@@ -385,7 +385,6 @@ impl From<MessageContent> for MessageContentInitial {
                 confirm_label: c.confirm_label,
                 cancel_label: c.cancel_label,
                 action_id: c.action_id,
-                payload: c.payload,
                 disclosure: c.disclosure,
                 expires_at: c.expires_at,
             }),
@@ -436,7 +435,6 @@ impl From<MessageContentInitial> for MessageContent {
                 confirm_label: c.confirm_label,
                 cancel_label: c.cancel_label,
                 action_id: c.action_id,
-                payload: c.payload,
                 disclosure: c.disclosure,
                 state: ActionCardState::Pending,
                 expires_at: c.expires_at,
@@ -783,8 +781,6 @@ pub struct ActionCardContentInitial {
     pub confirm_label: String,
     pub cancel_label: String,
     pub action_id: String,
-    #[serde(with = "serde_bytes")]
-    pub payload: Vec<u8>,
     pub disclosure: Option<String>,
     pub expires_at: Option<TimestampMillis>,
 }
@@ -797,8 +793,6 @@ pub struct ActionCardContent {
     pub confirm_label: String,
     pub cancel_label: String,
     pub action_id: String,
-    #[serde(with = "serde_bytes")]
-    pub payload: Vec<u8>,
     pub disclosure: Option<String>,
     pub state: ActionCardState,
     pub expires_at: Option<TimestampMillis>,

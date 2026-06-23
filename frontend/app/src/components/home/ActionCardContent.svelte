@@ -11,7 +11,11 @@
 
     let { content, readonly, onRespond }: Props = $props();
 
-    let pending = $derived(content.state === "pending");
+    // A card past its expiry is treated as no longer actionable, matching the canister (which rejects
+    // a confirm/cancel on an expired card). Guards against showing live buttons on a stale card.
+    let expired = $derived(content.expiresAt !== undefined && content.expiresAt <= BigInt(Date.now()));
+    let pending = $derived(content.state === "pending" && !expired);
+    let displayState = $derived(expired && content.state === "pending" ? "expired" : content.state);
     // If the consumer required a disclosure, confirm is gated on the human acknowledging it.
     let acknowledged = $state(false);
     let canConfirm = $derived(pending && !readonly && (content.disclosure === undefined || acknowledged));
@@ -48,7 +52,7 @@
             </button>
         </div>
     {:else}
-        <div class="state state-{content.state}">{content.state}</div>
+        <div class="state state-{displayState}">{displayState}</div>
     {/if}
 </div>
 

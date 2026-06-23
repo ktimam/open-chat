@@ -51,6 +51,7 @@
         onExpandMessage?: (() => void) | undefined;
         onRemovePreview?: (url: string) => void;
         onRegisterVote?: (vote: { type: "delete" | "register"; answerIndex: number }) => void;
+        onRespondToActionCard?: (response: "confirm" | "cancel") => void;
         ogPreviews?: OgPreview[];
         messagePreviews?: RehydratedMessagePreview[];
     }
@@ -80,6 +81,7 @@
         onExpandMessage = undefined,
         onRemovePreview,
         onRegisterVote,
+        onRespondToActionCard,
         ogPreviews = [],
         messagePreviews = [],
     }: Props = $props();
@@ -164,7 +166,7 @@
 {:else if content.kind === "poll_content"}
     <PollContent {readonly} {me} {content} {senderId} {reply} {edited} {onRegisterVote} />
 {:else if content.kind === "action_card_content"}
-    <ActionCardContent {content} {readonly} />
+    <ActionCardContent {content} {readonly} onRespond={onRespondToActionCard} />
 {:else if content.kind === "giphy_content"}
     <GiphyContent
         {me}

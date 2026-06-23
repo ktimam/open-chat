@@ -2048,8 +2048,6 @@ pub struct ActionCardContentInternal {
     pub cancel_label: String,
     #[serde(rename = "ai")]
     pub action_id: String,
-    #[serde(rename = "pl", with = "serde_bytes")]
-    pub payload: Vec<u8>,
     #[serde(rename = "d", default, skip_serializing_if = "Option::is_none")]
     pub disclosure: Option<String>,
     #[serde(rename = "s")]
@@ -2105,7 +2103,6 @@ impl From<ActionCardContentInitial> for ActionCardContentInternal {
             confirm_label: value.confirm_label,
             cancel_label: value.cancel_label,
             action_id: value.action_id,
-            payload: value.payload,
             disclosure: value.disclosure,
             state: ActionCardState::Pending,
             expires_at: value.expires_at,
@@ -2125,7 +2122,6 @@ impl MessageContentInternalSubtype for ActionCardContentInternal {
             confirm_label: self.confirm_label,
             cancel_label: self.cancel_label,
             action_id: self.action_id,
-            payload: self.payload,
             disclosure: self.disclosure,
             state: self.state,
             expires_at: self.expires_at,

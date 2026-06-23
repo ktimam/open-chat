@@ -376,6 +376,12 @@
             });
     }
 
+    function onRespondToActionCard(response: "confirm" | "cancel") {
+        if (chatId.kind === "direct_chat") return;
+
+        client.respondToActionCard(chatId, threadRootMessageIndex, msg.messageId, response);
+    }
+
     function reportMessage() {
         showReport = true;
     }
@@ -789,6 +795,7 @@
                                     blockLevelMarkdown={msg.blockLevelMarkdown}
                                     {onRemovePreview}
                                     {onRegisterVote}
+                                    {onRespondToActionCard}
                                     {onExpandMessage}
                                     ogPreviews={msg.ogPreviews}
                                     messagePreviews={msg.messagePreviews} />

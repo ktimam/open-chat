@@ -850,7 +850,6 @@ function actionCardContent(value: TActionCardContent): ActionCardContent {
         confirmLabel: value.confirm_label,
         cancelLabel: value.cancel_label,
         actionId: value.action_id,
-        payload: value.payload instanceof Uint8Array ? value.payload : Uint8Array.from(value.payload),
         disclosure: value.disclosure,
         state: actionCardState(value.state),
         expiresAt: value.expires_at,

@@ -7823,7 +7823,6 @@ export const ActionCardContentInitial = Type.Object({
     confirm_label: Type.String(),
     cancel_label: Type.String(),
     action_id: Type.String(),
-    payload: TSBytes,
     disclosure: Type.Optional(Type.String()),
     expires_at: Type.Optional(Type.BigInt()),
 });
@@ -7835,7 +7834,6 @@ export const ActionCardContent = Type.Object({
     confirm_label: Type.String(),
     cancel_label: Type.String(),
     action_id: Type.String(),
-    payload: TSBytes,
     disclosure: Type.Optional(Type.String()),
     state: ActionCardState,
     expires_at: Type.Optional(Type.BigInt()),

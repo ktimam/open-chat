@@ -463,7 +463,6 @@ export interface ActionCardContent {
     confirmLabel: string;
     cancelLabel: string;
     actionId: string;
-    payload: Uint8Array;
     disclosure?: string;
     state: ActionCardState;
     expiresAt?: bigint;
