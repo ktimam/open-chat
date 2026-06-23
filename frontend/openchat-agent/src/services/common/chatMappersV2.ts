@@ -852,6 +852,8 @@ function actionCardContent(value: TActionCardContent): ActionCardContent {
         actionId: value.action_id,
         disclosure: value.disclosure,
         state: actionCardState(value.state),
+        respondedBy: value.responded_by !== undefined ? principalBytesToString(value.responded_by) : undefined,
+        respondedAt: value.responded_at,
         expiresAt: value.expires_at,
     };
 }

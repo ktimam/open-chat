@@ -465,6 +465,8 @@ export interface ActionCardContent {
     actionId: string;
     disclosure?: string;
     state: ActionCardState;
+    respondedBy?: string;
+    respondedAt?: bigint;
     expiresAt?: bigint;
 }
 
@@ -2531,6 +2533,7 @@ export type ChatEventType =
     | "MessageP2pSwapCompleted"
     | "MessageP2pSwapCancelled"
     | "MessageVideoCall"
+    | "MessageActionCardResponse"
     | "MessageOther"
     | "Created"
     | "NameChanged"

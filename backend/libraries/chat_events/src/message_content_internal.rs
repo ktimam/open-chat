@@ -2124,6 +2124,8 @@ impl MessageContentInternalSubtype for ActionCardContentInternal {
             action_id: self.action_id,
             disclosure: self.disclosure,
             state: self.state,
+            responded_by: self.responded_by,
+            responded_at: self.responded_at,
             expires_at: self.expires_at,
         }
     }

@@ -899,6 +899,7 @@ export const ChatEventType = Type.Union([
     Type.Literal("MessageP2pSwapCompleted"),
     Type.Literal("MessageP2pSwapCancelled"),
     Type.Literal("MessageVideoCall"),
+    Type.Literal("MessageActionCardResponse"),
     Type.Literal("MessageOther"),
     Type.Literal("Created"),
     Type.Literal("NameChanged"),
@@ -7836,6 +7837,8 @@ export const ActionCardContent = Type.Object({
     action_id: Type.String(),
     disclosure: Type.Optional(Type.String()),
     state: ActionCardState,
+    responded_by: Type.Optional(UserId),
+    responded_at: Type.Optional(Type.BigInt()),
     expires_at: Type.Optional(Type.BigInt()),
 });
 

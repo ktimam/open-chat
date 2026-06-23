@@ -663,7 +663,7 @@ impl ChatEvents {
             args.min_visible_event_index,
             args.now,
             true,
-            ChatEventType::MessageEdited,
+            ChatEventType::MessageActionCardResponse,
             |message, _| Self::respond_to_action_card_inner(message, &args),
         ) {
             Ok(result) => Ok(result),

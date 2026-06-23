@@ -437,6 +437,8 @@ impl From<MessageContentInitial> for MessageContent {
                 action_id: c.action_id,
                 disclosure: c.disclosure,
                 state: ActionCardState::Pending,
+                responded_by: None,
+                responded_at: None,
                 expires_at: c.expires_at,
             }),
             MessageContentInitial::P2PSwap(_) => unimplemented!(),
@@ -795,6 +797,8 @@ pub struct ActionCardContent {
     pub action_id: String,
     pub disclosure: Option<String>,
     pub state: ActionCardState,
+    pub responded_by: Option<UserId>,
+    pub responded_at: Option<TimestampMillis>,
     pub expires_at: Option<TimestampMillis>,
 }
 
