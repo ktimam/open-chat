@@ -7841,6 +7841,44 @@ export const ActionCardContent = Type.Object({
     expires_at: Type.Optional(Type.BigInt()),
 });
 
+export type ActionCardResponse = Static<typeof ActionCardResponse>;
+export const ActionCardResponse = Type.Union([Type.Literal("Confirm"), Type.Literal("Cancel")]);
+
+export type GroupRespondToActionCardArgs = Static<typeof GroupRespondToActionCardArgs>;
+export const GroupRespondToActionCardArgs = Type.Object({
+    thread_root_message_index: Type.Optional(MessageIndex),
+    message_id: MessageId,
+    response: ActionCardResponse,
+});
+
+export type GroupRespondToActionCardResponse = Static<typeof GroupRespondToActionCardResponse>;
+export const GroupRespondToActionCardResponse = Type.Union([
+    Type.Object({
+        Success: ActionCardState,
+    }),
+    Type.Object({
+        Error: OCError,
+    }),
+]);
+
+export type CommunityRespondToActionCardArgs = Static<typeof CommunityRespondToActionCardArgs>;
+export const CommunityRespondToActionCardArgs = Type.Object({
+    channel_id: ChannelId,
+    thread_root_message_index: Type.Optional(MessageIndex),
+    message_id: MessageId,
+    response: ActionCardResponse,
+});
+
+export type CommunityRespondToActionCardResponse = Static<typeof CommunityRespondToActionCardResponse>;
+export const CommunityRespondToActionCardResponse = Type.Union([
+    Type.Object({
+        Success: ActionCardState,
+    }),
+    Type.Object({
+        Error: OCError,
+    }),
+]);
+
 export const BotMessageContent = Type.Union([
     Type.Object({
         Text: TextContent,

@@ -33,6 +33,7 @@ import type {
     PublicGroupSummaryResponse,
     RegisterPollVoteResponse,
     RegisterProposalVoteResponse,
+    RespondToActionCardResponse,
     RemoveMemberResponse,
     ResetInviteCodeResponse,
     Rules,
@@ -89,6 +90,8 @@ import {
     GroupRegenerateWebhookResponse,
     GroupRegisterPollVoteArgs,
     GroupRegisterPollVoteResponse,
+    GroupRespondToActionCardArgs,
+    GroupRespondToActionCardResponse,
     GroupRegisterProposalVoteArgs,
     GroupRegisterProposalVoteV2Args,
     GroupRegisterWebhookArgs,
@@ -744,6 +747,26 @@ export class GroupClient
             unitResult,
             GroupRegisterPollVoteArgs,
             GroupRegisterPollVoteResponse,
+        );
+    }
+
+    respondToActionCard(
+        groupId: string,
+        messageId: bigint,
+        threadRootMessageIndex: number | undefined,
+        response: "confirm" | "cancel",
+    ): Promise<RespondToActionCardResponse> {
+        return this.update(
+            groupId,
+            "respond_to_action_card",
+            {
+                thread_root_message_index: threadRootMessageIndex,
+                message_id: messageId,
+                response: response === "confirm" ? "Confirm" : "Cancel",
+            },
+            unitResult,
+            GroupRespondToActionCardArgs,
+            GroupRespondToActionCardResponse,
         );
     }
 

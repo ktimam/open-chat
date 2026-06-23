@@ -2213,6 +2213,7 @@ export type DeletedDirectMessageResponse =
     | Offline;
 
 export type RegisterPollVoteResponse = Success | OCError | Offline;
+export type RespondToActionCardResponse = Success | OCError | Offline;
 export type InviteCodeResponse = InviteCodeSuccess | OCError | Offline | Failure;
 
 export type InviteCodeSuccess = {

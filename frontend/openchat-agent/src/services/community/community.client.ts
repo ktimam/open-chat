@@ -48,6 +48,7 @@ import type {
     OptionalChatPermissions,
     PinMessageResponse,
     RegisterPollVoteResponse,
+    RespondToActionCardResponse,
     RegisterProposalVoteResponse,
     RemoveMemberResponse,
     ResetInviteCodeResponse,
@@ -127,6 +128,8 @@ import {
     CommunityRegenerateWebhookResponse,
     CommunityRegisterPollVoteArgs,
     CommunityRegisterPollVoteResponse,
+    CommunityRespondToActionCardArgs,
+    CommunityRespondToActionCardResponse,
     CommunityRegisterProposalVoteArgs,
     CommunityRegisterWebhookArgs,
     CommunityRegisterWebhookResponse,
@@ -1002,6 +1005,27 @@ export class CommunityClient
             unitResult,
             CommunityRegisterPollVoteArgs,
             CommunityRegisterPollVoteResponse,
+        );
+    }
+
+    respondToActionCard(
+        chatId: ChannelIdentifier,
+        messageId: bigint,
+        threadRootMessageIndex: number | undefined,
+        response: "confirm" | "cancel",
+    ): Promise<RespondToActionCardResponse> {
+        return this.update(
+            chatId.communityId,
+            "respond_to_action_card",
+            {
+                channel_id: toBigInt32(chatId.channelId),
+                thread_root_message_index: threadRootMessageIndex,
+                message_id: messageId,
+                response: response === "confirm" ? "Confirm" : "Cancel",
+            },
+            unitResult,
+            CommunityRespondToActionCardArgs,
+            CommunityRespondToActionCardResponse,
         );
     }
 

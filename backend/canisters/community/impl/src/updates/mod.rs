@@ -40,6 +40,7 @@ pub mod leave_channel;
 pub mod pin_message;
 pub mod register_poll_vote;
 pub mod register_proposal_vote;
+pub mod respond_to_action_card;
 //pub mod register_proposal_vote_v2;
 pub mod delete_webhook;
 pub mod handle_webhook;

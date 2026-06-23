@@ -2334,6 +2334,24 @@ export class OpenChat {
             .catch(() => false);
     }
 
+    respondToActionCard(
+        chatId: MultiUserChatIdentifier,
+        threadRootMessageIndex: number | undefined,
+        messageId: bigint,
+        response: "confirm" | "cancel",
+    ): Promise<boolean> {
+        return this.#worker
+            .send({
+                kind: "respondToActionCard",
+                chatId,
+                threadRootMessageIndex,
+                messageId,
+                response,
+            })
+            .then((resp) => resp.kind === "success")
+            .catch(() => false);
+    }
+
     deleteMessage(
         id: ChatIdentifier,
         threadRootMessageIndex: number | undefined,

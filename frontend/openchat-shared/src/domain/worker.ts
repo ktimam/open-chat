@@ -66,6 +66,7 @@ import type {
     PublicGroupSummaryResponse,
     RegisterPollVoteResponse,
     RegisterProposalVoteResponse,
+    RespondToActionCardResponse,
     RemoveHotGroupExclusionResponse,
     RemoveMemberResponse,
     ResetInviteCodeResponse,
@@ -265,6 +266,7 @@ export type WorkerRequest =
     | DeleteMessage
     | UndeleteMessage
     | RegisterPollVote
+    | RespondToActionCard
     | UpdateGroup
     | JoinGroup
     | JoinCommunity
@@ -1196,6 +1198,14 @@ type RegisterPollVote = {
     kind: "registerPollVote";
 };
 
+type RespondToActionCard = {
+    chatId: MultiUserChatIdentifier;
+    threadRootMessageIndex: number | undefined;
+    messageId: bigint;
+    response: "confirm" | "cancel";
+    kind: "respondToActionCard";
+};
+
 type UpdateGroup = {
     chatId: MultiUserChatIdentifier;
     name?: string;
@@ -1765,6 +1775,7 @@ export type WorkerResponseInner =
     | DeleteMessageResponse
     | UndeleteMessageResponse
     | RegisterPollVoteResponse
+    | RespondToActionCardResponse
     | UpdateGroupResponse
     | JoinGroupResponse
     | DeleteGroupResponse
@@ -2246,6 +2257,8 @@ export type WorkerResult<T> = T extends Init
     ? UpdateGroupResponse
     : T extends RegisterPollVote
     ? RegisterPollVoteResponse
+    : T extends RespondToActionCard
+    ? RespondToActionCardResponse
     : T extends DeleteMessage
     ? DeleteMessageResponse
     : T extends UndeleteMessage

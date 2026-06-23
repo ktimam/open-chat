@@ -498,6 +498,14 @@ function getAction(
                 payload.newAchievement,
             );
 
+        case "respondToActionCard":
+            return agent.respondToActionCard(
+                payload.chatId,
+                payload.threadRootMessageIndex,
+                payload.messageId,
+                payload.response,
+            );
+
         case "deleteMessage":
             return agent.deleteMessage(
                 payload.chatId,

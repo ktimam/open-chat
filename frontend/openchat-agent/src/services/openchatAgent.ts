@@ -130,6 +130,7 @@ import type {
     Referral,
     RehydratedMessagePreview,
     RegisterPollVoteResponse,
+    RespondToActionCardResponse,
     RegisterProposalVoteResponse,
     RegisterUserResponse,
     RegistryValue,
@@ -2840,6 +2841,32 @@ export class OpenChatAgent extends EventTarget {
                     voteType,
                     threadRootMessageIndex,
                     newAchievement,
+                );
+        }
+    }
+
+    respondToActionCard(
+        chatId: MultiUserChatIdentifier,
+        threadRootMessageIndex: number | undefined,
+        messageId: bigint,
+        response: "confirm" | "cancel",
+    ): Promise<RespondToActionCardResponse> {
+        if (offline()) return Promise.resolve(CommonResponses.offline());
+
+        switch (chatId.kind) {
+            case "group_chat":
+                return this._groupClient.respondToActionCard(
+                    chatId.groupId,
+                    messageId,
+                    threadRootMessageIndex,
+                    response,
+                );
+            case "channel":
+                return this._communityClient.respondToActionCard(
+                    chatId,
+                    messageId,
+                    threadRootMessageIndex,
+                    response,
                 );
         }
     }
