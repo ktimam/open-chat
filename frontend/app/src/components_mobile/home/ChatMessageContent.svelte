@@ -14,6 +14,7 @@
     import MessageReminderCreatedContent from "./MessageReminderCreatedContent.svelte";
     import P2PSwapContent from "./P2PSwapContent.svelte";
     import PlaceholderContent from "./PlaceholderContent.svelte";
+    import ActionCardContent from "../../components/home/ActionCardContent.svelte";
     import PollContent from "./PollContent.svelte";
     import PrizeContent from "./PrizeContent.svelte";
     import PrizeWinnerContent from "./PrizeWinnerContent.svelte";
@@ -162,6 +163,8 @@
     <PrizeWinnerContent {content} />
 {:else if content.kind === "poll_content"}
     <PollContent {readonly} {me} {content} {senderId} {reply} {edited} {onRegisterVote} />
+{:else if content.kind === "action_card_content"}
+    <ActionCardContent {content} {readonly} />
 {:else if content.kind === "giphy_content"}
     <GiphyContent
         {me}

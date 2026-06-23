@@ -102,6 +102,7 @@ export type MessageContent =
     | PrizeContentInitial
     | P2PSwapContent
     | P2PSwapContentInitial
+    | ActionCardContent
     | PrizeWinnerContent
     | MessageReminderCreatedContent
     | MessageReminderContent
@@ -444,6 +445,28 @@ export interface P2PSwapContent {
     status: P2PSwapStatus;
     swapId: number;
     token0TxnIn: TransactionId;
+}
+
+export interface ActionCardRow {
+    label: string;
+    value: string;
+}
+
+export type ActionCardState = "pending" | "confirmed" | "cancelled" | "expired";
+
+// A generic interactive confirm card. `rows` are the exact values forwarded on confirm; `payload`
+// is the opaque verbatim encoding the registered app receives. OpenChat does not interpret either.
+export interface ActionCardContent {
+    kind: "action_card_content";
+    title: string;
+    rows: ActionCardRow[];
+    confirmLabel: string;
+    cancelLabel: string;
+    actionId: string;
+    payload: Uint8Array;
+    disclosure?: string;
+    state: ActionCardState;
+    expiresAt?: bigint;
 }
 
 export type TransactionId = bigint;

@@ -39,6 +39,7 @@ pub mod pin_message;
 pub mod regenerate_webhook;
 pub mod register_poll_vote;
 pub mod register_proposal_vote;
+pub mod respond_to_action_card;
 pub mod register_proposal_vote_v2;
 pub mod register_webhook;
 pub mod remove_participant;

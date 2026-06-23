@@ -2,7 +2,8 @@ use chat_events::{
     AddRemoveReactionArgs, ChatEventInternal, ChatEvents, ChatEventsListReader, DeleteMessageSuccess,
     DeleteUndeleteMessagesArgs, EditMessageArgs, EventPusher, ExpiredThread, GroupGateUpdatedInternal, MessageContentInternal,
     MessageInternal, NullEventPusher, PushEventResultInternal, PushMessageArgs, Reader, RegisterPollVoteArgs,
-    RegisterPollVoteSuccess, RemoveEventsResult, ReservePrizeSuccess, TipMessageArgs, UndeleteMessageSuccess,
+    RegisterPollVoteSuccess, RemoveEventsResult, ReservePrizeSuccess, RespondToActionCardArgs, TipMessageArgs,
+    UndeleteMessageSuccess,
     UpdateMessageSuccess,
 };
 use group_community_common::MemberUpdate;
@@ -15,7 +16,8 @@ use serde::{Deserialize, Serialize};
 use std::cmp::{Reverse, max, min};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use types::{
-    AccessGateConfig, AccessGateConfigInternal, AvatarChanged, BotMessageContext, BotNotification, Caller, Chat,
+    AccessGateConfig, AccessGateConfigInternal, ActionCardResponse, ActionCardState, AvatarChanged, BotMessageContext,
+    BotNotification, Caller, Chat,
     CustomPermission, DiamondMembershipStatus, Document, EventIndex, EventOrExpiredRange, EventWrapper, EventsCaller,
     EventsResponse, ExternalUrlUpdated, GroupDescriptionChanged, GroupMember, GroupNameChanged, GroupPermissions,
     GroupReplyContext, GroupRole, GroupRulesChanged, GroupSubtype, GroupVisibilityChanged, HydratedMention,
@@ -1757,6 +1759,27 @@ impl GroupChatCore {
             message_index,
             option_index,
             operation,
+            now,
+        })
+    }
+
+    pub fn respond_to_action_card(
+        &mut self,
+        user_id: UserId,
+        thread_root_message_index: Option<MessageIndex>,
+        message_id: MessageId,
+        response: ActionCardResponse,
+        now: TimestampMillis,
+    ) -> OCResult<UpdateMessageSuccess<ActionCardState>> {
+        let member = self.members.get_verified_member(user_id)?;
+        let min_visible_event_index = member.min_visible_event_index();
+
+        self.events.respond_to_action_card(RespondToActionCardArgs {
+            user_id,
+            min_visible_event_index,
+            thread_root_message_index,
+            message_id,
+            response,
             now,
         })
     }

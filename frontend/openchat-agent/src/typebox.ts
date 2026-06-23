@@ -7802,6 +7802,45 @@ export const BotMessageContext = Type.Object({
 });
 
 export type BotMessageContent = Static<typeof BotMessageContent>;
+export type ActionCardRow = Static<typeof ActionCardRow>;
+export const ActionCardRow = Type.Object({
+    label: Type.String(),
+    value: Type.String(),
+});
+
+export type ActionCardState = Static<typeof ActionCardState>;
+export const ActionCardState = Type.Union([
+    Type.Literal("Pending"),
+    Type.Literal("Confirmed"),
+    Type.Literal("Cancelled"),
+    Type.Literal("Expired"),
+]);
+
+export type ActionCardContentInitial = Static<typeof ActionCardContentInitial>;
+export const ActionCardContentInitial = Type.Object({
+    title: Type.String(),
+    rows: Type.Array(ActionCardRow),
+    confirm_label: Type.String(),
+    cancel_label: Type.String(),
+    action_id: Type.String(),
+    payload: TSBytes,
+    disclosure: Type.Optional(Type.String()),
+    expires_at: Type.Optional(Type.BigInt()),
+});
+
+export type ActionCardContent = Static<typeof ActionCardContent>;
+export const ActionCardContent = Type.Object({
+    title: Type.String(),
+    rows: Type.Array(ActionCardRow),
+    confirm_label: Type.String(),
+    cancel_label: Type.String(),
+    action_id: Type.String(),
+    payload: TSBytes,
+    disclosure: Type.Optional(Type.String()),
+    state: ActionCardState,
+    expires_at: Type.Optional(Type.BigInt()),
+});
+
 export const BotMessageContent = Type.Union([
     Type.Object({
         Text: TextContent,
@@ -8159,6 +8198,9 @@ export const MessageContent = Type.Union([
     Type.Object({
         Custom: CustomContent,
     }),
+    Type.Object({
+        ActionCard: ActionCardContent,
+    }),
 ]);
 
 export type GroupMatch = Static<typeof GroupMatch>;
@@ -8228,6 +8270,9 @@ export const MessageContentInitial = Type.Union([
     }),
     Type.Object({
         Custom: CustomContent,
+    }),
+    Type.Object({
+        ActionCard: ActionCardContentInitial,
     }),
 ]);
 

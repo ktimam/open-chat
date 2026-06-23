@@ -17,7 +17,8 @@ use std::mem;
 use std::ops::DerefMut;
 use tracing::error;
 use types::{
-    BlobReference, BotChatEvent, BotNotification, CallParticipant, CanisterId, Chat, ChatEvent, ChatEventCategory,
+    ActionCardResponse, ActionCardState, BlobReference, BotChatEvent, BotNotification, CallParticipant, CanisterId, Chat,
+    ChatEvent, ChatEventCategory,
     ChatEventType, ChatType, CompletedCryptoTransaction, DiamondMembershipStatus, DirectChatCreated, EventContext, EventIndex,
     EventMetaData, EventWrapper, EventWrapperInternal, EventsTimeToLiveUpdated, GroupCanisterThreadDetails, GroupCreated,
     GroupFrozen, GroupUnfrozen, HydratedMention, Mention, Message, MessageEditedEventPayload, MessageEventPayload, MessageId,
@@ -645,6 +646,49 @@ impl ChatEvents {
             RegisterVoteResult::PollEnded => Err(UpdateEventError::NoChange(OCErrorCode::PollEnded)),
             RegisterVoteResult::OptionIndexOutOfRange => Err(UpdateEventError::NoChange(OCErrorCode::PollOptionNotFound)),
             RegisterVoteResult::UserCannotChangeVote => Err(UpdateEventError::NoChange(OCErrorCode::CannotChangeVote)),
+        }
+    }
+
+    // Records a human's Confirm/Cancel response to an interactive ActionCard. On a state transition the
+    // message is marked updated (so clients re-render) and, via `update_message`, a bot notification of
+    // the updated event is generated for subscribed bots — the authenticated forward of the card (incl.
+    // its `payload`) to the integration's endpoint. Idempotent: a no-op response yields `NoChange`.
+    pub fn respond_to_action_card(
+        &mut self,
+        args: RespondToActionCardArgs,
+    ) -> OCResult<UpdateMessageSuccess<ActionCardState>> {
+        match self.update_message(
+            args.thread_root_message_index,
+            args.message_id.into(),
+            args.min_visible_event_index,
+            args.now,
+            true,
+            ChatEventType::MessageEdited,
+            |message, _| Self::respond_to_action_card_inner(message, &args),
+        ) {
+            Ok(result) => Ok(result),
+            Err(UpdateEventError::NoChange(error)) => Err(error.into()),
+            Err(UpdateEventError::NotFound) => Err(OCErrorCode::MessageNotFound.into()),
+        }
+    }
+
+    fn respond_to_action_card_inner(
+        message: &mut MessageInternal,
+        args: &RespondToActionCardArgs,
+    ) -> Result<ActionCardState, UpdateEventError<OCErrorCode>> {
+        let MessageContentInternal::ActionCard(card) = &mut message.content else {
+            return Err(UpdateEventError::NotFound);
+        };
+
+        let changed = match args.response {
+            ActionCardResponse::Confirm => card.confirm(args.user_id, args.now),
+            ActionCardResponse::Cancel => card.cancel(args.user_id, args.now),
+        };
+
+        if changed {
+            Ok(card.state.clone())
+        } else {
+            Err(UpdateEventError::NoChange(OCErrorCode::NoChange))
         }
     }
 
@@ -2566,6 +2610,15 @@ pub struct RegisterPollVoteArgs {
     pub message_index: MessageIndex,
     pub option_index: u32,
     pub operation: VoteOperation,
+    pub now: TimestampMillis,
+}
+
+pub struct RespondToActionCardArgs {
+    pub user_id: UserId,
+    pub min_visible_event_index: EventIndex,
+    pub thread_root_message_index: Option<MessageIndex>,
+    pub message_id: MessageId,
+    pub response: ActionCardResponse,
     pub now: TimestampMillis,
 }
 

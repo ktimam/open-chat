@@ -34,6 +34,7 @@ pub enum MessageContentInitial {
     P2PSwap(P2PSwapContentInitial),
     Encrypted(EncryptedContent),
     Custom(CustomContent),
+    ActionCard(ActionCardContentInitial),
 }
 
 #[ts_export]
@@ -58,6 +59,7 @@ pub enum MessageContent {
     VideoCall(VideoCallContent),
     Encrypted(EncryptedContent),
     Custom(CustomContent),
+    ActionCard(ActionCardContent),
 }
 
 #[ts_export]
@@ -80,6 +82,7 @@ pub enum MessageContentType {
     ReportedMessage,
     P2PSwap,
     VideoCall,
+    ActionCard,
     Custom(String),
 }
 
@@ -172,7 +175,8 @@ impl MessageContent {
             | MessageContent::P2PSwap(_)
             | MessageContent::VideoCall(_)
             | MessageContent::Encrypted(_)
-            | MessageContent::Custom(_) => {}
+            | MessageContent::Custom(_)
+            | MessageContent::ActionCard(_) => {}
         }
 
         references
@@ -191,6 +195,7 @@ impl MessageContent {
             MessageContent::GovernanceProposal(gp) => Some(gp.proposal.title()),
             MessageContent::Prize(p) => p.caption.as_deref(),
             MessageContent::P2PSwap(p) => p.caption.as_deref(),
+            MessageContent::ActionCard(a) => Some(a.title.as_str()),
             MessageContent::Deleted(_)
             | MessageContent::PrizeWinner(_)
             | MessageContent::MessageReminderCreated(_)
@@ -223,6 +228,7 @@ impl MessageContent {
         match self {
             MessageContent::Image(i) => i.blob_reference.as_ref().map(|b| b.url()),
             MessageContent::Video(v) => v.image_blob_reference.as_ref().map(|b| b.url()),
+            MessageContent::ActionCard(_) => None,
             MessageContent::Text(_)
             | MessageContent::Audio(_)
             | MessageContent::File(_)
@@ -246,6 +252,7 @@ impl MessageContent {
     pub fn notification_file_name(&self) -> Option<String> {
         match self {
             MessageContent::File(f) => Some(f.name.clone()),
+            MessageContent::ActionCard(_) => None,
             MessageContent::Image(_)
             | MessageContent::Video(_)
             | MessageContent::Text(_)
@@ -309,6 +316,7 @@ impl MessageContentInitial {
             MessageContentInitial::MessageReminderCreated(r) => r.notes.as_deref(),
             MessageContentInitial::MessageReminder(r) => r.notes.as_deref(),
             MessageContentInitial::P2PSwap(p) => p.caption.as_deref(),
+            MessageContentInitial::ActionCard(a) => Some(a.title.as_str()),
             MessageContentInitial::Encrypted(_) | MessageContentInitial::Deleted(_) | MessageContentInitial::Custom(_) => None,
         }
     }
@@ -344,6 +352,7 @@ impl From<&MessageContentInitial> for MessagePermission {
             MessageContentInitial::Giphy(_) => MessagePermission::Giphy,
             MessageContentInitial::Prize(_) => MessagePermission::Prize,
             MessageContentInitial::P2PSwap(_) => MessagePermission::P2pSwap,
+            MessageContentInitial::ActionCard(_) => MessagePermission::ActionCard,
             _ => unreachable!(),
         }
     }
@@ -370,6 +379,16 @@ impl From<MessageContent> for MessageContentInitial {
             MessageContent::ReportedMessage(_) => panic!("Cannot send a 'reported message' message"),
             MessageContent::Encrypted(e) => MessageContentInitial::Encrypted(e),
             MessageContent::Custom(c) => MessageContentInitial::Custom(c),
+            MessageContent::ActionCard(c) => MessageContentInitial::ActionCard(ActionCardContentInitial {
+                title: c.title,
+                rows: c.rows,
+                confirm_label: c.confirm_label,
+                cancel_label: c.cancel_label,
+                action_id: c.action_id,
+                payload: c.payload,
+                disclosure: c.disclosure,
+                expires_at: c.expires_at,
+            }),
             MessageContent::P2PSwap(_) | MessageContent::VideoCall(_) => unimplemented!(),
         }
     }
@@ -411,6 +430,17 @@ impl From<MessageContentInitial> for MessageContent {
             MessageContentInitial::MessageReminder(r) => MessageContent::MessageReminder(r),
             MessageContentInitial::Encrypted(e) => MessageContent::Encrypted(e),
             MessageContentInitial::Custom(c) => MessageContent::Custom(c),
+            MessageContentInitial::ActionCard(c) => MessageContent::ActionCard(ActionCardContent {
+                title: c.title,
+                rows: c.rows,
+                confirm_label: c.confirm_label,
+                cancel_label: c.cancel_label,
+                action_id: c.action_id,
+                payload: c.payload,
+                disclosure: c.disclosure,
+                state: ActionCardState::Pending,
+                expires_at: c.expires_at,
+            }),
             MessageContentInitial::P2PSwap(_) => unimplemented!(),
         }
     }
@@ -436,6 +466,7 @@ impl MessageContentType {
             MessageContentType::ReportedMessage => None,
             MessageContentType::P2PSwap => Some(Achievement::SentP2PSwapOffer),
             MessageContentType::VideoCall => Some(Achievement::StartedCall),
+            MessageContentType::ActionCard => None,
             MessageContentType::Custom(c) => {
                 if c == "meme_fighter" {
                     Some(Achievement::SentMeme)
@@ -467,6 +498,7 @@ impl Display for MessageContentType {
             MessageContentType::ReportedMessage => "ReportedMessage",
             MessageContentType::P2PSwap => "P2PSwap",
             MessageContentType::VideoCall => "VideoCall",
+            MessageContentType::ActionCard => "ActionCard",
             MessageContentType::Custom(c) => c,
         };
 
@@ -494,6 +526,7 @@ impl From<&MessageContent> for MessageContentType {
             MessageContent::ReportedMessage(_) => MessageContentType::ReportedMessage,
             MessageContent::P2PSwap(_) => MessageContentType::P2PSwap,
             MessageContent::VideoCall(_) => MessageContentType::VideoCall,
+            MessageContent::ActionCard(_) => MessageContentType::ActionCard,
             MessageContent::Encrypted(e) => e.content_type.clone().into(),
             MessageContent::Custom(c) => MessageContentType::Custom(c.kind.clone()),
         }
@@ -728,6 +761,63 @@ pub struct P2PSwapContent {
     pub caption: Option<String>,
     pub token0_txn_in: u64,
     pub status: P2PSwapStatus,
+}
+
+// A generic, interactive "confirm card": caller-provided plain-language rows + Confirm/Cancel.
+// On Confirm, `payload` (an opaque, verbatim encoding of the displayed rows) is forwarded to the
+// registered action's endpoint. OpenChat never interprets `payload` or `action_id`; the consumer app
+// supplies them. The `rows` ARE the exact values that will be forwarded, so a human reviewing the card
+// sees precisely what is sent. This type carries no app-specific concepts.
+#[ts_export]
+#[derive(CandidType, Serialize, Deserialize, Clone, Debug)]
+pub struct ActionCardRow {
+    pub label: String,
+    pub value: String,
+}
+
+#[ts_export]
+#[derive(CandidType, Serialize, Deserialize, Clone, Debug)]
+pub struct ActionCardContentInitial {
+    pub title: String,
+    pub rows: Vec<ActionCardRow>,
+    pub confirm_label: String,
+    pub cancel_label: String,
+    pub action_id: String,
+    #[serde(with = "serde_bytes")]
+    pub payload: Vec<u8>,
+    pub disclosure: Option<String>,
+    pub expires_at: Option<TimestampMillis>,
+}
+
+#[ts_export]
+#[derive(CandidType, Serialize, Deserialize, Clone, Debug)]
+pub struct ActionCardContent {
+    pub title: String,
+    pub rows: Vec<ActionCardRow>,
+    pub confirm_label: String,
+    pub cancel_label: String,
+    pub action_id: String,
+    #[serde(with = "serde_bytes")]
+    pub payload: Vec<u8>,
+    pub disclosure: Option<String>,
+    pub state: ActionCardState,
+    pub expires_at: Option<TimestampMillis>,
+}
+
+#[ts_export]
+#[derive(CandidType, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub enum ActionCardState {
+    Pending,
+    Confirmed,
+    Cancelled,
+    Expired,
+}
+
+#[ts_export]
+#[derive(CandidType, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub enum ActionCardResponse {
+    Confirm,
+    Cancel,
 }
 
 #[ts_export]

@@ -9,7 +9,8 @@ use serde_bytes::ByteBuf;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use types::icrc1::{Account, CryptoAccount};
 use types::{
-    AudioContent, BlobReference, CallParticipant, CanisterId, CompletedCryptoTransaction, ContentValidationError,
+    ActionCardContent, ActionCardContentInitial, ActionCardRow, ActionCardState, AudioContent, BlobReference, CallParticipant,
+    CanisterId, CompletedCryptoTransaction, ContentValidationError,
     ContentWithCaptionEventPayload, CryptoContent, CryptoContentEventPayload, CryptoTransaction, Cryptocurrency, CustomContent,
     EncryptedContent, EncryptedContentEventPayload, EncryptedMessageContentType, EncryptionKey, FileContent,
     FileContentEventPayload, GiphyContent, GiphyImageVariant, GovernanceProposalContentEventPayload, ImageContent,
@@ -64,6 +65,8 @@ pub enum MessageContentInternal {
     Encrypted(EncryptedContentInternal),
     #[serde(rename = "cu")]
     Custom(CustomContentInternal),
+    #[serde(rename = "ac")]
+    ActionCard(ActionCardContentInternal),
 }
 
 impl MessageContentInternal {
@@ -80,7 +83,9 @@ impl MessageContentInternal {
             let invalid_type_for_forwarding = contains_crypto_transfer
                 || matches!(
                     &content,
-                    MessageContentInitial::Poll(_) | MessageContentInitial::GovernanceProposal(_)
+                    MessageContentInitial::Poll(_)
+                        | MessageContentInitial::GovernanceProposal(_)
+                        | MessageContentInitial::ActionCard(_)
                 );
 
             if invalid_type_for_forwarding {
@@ -123,6 +128,7 @@ impl MessageContentInternal {
             MessageContentInitial::Prize(p) => p.prizes_v2.is_empty(),
             MessageContentInitial::Encrypted(e) => e.encrypted_data.is_empty(),
             MessageContentInitial::Deleted(_) => true,
+            MessageContentInitial::ActionCard(a) => a.rows.is_empty(),
             MessageContentInitial::Crypto(_)
             | MessageContentInitial::Giphy(_)
             | MessageContentInitial::GovernanceProposal(_)
@@ -204,6 +210,7 @@ impl MessageContentInternal {
             MessageContentInternal::VideoCall(c) => MessageContent::VideoCall(c.hydrate()),
             MessageContentInternal::Encrypted(e) => MessageContent::Encrypted(e.hydrate(my_user_id)),
             MessageContentInternal::Custom(c) => MessageContent::Custom(c.hydrate(my_user_id)),
+            MessageContentInternal::ActionCard(a) => MessageContent::ActionCard(a.hydrate(my_user_id)),
         }
     }
 
@@ -222,6 +229,7 @@ impl MessageContentInternal {
             MessageContentInternal::MessageReminderCreated(r) => r.notes.as_deref(),
             MessageContentInternal::MessageReminder(r) => r.notes.as_deref(),
             MessageContentInternal::P2PSwap(p) => p.caption.as_deref(),
+            MessageContentInternal::ActionCard(c) => Some(c.title.as_str()),
             MessageContentInternal::PrizeWinner(_)
             | MessageContentInternal::Deleted(_)
             | MessageContentInternal::ReportedMessage(_)
@@ -276,7 +284,8 @@ impl MessageContentInternal {
             | MessageContentInternal::P2PSwap(_)
             | MessageContentInternal::VideoCall(_)
             | MessageContentInternal::Encrypted(_)
-            | MessageContentInternal::Custom(_) => {}
+            | MessageContentInternal::Custom(_)
+            | MessageContentInternal::ActionCard(_) => {}
         }
 
         references
@@ -368,9 +377,10 @@ impl MessageContentInternal {
                 content_type: MessageContentType::from(e.content_type.clone()).to_string(),
                 encrypted_length: e.encrypted_data.len() as u32,
             }),
-            MessageContentInternal::Deleted(_) | MessageContentInternal::VideoCall(_) | MessageContentInternal::Custom(_) => {
-                MessageContentEventPayload::Empty
-            }
+            MessageContentInternal::Deleted(_)
+            | MessageContentInternal::VideoCall(_)
+            | MessageContentInternal::Custom(_)
+            | MessageContentInternal::ActionCard(_) => MessageContentEventPayload::Empty,
         }
     }
 
@@ -456,7 +466,8 @@ impl From<&MessageContentInternal> for Document {
             MessageContentInternal::ReportedMessage(_)
             | MessageContentInternal::Deleted(_)
             | MessageContentInternal::VideoCall(_)
-            | MessageContentInternal::Encrypted(_) => {}
+            | MessageContentInternal::Encrypted(_)
+            | MessageContentInternal::ActionCard(_) => {}
         }
 
         document
@@ -2025,6 +2036,103 @@ impl From<BlobReference> for BlobReferenceInternal {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ActionCardContentInternal {
+    #[serde(rename = "ti")]
+    pub title: String,
+    #[serde(rename = "r")]
+    pub rows: Vec<ActionCardRow>,
+    #[serde(rename = "cl")]
+    pub confirm_label: String,
+    #[serde(rename = "xl")]
+    pub cancel_label: String,
+    #[serde(rename = "ai")]
+    pub action_id: String,
+    #[serde(rename = "pl", with = "serde_bytes")]
+    pub payload: Vec<u8>,
+    #[serde(rename = "d", default, skip_serializing_if = "Option::is_none")]
+    pub disclosure: Option<String>,
+    #[serde(rename = "s")]
+    pub state: ActionCardState,
+    #[serde(rename = "e", default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<TimestampMillis>,
+    #[serde(rename = "rb", default, skip_serializing_if = "Option::is_none")]
+    pub responded_by: Option<UserId>,
+    #[serde(rename = "ra", default, skip_serializing_if = "Option::is_none")]
+    pub responded_at: Option<TimestampMillis>,
+}
+
+impl ActionCardContentInternal {
+    // Transition Pending -> Confirmed (idempotent). Returns true only on the transition, so callers
+    // forward the payload exactly once. An expired card cannot be confirmed.
+    pub fn confirm(&mut self, user_id: UserId, now: TimestampMillis) -> bool {
+        if self.is_expired(now) {
+            self.state = ActionCardState::Expired;
+            return false;
+        }
+        if matches!(self.state, ActionCardState::Pending) {
+            self.state = ActionCardState::Confirmed;
+            self.responded_by = Some(user_id);
+            self.responded_at = Some(now);
+            true
+        } else {
+            false
+        }
+    }
+
+    // Transition Pending -> Cancelled (idempotent). Returns true only on the transition.
+    pub fn cancel(&mut self, user_id: UserId, now: TimestampMillis) -> bool {
+        if matches!(self.state, ActionCardState::Pending) {
+            self.state = ActionCardState::Cancelled;
+            self.responded_by = Some(user_id);
+            self.responded_at = Some(now);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn is_expired(&self, now: TimestampMillis) -> bool {
+        self.expires_at.is_some_and(|e| now > e)
+    }
+}
+
+impl From<ActionCardContentInitial> for ActionCardContentInternal {
+    fn from(value: ActionCardContentInitial) -> Self {
+        ActionCardContentInternal {
+            title: value.title,
+            rows: value.rows,
+            confirm_label: value.confirm_label,
+            cancel_label: value.cancel_label,
+            action_id: value.action_id,
+            payload: value.payload,
+            disclosure: value.disclosure,
+            state: ActionCardState::Pending,
+            expires_at: value.expires_at,
+            responded_by: None,
+            responded_at: None,
+        }
+    }
+}
+
+impl MessageContentInternalSubtype for ActionCardContentInternal {
+    type ContentType = ActionCardContent;
+
+    fn hydrate(self, _my_user_id: Option<UserId>) -> Self::ContentType {
+        ActionCardContent {
+            title: self.title,
+            rows: self.rows,
+            confirm_label: self.confirm_label,
+            cancel_label: self.cancel_label,
+            action_id: self.action_id,
+            payload: self.payload,
+            disclosure: self.disclosure,
+            state: self.state,
+            expires_at: self.expires_at,
+        }
+    }
+}
+
 impl From<MessageContentInitial> for MessageContentInternal {
     fn from(value: MessageContentInitial) -> Self {
         match value {
@@ -2041,6 +2149,7 @@ impl From<MessageContentInitial> for MessageContentInternal {
             MessageContentInitial::MessageReminder(r) => MessageContentInternal::MessageReminder(r.into()),
             MessageContentInitial::Encrypted(e) => MessageContentInternal::Encrypted(e.into()),
             MessageContentInitial::Custom(c) => MessageContentInternal::Custom(c.into()),
+            MessageContentInitial::ActionCard(a) => MessageContentInternal::ActionCard(a.into()),
             MessageContentInitial::Crypto(c) => c
                 .try_into()
                 .map(MessageContentInternal::Crypto)
@@ -2074,6 +2183,7 @@ impl From<&MessageContentInternal> for MessageContentType {
             MessageContentInternal::VideoCall(_) => MessageContentType::VideoCall,
             MessageContentInternal::Encrypted(e) => e.content_type.clone().into(),
             MessageContentInternal::Custom(c) => MessageContentType::Custom(c.kind.clone()),
+            MessageContentInternal::ActionCard(_) => MessageContentType::ActionCard,
         }
     }
 }
