@@ -18,6 +18,55 @@ dependencies = [
 ]
 
 [[package]]
+name = "action_inbox_canister"
+version = "0.1.0"
+dependencies = [
+ "candid",
+ "candid_gen",
+ "oc_error_codes",
+ "serde",
+ "serde_bytes",
+ "types",
+]
+
+[[package]]
+name = "action_inbox_canister_c2c_client"
+version = "0.1.0"
+dependencies = [
+ "action_inbox_canister",
+ "candid",
+ "canister_client",
+ "ic-cdk",
+ "msgpack",
+ "tracing",
+ "types",
+]
+
+[[package]]
+name = "action_inbox_canister_impl"
+version = "0.1.0"
+dependencies = [
+ "action_inbox_canister",
+ "candid",
+ "canister_api_macros",
+ "canister_logger",
+ "canister_state_macros",
+ "canister_tracing_macros",
+ "http_request",
+ "ic-cdk",
+ "ic-cdk-timers",
+ "ic-stable-structures 0.7.0",
+ "msgpack",
+ "rand 0.8.5",
+ "serde",
+ "serde_bytes",
+ "stable_memory",
+ "tracing",
+ "types",
+ "utils",
+]
+
+[[package]]
 name = "activity_notification_state"
 version = "0.1.0"
 dependencies = [

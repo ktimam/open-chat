@@ -15,6 +15,7 @@ then
 fi
 
 CANISTERS=(
+  action_inbox
   airdrop_bot
   community
   cycles_dispenser

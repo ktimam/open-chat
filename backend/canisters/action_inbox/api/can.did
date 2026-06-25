@@ -1,0 +1,19 @@
+type Args = record {
+  max_results : nat32;
+  consumer_key_fingerprint : blob;
+  since_id : nat64;
+};
+type Response = variant { Success : SuccessResult };
+type Response_1 = variant { Success : text };
+type StoredAction = record {
+  id : nat64;
+  ciphertext : blob;
+  ephemeral_public_key : blob;
+  created_at : nat64;
+  oc_signature : blob;
+};
+type SuccessResult = record { actions : vec StoredAction };
+service : {
+  actions : (Args) -> (Response) query;
+  openchat_public_key : (record {}) -> (Response_1) query;
+}

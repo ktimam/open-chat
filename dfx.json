@@ -1,6 +1,12 @@
 {
   "dfx": "0.31.0-beta.1",
   "canisters": {
+    "action_inbox": {
+      "type": "custom",
+      "candid": "backend/canisters/action_inbox/api/can.did",
+      "wasm": "wasms/action_inbox.wasm.gz",
+      "build": "./scripts/generate-wasm.sh action_inbox"
+    },
     "openchat_installer": {
       "type": "custom",
       "candid": "backend/canisters/openchat_installer/api/can.did",

@@ -1,6 +1,9 @@
 [workspace]
 members = [
     "backend/benchmarks",
+    "backend/canisters/action_inbox/api",
+    "backend/canisters/action_inbox/c2c_client",
+    "backend/canisters/action_inbox/impl",
     "backend/canisters/airdrop_bot/api",
     "backend/canisters/airdrop_bot/c2c_client",
     "backend/canisters/airdrop_bot/impl",
