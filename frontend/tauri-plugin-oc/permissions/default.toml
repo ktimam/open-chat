@@ -20,4 +20,8 @@ permissions = [
     "allow-save-media",
     "allow-update-chat-shortcuts",
     "allow-get-pending-deep-link",
+    "allow-download-model",
+    "allow-list-local-models",
+    "allow-delete-model",
+    "allow-infer",
 ]

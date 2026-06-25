@@ -49,5 +49,13 @@ fn is_allowed_url(url_str: &str) -> bool {
 
     // We only allow local webview navigation, everything else must open an
     // external app or a browser.
+    //
+    // On a desktop build the webview is served from an http origin (the dev server, or a local replica
+    // canister subdomain). Without allowing those hosts the navigation handler rejects the initial
+    // navigation and the page falls back to a `data:` URL with no module base, so nothing loads. These
+    // extra hosts never match on mobile, where the host is always `tauri.localhost`.
     host == "tauri.localhost"
+        || host == "localhost"
+        || host == "127.0.0.1"
+        || host.ends_with(".localhost")
 }

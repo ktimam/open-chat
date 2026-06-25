@@ -9,7 +9,9 @@ const __filename = fileURLToPath(import.meta.url);
 export const __dirname = dirname(__filename);
 
 // Sass relevant files & directives
-export const mixins = path.join(__dirname, "src", "styles", "mixins.scss");
+// Forward-slash the path: in a Sass `@use` string the backslashes of a Windows absolute path are escape
+// sequences that corrupt it ("Can't find stylesheet"). Forward slashes work on every platform.
+export const mixins = path.join(__dirname, "src", "styles", "mixins.scss").replace(/\\/g, "/");
 export const sassModulesAndMixins = `@use 'sass:math'; @use 'sass:map'; @use '${mixins}' as *;`;
 
 // Generates content security policy (CSP) hash for the provided entry

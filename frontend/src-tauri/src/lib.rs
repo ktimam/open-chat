@@ -49,8 +49,12 @@ mod mobile_features {
             WebviewUrl::App("index.html".into())
         };
 
-        // Create the main window ourselves with navigation handler
+        // Create the main window ourselves with navigation handler. A narrow default size makes the web
+        // app mount its mobile layout on desktop (it is width-driven), which is the layout this client
+        // targets; the size/title are ignored on mobile, where the window is full-screen.
         WebviewWindowBuilder::new(app, MAIN_WINDOW_LABEL, webview_url)
+            .inner_size(460.0, 920.0)
+            .title("OpenChat")
             .on_navigation(move |url: &Url| {
                 crate::navigation::mobile_on_navigation_handler(&app_handle, url)
             })

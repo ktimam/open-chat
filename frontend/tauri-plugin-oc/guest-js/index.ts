@@ -16,6 +16,19 @@ export { saveMediaToDevice, type SaveMediaRequest } from "./commands/saveMedia";
 export { enableViewportResize } from "./commands/enableViewportResize";
 export { disableViewportResize } from "./commands/disableViewportResize";
 export {
+    downloadModel,
+    listLocalModels,
+    deleteModel,
+    infer,
+    onModelDownloadProgress,
+    type ModelFileSpec,
+    type DownloadModelRequest,
+    type LocalModel,
+    type InferRequest,
+    type InferResponse,
+    type ModelDownloadProgress,
+} from "./commands/onDeviceModels";
+export {
     updateChatShortcuts,
     type ChatShortcut,
     type UpdateChatShortcutsRequest,

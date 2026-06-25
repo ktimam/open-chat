@@ -17,6 +17,10 @@ const COMMANDS: &[&str] = &[
     "disable_viewport_resize",
     "save_media",
     "update_chat_shortcuts",
+    "download_model",
+    "list_local_models",
+    "delete_model",
+    "infer",
 ];
 
 fn main() {
