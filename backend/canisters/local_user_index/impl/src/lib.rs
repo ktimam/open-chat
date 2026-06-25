@@ -594,6 +594,8 @@ struct Data {
     pub premium_items: PremiumItems,
     pub blocked_username_patterns: Vec<String>,
     pub openai_api_key: Option<String>,
+    #[serde(default)]
+    pub action_inbox_canister_id: Option<CanisterId>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -686,6 +688,7 @@ impl Data {
             premium_items: PremiumItems::default(),
             blocked_username_patterns: Vec::new(),
             openai_api_key,
+            action_inbox_canister_id: None,
         }
     }
 }

@@ -20,9 +20,10 @@ use hkdf::Hkdf;
 use p256::PublicKey;
 use p256::elliptic_curve::sec1::ToEncodedPoint;
 use p256::pkcs8::DecodePublicKey;
+use p256::pkcs8::EncodePublicKey;
 use rand_core::CryptoRngCore;
 use serde::{Deserialize, Serialize};
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 
 /// HKDF `info` label; bumping it versions the wire format.
 const INFO: &[u8] = b"oc-action-inbox-v1";
@@ -54,6 +55,15 @@ fn derive_key_and_nonce(shared_secret: &[u8]) -> Result<([u8; 32], [u8; 12]), St
     key.copy_from_slice(&okm[..32]);
     nonce.copy_from_slice(&okm[32..]);
     Ok((key, nonce))
+}
+
+/// Stable routing key for a consumer: SHA-256 of the P-256 public key's SubjectPublicKeyInfo DER. Both the
+/// depositor (this Rust side) and the consumer (its client) compute it identically so deposits route to the
+/// right inbox slot. The consumer's client computes `sha256(crypto.subtle.exportKey("spki", pubKey))`.
+pub fn key_fingerprint(public_key_pem: &str) -> Result<[u8; 32], String> {
+    let pk = PublicKey::from_public_key_pem(public_key_pem).map_err(|e| e.to_string())?;
+    let der = pk.to_public_key_der().map_err(|e| e.to_string())?;
+    Ok(Sha256::digest(der.as_bytes()).into())
 }
 
 /// Encrypt `plaintext` to `recipient_public_key_pem` (a P-256 SubjectPublicKeyInfo PEM).

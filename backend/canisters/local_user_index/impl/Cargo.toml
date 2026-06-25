@@ -10,8 +10,11 @@ path = "src/lib.rs"
 crate-type = ["cdylib"]
 
 [dependencies]
+action_inbox_canister = { path = "../../action_inbox/api" }
+action_inbox_canister_c2c_client = { path = "../../action_inbox/c2c_client" }
 candid = { workspace = true }
 canister_api_macros = { path = "../../../libraries/canister_api_macros" }
+ecies_payload = { path = "../../../libraries/ecies_payload" }
 canister_client = { path = "../../../libraries/canister_client" }
 canister_logger = { path = "../../../libraries/canister_logger" }
 canister_state_macros = { path = "../../../libraries/canister_state_macros" }

@@ -10,6 +10,8 @@ pub mod c2c_community_canister;
 pub mod c2c_create_community;
 pub mod c2c_create_group;
 pub mod c2c_create_user;
+pub mod c2c_deposit_action_confirmed;
+pub mod set_action_inbox_canister;
 pub mod c2c_delete_community;
 pub mod c2c_delete_group;
 pub mod c2c_group_canister;

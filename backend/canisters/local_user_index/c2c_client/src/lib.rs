@@ -15,6 +15,7 @@ generate_c2c_call!(chat_events);
 generate_c2c_call!(c2c_community_canister, 300);
 generate_c2c_call!(c2c_create_community);
 generate_c2c_call!(c2c_create_group);
+generate_c2c_call!(c2c_deposit_action_confirmed);
 generate_c2c_call!(c2c_delete_community);
 generate_c2c_call!(c2c_delete_group);
 generate_c2c_call!(c2c_group_canister, 300);
