@@ -23,6 +23,10 @@ Default permissions for the plugin
 - `allow-save-media`
 - `allow-update-chat-shortcuts`
 - `allow-get-pending-deep-link`
+- `allow-download-model`
+- `allow-list-local-models`
+- `allow-delete-model`
+- `allow-infer`
 
 ## Permission Table
 
@@ -32,6 +36,32 @@ Default permissions for the plugin
 <th>Description</th>
 </tr>
 
+
+<tr>
+<td>
+
+`oc:allow-delete-model`
+
+</td>
+<td>
+
+Enables the delete_model command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`oc:deny-delete-model`
+
+</td>
+<td>
+
+Denies the delete_model command without any pre-configured scope.
+
+</td>
+</tr>
 
 <tr>
 <td>
@@ -55,6 +85,32 @@ Enables the disable_viewport_resize command without any pre-configured scope.
 <td>
 
 Denies the disable_viewport_resize command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`oc:allow-download-model`
+
+</td>
+<td>
+
+Enables the download_model command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`oc:deny-download-model`
+
+</td>
+<td>
+
+Denies the download_model command without any pre-configured scope.
 
 </td>
 </tr>
@@ -185,6 +241,58 @@ Enables the get_server_version command without any pre-configured scope.
 <td>
 
 Denies the get_server_version command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`oc:allow-infer`
+
+</td>
+<td>
+
+Enables the infer command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`oc:deny-infer`
+
+</td>
+<td>
+
+Denies the infer command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`oc:allow-list-local-models`
+
+</td>
+<td>
+
+Enables the list_local_models command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`oc:deny-list-local-models`
+
+</td>
+<td>
+
+Denies the list_local_models command without any pre-configured scope.
 
 </td>
 </tr>
