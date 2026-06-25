@@ -468,6 +468,11 @@ export interface ActionCardContent {
     respondedBy?: string;
     respondedAt?: bigint;
     expiresAt?: bigint;
+    // Send-only delivery routing (set when posting, never hydrated on receive). When both are present,
+    // confirming the card encrypts `confirmPayload` (opaque bytes) to `recipientPublicKey` (a P-256 SPKI
+    // PEM) and deposits it into the on-chain action_inbox. OpenChat never interprets the payload.
+    recipientPublicKey?: string;
+    confirmPayload?: Uint8Array;
 }
 
 export type TransactionId = bigint;
