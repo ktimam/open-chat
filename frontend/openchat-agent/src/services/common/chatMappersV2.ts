@@ -1620,10 +1620,23 @@ export function apiMessageContent(domain: MessageContent): TMessageContentInitia
         case "proposal_content":
         case "message_reminder_content":
         case "message_reminder_created_content":
+        case "action_card_content":
+            return {
+                ActionCard: {
+                    title: domain.title,
+                    rows: domain.rows.map((r) => ({ label: r.label, value: r.value })),
+                    confirm_label: domain.confirmLabel,
+                    cancel_label: domain.cancelLabel,
+                    action_id: domain.actionId,
+                    disclosure: domain.disclosure,
+                    expires_at: domain.expiresAt,
+                    recipient_public_key: domain.recipientPublicKey,
+                    confirm_payload: domain.confirmPayload,
+                },
+            };
         case "reported_message_content":
         case "p2p_swap_content":
         case "encrypted_content":
-        case "action_card_content":
             throw new Error(`Incorrectly attempting to send {domain.kind} content to the server`);
     }
 }

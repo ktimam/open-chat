@@ -7826,6 +7826,8 @@ export const ActionCardContentInitial = Type.Object({
     action_id: Type.String(),
     disclosure: Type.Optional(Type.String()),
     expires_at: Type.Optional(Type.BigInt()),
+    recipient_public_key: Type.Optional(Type.String()),
+    confirm_payload: Type.Optional(TSBytes),
 });
 
 export type ActionCardContent = Static<typeof ActionCardContent>;
