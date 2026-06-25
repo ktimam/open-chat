@@ -4,6 +4,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 mod access_tokens;
 mod achievement;
+mod ai_actions;
 mod airdrop_config;
 mod avatar;
 mod bitflags;
@@ -93,6 +94,7 @@ mod video_calls;
 
 pub use access_tokens::*;
 pub use achievement::*;
+pub use ai_actions::*;
 pub use airdrop_config::*;
 pub use avatar::*;
 pub use bots::*;
