@@ -120,6 +120,7 @@ members = [
     "backend/libraries/constants",
     "backend/libraries/cycles_dispenser_client",
     "backend/libraries/dynamodb_index_store",
+    "backend/libraries/ecies_payload",
     "backend/libraries/email_magic_links",
     "backend/libraries/email_utils",
     "backend/libraries/error_codes",
@@ -179,6 +180,7 @@ version = "0.1.0"
 edition = "2024"
 
 [workspace.dependencies]
+aes-gcm = "0.10"
 async-channel = "2"
 async-trait = "0.1"
 aws-config = "1"
@@ -207,6 +209,7 @@ fcm-service = { git = "https://github.com/ivan-jukic/fcm-service", branch = "mai
 futures = "0.3"
 getrandom = { version = "0.2", features = ["custom"] }
 hex = "0.4"
+hkdf = "0.12"
 hmac-sha256 = { version = "1", features = ["traits010"] }
 http = "1"
 ic-agent = "0.40"

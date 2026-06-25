@@ -1,0 +1,17 @@
+[package]
+name = "ecies_payload"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+aes-gcm = { workspace = true }
+candid = { workspace = true }
+hkdf = { workspace = true }
+p256 = { workspace = true, features = ["ecdh", "ecdsa", "pem", "pkcs8"] }
+rand_core = "0.6"
+serde = { workspace = true }
+serde_bytes = { workspace = true }
+sha2 = { workspace = true }
+
+[dev-dependencies]
+rand = { workspace = true }
