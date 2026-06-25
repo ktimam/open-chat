@@ -20,7 +20,6 @@ use hkdf::Hkdf;
 use p256::PublicKey;
 use p256::elliptic_curve::sec1::ToEncodedPoint;
 use p256::pkcs8::DecodePublicKey;
-use p256::pkcs8::EncodePublicKey;
 use rand_core::CryptoRngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -57,13 +56,14 @@ fn derive_key_and_nonce(shared_secret: &[u8]) -> Result<([u8; 32], [u8; 12]), St
     Ok((key, nonce))
 }
 
-/// Stable routing key for a consumer: SHA-256 of the P-256 public key's SubjectPublicKeyInfo DER. Both the
-/// depositor (this Rust side) and the consumer (its client) compute it identically so deposits route to the
-/// right inbox slot. The consumer's client computes `sha256(crypto.subtle.exportKey("spki", pubKey))`.
+/// Stable routing key for a consumer: SHA-256 of the P-256 public key's uncompressed SEC1 point (the 65-byte
+/// `0x04 ‖ X ‖ Y`). Both the depositor (this Rust side) and the consumer (its client) compute it identically
+/// so deposits route to the right inbox slot. The raw point is used (not the SPKI DER) so the digest is
+/// independent of how each stack encodes the SubjectPublicKeyInfo algorithm OID (WebCrypto may tag an ECDH
+/// key differently than `p256`). The consumer computes `sha256(crypto.subtle.exportKey("raw", pubKey))`.
 pub fn key_fingerprint(public_key_pem: &str) -> Result<[u8; 32], String> {
     let pk = PublicKey::from_public_key_pem(public_key_pem).map_err(|e| e.to_string())?;
-    let der = pk.to_public_key_der().map_err(|e| e.to_string())?;
-    Ok(Sha256::digest(der.as_bytes()).into())
+    Ok(Sha256::digest(pk.to_encoded_point(false).as_bytes()).into())
 }
 
 /// Encrypt `plaintext` to `recipient_public_key_pem` (a P-256 SubjectPublicKeyInfo PEM).
