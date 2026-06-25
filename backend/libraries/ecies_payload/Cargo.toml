@@ -15,4 +15,5 @@ sha2 = { workspace = true }
 
 [dev-dependencies]
 base64 = { workspace = true }
+jwt = { path = "../jwt" }
 rand = { workspace = true }

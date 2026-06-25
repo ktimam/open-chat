@@ -149,12 +149,21 @@ mod tests {
         let envelope = encrypt(plaintext, &pk_pem, &mut rng).unwrap();
         let fingerprint = key_fingerprint(&pk_pem).unwrap();
 
+        // Platform signing key: sign the envelope's preimage exactly as local_user_index does on deposit, so a
+        // WebCrypto consumer can prove it verifies the provenance signature OpenChat produces.
+        let oc = p256::SecretKey::random(&mut rng);
+        let oc_public_key_pem = oc.public_key().to_public_key_pem(Default::default()).unwrap();
+        let oc_secret_key_der = oc.to_pkcs8_der().unwrap().as_bytes().to_vec();
+        let oc_signature = jwt::sign_bytes(&envelope.signing_preimage(), &oc_secret_key_der, &mut rng).unwrap();
+
         println!("ECIES_VECTOR_BEGIN");
         println!("recipient_sk_pem_b64={}", b64.encode(sk_pem.as_bytes()));
         println!("recipient_pk_pem_b64={}", b64.encode(pk_pem.as_bytes()));
         println!("ephemeral_public_key_b64={}", b64.encode(&envelope.ephemeral_public_key));
         println!("ciphertext_b64={}", b64.encode(&envelope.ciphertext));
         println!("signing_preimage_b64={}", b64.encode(envelope.signing_preimage()));
+        println!("oc_public_key_pem_b64={}", b64.encode(oc_public_key_pem.as_bytes()));
+        println!("oc_signature_b64={}", b64.encode(&oc_signature));
         println!("fingerprint_hex={}", fingerprint.iter().map(|b| format!("{b:02x}")).collect::<String>());
         println!("expected_plaintext={}", String::from_utf8_lossy(plaintext));
         println!("ECIES_VECTOR_END");
