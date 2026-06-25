@@ -1,4 +1,5 @@
 pub mod account_billing;
+pub mod ai_action_registry;
 pub mod chit_leaderboard;
 pub mod diamond_membership_details;
 pub mod external_achievements;

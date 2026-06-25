@@ -59,6 +59,8 @@ fn main() {
     generate_ts_method!(user_index, update_diamond_membership_subscription);
 
     generate_ts_method!(user_index, pay_for_diamond_membership);
+    generate_ts_method!(user_index, ai_actions);
+    generate_ts_method!(user_index, register_ai_action);
     generate_ts_method!(user_index, register_bot);
     generate_ts_method!(user_index, remove_bot);
     generate_ts_method!(user_index, set_diamond_membership_fees);

@@ -412,6 +412,8 @@ struct Data {
     #[serde(default)]
     pub blocked_username_patterns: Vec<String>,
     pub openai_api_key: Option<String>,
+    #[serde(default)]
+    pub ai_actions: crate::model::ai_action_registry::AiActionRegistry,
 }
 
 impl Data {
@@ -497,6 +499,7 @@ impl Data {
             premium_items: PremiumItems::default(),
             blocked_username_patterns: Vec::new(),
             openai_api_key: None,
+            ai_actions: crate::model::ai_action_registry::AiActionRegistry::default(),
         };
 
         // Register the ProposalsBot

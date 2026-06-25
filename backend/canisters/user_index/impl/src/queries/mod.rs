@@ -1,3 +1,4 @@
+pub mod ai_actions;
 pub mod bot_installation_events;
 pub mod bot_updates;
 pub mod c2c_lookup_user;
