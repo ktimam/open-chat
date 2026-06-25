@@ -387,6 +387,9 @@ impl From<MessageContent> for MessageContentInitial {
                 action_id: c.action_id,
                 disclosure: c.disclosure,
                 expires_at: c.expires_at,
+                // Server-only routing fields are not present on the hydrated content.
+                recipient_public_key: None,
+                confirm_payload: None,
             }),
             MessageContent::P2PSwap(_) | MessageContent::VideoCall(_) => unimplemented!(),
         }
@@ -785,6 +788,13 @@ pub struct ActionCardContentInitial {
     pub action_id: String,
     pub disclosure: Option<String>,
     pub expires_at: Option<TimestampMillis>,
+    // If both are set, confirming the card deposits `confirm_payload` (opaque bytes, never interpreted by
+    // OpenChat) encrypted to `recipient_public_key` (a P-256 SPKI PEM) into the action_inbox canister.
+    #[serde(default)]
+    pub recipient_public_key: Option<String>,
+    #[serde(default)]
+    #[ts(as = "Option::<ts_export::TSBytes>")]
+    pub confirm_payload: Option<ByteBuf>,
 }
 
 #[ts_export]

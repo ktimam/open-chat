@@ -2058,6 +2058,11 @@ pub struct ActionCardContentInternal {
     pub responded_by: Option<UserId>,
     #[serde(rename = "ra", default, skip_serializing_if = "Option::is_none")]
     pub responded_at: Option<TimestampMillis>,
+    // Opaque delivery routing (see ActionCardContentInitial). Server-only: not hydrated to clients.
+    #[serde(rename = "rpk", default, skip_serializing_if = "Option::is_none")]
+    pub recipient_public_key: Option<String>,
+    #[serde(rename = "cp", default, skip_serializing_if = "Option::is_none")]
+    pub confirm_payload: Option<ByteBuf>,
 }
 
 impl ActionCardContentInternal {
@@ -2108,6 +2113,8 @@ impl From<ActionCardContentInitial> for ActionCardContentInternal {
             expires_at: value.expires_at,
             responded_by: None,
             responded_at: None,
+            recipient_public_key: value.recipient_public_key,
+            confirm_payload: value.confirm_payload,
         }
     }
 }

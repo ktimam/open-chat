@@ -2,8 +2,8 @@ use chat_events::{
     AddRemoveReactionArgs, ChatEventInternal, ChatEvents, ChatEventsListReader, DeleteMessageSuccess,
     DeleteUndeleteMessagesArgs, EditMessageArgs, EventPusher, ExpiredThread, GroupGateUpdatedInternal, MessageContentInternal,
     MessageInternal, NullEventPusher, PushEventResultInternal, PushMessageArgs, Reader, RegisterPollVoteArgs,
-    RegisterPollVoteSuccess, RemoveEventsResult, ReservePrizeSuccess, RespondToActionCardArgs, TipMessageArgs,
-    UndeleteMessageSuccess,
+    RegisterPollVoteSuccess, RemoveEventsResult, ReservePrizeSuccess, RespondToActionCardArgs, RespondToActionCardResult,
+    TipMessageArgs, UndeleteMessageSuccess,
     UpdateMessageSuccess,
 };
 use group_community_common::MemberUpdate;
@@ -1770,7 +1770,7 @@ impl GroupChatCore {
         message_id: MessageId,
         response: ActionCardResponse,
         now: TimestampMillis,
-    ) -> OCResult<UpdateMessageSuccess<ActionCardState>> {
+    ) -> OCResult<UpdateMessageSuccess<RespondToActionCardResult>> {
         let member = self.members.get_verified_member(user_id)?;
         let min_visible_event_index = member.min_visible_event_index();
 

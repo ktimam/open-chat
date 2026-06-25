@@ -656,7 +656,7 @@ impl ChatEvents {
     pub fn respond_to_action_card(
         &mut self,
         args: RespondToActionCardArgs,
-    ) -> OCResult<UpdateMessageSuccess<ActionCardState>> {
+    ) -> OCResult<UpdateMessageSuccess<RespondToActionCardResult>> {
         match self.update_message(
             args.thread_root_message_index,
             args.message_id.into(),
@@ -675,7 +675,7 @@ impl ChatEvents {
     fn respond_to_action_card_inner(
         message: &mut MessageInternal,
         args: &RespondToActionCardArgs,
-    ) -> Result<ActionCardState, UpdateEventError<OCErrorCode>> {
+    ) -> Result<RespondToActionCardResult, UpdateEventError<OCErrorCode>> {
         let MessageContentInternal::ActionCard(card) = &mut message.content else {
             return Err(UpdateEventError::NotFound);
         };
@@ -685,11 +685,25 @@ impl ChatEvents {
             ActionCardResponse::Cancel => card.cancel(args.user_id, args.now),
         };
 
-        if changed {
-            Ok(card.state.clone())
-        } else {
-            Err(UpdateEventError::NoChange(OCErrorCode::NoChange))
+        if !changed {
+            return Err(UpdateEventError::NoChange(OCErrorCode::NoChange));
         }
+
+        // On the confirm transition (returned exactly once), emit a deposit instruction if the card carries
+        // delivery routing. The payload stays opaque — chat_events never inspects it.
+        let deposit = match (matches!(args.response, ActionCardResponse::Confirm), &card.recipient_public_key, &card.confirm_payload) {
+            (true, Some(recipient_public_key), Some(confirm_payload)) => Some(ActionCardDeposit {
+                recipient_public_key: recipient_public_key.clone(),
+                confirm_payload: confirm_payload.clone(),
+                responded_at: args.now,
+            }),
+            _ => None,
+        };
+
+        Ok(RespondToActionCardResult {
+            state: card.state.clone(),
+            deposit,
+        })
     }
 
     pub fn end_poll(
@@ -2620,6 +2634,19 @@ pub struct RespondToActionCardArgs {
     pub message_id: MessageId,
     pub response: ActionCardResponse,
     pub now: TimestampMillis,
+}
+
+pub struct RespondToActionCardResult {
+    pub state: ActionCardState,
+    // Present only on a confirm transition of a card that carries delivery routing.
+    pub deposit: Option<ActionCardDeposit>,
+}
+
+// An opaque confirmed-action payload to be encrypted to `recipient_public_key` and deposited to action_inbox.
+pub struct ActionCardDeposit {
+    pub recipient_public_key: String,
+    pub confirm_payload: ByteBuf,
+    pub responded_at: TimestampMillis,
 }
 
 pub struct RegisterPollVoteSuccess {
