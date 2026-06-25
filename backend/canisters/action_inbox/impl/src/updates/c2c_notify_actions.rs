@@ -4,7 +4,7 @@ use action_inbox_canister::c2c_notify_actions::{Response::*, *};
 use canister_api_macros::update;
 use canister_tracing_macros::trace;
 
-#[update(guard = "caller_is_authorized_depositor", msgpack = true)]
+#[update(guard = "caller_is_authorized_depositor", candid = true, msgpack = true)]
 #[trace]
 fn c2c_notify_actions(args: Args) -> Response {
     mutate_state(|state| c2c_notify_actions_impl(args, state))

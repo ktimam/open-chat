@@ -1,10 +1,20 @@
+type ActionDeposit = record {
+  idempotency_id : nat64;
+  ciphertext : blob;
+  ephemeral_public_key : blob;
+  consumer_key_fingerprint : blob;
+  created_at : nat64;
+  oc_signature : blob;
+};
 type Args = record {
   max_results : nat32;
   consumer_key_fingerprint : blob;
   since_id : nat64;
 };
+type Args_1 = record { deposits : vec ActionDeposit };
 type Response = variant { Success : SuccessResult };
-type Response_1 = variant { Success : text };
+type Response_1 = variant { Error : record { nat16; opt text }; Success };
+type Response_2 = variant { Success : text };
 type StoredAction = record {
   id : nat64;
   ciphertext : blob;
@@ -15,5 +25,6 @@ type StoredAction = record {
 type SuccessResult = record { actions : vec StoredAction };
 service : {
   actions : (Args) -> (Response) query;
-  openchat_public_key : (record {}) -> (Response_1) query;
+  c2c_notify_actions : (Args_1) -> (Response_1);
+  openchat_public_key : (record {}) -> (Response_2) query;
 }
