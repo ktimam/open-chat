@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
     type AiActionDefinition,
+    type AiActionRegistrationWire,
+    aiActionFromRegistration,
     buildActionCardContent,
+    isActionRunnable,
     parseExtraction,
     runAiAction,
 } from "./aiAction";
@@ -95,5 +98,66 @@ describe("runAiAction", () => {
         expect(seen?.prompt).toBe(DEF.promptTemplate);
         expect(seen?.responseSchema).toBe(DEF.responseSchema);
         expect(seen?.image).toEqual(new Uint8Array([1, 2, 3]));
+    });
+});
+
+describe("aiActionFromRegistration", () => {
+    const WIRE: AiActionRegistrationWire = {
+        id: 1n,
+        definition: {
+            name: "demo.expense.add",
+            description: "Log expense",
+            prompt_template: "extract the transaction",
+            response_schema: '{"type":"object"}',
+            endpoint: "",
+            consumer_public_key: "-----BEGIN PUBLIC KEY-----\nABC\n-----END PUBLIC KEY-----\n",
+            card: {
+                title: "Log expense",
+                confirm_label: "Add",
+                cancel_label: "Dismiss",
+                rows: [
+                    { field: "amount", label: "Amount" },
+                    { field: "currency", label: "Currency" },
+                ],
+            },
+        },
+    };
+
+    it("maps the snake_case registry entry to a runner AiActionDefinition", () => {
+        const def = aiActionFromRegistration(WIRE);
+        expect(def.name).toBe("demo.expense.add");
+        expect(def.promptTemplate).toBe("extract the transaction");
+        expect(def.responseSchema).toEqual({ type: "object" });
+        expect(def.consumerPublicKey).toContain("BEGIN PUBLIC KEY");
+        expect(def.card.confirmLabel).toBe("Add");
+        // card row `field` becomes the runner's `valueKey`
+        expect(def.card.rows).toEqual([
+            { label: "Amount", valueKey: "amount" },
+            { label: "Currency", valueKey: "currency" },
+        ]);
+    });
+    it("tolerates a non-JSON schema string (no constraint)", () => {
+        const def = aiActionFromRegistration({ ...WIRE, definition: { ...WIRE.definition, response_schema: "not json" } });
+        expect(def.responseSchema).toBeUndefined();
+    });
+});
+
+describe("isActionRunnable", () => {
+    const base = aiActionFromRegistration({
+        id: 1n,
+        definition: {
+            name: "a",
+            description: "",
+            prompt_template: "p",
+            response_schema: "",
+            endpoint: "",
+            consumer_public_key: "KEY",
+            card: { title: "t", confirm_label: "c", cancel_label: "x", rows: [] },
+        },
+    });
+    it("requires inference + a recipient key", () => {
+        expect(isActionRunnable(base, true)).toBe(true);
+        expect(isActionRunnable(base, false)).toBe(false);
+        expect(isActionRunnable({ ...base, consumerPublicKey: undefined }, true)).toBe(false);
     });
 });

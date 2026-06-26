@@ -123,3 +123,60 @@ export async function runAiAction(
 
     return { kind: "ready", card: buildActionCardContent(def, extracted, recipientPublicKeyPem), extracted };
 }
+
+// --- Registry read -------------------------------------------------------------------------------------------
+// The on-chain registry entry as the user_index `ai_actions` query returns it (snake_case; response_schema is a
+// JSON string; card rows are keyed by `field`). Defined here as the read contract — the agent validates the
+// query result into this shape, then maps it to the AiActionDefinition the runner consumes.
+export interface AiActionRegistrationWire {
+    id: bigint;
+    definition: {
+        name: string;
+        description: string;
+        prompt_template: string;
+        response_schema: string;
+        endpoint: string;
+        consumer_public_key?: string;
+        card: {
+            title: string;
+            confirm_label: string;
+            cancel_label: string;
+            disclosure?: string;
+            rows: { field: string; label: string }[];
+        };
+    };
+}
+
+export function aiActionFromRegistration(reg: AiActionRegistrationWire): AiActionDefinition {
+    const d = reg.definition;
+    let responseSchema: object | undefined;
+    if (d.response_schema.trim().length > 0) {
+        try {
+            const parsed: unknown = JSON.parse(d.response_schema);
+            if (parsed !== null && typeof parsed === "object") responseSchema = parsed as object;
+        } catch {
+            // best-effort: a non-JSON schema string just means no constraint is passed to the model
+        }
+    }
+    return {
+        name: d.name,
+        description: d.description,
+        promptTemplate: d.prompt_template,
+        responseSchema,
+        endpoint: d.endpoint,
+        consumerPublicKey: d.consumer_public_key,
+        card: {
+            title: d.card.title,
+            confirmLabel: d.card.confirm_label,
+            cancelLabel: d.card.cancel_label,
+            disclosure: d.card.disclosure,
+            rows: d.card.rows.map((r) => ({ label: r.label, valueKey: r.field })),
+        },
+    };
+}
+
+// An action is "runnable" for a message only if it can deliver on-chain (has a recipient key) and on-device
+// inference is available; callers use this to decide whether to surface the proposal affordance.
+export function isActionRunnable(def: AiActionDefinition, inferenceAvailable: boolean): boolean {
+    return inferenceAvailable && (def.consumerPublicKey?.length ?? 0) > 0;
+}
