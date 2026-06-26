@@ -19,6 +19,7 @@
     import { navigate } from "@utils/navigation";
     import { getContext } from "svelte";
     import { _, locale } from "svelte-i18n";
+    import AutoFix from "svelte-material-icons/AutoFix.svelte";
     import CollapseIcon from "svelte-material-icons/ArrowCollapseUp.svelte";
     import Cancel from "svelte-material-icons/Cancel.svelte";
     import ChatPlusOutline from "svelte-material-icons/ChatPlusOutline.svelte";
@@ -49,6 +50,7 @@
     import { now } from "../../stores/time";
     import { toastStore } from "../../stores/toast";
     import { isTouchOnlyDevice } from "../../utils/devices";
+    import { isNativeClient } from "../../utils/onDeviceInference";
     import * as shareFunctions from "../../utils/share";
     import { copyToClipboard } from "../../utils/urls";
     import AreYouSure from "../AreYouSure.svelte";
@@ -102,6 +104,7 @@
         onEditMessage: () => void;
         onReplyPrivately: () => void;
         onTipMessage: (ledger: string) => void;
+        onRunAiAction?: () => void;
     }
 
     let {
@@ -144,6 +147,7 @@
         onEditMessage,
         onReplyPrivately,
         onTipMessage,
+        onRunAiAction,
     }: Props = $props();
 
     let menuIconEl: MenuIcon | undefined;
@@ -608,6 +612,16 @@
                         {/snippet}
                         {#snippet text()}
                             <div><Translatable resourceKey={i18nKey("tip.menu")} /></div>
+                        {/snippet}
+                    </MenuItem>
+                {/if}
+                {#if onRunAiAction !== undefined && isNativeClient()}
+                    <MenuItem onclick={onRunAiAction}>
+                        {#snippet icon()}
+                            <AutoFix size={$iconSize} color={"var(--icon-inverted-txt)"} />
+                        {/snippet}
+                        {#snippet text()}
+                            <div><Translatable resourceKey={i18nKey("aiActions.propose")} /></div>
                         {/snippet}
                     </MenuItem>
                 {/if}

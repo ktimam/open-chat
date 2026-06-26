@@ -1,6 +1,7 @@
 
 <script lang="ts">
     import { navigate } from "@utils/navigation";
+    import { proposeAndPost } from "@utils/aiActionRunner";
     import Typing from "@shared_components/Typing.svelte";
     import { trackedEffect } from "@src/utils/effects.svelte";
     import type { ProfileLinkClickedEvent } from "@webcomponents/profileLink";
@@ -261,6 +262,28 @@
 
     function tipMessage(ledger: string) {
         tipping = ledger;
+    }
+
+    async function runAiActionHandler() {
+        const result = await proposeAndPost(client, messageContext, msg.content);
+        switch (result.kind) {
+            case "no_actions":
+                toastStore.showFailureToast(i18nKey("No AI actions are registered"));
+                break;
+            case "unavailable":
+                toastStore.showFailureToast(i18nKey("On-device model unavailable"));
+                break;
+            case "unsupported_content":
+                toastStore.showFailureToast(i18nKey("This message can't be turned into an action"));
+                break;
+            case "no_extraction":
+                toastStore.showFailureToast(i18nKey("The model found no action in this message"));
+                break;
+            case "error":
+                toastStore.showFailureToast(i18nKey(`Action failed: ${result.error}`));
+                break;
+            // "ready" -> proposeAndPost already posted the card for the user to confirm.
+        }
     }
 
     function selectReaction(selected: SelectedEmoji) {
@@ -752,6 +775,7 @@
                                 onTipMessage={tipMessage}
                                 onReportMessage={reportMessage}
                                 onCancelReminder={cancelReminder}
+                                onRunAiAction={runAiActionHandler}
                                 onRemindMe={remindMe} />
                         {/if}
 
