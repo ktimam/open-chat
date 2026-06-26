@@ -3118,8 +3118,10 @@ name = "ecies_payload"
 version = "0.1.0"
 dependencies = [
  "aes-gcm",
+ "base64 0.22.1",
  "candid",
  "hkdf",
+ "jwt",
  "p256",
  "rand 0.8.5",
  "rand_core 0.6.4",
@@ -6520,6 +6522,8 @@ dependencies = [
 name = "local_user_index_canister_impl"
 version = "0.1.0"
 dependencies = [
+ "action_inbox_canister",
+ "action_inbox_canister_c2c_client",
  "candid",
  "canister_api_macros",
  "canister_client",
@@ -6531,6 +6535,7 @@ dependencies = [
  "community_canister_c2c_client",
  "constants",
  "ct-codecs",
+ "ecies_payload",
  "email_address",
  "event_store_producer",
  "event_store_producer_cdk_runtime",
