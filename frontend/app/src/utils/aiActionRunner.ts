@@ -6,27 +6,47 @@
 // with client.sendMessageWithContent — on confirm, OpenChat encrypts confirmPayload to the action's
 // recipient_public_key and deposits it into the action_inbox. Nothing here is app-specific.
 
-import { runAiAction, type AiActionDefinition, type RunAiActionResult } from "openchat-shared";
+import {
+    isActionRunnable,
+    runAiAction,
+    type AiActionDefinition,
+    type RunAiActionResult,
+} from "openchat-shared";
 import type { MessageContent, MessageContext, OpenChat } from "openchat-client";
-import { inferOnDevice } from "./onDeviceInference";
+import { inferOnDevice, isNativeClient } from "./onDeviceInference";
 
 export type ProposeResult =
     | RunAiActionResult
     // No app has registered an AI action with a recipient key.
     | { kind: "no_actions" }
-    // The message content isn't something the runner can extract from (yet).
+    // The message content isn't something the runner can extract from.
     | { kind: "unsupported_content" };
 
-// Pick a registered action to run against this content. Generic: first action that declares a recipient key.
-// (A richer UI could let the user choose, or match on a per-action trigger.)
+// Pick a registered action to run against this content. Generic: the first action that is runnable on this
+// client (on-device inference available + the action declares a recipient key). A richer UI could let the
+// user choose, or match on a per-action trigger.
 function pickAction(actions: AiActionDefinition[]): AiActionDefinition | undefined {
-    return actions.find((a) => a.consumerPublicKey !== undefined && a.consumerPublicKey.length > 0);
+    const available = isNativeClient();
+    return actions.find((a) => isActionRunnable(a, available));
 }
 
-function contentToInput(content: MessageContent): { text?: string; image?: Uint8Array } | undefined {
-    if (content.kind === "text_content") return { text: content.text };
-    // Image extraction (the receipt-screenshot case) needs the blob bytes fetched from storage first; wire
-    // that in where the caller already has the decrypted image bytes and pass { image }.
+// Turn a message's content into runner input. Text is used directly; an image's bytes are fetched from the
+// (already-decrypted, displayable) blob URL so the on-device vision model can read it (the receipt case).
+async function contentToInput(
+    content: MessageContent,
+): Promise<{ text?: string; image?: Uint8Array } | undefined> {
+    if (content.kind === "text_content") {
+        return { text: content.text };
+    }
+    if (content.kind === "image_content" && content.blobUrl !== undefined) {
+        try {
+            const resp = await fetch(content.blobUrl);
+            if (!resp.ok) return undefined;
+            return { image: new Uint8Array(await resp.arrayBuffer()) };
+        } catch {
+            return undefined;
+        }
+    }
     return undefined;
 }
 
@@ -39,10 +59,10 @@ export async function proposeAiActionForMessage(
     const def = pickAction(actions);
     if (def === undefined) return { kind: "no_actions" };
 
-    const input = contentToInput(content);
+    const input = await contentToInput(content);
     if (input === undefined) return { kind: "unsupported_content" };
 
-    // def.consumerPublicKey is guaranteed by pickAction.
+    // def.consumerPublicKey is guaranteed by isActionRunnable/pickAction.
     return runAiAction(def, input, def.consumerPublicKey as string, inferOnDevice);
 }
 
