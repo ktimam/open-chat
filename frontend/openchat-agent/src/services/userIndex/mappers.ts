@@ -33,8 +33,9 @@ import type {
     UsersApiResponse,
     UserSummary,
     UserSummaryUpdate,
+    type AiActionDefinition,
 } from "openchat-shared";
-import { CommonResponses, UnsupportedValueError } from "openchat-shared";
+import { aiActionFromRegistration, CommonResponses, UnsupportedValueError } from "openchat-shared";
 import type {
     BotDefinition as ApiBotDefinition,
     BotInstallationLocation as ApiBotInstallationLocation,
@@ -75,6 +76,7 @@ import type {
     UserIndexUnsuspendUserResponse,
     UserIndexUserRegistrationCanisterResponse,
     UserIndexUsersResponse,
+    UserIndexAiActionsResponse,
 } from "../../typebox";
 import { toRecord } from "../../utils/list";
 import {
@@ -596,6 +598,15 @@ export function diamondMembershipFeesResponse(
         "Unexpected DiamondMembershipFeesResponse type received",
         value,
     );
+}
+
+export function aiActionsResponse(value: UserIndexAiActionsResponse): AiActionDefinition[] {
+    if ("Success" in value) {
+        return value.Success.actions.map((r) =>
+            aiActionFromRegistration({ id: BigInt(r.id), definition: r.definition }),
+        );
+    }
+    throw new UnsupportedValueError("Unexpected AiActionsResponse type received", value);
 }
 
 export function chitLeaderboardResponse(

@@ -1087,6 +1087,9 @@ function getAction(
         case "diamondMembershipFees":
             return agent.diamondMembershipFees();
 
+        case "aiActions":
+            return agent.aiActions();
+
         case "reportedMessages":
             return agent.reportedMessages(payload.userId);
 

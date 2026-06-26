@@ -204,6 +204,7 @@ import type {
     DeleteCryptoAccountResponse,
     DiamondMembershipDuration,
     DiamondMembershipFees,
+    AiActionDefinition,
     ManageFavouritesResponse,
     NamedAccount,
     PayForDiamondMembershipResponse,
@@ -400,6 +401,7 @@ export type WorkerRequest =
     | ApproveTransfer
     | DeleteDirectChat
     | GetDiamondMembershipFees
+    | AiActions
     | GetReportedMessages
     | GetExchangeRates
     | AcceptP2PSwap
@@ -2110,6 +2112,10 @@ type GetDiamondMembershipFees = {
     kind: "diamondMembershipFees";
 };
 
+type AiActions = {
+    kind: "aiActions";
+};
+
 type GetExchangeRates = {
     kind: "exchangeRates";
 };
@@ -2489,6 +2495,8 @@ export type WorkerResult<T> = T extends Init
     ? boolean
     : T extends GetDiamondMembershipFees
     ? DiamondMembershipFees[]
+    : T extends AiActions
+    ? AiActionDefinition[]
     : T extends GetReportedMessages
     ? string
     : T extends GetExchangeRates

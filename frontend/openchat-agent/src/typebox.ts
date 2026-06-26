@@ -5989,6 +5989,46 @@ export const RegistryTokenDetails = Type.Object({
     evm_contract_addresses: Type.Array(EvmContractAddress),
 });
 
+export type UserIndexAiActionsCardRowTemplate = Static<typeof UserIndexAiActionsCardRowTemplate>;
+export const UserIndexAiActionsCardRowTemplate = Type.Object({
+    field: Type.String(),
+    label: Type.String(),
+});
+
+export type UserIndexAiActionsCardTemplate = Static<typeof UserIndexAiActionsCardTemplate>;
+export const UserIndexAiActionsCardTemplate = Type.Object({
+    title: Type.String(),
+    confirm_label: Type.String(),
+    cancel_label: Type.String(),
+    rows: Type.Array(UserIndexAiActionsCardRowTemplate),
+    disclosure: Type.Optional(Type.String()),
+});
+
+export type UserIndexAiActionsDefinition = Static<typeof UserIndexAiActionsDefinition>;
+export const UserIndexAiActionsDefinition = Type.Object({
+    name: Type.String(),
+    description: Type.String(),
+    prompt_template: Type.String(),
+    response_schema: Type.String(),
+    card: UserIndexAiActionsCardTemplate,
+    endpoint: Type.String(),
+    consumer_public_key: Type.Optional(Type.String()),
+});
+
+export type UserIndexAiActionsRegistration = Static<typeof UserIndexAiActionsRegistration>;
+export const UserIndexAiActionsRegistration = Type.Object({
+    id: Type.Number(),
+    registered_by: UserId,
+    definition: UserIndexAiActionsDefinition,
+    created: Type.BigInt(),
+    updated: Type.BigInt(),
+});
+
+export type UserIndexAiActionsResponse = Static<typeof UserIndexAiActionsResponse>;
+export const UserIndexAiActionsResponse = Type.Object({
+    Success: Type.Object({ actions: Type.Array(UserIndexAiActionsRegistration) }),
+});
+
 export type UserIndexDiamondMembershipFeesResponse = Static<
     typeof UserIndexDiamondMembershipFeesResponse
 >;

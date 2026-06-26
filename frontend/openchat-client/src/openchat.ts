@@ -164,6 +164,7 @@ import {
     type DexId,
     type DiamondMembershipDuration,
     type DiamondMembershipFees,
+    type AiActionDefinition,
     type DiamondMembershipStatus,
     type DiamondRoute,
     type Dimensions,
@@ -7046,6 +7047,14 @@ export class OpenChat {
         return this.#worker
             .send({
                 kind: "diamondMembershipFees",
+            })
+            .catch(() => []);
+    }
+
+    aiActions(): Promise<AiActionDefinition[]> {
+        return this.#worker
+            .send({
+                kind: "aiActions",
             })
             .catch(() => []);
     }
