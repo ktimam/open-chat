@@ -14,3 +14,4 @@ pub mod chat_events;
 pub mod group_and_community_summary_updates_v2;
 pub mod latest_notification_index;
 pub mod notifications;
+pub mod oc_signing_public_key;
