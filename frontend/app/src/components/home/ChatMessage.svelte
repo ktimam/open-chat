@@ -2,6 +2,7 @@
 <script lang="ts">
     import { navigate } from "@utils/navigation";
     import { proposeAndPost } from "@utils/aiActionRunner";
+    import { isNativeClient } from "@utils/onDeviceInference";
     import Typing from "@shared_components/Typing.svelte";
     import { trackedEffect } from "@src/utils/effects.svelte";
     import type { ProfileLinkClickedEvent } from "@webcomponents/profileLink";
@@ -265,7 +266,24 @@
     }
 
     async function runAiActionHandler() {
-        const result = await proposeAndPost(client, messageContext, msg.content);
+        // On-device inference only runs in the native (desktop/mobile) client. In a browser, fall back to a
+        // manually-supplied extraction so the confirm → deposit cycle can still be driven.
+        let manualExtraction: Record<string, unknown> | undefined;
+        if (!isNativeClient()) {
+            const raw = window.prompt(
+                "On-device inference runs only in the desktop/mobile app. Enter the action's fields as JSON " +
+                    'to propose it here, e.g. {"amount":"$20"}',
+                "{}",
+            );
+            if (raw === null) return;
+            try {
+                manualExtraction = JSON.parse(raw) as Record<string, unknown>;
+            } catch {
+                toastStore.showFailureToast(i18nKey("That isn't valid JSON"));
+                return;
+            }
+        }
+        const result = await proposeAndPost(client, messageContext, msg.content, manualExtraction);
         switch (result.kind) {
             case "no_actions":
                 toastStore.showFailureToast(i18nKey("No AI actions are registered"));

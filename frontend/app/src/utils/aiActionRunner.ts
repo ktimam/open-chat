@@ -7,6 +7,7 @@
 // recipient_public_key and deposits it into the action_inbox. Nothing here is app-specific.
 
 import {
+    buildActionCardContent,
     isActionRunnable,
     runAiAction,
     type AiActionDefinition,
@@ -26,8 +27,12 @@ export type ProposeResult =
 // client (on-device inference available + the action declares a recipient key). A richer UI could let the
 // user choose, or match on a per-action trigger.
 function pickAction(actions: AiActionDefinition[]): AiActionDefinition | undefined {
-    const available = isNativeClient();
-    return actions.find((a) => isActionRunnable(a, available));
+    // Native: require on-device inference + a recipient key. Browser: a recipient key is enough — the
+    // extraction is supplied manually via the fallback in proposeAiActionForMessage.
+    if (isNativeClient()) {
+        return actions.find((a) => isActionRunnable(a, true));
+    }
+    return actions.find((a) => (a.consumerPublicKey?.length ?? 0) > 0);
 }
 
 // Turn a message's content into runner input. Text is used directly; an image's bytes are fetched from the
@@ -54,10 +59,18 @@ async function contentToInput(
 export async function proposeAiActionForMessage(
     client: OpenChat,
     content: MessageContent,
+    manualExtraction?: Record<string, unknown>,
 ): Promise<ProposeResult> {
     const actions = await client.aiActions();
     const def = pickAction(actions);
     if (def === undefined) return { kind: "no_actions" };
+
+    // Browser fallback: with no on-device runtime, the caller can supply the extraction directly (e.g. from a
+    // small dialog). Build the card from it with no inference — the rest of the cycle is identical.
+    if (!isNativeClient() && manualExtraction !== undefined) {
+        const card = buildActionCardContent(def, manualExtraction, def.consumerPublicKey as string);
+        return { kind: "ready", card, extracted: manualExtraction };
+    }
 
     const input = await contentToInput(content);
     if (input === undefined) return { kind: "unsupported_content" };
@@ -71,8 +84,9 @@ export async function proposeAndPost(
     client: OpenChat,
     messageContext: MessageContext,
     content: MessageContent,
+    manualExtraction?: Record<string, unknown>,
 ): Promise<ProposeResult> {
-    const result = await proposeAiActionForMessage(client, content);
+    const result = await proposeAiActionForMessage(client, content, manualExtraction);
     if (result.kind === "ready") {
         client.sendMessageWithContent(messageContext, result.card, false, [], false);
     }
