@@ -265,25 +265,34 @@
         tipping = ledger;
     }
 
+    function promptForExtraction(): Record<string, unknown> | undefined {
+        const raw = window.prompt(
+            'Enter the action\'s fields as JSON to propose it, e.g. {"amount":20,"currency":"USD"}',
+            "{}",
+        );
+        if (raw === null) return undefined;
+        try {
+            return JSON.parse(raw) as Record<string, unknown>;
+        } catch {
+            toastStore.showFailureToast(i18nKey("That isn't valid JSON"));
+            return undefined;
+        }
+    }
+
     async function runAiActionHandler() {
-        // On-device inference only runs in the native (desktop/mobile) client. In a browser, fall back to a
-        // manually-supplied extraction so the confirm → deposit cycle can still be driven.
+        // Native clients run the on-device model. A browser — or a native client with no model downloaded —
+        // falls back to a manually-supplied extraction so the confirm → deposit cycle can still be driven.
         let manualExtraction: Record<string, unknown> | undefined;
         if (!isNativeClient()) {
-            const raw = window.prompt(
-                "On-device inference runs only in the desktop/mobile app. Enter the action's fields as JSON " +
-                    'to propose it here, e.g. {"amount":"$20"}',
-                "{}",
-            );
-            if (raw === null) return;
-            try {
-                manualExtraction = JSON.parse(raw) as Record<string, unknown>;
-            } catch {
-                toastStore.showFailureToast(i18nKey("That isn't valid JSON"));
-                return;
-            }
+            manualExtraction = promptForExtraction();
+            if (manualExtraction === undefined) return;
         }
-        const result = await proposeAndPost(client, messageContext, msg.content, manualExtraction);
+        let result = await proposeAndPost(client, messageContext, msg.content, manualExtraction);
+        if (result.kind === "unavailable") {
+            const me = promptForExtraction();
+            if (me === undefined) return;
+            result = await proposeAndPost(client, messageContext, msg.content, me);
+        }
         switch (result.kind) {
             case "no_actions":
                 toastStore.showFailureToast(i18nKey("No AI actions are registered"));

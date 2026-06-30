@@ -65,9 +65,9 @@ export async function proposeAiActionForMessage(
     const def = pickAction(actions);
     if (def === undefined) return { kind: "no_actions" };
 
-    // Browser fallback: with no on-device runtime, the caller can supply the extraction directly (e.g. from a
-    // small dialog). Build the card from it with no inference — the rest of the cycle is identical.
-    if (!isNativeClient() && manualExtraction !== undefined) {
+    // Fallback: when the caller supplies an extraction directly (no on-device runtime, or a native client with
+    // no model), build the card from it with no inference — the rest of the cycle is identical.
+    if (manualExtraction !== undefined) {
         const card = buildActionCardContent(def, manualExtraction, def.consumerPublicKey as string);
         return { kind: "ready", card, extracted: manualExtraction };
     }
