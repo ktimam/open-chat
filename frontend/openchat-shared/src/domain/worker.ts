@@ -181,6 +181,7 @@ import type {
     MemberRole,
     OptionalChatPermissions,
 } from "./permission";
+import type { AiActionDefinition } from "./aiAction";
 import type { CandidateProposal } from "./proposals";
 import type {
     StakeNeuronForSubmittingProposalsResponse,
@@ -204,7 +205,6 @@ import type {
     DeleteCryptoAccountResponse,
     DiamondMembershipDuration,
     DiamondMembershipFees,
-    AiActionDefinition,
     ManageFavouritesResponse,
     NamedAccount,
     PayForDiamondMembershipResponse,
