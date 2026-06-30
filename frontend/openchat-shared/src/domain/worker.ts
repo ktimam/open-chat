@@ -402,6 +402,7 @@ export type WorkerRequest =
     | DeleteDirectChat
     | GetDiamondMembershipFees
     | AiActions
+    | RegisterAiAction
     | GetReportedMessages
     | GetExchangeRates
     | AcceptP2PSwap
@@ -2116,6 +2117,11 @@ type AiActions = {
     kind: "aiActions";
 };
 
+type RegisterAiAction = {
+    kind: "registerAiAction";
+    definition: AiActionDefinition;
+};
+
 type GetExchangeRates = {
     kind: "exchangeRates";
 };
@@ -2497,6 +2503,8 @@ export type WorkerResult<T> = T extends Init
     ? DiamondMembershipFees[]
     : T extends AiActions
     ? AiActionDefinition[]
+    : T extends RegisterAiAction
+    ? boolean
     : T extends GetReportedMessages
     ? string
     : T extends GetExchangeRates

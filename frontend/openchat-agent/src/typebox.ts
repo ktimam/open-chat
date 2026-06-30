@@ -6029,6 +6029,18 @@ export const UserIndexAiActionsResponse = Type.Object({
     Success: Type.Object({ actions: Type.Array(UserIndexAiActionsRegistration) }),
 });
 
+export type UserIndexRegisterAiActionArgs = Static<typeof UserIndexRegisterAiActionArgs>;
+export const UserIndexRegisterAiActionArgs = Type.Object({
+    definition: UserIndexAiActionsDefinition,
+});
+
+export type UserIndexRegisterAiActionResponse = Static<typeof UserIndexRegisterAiActionResponse>;
+export const UserIndexRegisterAiActionResponse = Type.Union([
+    Type.Object({ Success: UserIndexAiActionsRegistration }),
+    Type.Object({ InvalidRequest: Type.String() }),
+    Type.Object({ Error: OCError }),
+]);
+
 export type UserIndexDiamondMembershipFeesResponse = Static<
     typeof UserIndexDiamondMembershipFeesResponse
 >;

@@ -60,7 +60,7 @@ import type {
     DexId,
     DiamondMembershipDuration,
     DiamondMembershipFees,
-    type AiActionDefinition,
+    AiActionDefinition,
     DirectChatIdentifier,
     DirectChatSummary,
     DirectChatSummaryUpdates,
@@ -3677,6 +3677,10 @@ export class OpenChatAgent extends EventTarget {
 
     aiActions(): Promise<AiActionDefinition[]> {
         return this._userIndexClient.aiActions();
+    }
+
+    registerAiAction(definition: AiActionDefinition): Promise<boolean> {
+        return this._userIndexClient.registerAiAction(definition);
     }
 
     setDiamondMembershipFees(fees: DiamondMembershipFees[]): Promise<boolean> {

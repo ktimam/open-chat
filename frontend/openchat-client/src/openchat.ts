@@ -7059,6 +7059,13 @@ export class OpenChat {
             .catch(() => []);
     }
 
+    registerAiAction(definition: AiActionDefinition): Promise<boolean> {
+        return this.#worker.send({
+            kind: "registerAiAction",
+            definition,
+        });
+    }
+
     reportedMessages(userId: string | undefined): Promise<string> {
         return this.#worker.send({
             kind: "reportedMessages",

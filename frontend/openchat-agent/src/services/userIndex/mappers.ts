@@ -33,7 +33,7 @@ import type {
     UsersApiResponse,
     UserSummary,
     UserSummaryUpdate,
-    type AiActionDefinition,
+    AiActionDefinition,
 } from "openchat-shared";
 import { aiActionFromRegistration, CommonResponses, UnsupportedValueError } from "openchat-shared";
 import type {
@@ -77,6 +77,8 @@ import type {
     UserIndexUserRegistrationCanisterResponse,
     UserIndexUsersResponse,
     UserIndexAiActionsResponse,
+    UserIndexAiActionsDefinition,
+    UserIndexRegisterAiActionResponse,
 } from "../../typebox";
 import { toRecord } from "../../utils/list";
 import {
@@ -607,6 +609,30 @@ export function aiActionsResponse(value: UserIndexAiActionsResponse): AiActionDe
         );
     }
     throw new UnsupportedValueError("Unexpected AiActionsResponse type received", value);
+}
+
+// The inverse of aiActionFromRegistration: maps the runner's camelCase AiActionDefinition into the on-chain
+// snake_case wire shape (response_schema as a JSON string, card rows keyed by `field`, endpoint required).
+export function apiAiActionDefinition(def: AiActionDefinition): UserIndexAiActionsDefinition {
+    return {
+        name: def.name,
+        description: def.description,
+        prompt_template: def.promptTemplate,
+        response_schema: def.responseSchema !== undefined ? JSON.stringify(def.responseSchema) : "",
+        endpoint: def.endpoint ?? "",
+        consumer_public_key: def.consumerPublicKey,
+        card: {
+            title: def.card.title,
+            confirm_label: def.card.confirmLabel,
+            cancel_label: def.card.cancelLabel,
+            disclosure: def.card.disclosure,
+            rows: def.card.rows.map((r) => ({ field: r.valueKey, label: r.label })),
+        },
+    };
+}
+
+export function registerAiActionResponse(value: UserIndexRegisterAiActionResponse): boolean {
+    return "Success" in value;
 }
 
 export function chitLeaderboardResponse(

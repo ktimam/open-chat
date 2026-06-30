@@ -1090,6 +1090,9 @@ function getAction(
         case "aiActions":
             return agent.aiActions();
 
+        case "registerAiAction":
+            return agent.registerAiAction(payload.definition);
+
         case "reportedMessages":
             return agent.reportedMessages(payload.userId);
 

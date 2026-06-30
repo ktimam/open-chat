@@ -1610,16 +1610,6 @@ export function apiMessageContent(domain: MessageContent): TMessageContentInitia
                 },
             };
 
-        case "video_call_content":
-        case "deleted_content":
-        case "blocked_content":
-        case "prize_content":
-        case "prize_winner_content":
-        case "placeholder_content":
-        case "bot_placeholder_content":
-        case "proposal_content":
-        case "message_reminder_content":
-        case "message_reminder_created_content":
         case "action_card_content":
             return {
                 ActionCard: {
@@ -1634,10 +1624,21 @@ export function apiMessageContent(domain: MessageContent): TMessageContentInitia
                     confirm_payload: domain.confirmPayload,
                 },
             };
+
+        case "video_call_content":
+        case "deleted_content":
+        case "blocked_content":
+        case "prize_content":
+        case "prize_winner_content":
+        case "placeholder_content":
+        case "bot_placeholder_content":
+        case "proposal_content":
+        case "message_reminder_content":
+        case "message_reminder_created_content":
         case "reported_message_content":
         case "p2p_swap_content":
         case "encrypted_content":
-            throw new Error(`Incorrectly attempting to send {domain.kind} content to the server`);
+            throw new Error(`Incorrectly attempting to send ${domain.kind} content to the server`);
     }
 }
 

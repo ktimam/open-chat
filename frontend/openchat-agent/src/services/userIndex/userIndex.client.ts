@@ -8,7 +8,7 @@ import type {
     CurrentUserResponse,
     DiamondMembershipDuration,
     DiamondMembershipFees,
-    type AiActionDefinition,
+    AiActionDefinition,
     ExploreBotsResponse,
     ExternalAchievementsResponse,
     ExternalBot,
@@ -44,6 +44,8 @@ import {
     UserIndexCurrentUserResponse,
     UserIndexDiamondMembershipFeesResponse,
     UserIndexAiActionsResponse,
+    UserIndexRegisterAiActionArgs,
+    UserIndexRegisterAiActionResponse,
     UserIndexExploreBotsArgs,
     UserIndexExploreBotsResponse,
     UserIndexExternalAchievementsArgs,
@@ -103,6 +105,8 @@ import {
     currentUserResponse,
     diamondMembershipFeesResponse,
     aiActionsResponse,
+    apiAiActionDefinition,
+    registerAiActionResponse,
     exploreBotsResponse,
     externalAchievementsResponse,
     payForDiamondMembershipResponse,
@@ -554,6 +558,16 @@ export class UserIndexClient extends SingleCanisterMsgpackAgent {
 
     aiActions(): Promise<AiActionDefinition[]> {
         return this.query("ai_actions", {}, aiActionsResponse, Empty, UserIndexAiActionsResponse);
+    }
+
+    registerAiAction(definition: AiActionDefinition): Promise<boolean> {
+        return this.update(
+            "register_ai_action",
+            { definition: apiAiActionDefinition(definition) },
+            registerAiActionResponse,
+            UserIndexRegisterAiActionArgs,
+            UserIndexRegisterAiActionResponse,
+        );
     }
 
     setDiamondMembershipFees(fees: DiamondMembershipFees[]): Promise<boolean> {
