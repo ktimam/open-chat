@@ -145,7 +145,7 @@ mod tests {
         let pk_pem = recipient.public_key().to_public_key_pem(Default::default()).unwrap();
         let sk_pem = recipient.to_pkcs8_pem(Default::default()).unwrap().to_string();
 
-        let plaintext = b"{\"action_id\":\"iou.add\",\"rows\":[{\"label\":\"Amount\",\"value\":\"$20\"}]}";
+        let plaintext = b"{\"action_id\":\"example.action\",\"rows\":[{\"label\":\"Amount\",\"value\":\"$20\"}]}";
         let envelope = encrypt(plaintext, &pk_pem, &mut rng).unwrap();
         let fingerprint = key_fingerprint(&pk_pem).unwrap();
 
