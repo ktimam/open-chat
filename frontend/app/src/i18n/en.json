@@ -1670,6 +1670,25 @@
         "userNotFound": "User not found",
         "welcome": "Welcome to OpenChat"
     },
+    "aiActions": {
+        "propose": "Propose action"
+    },
+    "aiApps": {
+        "checkConnection": "Check connection",
+        "chooseAction": "Choose an action",
+        "linkCodeExpired": "This code has expired",
+        "linkCodeExpires": "Expires in {remaining}",
+        "linkCodeFailed": "We couldn't create a connection code. Try again.",
+        "linkExplain": "{name} delivers your confirmed actions encrypted to a key only your app holds. Connect once to link them.",
+        "linkInstruction": "Open {name} and enter this code in its Connect to OpenChat screen",
+        "linkNewCode": "Get a new code",
+        "linkNotYet": "Not connected yet — enter the code in {name}, then check again",
+        "linkTitle": "Connect {name}",
+        "loading": "Loading AI apps...",
+        "none": "No AI apps have been registered",
+        "title": "AI apps",
+        "toggleFailed": "Unable to update the app"
+    },
     "reminders": {
         "cancel": "Cancel reminder",
         "cancelFailure": "Sorry we were unable to cancel your reminder",

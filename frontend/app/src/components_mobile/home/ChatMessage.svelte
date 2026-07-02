@@ -1,5 +1,12 @@
 <script lang="ts">
     import { navigate } from "@utils/navigation";
+    import {
+        proposeAndPost,
+        proposeAndPostCandidate,
+        type AiActionCandidate,
+        type ProposeResult,
+    } from "@utils/aiActionRunner";
+    import { isNativeClient } from "@utils/onDeviceInference";
     import { confirmMessageDeletion } from "@src/stores/settings";
     import { trackedEffect } from "@src/utils/effects.svelte";
     import { keyboard } from "@stores/keyboard.svelte";
@@ -7,13 +14,16 @@
     import type { ProfileLinkClickedEvent } from "@webcomponents/profileLink";
     import {
         Avatar,
+        Body,
         Column,
         Container,
+        ListAction,
         MenuTrigger,
         type PanDirection,
         Sheet,
     } from "component-lib";
     import {
+        type AiAppRegistration,
         type ChatIdentifier,
         chatListScopeStore,
         type ChatType,
@@ -38,6 +48,7 @@
     } from "openchat-client";
     import { getContext, onDestroy, onMount, tick } from "svelte";
     import Reply from "svelte-material-icons/Reply.svelte";
+    import Robot from "svelte-material-icons/RobotOutline.svelte";
     import ShareOutline from "svelte-material-icons/ShareOutline.svelte";
     import SquareEditOutline from "svelte-material-icons/SquareEditOutline.svelte";
     import { i18nKey } from "../../i18n/i18n";
@@ -52,6 +63,7 @@
     import BotProfile, { type BotProfileProps } from "../bots/BotProfile.svelte";
     import Checkbox from "../Checkbox.svelte";
     import Translatable from "../Translatable.svelte";
+    import AiAppLinkSheet from "./AiAppLinkSheet.svelte";
     import ChatMessageContent from "./ChatMessageContent.svelte";
     import ChatMessageMenu from "./ChatMessageMenu.svelte";
     import ChatMessageOptions from "./ChatMessageOptions.svelte";
@@ -237,6 +249,117 @@
 
     function replyPrivately() {
         publish("replyPrivatelyTo", createReplyContext());
+    }
+
+    function promptForExtraction(): Record<string, unknown> | undefined {
+        const raw = window.prompt(
+            'Enter the action\'s fields as JSON to propose it, e.g. {"amount":20,"currency":"USD"}',
+            "{}",
+        );
+        if (raw === null) return undefined;
+        try {
+            return JSON.parse(raw) as Record<string, unknown>;
+        } catch {
+            toastStore.showFailureToast(i18nKey("That isn't valid JSON"));
+            return undefined;
+        }
+    }
+
+    // More than one enabled app action applies to this message — the user picks one from a sheet.
+    let aiActionChooser = $state<
+        { candidates: AiActionCandidate[]; extraction?: Record<string, unknown> } | undefined
+    >(undefined);
+
+    // A per-user-keys app needs the one-time link-code pairing before its actions can run — the
+    // consent sheet is showing; the propose that triggered it resumes when the link completes.
+    let aiAppLink = $state<
+        { app: AiAppRegistration; extraction?: Record<string, unknown> } | undefined
+    >(undefined);
+
+    function showAiActionResult(result: ProposeResult) {
+        switch (result.kind) {
+            case "no_actions":
+                toastStore.showFailureToast(i18nKey("No AI actions are registered"));
+                break;
+            case "unavailable":
+                toastStore.showFailureToast(i18nKey("On-device model unavailable"));
+                break;
+            case "unsupported_content":
+                toastStore.showFailureToast(i18nKey("This message can't be turned into an action"));
+                break;
+            case "no_extraction":
+                toastStore.showFailureToast(i18nKey("The model found no action in this message"));
+                break;
+            case "error":
+                toastStore.showFailureToast(i18nKey(`Action failed: ${result.error}`));
+                break;
+            // "ready" -> proposeAndPost already posted the card for the user to confirm.
+            // "choose" -> the chooser sheet is showing; nothing to report yet.
+            // "link_required" -> the consent sheet is showing; the propose resumes after linking.
+        }
+    }
+
+    // The propose flow proper — also re-entered (with the same extraction) when the consent sheet
+    // completes, so the action the user asked for resumes automatically after linking.
+    async function proposeWithExtraction(manualExtraction?: Record<string, unknown>) {
+        let result = await proposeAndPost(client, messageContext, msg.content, manualExtraction);
+        if (result.kind === "choose") {
+            aiActionChooser = { candidates: result.candidates, extraction: manualExtraction };
+            return;
+        }
+        if (result.kind === "link_required") {
+            aiAppLink = { app: result.app, extraction: manualExtraction };
+            return;
+        }
+        if (result.kind === "unavailable") {
+            const extraction = promptForExtraction();
+            if (extraction === undefined) return;
+            result = await proposeAndPost(client, messageContext, msg.content, extraction);
+        }
+        showAiActionResult(result);
+    }
+
+    async function runAiActionHandler() {
+        // Native clients run the on-device model. A browser — or a native client with no model downloaded —
+        // falls back to a manually-supplied extraction so the confirm → deposit cycle can still be driven.
+        let manualExtraction: Record<string, unknown> | undefined;
+        if (!isNativeClient()) {
+            manualExtraction = promptForExtraction();
+            if (manualExtraction === undefined) return;
+        }
+        await proposeWithExtraction(manualExtraction);
+    }
+
+    // The app has claimed the link code (the user's key is registered) — close the consent sheet
+    // and re-run the propose that triggered it.
+    function resumeAfterAiAppLink() {
+        const extraction = aiAppLink?.extraction;
+        aiAppLink = undefined;
+        void proposeWithExtraction(extraction);
+    }
+
+    async function runChosenAiAction(candidate: AiActionCandidate) {
+        const extraction = aiActionChooser?.extraction;
+        aiActionChooser = undefined;
+        let result = await proposeAndPostCandidate(
+            client,
+            messageContext,
+            msg.content,
+            candidate,
+            extraction,
+        );
+        if (result.kind === "unavailable") {
+            const retry = promptForExtraction();
+            if (retry === undefined) return;
+            result = await proposeAndPostCandidate(
+                client,
+                messageContext,
+                msg.content,
+                candidate,
+                retry,
+            );
+        }
+        showAiActionResult(result);
     }
 
     function cancelReminder(content: MessageReminderCreatedContent) {
@@ -581,10 +704,36 @@
                 onCancelReminder={cancelReminder}
                 onDeleteMessage={deleteMessage}
                 onRemindMe={remindMe}
+                onRunAiAction={runAiActionHandler}
                 {onDeleteFailedMessage}
                 onOptionSelected={() => (isSheetMenuOpen = false)} />
         </Column>
     </Sheet>
+{/if}
+
+{#if aiActionChooser !== undefined}
+    <Sheet onDismiss={() => (aiActionChooser = undefined)}>
+        <Column gap="md" padding={["lg", "lg", "xxl", "lg"]} maxHeight="70vh">
+            <Body fontWeight={"bold"}>
+                <Translatable resourceKey={i18nKey("aiApps.chooseAction")} />
+            </Body>
+            {#each aiActionChooser.candidates as candidate (`${candidate.app.id}-${candidate.action.name}`)}
+                <ListAction onClick={() => runChosenAiAction(candidate)}>
+                    {#snippet icon(color)}
+                        <Robot {color} />
+                    {/snippet}
+                    {candidate.app.manifest.name} — {candidate.action.name}
+                </ListAction>
+            {/each}
+        </Column>
+    </Sheet>
+{/if}
+
+{#if aiAppLink !== undefined}
+    <AiAppLinkSheet
+        app={aiAppLink.app}
+        onDismiss={() => (aiAppLink = undefined)}
+        onLinked={resumeAfterAiAppLink} />
 {/if}
 
 {#if showRemindMe}
@@ -736,6 +885,7 @@
                                     onCancelReminder={cancelReminder}
                                     onDeleteMessage={deleteMessage}
                                     onRemindMe={remindMe}
+                                    onRunAiAction={runAiActionHandler}
                                     onOpenSheetMenu={openSheetMenu}
                                     {onDeleteFailedMessage} />
                             {/if}

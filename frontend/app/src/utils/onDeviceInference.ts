@@ -55,7 +55,13 @@ export async function inferOnDevice(request: InferenceRequest): Promise<Inferenc
         });
         return { kind: "ok", text: res.text };
     } catch (err) {
-        return { kind: "error", error: err instanceof Error ? err.message : String(err) };
+        const message = err instanceof Error ? err.message : String(err);
+        // A build without the `inference` cargo feature reports the runtime as missing. That's a capability
+        // gap, not a runtime error — surface it as "unavailable" so callers degrade to their manual fallback.
+        if (/inference runtime|inference.*cargo feature|compiled without/i.test(message)) {
+            return { kind: "unavailable", reason: message };
+        }
+        return { kind: "error", error: message };
     }
 }
 

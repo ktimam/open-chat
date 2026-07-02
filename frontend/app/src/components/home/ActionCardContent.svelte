@@ -36,18 +36,33 @@
     </table>
 
     {#if content.disclosure !== undefined}
-        <label class="disclosure">
+        <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+        <label class="disclosure" onclick={(e) => e.stopPropagation()}>
             <input type="checkbox" bind:checked={acknowledged} disabled={!pending || readonly} />
             <span>{content.disclosure}</span>
         </label>
     {/if}
 
     {#if pending}
+        <!-- stopPropagation: in the mobile layout the whole bubble is wrapped in a MenuTrigger, so an
+             unstopped click on these controls would also open the message context menu. -->
         <div class="actions">
-            <button class="cancel" disabled={readonly} onclick={() => onRespond?.("cancel")}>
+            <button
+                class="cancel"
+                disabled={readonly}
+                onclick={(e) => {
+                    e.stopPropagation();
+                    onRespond?.("cancel");
+                }}>
                 {content.cancelLabel}
             </button>
-            <button class="confirm" disabled={!canConfirm} onclick={() => onRespond?.("confirm")}>
+            <button
+                class="confirm"
+                disabled={!canConfirm}
+                onclick={(e) => {
+                    e.stopPropagation();
+                    onRespond?.("confirm");
+                }}>
                 {content.confirmLabel}
             </button>
         </div>

@@ -1,12 +1,17 @@
 
 <script lang="ts">
     import { navigate } from "@utils/navigation";
-    import { proposeAndPost } from "@utils/aiActionRunner";
+    import {
+        proposeAndPost,
+        proposeAndPostCandidate,
+        type AiActionCandidate,
+        type ProposeResult,
+    } from "@utils/aiActionRunner";
     import { isNativeClient } from "@utils/onDeviceInference";
     import Typing from "@shared_components/Typing.svelte";
     import { trackedEffect } from "@src/utils/effects.svelte";
     import type { ProfileLinkClickedEvent } from "@webcomponents/profileLink";
-    import { AvatarSize, type ChatIdentifier, chatListScopeStore, type ChatType, currentUserIdStore, currentUserStore, type EnhancedReplyContext, iconSize, localUpdates, type Message, type MessageReminderCreatedContent, mobileWidth, OpenChat, publish, routeForMessage, routeStore, screenWidth, ScreenWidth, selectedChatBlockedUsersStore, selectedChatWebhooksStore, selectedCommunityMembersStore, type SelectedEmoji, type SenderContext, translationsStore, unconfirmedReadByThem, undeletingMessagesStore, type UserSummary } from "openchat-client";
+    import { type AiAppRegistration, AvatarSize, type ChatIdentifier, chatListScopeStore, type ChatType, currentUserIdStore, currentUserStore, type EnhancedReplyContext, iconSize, localUpdates, type Message, type MessageReminderCreatedContent, mobileWidth, OpenChat, publish, routeForMessage, routeStore, screenWidth, ScreenWidth, selectedChatBlockedUsersStore, selectedChatWebhooksStore, selectedCommunityMembersStore, type SelectedEmoji, type SenderContext, translationsStore, unconfirmedReadByThem, undeletingMessagesStore, type UserSummary } from "openchat-client";
     import { getContext, onDestroy, onMount, tick } from "svelte";
     import { _ } from "svelte-i18n";
     import Close from "svelte-material-icons/Close.svelte";
@@ -279,6 +284,42 @@
         }
     }
 
+    // This (classic) UI has no chooser sheet — a numbered prompt picks between multiple enabled app
+    // actions, in keeping with the manual-extraction prompt fallback above.
+    function promptForCandidate(candidates: AiActionCandidate[]): AiActionCandidate | undefined {
+        const list = candidates
+            .map((c, i) => `${i + 1}: ${c.app.manifest.name} — ${c.action.name}`)
+            .join("\n");
+        const raw = window.prompt(`Choose an action to run:\n${list}`, "1");
+        if (raw === null) return undefined;
+        return candidates[parseInt(raw, 10) - 1];
+    }
+
+    // ... and no consent sheet — a blocking alert displays the one-time pairing code for a
+    // per-user-keys app; when the user confirms they entered it in the app, the key is re-checked
+    // and the propose that triggered it resumes.
+    async function linkAppAndResume(
+        app: AiAppRegistration,
+        manualExtraction?: Record<string, unknown>,
+    ): Promise<ProposeResult | undefined> {
+        const link = await client.createAiAppLinkCode(app.id);
+        if (link === undefined) {
+            toastStore.showFailureToast(i18nKey("Couldn't create a connection code"));
+            return undefined;
+        }
+        window.alert(
+            `${app.manifest.name} delivers your confirmed actions encrypted to a key only your app holds. Connect once to link them.\n\n` +
+                `Your code: ${link.code}\n\n` +
+                `Open ${app.manifest.name} and enter this code in its Connect to OpenChat screen, then press OK.`,
+        );
+        const keys = await client.myAiAppKeys();
+        if (!keys.some((k) => k.appId === app.id && k.publicKey.length > 0)) {
+            toastStore.showFailureToast(i18nKey(`${app.manifest.name} isn't connected yet`));
+            return undefined;
+        }
+        return proposeAndPost(client, messageContext, msg.content, manualExtraction);
+    }
+
     async function runAiActionHandler() {
         // Native clients run the on-device model. A browser — or a native client with no model downloaded —
         // falls back to a manually-supplied extraction so the confirm → deposit cycle can still be driven.
@@ -288,7 +329,33 @@
             if (manualExtraction === undefined) return;
         }
         let result = await proposeAndPost(client, messageContext, msg.content, manualExtraction);
-        if (result.kind === "unavailable") {
+        if (result.kind === "link_required") {
+            const resumed = await linkAppAndResume(result.app, manualExtraction);
+            if (resumed === undefined) return;
+            result = resumed;
+        }
+        if (result.kind === "choose") {
+            const candidate = promptForCandidate(result.candidates);
+            if (candidate === undefined) return;
+            result = await proposeAndPostCandidate(
+                client,
+                messageContext,
+                msg.content,
+                candidate,
+                manualExtraction,
+            );
+            if (result.kind === "unavailable") {
+                const me = promptForExtraction();
+                if (me === undefined) return;
+                result = await proposeAndPostCandidate(
+                    client,
+                    messageContext,
+                    msg.content,
+                    candidate,
+                    me,
+                );
+            }
+        } else if (result.kind === "unavailable") {
             const me = promptForExtraction();
             if (me === undefined) return;
             result = await proposeAndPost(client, messageContext, msg.content, me);
