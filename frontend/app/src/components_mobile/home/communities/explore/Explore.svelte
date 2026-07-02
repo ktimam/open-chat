@@ -185,10 +185,19 @@
     let connectedAppIds = $state(new Set<number>());
 
     function search(reset = false) {
+        searchFor(view, reset);
+    }
+
+    // Takes the view EXPLICITLY: setView must search the TARGET view, but `view` itself is only
+    // assigned inside the view-transition callback, which runs asynchronously when the browser
+    // supports startViewTransition — reading `view` here at click time would search the OLD tab
+    // (harmless for communities/bots, whose results the onMount subscriptions populate anyway,
+    // but it left the query-driven AI-apps tab permanently empty on first open).
+    function searchFor(v: View, reset: boolean) {
         searching = true;
-        if (view === "communities") {
+        if (v === "communities") {
             searchCommunities($exploreCommunitiesFiltersStore, reset);
-        } else if (view === "bots") {
+        } else if (v === "bots") {
             searchBots($showUnpublishedBots);
         } else {
             searchAiApps(reset);
@@ -229,7 +238,7 @@
         transition(["fade"], () => {
             view = v;
         });
-        search(true);
+        searchFor(v, true);
     }
 
     function scrollToTop() {
