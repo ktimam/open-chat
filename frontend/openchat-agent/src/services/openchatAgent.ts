@@ -60,7 +60,6 @@ import type {
     DexId,
     DiamondMembershipDuration,
     DiamondMembershipFees,
-    AiActionDefinition,
     AiAppLinkCode,
     AiAppManifest,
     AiAppRegistration,
@@ -3679,14 +3678,6 @@ export class OpenChatAgent extends EventTarget {
         return this._userIndexClient.diamondMembershipFees();
     }
 
-    aiActions(): Promise<AiActionDefinition[]> {
-        return this._userIndexClient.aiActions();
-    }
-
-    registerAiAction(definition: AiActionDefinition): Promise<boolean> {
-        return this._userIndexClient.registerAiAction(definition);
-    }
-
     aiApps(): Promise<AiAppRegistration[]> {
         return this._userIndexClient.aiApps();
     }
@@ -3701,6 +3692,10 @@ export class OpenChatAgent extends EventTarget {
 
     createAiAppLinkCode(appId: number): Promise<AiAppLinkCode | undefined> {
         return this._userIndexClient.createAiAppLinkCode(appId);
+    }
+
+    removeMyAiAppKey(appId: number): Promise<boolean> {
+        return this._userIndexClient.removeMyAiAppKey(appId);
     }
 
     // Phase A: AI apps are scoped to group chats only; other chat kinds resolve without effect.

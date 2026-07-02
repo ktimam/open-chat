@@ -6073,31 +6073,18 @@ export const UserIndexAiActionsDefinition = Type.Object({
     rules: Type.Optional(Type.Array(UserIndexAiActionsRule)),
 });
 
-export type UserIndexAiActionsRegistration = Static<typeof UserIndexAiActionsRegistration>;
-export const UserIndexAiActionsRegistration = Type.Object({
-    id: Type.Number(),
-    registered_by: UserId,
-    definition: UserIndexAiActionsDefinition,
-    created: Type.BigInt(),
-    updated: Type.BigInt(),
-});
-
-export type UserIndexAiActionsResponse = Static<typeof UserIndexAiActionsResponse>;
-export const UserIndexAiActionsResponse = Type.Object({
-    Success: Type.Object({ actions: Type.Array(UserIndexAiActionsRegistration) }),
-});
-
-export type UserIndexRegisterAiActionArgs = Static<typeof UserIndexRegisterAiActionArgs>;
-export const UserIndexRegisterAiActionArgs = Type.Object({
-    definition: UserIndexAiActionsDefinition,
-});
-
-export type UserIndexRegisterAiActionResponse = Static<typeof UserIndexRegisterAiActionResponse>;
-export const UserIndexRegisterAiActionResponse = Type.Union([
-    Type.Object({ Success: UserIndexAiActionsRegistration }),
-    Type.Object({ InvalidRequest: Type.String() }),
-    Type.Object({ Error: OCError }),
+export type UserIndexAiAppSurfaceDisplay = Static<typeof UserIndexAiAppSurfaceDisplay>;
+export const UserIndexAiAppSurfaceDisplay = Type.Union([
+    Type.Literal("sheet"),
+    Type.Literal("external"),
 ]);
+
+export type UserIndexAiAppSurface = Static<typeof UserIndexAiAppSurface>;
+export const UserIndexAiAppSurface = Type.Object({
+    kind: Type.String(),
+    url: Type.String(),
+    display: UserIndexAiAppSurfaceDisplay,
+});
 
 export type UserIndexAiAppManifest = Static<typeof UserIndexAiAppManifest>;
 export const UserIndexAiAppManifest = Type.Object({
@@ -6108,6 +6095,8 @@ export const UserIndexAiAppManifest = Type.Object({
     // Optional for old-data tolerance: registrations that predate per-user keys omit it.
     per_user_keys: Type.Optional(Type.Boolean()),
     actions: Type.Array(UserIndexAiActionsDefinition),
+    // Optional for old-data tolerance: registrations that predate surfaces omit it (=== []).
+    surfaces: Type.Optional(Type.Array(UserIndexAiAppSurface)),
 });
 
 export type UserIndexAiAppRegistration = Static<typeof UserIndexAiAppRegistration>;
@@ -6186,6 +6175,18 @@ export const UserIndexCreateAiAppLinkCodeResponse = Type.Union([
         Success: Type.Object({ code: Type.String(), expires_at: Type.BigInt() }),
     }),
     Type.Literal("AppNotFound"),
+    Type.Object({ Error: OCError }),
+]);
+
+export type UserIndexRemoveMyAiAppKeyArgs = Static<typeof UserIndexRemoveMyAiAppKeyArgs>;
+export const UserIndexRemoveMyAiAppKeyArgs = Type.Object({
+    app_id: Type.Number(),
+});
+
+export type UserIndexRemoveMyAiAppKeyResponse = Static<typeof UserIndexRemoveMyAiAppKeyResponse>;
+export const UserIndexRemoveMyAiAppKeyResponse = Type.Union([
+    Type.Literal("Success"),
+    Type.Object({ InvalidRequest: Type.String() }),
     Type.Object({ Error: OCError }),
 ]);
 

@@ -1,9 +1,8 @@
 use crate::guards::caller_is_openchat_user_or_test_mode;
-use crate::updates::register_ai_action::validate_action_definition;
 use crate::{RuntimeState, mutate_state};
 use canister_api_macros::update;
 use canister_tracing_macros::trace;
-use types::{AiAppManifest, UserId};
+use types::{AiActionDefinition, AiActionRule, AiAppManifest, AiAppSurface, UserId};
 use url::Url;
 use user_index_canister::register_ai_app::{Response::*, *};
 
@@ -90,8 +89,111 @@ fn validate(manifest: &AiAppManifest) -> Result<(), String> {
         return Err(format!("actions must contain at most {MAX_ACTIONS} entries"));
     }
     for (index, action) in manifest.actions.iter().enumerate() {
-        // Each embedded action must satisfy exactly the same rules as a standalone registration.
         validate_action_definition(action).map_err(|message| format!("actions[{index}]: {message}"))?;
+    }
+    if manifest.surfaces.len() > MAX_SURFACES {
+        return Err(format!("surfaces must contain at most {MAX_SURFACES} entries"));
+    }
+    for (index, surface) in manifest.surfaces.iter().enumerate() {
+        validate_surface(surface).map_err(|message| format!("surfaces[{index}]: {message}"))?;
+    }
+    Ok(())
+}
+
+const MAX_SURFACES: usize = 10;
+const MAX_SURFACE_KIND_LENGTH: usize = 64;
+const MAX_SURFACE_URL_LENGTH: usize = 2000;
+
+/// Validates a single UI surface declared in an app manifest.
+fn validate_surface(surface: &AiAppSurface) -> Result<(), String> {
+    let kind_length = surface.kind.chars().count();
+    if kind_length == 0 || kind_length > MAX_SURFACE_KIND_LENGTH {
+        return Err(format!("kind must be between 1 and {MAX_SURFACE_KIND_LENGTH} characters"));
+    }
+    let url_length = surface.url.chars().count();
+    if url_length == 0 || url_length > MAX_SURFACE_URL_LENGTH {
+        return Err(format!("url must be between 1 and {MAX_SURFACE_URL_LENGTH} characters"));
+    }
+    // The url is a template; substitute the placeholders with dummy values so that an otherwise
+    // valid templated URL (e.g. ".../link?chat={chatKey}") passes URL parsing.
+    let substituted = surface.url.replace("{chatKey}", "group:aaaaa-aa").replace("{appId}", "1");
+    if Url::parse(&substituted).is_err() {
+        return Err("url must be a valid URL".to_string());
+    }
+    Ok(())
+}
+
+/// Validates a single action definition embedded in an app manifest.
+fn validate_action_definition(definition: &AiActionDefinition) -> Result<(), String> {
+    if definition.name.trim().is_empty() {
+        return Err("name is required".to_string());
+    }
+    if Url::parse(&definition.endpoint).is_err() {
+        return Err("endpoint must be a valid URL".to_string());
+    }
+    if serde_json::from_str::<serde_json::Value>(&definition.response_schema).is_err() {
+        return Err("response_schema must be valid JSON".to_string());
+    }
+    validate_rules(&definition.rules)?;
+    Ok(())
+}
+
+const MAX_RULES: usize = 20;
+const MAX_RULE_STRING_LENGTH: usize = 64;
+const MAX_INSTRUCTION_TEXT_LENGTH: usize = 1000;
+const MAX_KEYWORD_MAPPINGS: usize = 50;
+const MAX_KEYWORDS_PER_MAPPING: usize = 50;
+const MAX_FROM_MESSAGE_MAX_LENGTH: u32 = 2000;
+
+fn validate_rules(rules: &[AiActionRule]) -> Result<(), String> {
+    if rules.len() > MAX_RULES {
+        return Err(format!("rules must contain at most {MAX_RULES} entries"));
+    }
+    for rule in rules {
+        match rule {
+            AiActionRule::KeywordMap(r) => {
+                validate_rule_string("keyword_map field", &r.field)?;
+                if r.map.len() > MAX_KEYWORD_MAPPINGS {
+                    return Err(format!("keyword_map map must contain at most {MAX_KEYWORD_MAPPINGS} mappings"));
+                }
+                for mapping in &r.map {
+                    validate_rule_string("keyword_map value", &mapping.value)?;
+                    if mapping.keywords.len() > MAX_KEYWORDS_PER_MAPPING {
+                        return Err(format!(
+                            "keyword_map mapping must contain at most {MAX_KEYWORDS_PER_MAPPING} keywords"
+                        ));
+                    }
+                    for keyword in &mapping.keywords {
+                        validate_rule_string("keyword_map keyword", keyword)?;
+                    }
+                }
+            }
+            AiActionRule::FromMessage(r) => {
+                validate_rule_string("from_message field", &r.field)?;
+                if r.max_length.is_some_and(|max_length| max_length > MAX_FROM_MESSAGE_MAX_LENGTH) {
+                    return Err(format!("from_message max_length must be at most {MAX_FROM_MESSAGE_MAX_LENGTH}"));
+                }
+            }
+            AiActionRule::Normalize(r) => {
+                validate_rule_string("normalize field", &r.field)?;
+            }
+            AiActionRule::Instruction(r) => {
+                if r.text.chars().count() > MAX_INSTRUCTION_TEXT_LENGTH {
+                    return Err(format!(
+                        "instruction text must be at most {MAX_INSTRUCTION_TEXT_LENGTH} characters"
+                    ));
+                }
+            }
+            AiActionRule::Context(_) => {}
+        }
+    }
+    Ok(())
+}
+
+fn validate_rule_string(label: &str, value: &str) -> Result<(), String> {
+    let length = value.chars().count();
+    if length == 0 || length > MAX_RULE_STRING_LENGTH {
+        return Err(format!("{label} must be between 1 and {MAX_RULE_STRING_LENGTH} characters"));
     }
     Ok(())
 }

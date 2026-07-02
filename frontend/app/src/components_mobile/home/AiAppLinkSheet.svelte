@@ -5,12 +5,16 @@
     // connection" re-queries my_ai_app_keys and, once the key appears, hands control back to the
     // caller so the propose flow that triggered the sheet resumes automatically.
     import { i18nKey } from "@src/i18n/i18n";
+    import { connectSurfaceOpening, openSurfaceExternally } from "@utils/aiAppSurfaces";
     import { Body, BodySmall, CommonButton, Container, Sheet, Title } from "component-lib";
     import type { AiAppLinkCode, AiAppRegistration, OpenChat } from "openchat-client";
     import { getContext } from "svelte";
     import Check from "svelte-material-icons/Check.svelte";
+    import ContentCopy from "svelte-material-icons/ContentCopy.svelte";
+    import OpenInNew from "svelte-material-icons/OpenInNew.svelte";
     import Refresh from "svelte-material-icons/Refresh.svelte";
     import { now500 } from "../../stores/time";
+    import { toastStore } from "../../stores/toast";
     import Translatable from "../Translatable.svelte";
 
     const client = getContext<OpenChat>("client");
@@ -24,6 +28,11 @@
     }
 
     let { app, onDismiss, onLinked }: Props = $props();
+
+    // The app's registered "connect" surface — its pairing-code entry page. When declared, the
+    // sheet offers a one-tap "open the right page" shortcut instead of leaving the user to hunt
+    // through the app's menus for where the code goes.
+    let connectSurface = $derived(connectSurfaceOpening(app));
 
     let loadingCode = $state(false);
     let codeFailed = $state(false);
@@ -56,6 +65,16 @@
     }
 
     fetchCode();
+
+    async function copyCode() {
+        if (linkCode === undefined) return;
+        try {
+            await navigator.clipboard.writeText(linkCode.code);
+            toastStore.showSuccessToast(i18nKey("aiApps.linkCodeCopied"));
+        } catch {
+            toastStore.showFailureToast(i18nKey("aiApps.linkCodeCopyFailed"));
+        }
+    }
 
     async function checkConnection() {
         checking = true;
@@ -103,10 +122,53 @@
                 {/if}
             </div>
 
-            <Body>
-                <Translatable
-                    resourceKey={i18nKey("aiApps.linkInstruction", { name: app.manifest.name })} />
-            </Body>
+            <!-- How-to: numbered steps; when the app registered a "connect" surface the second
+                 step is a one-tap button that opens its code-entry page directly. -->
+            <ol class="steps">
+                <li>
+                    <BodySmall>
+                        <Translatable resourceKey={i18nKey("aiApps.linkStepCopy")} />
+                    </BodySmall>
+                </li>
+                <li>
+                    {#if connectSurface !== undefined}
+                        <BodySmall>
+                            <Translatable
+                                resourceKey={i18nKey("aiApps.linkStepOpen", {
+                                    name: app.manifest.name,
+                                })} />
+                        </BodySmall>
+                        <CommonButton
+                            onClick={() => openSurfaceExternally(client, connectSurface.url)}
+                            size={"small_text"}>
+                            {#snippet icon(color, size)}
+                                <OpenInNew {color} {size} />
+                            {/snippet}
+                            <Translatable
+                                resourceKey={i18nKey("aiApps.linkOpenConnectPage", {
+                                    name: app.manifest.name,
+                                })} />
+                        </CommonButton>
+                    {:else}
+                        <BodySmall>
+                            <Translatable
+                                resourceKey={i18nKey("aiApps.linkInstruction", {
+                                    name: app.manifest.name,
+                                })} />
+                        </BodySmall>
+                    {/if}
+                </li>
+                <li>
+                    <BodySmall>
+                        <Translatable resourceKey={i18nKey("aiApps.linkStepPaste")} />
+                    </BodySmall>
+                </li>
+                <li>
+                    <BodySmall>
+                        <Translatable resourceKey={i18nKey("aiApps.linkStepCheck")} />
+                    </BodySmall>
+                </li>
+            </ol>
 
             {#if notLinkedYet}
                 <BodySmall colour={"textSecondary"}>
@@ -121,6 +183,14 @@
         {/if}
 
         <Container gap={"md"} mainAxisAlignment={"end"} crossAxisAlignment={"center"}>
+            {#if linkCode !== undefined && !expired}
+                <CommonButton onClick={copyCode} size={"medium"}>
+                    {#snippet icon(color, size)}
+                        <ContentCopy {color} {size} />
+                    {/snippet}
+                    <Translatable resourceKey={i18nKey("aiApps.linkCodeCopy")} />
+                </CommonButton>
+            {/if}
             {#if codeFailed || expired}
                 <CommonButton loading={loadingCode} onClick={fetchCode} size={"medium"}>
                     {#snippet icon(color, size)}
@@ -145,6 +215,19 @@
 </Sheet>
 
 <style>
+    .steps {
+        margin: 0;
+        padding-inline-start: 1.25rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.375rem;
+        width: 100%;
+
+        li::marker {
+            color: var(--text-secondary, inherit);
+        }
+    }
+
     .code {
         display: flex;
         gap: 0.5rem;

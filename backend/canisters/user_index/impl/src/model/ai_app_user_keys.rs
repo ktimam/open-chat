@@ -16,6 +16,23 @@ impl AiAppUserKeys {
         self.keys.insert((user_id, app_id), public_key);
     }
 
+    /// Removes the key for one (user, app) pair. Returns true if a key was present. Backs
+    /// `remove_my_ai_app_key` (a user disconnecting an app: after this OpenChat no longer delivers
+    /// that user's confirmed actions to the app) and app-deletion cleanup. Idempotent.
+    pub fn remove(&mut self, user_id: UserId, app_id: AiAppId) -> bool {
+        self.keys.remove(&(user_id, app_id)).is_some()
+    }
+
+    /// Removes every entry whose registered key equals `public_key` exactly, returning how many
+    /// were removed. Backs `revoke_ai_app_user_key` (the consumer app disconnecting on the user's
+    /// behalf, authorized by knowledge of the PEM). Keys are per-user generated so in practice at
+    /// most one entry matches.
+    pub fn remove_by_key(&mut self, public_key: &str) -> u32 {
+        let before = self.keys.len();
+        self.keys.retain(|_, key| key != public_key);
+        (before - self.keys.len()) as u32
+    }
+
     /// All of one user's registered keys, ordered by app id (HashMap iteration order is arbitrary
     /// and clients present these deterministically).
     pub fn keys_for_user(&self, user_id: UserId) -> Vec<AiAppUserKey> {

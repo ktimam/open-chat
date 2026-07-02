@@ -106,7 +106,6 @@
     import ChitRewards from "./user_profile/ChitRewards.svelte";
     import ClearCache from "./user_profile/ClearCache.svelte";
     import ModelManager from "./user_profile/ModelManager.svelte";
-    import RegisterAiAction from "./user_profile/RegisterAiAction.svelte";
     import CommunitySettings from "./user_profile/CommunitySettings.svelte";
     import DeleteAccount from "./user_profile/DeleteAccount.svelte";
     import Share from "./user_profile/Share.svelte";
@@ -228,7 +227,6 @@
         | { kind: "user_profile_delete_account" }
         | { kind: "user_profile_cache_management" }
         | { kind: "user_profile_models" }
-        | { kind: "user_profile_register_ai_action" }
         | { kind: "app_settings" }
         | { kind: "upgrade_diamond" }
         | { kind: "update_bot" }
@@ -568,9 +566,6 @@
                 push({ kind: "user_profile_cache_management" }),
             ),
             subscribe("userProfileModels", () => push({ kind: "user_profile_models" })),
-            subscribe("userProfileRegisterAiAction", () =>
-                push({ kind: "user_profile_register_ai_action" }),
-            ),
             subscribe("userProfileAbout", () => push({ kind: "user_profile_about" })),
             subscribe("closeModalPage", pop),
             subscribe("closeModalStack", popStack),
@@ -615,8 +610,6 @@
             <ClearCache />
         {:else if page.kind === "user_profile_models"}
             <ModelManager />
-        {:else if page.kind === "user_profile_register_ai_action"}
-            <RegisterAiAction />
         {:else if page.kind === "user_profile_verify"}
             <Verify />
         {:else if page.kind === "user_profile_bot_config"}

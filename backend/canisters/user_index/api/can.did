@@ -78,6 +78,17 @@ type AiActionDefinition = record {
     rules : vec AiActionRule;
 };
 
+type AiAppSurface = record {
+    kind : text;
+    url : text;
+    display : SurfaceDisplay;
+};
+
+type SurfaceDisplay = variant {
+    sheet;
+    external;
+};
+
 type AiAppManifest = record {
     name : text;
     description : text;
@@ -85,6 +96,7 @@ type AiAppManifest = record {
     consumer_public_key : text;
     per_user_keys : bool;
     actions : vec AiActionDefinition;
+    surfaces : vec AiAppSurface;
 };
 
 type AiAppRegistration = record {
@@ -131,6 +143,16 @@ type ClaimAiAppLinkCodeResponse = variant {
     CodeNotFound;
     CodeExpired;
     InvalidRequest : text;
+    Error : OCError;
+};
+
+type RevokeAiAppUserKeyArgs = record {
+    public_key : text;
+};
+
+type RevokeAiAppUserKeyResponse = variant {
+    Success;
+    KeyNotFound;
     Error : OCError;
 };
 
@@ -526,4 +548,9 @@ service : {
     // Callable by any principal: the single-use, short-lived link code carried in the args IS the
     // authorization (an external app claims it on the user's behalf to register their delivery key)
     claim_ai_app_link_code : (ClaimAiAppLinkCodeArgs) -> (ClaimAiAppLinkCodeResponse);
+
+    // Callable by any principal: knowledge of the exact registered per-user PEM IS the
+    // authorization (the app calls it when the user disconnects inside the app, so OpenChat drops
+    // the now-useless key and the in-chat flow re-offers pairing)
+    revoke_ai_app_user_key : (RevokeAiAppUserKeyArgs) -> (RevokeAiAppUserKeyResponse);
 };

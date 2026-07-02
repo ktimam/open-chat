@@ -7,7 +7,20 @@
         type ProposeResult,
     } from "@utils/aiActionRunner";
     import { isNativeClient } from "@utils/onDeviceInference";
-    import { confirmMessageDeletion } from "@src/stores/settings";
+    import {
+        openSurfaceExternally,
+        surfaceToOpenAfterConfirm,
+        type SurfaceOpening,
+    } from "@utils/aiAppSurfaces";
+    import {
+        autoProposeSuggestions,
+        dismissAutoProposeSuggestion,
+        muteAutoProposeInChat,
+    } from "@utils/autoPropose";
+    import {
+        autoProposeSuggestions as autoProposeEnabled,
+        confirmMessageDeletion,
+    } from "@src/stores/settings";
     import { trackedEffect } from "@src/utils/effects.svelte";
     import { keyboard } from "@stores/keyboard.svelte";
     import { popHistoryStateWithAction, pushDummyHistoryState } from "@utils/history";
@@ -64,6 +77,8 @@
     import Checkbox from "../Checkbox.svelte";
     import Translatable from "../Translatable.svelte";
     import AiAppLinkSheet from "./AiAppLinkSheet.svelte";
+    import AiAppSurfaceSheet from "./AiAppSurfaceSheet.svelte";
+    import AutoProposeChip from "./AutoProposeChip.svelte";
     import ChatMessageContent from "./ChatMessageContent.svelte";
     import ChatMessageMenu from "./ChatMessageMenu.svelte";
     import ChatMessageOptions from "./ChatMessageOptions.svelte";
@@ -276,10 +291,14 @@
         { app: AiAppRegistration; extraction?: Record<string, unknown> } | undefined
     >(undefined);
 
+    // A "sheet"-display chat_link surface to host after a successful confirm (see
+    // openSurfaceAfterConfirm below).
+    let confirmSurface = $state<SurfaceOpening | undefined>(undefined);
+
     function showAiActionResult(result: ProposeResult) {
         switch (result.kind) {
             case "no_actions":
-                toastStore.showFailureToast(i18nKey("No AI actions are registered"));
+                toastStore.showFailureToast(i18nKey("aiApps.noneEnabled"));
                 break;
             case "unavailable":
                 toastStore.showFailureToast(i18nKey("On-device model unavailable"));
@@ -502,7 +521,31 @@
     function onRespondToActionCard(response: "confirm" | "cancel") {
         if (chatId.kind === "direct_chat") return;
 
-        client.respondToActionCard(chatId, threadRootMessageIndex, msg.messageId, response);
+        // Capture before the async round-trip: the card content is replaced when its state
+        // refreshes to "confirmed".
+        const actionId =
+            msg.content.kind === "action_card_content" ? msg.content.actionId : undefined;
+        void client
+            .respondToActionCard(chatId, threadRootMessageIndex, msg.messageId, response)
+            .then((success) => {
+                if (success && response === "confirm" && actionId !== undefined) {
+                    void openSurfaceAfterConfirm(actionId);
+                }
+            });
+    }
+
+    // After the first successfully confirmed action in a chat, the owning app's "chat_link"
+    // surface (when it declares one) opens so the user can finish configuring the chat inside the
+    // app — "sheet" surfaces embed in a bottom sheet, "external" ones open the system browser.
+    // surfaceToOpenAfterConfirm persists the once-per-(app, chat) marker.
+    async function openSurfaceAfterConfirm(actionId: string) {
+        const opening = await surfaceToOpenAfterConfirm(client, chatId, actionId);
+        if (opening === undefined) return;
+        if (opening.surface.display === "sheet") {
+            confirmSurface = opening;
+        } else {
+            openSurfaceExternally(client, opening.url);
+        }
     }
 
     function reportMessage() {
@@ -577,6 +620,23 @@
     let showConfirmDelete = $state(false);
 
     let longpressCooldown = $derived(scrollStatus.isCooldown);
+
+    // Auto-propose: the matcher (utils/autoPropose.ts) flagged this message as matching a
+    // registered action's trigger keywords — render the under-bubble chip. Tapping it re-uses the
+    // exact same propose path as the message menu.
+    let autoProposeSuggestion = $derived(
+        $autoProposeEnabled && !inert ? $autoProposeSuggestions.get(msg.messageId) : undefined,
+    );
+
+    function proposeSuggestedAiAction() {
+        dismissAutoProposeSuggestion(msg.messageId);
+        void runAiActionHandler();
+    }
+
+    function muteAutoProposeSuggestions() {
+        muteAutoProposeInChat(chatId);
+        toastStore.showSuccessToast(i18nKey("aiApps.autoPropose.muted"));
+    }
 
     async function deleteMessage(deletionConfirmed: boolean) {
         if (failed) {
@@ -734,6 +794,13 @@
         app={aiAppLink.app}
         onDismiss={() => (aiAppLink = undefined)}
         onLinked={resumeAfterAiAppLink} />
+{/if}
+
+{#if confirmSurface !== undefined}
+    <AiAppSurfaceSheet
+        title={confirmSurface.app.manifest.name}
+        url={confirmSurface.url}
+        onDismiss={() => (confirmSurface = undefined)} />
 {/if}
 
 {#if showRemindMe}
@@ -975,6 +1042,15 @@
                             onClick={tipMessage}
                             {canTip}
                             offset={!hasThread} />
+                    {/if}
+                    {#if autoProposeSuggestion !== undefined}
+                        <AutoProposeChip
+                            {me}
+                            title={autoProposeSuggestion.title}
+                            offset={!hasThread && !hasReactions && !hasTips}
+                            onPropose={proposeSuggestedAiAction}
+                            onDismiss={() => dismissAutoProposeSuggestion(msg.messageId)}
+                            onMute={muteAutoProposeSuggestions} />
                     {/if}
                 </Container>
             </Container>

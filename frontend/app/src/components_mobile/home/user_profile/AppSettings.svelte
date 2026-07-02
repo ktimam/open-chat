@@ -101,14 +101,6 @@
                 )} />
 
             <LinkedCard
-                onClick={() => publish("userProfileRegisterAiAction")}
-                Icon={RobotOutline}
-                title={i18nKey("Register AI action")}
-                info={i18nKey(
-                    "Register a generic AI action (prompt, output schema, confirm-card template, recipient key) so any app's drafts can be proposed in chat.",
-                )} />
-
-            <LinkedCard
                 onClick={() => publish("userProfileDeleteAccount")}
                 Icon={Delete}
                 title={i18nKey("Delete account")}

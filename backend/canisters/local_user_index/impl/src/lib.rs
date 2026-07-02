@@ -51,6 +51,7 @@ use utils::fcm_token_store::FcmTokenStore;
 use utils::idempotency_checker::IdempotencyChecker;
 use utils::iterator_extensions::IteratorExtensions;
 
+mod action_deposit_envelope;
 mod bots;
 mod guards;
 mod jobs;

@@ -1,6 +1,7 @@
 <script lang="ts">
     import { i18nKey } from "@src/i18n/i18n";
     import {
+        autoProposeSuggestions,
         lowBandwidth,
         videoCameraOn,
         videoMicOn,
@@ -73,6 +74,13 @@
                 info={"With this option turned on, messages from users you have blocked will not be visible in group and community chats. Keep in mind that this might cause you to lose some conversation context."}>
                 <Switch width={"fill"} reverse bind:checked={$hideMessagesFromDirectBlocked}>
                     <Translatable resourceKey={i18nKey("Hide messages from blocked users")} />
+                </Switch>
+            </Setting>
+            <Setting
+                toggle={() => autoProposeSuggestions.toggle()}
+                info={"When a message looks like something a registered AI app can act on, show a small suggestion chip under it. Long-press a chip's X to mute suggestions for that chat."}>
+                <Switch width={"fill"} reverse bind:checked={$autoProposeSuggestions}>
+                    <Translatable resourceKey={i18nKey("aiApps.autoPropose.setting")} />
                 </Switch>
             </Setting>
         </Container>

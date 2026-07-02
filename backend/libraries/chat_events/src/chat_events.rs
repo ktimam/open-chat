@@ -18,15 +18,15 @@ use std::ops::DerefMut;
 use tracing::error;
 use types::{
     ActionCardResponse, ActionCardState, BlobReference, BotChatEvent, BotNotification, CallParticipant, CanisterId, Chat,
-    ChatEvent, ChatEventCategory,
-    ChatEventType, ChatType, CompletedCryptoTransaction, DiamondMembershipStatus, DirectChatCreated, EventContext, EventIndex,
-    EventMetaData, EventWrapper, EventWrapperInternal, EventsTimeToLiveUpdated, GroupCanisterThreadDetails, GroupCreated,
-    GroupFrozen, GroupUnfrozen, HydratedMention, Mention, Message, MessageEditedEventPayload, MessageEventPayload, MessageId,
-    MessageIndex, MessageMatch, MessageTippedEventPayload, Milliseconds, MultiUserChat, OCResult, OgPreview, OptionUpdate,
-    P2PSwapAccepted, P2PSwapCompleted, P2PSwapCompletedEventPayload, P2PSwapContent, P2PSwapStatus, PendingCryptoTransaction,
-    PollVotes, ProposalRewardStatus, ProposalUpdate, Reaction, ReactionAddedEventPayload, RegisterVoteResult,
-    ReserveP2PSwapSuccess, SenderContext, Tally, TimestampMillis, TimestampNanos, Timestamped, Tips, UserId, VideoCall,
-    VideoCallEndedEventPayload, VideoCallParticipants, VideoCallPresence, VideoCallType, VoteOperation,
+    ChatEvent, ChatEventCategory, ChatEventType, ChatType, CompletedCryptoTransaction, DiamondMembershipStatus,
+    DirectChatCreated, EventContext, EventIndex, EventMetaData, EventWrapper, EventWrapperInternal, EventsTimeToLiveUpdated,
+    GroupCanisterThreadDetails, GroupCreated, GroupFrozen, GroupUnfrozen, HydratedMention, Mention, Message,
+    MessageEditedEventPayload, MessageEventPayload, MessageId, MessageIndex, MessageMatch, MessageTippedEventPayload,
+    Milliseconds, MultiUserChat, OCResult, OgPreview, OptionUpdate, P2PSwapAccepted, P2PSwapCompleted,
+    P2PSwapCompletedEventPayload, P2PSwapContent, P2PSwapStatus, PendingCryptoTransaction, PollVotes, ProposalRewardStatus,
+    ProposalUpdate, Reaction, ReactionAddedEventPayload, RegisterVoteResult, ReserveP2PSwapSuccess, SenderContext, Tally,
+    TimestampMillis, TimestampNanos, Timestamped, Tips, UserId, VideoCall, VideoCallEndedEventPayload, VideoCallParticipants,
+    VideoCallPresence, VideoCallType, VoteOperation,
 };
 
 #[derive(Serialize, Deserialize)]
@@ -691,11 +691,17 @@ impl ChatEvents {
 
         // On the confirm transition (returned exactly once), emit a deposit instruction if the card carries
         // delivery routing. The payload stays opaque — chat_events never inspects it.
-        let deposit = match (matches!(args.response, ActionCardResponse::Confirm), &card.recipient_public_key, &card.confirm_payload) {
+        let deposit = match (
+            matches!(args.response, ActionCardResponse::Confirm),
+            &card.recipient_public_key,
+            &card.confirm_payload,
+        ) {
             (true, Some(recipient_public_key), Some(confirm_payload)) => Some(ActionCardDeposit {
                 recipient_public_key: recipient_public_key.clone(),
                 confirm_payload: confirm_payload.clone(),
                 responded_at: args.now,
+                message_id: args.message_id,
+                confirmed_by: args.user_id,
             }),
             _ => None,
         };
@@ -2643,10 +2649,14 @@ pub struct RespondToActionCardResult {
 }
 
 // An opaque confirmed-action payload to be encrypted to `recipient_public_key` and deposited to action_inbox.
+// `message_id`/`confirmed_by` identify WHERE/BY WHOM the confirm happened; the chat identity itself is added
+// at the canister layer (each canister knows itself) so the consumer receives full provenance context.
 pub struct ActionCardDeposit {
     pub recipient_public_key: String,
     pub confirm_payload: ByteBuf,
     pub responded_at: TimestampMillis,
+    pub message_id: MessageId,
+    pub confirmed_by: UserId,
 }
 
 pub struct RegisterPollVoteSuccess {

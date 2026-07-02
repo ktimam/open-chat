@@ -181,12 +181,7 @@ import type {
     MemberRole,
     OptionalChatPermissions,
 } from "./permission";
-import type {
-    AiActionDefinition,
-    AiAppLinkCode,
-    AiAppRegistration,
-    AiAppUserKey,
-} from "./aiAction";
+import type { AiAppLinkCode, AiAppRegistration, AiAppUserKey } from "./aiAction";
 import type { CandidateProposal } from "./proposals";
 import type {
     StakeNeuronForSubmittingProposalsResponse,
@@ -406,13 +401,12 @@ export type WorkerRequest =
     | ApproveTransfer
     | DeleteDirectChat
     | GetDiamondMembershipFees
-    | AiActions
-    | RegisterAiAction
     | AiApps
     | SetAiAppEnabled
     | EnabledAiApps
     | MyAiAppKeys
     | CreateAiAppLinkCode
+    | RemoveMyAiAppKey
     | GetReportedMessages
     | GetExchangeRates
     | AcceptP2PSwap
@@ -1872,7 +1866,6 @@ export type WorkerResponseInner =
     | SwapTokensResponse
     | TokenSwapStatusResponse
     | DiamondMembershipFees[]
-    | AiActionDefinition[]
     | AiAppRegistration[]
     | AiAppUserKey[]
     | AiAppLinkCode
@@ -2128,15 +2121,6 @@ type GetDiamondMembershipFees = {
     kind: "diamondMembershipFees";
 };
 
-type AiActions = {
-    kind: "aiActions";
-};
-
-type RegisterAiAction = {
-    kind: "registerAiAction";
-    definition: AiActionDefinition;
-};
-
 type AiApps = {
     kind: "aiApps";
 };
@@ -2159,6 +2143,11 @@ type MyAiAppKeys = {
 
 type CreateAiAppLinkCode = {
     kind: "createAiAppLinkCode";
+    appId: number;
+};
+
+type RemoveMyAiAppKey = {
+    kind: "removeMyAiAppKey";
     appId: number;
 };
 
@@ -2541,10 +2530,6 @@ export type WorkerResult<T> = T extends Init
     ? boolean
     : T extends GetDiamondMembershipFees
     ? DiamondMembershipFees[]
-    : T extends AiActions
-    ? AiActionDefinition[]
-    : T extends RegisterAiAction
-    ? boolean
     : T extends AiApps
     ? AiAppRegistration[]
     : T extends SetAiAppEnabled
@@ -2555,6 +2540,8 @@ export type WorkerResult<T> = T extends Init
     ? AiAppUserKey[]
     : T extends CreateAiAppLinkCode
     ? AiAppLinkCode | undefined
+    : T extends RemoveMyAiAppKey
+    ? boolean
     : T extends GetReportedMessages
     ? string
     : T extends GetExchangeRates

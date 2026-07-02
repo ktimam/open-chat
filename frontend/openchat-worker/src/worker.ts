@@ -1087,12 +1087,6 @@ function getAction(
         case "diamondMembershipFees":
             return agent.diamondMembershipFees();
 
-        case "aiActions":
-            return agent.aiActions();
-
-        case "registerAiAction":
-            return agent.registerAiAction(payload.definition);
-
         case "aiApps":
             return agent.aiApps();
 
@@ -1107,6 +1101,9 @@ function getAction(
 
         case "createAiAppLinkCode":
             return agent.createAiAppLinkCode(payload.appId);
+
+        case "removeMyAiAppKey":
+            return agent.removeMyAiAppKey(payload.appId);
 
         case "reportedMessages":
             return agent.reportedMessages(payload.userId);

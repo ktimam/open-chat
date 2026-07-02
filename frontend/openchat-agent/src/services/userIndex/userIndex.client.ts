@@ -8,7 +8,6 @@ import type {
     CurrentUserResponse,
     DiamondMembershipDuration,
     DiamondMembershipFees,
-    AiActionDefinition,
     AiAppLinkCode,
     AiAppManifest,
     AiAppRegistration,
@@ -47,15 +46,14 @@ import {
     UserIndexChitLeaderboardResponse,
     UserIndexCurrentUserResponse,
     UserIndexDiamondMembershipFeesResponse,
-    UserIndexAiActionsResponse,
-    UserIndexRegisterAiActionArgs,
-    UserIndexRegisterAiActionResponse,
     UserIndexAiAppsResponse,
     UserIndexRegisterAiAppArgs,
     UserIndexRegisterAiAppResponse,
     UserIndexMyAiAppKeysResponse,
     UserIndexCreateAiAppLinkCodeArgs,
     UserIndexCreateAiAppLinkCodeResponse,
+    UserIndexRemoveMyAiAppKeyArgs,
+    UserIndexRemoveMyAiAppKeyResponse,
     UserIndexExploreBotsArgs,
     UserIndexExploreBotsResponse,
     UserIndexExternalAchievementsArgs,
@@ -114,14 +112,12 @@ import {
     chitLeaderboardResponse,
     currentUserResponse,
     diamondMembershipFeesResponse,
-    aiActionsResponse,
-    apiAiActionDefinition,
-    registerAiActionResponse,
     aiAppsResponse,
     apiAiAppManifest,
     registerAiAppResponse,
     myAiAppKeysResponse,
     createAiAppLinkCodeResponse,
+    removeMyAiAppKeyResponse,
     exploreBotsResponse,
     externalAchievementsResponse,
     payForDiamondMembershipResponse,
@@ -571,20 +567,6 @@ export class UserIndexClient extends SingleCanisterMsgpackAgent {
         );
     }
 
-    aiActions(): Promise<AiActionDefinition[]> {
-        return this.query("ai_actions", {}, aiActionsResponse, Empty, UserIndexAiActionsResponse);
-    }
-
-    registerAiAction(definition: AiActionDefinition): Promise<boolean> {
-        return this.update(
-            "register_ai_action",
-            { definition: apiAiActionDefinition(definition) },
-            registerAiActionResponse,
-            UserIndexRegisterAiActionArgs,
-            UserIndexRegisterAiActionResponse,
-        );
-    }
-
     aiApps(): Promise<AiAppRegistration[]> {
         return this.query("ai_apps", {}, aiAppsResponse, Empty, UserIndexAiAppsResponse);
     }
@@ -617,6 +599,17 @@ export class UserIndexClient extends SingleCanisterMsgpackAgent {
             createAiAppLinkCodeResponse,
             UserIndexCreateAiAppLinkCodeArgs,
             UserIndexCreateAiAppLinkCodeResponse,
+        );
+    }
+
+    // Removes the caller's own per-app delivery key (a user disconnecting an app). true on success.
+    removeMyAiAppKey(appId: number): Promise<boolean> {
+        return this.update(
+            "remove_my_ai_app_key",
+            { app_id: appId },
+            removeMyAiAppKeyResponse,
+            UserIndexRemoveMyAiAppKeyArgs,
+            UserIndexRemoveMyAiAppKeyResponse,
         );
     }
 

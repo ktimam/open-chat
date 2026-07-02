@@ -8,6 +8,7 @@
         type ProposeResult,
     } from "@utils/aiActionRunner";
     import { isNativeClient } from "@utils/onDeviceInference";
+    import { openSurfaceExternally, surfaceToOpenAfterConfirm } from "@utils/aiAppSurfaces";
     import Typing from "@shared_components/Typing.svelte";
     import { trackedEffect } from "@src/utils/effects.svelte";
     import type { ProfileLinkClickedEvent } from "@webcomponents/profileLink";
@@ -362,7 +363,7 @@
         }
         switch (result.kind) {
             case "no_actions":
-                toastStore.showFailureToast(i18nKey("No AI actions are registered"));
+                toastStore.showFailureToast(i18nKey("aiApps.noneEnabled"));
                 break;
             case "unavailable":
                 toastStore.showFailureToast(i18nKey("On-device model unavailable"));
@@ -498,7 +499,25 @@
     function onRespondToActionCard(response: "confirm" | "cancel") {
         if (chatId.kind === "direct_chat") return;
 
-        client.respondToActionCard(chatId, threadRootMessageIndex, msg.messageId, response);
+        // Capture before the async round-trip: the card content is replaced when its state
+        // refreshes to "confirmed".
+        const actionId =
+            msg.content.kind === "action_card_content" ? msg.content.actionId : undefined;
+        void client
+            .respondToActionCard(chatId, threadRootMessageIndex, msg.messageId, response)
+            .then(async (success) => {
+                if (!success || response !== "confirm" || actionId === undefined) return;
+                // After the first successfully confirmed action in a chat, open the owning app's
+                // "chat_link" surface (when it declares one) so the user can finish configuring
+                // the chat inside the app. The classic layout keeps this minimal: whatever the
+                // surface's display, the substituted URL opens in a new tab (the mobile layout
+                // hosts "sheet" surfaces in-app). surfaceToOpenAfterConfirm persists the
+                // once-per-(app, chat) marker.
+                const opening = await surfaceToOpenAfterConfirm(client, chatId, actionId);
+                if (opening !== undefined) {
+                    openSurfaceExternally(client, opening.url);
+                }
+            });
     }
 
     function reportMessage() {

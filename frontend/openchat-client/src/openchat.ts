@@ -164,7 +164,6 @@ import {
     type DexId,
     type DiamondMembershipDuration,
     type DiamondMembershipFees,
-    type AiActionDefinition,
     type AiAppLinkCode,
     type AiAppRegistration,
     type AiAppUserKey,
@@ -7054,21 +7053,6 @@ export class OpenChat {
             .catch(() => []);
     }
 
-    aiActions(): Promise<AiActionDefinition[]> {
-        return this.#worker
-            .send({
-                kind: "aiActions",
-            })
-            .catch(() => []);
-    }
-
-    registerAiAction(definition: AiActionDefinition): Promise<boolean> {
-        return this.#worker.send({
-            kind: "registerAiAction",
-            definition,
-        });
-    }
-
     aiApps(): Promise<AiAppRegistration[]> {
         return this.#worker
             .send({
@@ -7096,6 +7080,18 @@ export class OpenChat {
                 appId,
             })
             .catch(() => undefined);
+    }
+
+    // Disconnect this user from an app: remove their own per-app delivery key so OpenChat stops
+    // delivering their confirmed actions to it (the app's registration and other users are
+    // unaffected). One-sided — needs no code from the app. false on failure.
+    removeMyAiAppKey(appId: number): Promise<boolean> {
+        return this.#worker
+            .send({
+                kind: "removeMyAiAppKey",
+                appId,
+            })
+            .catch(() => false);
     }
 
     // Phase A: AI apps are group-scoped only; non-group chat ids resolve to false / empty.

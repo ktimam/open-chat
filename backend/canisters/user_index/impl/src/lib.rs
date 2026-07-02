@@ -412,8 +412,9 @@ struct Data {
     #[serde(default)]
     pub blocked_username_patterns: Vec<String>,
     pub openai_api_key: Option<String>,
-    #[serde(default)]
-    pub ai_actions: crate::model::ai_action_registry::AiActionRegistry,
+    // The legacy standalone AI-action registry (`ai_actions`) was retired in favour of the AI-app
+    // directory below. Serde ignores unknown fields, so any `ai_actions` entry still present in
+    // pre-upgrade serialized state is simply dropped on deserialize — no migration is needed.
     #[serde(default)]
     pub ai_apps: crate::model::ai_app_registry::AiAppRegistry,
     #[serde(default)]
@@ -505,7 +506,6 @@ impl Data {
             premium_items: PremiumItems::default(),
             blocked_username_patterns: Vec::new(),
             openai_api_key: None,
-            ai_actions: crate::model::ai_action_registry::AiActionRegistry::default(),
             ai_apps: crate::model::ai_app_registry::AiAppRegistry::default(),
             ai_app_user_keys: crate::model::ai_app_user_keys::AiAppUserKeys::default(),
             ai_app_link_codes: crate::model::ai_app_link_codes::AiAppLinkCodes::default(),
@@ -624,7 +624,6 @@ impl Default for Data {
             premium_items: PremiumItems::default(),
             blocked_username_patterns: Vec::new(),
             openai_api_key: None,
-            ai_actions: crate::model::ai_action_registry::AiActionRegistry::default(),
             ai_apps: crate::model::ai_app_registry::AiAppRegistry::default(),
             ai_app_user_keys: crate::model::ai_app_user_keys::AiAppUserKeys::default(),
             ai_app_link_codes: crate::model::ai_app_link_codes::AiAppLinkCodes::default(),

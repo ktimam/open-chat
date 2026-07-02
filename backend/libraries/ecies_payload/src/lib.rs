@@ -9,9 +9,10 @@
 //!   ciphertext  = AES-256-GCM(key, nonce, plaintext)
 //!   wire        = { ephemeral_public_key (65-byte uncompressed SEC1), ciphertext }
 //!
-//! Provenance is added separately by signing `signing_preimage()` (= ephemeral_pk ‖ ciphertext) with the
-//! platform's existing P-256 key via `jwt::sign_bytes` — i.e. ECDSA(SHA-256(preimage)), which Web Crypto's
-//! `ECDSA`/`SHA-256` verifies directly. Nothing here is app-specific.
+//! Provenance is added separately by signing `signing_preimage(created_at)` (= ephemeral_pk ‖ ciphertext ‖
+//! created_at as u64 little-endian) with the platform's existing P-256 key via `jwt::sign_bytes` — i.e.
+//! ECDSA(SHA-256(preimage)), which Web Crypto's `ECDSA`/`SHA-256` verifies directly. Nothing here is
+//! app-specific.
 
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
@@ -36,11 +37,18 @@ pub struct EciesEnvelope {
 }
 
 impl EciesEnvelope {
-    /// The exact bytes signed for provenance: `ephemeral_public_key ‖ ciphertext`.
-    pub fn signing_preimage(&self) -> Vec<u8> {
-        let mut preimage = Vec::with_capacity(self.ephemeral_public_key.len() + self.ciphertext.len());
+    /// The exact bytes signed for provenance (preimage v2):
+    /// `ephemeral_public_key ‖ ciphertext ‖ created_at (u64 little-endian, 8 bytes)`.
+    ///
+    /// v2 binds the deposit timestamp into the signature so `created_at` can no longer be altered without
+    /// invalidating the provenance signature (in v1 it was unsigned). Entries signed with the v1 preimage
+    /// (without the timestamp) become unverifiable — acceptable, this format has only ever been deployed to
+    /// local dev environments.
+    pub fn signing_preimage(&self, created_at: u64) -> Vec<u8> {
+        let mut preimage = Vec::with_capacity(self.ephemeral_public_key.len() + self.ciphertext.len() + 8);
         preimage.extend_from_slice(&self.ephemeral_public_key);
         preimage.extend_from_slice(&self.ciphertext);
+        preimage.extend_from_slice(&created_at.to_le_bytes());
         preimage
     }
 }
@@ -126,7 +134,15 @@ mod tests {
         let envelope = encrypt(plaintext, &pk_pem, &mut rng).unwrap();
 
         assert_eq!(envelope.ephemeral_public_key.len(), 65, "uncompressed SEC1 ephemeral key");
-        assert_eq!(envelope.signing_preimage().len(), 65 + envelope.ciphertext.len());
+
+        let created_at: u64 = 1_720_000_000_000;
+        let preimage = envelope.signing_preimage(created_at);
+        assert_eq!(preimage.len(), 65 + envelope.ciphertext.len() + 8);
+        assert_eq!(
+            &preimage[preimage.len() - 8..],
+            created_at.to_le_bytes(),
+            "created_at is u64 LE-suffixed (preimage v2)"
+        );
 
         let recovered = decrypt(&envelope, &sk_pem).unwrap();
         assert_eq!(recovered, plaintext);
@@ -146,25 +162,31 @@ mod tests {
         let sk_pem = recipient.to_pkcs8_pem(Default::default()).unwrap().to_string();
 
         let plaintext = b"{\"action_id\":\"example.action\",\"rows\":[{\"label\":\"Amount\",\"value\":\"$20\"}]}";
+        let created_at: u64 = 1_720_000_000_000;
         let envelope = encrypt(plaintext, &pk_pem, &mut rng).unwrap();
         let fingerprint = key_fingerprint(&pk_pem).unwrap();
 
-        // Platform signing key: sign the envelope's preimage exactly as local_user_index does on deposit, so a
-        // WebCrypto consumer can prove it verifies the provenance signature OpenChat produces.
+        // Platform signing key: sign the envelope's v2 preimage (which binds `created_at`) exactly as
+        // local_user_index does on deposit, so a WebCrypto consumer can prove it verifies the provenance
+        // signature OpenChat produces.
         let oc = p256::SecretKey::random(&mut rng);
         let oc_public_key_pem = oc.public_key().to_public_key_pem(Default::default()).unwrap();
         let oc_secret_key_der = oc.to_pkcs8_der().unwrap().as_bytes().to_vec();
-        let oc_signature = jwt::sign_bytes(&envelope.signing_preimage(), &oc_secret_key_der, &mut rng).unwrap();
+        let oc_signature = jwt::sign_bytes(&envelope.signing_preimage(created_at), &oc_secret_key_der, &mut rng).unwrap();
 
         println!("ECIES_VECTOR_BEGIN");
         println!("recipient_sk_pem_b64={}", b64.encode(sk_pem.as_bytes()));
         println!("recipient_pk_pem_b64={}", b64.encode(pk_pem.as_bytes()));
         println!("ephemeral_public_key_b64={}", b64.encode(&envelope.ephemeral_public_key));
         println!("ciphertext_b64={}", b64.encode(&envelope.ciphertext));
-        println!("signing_preimage_b64={}", b64.encode(envelope.signing_preimage()));
+        println!("created_at={created_at}");
+        println!("signing_preimage_b64={}", b64.encode(envelope.signing_preimage(created_at)));
         println!("oc_public_key_pem_b64={}", b64.encode(oc_public_key_pem.as_bytes()));
         println!("oc_signature_b64={}", b64.encode(&oc_signature));
-        println!("fingerprint_hex={}", fingerprint.iter().map(|b| format!("{b:02x}")).collect::<String>());
+        println!(
+            "fingerprint_hex={}",
+            fingerprint.iter().map(|b| format!("{b:02x}")).collect::<String>()
+        );
         println!("expected_plaintext={}", String::from_utf8_lossy(plaintext));
         println!("ECIES_VECTOR_END");
     }

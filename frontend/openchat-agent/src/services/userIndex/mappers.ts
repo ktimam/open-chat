@@ -40,12 +40,7 @@ import type {
     AiAppRegistration,
     AiAppUserKey,
 } from "openchat-shared";
-import {
-    aiActionFromRegistration,
-    aiAppFromRegistration,
-    CommonResponses,
-    UnsupportedValueError,
-} from "openchat-shared";
+import { aiAppFromRegistration, CommonResponses, UnsupportedValueError } from "openchat-shared";
 import type {
     BotDefinition as ApiBotDefinition,
     BotInstallationLocation as ApiBotInstallationLocation,
@@ -86,15 +81,14 @@ import type {
     UserIndexUnsuspendUserResponse,
     UserIndexUserRegistrationCanisterResponse,
     UserIndexUsersResponse,
-    UserIndexAiActionsResponse,
     UserIndexAiActionsDefinition,
     UserIndexAiActionsRule,
-    UserIndexRegisterAiActionResponse,
     UserIndexAiAppManifest,
     UserIndexAiAppsResponse,
     UserIndexRegisterAiAppResponse,
     UserIndexMyAiAppKeysResponse,
     UserIndexCreateAiAppLinkCodeResponse,
+    UserIndexRemoveMyAiAppKeyResponse,
 } from "../../typebox";
 import { toRecord } from "../../utils/list";
 import {
@@ -618,15 +612,6 @@ export function diamondMembershipFeesResponse(
     );
 }
 
-export function aiActionsResponse(value: UserIndexAiActionsResponse): AiActionDefinition[] {
-    if ("Success" in value) {
-        return value.Success.actions.map((r) =>
-            aiActionFromRegistration({ id: BigInt(r.id), definition: r.definition }),
-        );
-    }
-    throw new UnsupportedValueError("Unexpected AiActionsResponse type received", value);
-}
-
 // Maps a domain rule (flat, camelCase discriminated union) into the wire shape serde expects for the
 // externally tagged Rust AiActionRule enum: a single-key map { variant_name: payload } with snake_case
 // field names, unit enum values (mode/ops/provide items) travelling as plain snake_case strings.
@@ -651,7 +636,7 @@ function apiAiActionRule(rule: AiActionRule): UserIndexAiActionsRule {
     }
 }
 
-// The inverse of aiActionFromRegistration: maps the runner's camelCase AiActionDefinition into the on-chain
+// The inverse of aiActionDefinitionFromWire: maps the runner's camelCase AiActionDefinition into the on-chain
 // snake_case wire shape (response_schema as a JSON string, card rows keyed by `field`, endpoint required).
 // Absent rules are sent as [] (the backend field also has serde(default), but sending [] is explicit).
 export function apiAiActionDefinition(def: AiActionDefinition): UserIndexAiActionsDefinition {
@@ -673,10 +658,6 @@ export function apiAiActionDefinition(def: AiActionDefinition): UserIndexAiActio
     };
 }
 
-export function registerAiActionResponse(value: UserIndexRegisterAiActionResponse): boolean {
-    return "Success" in value;
-}
-
 export function aiAppsResponse(value: UserIndexAiAppsResponse): AiAppRegistration[] {
     if ("Success" in value) {
         return value.Success.apps.map((a) =>
@@ -692,8 +673,10 @@ export function aiAppsResponse(value: UserIndexAiAppsResponse): AiAppRegistratio
     throw new UnsupportedValueError("Unexpected AiAppsResponse type received", value);
 }
 
-// Maps the camelCase AiAppManifest into the on-chain snake_case wire shape; nested actions reuse the
-// exact per-action mapping the legacy register_ai_action endpoint uses.
+// Maps the camelCase AiAppManifest into the on-chain snake_case wire shape; nested actions use the
+// per-action mapping above. Absent surfaces are sent as [] (the backend field also has
+// serde(default), but sending [] is explicit); the surface fields and the display strings
+// ("sheet" / "external") already match the wire shape byte-for-byte.
 export function apiAiAppManifest(manifest: AiAppManifest): UserIndexAiAppManifest {
     return {
         name: manifest.name,
@@ -702,6 +685,11 @@ export function apiAiAppManifest(manifest: AiAppManifest): UserIndexAiAppManifes
         consumer_public_key: manifest.consumerPublicKey,
         per_user_keys: manifest.perUserKeys ?? false,
         actions: manifest.actions.map(apiAiActionDefinition),
+        surfaces: (manifest.surfaces ?? []).map((s) => ({
+            kind: s.kind,
+            url: s.url,
+            display: s.display,
+        })),
     };
 }
 
@@ -730,6 +718,12 @@ export function createAiAppLinkCodeResponse(
         };
     }
     return undefined;
+}
+
+// The user's own delivery key was removed (or there was none) — a disconnect. Anything else
+// (InvalidRequest / Error) is a failure the caller reports as "couldn't disconnect".
+export function removeMyAiAppKeyResponse(value: UserIndexRemoveMyAiAppKeyResponse): boolean {
+    return value === "Success";
 }
 
 export function chitLeaderboardResponse(

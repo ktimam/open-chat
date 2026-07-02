@@ -2,6 +2,7 @@
 
 import { OpenChat, routeStore, type RouteParams, type RouteType } from "openchat-client";
 import { openUrl } from "tauri-plugin-oc-api";
+import { isNativeClient } from "./onDeviceInference";
 
 const regex = new RegExp("^(?:[a-z]+:)?//", "i");
 
@@ -165,7 +166,10 @@ export async function openExternalUrl(client: OpenChat, url: string): Promise<vo
 
     const href = parsed.toString();
 
-    if (client.isNativeApp()) {
+    // Hand off to the OS browser on any native client. isNativeApp() only covers the mobile OS
+    // targets; the Tauri desktop shell is a native webview too (isNativeClient), and there
+    // window.open is a silent no-op — so it must take the openUrl path as well.
+    if (client.isNativeApp() || isNativeClient()) {
         await openUrl({ url: href });
         return;
     }

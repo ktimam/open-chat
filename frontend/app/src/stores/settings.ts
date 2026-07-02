@@ -13,6 +13,12 @@ export const confirmMessageDeletion = new LocalStorageBoolStore(
     configKeys.confirmMessageDeletion,
     true,
 );
+// Global on/off switch for the AI-action auto-propose chips (per-chat muting lives in
+// utils/autoPropose.ts alongside the rest of the suggestion machinery).
+export const autoProposeSuggestions = new LocalStorageBoolStore(
+    configKeys.autoProposeSuggestions,
+    true,
+);
 export const chitPopup = new LocalStorageBoolStore(configKeys.chitPopup, true);
 export const hideChitIcon = new LocalStorageBoolStore(configKeys.hideChitIcon, false);
 export const disableChit = new LocalStorageBoolStore(configKeys.disableChit, false);

@@ -1,26 +1,25 @@
 // App-level orchestrator for the in-OpenChat AI-action runner.
 //
-// Ties together the three verified pieces: the on-chain registry (client.aiActions()), the on-device model
+// Ties together the three verified pieces: the AI-app directory (client.aiApps()), the on-device model
 // (inferOnDevice), and the generic runner (runAiAction, in openchat-shared). Given a chat message's content,
-// it runs the registered action on-device and returns a proposable confirm-card. The caller posts the card
+// it runs the offered action on-device and returns a proposable confirm-card. The caller posts the card
 // with client.sendMessageWithContent — on confirm, OpenChat encrypts confirmPayload to the action's
 // recipient_public_key and deposits it into the action_inbox. Nothing here is app-specific.
 //
 // Scoping (Phase A): in a group chat the actions on offer come from the AI-app directory — the apps the
 // group's owner/admins enabled in that chat (client.enabledAiApps X client.aiApps), flattened to
-// (app, action) pairs. When no app is enabled — or the chat isn't a group — the flat per-action registry
-// (client.aiActions) is used exactly as before, so existing setups keep working unchanged.
+// (app, action) pairs. A chat with no enabled app — including every non-group chat, where there is no app
+// enablement yet (Phase A.1) — offers no actions.
 
 import {
     buildActionCardContent,
-    isActionRunnable,
     runAiAction,
     type AiActionDefinition,
     type AiAppRegistration,
     type RunAiActionResult,
 } from "openchat-shared";
 import type { ChatIdentifier, MessageContent, MessageContext, OpenChat } from "openchat-client";
-import { inferOnDevice, isNativeClient } from "./onDeviceInference";
+import { inferOnDevice } from "./onDeviceInference";
 
 // A directory app's action offered in a chat, with the delivery key already resolved. For a
 // per-user-keys app this is the proposing user's own registered key (from my_ai_app_keys);
@@ -34,7 +33,7 @@ export interface AiActionCandidate {
 
 export type ProposeResult =
     | RunAiActionResult
-    // No app has registered an AI action with a recipient key.
+    // No AI app is enabled in this chat (non-group chats never have one — Phase A.1).
     | { kind: "no_actions" }
     // The message content isn't something the runner can extract from.
     | { kind: "unsupported_content" }
@@ -46,19 +45,7 @@ export type ProposeResult =
     // then re-propose.
     | { kind: "link_required"; app: AiAppRegistration };
 
-// Pick a registered action to run against this content. Generic: the first action that is runnable on this
-// client (on-device inference available + the action declares a recipient key). A richer UI could let the
-// user choose, or match on a per-action trigger.
-function pickAction(actions: AiActionDefinition[]): AiActionDefinition | undefined {
-    // Native: require on-device inference + a recipient key. Browser: a recipient key is enough — the
-    // extraction is supplied manually via the fallback in proposeAiActionForMessage.
-    if (isNativeClient()) {
-        return actions.find((a) => isActionRunnable(a, true));
-    }
-    return actions.find((a) => (a.consumerPublicKey?.length ?? 0) > 0);
-}
-
-interface ResolvedCandidates {
+export interface ResolvedCandidates {
     candidates: AiActionCandidate[];
     // Enabled per-user-keys apps the user has no registered key for. Their actions must NOT fall
     // back to the manifest/action key (it belongs to someone else) — they need the one-time
@@ -68,8 +55,9 @@ interface ResolvedCandidates {
 
 // Resolve the (app, action) candidates on offer in a chat: the apps enabled in the chat crossed with the
 // global app directory, flattened. Phase A: the directory is group-scoped only, so any other chat kind
-// resolves to no candidates (and the caller falls back to the flat registry path).
-async function resolveCandidates(
+// resolves to no candidates. Exported so the auto-propose matcher (utils/autoPropose.ts) derives its
+// trigger vocabulary from this same resolution.
+export async function resolveCandidates(
     client: OpenChat,
     chatId: ChatIdentifier,
 ): Promise<ResolvedCandidates> {
@@ -156,10 +144,10 @@ async function runDefinition(
 }
 
 // Run the action on offer for a message in this chat, returning a card to propose (or a status).
-// Group chats consult the AI-app directory first; exactly one runnable candidate runs directly,
+// The AI-app directory is the only source of actions: exactly one runnable candidate runs directly,
 // several defer to the UI's chooser. When the only enabled apps are per-user-keys apps the user
-// hasn't linked yet, the caller must run the consent flow ("link_required"). None of either falls
-// back to the flat per-action registry (legacy path, unchanged).
+// hasn't linked yet, the caller must run the consent flow ("link_required"). A chat with no enabled
+// app — including every non-group chat — yields "no_actions".
 export async function proposeAiActionForMessage(
     client: OpenChat,
     chatId: ChatIdentifier,
@@ -177,14 +165,7 @@ export async function proposeAiActionForMessage(
     if (linkRequired.length > 0) {
         return { kind: "link_required", app: linkRequired[0] };
     }
-
-    // Legacy path: no app enabled in this chat (or not a group chat) — the flat registry, as before.
-    const actions = await client.aiActions();
-    const def = pickAction(actions);
-    if (def === undefined) return { kind: "no_actions" };
-
-    // def.consumerPublicKey is guaranteed by isActionRunnable/pickAction.
-    return runDefinition(def, def.consumerPublicKey as string, content, manualExtraction);
+    return { kind: "no_actions" };
 }
 
 // Convenience: run + post. Posts the proposed card into the chat (Pending) for the user to confirm.

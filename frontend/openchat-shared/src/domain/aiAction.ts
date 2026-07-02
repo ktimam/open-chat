@@ -8,7 +8,7 @@
 // value comes from the registration. The card is then posted by the caller; on confirm OpenChat encrypts the
 // payload to the recipient and deposits it into the on-chain action_inbox.
 
-import type { ActionCardContent, ActionCardRow } from "./chat/chat";
+import type { ActionCardContent, ActionCardRow, ChatIdentifier } from "./chat/chat";
 import type { InferenceRequest, InferenceResult } from "./onDeviceModel";
 
 // A row of the card, declaratively bound to a key in the model's structured output.
@@ -68,6 +68,39 @@ export interface AiActionDefinition {
 // owners/admins then enable the app per chat. The manifest-level consumerPublicKey is the app's delivery
 // key; an action's own consumerPublicKey, when set, overrides it.
 
+// How OpenChat presents a declared surface.
+//   "sheet"    = embedded in-app (an iframe hosted in a bottom sheet)
+//   "external" = opened in the system browser / a new tab
+export type AiAppSurfaceDisplay = "sheet" | "external";
+
+// The frontend mirror of the on-chain AiAppSurface (types/src/ai_actions.rs): a URL OpenChat can open
+// on the app's behalf. `kind` says what the surface is for — "chat_link" = configure/link a chat inside
+// the app (OpenChat opens it after the first confirmed action in a chat); other kinds are app-defined
+// and OpenChat ignores kinds it does not know. The URL may contain the placeholders {chatKey} and
+// {appId}, which OpenChat substitutes before opening (see chatKeyFor for the {chatKey} format).
+export interface AiAppSurface {
+    kind: string;
+    url: string;
+    display: AiAppSurfaceDisplay;
+}
+
+// Canonical, generic rendering of a chat identity for surface URLs. MUST byte-match the backend
+// renderer (backend/canisters/local_user_index/impl/src/action_deposit_envelope.rs `chat_key`) because
+// apps correlate this value with the delivery provenance (`context.chat`) of confirmed actions:
+//   "group:<group canister principal text>"
+//   "channel:<community canister principal text>:<channel id decimal>"
+// Direct chats return undefined — no confirm path exists for them, so no chat key is ever rendered.
+export function chatKeyFor(chatId: ChatIdentifier): string | undefined {
+    switch (chatId.kind) {
+        case "group_chat":
+            return `group:${chatId.groupId}`;
+        case "channel":
+            return `channel:${chatId.communityId}:${chatId.channelId}`;
+        case "direct_chat":
+            return undefined;
+    }
+}
+
 // The frontend mirror of the on-chain AiAppManifest (types/src/ai_actions.rs).
 export interface AiAppManifest {
     // Unique per owner; the stable id used for upsert-by-(owner, name).
@@ -81,6 +114,8 @@ export interface AiAppManifest {
     // first pair via a link code. Absent === false (legacy single-key delivery).
     perUserKeys?: boolean;
     actions: AiActionDefinition[];
+    // Surfaces the app declares (absent === []).
+    surfaces?: AiAppSurface[];
 }
 
 // The frontend mirror of the on-chain AiAppRegistration as the user_index `ai_apps` query returns it.
@@ -363,10 +398,11 @@ export async function runAiAction(
     };
 }
 
-// --- Registry read -------------------------------------------------------------------------------------------
-// The on-chain registry entry as the user_index `ai_actions` query returns it (snake_case; response_schema is a
-// JSON string; card rows are keyed by `field`). Defined here as the read contract — the agent validates the
-// query result into this shape, then maps it to the AiActionDefinition the runner consumes.
+// --- Directory read ------------------------------------------------------------------------------------------
+// The on-chain action definition as the user_index `ai_apps` query returns it, nested in each app's manifest
+// (snake_case; response_schema is a JSON string; card rows are keyed by `field`). Defined here as the read
+// contract — the agent validates the query result into this shape, then maps it to the AiActionDefinition the
+// runner consumes.
 
 // Rules as serde/msgpack encodes the Rust AiActionRule enum: externally tagged — newtype variants become a
 // single-key map { variant_name: payload } and unit variants (RuleMode, NormalizeOp, ContextItem) become
@@ -395,14 +431,18 @@ export interface AiActionDefinitionWire {
     rules?: AiActionRuleWire[];
 }
 
-export interface AiActionRegistrationWire {
-    id: bigint;
-    definition: AiActionDefinitionWire;
+// A surface as serde encodes the Rust AiAppSurface: field names already match the domain shape and
+// the SurfaceDisplay unit variants travel as the plain strings "sheet" / "external" (per-variant
+// serde renames).
+export interface AiAppSurfaceWire {
+    kind: string;
+    url: string;
+    display: AiAppSurfaceDisplay;
 }
 
 // The on-chain AiAppManifest / AiAppRegistration as the user_index `ai_apps` query returns them
-// (snake_case; nested actions use the same wire shape as the legacy per-action registry). The
-// registration's `owner` principal is expected to have already been stringified by the agent layer.
+// (snake_case; nested actions use the AiActionDefinitionWire shape above). The registration's
+// `owner` principal is expected to have already been stringified by the agent layer.
 export interface AiAppManifestWire {
     name: string;
     description: string;
@@ -411,6 +451,8 @@ export interface AiAppManifestWire {
     // serde(default) on-chain: registrations that predate per-user keys omit it (=== false).
     per_user_keys?: boolean;
     actions: AiActionDefinitionWire[];
+    // serde(default) on-chain: registrations that predate surfaces omit it (=== []).
+    surfaces?: AiAppSurfaceWire[];
 }
 
 export interface AiAppRegistrationWire {
@@ -528,10 +570,6 @@ export function aiActionDefinitionFromWire(d: AiActionDefinitionWire): AiActionD
     };
 }
 
-export function aiActionFromRegistration(reg: AiActionRegistrationWire): AiActionDefinition {
-    return aiActionDefinitionFromWire(reg.definition);
-}
-
 export function aiAppManifestFromWire(m: AiAppManifestWire): AiAppManifest {
     return {
         name: m.name,
@@ -540,6 +578,12 @@ export function aiAppManifestFromWire(m: AiAppManifestWire): AiAppManifest {
         consumerPublicKey: m.consumer_public_key,
         perUserKeys: m.per_user_keys,
         actions: m.actions.map(aiActionDefinitionFromWire),
+        // Tolerant: registrations that predate surfaces omit the field.
+        surfaces: (m.surfaces ?? []).map((s) => ({
+            kind: s.kind,
+            url: s.url,
+            display: s.display,
+        })),
     };
 }
 
@@ -551,10 +595,4 @@ export function aiAppFromRegistration(reg: AiAppRegistrationWire): AiAppRegistra
         created: reg.created,
         updated: reg.updated,
     };
-}
-
-// An action is "runnable" for a message only if it can deliver on-chain (has a recipient key) and on-device
-// inference is available; callers use this to decide whether to surface the proposal affordance.
-export function isActionRunnable(def: AiActionDefinition, inferenceAvailable: boolean): boolean {
-    return inferenceAvailable && (def.consumerPublicKey?.length ?? 0) > 0;
 }

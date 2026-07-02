@@ -10,12 +10,12 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use types::icrc1::{Account, CryptoAccount};
 use types::{
     ActionCardContent, ActionCardContentInitial, ActionCardRow, ActionCardState, AudioContent, BlobReference, CallParticipant,
-    CanisterId, CompletedCryptoTransaction, ContentValidationError,
-    ContentWithCaptionEventPayload, CryptoContent, CryptoContentEventPayload, CryptoTransaction, Cryptocurrency, CustomContent,
-    EncryptedContent, EncryptedContentEventPayload, EncryptedMessageContentType, EncryptionKey, FileContent,
-    FileContentEventPayload, GiphyContent, GiphyImageVariant, GovernanceProposalContentEventPayload, ImageContent,
-    ImageOrVideoContentEventPayload, MAX_TEXT_LENGTH, MAX_TEXT_LENGTH_USIZE, MessageContent, MessageContentEventPayload,
-    MessageContentInitial, MessageContentType, MessageIndex, MessageReminderContent, MessageReminderContentEventPayload,
+    CanisterId, CompletedCryptoTransaction, ContentValidationError, ContentWithCaptionEventPayload, CryptoContent,
+    CryptoContentEventPayload, CryptoTransaction, Cryptocurrency, CustomContent, EncryptedContent,
+    EncryptedContentEventPayload, EncryptedMessageContentType, EncryptionKey, FileContent, FileContentEventPayload,
+    GiphyContent, GiphyImageVariant, GovernanceProposalContentEventPayload, ImageContent, ImageOrVideoContentEventPayload,
+    MAX_TEXT_LENGTH, MAX_TEXT_LENGTH_USIZE, MessageContent, MessageContentEventPayload, MessageContentInitial,
+    MessageContentType, MessageIndex, MessageReminderContent, MessageReminderContentEventPayload,
     MessageReminderCreatedContent, MessageReport, Milliseconds, P2PSwapAccepted, P2PSwapCancelled, P2PSwapCompleted,
     P2PSwapContent, P2PSwapContentEventPayload, P2PSwapContentInitial, P2PSwapExpired, P2PSwapReserved, P2PSwapStatus,
     PendingCryptoTransaction, PollConfig, PollContent, PollContentEventPayload, PollVotes, PrizeContent,

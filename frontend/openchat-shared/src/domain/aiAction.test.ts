@@ -1,13 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
     type AiActionDefinition,
-    type AiActionRegistrationWire,
+    type AiActionDefinitionWire,
     type AiActionRule,
-    aiActionFromRegistration,
+    type AiAppManifestWire,
+    aiActionDefinitionFromWire,
+    aiAppManifestFromWire,
     applyRulesPostPass,
     buildActionCardContent,
+    chatKeyFor,
     compileRules,
-    isActionRunnable,
     parseExtraction,
     runAiAction,
 } from "./aiAction";
@@ -339,30 +341,27 @@ describe("applyRulesPostPass", () => {
     });
 });
 
-describe("aiActionFromRegistration", () => {
-    const WIRE: AiActionRegistrationWire = {
-        id: 1n,
-        definition: {
-            name: "demo.expense.add",
-            description: "Log expense",
-            prompt_template: "extract the transaction",
-            response_schema: '{"type":"object"}',
-            endpoint: "",
-            consumer_public_key: "-----BEGIN PUBLIC KEY-----\nABC\n-----END PUBLIC KEY-----\n",
-            card: {
-                title: "Log expense",
-                confirm_label: "Add",
-                cancel_label: "Dismiss",
-                rows: [
-                    { field: "amount", label: "Amount" },
-                    { field: "currency", label: "Currency" },
-                ],
-            },
+describe("aiActionDefinitionFromWire", () => {
+    const WIRE: AiActionDefinitionWire = {
+        name: "demo.expense.add",
+        description: "Log expense",
+        prompt_template: "extract the transaction",
+        response_schema: '{"type":"object"}',
+        endpoint: "",
+        consumer_public_key: "-----BEGIN PUBLIC KEY-----\nABC\n-----END PUBLIC KEY-----\n",
+        card: {
+            title: "Log expense",
+            confirm_label: "Add",
+            cancel_label: "Dismiss",
+            rows: [
+                { field: "amount", label: "Amount" },
+                { field: "currency", label: "Currency" },
+            ],
         },
     };
 
-    it("maps the snake_case registry entry to a runner AiActionDefinition", () => {
-        const def = aiActionFromRegistration(WIRE);
+    it("maps the snake_case wire definition to a runner AiActionDefinition", () => {
+        const def = aiActionDefinitionFromWire(WIRE);
         expect(def.name).toBe("demo.expense.add");
         expect(def.promptTemplate).toBe("extract the transaction");
         expect(def.responseSchema).toEqual({ type: "object" });
@@ -375,32 +374,29 @@ describe("aiActionFromRegistration", () => {
         ]);
     });
     it("tolerates a non-JSON schema string (no constraint)", () => {
-        const def = aiActionFromRegistration({ ...WIRE, definition: { ...WIRE.definition, response_schema: "not json" } });
+        const def = aiActionDefinitionFromWire({ ...WIRE, response_schema: "not json" });
         expect(def.responseSchema).toBeUndefined();
     });
     it("defaults rules to [] when absent from the wire", () => {
-        const def = aiActionFromRegistration(WIRE);
+        const def = aiActionDefinitionFromWire(WIRE);
         expect(def.rules).toEqual([]);
     });
     it("maps externally tagged wire rules to the flat domain union", () => {
-        const def = aiActionFromRegistration({
+        const def = aiActionDefinitionFromWire({
             ...WIRE,
-            definition: {
-                ...WIRE.definition,
-                rules: [
-                    {
-                        keyword_map: {
-                            field: "category",
-                            mode: "override",
-                            map: [{ value: "travel", keywords: ["flight", "hotel"] }],
-                        },
+            rules: [
+                {
+                    keyword_map: {
+                        field: "category",
+                        mode: "override",
+                        map: [{ value: "travel", keywords: ["flight", "hotel"] }],
                     },
-                    { from_message: { field: "note", max_length: 120 } },
-                    { normalize: { field: "amount", ops: ["k_m_suffix", "trim"] } },
-                    { instruction: { text: "Be terse." } },
-                    { context: { provide: ["today"] } },
-                ],
-            },
+                },
+                { from_message: { field: "note", max_length: 120 } },
+                { normalize: { field: "amount", ops: ["k_m_suffix", "trim"] } },
+                { instruction: { text: "Be terse." } },
+                { context: { provide: ["today"] } },
+            ],
         });
         expect(def.rules).toEqual([
             {
@@ -415,21 +411,47 @@ describe("aiActionFromRegistration", () => {
             { kind: "context", provide: ["today"] },
         ]);
     });
-    it("skips malformed wire rules instead of failing", () => {
-        const def = aiActionFromRegistration({
-            ...WIRE,
-            definition: {
-                ...WIRE.definition,
-                // deliberately broken entries mixed in with one valid rule
-                rules: [
-                    "nonsense",
-                    { unknown_rule: { field: "x" } },
-                    { keyword_map: { field: "k", mode: "sideways", map: [] } },
-                    { instruction: { text: "Keep it short." } },
-                    // unrecognised normalize ops are dropped, the rule itself survives
-                    { normalize: { field: "amount", ops: ["trim", "future_op"] } },
-                ] as unknown as NonNullable<AiActionRegistrationWire["definition"]["rules"]>,
+    it("maps wire surfaces and defaults them to [] when absent", () => {
+        const manifestWire: AiAppManifestWire = {
+            name: "demo",
+            description: "Demo app",
+            consumer_public_key: "-----BEGIN PUBLIC KEY-----\nABC\n-----END PUBLIC KEY-----\n",
+            actions: [WIRE],
+            surfaces: [
+                {
+                    kind: "chat_link",
+                    url: "https://app.example/openchat/link-chat?chat={chatKey}",
+                    display: "sheet",
+                },
+                { kind: "docs", url: "https://app.example/docs", display: "external" },
+            ],
+        };
+        const manifest = aiAppManifestFromWire(manifestWire);
+        expect(manifest.surfaces).toEqual([
+            {
+                kind: "chat_link",
+                url: "https://app.example/openchat/link-chat?chat={chatKey}",
+                display: "sheet",
             },
+            { kind: "docs", url: "https://app.example/docs", display: "external" },
+        ]);
+        // Registrations that predate surfaces omit the field entirely.
+        const legacy = aiAppManifestFromWire({ ...manifestWire, surfaces: undefined });
+        expect(legacy.surfaces).toEqual([]);
+    });
+
+    it("skips malformed wire rules instead of failing", () => {
+        const def = aiActionDefinitionFromWire({
+            ...WIRE,
+            // deliberately broken entries mixed in with one valid rule
+            rules: [
+                "nonsense",
+                { unknown_rule: { field: "x" } },
+                { keyword_map: { field: "k", mode: "sideways", map: [] } },
+                { instruction: { text: "Keep it short." } },
+                // unrecognised normalize ops are dropped, the rule itself survives
+                { normalize: { field: "amount", ops: ["trim", "future_op"] } },
+            ] as unknown as NonNullable<AiActionDefinitionWire["rules"]>,
         });
         expect(def.rules).toEqual([
             { kind: "instruction", text: "Keep it short." },
@@ -438,22 +460,24 @@ describe("aiActionFromRegistration", () => {
     });
 });
 
-describe("isActionRunnable", () => {
-    const base = aiActionFromRegistration({
-        id: 1n,
-        definition: {
-            name: "a",
-            description: "",
-            prompt_template: "p",
-            response_schema: "",
-            endpoint: "",
-            consumer_public_key: "KEY",
-            card: { title: "t", confirm_label: "c", cancel_label: "x", rows: [] },
-        },
+describe("chatKeyFor", () => {
+    // These MUST byte-match the backend renderer
+    // (backend/canisters/local_user_index/impl/src/action_deposit_envelope.rs `chat_key`).
+    it("renders a group chat as group:<principal>", () => {
+        expect(chatKeyFor({ kind: "group_chat", groupId: "dgegb-daaaa-aaaar-arlhq-cai" })).toBe(
+            "group:dgegb-daaaa-aaaar-arlhq-cai",
+        );
     });
-    it("requires inference + a recipient key", () => {
-        expect(isActionRunnable(base, true)).toBe(true);
-        expect(isActionRunnable(base, false)).toBe(false);
-        expect(isActionRunnable({ ...base, consumerPublicKey: undefined }, true)).toBe(false);
+    it("renders a channel as channel:<community principal>:<channel id decimal>", () => {
+        expect(
+            chatKeyFor({
+                kind: "channel",
+                communityId: "dgegb-daaaa-aaaar-arlhq-cai",
+                channelId: 42,
+            }),
+        ).toBe("channel:dgegb-daaaa-aaaar-arlhq-cai:42");
+    });
+    it("returns undefined for direct chats (no confirm path)", () => {
+        expect(chatKeyFor({ kind: "direct_chat", userId: "27eue-hyaaa-aaaaf-aaa4a-cai" })).toBeUndefined();
     });
 });

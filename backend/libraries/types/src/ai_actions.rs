@@ -3,8 +3,6 @@ use candid::CandidType;
 use serde::{Deserialize, Serialize};
 use ts_export::ts_export;
 
-pub type AiActionId = u32;
-
 pub type AiAppId = u32;
 
 /// The caller-supplied part of an AI app registration: one manifest covering the app's identity, its
@@ -32,6 +30,39 @@ pub struct AiAppManifest {
     pub per_user_keys: bool,
     /// The actions this app offers. A per-action `consumer_public_key`, when set, overrides the app key.
     pub actions: Vec<AiActionDefinition>,
+    /// App-declared UI surfaces OpenChat can open on the app's behalf (e.g. a chat-linking page).
+    /// Absent on the wire means none.
+    #[serde(default)]
+    pub surfaces: Vec<AiAppSurface>,
+}
+
+/// A UI surface an app declares in its manifest: a URL OpenChat opens at well-known moments so the
+/// user can configure the app without leaving the chat client.
+#[ts_export]
+#[derive(CandidType, Serialize, Deserialize, Debug, Clone)]
+pub struct AiAppSurface {
+    /// What the surface is for. "chat_link" = configure/link a chat inside the app (opened by
+    /// OpenChat after the first confirmed action in a chat). Other kinds are app-defined; OpenChat
+    /// ignores kinds it does not know.
+    pub kind: String,
+    /// URL template. Placeholders OpenChat substitutes: {chatKey} (the canonical chat key, same
+    /// format as the delivery provenance: "group:<principal>" / "channel:<principal>:<id>") and
+    /// {appId}.
+    pub url: String,
+    pub display: SurfaceDisplay,
+}
+
+/// How OpenChat presents a surface when it opens it.
+#[ts_export]
+#[derive(CandidType, Serialize, Deserialize, Debug, Clone)]
+// Per-variant renames — see AiActionRule for why rename_all cannot be used with candid.
+pub enum SurfaceDisplay {
+    /// Embedded in-app (an iframe hosted in a bottom sheet).
+    #[serde(rename = "sheet")]
+    Sheet,
+    /// Opened in the system browser / a new tab.
+    #[serde(rename = "external")]
+    External,
 }
 
 /// A single user's registered delivery key for one app: when the app's manifest sets
@@ -55,22 +86,10 @@ pub struct AiAppRegistration {
     pub updated: TimestampMillis,
 }
 
-/// A registered, reusable "AI action": a generic, app-supplied configuration that lets a client-side model
-/// propose a *confirmable, authenticated* in-chat action. Nothing here is specific to any one app — the
-/// prompt, output schema, card layout and delivery endpoint are all supplied by whoever registers the
-/// action, so the same mechanism serves any consumer.
-#[ts_export]
-#[derive(CandidType, Serialize, Deserialize, Debug, Clone)]
-pub struct AiActionRegistration {
-    pub id: AiActionId,
-    pub registered_by: UserId,
-    pub definition: AiActionDefinition,
-    pub created: TimestampMillis,
-    pub updated: TimestampMillis,
-}
-
-/// The caller-supplied part of a registration. The on-chain `id`, `registered_by` and timestamps are
-/// assigned by the canister.
+/// A single, generic "AI action": an app-supplied configuration that lets a client-side model propose a
+/// *confirmable, authenticated* in-chat action. Nothing here is specific to any one app — the prompt,
+/// output schema, card layout and delivery endpoint are all supplied by the app that declares the action,
+/// so the same mechanism serves any consumer.
 #[ts_export]
 #[derive(CandidType, Serialize, Deserialize, Debug, Clone)]
 pub struct AiActionDefinition {
