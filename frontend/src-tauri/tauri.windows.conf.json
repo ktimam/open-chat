@@ -1,5 +1,5 @@
 {
     "build": {
-        "devUrl": "http://localhost:5001"
+        "devUrl": "http://localhost:5003"
     }
 }

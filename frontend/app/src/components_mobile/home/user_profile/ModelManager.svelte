@@ -2,7 +2,7 @@
     import { i18nKey } from "@src/i18n/i18n";
     import { selectedModelId } from "@src/stores/onDeviceModels";
     import { defaultModelCatalog } from "@utils/modelCatalog";
-    import { isNativeClient } from "@utils/onDeviceInference";
+    import { inferOnDevice, isNativeClient } from "@utils/onDeviceInference";
     import { BodySmall, Button, Caption, Chip, Container, H2, Switch } from "component-lib";
     import type { ModelCatalogEntry } from "openchat-shared";
     import { onDestroy, onMount } from "svelte";
@@ -69,6 +69,28 @@
     function select(id: string) {
         selectedModelId.set(id);
         selected = id;
+    }
+
+    // Lightweight "try it" affordance: run a prompt through the selected model via the generic on-device
+    // inference facade and show the raw output, so users can confirm a downloaded model actually works.
+    let prompt = $state("Write a short haiku about the ocean.");
+    let inferring = $state(false);
+    let inferOutput = $state("");
+
+    async function runInference() {
+        inferring = true;
+        inferOutput = "";
+        try {
+            const res = await inferOnDevice({ prompt, maxTokens: 64 });
+            inferOutput =
+                res.kind === "ok"
+                    ? res.text
+                    : `[${res.kind}] ${res.kind === "unavailable" ? res.reason : res.error}`;
+        } catch (e) {
+            inferOutput = `[error] ${String(e)}`;
+        } finally {
+            inferring = false;
+        }
     }
 
     async function remove(id: string) {
@@ -152,6 +174,19 @@
                                 <Translatable resourceKey={i18nKey("Remove")}></Translatable>
                             </Button>
                         </Container>
+                        {#if selected === entry.id}
+                            <textarea class="prompt" bind:value={prompt} rows="2"></textarea>
+                            <Container gap={"sm"} direction={"horizontal"}>
+                                <Button disabled={inferring} onClick={runInference}>
+                                    <Translatable
+                                        resourceKey={i18nKey(inferring ? "Running…" : "Run on-device")}
+                                    ></Translatable>
+                                </Button>
+                            </Container>
+                            {#if inferOutput}
+                                <pre class="output">{inferOutput}</pre>
+                            {/if}
+                        {/if}
                     {:else if busy}
                         <div class="progress-track">
                             <div class="progress-fill" style={`width:${percent(entry.id)}%`}></div>
@@ -220,5 +255,26 @@
     a {
         color: var(--accent, #4a90d9);
         text-decoration: underline;
+    }
+    .prompt {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 8px;
+        border-radius: 6px;
+        border: 1px solid var(--input-bg, rgba(0, 0, 0, 0.2));
+        background-color: var(--input-bg, rgba(0, 0, 0, 0.05));
+        color: inherit;
+        font: inherit;
+        resize: vertical;
+    }
+    .output {
+        white-space: pre-wrap;
+        word-break: break-word;
+        margin: 0;
+        padding: 8px;
+        border-radius: 6px;
+        background-color: var(--input-bg, rgba(0, 0, 0, 0.05));
+        font-family: monospace;
+        font-size: 0.85em;
     }
 </style>
