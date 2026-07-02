@@ -6,11 +6,17 @@
     // enablement stays where it lives: each chat's Apps settings.
     import { i18nKey } from "@src/i18n/i18n";
     import { toastStore } from "@src/stores/toast";
+    import {
+        homeSurfaceOpening,
+        openSurfaceExternally,
+        type SurfaceOpening,
+    } from "@utils/aiAppSurfaces";
     import { Body, BodySmall, CommonButton, Container, Sheet, Title } from "component-lib";
     import type { AiAppRegistration, OpenChat } from "openchat-client";
     import { getContext } from "svelte";
     import LinkOff from "svelte-material-icons/LinkOff.svelte";
     import LinkVariant from "svelte-material-icons/LinkVariant.svelte";
+    import Web from "svelte-material-icons/Web.svelte";
     import Translatable from "../../../Translatable.svelte";
 
     const client = getContext<OpenChat>("client");
@@ -23,9 +29,23 @@
         onConnect: () => void;
         // The user's key was removed — the caller refreshes its connected set.
         onDisconnected: () => void;
+        // Embed a "sheet"-display surface (the in-window browser) — the caller swaps the sheets.
+        onOpenSurface: (opening: SurfaceOpening) => void;
     }
 
-    let { app, connected, onDismiss, onConnect, onDisconnected }: Props = $props();
+    let { app, connected, onDismiss, onConnect, onDisconnected, onOpenSurface }: Props = $props();
+
+    // The app's own webpage, when its manifest declares a "home" surface.
+    let homeSurface = $derived(homeSurfaceOpening(app));
+
+    function openHome() {
+        if (homeSurface === undefined) return;
+        if (homeSurface.surface.display === "sheet") {
+            onOpenSurface(homeSurface);
+        } else {
+            openSurfaceExternally(client, homeSurface.url);
+        }
+    }
 
     let disconnecting = $state(false);
 
@@ -56,6 +76,17 @@
 
         {#if app.manifest.description.length > 0}
             <Body colour={"textSecondary"}>{app.manifest.description}</Body>
+        {/if}
+
+        {#if homeSurface !== undefined}
+            <Container mainAxisAlignment={"start"}>
+                <CommonButton onClick={openHome} size={"small_text"}>
+                    {#snippet icon(color, size)}
+                        <Web {color} {size} />
+                    {/snippet}
+                    <Translatable resourceKey={i18nKey("aiApps.website")} />
+                </CommonButton>
+            </Container>
         {/if}
 
         <Container direction={"vertical"} gap={"sm"}>

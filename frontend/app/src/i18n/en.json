@@ -1719,7 +1719,8 @@
         "linkStepPaste": "Paste the code there and press Connect",
         "reconnect": "Reconnect",
         "title": "AI apps",
-        "toggleFailed": "Unable to update the app"
+        "toggleFailed": "Unable to update the app",
+        "website": "Website"
     },
     "reminders": {
         "cancel": "Cancel reminder",

@@ -26,6 +26,9 @@ const CHAT_LINK_KIND = "chat_link";
 // consent sheet displays. Chat-independent (only {appId} is substituted); the pairing sheet offers
 // it as an "open the right page" shortcut so the user isn't left hunting through the app's menus.
 const CONNECT_KIND = "connect";
+// "home": the app's own webpage, offered from its directory detail sheet. display "sheet" embeds
+// it right in the OpenChat window (the iframe host); "external" hands off to the OS browser.
+const HOME_KIND = "home";
 
 function substitutePlaceholders(template: string, chatKey: string, appId: number): string {
     // Values are URI-component encoded so the substituted URL stays parseable wherever the
@@ -53,7 +56,19 @@ export function chatLinkSurfaceOpening(
 // The app's "connect" surface (its pairing-code entry page), or undefined when it declares none.
 // Chat-independent: {chatKey} has no meaning here, so only {appId} is substituted.
 export function connectSurfaceOpening(app: AiAppRegistration): SurfaceOpening | undefined {
-    const surface = (app.manifest.surfaces ?? []).find((s) => s.kind === CONNECT_KIND);
+    return chatIndependentSurfaceOpening(app, CONNECT_KIND);
+}
+
+// The app's "home" surface (its own webpage), or undefined when it declares none.
+export function homeSurfaceOpening(app: AiAppRegistration): SurfaceOpening | undefined {
+    return chatIndependentSurfaceOpening(app, HOME_KIND);
+}
+
+function chatIndependentSurfaceOpening(
+    app: AiAppRegistration,
+    kind: string,
+): SurfaceOpening | undefined {
+    const surface = (app.manifest.surfaces ?? []).find((s) => s.kind === kind);
     if (surface === undefined) return undefined;
     return {
         app,

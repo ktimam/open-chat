@@ -53,7 +53,9 @@
     import AnonFooter from "../../AnonFooter.svelte";
     import NothingToSee from "../../NothingToSee.svelte";
     import { updateCommunityState } from "../createOrUpdate/community.svelte";
+    import type { SurfaceOpening } from "@utils/aiAppSurfaces";
     import AiAppLinkSheet from "../../AiAppLinkSheet.svelte";
+    import AiAppSurfaceSheet from "../../AiAppSurfaceSheet.svelte";
     import AiAppCard from "./AiAppCard.svelte";
     import AiAppSheet from "./AiAppSheet.svelte";
     import BotCard from "./BotCard.svelte";
@@ -187,6 +189,8 @@
     // Connect in the detail sheet closes it and opens the pairing sheet).
     let selectedApp = $state<AiAppRegistration | undefined>(undefined);
     let linkingApp = $state<AiAppRegistration | undefined>(undefined);
+    // A "sheet"-display surface being shown in the embedded in-window browser.
+    let appSurface = $state<SurfaceOpening | undefined>(undefined);
 
     function refreshConnected() {
         client.myAiAppKeys().then((keys) => {
@@ -548,6 +552,10 @@
             linkingApp = app;
             selectedApp = undefined;
         }}
+        onOpenSurface={(opening) => {
+            appSurface = opening;
+            selectedApp = undefined;
+        }}
         onDisconnected={refreshConnected} />
 {/if}
 
@@ -559,6 +567,13 @@
             linkingApp = undefined;
             refreshConnected();
         }} />
+{/if}
+
+{#if appSurface !== undefined}
+    <AiAppSurfaceSheet
+        title={appSurface.app.manifest.name}
+        url={appSurface.url}
+        onDismiss={() => (appSurface = undefined)} />
 {/if}
 
 <style lang="scss">
