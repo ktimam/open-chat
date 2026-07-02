@@ -8,6 +8,16 @@ pub fn caller_is_openchat_user() -> Result<(), String> {
     }
 }
 
+// In test_mode any principal is accepted so that a deploy script's standalone identity can manage
+// its AI app registrations against a local network.
+pub fn caller_is_openchat_user_or_test_mode() -> Result<(), String> {
+    if read_state(|state| state.is_caller_openchat_user() || state.data.test_mode) {
+        Ok(())
+    } else {
+        Err("Caller is not an OpenChat user".to_string())
+    }
+}
+
 pub fn caller_is_governance_principal() -> Result<(), String> {
     if read_state(|state| state.is_caller_governance_principal()) {
         Ok(())

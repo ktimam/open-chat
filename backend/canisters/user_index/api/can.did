@@ -1,5 +1,139 @@
 import "../../../libraries/types/can.did";
 
+type AiActionCardRowTemplate = record {
+    field : text;
+    label : text;
+};
+
+type AiActionCardTemplate = record {
+    title : text;
+    confirm_label : text;
+    cancel_label : text;
+    rows : vec AiActionCardRowTemplate;
+    disclosure : opt text;
+};
+
+type AiActionRule = variant {
+    keyword_map : KeywordMapRule;
+    from_message : FromMessageRule;
+    normalize : NormalizeRule;
+    instruction : InstructionRule;
+    context : ContextRule;
+};
+
+type KeywordMapRule = record {
+    field : text;
+    mode : RuleMode;
+    map : vec KeywordMapping;
+};
+
+type KeywordMapping = record {
+    value : text;
+    keywords : vec text;
+};
+
+type RuleMode = variant {
+    hint;
+    "override";
+};
+
+type FromMessageRule = record {
+    field : text;
+    max_length : opt nat32;
+};
+
+type NormalizeRule = record {
+    field : text;
+    ops : vec NormalizeOp;
+};
+
+type NormalizeOp = variant {
+    k_m_suffix;
+    strip_symbols;
+    uppercase;
+    lowercase;
+    trim;
+};
+
+type InstructionRule = record {
+    "text" : text;
+};
+
+type ContextRule = record {
+    provide : vec ContextItem;
+};
+
+type ContextItem = variant {
+    today;
+};
+
+type AiActionDefinition = record {
+    name : text;
+    description : text;
+    prompt_template : text;
+    response_schema : text;
+    card : AiActionCardTemplate;
+    endpoint : text;
+    consumer_public_key : opt text;
+    rules : vec AiActionRule;
+};
+
+type AiAppManifest = record {
+    name : text;
+    description : text;
+    icon_url : opt text;
+    consumer_public_key : text;
+    per_user_keys : bool;
+    actions : vec AiActionDefinition;
+};
+
+type AiAppRegistration = record {
+    id : nat32;
+    owner : UserId;
+    manifest : AiAppManifest;
+    created : TimestampMillis;
+    updated : TimestampMillis;
+};
+
+type AiAppsResponse = variant {
+    Success : record {
+        apps : vec AiAppRegistration;
+    };
+};
+
+type RegisterAiAppArgs = record {
+    manifest : AiAppManifest;
+};
+
+type RegisterAiAppResponse = variant {
+    Success : AiAppRegistration;
+    InvalidRequest : text;
+    Error : OCError;
+};
+
+type DeleteAiAppArgs = record {
+    name : text;
+};
+
+type DeleteAiAppResponse = variant {
+    Success;
+    NotFound;
+    Error : OCError;
+};
+
+type ClaimAiAppLinkCodeArgs = record {
+    code : text;
+    public_key : text;
+};
+
+type ClaimAiAppLinkCodeResponse = variant {
+    Success;
+    CodeNotFound;
+    CodeExpired;
+    InvalidRequest : text;
+    Error : OCError;
+};
+
 type UserRegistrationCanisterResponse = variant {
     Success : CanisterId;
     NewRegistrationsClosed;
@@ -352,6 +486,7 @@ type AwardExternalAchievementResponse = variant {
 
 service : {
     // Queries
+    ai_apps : (EmptyArgs) -> (AiAppsResponse) query;
     bot_updates : (BotUpdatesArgs) -> (BotUpdatesResponse) query;
     check_username : (CheckUsernameArgs) -> (CheckUsernameResponse) query;
     chit_leaderboard : (EmptyArgs) -> (ChitLeaderboardResponse) query;
@@ -382,4 +517,13 @@ service : {
 
     // Only callable by SNS governance canister or by bot owner
     remove_bot : (RemoveBotArgs) -> (RemoveBotResponse);
+
+    // Callable by any OpenChat user (or, in test_mode, any principal — so an external app's deploy
+    // script can manage its own manifest)
+    register_ai_app : (RegisterAiAppArgs) -> (RegisterAiAppResponse);
+    delete_ai_app : (DeleteAiAppArgs) -> (DeleteAiAppResponse);
+
+    // Callable by any principal: the single-use, short-lived link code carried in the args IS the
+    // authorization (an external app claims it on the user's behalf to register their delivery key)
+    claim_ai_app_link_code : (ClaimAiAppLinkCodeArgs) -> (ClaimAiAppLinkCodeResponse);
 };

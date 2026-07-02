@@ -414,6 +414,12 @@ struct Data {
     pub openai_api_key: Option<String>,
     #[serde(default)]
     pub ai_actions: crate::model::ai_action_registry::AiActionRegistry,
+    #[serde(default)]
+    pub ai_apps: crate::model::ai_app_registry::AiAppRegistry,
+    #[serde(default)]
+    pub ai_app_user_keys: crate::model::ai_app_user_keys::AiAppUserKeys,
+    #[serde(default)]
+    pub ai_app_link_codes: crate::model::ai_app_link_codes::AiAppLinkCodes,
 }
 
 impl Data {
@@ -500,6 +506,9 @@ impl Data {
             blocked_username_patterns: Vec::new(),
             openai_api_key: None,
             ai_actions: crate::model::ai_action_registry::AiActionRegistry::default(),
+            ai_apps: crate::model::ai_app_registry::AiAppRegistry::default(),
+            ai_app_user_keys: crate::model::ai_app_user_keys::AiAppUserKeys::default(),
+            ai_app_link_codes: crate::model::ai_app_link_codes::AiAppLinkCodes::default(),
         };
 
         // Register the ProposalsBot
@@ -615,6 +624,10 @@ impl Default for Data {
             premium_items: PremiumItems::default(),
             blocked_username_patterns: Vec::new(),
             openai_api_key: None,
+            ai_actions: crate::model::ai_action_registry::AiActionRegistry::default(),
+            ai_apps: crate::model::ai_app_registry::AiAppRegistry::default(),
+            ai_app_user_keys: crate::model::ai_app_user_keys::AiAppUserKeys::default(),
+            ai_app_link_codes: crate::model::ai_app_link_codes::AiAppLinkCodes::default(),
         }
     }
 }

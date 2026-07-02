@@ -2050,6 +2050,7 @@ type ChatEventType = variant {
     MessageP2pSwapCompleted;
     MessageP2pSwapCancelled;
     MessageVideoCall;
+    MessageActionCardResponse;
     MessageOther;
 
     // Details category

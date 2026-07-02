@@ -17,6 +17,19 @@ impl AiActionRegistry {
         definition: AiActionDefinition,
         now: TimestampMillis,
     ) -> AiActionRegistration {
+        // An action's name is unique per owner: re-registering the same name upserts the existing
+        // entry (keeping its id and created timestamp) rather than accumulating duplicates that
+        // would then shadow each other unpredictably in list()/pickAction.
+        if let Some(existing) = self
+            .actions
+            .values_mut()
+            .find(|r| r.registered_by == registered_by && r.definition.name == definition.name)
+        {
+            existing.definition = definition;
+            existing.updated = now;
+            return existing.clone();
+        }
+
         self.next_id += 1;
         let registration = AiActionRegistration {
             id: self.next_id,
@@ -50,6 +63,10 @@ impl AiActionRegistry {
     }
 
     pub fn list(&self) -> Vec<AiActionRegistration> {
-        self.actions.values().cloned().collect()
+        // Deterministic (oldest-first) ordering — HashMap iteration order is arbitrary and clients
+        // pick the first runnable action.
+        let mut actions: Vec<_> = self.actions.values().cloned().collect();
+        actions.sort_unstable_by_key(|r| r.id);
+        actions
     }
 }

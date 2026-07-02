@@ -46,6 +46,7 @@ pub mod remove_participant;
 pub mod remove_reaction;
 pub mod report_message;
 pub mod send_message;
+pub mod set_ai_app_enabled;
 pub mod set_video_call_presence;
 pub mod start_video_call;
 pub mod toggle_mute_notifications;

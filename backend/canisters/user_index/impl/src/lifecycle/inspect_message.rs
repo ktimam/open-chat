@@ -26,6 +26,17 @@ fn accept_if_valid(state: &RuntimeState) {
         | "update_bot"
         | "update_diamond_membership_subscription"
         | "register_ai_action" => state.is_caller_openchat_user(),
+        // In test_mode any principal may manage AI app registrations (deploy scripts run locally
+        // with a standalone identity).
+        "create_ai_app_link_code" | "delete_ai_app" | "register_ai_app" | "set_my_ai_app_key" => {
+            state.is_caller_openchat_user() || state.data.test_mode
+        }
+        // Accepted from ANY principal: the single-use, short-lived link code in the payload IS the
+        // authorization (bearer semantics) — it is validated and consumed in the method body, and
+        // external apps call this with principals that are not OpenChat users.
+        // TODO(rate-limit): upstream should consider throttling failed claims to further harden the
+        // 6-digit code space against brute force within its 10-minute TTL.
+        "claim_ai_app_link_code" => true,
         "suspend_user" | "unsuspend_user" => state.is_caller_platform_moderator(),
         "set_diamond_membership_fees"
         | "set_premium_item_cost"
