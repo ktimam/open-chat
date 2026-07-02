@@ -41,6 +41,7 @@ import type {
     AiAppUserKey,
 } from "openchat-shared";
 import { aiAppFromRegistration, CommonResponses, UnsupportedValueError } from "openchat-shared";
+import type { ExploreAiAppsResponse } from "openchat-shared";
 import type {
     BotDefinition as ApiBotDefinition,
     BotInstallationLocation as ApiBotInstallationLocation,
@@ -88,6 +89,7 @@ import type {
     UserIndexRegisterAiAppResponse,
     UserIndexMyAiAppKeysResponse,
     UserIndexCreateAiAppLinkCodeResponse,
+    UserIndexExploreAiAppsResponse,
     UserIndexRemoveMyAiAppKeyResponse,
 } from "../../typebox";
 import { toRecord } from "../../utils/list";
@@ -667,6 +669,7 @@ export function aiAppsResponse(value: UserIndexAiAppsResponse): AiAppRegistratio
                 manifest: a.manifest,
                 created: a.created,
                 updated: a.updated,
+                published: a.published,
             }),
         );
     }
@@ -708,6 +711,27 @@ export function myAiAppKeysResponse(value: UserIndexMyAiAppKeysResponse): AiAppU
 }
 
 // AppNotFound / Error both resolve to undefined — the caller has no code to display either way.
+// One explorer page. Term-length failures / errors degrade to an empty page — the explorer UI
+// treats that the same as "no matches".
+export function exploreAiAppsResponse(value: UserIndexExploreAiAppsResponse): ExploreAiAppsResponse {
+    if (typeof value === "object" && "Success" in value) {
+        return {
+            matches: value.Success.matches.map((a) =>
+                aiAppFromRegistration({
+                    id: a.id,
+                    owner: principalBytesToString(a.owner),
+                    manifest: a.manifest,
+                    created: a.created,
+                    updated: a.updated,
+                    published: a.published,
+                }),
+            ),
+            total: value.Success.total,
+        };
+    }
+    return { matches: [], total: 0 };
+}
+
 export function createAiAppLinkCodeResponse(
     value: UserIndexCreateAiAppLinkCodeResponse,
 ): AiAppLinkCode | undefined {

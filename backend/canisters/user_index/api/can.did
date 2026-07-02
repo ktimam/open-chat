@@ -105,12 +105,40 @@ type AiAppRegistration = record {
     manifest : AiAppManifest;
     created : TimestampMillis;
     updated : TimestampMillis;
+    published : bool;
 };
 
 type AiAppsResponse = variant {
     Success : record {
         apps : vec AiAppRegistration;
     };
+};
+
+type ExploreAiAppsArgs = record {
+    search_term : opt text;
+    page_index : nat32;
+    page_size : nat8;
+};
+
+type ExploreAiAppsResponse = variant {
+    Success : record {
+        matches : vec AiAppRegistration;
+        total : nat32;
+    };
+    TermTooShort : nat8;
+    TermTooLong : nat8;
+    Error : OCError;
+};
+
+type PublishAiAppArgs = record {
+    app_id : nat32;
+};
+
+type PublishAiAppResponse = variant {
+    Success;
+    NotFound;
+    NotAuthorised;
+    Error : OCError;
 };
 
 type RegisterAiAppArgs = record {
@@ -509,6 +537,7 @@ type AwardExternalAchievementResponse = variant {
 service : {
     // Queries
     ai_apps : (EmptyArgs) -> (AiAppsResponse) query;
+    explore_ai_apps : (ExploreAiAppsArgs) -> (ExploreAiAppsResponse) query;
     bot_updates : (BotUpdatesArgs) -> (BotUpdatesResponse) query;
     check_username : (CheckUsernameArgs) -> (CheckUsernameResponse) query;
     chit_leaderboard : (EmptyArgs) -> (ChitLeaderboardResponse) query;
@@ -544,6 +573,8 @@ service : {
     // script can manage its own manifest)
     register_ai_app : (RegisterAiAppArgs) -> (RegisterAiAppResponse);
     delete_ai_app : (DeleteAiAppArgs) -> (DeleteAiAppResponse);
+    // Gated to SNS governance in production; open in test_mode (local deploy scripts self-publish)
+    publish_ai_app : (PublishAiAppArgs) -> (PublishAiAppResponse);
 
     // Callable by any principal: the single-use, short-lived link code carried in the args IS the
     // authorization (an external app claims it on the user's behalf to register their delivery key)

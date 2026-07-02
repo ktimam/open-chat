@@ -6,6 +6,7 @@ pub mod check_username;
 pub mod chit_leaderboard;
 pub mod current_user;
 pub mod diamond_membership_fees;
+pub mod explore_ai_apps;
 pub mod explore_bots;
 pub mod external_achievements;
 pub mod http_request;

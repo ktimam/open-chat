@@ -1,6 +1,7 @@
 use crate::{RuntimeState, mutate_state};
 use canister_api_macros::update;
 use canister_tracing_macros::trace;
+use oc_error_codes::OCErrorCode;
 use user_index_canister::revoke_ai_app_user_key::{Response::*, *};
 
 // The CONSUMER-APP side of a one-sided disconnect: when a user disconnects inside the app (the app
@@ -23,5 +24,18 @@ fn revoke_ai_app_user_key(args: Args) -> Response {
 }
 
 fn revoke_ai_app_user_key_impl(args: Args, state: &mut RuntimeState) -> Response {
-    if state.data.ai_app_user_keys.remove_by_key(&args.public_key) > 0 { Success } else { KeyNotFound }
+    // Failure throttle (see the TODO above): misses count against the caller and globally, so the
+    // endpoint cannot be used to probe for registered keys at scale. Successful revokes are free.
+    let caller = state.env.caller();
+    let now = state.env.now();
+    if let Err(retry_after_ms) = state.data.ai_app_call_throttle.check(caller, now) {
+        return Error(OCErrorCode::Throttled.with_message(retry_after_ms));
+    }
+
+    if state.data.ai_app_user_keys.remove_by_key(&args.public_key) > 0 {
+        Success
+    } else {
+        state.data.ai_app_call_throttle.record_failure(caller, now);
+        KeyNotFound
+    }
 }

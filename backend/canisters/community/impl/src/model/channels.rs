@@ -10,7 +10,7 @@ use std::cmp::Reverse;
 use std::collections::hash_map::Entry::Vacant;
 use std::collections::{BTreeSet, HashMap};
 use types::{
-    ChannelId, ChannelMatch, CommunityCanisterChannelSummary, CommunityCanisterChannelSummaryUpdates, CommunityId,
+    AiAppId, ChannelId, ChannelMatch, CommunityCanisterChannelSummary, CommunityCanisterChannelSummaryUpdates, CommunityId,
     GroupMembership, GroupMembershipUpdates, GroupPermissionRole, GroupPermissions, MAX_THREADS_IN_SUMMARY, MultiUserChat,
     Rules, TimestampMillis, UserId, UserType,
 };
@@ -26,6 +26,12 @@ pub struct Channel {
     pub id: ChannelId,
     pub chat: GroupChatCore,
     pub date_imported: Option<TimestampMillis>,
+    // AI apps enabled in THIS channel (ids from the user_index AI-app directory). Stored as ids
+    // only — deliberately not validated against the directory; a dangling id is harmless because
+    // clients intersect this set with the directory. serde(default) keeps pre-upgrade snapshots
+    // deserializing (empty set), the same upgrade-compat pattern as the group canister's field.
+    #[serde(default)]
+    pub enabled_ai_apps: BTreeSet<AiAppId>,
 }
 
 impl Channels {
@@ -251,6 +257,7 @@ impl Channel {
                 now,
             ),
             date_imported: None,
+            enabled_ai_apps: BTreeSet::new(),
         }
     }
 

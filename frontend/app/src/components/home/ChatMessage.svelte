@@ -497,8 +497,6 @@
     }
 
     function onRespondToActionCard(response: "confirm" | "cancel") {
-        if (chatId.kind === "direct_chat") return;
-
         // Capture before the async round-trip: the card content is replaced when its state
         // refreshes to "confirmed".
         const actionId =

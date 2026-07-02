@@ -165,6 +165,7 @@ import {
     type DiamondMembershipDuration,
     type DiamondMembershipFees,
     type AiAppLinkCode,
+    type ExploreAiAppsResponse,
     type AiAppRegistration,
     type AiAppUserKey,
     type DiamondMembershipStatus,
@@ -2338,7 +2339,7 @@ export class OpenChat {
     }
 
     respondToActionCard(
-        chatId: MultiUserChatIdentifier,
+        chatId: ChatIdentifier,
         threadRootMessageIndex: number | undefined,
         messageId: bigint,
         response: "confirm" | "cancel",
@@ -7059,6 +7060,23 @@ export class OpenChat {
                 kind: "aiApps",
             })
             .catch(() => []);
+    }
+
+    // Paginated, scored search over the PUBLISHED app directory (the explorer surface).
+    // Rejection -> an empty page.
+    exploreAiApps(
+        searchTerm: string | undefined,
+        pageIndex: number,
+        pageSize: number,
+    ): Promise<ExploreAiAppsResponse> {
+        return this.#worker
+            .send({
+                kind: "exploreAiApps",
+                searchTerm,
+                pageIndex,
+                pageSize,
+            })
+            .catch(() => ({ matches: [], total: 0 }));
     }
 
     // The signed-in user's own registered per-app delivery keys (per-user-keys apps encrypt that

@@ -1,3 +1,4 @@
+use search::weighted::{Document as SearchDocument, Query};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use types::{AiAppId, AiAppManifest, AiAppRegistration, TimestampMillis, UserId};
@@ -55,9 +56,23 @@ impl AiAppRegistry {
             manifest,
             created: now,
             updated: now,
+            // Private until published (the upsert branch above leaves `published` untouched, so a
+            // re-registered app keeps its directory visibility — like bots keep theirs on update).
+            published: false,
         };
         self.apps.insert(registration.id, registration.clone());
         Ok(registration)
+    }
+
+    /// Makes the app visible in the public directory/explorer. Returns false for an unknown id.
+    pub fn publish(&mut self, id: AiAppId, now: TimestampMillis) -> bool {
+        if let Some(app) = self.apps.get_mut(&id) {
+            app.published = true;
+            app.updated = now;
+            true
+        } else {
+            false
+        }
     }
 
     pub fn delete(&mut self, owner: UserId, name: &str) -> bool {
@@ -78,11 +93,59 @@ impl AiAppRegistry {
         self.apps.contains_key(&id)
     }
 
-    pub fn list(&self) -> Vec<AiAppRegistration> {
-        // Deterministic (oldest-first) ordering — HashMap iteration order is arbitrary and clients
-        // present these to users.
-        let mut apps: Vec<_> = self.apps.values().cloned().collect();
+    /// The directory as one caller sees it: every PUBLISHED app, plus the caller's own unpublished
+    /// ones (a registrant must be able to see and manage an app before it is published).
+    /// Deterministic (oldest-first) ordering — HashMap iteration order is arbitrary and clients
+    /// present these to users.
+    pub fn list_visible(&self, caller: Option<UserId>) -> Vec<AiAppRegistration> {
+        let mut apps: Vec<_> = self
+            .apps
+            .values()
+            .filter(|r| r.published || Some(r.owner) == caller)
+            .cloned()
+            .collect();
         apps.sort_unstable_by_key(|r| r.id);
         apps
+    }
+
+    /// Paginated, scored search over PUBLISHED apps only (the explorer surface). Mirrors
+    /// UserMap::search_bots: name weighted 5x over description when a term is given; with no
+    /// term, oldest-first (registration order — apps have no installation count to rank by).
+    /// Returns (page, total-before-pagination).
+    pub fn search(&self, search_term: Option<String>, page_index: u32, page_size: u8) -> (Vec<AiAppRegistration>, u32) {
+        let query = search_term.map(Query::parse);
+
+        let mut matches: Vec<_> = self
+            .apps
+            .values()
+            .filter(|r| r.published)
+            .map(|r| {
+                let score = if let Some(query) = &query {
+                    SearchDocument::default()
+                        .add_field(r.manifest.name.clone(), 5.0, true)
+                        .add_field(r.manifest.description.clone(), 1.0, true)
+                        .calculate_score(query)
+                } else {
+                    // ids ascend from 1, so this ranks oldest registrations first.
+                    u32::MAX - r.id
+                };
+                (score, r)
+            })
+            .collect();
+
+        let total = matches.len() as u32;
+
+        matches.sort_by_key(|(score, _)| *score);
+
+        let matches = matches
+            .into_iter()
+            .rev()
+            .filter(|&(s, _)| s > 0)
+            .map(|(_, r)| r.clone())
+            .skip(page_index as usize * page_size as usize)
+            .take(page_size as usize)
+            .collect();
+
+        (matches, total)
     }
 }

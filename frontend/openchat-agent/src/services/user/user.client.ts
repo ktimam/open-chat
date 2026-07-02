@@ -34,6 +34,7 @@ import {
     type DeleteMessageResponse,
     type DirectChatIdentifier,
     type EditMessageResponse,
+    type RespondToActionCardResponse,
     type EventsResponse,
     type EventWrapper,
     type EvmChain,
@@ -112,6 +113,8 @@ import {
     UserDeleteGroupArgs,
     UserDeleteMessagesArgs,
     UserEditMessageArgs,
+    UserRespondToActionCardArgs,
+    UserRespondToActionCardResponse,
     UserEventsArgs,
     UserEventsByIndexArgs,
     UserEventsResponse,
@@ -525,6 +528,28 @@ export class UserClient
             }
             throw new Error("Unable to set profile background");
         });
+    }
+
+    // The direct-chat confirm path: the responder's OWN canister runs the transition + deposit
+    // and mirrors the outcome to the other participant (see the user canister endpoint).
+    respondToActionCard(
+        userId: string,
+        messageId: bigint,
+        threadRootMessageIndex: number | undefined,
+        response: "confirm" | "cancel",
+    ): Promise<RespondToActionCardResponse> {
+        return this.update(
+            "respond_to_action_card",
+            {
+                user_id: principalStringToBytes(userId),
+                thread_root_message_index: threadRootMessageIndex,
+                message_id: messageId,
+                response: response === "confirm" ? "Confirm" : "Cancel",
+            },
+            unitResult,
+            UserRespondToActionCardArgs,
+            UserRespondToActionCardResponse,
+        );
     }
 
     editMessage(

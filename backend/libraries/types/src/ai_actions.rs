@@ -84,6 +84,13 @@ pub struct AiAppRegistration {
     pub manifest: AiAppManifest,
     pub created: TimestampMillis,
     pub updated: TimestampMillis,
+    /// Directory visibility: a new registration starts UNPUBLISHED (visible only to its owner, so
+    /// it can be developed/tested privately); `publish_ai_app` flips it. `serde(default)` makes
+    /// pre-upgrade entries deserialize as unpublished. A sibling of `manifest` deliberately, so a
+    /// re-register (manifest upsert) never resets it — mirroring how bots keep their published
+    /// status across updates.
+    #[serde(default)]
+    pub published: bool,
 }
 
 /// A single, generic "AI action": an app-supplied configuration that lets a client-side model propose a

@@ -34,7 +34,7 @@
     let { chat }: Props = $props();
 
     // Phase A: the AI-app directory is group-scoped only — no channels/communities yet.
-    let isGroup = $derived(chat.id.kind === "group_chat");
+    let isMultiUser = $derived(chat.id.kind === "group_chat" || chat.id.kind === "channel");
     let myRole = $derived($selectedChatSummaryStore?.membership.role);
     // Only the group's owner or admins can enable/disable apps (the canister enforces this too).
     let canManage = $derived(!$anonUserStore && (myRole === ROLE_OWNER || myRole === ROLE_ADMIN));
@@ -62,7 +62,7 @@
         loading = false;
     }
 
-    if (chat.id.kind === "group_chat") {
+    if (chat.id.kind === "group_chat" || chat.id.kind === "channel") {
         load();
     }
 
@@ -135,7 +135,7 @@
     }
 </script>
 
-{#if isGroup}
+{#if isMultiUser}
     <Separator />
 
     <Container padding={["zero", "md"]} gap={"lg"} direction={"vertical"}>

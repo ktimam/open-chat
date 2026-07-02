@@ -477,7 +477,9 @@ describe("chatKeyFor", () => {
             }),
         ).toBe("channel:dgegb-daaaa-aaaar-arlhq-cai:42");
     });
-    it("returns undefined for direct chats (no confirm path)", () => {
-        expect(chatKeyFor({ kind: "direct_chat", userId: "27eue-hyaaa-aaaaf-aaa4a-cai" })).toBeUndefined();
+    it("keys direct chats by the other participant", () => {
+        expect(chatKeyFor({ kind: "direct_chat", userId: "27eue-hyaaa-aaaaf-aaa4a-cai" })).toBe(
+            "direct:27eue-hyaaa-aaaaf-aaa4a-cai",
+        );
     });
 });

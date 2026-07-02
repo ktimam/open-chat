@@ -181,7 +181,7 @@ import type {
     MemberRole,
     OptionalChatPermissions,
 } from "./permission";
-import type { AiAppLinkCode, AiAppRegistration, AiAppUserKey } from "./aiAction";
+import type { AiAppLinkCode, AiAppRegistration, AiAppUserKey, ExploreAiAppsResponse } from "./aiAction";
 import type { CandidateProposal } from "./proposals";
 import type {
     StakeNeuronForSubmittingProposalsResponse,
@@ -407,6 +407,7 @@ export type WorkerRequest =
     | MyAiAppKeys
     | CreateAiAppLinkCode
     | RemoveMyAiAppKey
+    | ExploreAiApps
     | GetReportedMessages
     | GetExchangeRates
     | AcceptP2PSwap
@@ -1206,7 +1207,7 @@ type RegisterPollVote = {
 };
 
 type RespondToActionCard = {
-    chatId: MultiUserChatIdentifier;
+    chatId: ChatIdentifier;
     threadRootMessageIndex: number | undefined;
     messageId: bigint;
     response: "confirm" | "cancel";
@@ -2151,6 +2152,13 @@ type RemoveMyAiAppKey = {
     appId: number;
 };
 
+type ExploreAiApps = {
+    kind: "exploreAiApps";
+    searchTerm: string | undefined;
+    pageIndex: number;
+    pageSize: number;
+};
+
 type GetExchangeRates = {
     kind: "exchangeRates";
 };
@@ -2542,6 +2550,8 @@ export type WorkerResult<T> = T extends Init
     ? AiAppLinkCode | undefined
     : T extends RemoveMyAiAppKey
     ? boolean
+    : T extends ExploreAiApps
+    ? ExploreAiAppsResponse
     : T extends GetReportedMessages
     ? string
     : T extends GetExchangeRates

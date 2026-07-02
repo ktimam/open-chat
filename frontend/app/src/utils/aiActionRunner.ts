@@ -54,14 +54,37 @@ export interface ResolvedCandidates {
 }
 
 // Resolve the (app, action) candidates on offer in a chat: the apps enabled in the chat crossed with the
-// global app directory, flattened. Phase A: the directory is group-scoped only, so any other chat kind
-// resolves to no candidates. Exported so the auto-propose matcher (utils/autoPropose.ts) derives its
-// trigger vocabulary from this same resolution.
+// global app directory, flattened. Groups and channels carry an admin-curated enabled set on their
+// canister; direct chats have no admin, so the user's CONNECTED apps (published per-user-keys apps
+// they hold a delivery key for) participate automatically. Exported so the auto-propose matcher
+// (utils/autoPropose.ts) derives its trigger vocabulary from this same resolution.
 export async function resolveCandidates(
     client: OpenChat,
     chatId: ChatIdentifier,
 ): Promise<ResolvedCandidates> {
-    if (chatId.kind !== "group_chat") return { candidates: [], linkRequired: [] };
+    if (chatId.kind === "direct_chat") {
+        // v0 direct-chat enablement: your connected apps ARE the enabled set. Only apps you hold a
+        // key for participate — unconnected apps never inject pairing prompts into personal chats.
+        const apps = await client.aiApps();
+        const perUserApps = apps.filter((app) => app.manifest.perUserKeys === true);
+        if (perUserApps.length === 0) return { candidates: [], linkRequired: [] };
+        const myKeys = new Map<number, string>();
+        for (const key of await client.myAiAppKeys()) {
+            myKeys.set(key.appId, key.publicKey);
+        }
+        const candidates: AiActionCandidate[] = [];
+        for (const app of perUserApps) {
+            const myKey = myKeys.get(app.id);
+            if (myKey === undefined || myKey.length === 0) continue;
+            for (const action of app.manifest.actions) {
+                candidates.push({ app, action, recipientKey: myKey });
+            }
+        }
+        return { candidates, linkRequired: [] };
+    }
+    if (chatId.kind !== "group_chat" && chatId.kind !== "channel") {
+        return { candidates: [], linkRequired: [] };
+    }
     const [enabledIds, apps] = await Promise.all([client.enabledAiApps(chatId), client.aiApps()]);
     const enabled = new Set(enabledIds);
     const enabledApps = apps.filter((app) => enabled.has(app.id));

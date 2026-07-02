@@ -6106,6 +6106,7 @@ export const UserIndexAiAppRegistration = Type.Object({
     manifest: UserIndexAiAppManifest,
     created: Type.BigInt(),
     updated: Type.BigInt(),
+    published: Type.Boolean(),
 });
 
 export type UserIndexAiAppsResponse = Static<typeof UserIndexAiAppsResponse>;
@@ -6187,6 +6188,50 @@ export type UserIndexRemoveMyAiAppKeyResponse = Static<typeof UserIndexRemoveMyA
 export const UserIndexRemoveMyAiAppKeyResponse = Type.Union([
     Type.Literal("Success"),
     Type.Object({ InvalidRequest: Type.String() }),
+    Type.Object({ Error: OCError }),
+]);
+
+export type UserIndexExploreAiAppsArgs = Static<typeof UserIndexExploreAiAppsArgs>;
+export const UserIndexExploreAiAppsArgs = Type.Object({
+    search_term: Type.Optional(Type.String()),
+    page_index: Type.Number(),
+    page_size: Type.Number(),
+});
+
+export type UserIndexExploreAiAppsResponse = Static<typeof UserIndexExploreAiAppsResponse>;
+export const UserIndexExploreAiAppsResponse = Type.Union([
+    Type.Object({
+        Success: Type.Object({ matches: Type.Array(UserIndexAiAppRegistration), total: Type.Number() }),
+    }),
+    Type.Object({ TermTooShort: Type.Number() }),
+    Type.Object({ TermTooLong: Type.Number() }),
+    Type.Object({ Error: OCError }),
+]);
+
+export type CommunitySetAiAppEnabledArgs = Static<typeof CommunitySetAiAppEnabledArgs>;
+export const CommunitySetAiAppEnabledArgs = Type.Object({
+    channel_id: ChannelId,
+    app_id: Type.Number(),
+    enabled: Type.Boolean(),
+});
+
+export type CommunitySetAiAppEnabledResponse = Static<typeof CommunitySetAiAppEnabledResponse>;
+export const CommunitySetAiAppEnabledResponse = Type.Union([
+    Type.Literal("Success"),
+    Type.Literal("NotAuthorized"),
+    Type.Literal("UserNotInCommunity"),
+    Type.Literal("ChannelNotFound"),
+    Type.Object({ Error: OCError }),
+]);
+
+export type CommunityEnabledAiAppsArgs = Static<typeof CommunityEnabledAiAppsArgs>;
+export const CommunityEnabledAiAppsArgs = Type.Object({
+    channel_id: ChannelId,
+});
+
+export type CommunityEnabledAiAppsResponse = Static<typeof CommunityEnabledAiAppsResponse>;
+export const CommunityEnabledAiAppsResponse = Type.Union([
+    Type.Object({ Success: Type.Object({ app_ids: Type.Array(Type.Number()) }) }),
     Type.Object({ Error: OCError }),
 ]);
 
@@ -8077,6 +8122,24 @@ export const GroupRespondToActionCardArgs = Type.Object({
 
 export type GroupRespondToActionCardResponse = Static<typeof GroupRespondToActionCardResponse>;
 export const GroupRespondToActionCardResponse = Type.Union([
+    Type.Object({
+        Success: ActionCardState,
+    }),
+    Type.Object({
+        Error: OCError,
+    }),
+]);
+
+export type UserRespondToActionCardArgs = Static<typeof UserRespondToActionCardArgs>;
+export const UserRespondToActionCardArgs = Type.Object({
+    user_id: UserId,
+    thread_root_message_index: Type.Optional(MessageIndex),
+    message_id: MessageId,
+    response: ActionCardResponse,
+});
+
+export type UserRespondToActionCardResponse = Static<typeof UserRespondToActionCardResponse>;
+export const UserRespondToActionCardResponse = Type.Union([
     Type.Object({
         Success: ActionCardState,
     }),

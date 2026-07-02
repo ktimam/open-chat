@@ -421,6 +421,9 @@ struct Data {
     pub ai_app_user_keys: crate::model::ai_app_user_keys::AiAppUserKeys,
     #[serde(default)]
     pub ai_app_link_codes: crate::model::ai_app_link_codes::AiAppLinkCodes,
+    // Failure throttle for the bearer AI-app endpoints (claim/revoke) — see the model docs.
+    #[serde(default)]
+    pub ai_app_call_throttle: crate::model::ai_app_call_throttle::AiAppCallThrottle,
 }
 
 impl Data {
@@ -509,6 +512,7 @@ impl Data {
             ai_apps: crate::model::ai_app_registry::AiAppRegistry::default(),
             ai_app_user_keys: crate::model::ai_app_user_keys::AiAppUserKeys::default(),
             ai_app_link_codes: crate::model::ai_app_link_codes::AiAppLinkCodes::default(),
+            ai_app_call_throttle: crate::model::ai_app_call_throttle::AiAppCallThrottle::default(),
         };
 
         // Register the ProposalsBot
@@ -627,6 +631,7 @@ impl Default for Data {
             ai_apps: crate::model::ai_app_registry::AiAppRegistry::default(),
             ai_app_user_keys: crate::model::ai_app_user_keys::AiAppUserKeys::default(),
             ai_app_link_codes: crate::model::ai_app_link_codes::AiAppLinkCodes::default(),
+            ai_app_call_throttle: crate::model::ai_app_call_throttle::AiAppCallThrottle::default(),
         }
     }
 }

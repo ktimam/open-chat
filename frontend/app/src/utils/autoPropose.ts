@@ -161,7 +161,7 @@ export function evaluateForAutoPropose(
     if (!autoProposeEnabled.value) return;
     // Phase-A app enablement is group-scoped, so only group chats can have a vocabulary —
     // bailing out here keeps every other chat kind entirely off the lookup path.
-    if (chatId.kind !== "group_chat") return;
+    if (chatId.kind !== "group_chat" && chatId.kind !== "channel" && chatId.kind !== "direct_chat") return;
     if (autoProposeMutedInChat(chatId)) return;
 
     const fresh = messages.filter(

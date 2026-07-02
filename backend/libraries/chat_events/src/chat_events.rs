@@ -712,6 +712,46 @@ impl ChatEvents {
         })
     }
 
+    /// Applies an action-card state change decided on ANOTHER canister. The two copies of a
+    /// direct chat live on the two participants' canisters: the responder's canister runs the real
+    /// transition (and emits the deposit); the other copy mirrors the outcome through this —
+    /// APPLY-ONLY, gated on the local copy still being Pending, and it NEVER emits a deposit, so
+    /// exactly one deposit exists per human response no matter how events interleave.
+    pub fn apply_action_card_state(
+        &mut self,
+        thread_root_message_index: Option<MessageIndex>,
+        message_id: MessageId,
+        new_state: ActionCardState,
+        responded_by: UserId,
+        responded_at: TimestampMillis,
+        now: TimestampMillis,
+    ) -> OCResult {
+        match self.update_message(
+            thread_root_message_index,
+            message_id.into(),
+            EventIndex::default(),
+            now,
+            true,
+            ChatEventType::MessageActionCardResponse,
+            |message, _| {
+                let MessageContentInternal::ActionCard(card) = &mut message.content else {
+                    return Err(UpdateEventError::NotFound);
+                };
+                if !matches!(card.state, ActionCardState::Pending) {
+                    return Err(UpdateEventError::NoChange(OCErrorCode::NoChange));
+                }
+                card.state = new_state.clone();
+                card.responded_by = Some(responded_by);
+                card.responded_at = Some(responded_at);
+                Ok(())
+            },
+        ) {
+            Ok(_) => Ok(()),
+            Err(UpdateEventError::NoChange(error)) => Err(error.into()),
+            Err(UpdateEventError::NotFound) => Err(OCErrorCode::MessageNotFound.into()),
+        }
+    }
+
     pub fn end_poll(
         &mut self,
         thread_root_message_index: Option<MessageIndex>,

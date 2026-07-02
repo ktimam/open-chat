@@ -53,6 +53,7 @@ pub mod pay_for_streak_insurance;
 pub mod pin_chat_v2;
 pub mod remove_reaction;
 pub mod report_message;
+pub mod respond_to_action_card;
 pub mod save_crypto_account;
 pub mod send_message_v2;
 pub mod send_message_with_transfer_to_channel;

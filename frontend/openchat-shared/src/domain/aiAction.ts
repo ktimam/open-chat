@@ -97,7 +97,11 @@ export function chatKeyFor(chatId: ChatIdentifier): string | undefined {
         case "channel":
             return `channel:${chatId.communityId}:${chatId.channelId}`;
         case "direct_chat":
-            return undefined;
+            // Rendered per participant — each side keys the chat by the OTHER user, byte-matching
+            // the deposit its OWN canister emits (the responder's canister is the confirm path for
+            // direct chats). The two participants therefore see different keys for the same chat;
+            // per-user-keys apps attribute via confirmedBy, so this is sufficient.
+            return `direct:${chatId.userId}`;
     }
 }
 
@@ -125,6 +129,8 @@ export interface AiAppRegistration {
     manifest: AiAppManifest;
     created: bigint;
     updated: bigint;
+    // Directory visibility (Phase B): unpublished apps are visible only to their owner.
+    published: boolean;
 }
 
 // The calling user's own registered delivery key for one app, as the user_index `my_ai_app_keys`
@@ -461,6 +467,7 @@ export interface AiAppRegistrationWire {
     manifest: AiAppManifestWire;
     created: bigint;
     updated: bigint;
+    published: boolean;
 }
 
 const NORMALIZE_OPS: readonly AiActionNormalizeOp[] = [
@@ -587,6 +594,13 @@ export function aiAppManifestFromWire(m: AiAppManifestWire): AiAppManifest {
     };
 }
 
+// One page of the published-app explorer (user_index explore_ai_apps). Failures degrade to an
+// empty page at the mapping layer, so consumers never branch on error shapes.
+export interface ExploreAiAppsResponse {
+    matches: AiAppRegistration[];
+    total: number;
+}
+
 export function aiAppFromRegistration(reg: AiAppRegistrationWire): AiAppRegistration {
     return {
         id: reg.id,
@@ -594,5 +608,6 @@ export function aiAppFromRegistration(reg: AiAppRegistrationWire): AiAppRegistra
         manifest: aiAppManifestFromWire(reg.manifest),
         created: reg.created,
         updated: reg.updated,
+        published: reg.published,
     };
 }

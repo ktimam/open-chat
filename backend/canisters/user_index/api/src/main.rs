@@ -9,6 +9,7 @@ fn main() {
     generate_candid_method!(user_index, chit_leaderboard, query);
     generate_candid_method!(user_index, current_user, query);
     generate_candid_method!(user_index, diamond_membership_fees, query);
+    generate_candid_method!(user_index, explore_ai_apps, query);
     generate_candid_method!(user_index, explore_bots, query);
     generate_candid_method!(user_index, external_achievements, query);
     generate_candid_method!(user_index, platform_moderators, query);
@@ -26,7 +27,9 @@ fn main() {
     generate_candid_method!(user_index, claim_ai_app_link_code, update);
     generate_candid_method!(user_index, delete_ai_app, update);
     generate_candid_method!(user_index, register_ai_app, update);
+    generate_candid_method!(user_index, revoke_ai_app_user_key, update);
     generate_candid_method!(user_index, register_external_achievement, update);
+    generate_candid_method!(user_index, publish_ai_app, update);
     generate_candid_method!(user_index, publish_bot, update);
     generate_candid_method!(user_index, remove_bot, update);
     generate_candid_method!(user_index, update_bot, update);
@@ -45,6 +48,7 @@ fn main() {
     generate_ts_method!(user_index, chit_leaderboard);
     generate_ts_method!(user_index, current_user);
     generate_ts_method!(user_index, diamond_membership_fees);
+    generate_ts_method!(user_index, explore_ai_apps);
     generate_ts_method!(user_index, explore_bots);
     generate_ts_method!(user_index, external_achievements);
     generate_ts_method!(user_index, platform_moderators);
@@ -68,7 +72,10 @@ fn main() {
     generate_ts_method!(user_index, create_ai_app_link_code);
     generate_ts_method!(user_index, delete_ai_app);
     generate_ts_method!(user_index, my_ai_app_keys);
+    generate_ts_method!(user_index, publish_ai_app);
     generate_ts_method!(user_index, register_ai_app);
+    generate_ts_method!(user_index, remove_my_ai_app_key);
+    generate_ts_method!(user_index, revoke_ai_app_user_key);
     generate_ts_method!(user_index, set_my_ai_app_key);
     generate_ts_method!(user_index, register_bot);
     generate_ts_method!(user_index, remove_bot);

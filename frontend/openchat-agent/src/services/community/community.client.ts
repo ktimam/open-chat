@@ -130,6 +130,10 @@ import {
     CommunityRegisterPollVoteResponse,
     CommunityRespondToActionCardArgs,
     CommunityRespondToActionCardResponse,
+    CommunitySetAiAppEnabledArgs,
+    CommunitySetAiAppEnabledResponse,
+    CommunityEnabledAiAppsArgs,
+    CommunityEnabledAiAppsResponse,
     CommunityRegisterProposalVoteArgs,
     CommunityRegisterWebhookArgs,
     CommunityRegisterWebhookResponse,
@@ -1026,6 +1030,33 @@ export class CommunityClient
             unitResult,
             CommunityRespondToActionCardArgs,
             CommunityRespondToActionCardResponse,
+        );
+    }
+
+    // Per-CHANNEL AI-app enablement (mirrors the group canister's endpoints one level down).
+    setAiAppEnabled(chatId: ChannelIdentifier, appId: number, enabled: boolean): Promise<boolean> {
+        return this.update(
+            chatId.communityId,
+            "set_ai_app_enabled",
+            {
+                channel_id: toBigInt32(chatId.channelId),
+                app_id: appId,
+                enabled,
+            },
+            (resp) => resp === "Success",
+            CommunitySetAiAppEnabledArgs,
+            CommunitySetAiAppEnabledResponse,
+        );
+    }
+
+    enabledAiApps(chatId: ChannelIdentifier): Promise<number[]> {
+        return this.query(
+            chatId.communityId,
+            "enabled_ai_apps",
+            { channel_id: toBigInt32(chatId.channelId) },
+            (resp) => (typeof resp === "object" && "Success" in resp ? resp.Success.app_ids : []),
+            CommunityEnabledAiAppsArgs,
+            CommunityEnabledAiAppsResponse,
         );
     }
 

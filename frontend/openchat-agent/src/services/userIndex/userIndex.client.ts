@@ -9,6 +9,7 @@ import type {
     DiamondMembershipDuration,
     DiamondMembershipFees,
     AiAppLinkCode,
+    ExploreAiAppsResponse,
     AiAppManifest,
     AiAppRegistration,
     AiAppUserKey,
@@ -54,6 +55,8 @@ import {
     UserIndexCreateAiAppLinkCodeResponse,
     UserIndexRemoveMyAiAppKeyArgs,
     UserIndexRemoveMyAiAppKeyResponse,
+    UserIndexExploreAiAppsArgs,
+    UserIndexExploreAiAppsResponse,
     UserIndexExploreBotsArgs,
     UserIndexExploreBotsResponse,
     UserIndexExternalAchievementsArgs,
@@ -118,6 +121,7 @@ import {
     myAiAppKeysResponse,
     createAiAppLinkCodeResponse,
     removeMyAiAppKeyResponse,
+    exploreAiAppsResponse,
     exploreBotsResponse,
     externalAchievementsResponse,
     payForDiamondMembershipResponse,
@@ -599,6 +603,21 @@ export class UserIndexClient extends SingleCanisterMsgpackAgent {
             createAiAppLinkCodeResponse,
             UserIndexCreateAiAppLinkCodeArgs,
             UserIndexCreateAiAppLinkCodeResponse,
+        );
+    }
+
+    // Paginated, scored search over the PUBLISHED app directory.
+    exploreAiApps(
+        searchTerm: string | undefined,
+        pageIndex: number,
+        pageSize: number,
+    ): Promise<ExploreAiAppsResponse> {
+        return this.query(
+            "explore_ai_apps",
+            { search_term: searchTerm, page_index: pageIndex, page_size: pageSize },
+            exploreAiAppsResponse,
+            UserIndexExploreAiAppsArgs,
+            UserIndexExploreAiAppsResponse,
         );
     }
 

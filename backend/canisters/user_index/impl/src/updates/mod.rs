@@ -17,6 +17,7 @@ pub mod mark_local_user_index_full;
 pub mod mark_suspected_bot;
 pub mod modclub_callback;
 pub mod pay_for_diamond_membership;
+pub mod publish_ai_app;
 pub mod publish_bot;
 pub mod register_ai_app;
 pub mod register_bot;

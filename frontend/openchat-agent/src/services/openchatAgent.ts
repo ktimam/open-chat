@@ -61,6 +61,7 @@ import type {
     DiamondMembershipDuration,
     DiamondMembershipFees,
     AiAppLinkCode,
+    ExploreAiAppsResponse,
     AiAppManifest,
     AiAppRegistration,
     AiAppUserKey,
@@ -2850,7 +2851,7 @@ export class OpenChatAgent extends EventTarget {
     }
 
     respondToActionCard(
-        chatId: MultiUserChatIdentifier,
+        chatId: ChatIdentifier,
         threadRootMessageIndex: number | undefined,
         messageId: bigint,
         response: "confirm" | "cancel",
@@ -2868,6 +2869,13 @@ export class OpenChatAgent extends EventTarget {
             case "channel":
                 return this._communityClient.respondToActionCard(
                     chatId,
+                    messageId,
+                    threadRootMessageIndex,
+                    response,
+                );
+            case "direct_chat":
+                return this.userClient.respondToActionCard(
+                    chatId.userId,
                     messageId,
                     threadRootMessageIndex,
                     response,
@@ -3686,6 +3694,14 @@ export class OpenChatAgent extends EventTarget {
         return this._userIndexClient.registerAiApp(manifest);
     }
 
+    exploreAiApps(
+        searchTerm: string | undefined,
+        pageIndex: number,
+        pageSize: number,
+    ): Promise<ExploreAiAppsResponse> {
+        return this._userIndexClient.exploreAiApps(searchTerm, pageIndex, pageSize);
+    }
+
     myAiAppKeys(): Promise<AiAppUserKey[]> {
         return this._userIndexClient.myAiAppKeys();
     }
@@ -3698,13 +3714,17 @@ export class OpenChatAgent extends EventTarget {
         return this._userIndexClient.removeMyAiAppKey(appId);
     }
 
-    // Phase A: AI apps are scoped to group chats only; other chat kinds resolve without effect.
+    // Per-chat enablement lives on the chat's own canister: groups on the group canister,
+    // channels on the community canister (per channel). Direct chats have no admin-curated set
+    // (the client treats the user's connected apps as enabled there), so they resolve to none.
     setAiAppEnabled(chatId: ChatIdentifier, appId: number, enabled: boolean): Promise<boolean> {
         if (offline()) return Promise.resolve(false);
 
         switch (chatId.kind) {
             case "group_chat":
                 return this._groupClient.setAiAppEnabled(chatId.groupId, appId, enabled);
+            case "channel":
+                return this._communityClient.setAiAppEnabled(chatId, appId, enabled);
             default:
                 return Promise.resolve(false);
         }
@@ -3714,6 +3734,8 @@ export class OpenChatAgent extends EventTarget {
         switch (chatId.kind) {
             case "group_chat":
                 return this._groupClient.enabledAiApps(chatId.groupId);
+            case "channel":
+                return this._communityClient.enabledAiApps(chatId);
             default:
                 return Promise.resolve([]);
         }

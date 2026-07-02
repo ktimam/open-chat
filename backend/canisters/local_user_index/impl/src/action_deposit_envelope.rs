@@ -18,7 +18,10 @@ use types::{Chat, TimestampMillis};
 /// Consumers treat it as an opaque key; it only needs to be deterministic.
 pub fn chat_key(chat: &Chat) -> String {
     match chat {
-        // No confirm path exists for direct chats today; rendered for completeness.
+        // Direct chats: rendered per participant — each side's confirm path (the responder's own
+        // user canister) identifies the chat by the OTHER participant, so the two participants see
+        // different keys for the same chat. Sufficient for per-user-keys apps, where attribution
+        // is via confirmedBy; consumers needing a cross-participant key can canonicalize later.
         Chat::Direct(chat_id) => format!("direct:{chat_id}"),
         Chat::Group(chat_id) => format!("group:{chat_id}"),
         Chat::Channel(community_id, channel_id) => format!("channel:{community_id}:{channel_id}"),

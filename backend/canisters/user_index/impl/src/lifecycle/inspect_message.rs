@@ -57,6 +57,11 @@ fn accept_if_valid(state: &RuntimeState) {
         | "register_external_achievement"
         | "publish_bot"
         | "suspected_bots" => state.is_caller_governance_principal(),
+        // Mirrors publish_bot, but ALSO open to any OpenChat user in test_mode so the msgpack
+        // (frontend/dev) variant is reachable locally; the handler enforces governance/test_mode.
+        "publish_ai_app" => {
+            state.is_caller_governance_principal() || (state.data.test_mode && state.is_caller_openchat_user())
+        }
         "award_external_achievement" | "modclub_callback" => true,
         "remove_bot" => state.is_caller_governance_principal() || state.is_caller_openchat_user(),
         _ => false,

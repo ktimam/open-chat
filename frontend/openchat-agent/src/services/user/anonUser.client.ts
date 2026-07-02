@@ -26,6 +26,7 @@ import type {
     DeleteMessageResponse,
     DirectChatIdentifier,
     EditMessageResponse,
+    RespondToActionCardResponse,
     EventsResponse,
     EventWrapper,
     EvmChain,
@@ -217,6 +218,15 @@ export class AnonUserClient implements IChatEventsReader<DirectChatIdentifier> {
         _message: Message,
         _threadRootMessageIndex?: number,
     ): Promise<EditMessageResponse> {
+        throw new AnonymousOperationError();
+    }
+
+    respondToActionCard(
+        _userId: string,
+        _messageId: bigint,
+        _threadRootMessageIndex: number | undefined,
+        _response: "confirm" | "cancel",
+    ): Promise<RespondToActionCardResponse> {
         throw new AnonymousOperationError();
     }
 

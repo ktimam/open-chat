@@ -63,6 +63,7 @@ pub mod remove_reaction;
 pub mod report_message;
 pub mod reset_invite_code;
 pub mod send_message;
+pub mod set_ai_app_enabled;
 pub mod set_member_display_name;
 pub mod set_video_call_presence;
 pub mod start_video_call_v2;

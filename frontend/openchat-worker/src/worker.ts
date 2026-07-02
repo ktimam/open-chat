@@ -1105,6 +1105,9 @@ function getAction(
         case "removeMyAiAppKey":
             return agent.removeMyAiAppKey(payload.appId);
 
+        case "exploreAiApps":
+            return agent.exploreAiApps(payload.searchTerm, payload.pageIndex, payload.pageSize);
+
         case "reportedMessages":
             return agent.reportedMessages(payload.userId);
 

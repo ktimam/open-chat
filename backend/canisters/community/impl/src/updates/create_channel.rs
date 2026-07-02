@@ -204,6 +204,7 @@ fn create_channel_impl(
         id: channel_id,
         chat,
         date_imported: None,
+        enabled_ai_apps: std::collections::BTreeSet::new(),
     });
 
     if args.is_public {

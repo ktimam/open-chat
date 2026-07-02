@@ -24,6 +24,7 @@
         offlineStore,
         publish,
         showUnpublishedBots,
+        type AiAppRegistration,
         type BotMatch,
         type CommunityMatch,
         type OpenChat,
@@ -37,10 +38,12 @@
     import CloudOffOutline from "svelte-material-icons/CloudOffOutline.svelte";
     import EyeOutline from "svelte-material-icons/EyeOutline.svelte";
     import Filter from "svelte-material-icons/FilterVariant.svelte";
+    import AutoFix from "svelte-material-icons/AutoFix.svelte";
     import Robot from "svelte-material-icons/RobotOutline.svelte";
     import { fade } from "svelte/transition";
     import { i18nKey, interpolate } from "../../../../i18n/i18n";
     import {
+        aiAppSearchState,
         botSearchState,
         communitySearchState,
         SearchState,
@@ -50,6 +53,7 @@
     import AnonFooter from "../../AnonFooter.svelte";
     import NothingToSee from "../../NothingToSee.svelte";
     import { updateCommunityState } from "../createOrUpdate/community.svelte";
+    import AiAppCard from "./AiAppCard.svelte";
     import BotCard from "./BotCard.svelte";
     import BotFilters from "./BotFilters.svelte";
     import CommunityCard from "./CommunityCard.svelte";
@@ -58,7 +62,7 @@
 
     const client = getContext<OpenChat>("client");
 
-    type View = "communities" | "bots";
+    type View = "communities" | "bots" | "aiApps";
     let searching = $state(false);
     let showFab = $state(false);
     let scrollableElement: HTMLElement | undefined;
@@ -67,14 +71,19 @@
     let showingFilters = $state(false);
     let selectedCommunity = $state<CommunityMatch>();
 
-    let searchState = $derived<SearchState<CommunityMatch | BotMatch>>(
-        view === "communities" ? communitySearchState : botSearchState,
+    let searchState = $derived<SearchState<CommunityMatch | BotMatch | AiAppRegistration>>(
+        view === "communities"
+            ? communitySearchState
+            : view === "bots"
+              ? botSearchState
+              : aiAppSearchState,
     );
 
     function clear() {
         searchState.term = "";
         communitySearchState.term = "";
         botSearchState.term = "";
+        aiAppSearchState.term = "";
         search(true);
     }
 
@@ -144,12 +153,45 @@
         searching = false;
     }
 
+    // Query-driven like communities (the published AI-app directory lives on the user_index; there
+    // is no locally-synced state to filter, unlike bots).
+    function searchAiApps(reset = false) {
+        if (reset) {
+            aiAppSearchState.reset();
+        } else {
+            aiAppSearchState.nextPage();
+        }
+        client
+            .exploreAiApps(
+                aiAppSearchState.term === "" ? undefined : aiAppSearchState.term,
+                aiAppSearchState.index,
+                32,
+            )
+            .then((results) => {
+                if (reset) {
+                    aiAppSearchState.results = results.matches;
+                } else {
+                    aiAppSearchState.appendResults(results.matches);
+                }
+                aiAppSearchState.total = results.total;
+            })
+            .finally(() => (searching = false));
+        // Refresh the connected set so cards can show the "Connected" badge.
+        client.myAiAppKeys().then((keys) => {
+            connectedAppIds = new Set(keys.filter((k) => k.publicKey.length > 0).map((k) => k.appId));
+        });
+    }
+
+    let connectedAppIds = $state(new Set<number>());
+
     function search(reset = false) {
         searching = true;
         if (view === "communities") {
             searchCommunities($exploreCommunitiesFiltersStore, reset);
-        } else {
+        } else if (view === "bots") {
             searchBots($showUnpublishedBots);
+        } else {
+            searchAiApps(reset);
         }
     }
 
@@ -309,7 +351,13 @@
                 onSearch={() => search(true)}
                 placeholder={interpolate(
                     $_,
-                    i18nKey(view === "communities" ? "communities.search" : "Search bots"),
+                    i18nKey(
+                        view === "communities"
+                            ? "communities.search"
+                            : view === "bots"
+                              ? "Search bots"
+                              : "aiApps.searchPlaceholder",
+                    ),
                 )} />
         </Container>
 
@@ -327,6 +375,14 @@
                     <Robot {color} />
                 {/snippet}
                 <Translatable resourceKey={i18nKey("Bots")} />
+            </Chip>
+            <Chip
+                onClick={() => setView("aiApps")}
+                mode={view === "aiApps" ? "rounded" : "unselected"}>
+                {#snippet icon(color)}
+                    <AutoFix {color} />
+                {/snippet}
+                <Translatable resourceKey={i18nKey("aiApps.exploreChip")} />
             </Chip>
         </Container>
     </Container>
@@ -355,14 +411,28 @@
                 {:else}
                     <NothingToSee
                         reset={{
-                            onClick: view === "communities" ? createCommunity : registerBot,
-                            text: view === "communities" ? "Create a community" : "Register a bot",
+                            onClick:
+                                view === "communities"
+                                    ? createCommunity
+                                    : view === "bots"
+                                      ? registerBot
+                                      : clear,
+                            text:
+                                view === "communities"
+                                    ? "Create a community"
+                                    : view === "bots"
+                                      ? "Register a bot"
+                                      : "Clear search",
                         }}
                         subtitle={interpolate($_, i18nKey("communities.refineSearch"))}
                         title={interpolate(
                             $_,
                             i18nKey(
-                                view === "communities" ? "communities.noMatch" : "No matching bots",
+                                view === "communities"
+                                    ? "communities.noMatch"
+                                    : view === "bots"
+                                      ? "No matching bots"
+                                      : "aiApps.noMatch",
                             ),
                         )}>
                     </NothingToSee>
@@ -378,7 +448,7 @@
                         {@render communityCard(community)}
                     {/each}
                 </Container>
-            {:else}
+            {:else if view === "bots"}
                 <Container
                     padding={$anonUserStore ? ["zero", "lg", "huge", "lg"] : ["zero", "lg"]}
                     direction={"vertical"}
@@ -388,6 +458,15 @@
                             onSelect={(id) =>
                                 publish("showBot", { bot: botState.externalBots.get(id)! })}
                             {bot} />
+                    {/each}
+                </Container>
+            {:else}
+                <Container
+                    padding={$anonUserStore ? ["zero", "lg", "huge", "lg"] : ["zero", "lg"]}
+                    direction={"vertical"}
+                    gap={"lg"}>
+                    {#each aiAppSearchState.results as app (app.id)}
+                        <AiAppCard {app} connected={connectedAppIds.has(app.id)} />
                     {/each}
                 </Container>
             {/if}
