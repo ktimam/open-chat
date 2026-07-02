@@ -53,7 +53,9 @@
     import AnonFooter from "../../AnonFooter.svelte";
     import NothingToSee from "../../NothingToSee.svelte";
     import { updateCommunityState } from "../createOrUpdate/community.svelte";
+    import AiAppLinkSheet from "../../AiAppLinkSheet.svelte";
     import AiAppCard from "./AiAppCard.svelte";
+    import AiAppSheet from "./AiAppSheet.svelte";
     import BotCard from "./BotCard.svelte";
     import BotFilters from "./BotFilters.svelte";
     import CommunityCard from "./CommunityCard.svelte";
@@ -177,12 +179,22 @@
             })
             .finally(() => (searching = false));
         // Refresh the connected set so cards can show the "Connected" badge.
-        client.myAiAppKeys().then((keys) => {
-            connectedAppIds = new Set(keys.filter((k) => k.publicKey.length > 0).map((k) => k.appId));
-        });
+        refreshConnected();
     }
 
     let connectedAppIds = $state(new Set<number>());
+    // The app whose detail sheet is open, and the app whose pairing sheet is open (the two swap:
+    // Connect in the detail sheet closes it and opens the pairing sheet).
+    let selectedApp = $state<AiAppRegistration | undefined>(undefined);
+    let linkingApp = $state<AiAppRegistration | undefined>(undefined);
+
+    function refreshConnected() {
+        client.myAiAppKeys().then((keys) => {
+            connectedAppIds = new Set(
+                keys.filter((k) => k.publicKey.length > 0).map((k) => k.appId),
+            );
+        });
+    }
 
     function search(reset = false) {
         searchFor(view, reset);
@@ -475,7 +487,10 @@
                     direction={"vertical"}
                     gap={"lg"}>
                     {#each aiAppSearchState.results as app (app.id)}
-                        <AiAppCard {app} connected={connectedAppIds.has(app.id)} />
+                        <AiAppCard
+                            {app}
+                            connected={connectedAppIds.has(app.id)}
+                            onSelect={() => (selectedApp = app)} />
                     {/each}
                 </Container>
             {/if}
@@ -521,6 +536,29 @@
             {/snippet}
         </FloatingButton>
     </div>
+{/if}
+
+{#if selectedApp !== undefined}
+    {@const app = selectedApp}
+    <AiAppSheet
+        {app}
+        connected={connectedAppIds.has(app.id)}
+        onDismiss={() => (selectedApp = undefined)}
+        onConnect={() => {
+            linkingApp = app;
+            selectedApp = undefined;
+        }}
+        onDisconnected={refreshConnected} />
+{/if}
+
+{#if linkingApp !== undefined}
+    <AiAppLinkSheet
+        app={linkingApp}
+        onDismiss={() => (linkingApp = undefined)}
+        onLinked={() => {
+            linkingApp = undefined;
+            refreshConnected();
+        }} />
 {/if}
 
 <style lang="scss">

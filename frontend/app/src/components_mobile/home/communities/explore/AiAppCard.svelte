@@ -12,14 +12,16 @@
         app: AiAppRegistration;
         // The signed-in user already holds a delivery key for this app (per-user-keys pairing).
         connected: boolean;
+        // Opens the app's detail sheet (connection lifecycle + full action list).
+        onSelect: () => void;
     }
 
-    let { app, connected }: Props = $props();
+    let { app, connected, onSelect }: Props = $props();
 
     let actionCount = $derived(app.manifest.actions.length);
 </script>
 
-<Container padding={["sm", "zero"]} direction={"vertical"}>
+<Container onClick={onSelect} padding={["sm", "zero"]} direction={"vertical"}>
     <Container overflow={"hidden"} gap={"md"}>
         <div class="badge">
             <AutoFix size={"1.5rem"} color={ColourVars.textOnPrimary} />
