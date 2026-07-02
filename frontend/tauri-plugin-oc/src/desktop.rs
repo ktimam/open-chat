@@ -18,7 +18,12 @@ pub struct Oc<R: Runtime>(AppHandle<R>);
 // degrade to graceful no-ops / empty defaults rather than panicking — that lets the web app boot on
 // desktop instead of crashing at startup the moment it calls e.g. `svelte_ready`.
 impl<R: Runtime> Oc<R> {
-    pub fn open_url(&self, _payload: OpenUrlRequest) -> crate::Result<OpenUrlResponse> {
+    // On desktop, hand the URL to the OS default handler (browser for http(s)) — unlike the other
+    // mobile-bridge methods this one HAS a real desktop meaning; a no-op here is why "open in
+    // browser" / external links silently did nothing in the desktop shell.
+    pub fn open_url(&self, payload: OpenUrlRequest) -> crate::Result<OpenUrlResponse> {
+        // Best-effort: a failure to launch the handler must not surface as an app error.
+        let _ = open::that_detached(&payload.url);
         Ok(OpenUrlResponse::default())
     }
 
