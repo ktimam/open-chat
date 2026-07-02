@@ -106,6 +106,9 @@ import {
     GroupSelectedUpdatesResponse,
     GroupSendMessageArgs,
     GroupSendMessageResponse,
+    GroupSetAiAppEnabledArgs,
+    GroupSetAiAppEnabledResponse,
+    GroupEnabledAiAppsResponse,
     GroupSetVideoCallPresenceArgs,
     GroupThreadPreviewsArgs,
     GroupThreadPreviewsResponse,
@@ -747,6 +750,32 @@ export class GroupClient
             unitResult,
             GroupRegisterPollVoteArgs,
             GroupRegisterPollVoteResponse,
+        );
+    }
+
+    // Toggles an AI app's enabled state for this group (owner/admin gated on the canister side).
+    setAiAppEnabled(groupId: string, appId: number, enabled: boolean): Promise<boolean> {
+        return this.update(
+            groupId,
+            "set_ai_app_enabled",
+            {
+                app_id: appId,
+                enabled,
+            },
+            (resp) => resp === "Success",
+            GroupSetAiAppEnabledArgs,
+            GroupSetAiAppEnabledResponse,
+        );
+    }
+
+    enabledAiApps(groupId: string): Promise<number[]> {
+        return this.query(
+            groupId,
+            "enabled_ai_apps",
+            {},
+            (resp) => ("Success" in resp ? resp.Success.app_ids : []),
+            TEmpty,
+            GroupEnabledAiAppsResponse,
         );
     }
 

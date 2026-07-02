@@ -9,6 +9,10 @@ import type {
     DiamondMembershipDuration,
     DiamondMembershipFees,
     AiActionDefinition,
+    AiAppLinkCode,
+    AiAppManifest,
+    AiAppRegistration,
+    AiAppUserKey,
     ExploreBotsResponse,
     ExternalAchievementsResponse,
     ExternalBot,
@@ -46,6 +50,12 @@ import {
     UserIndexAiActionsResponse,
     UserIndexRegisterAiActionArgs,
     UserIndexRegisterAiActionResponse,
+    UserIndexAiAppsResponse,
+    UserIndexRegisterAiAppArgs,
+    UserIndexRegisterAiAppResponse,
+    UserIndexMyAiAppKeysResponse,
+    UserIndexCreateAiAppLinkCodeArgs,
+    UserIndexCreateAiAppLinkCodeResponse,
     UserIndexExploreBotsArgs,
     UserIndexExploreBotsResponse,
     UserIndexExternalAchievementsArgs,
@@ -107,6 +117,11 @@ import {
     aiActionsResponse,
     apiAiActionDefinition,
     registerAiActionResponse,
+    aiAppsResponse,
+    apiAiAppManifest,
+    registerAiAppResponse,
+    myAiAppKeysResponse,
+    createAiAppLinkCodeResponse,
     exploreBotsResponse,
     externalAchievementsResponse,
     payForDiamondMembershipResponse,
@@ -567,6 +582,41 @@ export class UserIndexClient extends SingleCanisterMsgpackAgent {
             registerAiActionResponse,
             UserIndexRegisterAiActionArgs,
             UserIndexRegisterAiActionResponse,
+        );
+    }
+
+    aiApps(): Promise<AiAppRegistration[]> {
+        return this.query("ai_apps", {}, aiAppsResponse, Empty, UserIndexAiAppsResponse);
+    }
+
+    registerAiApp(manifest: AiAppManifest): Promise<boolean> {
+        return this.update(
+            "register_ai_app",
+            { manifest: apiAiAppManifest(manifest) },
+            registerAiAppResponse,
+            UserIndexRegisterAiAppArgs,
+            UserIndexRegisterAiAppResponse,
+        );
+    }
+
+    // The calling user's own registered per-app delivery keys.
+    myAiAppKeys(): Promise<AiAppUserKey[]> {
+        return this.query(
+            "my_ai_app_keys",
+            {},
+            myAiAppKeysResponse,
+            Empty,
+            UserIndexMyAiAppKeysResponse,
+        );
+    }
+
+    createAiAppLinkCode(appId: number): Promise<AiAppLinkCode | undefined> {
+        return this.update(
+            "create_ai_app_link_code",
+            { app_id: appId },
+            createAiAppLinkCodeResponse,
+            UserIndexCreateAiAppLinkCodeArgs,
+            UserIndexCreateAiAppLinkCodeResponse,
         );
     }
 

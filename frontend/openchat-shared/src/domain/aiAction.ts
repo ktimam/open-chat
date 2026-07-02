@@ -26,6 +26,24 @@ export interface AiActionCardTemplate {
     disclosure?: string;
 }
 
+// Declarative extraction rules a registering app can attach to its action. Rules serve two purposes:
+// they compile into prompt guidance for the model (compileRules) and they run as a deterministic
+// post-pass over the model's extraction (applyRulesPostPass). All rules are generic — field names,
+// values and keywords come from the registration.
+export type AiActionRuleMode = "hint" | "override";
+export type AiActionNormalizeOp = "k_m_suffix" | "strip_symbols" | "uppercase" | "lowercase" | "trim";
+export type AiActionRule =
+    | {
+          kind: "keyword_map";
+          field: string;
+          mode: AiActionRuleMode;
+          map: { value: string; keywords: string[] }[];
+      }
+    | { kind: "from_message"; field: string; maxLength?: number }
+    | { kind: "normalize"; field: string; ops: AiActionNormalizeOp[] }
+    | { kind: "instruction"; text: string }
+    | { kind: "context"; provide: "today"[] };
+
 // The frontend mirror of the on-chain AiActionDefinition (types/src/ai_actions.rs). All values are supplied by
 // the registering app; OpenChat treats them opaquely.
 export interface AiActionDefinition {
@@ -41,6 +59,53 @@ export interface AiActionDefinition {
     endpoint?: string;
     // P-256 SPKI PEM — the recipient OpenChat encrypts confirmed actions to. Required for inbox delivery.
     consumerPublicKey?: string;
+    // Optional extraction rules (absent === []).
+    rules?: AiActionRule[];
+}
+
+// --- AI-app directory (Phase A) --------------------------------------------------------------------------------
+// An app registers ONE manifest (name, description, delivery key, its actions) with the user_index; chat
+// owners/admins then enable the app per chat. The manifest-level consumerPublicKey is the app's delivery
+// key; an action's own consumerPublicKey, when set, overrides it.
+
+// The frontend mirror of the on-chain AiAppManifest (types/src/ai_actions.rs).
+export interface AiAppManifest {
+    // Unique per owner; the stable id used for upsert-by-(owner, name).
+    name: string;
+    description: string;
+    iconUrl?: string;
+    // P-256 SPKI PEM: the app-level delivery key confirmed actions are encrypted to.
+    consumerPublicKey: string;
+    // When true, each user's confirmed actions are delivered encrypted to THAT user's own registered
+    // key (see AiAppUserKey) instead of the manifest/action key; a user with no registered key must
+    // first pair via a link code. Absent === false (legacy single-key delivery).
+    perUserKeys?: boolean;
+    actions: AiActionDefinition[];
+}
+
+// The frontend mirror of the on-chain AiAppRegistration as the user_index `ai_apps` query returns it.
+export interface AiAppRegistration {
+    id: number;
+    owner: string;
+    manifest: AiAppManifest;
+    created: bigint;
+    updated: bigint;
+}
+
+// The calling user's own registered delivery key for one app, as the user_index `my_ai_app_keys`
+// query returns it. For a per-user-keys app this key (not the manifest key) is the effective
+// recipient of that user's confirmed actions.
+export interface AiAppUserKey {
+    appId: number;
+    publicKey: string;
+}
+
+// A one-time pairing code (user_index `create_ai_app_link_code`): the user enters it in the app,
+// which then pushes their public key to OpenChat via `claim_ai_app_link_code`. Single-use, expires
+// at `expiresAt` (epoch millis).
+export interface AiAppLinkCode {
+    code: string;
+    expiresAt: bigint;
 }
 
 export type RunAiActionResult =
@@ -71,6 +136,156 @@ export function parseExtraction(text: string): Record<string, unknown> | undefin
     } catch {
         return undefined;
     }
+}
+
+// --- Rules ---------------------------------------------------------------------------------------------------
+
+// Compile the declared rules into prompt guidance lines. Only rules that need the model's cooperation
+// produce a line — normalize is deterministic (post-pass only) and context/today is already covered by
+// the dateline runAiAction always appends.
+export function compileRules(rules: AiActionRule[]): string[] {
+    const lines: string[] = [];
+    for (const rule of rules) {
+        switch (rule.kind) {
+            case "instruction":
+                lines.push(rule.text);
+                break;
+            case "keyword_map":
+                for (const m of rule.map) {
+                    lines.push(
+                        `Set "${rule.field}" to "${m.value}" when the message mentions any of: ${m.keywords.join(", ")}`,
+                    );
+                }
+                break;
+            case "from_message":
+                lines.push(`Set "${rule.field}" to a short phrase taken from the message.`);
+                break;
+            case "normalize":
+            case "context":
+                break;
+        }
+    }
+    return lines;
+}
+
+// "26k" / "1.5m" (optional commas/spaces) -> number; plain numeric strings -> number; real numbers untouched.
+function normalizeKMSuffix(v: unknown): unknown {
+    if (typeof v !== "string") return v;
+    const compact = v.trim().replace(/[,\s]/g, "");
+    const m = compact.match(/^([+-]?\d+(?:\.\d+)?)([kKmM])?$/);
+    if (m === null) return v;
+    const n = parseFloat(m[1]);
+    if (Number.isNaN(n)) return v;
+    const suffix = m[2]?.toLowerCase();
+    if (suffix === "k") return n * 1e3;
+    if (suffix === "m") return n * 1e6;
+    return n;
+}
+
+// Strip currency symbols / commas / spaces from a string, then parse as a number when what remains is numeric.
+function normalizeStripSymbols(v: unknown): unknown {
+    if (typeof v !== "string") return v;
+    const stripped = v.replace(/[\p{Sc},\s]/gu, "");
+    return /^[+-]?\d+(?:\.\d+)?$/.test(stripped) ? parseFloat(stripped) : stripped;
+}
+
+function applyNormalizeOp(op: AiActionNormalizeOp, v: unknown): unknown {
+    switch (op) {
+        case "k_m_suffix":
+            return normalizeKMSuffix(v);
+        case "strip_symbols":
+            return normalizeStripSymbols(v);
+        case "uppercase":
+            return typeof v === "string" ? v.toUpperCase() : v;
+        case "lowercase":
+            return typeof v === "string" ? v.toLowerCase() : v;
+        case "trim":
+            return typeof v === "string" ? v.trim() : v;
+    }
+}
+
+// Tiny local schema conformance pass (type/enum/pattern only — deliberately not a full JSON-schema
+// validator and no added dependency). Drops keys the schema doesn't declare and DELETES fields that
+// violate their declared constraint: visible omission beats silent wrongness.
+function conformToSchema(
+    extracted: Record<string, unknown>,
+    schema: object | undefined,
+): Record<string, unknown> {
+    if (schema === undefined) return extracted;
+    const props: unknown = (schema as { properties?: unknown }).properties;
+    if (props === null || typeof props !== "object" || Array.isArray(props)) return extracted;
+    const properties = props as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(extracted)) {
+        const propSchema: unknown = properties[key];
+        // Drop keys the schema doesn't declare.
+        if (propSchema === undefined) continue;
+        if (propSchema === null || typeof propSchema !== "object") {
+            out[key] = value;
+            continue;
+        }
+        const p = propSchema as { type?: unknown; enum?: unknown; pattern?: unknown };
+        if (p.type === "number" && typeof value !== "number") continue;
+        if (p.type === "string" && typeof value !== "string") continue;
+        if (Array.isArray(p.enum) && !p.enum.some((e) => e === value)) continue;
+        if (typeof p.pattern === "string" && typeof value === "string") {
+            try {
+                if (!new RegExp(p.pattern).test(value)) continue;
+            } catch {
+                // an invalid pattern is treated as no constraint
+            }
+        }
+        out[key] = value;
+    }
+    return out;
+}
+
+// Deterministic post-pass over the model's extraction, applied in a fixed order:
+//   1. from_message rules fill their field from the message text itself (trimmed, truncated).
+//   2. keyword_map rules with mode "override" scan the message (case-insensitive substring per keyword);
+//      the first mapping with any match wins. Mode "hint" is prompt-guidance only.
+//   3. normalize ops run in order on the field when it is present.
+//   4. schema conformance (type/enum/pattern) deletes violating fields and drops undeclared keys.
+export function applyRulesPostPass(
+    rules: AiActionRule[],
+    extracted: Record<string, unknown>,
+    messageText: string | undefined,
+    responseSchema?: object,
+): Record<string, unknown> {
+    let out: Record<string, unknown> = { ...extracted };
+
+    if (messageText !== undefined) {
+        for (const rule of rules) {
+            if (rule.kind === "from_message") {
+                out[rule.field] = messageText.trim().slice(0, rule.maxLength ?? 200);
+            }
+        }
+
+        const msg = messageText.toLowerCase();
+        for (const rule of rules) {
+            if (rule.kind === "keyword_map" && rule.mode === "override") {
+                const hit = rule.map.find((m) =>
+                    m.keywords.some((k) => k.length > 0 && msg.includes(k.toLowerCase())),
+                );
+                if (hit !== undefined) {
+                    out[rule.field] = hit.value;
+                }
+            }
+        }
+    }
+
+    for (const rule of rules) {
+        if (rule.kind === "normalize" && rule.field in out) {
+            let v = out[rule.field];
+            for (const op of rule.ops) {
+                v = applyNormalizeOp(op, v);
+            }
+            out[rule.field] = v;
+        }
+    }
+
+    out = conformToSchema(out, responseSchema);
+    return out;
 }
 
 // Pure: turn a registered action + a structured extraction + the recipient key into a postable ActionCard.
@@ -107,9 +322,25 @@ export async function runAiAction(
     recipientPublicKeyPem: string,
     infer: (req: InferenceRequest) => Promise<InferenceResult>,
 ): Promise<RunAiActionResult> {
+    // The native runtime reads only `prompt` (its separate `text` field is not consumed), so the
+    // message MUST be interpolated into the prompt for the model to see it. A dateline anchors
+    // relative or year-less dates in the message ("1st june") to the user's current date. Declared
+    // rules compile into a "Rules:" block of guidance lines between the template and the dateline.
+    const rules = def.rules ?? [];
+    const ruleLines = compileRules(rules);
+    const today = new Date().toISOString().slice(0, 10);
+    let prompt = def.promptTemplate;
+    if (ruleLines.length > 0) {
+        prompt += `\n\nRules:\n- ${ruleLines.join("\n- ")}`;
+    }
+    prompt += `\n\nToday is ${today}.`;
+    if (input.text !== undefined && input.text.trim().length > 0) {
+        prompt += `\n\nMessage:\n${input.text}`;
+    }
+
     const result = await infer({
         modelId: input.modelId,
-        prompt: def.promptTemplate,
+        prompt,
         image: input.image,
         text: input.text,
         responseSchema: def.responseSchema,
@@ -121,34 +352,155 @@ export async function runAiAction(
     const extracted = parseExtraction(result.text);
     if (extracted === undefined) return { kind: "no_extraction", raw: result.text };
 
-    return { kind: "ready", card: buildActionCardContent(def, extracted, recipientPublicKeyPem), extracted };
+    // Deterministic post-pass over the model output — the card AND the confirmPayload are built from
+    // the post-passed object, never the raw extraction.
+    const finalExtraction = applyRulesPostPass(rules, extracted, input.text, def.responseSchema);
+
+    return {
+        kind: "ready",
+        card: buildActionCardContent(def, finalExtraction, recipientPublicKeyPem),
+        extracted: finalExtraction,
+    };
 }
 
 // --- Registry read -------------------------------------------------------------------------------------------
 // The on-chain registry entry as the user_index `ai_actions` query returns it (snake_case; response_schema is a
 // JSON string; card rows are keyed by `field`). Defined here as the read contract — the agent validates the
 // query result into this shape, then maps it to the AiActionDefinition the runner consumes.
-export interface AiActionRegistrationWire {
-    id: bigint;
-    definition: {
-        name: string;
-        description: string;
-        prompt_template: string;
-        response_schema: string;
-        endpoint: string;
-        consumer_public_key?: string;
-        card: {
-            title: string;
-            confirm_label: string;
-            cancel_label: string;
-            disclosure?: string;
-            rows: { field: string; label: string }[];
-        };
+
+// Rules as serde/msgpack encodes the Rust AiActionRule enum: externally tagged — newtype variants become a
+// single-key map { variant_name: payload } and unit variants (RuleMode, NormalizeOp, ContextItem) become
+// plain snake_case strings.
+export type AiActionRuleWire =
+    | { keyword_map: { field: string; mode: string; map: { value: string; keywords: string[] }[] } }
+    | { from_message: { field: string; max_length?: number | null } }
+    | { normalize: { field: string; ops: string[] } }
+    | { instruction: { text: string } }
+    | { context: { provide: string[] } };
+
+export interface AiActionDefinitionWire {
+    name: string;
+    description: string;
+    prompt_template: string;
+    response_schema: string;
+    endpoint: string;
+    consumer_public_key?: string;
+    card: {
+        title: string;
+        confirm_label: string;
+        cancel_label: string;
+        disclosure?: string;
+        rows: { field: string; label: string }[];
     };
+    rules?: AiActionRuleWire[];
 }
 
-export function aiActionFromRegistration(reg: AiActionRegistrationWire): AiActionDefinition {
-    const d = reg.definition;
+export interface AiActionRegistrationWire {
+    id: bigint;
+    definition: AiActionDefinitionWire;
+}
+
+// The on-chain AiAppManifest / AiAppRegistration as the user_index `ai_apps` query returns them
+// (snake_case; nested actions use the same wire shape as the legacy per-action registry). The
+// registration's `owner` principal is expected to have already been stringified by the agent layer.
+export interface AiAppManifestWire {
+    name: string;
+    description: string;
+    icon_url?: string;
+    consumer_public_key: string;
+    // serde(default) on-chain: registrations that predate per-user keys omit it (=== false).
+    per_user_keys?: boolean;
+    actions: AiActionDefinitionWire[];
+}
+
+export interface AiAppRegistrationWire {
+    id: number;
+    owner: string;
+    manifest: AiAppManifestWire;
+    created: bigint;
+    updated: bigint;
+}
+
+const NORMALIZE_OPS: readonly AiActionNormalizeOp[] = [
+    "k_m_suffix",
+    "strip_symbols",
+    "uppercase",
+    "lowercase",
+    "trim",
+];
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+    return v !== null && typeof v === "object" && !Array.isArray(v);
+}
+
+function ruleFromWire(entry: unknown): AiActionRule | undefined {
+    if (!isRecord(entry)) return undefined;
+    if (isRecord(entry.keyword_map)) {
+        const r = entry.keyword_map;
+        if (
+            typeof r.field !== "string" ||
+            (r.mode !== "hint" && r.mode !== "override") ||
+            !Array.isArray(r.map)
+        ) {
+            return undefined;
+        }
+        const map: { value: string; keywords: string[] }[] = [];
+        for (const m of r.map) {
+            if (
+                isRecord(m) &&
+                typeof m.value === "string" &&
+                Array.isArray(m.keywords) &&
+                m.keywords.every((k) => typeof k === "string")
+            ) {
+                map.push({ value: m.value, keywords: m.keywords as string[] });
+            }
+        }
+        return { kind: "keyword_map", field: r.field, mode: r.mode, map };
+    }
+    if (isRecord(entry.from_message)) {
+        const r = entry.from_message;
+        if (typeof r.field !== "string") return undefined;
+        return {
+            kind: "from_message",
+            field: r.field,
+            maxLength: typeof r.max_length === "number" ? r.max_length : undefined,
+        };
+    }
+    if (isRecord(entry.normalize)) {
+        const r = entry.normalize;
+        if (typeof r.field !== "string" || !Array.isArray(r.ops)) return undefined;
+        // Unrecognised ops (forward compatibility) are skipped rather than failing the rule.
+        const ops = r.ops.filter((o): o is AiActionNormalizeOp =>
+            NORMALIZE_OPS.includes(o as AiActionNormalizeOp),
+        );
+        return { kind: "normalize", field: r.field, ops };
+    }
+    if (isRecord(entry.instruction)) {
+        const r = entry.instruction;
+        if (typeof r.text !== "string") return undefined;
+        return { kind: "instruction", text: r.text };
+    }
+    if (isRecord(entry.context)) {
+        const r = entry.context;
+        if (!Array.isArray(r.provide)) return undefined;
+        return { kind: "context", provide: r.provide.filter((p): p is "today" => p === "today") };
+    }
+    return undefined;
+}
+
+// Tolerant: a missing / non-array rules value maps to [] and entries that don't match a known rule
+// shape are skipped, so an older (or newer) registry entry can never break the runner.
+export function rulesFromWire(raw: unknown): AiActionRule[] {
+    if (!Array.isArray(raw)) return [];
+    const rules: AiActionRule[] = [];
+    for (const entry of raw) {
+        const rule = ruleFromWire(entry);
+        if (rule !== undefined) rules.push(rule);
+    }
+    return rules;
+}
+
+export function aiActionDefinitionFromWire(d: AiActionDefinitionWire): AiActionDefinition {
     let responseSchema: object | undefined;
     if (d.response_schema.trim().length > 0) {
         try {
@@ -172,6 +524,32 @@ export function aiActionFromRegistration(reg: AiActionRegistrationWire): AiActio
             disclosure: d.card.disclosure,
             rows: d.card.rows.map((r) => ({ label: r.label, valueKey: r.field })),
         },
+        rules: rulesFromWire(d.rules),
+    };
+}
+
+export function aiActionFromRegistration(reg: AiActionRegistrationWire): AiActionDefinition {
+    return aiActionDefinitionFromWire(reg.definition);
+}
+
+export function aiAppManifestFromWire(m: AiAppManifestWire): AiAppManifest {
+    return {
+        name: m.name,
+        description: m.description,
+        iconUrl: m.icon_url,
+        consumerPublicKey: m.consumer_public_key,
+        perUserKeys: m.per_user_keys,
+        actions: m.actions.map(aiActionDefinitionFromWire),
+    };
+}
+
+export function aiAppFromRegistration(reg: AiAppRegistrationWire): AiAppRegistration {
+    return {
+        id: reg.id,
+        owner: reg.owner,
+        manifest: aiAppManifestFromWire(reg.manifest),
+        created: reg.created,
+        updated: reg.updated,
     };
 }
 

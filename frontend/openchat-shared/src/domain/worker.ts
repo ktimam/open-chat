@@ -181,7 +181,12 @@ import type {
     MemberRole,
     OptionalChatPermissions,
 } from "./permission";
-import type { AiActionDefinition } from "./aiAction";
+import type {
+    AiActionDefinition,
+    AiAppLinkCode,
+    AiAppRegistration,
+    AiAppUserKey,
+} from "./aiAction";
 import type { CandidateProposal } from "./proposals";
 import type {
     StakeNeuronForSubmittingProposalsResponse,
@@ -403,6 +408,11 @@ export type WorkerRequest =
     | GetDiamondMembershipFees
     | AiActions
     | RegisterAiAction
+    | AiApps
+    | SetAiAppEnabled
+    | EnabledAiApps
+    | MyAiAppKeys
+    | CreateAiAppLinkCode
     | GetReportedMessages
     | GetExchangeRates
     | AcceptP2PSwap
@@ -1862,6 +1872,11 @@ export type WorkerResponseInner =
     | SwapTokensResponse
     | TokenSwapStatusResponse
     | DiamondMembershipFees[]
+    | AiActionDefinition[]
+    | AiAppRegistration[]
+    | AiAppUserKey[]
+    | AiAppLinkCode
+    | number[]
     | TranslationCorrections
     | AcceptP2PSwapResponse
     | CancelP2PSwapResponse
@@ -2120,6 +2135,31 @@ type AiActions = {
 type RegisterAiAction = {
     kind: "registerAiAction";
     definition: AiActionDefinition;
+};
+
+type AiApps = {
+    kind: "aiApps";
+};
+
+type SetAiAppEnabled = {
+    kind: "setAiAppEnabled";
+    chatId: ChatIdentifier;
+    appId: number;
+    enabled: boolean;
+};
+
+type EnabledAiApps = {
+    kind: "enabledAiApps";
+    chatId: ChatIdentifier;
+};
+
+type MyAiAppKeys = {
+    kind: "myAiAppKeys";
+};
+
+type CreateAiAppLinkCode = {
+    kind: "createAiAppLinkCode";
+    appId: number;
 };
 
 type GetExchangeRates = {
@@ -2505,6 +2545,16 @@ export type WorkerResult<T> = T extends Init
     ? AiActionDefinition[]
     : T extends RegisterAiAction
     ? boolean
+    : T extends AiApps
+    ? AiAppRegistration[]
+    : T extends SetAiAppEnabled
+    ? boolean
+    : T extends EnabledAiApps
+    ? number[]
+    : T extends MyAiAppKeys
+    ? AiAppUserKey[]
+    : T extends CreateAiAppLinkCode
+    ? AiAppLinkCode | undefined
     : T extends GetReportedMessages
     ? string
     : T extends GetExchangeRates

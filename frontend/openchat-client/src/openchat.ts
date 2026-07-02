@@ -165,6 +165,9 @@ import {
     type DiamondMembershipDuration,
     type DiamondMembershipFees,
     type AiActionDefinition,
+    type AiAppLinkCode,
+    type AiAppRegistration,
+    type AiAppUserKey,
     type DiamondMembershipStatus,
     type DiamondRoute,
     type Dimensions,
@@ -7064,6 +7067,56 @@ export class OpenChat {
             kind: "registerAiAction",
             definition,
         });
+    }
+
+    aiApps(): Promise<AiAppRegistration[]> {
+        return this.#worker
+            .send({
+                kind: "aiApps",
+            })
+            .catch(() => []);
+    }
+
+    // The signed-in user's own registered per-app delivery keys (per-user-keys apps encrypt that
+    // user's confirmed actions to these rather than the manifest key). Rejection -> [].
+    myAiAppKeys(): Promise<AiAppUserKey[]> {
+        return this.#worker
+            .send({
+                kind: "myAiAppKeys",
+            })
+            .catch(() => []);
+    }
+
+    // A one-time 6-digit pairing code the user enters in the app to push their public key to
+    // OpenChat. Undefined when the app is unknown or the call fails.
+    createAiAppLinkCode(appId: number): Promise<AiAppLinkCode | undefined> {
+        return this.#worker
+            .send({
+                kind: "createAiAppLinkCode",
+                appId,
+            })
+            .catch(() => undefined);
+    }
+
+    // Phase A: AI apps are group-scoped only; non-group chat ids resolve to false / empty.
+    setAiAppEnabled(chatId: ChatIdentifier, appId: number, enabled: boolean): Promise<boolean> {
+        return this.#worker
+            .send({
+                kind: "setAiAppEnabled",
+                chatId,
+                appId,
+                enabled,
+            })
+            .catch(() => false);
+    }
+
+    enabledAiApps(chatId: ChatIdentifier): Promise<number[]> {
+        return this.#worker
+            .send({
+                kind: "enabledAiApps",
+                chatId,
+            })
+            .catch(() => []);
     }
 
     reportedMessages(userId: string | undefined): Promise<string> {

@@ -61,6 +61,10 @@ import type {
     DiamondMembershipDuration,
     DiamondMembershipFees,
     AiActionDefinition,
+    AiAppLinkCode,
+    AiAppManifest,
+    AiAppRegistration,
+    AiAppUserKey,
     DirectChatIdentifier,
     DirectChatSummary,
     DirectChatSummaryUpdates,
@@ -3681,6 +3685,43 @@ export class OpenChatAgent extends EventTarget {
 
     registerAiAction(definition: AiActionDefinition): Promise<boolean> {
         return this._userIndexClient.registerAiAction(definition);
+    }
+
+    aiApps(): Promise<AiAppRegistration[]> {
+        return this._userIndexClient.aiApps();
+    }
+
+    registerAiApp(manifest: AiAppManifest): Promise<boolean> {
+        return this._userIndexClient.registerAiApp(manifest);
+    }
+
+    myAiAppKeys(): Promise<AiAppUserKey[]> {
+        return this._userIndexClient.myAiAppKeys();
+    }
+
+    createAiAppLinkCode(appId: number): Promise<AiAppLinkCode | undefined> {
+        return this._userIndexClient.createAiAppLinkCode(appId);
+    }
+
+    // Phase A: AI apps are scoped to group chats only; other chat kinds resolve without effect.
+    setAiAppEnabled(chatId: ChatIdentifier, appId: number, enabled: boolean): Promise<boolean> {
+        if (offline()) return Promise.resolve(false);
+
+        switch (chatId.kind) {
+            case "group_chat":
+                return this._groupClient.setAiAppEnabled(chatId.groupId, appId, enabled);
+            default:
+                return Promise.resolve(false);
+        }
+    }
+
+    enabledAiApps(chatId: ChatIdentifier): Promise<number[]> {
+        switch (chatId.kind) {
+            case "group_chat":
+                return this._groupClient.enabledAiApps(chatId.groupId);
+            default:
+                return Promise.resolve([]);
+        }
     }
 
     setDiamondMembershipFees(fees: DiamondMembershipFees[]): Promise<boolean> {

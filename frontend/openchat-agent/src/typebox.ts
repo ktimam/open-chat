@@ -6004,6 +6004,63 @@ export const UserIndexAiActionsCardTemplate = Type.Object({
     disclosure: Type.Optional(Type.String()),
 });
 
+export type UserIndexAiActionsRuleMode = Static<typeof UserIndexAiActionsRuleMode>;
+export const UserIndexAiActionsRuleMode = Type.Union([
+    Type.Literal("hint"),
+    Type.Literal("override"),
+]);
+
+export type UserIndexAiActionsNormalizeOp = Static<typeof UserIndexAiActionsNormalizeOp>;
+export const UserIndexAiActionsNormalizeOp = Type.Union([
+    Type.Literal("k_m_suffix"),
+    Type.Literal("strip_symbols"),
+    Type.Literal("uppercase"),
+    Type.Literal("lowercase"),
+    Type.Literal("trim"),
+]);
+
+export type UserIndexAiActionsContextItem = Static<typeof UserIndexAiActionsContextItem>;
+export const UserIndexAiActionsContextItem = Type.Union([Type.Literal("today")]);
+
+export type UserIndexAiActionsKeywordMapping = Static<typeof UserIndexAiActionsKeywordMapping>;
+export const UserIndexAiActionsKeywordMapping = Type.Object({
+    value: Type.String(),
+    keywords: Type.Array(Type.String()),
+});
+
+export type UserIndexAiActionsRule = Static<typeof UserIndexAiActionsRule>;
+export const UserIndexAiActionsRule = Type.Union([
+    Type.Object({
+        keyword_map: Type.Object({
+            field: Type.String(),
+            mode: UserIndexAiActionsRuleMode,
+            map: Type.Array(UserIndexAiActionsKeywordMapping),
+        }),
+    }),
+    Type.Object({
+        from_message: Type.Object({
+            field: Type.String(),
+            max_length: Type.Optional(Type.Number()),
+        }),
+    }),
+    Type.Object({
+        normalize: Type.Object({
+            field: Type.String(),
+            ops: Type.Array(UserIndexAiActionsNormalizeOp),
+        }),
+    }),
+    Type.Object({
+        instruction: Type.Object({
+            text: Type.String(),
+        }),
+    }),
+    Type.Object({
+        context: Type.Object({
+            provide: Type.Array(UserIndexAiActionsContextItem),
+        }),
+    }),
+]);
+
 export type UserIndexAiActionsDefinition = Static<typeof UserIndexAiActionsDefinition>;
 export const UserIndexAiActionsDefinition = Type.Object({
     name: Type.String(),
@@ -6013,6 +6070,7 @@ export const UserIndexAiActionsDefinition = Type.Object({
     card: UserIndexAiActionsCardTemplate,
     endpoint: Type.String(),
     consumer_public_key: Type.Optional(Type.String()),
+    rules: Type.Optional(Type.Array(UserIndexAiActionsRule)),
 });
 
 export type UserIndexAiActionsRegistration = Static<typeof UserIndexAiActionsRegistration>;
@@ -6038,6 +6096,116 @@ export type UserIndexRegisterAiActionResponse = Static<typeof UserIndexRegisterA
 export const UserIndexRegisterAiActionResponse = Type.Union([
     Type.Object({ Success: UserIndexAiActionsRegistration }),
     Type.Object({ InvalidRequest: Type.String() }),
+    Type.Object({ Error: OCError }),
+]);
+
+export type UserIndexAiAppManifest = Static<typeof UserIndexAiAppManifest>;
+export const UserIndexAiAppManifest = Type.Object({
+    name: Type.String(),
+    description: Type.String(),
+    icon_url: Type.Optional(Type.String()),
+    consumer_public_key: Type.String(),
+    // Optional for old-data tolerance: registrations that predate per-user keys omit it.
+    per_user_keys: Type.Optional(Type.Boolean()),
+    actions: Type.Array(UserIndexAiActionsDefinition),
+});
+
+export type UserIndexAiAppRegistration = Static<typeof UserIndexAiAppRegistration>;
+export const UserIndexAiAppRegistration = Type.Object({
+    id: Type.Number(),
+    owner: UserId,
+    manifest: UserIndexAiAppManifest,
+    created: Type.BigInt(),
+    updated: Type.BigInt(),
+});
+
+export type UserIndexAiAppsResponse = Static<typeof UserIndexAiAppsResponse>;
+export const UserIndexAiAppsResponse = Type.Object({
+    Success: Type.Object({ apps: Type.Array(UserIndexAiAppRegistration) }),
+});
+
+export type UserIndexRegisterAiAppArgs = Static<typeof UserIndexRegisterAiAppArgs>;
+export const UserIndexRegisterAiAppArgs = Type.Object({
+    manifest: UserIndexAiAppManifest,
+});
+
+export type UserIndexRegisterAiAppResponse = Static<typeof UserIndexRegisterAiAppResponse>;
+export const UserIndexRegisterAiAppResponse = Type.Union([
+    Type.Object({ Success: UserIndexAiAppRegistration }),
+    Type.Object({ InvalidRequest: Type.String() }),
+    Type.Object({ Error: OCError }),
+]);
+
+export type UserIndexDeleteAiAppArgs = Static<typeof UserIndexDeleteAiAppArgs>;
+export const UserIndexDeleteAiAppArgs = Type.Object({
+    name: Type.String(),
+});
+
+export type UserIndexDeleteAiAppResponse = Static<typeof UserIndexDeleteAiAppResponse>;
+export const UserIndexDeleteAiAppResponse = Type.Union([
+    Type.Literal("Success"),
+    Type.Literal("NotFound"),
+    Type.Object({ Error: OCError }),
+]);
+
+export type UserIndexAiAppUserKey = Static<typeof UserIndexAiAppUserKey>;
+export const UserIndexAiAppUserKey = Type.Object({
+    app_id: Type.Number(),
+    public_key: Type.String(),
+});
+
+export type UserIndexSetMyAiAppKeyArgs = Static<typeof UserIndexSetMyAiAppKeyArgs>;
+export const UserIndexSetMyAiAppKeyArgs = Type.Object({
+    app_id: Type.Number(),
+    public_key: Type.String(),
+});
+
+export type UserIndexSetMyAiAppKeyResponse = Static<typeof UserIndexSetMyAiAppKeyResponse>;
+export const UserIndexSetMyAiAppKeyResponse = Type.Union([
+    Type.Literal("Success"),
+    Type.Literal("AppNotFound"),
+    Type.Object({ InvalidRequest: Type.String() }),
+    Type.Object({ Error: OCError }),
+]);
+
+export type UserIndexMyAiAppKeysResponse = Static<typeof UserIndexMyAiAppKeysResponse>;
+export const UserIndexMyAiAppKeysResponse = Type.Object({
+    Success: Type.Object({ keys: Type.Array(UserIndexAiAppUserKey) }),
+});
+
+export type UserIndexCreateAiAppLinkCodeArgs = Static<typeof UserIndexCreateAiAppLinkCodeArgs>;
+export const UserIndexCreateAiAppLinkCodeArgs = Type.Object({
+    app_id: Type.Number(),
+});
+
+export type UserIndexCreateAiAppLinkCodeResponse = Static<
+    typeof UserIndexCreateAiAppLinkCodeResponse
+>;
+export const UserIndexCreateAiAppLinkCodeResponse = Type.Union([
+    Type.Object({
+        Success: Type.Object({ code: Type.String(), expires_at: Type.BigInt() }),
+    }),
+    Type.Literal("AppNotFound"),
+    Type.Object({ Error: OCError }),
+]);
+
+export type GroupSetAiAppEnabledArgs = Static<typeof GroupSetAiAppEnabledArgs>;
+export const GroupSetAiAppEnabledArgs = Type.Object({
+    app_id: Type.Number(),
+    enabled: Type.Boolean(),
+});
+
+export type GroupSetAiAppEnabledResponse = Static<typeof GroupSetAiAppEnabledResponse>;
+export const GroupSetAiAppEnabledResponse = Type.Union([
+    Type.Literal("Success"),
+    Type.Literal("NotAuthorized"),
+    Type.Literal("UserNotInGroup"),
+    Type.Object({ Error: OCError }),
+]);
+
+export type GroupEnabledAiAppsResponse = Static<typeof GroupEnabledAiAppsResponse>;
+export const GroupEnabledAiAppsResponse = Type.Union([
+    Type.Object({ Success: Type.Object({ app_ids: Type.Array(Type.Number()) }) }),
     Type.Object({ Error: OCError }),
 ]);
 

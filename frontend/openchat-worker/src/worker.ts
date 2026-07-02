@@ -1093,6 +1093,21 @@ function getAction(
         case "registerAiAction":
             return agent.registerAiAction(payload.definition);
 
+        case "aiApps":
+            return agent.aiApps();
+
+        case "setAiAppEnabled":
+            return agent.setAiAppEnabled(payload.chatId, payload.appId, payload.enabled);
+
+        case "enabledAiApps":
+            return agent.enabledAiApps(payload.chatId);
+
+        case "myAiAppKeys":
+            return agent.myAiAppKeys();
+
+        case "createAiAppLinkCode":
+            return agent.createAiAppLinkCode(payload.appId);
+
         case "reportedMessages":
             return agent.reportedMessages(payload.userId);
 

@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
     type AiActionDefinition,
     type AiActionRegistrationWire,
+    type AiActionRule,
     aiActionFromRegistration,
+    applyRulesPostPass,
     buildActionCardContent,
+    compileRules,
     isActionRunnable,
     parseExtraction,
     runAiAction,
@@ -78,7 +81,7 @@ describe("runAiAction", () => {
         if (r.kind === "ready") {
             expect(r.card.rows[0]).toEqual({ label: "Amount", value: "20" });
             expect(r.extracted.currency).toBe("USD");
-            expect(r.card.confirmPayload).toBeInstanceOf(Uint8Array);
+            expect(ArrayBuffer.isView(r.card.confirmPayload)).toBe(true);
         }
     });
     it("propagates unavailable (no autonomous fallback)", async () => {
@@ -95,9 +98,244 @@ describe("runAiAction", () => {
             seen = req;
             return { kind: "ok", text: "{}" };
         });
-        expect(seen?.prompt).toBe(DEF.promptTemplate);
+        const today = new Date().toISOString().slice(0, 10);
+        // No rules and no message text: template + the dateline only.
+        expect(seen?.prompt).toBe(`${DEF.promptTemplate}\n\nToday is ${today}.`);
         expect(seen?.responseSchema).toBe(DEF.responseSchema);
         expect(seen?.image).toEqual(new Uint8Array([1, 2, 3]));
+    });
+
+    it("interpolates the Rules lines, Today line and Message block into the prompt", async () => {
+        const def: AiActionDefinition = {
+            ...DEF,
+            rules: [
+                { kind: "instruction", text: "Amounts are in the account currency." },
+                {
+                    kind: "keyword_map",
+                    field: "category",
+                    mode: "hint",
+                    map: [{ value: "travel", keywords: ["flight", "hotel"] }],
+                },
+                { kind: "from_message", field: "note" },
+                // normalize + context are deterministic / covered by the dateline: no prompt line.
+                { kind: "normalize", field: "amount", ops: ["k_m_suffix"] },
+                { kind: "context", provide: ["today"] },
+            ],
+        };
+        let seen: InferenceRequest | undefined;
+        await runAiAction(def, { text: "paid for a flight" }, RECIPIENT, async (req) => {
+            seen = req;
+            return { kind: "ok", text: "{}" };
+        });
+        const today = new Date().toISOString().slice(0, 10);
+        expect(seen?.prompt).toBe(
+            `${DEF.promptTemplate}\n\n` +
+                `Rules:\n` +
+                `- Amounts are in the account currency.\n` +
+                `- Set "category" to "travel" when the message mentions any of: flight, hotel\n` +
+                `- Set "note" to a short phrase taken from the message.\n\n` +
+                `Today is ${today}.\n\n` +
+                `Message:\npaid for a flight`,
+        );
+    });
+
+    it("keyword_map override wins over the model output using the message text", async () => {
+        const def: AiActionDefinition = {
+            ...DEF,
+            rules: [
+                {
+                    kind: "keyword_map",
+                    field: "category",
+                    mode: "override",
+                    map: [
+                        { value: "travel", keywords: ["flight", "hotel"] },
+                        { value: "food", keywords: ["lunch", "dinner"] },
+                    ],
+                },
+            ],
+        };
+        const r = await runAiAction(
+            def,
+            { text: "Booked a Hotel for next week" },
+            RECIPIENT,
+            // The model got it wrong — the deterministic override must win.
+            okInfer('{"amount":20,"category":"food"}'),
+        );
+        expect(r.kind).toBe("ready");
+        if (r.kind === "ready") {
+            expect(r.extracted.category).toBe("travel");
+            // confirmPayload carries the POST-PASSED object.
+            const payload = JSON.parse(new TextDecoder().decode(r.card.confirmPayload!)) as Record<string, unknown>;
+            expect(payload.category).toBe("travel");
+        }
+    });
+
+    it("from_message fills the field from the message text", async () => {
+        const def: AiActionDefinition = {
+            ...DEF,
+            rules: [{ kind: "from_message", field: "note", maxLength: 10 }],
+        };
+        const r = await runAiAction(def, { text: "  team lunch at noon  " }, RECIPIENT, okInfer('{"amount":20}'));
+        expect(r.kind).toBe("ready");
+        if (r.kind === "ready") {
+            // trimmed, then truncated to maxLength
+            expect(r.extracted.note).toBe("team lunch");
+            const payload = JSON.parse(new TextDecoder().decode(r.card.confirmPayload!)) as Record<string, unknown>;
+            expect(payload.note).toBe("team lunch");
+        }
+    });
+
+    it("k_m_suffix normalization turns '26k' into 26000", async () => {
+        const def: AiActionDefinition = {
+            ...DEF,
+            rules: [{ kind: "normalize", field: "amount", ops: ["k_m_suffix"] }],
+        };
+        const r = await runAiAction(def, { text: "spent 26k" }, RECIPIENT, okInfer('{"amount":"26k"}'));
+        expect(r.kind).toBe("ready");
+        if (r.kind === "ready") {
+            expect(r.extracted.amount).toBe(26000);
+        }
+    });
+
+    it("schema conformance deletes a field violating an enum", async () => {
+        const def: AiActionDefinition = {
+            ...DEF,
+            responseSchema: {
+                type: "object",
+                properties: {
+                    amount: { type: "number" },
+                    currency: { type: "string", enum: ["USD", "EUR"] },
+                },
+            },
+            rules: [{ kind: "instruction", text: "Report the currency as an ISO code." }],
+        };
+        const r = await runAiAction(def, { text: "paid 20" }, RECIPIENT, okInfer('{"amount":20,"currency":"???"}'));
+        expect(r.kind).toBe("ready");
+        if (r.kind === "ready") {
+            // Visible omission beats silent wrongness: the enum-violating field is deleted.
+            expect(r.extracted).toEqual({ amount: 20 });
+            expect(r.card.rows.map((row) => row.label)).toEqual(["Amount"]);
+        }
+    });
+
+    it("rules-free definitions behave exactly as before", async () => {
+        let seen: InferenceRequest | undefined;
+        const r = await runAiAction(
+            DEF,
+            { text: "I paid $20 USD for lunch" },
+            RECIPIENT,
+            async (req) => {
+                seen = req;
+                return { kind: "ok", text: '{"amount":20,"currency":"USD","extra":true}' };
+            },
+        );
+        const today = new Date().toISOString().slice(0, 10);
+        // No Rules block in the prompt...
+        expect(seen?.prompt).toBe(
+            `${DEF.promptTemplate}\n\nToday is ${today}.\n\nMessage:\nI paid $20 USD for lunch`,
+        );
+        // ...and the extraction passes through untouched (DEF's schema declares no properties).
+        expect(r.kind).toBe("ready");
+        if (r.kind === "ready") {
+            expect(r.extracted).toEqual({ amount: 20, currency: "USD", extra: true });
+        }
+    });
+});
+
+describe("compileRules", () => {
+    it("compiles instruction / keyword_map / from_message and skips normalize + context", () => {
+        const rules: AiActionRule[] = [
+            { kind: "instruction", text: "Be terse." },
+            {
+                kind: "keyword_map",
+                field: "kind",
+                mode: "override",
+                map: [
+                    { value: "a", keywords: ["x", "y"] },
+                    { value: "b", keywords: ["z"] },
+                ],
+            },
+            { kind: "from_message", field: "note" },
+            { kind: "normalize", field: "amount", ops: ["trim"] },
+            { kind: "context", provide: ["today"] },
+        ];
+        expect(compileRules(rules)).toEqual([
+            "Be terse.",
+            'Set "kind" to "a" when the message mentions any of: x, y',
+            'Set "kind" to "b" when the message mentions any of: z',
+            'Set "note" to a short phrase taken from the message.',
+        ]);
+    });
+});
+
+describe("applyRulesPostPass", () => {
+    it("keyword_map hint mode never touches the extraction", () => {
+        const rules: AiActionRule[] = [
+            { kind: "keyword_map", field: "category", mode: "hint", map: [{ value: "travel", keywords: ["hotel"] }] },
+        ];
+        expect(applyRulesPostPass(rules, { category: "food" }, "a hotel stay")).toEqual({ category: "food" });
+    });
+    it("keyword_map override matches case-insensitively and the first matching mapping wins", () => {
+        const rules: AiActionRule[] = [
+            {
+                kind: "keyword_map",
+                field: "category",
+                mode: "override",
+                map: [
+                    { value: "travel", keywords: ["HOTEL"] },
+                    { value: "stay", keywords: ["hotel"] },
+                ],
+            },
+        ];
+        expect(applyRulesPostPass(rules, {}, "A Hotel Stay")).toEqual({ category: "travel" });
+    });
+    it("skips message-driven rules when there is no message text", () => {
+        const rules: AiActionRule[] = [
+            { kind: "from_message", field: "note" },
+            { kind: "keyword_map", field: "category", mode: "override", map: [{ value: "a", keywords: ["b"] }] },
+        ];
+        expect(applyRulesPostPass(rules, { amount: 1 }, undefined)).toEqual({ amount: 1 });
+    });
+    it("from_message truncates to 200 chars by default", () => {
+        const rules: AiActionRule[] = [{ kind: "from_message", field: "note" }];
+        const out = applyRulesPostPass(rules, {}, "x".repeat(500));
+        expect((out.note as string).length).toBe(200);
+    });
+    it("normalize handles k/m suffixes, plain numeric strings and leaves real numbers alone", () => {
+        const rules: AiActionRule[] = [{ kind: "normalize", field: "amount", ops: ["k_m_suffix"] }];
+        expect(applyRulesPostPass(rules, { amount: "26k" }, undefined)).toEqual({ amount: 26000 });
+        expect(applyRulesPostPass(rules, { amount: "1.5m" }, undefined)).toEqual({ amount: 1500000 });
+        expect(applyRulesPostPass(rules, { amount: "1,500 k" }, undefined)).toEqual({ amount: 1500000 });
+        expect(applyRulesPostPass(rules, { amount: "42" }, undefined)).toEqual({ amount: 42 });
+        expect(applyRulesPostPass(rules, { amount: 42 }, undefined)).toEqual({ amount: 42 });
+        expect(applyRulesPostPass(rules, { amount: "not a number" }, undefined)).toEqual({ amount: "not a number" });
+    });
+    it("normalize strip_symbols removes currency symbols/commas/spaces and parses numerics", () => {
+        const rules: AiActionRule[] = [{ kind: "normalize", field: "amount", ops: ["strip_symbols"] }];
+        expect(applyRulesPostPass(rules, { amount: "$1,299.50" }, undefined)).toEqual({ amount: 1299.5 });
+        expect(applyRulesPostPass(rules, { amount: "€ 20" }, undefined)).toEqual({ amount: 20 });
+    });
+    it("normalize applies string ops in order and skips absent fields", () => {
+        const rules: AiActionRule[] = [
+            { kind: "normalize", field: "code", ops: ["trim", "uppercase"] },
+            { kind: "normalize", field: "missing", ops: ["lowercase"] },
+        ];
+        expect(applyRulesPostPass(rules, { code: "  usd " }, undefined)).toEqual({ code: "USD" });
+    });
+    it("schema conformance drops undeclared keys and type-violating fields", () => {
+        const schema = {
+            type: "object",
+            properties: {
+                amount: { type: "number" },
+                code: { type: "string", pattern: "^[A-Z]{3}$" },
+            },
+        };
+        expect(applyRulesPostPass([], { amount: "20", code: "USD", extra: 1 }, undefined, schema)).toEqual({
+            code: "USD",
+        });
+        expect(applyRulesPostPass([], { amount: 20, code: "usd" }, undefined, schema)).toEqual({
+            amount: 20,
+        });
     });
 });
 
@@ -139,6 +377,64 @@ describe("aiActionFromRegistration", () => {
     it("tolerates a non-JSON schema string (no constraint)", () => {
         const def = aiActionFromRegistration({ ...WIRE, definition: { ...WIRE.definition, response_schema: "not json" } });
         expect(def.responseSchema).toBeUndefined();
+    });
+    it("defaults rules to [] when absent from the wire", () => {
+        const def = aiActionFromRegistration(WIRE);
+        expect(def.rules).toEqual([]);
+    });
+    it("maps externally tagged wire rules to the flat domain union", () => {
+        const def = aiActionFromRegistration({
+            ...WIRE,
+            definition: {
+                ...WIRE.definition,
+                rules: [
+                    {
+                        keyword_map: {
+                            field: "category",
+                            mode: "override",
+                            map: [{ value: "travel", keywords: ["flight", "hotel"] }],
+                        },
+                    },
+                    { from_message: { field: "note", max_length: 120 } },
+                    { normalize: { field: "amount", ops: ["k_m_suffix", "trim"] } },
+                    { instruction: { text: "Be terse." } },
+                    { context: { provide: ["today"] } },
+                ],
+            },
+        });
+        expect(def.rules).toEqual([
+            {
+                kind: "keyword_map",
+                field: "category",
+                mode: "override",
+                map: [{ value: "travel", keywords: ["flight", "hotel"] }],
+            },
+            { kind: "from_message", field: "note", maxLength: 120 },
+            { kind: "normalize", field: "amount", ops: ["k_m_suffix", "trim"] },
+            { kind: "instruction", text: "Be terse." },
+            { kind: "context", provide: ["today"] },
+        ]);
+    });
+    it("skips malformed wire rules instead of failing", () => {
+        const def = aiActionFromRegistration({
+            ...WIRE,
+            definition: {
+                ...WIRE.definition,
+                // deliberately broken entries mixed in with one valid rule
+                rules: [
+                    "nonsense",
+                    { unknown_rule: { field: "x" } },
+                    { keyword_map: { field: "k", mode: "sideways", map: [] } },
+                    { instruction: { text: "Keep it short." } },
+                    // unrecognised normalize ops are dropped, the rule itself survives
+                    { normalize: { field: "amount", ops: ["trim", "future_op"] } },
+                ] as unknown as NonNullable<AiActionRegistrationWire["definition"]["rules"]>,
+            },
+        });
+        expect(def.rules).toEqual([
+            { kind: "instruction", text: "Keep it short." },
+            { kind: "normalize", field: "amount", ops: ["trim"] },
+        ]);
     });
 });
 
