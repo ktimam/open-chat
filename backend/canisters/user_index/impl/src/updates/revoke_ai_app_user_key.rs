@@ -2,7 +2,35 @@ use crate::{RuntimeState, mutate_state};
 use canister_api_macros::update;
 use canister_tracing_macros::trace;
 use oc_error_codes::OCErrorCode;
+use p256::ecdsa::signature::Verifier;
+use p256::ecdsa::{Signature, VerifyingKey};
+use p256::pkcs8::DecodePublicKey;
+use types::TimestampMillis;
 use user_index_canister::revoke_ai_app_user_key::{Response::*, *};
+
+// Domain-separated challenge the caller must sign with the private key matching the PEM it wants
+// revoked (see the endpoint comment for why this replaces bare PEM knowledge).
+const REVOKE_CHALLENGE_DOMAIN: &[u8] = b"oc-revoke-ai-app-user-key-v1";
+
+// Accept signatures timestamped within this window of the canister clock. A generous past window
+// tolerates slow calls; a small future slack tolerates client clock skew. Stateless (no nonce
+// store) — the timestamp is the only replay bound.
+const REVOKE_PAST_WINDOW_MS: TimestampMillis = 5 * 60 * 1000;
+const REVOKE_FUTURE_SLACK_MS: TimestampMillis = 60 * 1000;
+
+// Canonical challenge preimage, byte-for-byte reproduced by the client before signing:
+//   domain || canister-id raw bytes || public-key PEM bytes || timestamp (u64 little-endian).
+// Binding the canister id prevents cross-canister replay; binding the exact PEM ties the signature
+// to the key being revoked; the timestamp gives the replay window.
+fn revoke_challenge_preimage(canister_id_bytes: &[u8], public_key: &str, timestamp: TimestampMillis) -> Vec<u8> {
+    let mut preimage =
+        Vec::with_capacity(REVOKE_CHALLENGE_DOMAIN.len() + canister_id_bytes.len() + public_key.len() + 8);
+    preimage.extend_from_slice(REVOKE_CHALLENGE_DOMAIN);
+    preimage.extend_from_slice(canister_id_bytes);
+    preimage.extend_from_slice(public_key.as_bytes());
+    preimage.extend_from_slice(&timestamp.to_le_bytes());
+    preimage
+}
 
 // The CONSUMER-APP side of a one-sided disconnect: when a user disconnects inside the app (the app
 // deletes its private key), the app calls this so OpenChat drops the now-useless public key too.
@@ -24,14 +52,46 @@ fn revoke_ai_app_user_key(args: Args) -> Response {
 }
 
 fn revoke_ai_app_user_key_impl(args: Args, state: &mut RuntimeState) -> Response {
-    // Failure throttle (see the TODO above): misses count against the caller and globally, so the
-    // endpoint cannot be used to probe for registered keys at scale. Successful revokes are free.
+    // Failure throttle: misses count against the caller and globally, so the endpoint cannot be
+    // used to probe for registered keys at scale. Kept FIRST so a bad signature still throttles.
+    // Successful revokes are free.
     let caller = state.env.caller();
     let now = state.env.now();
     if let Err(retry_after_ms) = state.data.ai_app_call_throttle.check(caller, now) {
         return Error(OCErrorCode::Throttled.with_message(retry_after_ms));
     }
 
+    // Reject stale or too-far-future timestamps before touching any keys.
+    if now.saturating_sub(args.timestamp) > REVOKE_PAST_WINDOW_MS
+        || args.timestamp.saturating_sub(now) > REVOKE_FUTURE_SLACK_MS
+    {
+        state.data.ai_app_call_throttle.record_failure(caller, now);
+        return Error(OCErrorCode::Expired.into());
+    }
+
+    // Proof-of-possession: verify the signature over the canonical challenge using the PEM being
+    // revoked. Any parse/verify failure maps to an error (never a silent success) and is throttled.
+    let preimage = revoke_challenge_preimage(state.env.canister_id().as_slice(), &args.public_key, args.timestamp);
+    let verifying_key = match VerifyingKey::from_public_key_pem(&args.public_key) {
+        Ok(vk) => vk,
+        Err(_) => {
+            state.data.ai_app_call_throttle.record_failure(caller, now);
+            return Error(OCErrorCode::InvalidPublicKey.into());
+        }
+    };
+    let signature = match Signature::from_slice(&args.signature) {
+        Ok(sig) => sig,
+        Err(_) => {
+            state.data.ai_app_call_throttle.record_failure(caller, now);
+            return Error(OCErrorCode::InvalidSignature.into());
+        }
+    };
+    if verifying_key.verify(&preimage, &signature).is_err() {
+        state.data.ai_app_call_throttle.record_failure(caller, now);
+        return Error(OCErrorCode::InvalidSignature.into());
+    }
+
+    // Signature is valid: remove the exact PEM it authenticated.
     if state.data.ai_app_user_keys.remove_by_key(&args.public_key) > 0 {
         Success
     } else {

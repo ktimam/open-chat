@@ -93,6 +93,7 @@ type AiAppManifest = record {
     name : text;
     description : text;
     icon_url : opt text;
+    app_canister_id : opt principal;
     consumer_public_key : text;
     per_user_keys : bool;
     actions : vec AiActionDefinition;
@@ -138,6 +139,7 @@ type PublishAiAppResponse = variant {
     Success;
     NotFound;
     NotAuthorised;
+    NotVerified;
     Error : OCError;
 };
 
@@ -176,6 +178,8 @@ type ClaimAiAppLinkCodeResponse = variant {
 
 type RevokeAiAppUserKeyArgs = record {
     public_key : text;
+    signature : blob;
+    timestamp : nat64;
 };
 
 type RevokeAiAppUserKeyResponse = variant {

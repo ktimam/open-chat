@@ -6091,6 +6091,8 @@ export const UserIndexAiAppManifest = Type.Object({
     name: Type.String(),
     description: Type.String(),
     icon_url: Type.Optional(Type.String()),
+    // Optional for old-data tolerance: registrations that predate the manifest-verify gate omit it.
+    app_canister_id: Type.Optional(TSPrincipal),
     consumer_public_key: Type.String(),
     // Optional for old-data tolerance: registrations that predate per-user keys omit it.
     per_user_keys: Type.Optional(Type.Boolean()),

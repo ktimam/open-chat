@@ -1,0 +1,13 @@
+[package]
+name = "ai_app_verifier_canister"
+version.workspace = true
+edition.workspace = true
+
+# The generic "AI app verifier" c2c interface: every AI app that wants its OpenChat manifest to be
+# publishable exposes `c2c_verify_ai_app`. This crate is the shared Args/Response contract — it is
+# NOT specific to any one app.
+
+[dependencies]
+candid = { workspace = true }
+serde = { workspace = true }
+types = { path = "../../../libraries/types" }

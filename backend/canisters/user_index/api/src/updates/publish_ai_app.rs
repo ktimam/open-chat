@@ -17,6 +17,10 @@ pub enum Response {
     Success,
     NotFound,
     NotAuthorised,
+    /// The manifest declared no `app_canister_id`, or that canister did not vouch for the app's
+    /// name (returned false, trapped, or was unreachable). Publishing is blocked until an app
+    /// canister vouches — the anti-squatting gate.
+    NotVerified,
     Error(OCError),
 }
 

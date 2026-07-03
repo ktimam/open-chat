@@ -93,6 +93,10 @@ impl AiAppRegistry {
         self.apps.contains_key(&id)
     }
 
+    pub fn get(&self, id: AiAppId) -> Option<&AiAppRegistration> {
+        self.apps.get(&id)
+    }
+
     /// The directory as one caller sees it: every PUBLISHED app, plus the caller's own unpublished
     /// ones (a registrant must be able to see and manage an app before it is published).
     /// Deterministic (oldest-first) ordering — HashMap iteration order is arbitrary and clients

@@ -147,6 +147,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "ai_app_verifier_canister"
+version = "0.1.0"
+dependencies = [
+ "candid",
+ "serde",
+ "types",
+]
+
+[[package]]
+name = "ai_app_verifier_canister_c2c_client"
+version = "0.1.0"
+dependencies = [
+ "ai_app_verifier_canister",
+ "candid",
+ "canister_client",
+ "ic-cdk",
+ "types",
+]
+
+[[package]]
 name = "airdrop_bot_canister"
 version = "0.1.0"
 dependencies = [
@@ -12655,6 +12675,8 @@ dependencies = [
 name = "user_index_canister_impl"
 version = "0.1.0"
 dependencies = [
+ "ai_app_verifier_canister",
+ "ai_app_verifier_canister_c2c_client",
  "candid",
  "canister_api_macros",
  "canister_logger",
@@ -12698,6 +12720,7 @@ dependencies = [
  "oc_error_codes",
  "online_users_canister",
  "online_users_canister_c2c_client",
+ "p256",
  "p256_key_pair",
  "proof_of_unique_personhood",
  "pulldown-cmark",

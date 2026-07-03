@@ -1,4 +1,4 @@
-use crate::{TimestampMillis, UserId};
+use crate::{CanisterId, TimestampMillis, UserId};
 use candid::CandidType;
 use serde::{Deserialize, Serialize};
 use ts_export::ts_export;
@@ -19,6 +19,16 @@ pub struct AiAppManifest {
     pub description: String,
     #[serde(default)]
     pub icon_url: Option<String>,
+    /// The app's own IC canister. When set, `publish_ai_app` makes a c2c call to this canister's
+    /// generic `c2c_verify_ai_app` method and only publishes if the canister vouches for this
+    /// manifest's `name` — proving the registrant controls the canister the manifest points at
+    /// (an anti-squatting check). Generic: OpenChat knows nothing app-specific, only the well-known
+    /// method name. `serde(default)` preserves upgrade/wire compat like the other optional fields.
+    // The ts_export macro only auto-maps a bare `CanisterId`; `Option<CanisterId>` needs the
+    // TSPrincipal representation spelled out (Principal has no TS impl).
+    #[serde(default)]
+    #[ts(as = "Option::<ts_export::TSPrincipal>", optional)]
+    pub app_canister_id: Option<CanisterId>,
     /// P-256 SPKI PEM: the app-level delivery key confirmed actions are encrypted/verified against.
     /// May be empty when `per_user_keys` is set — delivery then always targets the acting user's own
     /// registered key and this app-level key is never read.
