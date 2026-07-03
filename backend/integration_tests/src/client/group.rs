@@ -15,9 +15,11 @@ generate_msgpack_query_call!(selected_updates_v2);
 generate_msgpack_query_call!(summary);
 generate_msgpack_query_call!(summary_updates);
 generate_msgpack_query_call!(webhook);
+generate_msgpack_query_call!(enabled_ai_apps);
 
 // Updates
 generate_msgpack_update_call!(accept_p2p_swap);
+generate_msgpack_update_call!(set_ai_app_enabled);
 generate_msgpack_update_call!(add_reaction);
 generate_msgpack_update_call!(block_user);
 generate_msgpack_update_call!(cancel_p2p_swap);
@@ -570,6 +572,27 @@ pub mod happy_path {
             super::local_user_index(env, Principal::anonymous(), group_id.into(), &Empty {});
 
         local_user_index
+    }
+
+    pub fn set_ai_app_enabled(env: &mut PocketIc, sender: Principal, group_id: ChatId, app_id: types::AiAppId, enabled: bool) {
+        let response = super::set_ai_app_enabled(
+            env,
+            sender,
+            group_id.into(),
+            &group_canister::set_ai_app_enabled::Args { app_id, enabled },
+        );
+        match response {
+            group_canister::set_ai_app_enabled::Response::Success => (),
+            response => panic!("'set_ai_app_enabled' error: {response:?}"),
+        }
+    }
+
+    pub fn enabled_ai_apps(env: &PocketIc, sender: Principal, group_id: ChatId) -> Vec<types::AiAppId> {
+        let response = super::enabled_ai_apps(env, sender, group_id.into(), &group_canister::enabled_ai_apps::Args {});
+        match response {
+            group_canister::enabled_ai_apps::Response::Success(result) => result.app_ids,
+            response => panic!("'enabled_ai_apps' error: {response:?}"),
+        }
     }
 
     pub fn register_webhook(env: &mut PocketIc, caller: Principal, group_id: ChatId, name: String, avatar: Option<String>) {

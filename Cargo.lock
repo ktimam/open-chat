@@ -5928,6 +5928,7 @@ dependencies = [
 name = "integration_tests"
 version = "0.1.0"
 dependencies = [
+ "action_inbox_canister",
  "airdrop_bot_canister",
  "candid",
  "chat_events",
@@ -5935,6 +5936,7 @@ dependencies = [
  "constants",
  "cycles_dispenser_canister",
  "cycles_minting_canister",
+ "ecies_payload",
  "escrow_canister",
  "event_relay_canister",
  "event_store_canister",
@@ -5955,12 +5957,14 @@ dependencies = [
  "oc_error_codes",
  "online_users_canister",
  "openchat_installer_canister",
+ "p256_key_pair",
  "pocket-ic",
  "proposals_bot_canister",
  "rand 0.8.5",
  "registry_canister",
  "reqwest 0.12.28",
  "serde",
+ "serde_bytes",
  "serde_json",
  "sha256",
  "sign_in_with_email_canister",
