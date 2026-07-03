@@ -219,9 +219,10 @@ pub(crate) fn finalize_group_import(group_id: ChatId) {
                 id: channel_id,
                 chat,
                 date_imported: None, // This is only set once everything is complete
-                // A group-level enabled set is NOT carried over on import (out of scope here);
-                // channel admins re-enable apps after the import completes.
-                enabled_ai_apps: std::collections::BTreeSet::new(),
+                // Carry over the AI apps that were enabled on the source group so
+                // the imported channel keeps them (empty for the convert-to-new-
+                // community path, which doesn't snapshot the set).
+                enabled_ai_apps: group.enabled_ai_apps().clone(),
             });
 
             state.data.timer_jobs.enqueue_job(

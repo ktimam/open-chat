@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::collections::hash_map::Entry::Vacant;
-use types::{ChannelId, ChatId, EventContext, TimestampMillis, Timestamped, UserId};
+use std::collections::{BTreeSet, HashMap};
+use types::{AiAppId, ChannelId, ChatId, EventContext, TimestampMillis, Timestamped, UserId};
 
 #[derive(Serialize, Deserialize, Default)]
 pub struct GroupsBeingImported {
@@ -27,12 +27,20 @@ impl GroupsBeingImported {
         channel_id: ChannelId,
         imported_by: UserId,
         total_bytes: u64,
+        enabled_ai_apps: BTreeSet<AiAppId>,
         now: TimestampMillis,
         is_default: bool,
     ) -> bool {
         match self.groups.entry(group_id) {
             Vacant(e) => {
-                e.insert(GroupBeingImported::new(channel_id, imported_by, total_bytes, is_default, now));
+                e.insert(GroupBeingImported::new(
+                    channel_id,
+                    imported_by,
+                    total_bytes,
+                    enabled_ai_apps,
+                    is_default,
+                    now,
+                ));
                 true
             }
             _ => false,
@@ -147,6 +155,11 @@ pub struct GroupBeingImported {
     bytes: Vec<u8>,
     error_message: Option<String>,
     is_default: Timestamped<bool>,
+    // AI apps enabled on the source group; written onto the channel at finalize.
+    // `#[serde(default)]` so an import already in flight across the upgrade that
+    // introduced this field still deserializes (falls back to an empty set).
+    #[serde(default)]
+    enabled_ai_apps: BTreeSet<AiAppId>,
 }
 
 impl GroupBeingImported {
@@ -154,6 +167,7 @@ impl GroupBeingImported {
         channel_id: ChannelId,
         imported_by: UserId,
         total_bytes: u64,
+        enabled_ai_apps: BTreeSet<AiAppId>,
         is_default: bool,
         now: TimestampMillis,
     ) -> GroupBeingImported {
@@ -170,6 +184,7 @@ impl GroupBeingImported {
             bytes: Vec::with_capacity(total_bytes as usize),
             error_message: None,
             is_default: Timestamped::new(is_default, now),
+            enabled_ai_apps,
         }
     }
 
@@ -179,6 +194,10 @@ impl GroupBeingImported {
 
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
+    }
+
+    pub fn enabled_ai_apps(&self) -> &BTreeSet<AiAppId> {
+        &self.enabled_ai_apps
     }
 
     pub fn is_default(&self) -> Timestamped<bool> {
