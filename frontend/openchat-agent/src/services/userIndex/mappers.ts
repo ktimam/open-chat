@@ -91,6 +91,7 @@ import type {
     UserIndexCreateAiAppLinkCodeResponse,
     UserIndexExploreAiAppsResponse,
     UserIndexRemoveMyAiAppKeyResponse,
+    UserIndexPublishAiAppResponse,
 } from "../../typebox";
 import { toRecord } from "../../utils/list";
 import {
@@ -742,6 +743,11 @@ export function createAiAppLinkCodeResponse(
         };
     }
     return undefined;
+}
+
+// True only on Success — publishing the app succeeded. NotFound/NotAuthorised/Error -> false.
+export function publishAiAppResponse(value: UserIndexPublishAiAppResponse): boolean {
+    return value === "Success";
 }
 
 // The user's own delivery key was removed (or there was none) — a disconnect. Anything else

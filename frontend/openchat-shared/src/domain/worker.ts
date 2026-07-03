@@ -407,6 +407,7 @@ export type WorkerRequest =
     | MyAiAppKeys
     | CreateAiAppLinkCode
     | RemoveMyAiAppKey
+    | PublishAiApp
     | ExploreAiApps
     | GetReportedMessages
     | GetExchangeRates
@@ -2152,6 +2153,11 @@ type RemoveMyAiAppKey = {
     appId: number;
 };
 
+type PublishAiApp = {
+    kind: "publishAiApp";
+    appId: number;
+};
+
 type ExploreAiApps = {
     kind: "exploreAiApps";
     searchTerm: string | undefined;
@@ -2549,6 +2555,8 @@ export type WorkerResult<T> = T extends Init
     : T extends CreateAiAppLinkCode
     ? AiAppLinkCode | undefined
     : T extends RemoveMyAiAppKey
+    ? boolean
+    : T extends PublishAiApp
     ? boolean
     : T extends ExploreAiApps
     ? ExploreAiAppsResponse

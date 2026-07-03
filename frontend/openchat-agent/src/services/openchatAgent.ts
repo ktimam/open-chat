@@ -3714,6 +3714,10 @@ export class OpenChatAgent extends EventTarget {
         return this._userIndexClient.removeMyAiAppKey(appId);
     }
 
+    publishAiApp(appId: number): Promise<boolean> {
+        return this._userIndexClient.publishAiApp(appId);
+    }
+
     // Per-chat enablement lives on the chat's own canister: groups on the group canister,
     // channels on the community canister (per channel). Direct chats have no admin-curated set
     // (the client treats the user's connected apps as enabled there), so they resolve to none.

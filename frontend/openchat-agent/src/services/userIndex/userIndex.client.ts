@@ -57,6 +57,8 @@ import {
     UserIndexRemoveMyAiAppKeyResponse,
     UserIndexExploreAiAppsArgs,
     UserIndexExploreAiAppsResponse,
+    UserIndexPublishAiAppArgs,
+    UserIndexPublishAiAppResponse,
     UserIndexExploreBotsArgs,
     UserIndexExploreBotsResponse,
     UserIndexExternalAchievementsArgs,
@@ -122,6 +124,7 @@ import {
     createAiAppLinkCodeResponse,
     removeMyAiAppKeyResponse,
     exploreAiAppsResponse,
+    publishAiAppResponse,
     exploreBotsResponse,
     externalAchievementsResponse,
     payForDiamondMembershipResponse,
@@ -618,6 +621,18 @@ export class UserIndexClient extends SingleCanisterMsgpackAgent {
             exploreAiAppsResponse,
             UserIndexExploreAiAppsArgs,
             UserIndexExploreAiAppsResponse,
+        );
+    }
+
+    // Publishes one of the caller's registered apps into the directory (owner + governance/test_mode
+    // gated in the canister). true on success.
+    publishAiApp(appId: number): Promise<boolean> {
+        return this.update(
+            "publish_ai_app",
+            { app_id: appId },
+            publishAiAppResponse,
+            UserIndexPublishAiAppArgs,
+            UserIndexPublishAiAppResponse,
         );
     }
 

@@ -6191,6 +6191,19 @@ export const UserIndexRemoveMyAiAppKeyResponse = Type.Union([
     Type.Object({ Error: OCError }),
 ]);
 
+export type UserIndexPublishAiAppArgs = Static<typeof UserIndexPublishAiAppArgs>;
+export const UserIndexPublishAiAppArgs = Type.Object({
+    app_id: Type.Number(),
+});
+
+export type UserIndexPublishAiAppResponse = Static<typeof UserIndexPublishAiAppResponse>;
+export const UserIndexPublishAiAppResponse = Type.Union([
+    Type.Literal("Success"),
+    Type.Literal("NotFound"),
+    Type.Literal("NotAuthorised"),
+    Type.Object({ Error: OCError }),
+]);
+
 export type UserIndexExploreAiAppsArgs = Static<typeof UserIndexExploreAiAppsArgs>;
 export const UserIndexExploreAiAppsArgs = Type.Object({
     search_term: Type.Optional(Type.String()),

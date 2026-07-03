@@ -7112,6 +7112,16 @@ export class OpenChat {
             .catch(() => false);
     }
 
+    // Publish one of the caller's own registered apps into the directory. false on failure.
+    publishAiApp(appId: number): Promise<boolean> {
+        return this.#worker
+            .send({
+                kind: "publishAiApp",
+                appId,
+            })
+            .catch(() => false);
+    }
+
     // Phase A: AI apps are group-scoped only; non-group chat ids resolve to false / empty.
     setAiAppEnabled(chatId: ChatIdentifier, appId: number, enabled: boolean): Promise<boolean> {
         return this.#worker

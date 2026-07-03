@@ -18,6 +18,7 @@
     import LinkVariant from "svelte-material-icons/LinkVariant.svelte";
     import Web from "svelte-material-icons/Web.svelte";
     import Translatable from "../../../Translatable.svelte";
+    import AiAppIcon from "./AiAppIcon.svelte";
 
     const client = getContext<OpenChat>("client");
 
@@ -66,6 +67,7 @@
 <Sheet {onDismiss}>
     <Container height={"hug"} padding={"xl"} gap={"lg"} direction={"vertical"}>
         <Container crossAxisAlignment={"center"} gap={"sm"}>
+            <AiAppIcon iconUrl={app.manifest.iconUrl} size={"2.5rem"} />
             <Title fontWeight={"bold"}>{app.manifest.name}</Title>
             {#if connected}
                 <BodySmall colour={"secondary"} width={"hug"}>

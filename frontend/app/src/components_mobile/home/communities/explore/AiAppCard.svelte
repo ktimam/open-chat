@@ -2,11 +2,11 @@
     // One published AI app in the explorer. Everything shown is manifest data — the card is fully
     // generic. There is no app detail screen yet; per-chat enablement (the actionable surface)
     // lives in each chat's Apps settings, which this card points the user towards.
-    import { BodySmall, ColourVars, Container, Subtitle } from "component-lib";
+    import { BodySmall, Container, Subtitle } from "component-lib";
     import type { AiAppRegistration } from "openchat-client";
-    import AutoFix from "svelte-material-icons/AutoFix.svelte";
     import { i18nKey } from "../../../../i18n/i18n";
     import Translatable from "../../../Translatable.svelte";
+    import AiAppIcon from "./AiAppIcon.svelte";
 
     interface Props {
         app: AiAppRegistration;
@@ -23,9 +23,7 @@
 
 <Container onClick={onSelect} padding={["sm", "zero"]} direction={"vertical"}>
     <Container overflow={"hidden"} gap={"md"}>
-        <div class="badge">
-            <AutoFix size={"1.5rem"} color={ColourVars.textOnPrimary} />
-        </div>
+        <AiAppIcon iconUrl={app.manifest.iconUrl} size={"3rem"} />
         <Container gap={"xs"} direction={"vertical"}>
             <Container crossAxisAlignment={"center"} gap={"sm"}>
                 <Subtitle fontWeight={"bold"}>
@@ -53,15 +51,3 @@
     </Container>
 </Container>
 
-<style lang="scss">
-    .badge {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        flex-shrink: 0;
-        width: 3rem;
-        height: 3rem;
-        border-radius: 50%;
-        background-color: var(--primary);
-    }
-</style>
