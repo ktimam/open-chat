@@ -1,7 +1,7 @@
 use candid::CandidType;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
-use types::{Chat, MessageId, TimestampMillis, UserId};
+use types::{CanisterId, Chat, MessageId, TimestampMillis, UserId};
 
 // Generic deposit: a chat canister (on an ActionCard confirm) hands an OPAQUE plaintext payload plus the
 // recipient consumer's P-256 public key. local_user_index wraps the payload in the plaintext context
@@ -12,6 +12,10 @@ pub struct Args {
     pub consumer_public_key_pem: String,
     pub plaintext: ByteBuf,
     pub created_at: TimestampMillis,
+    // Per-app inbox override (from the app manifest, carried on the card). None -> the globally
+    // configured action_inbox. #[serde(default)] for wire compat with pre-field callers.
+    #[serde(default)]
+    pub inbox_canister_id: Option<CanisterId>,
     pub context: ActionDepositContext,
 }
 

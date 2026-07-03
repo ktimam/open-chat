@@ -67,6 +67,12 @@ describe("buildActionCardContent", () => {
         const card = buildActionCardContent(DEF, { amount: 20, currency: "USD" }, RECIPIENT);
         expect(card.rows.map((r) => r.label)).toEqual(["Amount", "Currency"]);
     });
+    it("threads the optional per-app inbox onto the card, undefined when omitted", () => {
+        const withInbox = buildActionCardContent(DEF, { amount: 1, currency: "USD" }, RECIPIENT, "aaaaa-aa");
+        expect(withInbox.inboxCanisterId).toBe("aaaaa-aa");
+        const withoutInbox = buildActionCardContent(DEF, { amount: 1, currency: "USD" }, RECIPIENT);
+        expect(withoutInbox.inboxCanisterId).toBeUndefined();
+    });
 });
 
 describe("runAiAction", () => {
@@ -438,6 +444,18 @@ describe("aiActionDefinitionFromWire", () => {
         // Registrations that predate surfaces omit the field entirely.
         const legacy = aiAppManifestFromWire({ ...manifestWire, surfaces: undefined });
         expect(legacy.surfaces).toEqual([]);
+    });
+
+    it("maps the wire inbox_canister_id (already a text principal) and leaves it undefined when absent", () => {
+        const base: AiAppManifestWire = {
+            name: "demo",
+            description: "Demo app",
+            consumer_public_key: "-----BEGIN PUBLIC KEY-----\nABC\n-----END PUBLIC KEY-----\n",
+            actions: [WIRE],
+            inbox_canister_id: "aaaaa-aa",
+        };
+        expect(aiAppManifestFromWire(base).inboxCanisterId).toBe("aaaaa-aa");
+        expect(aiAppManifestFromWire({ ...base, inbox_canister_id: undefined }).inboxCanisterId).toBeUndefined();
     });
 
     it("skips malformed wire rules instead of failing", () => {

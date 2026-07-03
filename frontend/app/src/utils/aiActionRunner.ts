@@ -29,6 +29,8 @@ export interface AiActionCandidate {
     app: AiAppRegistration;
     action: AiActionDefinition;
     recipientKey: string;
+    // Per-app inbox override from the app's manifest (undefined => global action_inbox).
+    inboxCanisterId?: string;
 }
 
 export type ProposeResult =
@@ -77,7 +79,7 @@ export async function resolveCandidates(
             const myKey = myKeys.get(app.id);
             if (myKey === undefined || myKey.length === 0) continue;
             for (const action of app.manifest.actions) {
-                candidates.push({ app, action, recipientKey: myKey });
+                candidates.push({ app, action, recipientKey: myKey, inboxCanisterId: app.manifest.inboxCanisterId });
             }
         }
         return { candidates, linkRequired: [] };
@@ -109,7 +111,7 @@ export async function resolveCandidates(
                 continue;
             }
             for (const action of app.manifest.actions) {
-                candidates.push({ app, action, recipientKey: myKey });
+                candidates.push({ app, action, recipientKey: myKey, inboxCanisterId: app.manifest.inboxCanisterId });
             }
             continue;
         }
@@ -120,7 +122,7 @@ export async function resolveCandidates(
                     ? (action.consumerPublicKey as string)
                     : app.manifest.consumerPublicKey;
             if (recipientKey.length === 0) continue;
-            candidates.push({ app, action, recipientKey });
+            candidates.push({ app, action, recipientKey, inboxCanisterId: app.manifest.inboxCanisterId });
         }
     }
     return { candidates, linkRequired };
@@ -154,16 +156,17 @@ async function runDefinition(
     recipientKey: string,
     content: MessageContent,
     manualExtraction?: Record<string, unknown>,
+    inboxCanisterId?: string,
 ): Promise<ProposeResult> {
     if (manualExtraction !== undefined) {
-        const card = buildActionCardContent(def, manualExtraction, recipientKey);
+        const card = buildActionCardContent(def, manualExtraction, recipientKey, inboxCanisterId);
         return { kind: "ready", card, extracted: manualExtraction };
     }
 
     const input = await contentToInput(content);
     if (input === undefined) return { kind: "unsupported_content" };
 
-    return runAiAction(def, input, recipientKey, inferOnDevice);
+    return runAiAction(def, input, recipientKey, inferOnDevice, inboxCanisterId);
 }
 
 // Run the action on offer for a message in this chat, returning a card to propose (or a status).
@@ -180,7 +183,7 @@ export async function proposeAiActionForMessage(
     const { candidates, linkRequired } = await resolveCandidates(client, chatId);
     if (candidates.length === 1) {
         const c = candidates[0];
-        return runDefinition(c.action, c.recipientKey, content, manualExtraction);
+        return runDefinition(c.action, c.recipientKey, content, manualExtraction, c.inboxCanisterId);
     }
     if (candidates.length > 1) {
         return { kind: "choose", candidates };
@@ -224,6 +227,7 @@ export async function proposeAndPostCandidate(
         candidate.recipientKey,
         content,
         manualExtraction,
+        candidate.inboxCanisterId,
     );
     if (result.kind === "ready") {
         client.sendMessageWithContent(messageContext, result.card, false, [], false);

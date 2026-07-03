@@ -6093,6 +6093,8 @@ export const UserIndexAiAppManifest = Type.Object({
     icon_url: Type.Optional(Type.String()),
     // Optional for old-data tolerance: registrations that predate the manifest-verify gate omit it.
     app_canister_id: Type.Optional(TSPrincipal),
+    // Optional per-app inbox: registrations that predate it omit it (deposits go to the global inbox).
+    inbox_canister_id: Type.Optional(TSPrincipal),
     consumer_public_key: Type.String(),
     // Optional for old-data tolerance: registrations that predate per-user keys omit it.
     per_user_keys: Type.Optional(Type.Boolean()),
@@ -8109,6 +8111,7 @@ export const ActionCardContentInitial = Type.Object({
     expires_at: Type.Optional(Type.BigInt()),
     recipient_public_key: Type.Optional(Type.String()),
     confirm_payload: Type.Optional(TSBytes),
+    inbox_canister_id: Type.Optional(TSPrincipal),
 });
 
 export type ActionCardContent = Static<typeof ActionCardContent>;

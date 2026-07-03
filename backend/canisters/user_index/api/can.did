@@ -94,6 +94,7 @@ type AiAppManifest = record {
     description : text;
     icon_url : opt text;
     app_canister_id : opt principal;
+    inbox_canister_id : opt principal;
     consumer_public_key : text;
     per_user_keys : bool;
     actions : vec AiActionDefinition;

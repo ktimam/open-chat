@@ -1622,6 +1622,9 @@ export function apiMessageContent(domain: MessageContent): TMessageContentInitia
                     expires_at: domain.expiresAt,
                     recipient_public_key: domain.recipientPublicKey,
                     confirm_payload: domain.confirmPayload,
+                    inbox_canister_id: domain.inboxCanisterId
+                        ? principalStringToBytes(domain.inboxCanisterId)
+                        : undefined,
                 },
             };
 

@@ -390,6 +390,7 @@ impl From<MessageContent> for MessageContentInitial {
                 // Server-only routing fields are not present on the hydrated content.
                 recipient_public_key: None,
                 confirm_payload: None,
+                inbox_canister_id: None,
             }),
             MessageContent::P2PSwap(_) | MessageContent::VideoCall(_) => unimplemented!(),
         }
@@ -795,6 +796,11 @@ pub struct ActionCardContentInitial {
     #[serde(default)]
     #[ts(as = "Option::<ts_export::TSBytes>")]
     pub confirm_payload: Option<ByteBuf>,
+    // If set, confirming this card deposits to this per-app inbox canister instead of the globally
+    // configured action_inbox. App-declared routing (from the manifest); OpenChat never interprets it.
+    #[serde(default)]
+    #[ts(as = "Option::<ts_export::TSPrincipal>", optional)]
+    pub inbox_canister_id: Option<CanisterId>,
 }
 
 #[ts_export]

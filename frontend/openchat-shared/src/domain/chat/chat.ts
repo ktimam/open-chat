@@ -473,6 +473,9 @@ export interface ActionCardContent {
     // PEM) and deposits it into the on-chain action_inbox. OpenChat never interprets the payload.
     recipientPublicKey?: string;
     confirmPayload?: Uint8Array;
+    // Send-only per-app inbox override (from the app manifest). When set, this card's confirmed deposit
+    // is routed to this canister instead of the global action_inbox. Never hydrated on receive.
+    inboxCanisterId?: string;
 }
 
 export type TransactionId = bigint;

@@ -25,6 +25,7 @@ async fn respond_to_action_card(args: Args) -> Response {
                 consumer_public_key_pem: deposit.recipient_public_key,
                 plaintext: deposit.confirm_payload,
                 created_at: deposit.created_at,
+                inbox_canister_id: deposit.inbox_canister_id,
                 context: deposit.context,
             },
         )
@@ -44,6 +45,7 @@ struct DepositInstruction {
     recipient_public_key: String,
     confirm_payload: ByteBuf,
     created_at: TimestampMillis,
+    inbox_canister_id: Option<CanisterId>,
     context: ActionDepositContext,
 }
 
@@ -70,6 +72,7 @@ fn respond_to_action_card_impl(args: Args, state: &mut RuntimeState) -> OCResult
         recipient_public_key: d.recipient_public_key,
         confirm_payload: d.confirm_payload,
         created_at: d.responded_at,
+        inbox_canister_id: d.inbox_canister_id,
         context: ActionDepositContext {
             chat,
             message_id: d.message_id,

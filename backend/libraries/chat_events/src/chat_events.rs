@@ -702,6 +702,7 @@ impl ChatEvents {
                 responded_at: args.now,
                 message_id: args.message_id,
                 confirmed_by: args.user_id,
+                inbox_canister_id: card.inbox_canister_id.clone(),
             }),
             _ => None,
         };
@@ -2697,6 +2698,8 @@ pub struct ActionCardDeposit {
     pub responded_at: TimestampMillis,
     pub message_id: MessageId,
     pub confirmed_by: UserId,
+    // Per-app inbox override carried from the card; None routes to the global action_inbox.
+    pub inbox_canister_id: Option<CanisterId>,
 }
 
 pub struct RegisterPollVoteSuccess {

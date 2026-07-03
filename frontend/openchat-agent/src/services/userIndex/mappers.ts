@@ -37,6 +37,7 @@ import type {
     AiActionRule,
     AiAppLinkCode,
     AiAppManifest,
+    AiAppManifestWire,
     AiAppRegistration,
     AiAppUserKey,
 } from "openchat-shared";
@@ -661,13 +662,24 @@ export function apiAiActionDefinition(def: AiActionDefinition): UserIndexAiActio
     };
 }
 
+// The manifest's principal-typed fields (inbox_canister_id) arrive as raw bytes off msgpack; decode
+// them to a text principal here — mirroring how `owner` is decoded — so the shared
+// aiAppManifestFromWire (which has no principal decoder) receives the AiAppManifestWire string shape.
+function aiAppManifestWithDecodedPrincipals(m: UserIndexAiAppManifest): AiAppManifestWire {
+    return {
+        ...m,
+        inbox_canister_id:
+            m.inbox_canister_id !== undefined ? principalBytesToString(m.inbox_canister_id) : undefined,
+    };
+}
+
 export function aiAppsResponse(value: UserIndexAiAppsResponse): AiAppRegistration[] {
     if ("Success" in value) {
         return value.Success.apps.map((a) =>
             aiAppFromRegistration({
                 id: a.id,
                 owner: principalBytesToString(a.owner),
-                manifest: a.manifest,
+                manifest: aiAppManifestWithDecodedPrincipals(a.manifest),
                 created: a.created,
                 updated: a.updated,
                 published: a.published,
@@ -686,6 +698,9 @@ export function apiAiAppManifest(manifest: AiAppManifest): UserIndexAiAppManifes
         name: manifest.name,
         description: manifest.description,
         icon_url: manifest.iconUrl,
+        inbox_canister_id: manifest.inboxCanisterId
+            ? principalStringToBytes(manifest.inboxCanisterId)
+            : undefined,
         consumer_public_key: manifest.consumerPublicKey,
         per_user_keys: manifest.perUserKeys ?? false,
         actions: manifest.actions.map(apiAiActionDefinition),
@@ -721,7 +736,7 @@ export function exploreAiAppsResponse(value: UserIndexExploreAiAppsResponse): Ex
                 aiAppFromRegistration({
                     id: a.id,
                     owner: principalBytesToString(a.owner),
-                    manifest: a.manifest,
+                    manifest: aiAppManifestWithDecodedPrincipals(a.manifest),
                     created: a.created,
                     updated: a.updated,
                     published: a.published,

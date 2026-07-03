@@ -29,6 +29,12 @@ pub struct AiAppManifest {
     #[serde(default)]
     #[ts(as = "Option::<ts_export::TSPrincipal>", optional)]
     pub app_canister_id: Option<CanisterId>,
+    /// Optional per-app inbox canister: confirmed actions from this app are deposited here instead of
+    /// OpenChat's globally configured action_inbox (per-app isolation + cycles). App-declared routing,
+    /// carried onto each confirmed action card; OpenChat never interprets the deposited payload.
+    #[serde(default)]
+    #[ts(as = "Option::<ts_export::TSPrincipal>", optional)]
+    pub inbox_canister_id: Option<CanisterId>,
     /// P-256 SPKI PEM: the app-level delivery key confirmed actions are encrypted/verified against.
     /// May be empty when `per_user_keys` is set — delivery then always targets the acting user's own
     /// registered key and this app-level key is never read.

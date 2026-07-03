@@ -35,7 +35,10 @@ async fn c2c_deposit_action_confirmed(args: Args) -> Response {
 
 // Kept sync so the rng + signing key are touched without holding canister state across the await.
 fn prepare(args: Args, state: &mut RuntimeState) -> Result<(CanisterId, ActionDeposit), Response> {
-    let Some(target) = state.data.action_inbox_canister_id else {
+    // Per-card inbox override (app-declared, carried on the card) wins; otherwise the globally
+    // configured action_inbox. Routing only — the envelope/encryption/signature below are identical
+    // regardless of target, so the E2E provenance is unchanged.
+    let Some(target) = args.inbox_canister_id.or(state.data.action_inbox_canister_id) else {
         return Err(NotConfigured);
     };
 

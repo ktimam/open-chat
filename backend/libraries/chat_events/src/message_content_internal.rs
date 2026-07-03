@@ -2063,6 +2063,9 @@ pub struct ActionCardContentInternal {
     pub recipient_public_key: Option<String>,
     #[serde(rename = "cp", default, skip_serializing_if = "Option::is_none")]
     pub confirm_payload: Option<ByteBuf>,
+    // Per-app inbox override (app-declared): deposit here instead of the global action_inbox.
+    #[serde(rename = "ici", default, skip_serializing_if = "Option::is_none")]
+    pub inbox_canister_id: Option<CanisterId>,
 }
 
 impl ActionCardContentInternal {
@@ -2115,6 +2118,7 @@ impl From<ActionCardContentInitial> for ActionCardContentInternal {
             responded_at: None,
             recipient_public_key: value.recipient_public_key,
             confirm_payload: value.confirm_payload,
+            inbox_canister_id: value.inbox_canister_id,
         }
     }
 }

@@ -120,6 +120,9 @@ export interface AiAppManifest {
     actions: AiActionDefinition[];
     // Surfaces the app declares (absent === []).
     surfaces?: AiAppSurface[];
+    // Optional per-app inbox canister (text principal, decoded by the agent layer). When set, the
+    // card-builder routes this app's confirmed actions here instead of the global action_inbox.
+    inboxCanisterId?: string;
 }
 
 // The frontend mirror of the on-chain AiAppRegistration as the user_index `ai_apps` query returns it.
@@ -336,6 +339,7 @@ export function buildActionCardContent(
     def: AiActionDefinition,
     extracted: Record<string, unknown>,
     recipientPublicKeyPem: string,
+    inboxCanisterId?: string,
 ): ActionCardContent {
     const rows: ActionCardRow[] = def.card.rows
         .map((r) => ({ label: r.label, value: formatValue(extracted[r.valueKey]) }))
@@ -352,6 +356,7 @@ export function buildActionCardContent(
         state: "pending",
         recipientPublicKey: recipientPublicKeyPem,
         confirmPayload: new TextEncoder().encode(JSON.stringify(extracted)),
+        inboxCanisterId,
     };
 }
 
@@ -362,6 +367,7 @@ export async function runAiAction(
     input: { image?: Uint8Array; text?: string; modelId?: string },
     recipientPublicKeyPem: string,
     infer: (req: InferenceRequest) => Promise<InferenceResult>,
+    inboxCanisterId?: string,
 ): Promise<RunAiActionResult> {
     // The native runtime reads only `prompt` (its separate `text` field is not consumed), so the
     // message MUST be interpolated into the prompt for the model to see it. A dateline anchors
@@ -399,7 +405,7 @@ export async function runAiAction(
 
     return {
         kind: "ready",
-        card: buildActionCardContent(def, finalExtraction, recipientPublicKeyPem),
+        card: buildActionCardContent(def, finalExtraction, recipientPublicKeyPem, inboxCanisterId),
         extracted: finalExtraction,
     };
 }
@@ -459,6 +465,9 @@ export interface AiAppManifestWire {
     actions: AiActionDefinitionWire[];
     // serde(default) on-chain: registrations that predate surfaces omit it (=== []).
     surfaces?: AiAppSurfaceWire[];
+    // Per-app inbox: the agent layer pre-decodes the principal bytes to a text principal (like owner)
+    // before this wire shape reaches aiAppManifestFromWire; absent for registrations that predate it.
+    inbox_canister_id?: string;
 }
 
 export interface AiAppRegistrationWire {
@@ -591,6 +600,7 @@ export function aiAppManifestFromWire(m: AiAppManifestWire): AiAppManifest {
             url: s.url,
             display: s.display,
         })),
+        inboxCanisterId: m.inbox_canister_id,
     };
 }
 
