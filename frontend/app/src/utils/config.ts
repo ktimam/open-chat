@@ -62,4 +62,5 @@ export const configKeys = {
     autoProposeMutedChats: "openchat_auto_propose_muted_chats",
     aiAppSurfacesShown: "openchat_ai_app_surfaces_shown",
     modelsSection: "openchat_models_section",
+    myAppsSection: "openchat_my_apps_section",
 };

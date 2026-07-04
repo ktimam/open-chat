@@ -88,6 +88,7 @@
     import FontSize from "./FontSize.svelte";
     import LinkedAuthAccounts from "./LinkedAuthAccounts.svelte";
     import ModelManager from "./ModelManager.svelte";
+    import MyApps from "./MyApps.svelte";
     import ReferredUsersList from "./ReferredUsersList.svelte";
     import ReferUsers from "./ReferUsers.svelte";
     import ThemeSelector from "./ThemeSelector.svelte";
@@ -563,6 +564,9 @@
                     </CollapsibleCard>
                 </div>
             {/if}
+            <div class="my-apps">
+                <MyApps />
+            </div>
             <div class="restricted">
                 <CollapsibleCard
                     onToggle={restrictedSectionOpen.toggle}
