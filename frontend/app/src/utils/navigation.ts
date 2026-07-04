@@ -242,12 +242,19 @@ export function navigationMode(
 }
 
 /**
- * Tracks how many entries this session has pushed onto the history stack.
- * Used to detect whether a pop has a real entry to go back to, or whether
- * we should fall back to a replace (e.g. user arrived via deep link).
+ * Mirrors this session's browser-history entries (pathnames only; current = last). We track the
+ * actual urls — not just a depth counter — because a `pop` must only issue a real `history.back()`
+ * when the previous entry IS the destination. After e.g. chats → channel → community (two pushes),
+ * popping to /chats with a blind history.back() would replay the buried CHANNEL url instead of
+ * landing on /chats; the stack lets us detect that and replace forward to the real destination.
  */
-let pushDepth = 0;
+let historyStack: string[] = [];
 let pendingNavigation: PendingNavigation | null = null;
+
+// Compare/track by pathname only, so /chats matches a stored /chats?foo=bar.
+function pathnameOnly(url: string): string {
+    return url.split(/[?#]/)[0];
+}
 
 function handlePopstate(event: PopStateEvent) {
     const { previousAction } = onPopstate(event);
@@ -256,8 +263,8 @@ function handlePopstate(event: PopStateEvent) {
         return;
     }
 
-    if (pushDepth > 0) {
-        pushDepth--;
+    if (historyStack.length > 1) {
+        historyStack.pop();
     }
 }
 
@@ -273,20 +280,30 @@ function doNavigate(to: string, intent: NavigationIntent, retries = 0) {
     }
     const mode = navigationMode(to, routeStore.value, intent);
     console.debug("ROUTER: navigating", { from: routeStore.value, to, mode, intent });
+    // Seed the stack with the entry the app first loaded on, so the first `pop` can reason about it.
+    if (historyStack.length === 0) {
+        historyStack.push(pathnameOnly(window.location.pathname));
+    }
+    const toPath = pathnameOnly(to);
     switch (mode) {
         case "push":
-            pushDepth++;
+            historyStack.push(toPath);
             page(to);
             syncCurrentHistoryState(history.state);
             break;
         case "replace":
+            historyStack[historyStack.length - 1] = toPath;
             page.replace(to);
             syncCurrentHistoryState(history.state);
             break;
         case "pop":
-            if (pushDepth > 0) {
-                history.back();
+            // history.back() only lands on `to` if the entry directly below the current one is `to`.
+            if (historyStack[historyStack.length - 2] === toPath) {
+                history.back(); // handlePopstate pops the stack
             } else {
+                // The previous entry is a buried intermediate (e.g. after channel→community pushes,
+                // going back would replay the channel) — replace forward so we land on `to`.
+                historyStack[historyStack.length - 1] = toPath;
                 page.replace(to);
                 syncCurrentHistoryState(history.state);
             }
