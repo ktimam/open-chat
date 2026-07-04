@@ -198,3 +198,13 @@ export const rightPanelWidth = new LocalStorageStore<number | undefined>(
 window.addEventListener("resize", () => {
     dimensions.set(getDimensions());
 });
+
+// `window.innerWidth` can be reported before the shell/webview window has settled to its real size,
+// with no follow-up `resize` event to correct it. That leaves `dimensions` (and everything derived
+// from it, notably `mobileWidth`) stuck at the wrong value — e.g. the app behaves as a wide two-panel
+// layout, auto-opening a chat, while actually rendering a single narrow panel. A ResizeObserver fires
+// on attach AND on every subsequent layout change, so `dimensions` always tracks the real rendered
+// width regardless of whether a `resize` event ever fires.
+if (typeof document !== "undefined" && typeof ResizeObserver !== "undefined") {
+    new ResizeObserver(() => dimensions.set(getDimensions())).observe(document.documentElement);
+}
