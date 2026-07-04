@@ -43,6 +43,7 @@
         accountsSectionOpen,
         advancedSectionOpen,
         appearanceSectionOpen,
+        autoProposeSuggestions,
         chatsSectionOpen,
         dclickReply,
         deleteAccountSectionOpen,
@@ -536,6 +537,12 @@
                         onChange={() => hideMessagesFromDirectBlocked.toggle()}
                         label={i18nKey("hideBlocked")}
                         checked={$hideMessagesFromDirectBlocked} />
+                    <Toggle
+                        id={"auto-propose"}
+                        small
+                        onChange={() => autoProposeSuggestions.toggle()}
+                        label={i18nKey("aiApps.autoPropose.setting")}
+                        checked={$autoProposeSuggestions} />
                 </CollapsibleCard>
             </div>
             <div class="video">

@@ -37,6 +37,7 @@
     import ArrowDown from "svelte-material-icons/ArrowDown.svelte";
     import ArrowUp from "svelte-material-icons/ArrowUp.svelte";
     import { rtlStore } from "../../stores/rtl";
+    import { evaluateForAutoPropose } from "../../utils/autoPropose";
     import { pop } from "../../utils/transition";
     import Fab from "../Fab.svelte";
     import TimelineDate from "./TimelineDate.svelte";
@@ -371,6 +372,26 @@
                 "loadedPreviousMessages",
                 (args) => !scrollingToMessage && onLoadedPreviousMessages(args),
             ),
+            // Auto-propose: these two events cover every new message exactly once ("sentMessage"
+            // for our own, "loadedNewMessages" for everyone else's) — the module's session Set
+            // dedupes across the chat/thread instances of this component.
+            subscribe("sentMessage", ({ context, event }) =>
+                evaluateForAutoPropose(client, context.chatId, [event]),
+            ),
+            subscribe("loadedNewMessages", (ctx) => {
+                if (messageContextsEqual(ctx, messageContext)) {
+                    // after tick() the `events` prop includes the newly loaded messages
+                    tick().then(() =>
+                        evaluateForAutoPropose(
+                            client,
+                            ctx.chatId,
+                            events.filter(
+                                (e): e is EventWrapper<Message> => e.event.kind === "message",
+                            ),
+                        ),
+                    );
+                }
+            }),
         ];
         return () => {
             heightObserver.disconnect();

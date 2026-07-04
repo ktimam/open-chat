@@ -9,6 +9,11 @@
     } from "@utils/aiActionRunner";
     import { isNativeClient } from "@utils/onDeviceInference";
     import { openSurfaceExternally, surfaceToOpenAfterConfirm } from "@utils/aiAppSurfaces";
+    import {
+        autoProposeSuggestions,
+        dismissAutoProposeSuggestion,
+        muteAutoProposeInChat,
+    } from "@utils/autoPropose";
     import Typing from "@shared_components/Typing.svelte";
     import { trackedEffect } from "@src/utils/effects.svelte";
     import type { ProfileLinkClickedEvent } from "@webcomponents/profileLink";
@@ -23,7 +28,7 @@
     import { i18nKey } from "../../i18n/i18n";
     import { quickReactions } from "../../stores/quickReactions";
     import { rtlStore } from "../../stores/rtl";
-    import { dclickReply } from "../../stores/settings";
+    import { autoProposeSuggestions as autoProposeEnabled, dclickReply } from "../../stores/settings";
     import { now } from "../../stores/time";
     import { toastStore } from "../../stores/toast";
     import { isTouchOnlyDevice } from "../../utils/devices";
@@ -37,6 +42,7 @@
     import ModalContent from "../ModalContent.svelte";
     import Overlay from "../Overlay.svelte";
     import Translatable from "../Translatable.svelte";
+    import AutoProposeChip from "./AutoProposeChip.svelte";
     import ChatMessageContent from "./ChatMessageContent.svelte";
     import ChatMessageMenu from "./ChatMessageMenu.svelte";
     import EmojiPicker from "./EmojiPickerWrapper.svelte";
@@ -381,6 +387,16 @@
         }
     }
 
+    function proposeSuggestedAiAction() {
+        dismissAutoProposeSuggestion(msg.messageId);
+        void runAiActionHandler();
+    }
+
+    function muteAutoProposeSuggestions() {
+        muteAutoProposeInChat(chatId);
+        toastStore.showSuccessToast(i18nKey("aiApps.autoPropose.muted"));
+    }
+
     function selectReaction(selected: SelectedEmoji) {
         if (selected.kind === "native") {
             toggleReaction(false, selected.unicode);
@@ -530,6 +546,12 @@
         msg.content.kind === "deleted_content" ||
             msg.content.kind === "blocked_content" ||
             collapsed,
+    );
+    // Auto-propose: the matcher (utils/autoPropose.ts) flagged this message as matching a
+    // registered action's trigger keywords — render the under-bubble chip. Tapping it re-uses the
+    // exact same propose path as the message menu.
+    let autoProposeSuggestion = $derived(
+        $autoProposeEnabled && !inert ? $autoProposeSuggestions.get(msg.messageId) : undefined,
     );
     let canTip = $derived(!me && confirmed && !inert && !failed);
     let inThread = $derived(threadRootMessage !== undefined);
@@ -937,6 +959,17 @@
                         {#each tips as [ledger, userTips]}
                             <TipThumbnail onClick={tipMessage} {canTip} {ledger} {userTips} />
                         {/each}
+                    </div>
+                {/if}
+
+                {#if autoProposeSuggestion !== undefined}
+                    <div class:indent={showAvatar}>
+                        <AutoProposeChip
+                            {me}
+                            title={autoProposeSuggestion.title}
+                            onPropose={proposeSuggestedAiAction}
+                            onDismiss={() => dismissAutoProposeSuggestion(msg.messageId)}
+                            onMute={muteAutoProposeSuggestions} />
                     </div>
                 {/if}
             {/snippet}
