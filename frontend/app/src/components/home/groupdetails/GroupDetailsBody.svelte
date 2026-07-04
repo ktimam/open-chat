@@ -31,6 +31,7 @@
     import Markdown from "@shared_components/Markdown.svelte";
     import Stats from "../Stats.svelte";
     import AdvancedSection from "./AdvancedSection.svelte";
+    import AiAppsSummary from "./AiAppsSummary.svelte";
 
     const client = getContext<OpenChat>("client");
 
@@ -189,6 +190,7 @@
                 isCommunityPublic={$selectedCommunitySummaryStore?.public ?? true}
                 isChannel={chat.id.kind === "channel"} />
         </CollapsibleCard>
+        <AiAppsSummary {chat} />
         {#if !externalContent}
             <CollapsibleCard
                 onToggle={groupStatsOpen.toggle}

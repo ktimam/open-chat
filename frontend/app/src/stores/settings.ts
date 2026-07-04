@@ -67,6 +67,7 @@ export const groupInviteUsersOpen = new LocalStorageBoolStore(
     false,
 );
 export const groupAdvancedOpen = new LocalStorageBoolStore(configKeys.groupAdvancedSection, false);
+export const groupAiAppsOpen = new LocalStorageBoolStore(configKeys.groupAiAppsSection, false);
 export const exploreGroupsDismissed = new LocalStorageBoolStore(
     configKeys.exploreGroupsDismissed,
     false,
