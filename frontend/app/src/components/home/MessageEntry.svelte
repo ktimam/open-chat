@@ -313,8 +313,10 @@
         const txt = editor?.getMarkdown() ?? "";
 
         // "/ai <prompt>" runs the on-device model locally instead of sending a message. Only outside
-        // edit mode — editing a message to start with /ai must still just edit it.
-        if (editingEvent === undefined && isLocalAiCommandPrefix(txt)) {
+        // edit mode (editing a message to start with /ai must still just edit it) and only for
+        // pure-text input — with an attachment staged, fall through to the normal send so the
+        // attachment is never silently dropped.
+        if (editingEvent === undefined && attachment === undefined && isLocalAiCommandPrefix(txt)) {
             const prompt = parseLocalAiCommand(txt);
             if (prompt === undefined) {
                 toastStore.showFailureToast(i18nKey("Type a prompt after /ai"));
