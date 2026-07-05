@@ -25,7 +25,20 @@ export function isNativeClient(): boolean {
     return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
-export async function inferOnDevice(request: InferenceRequest): Promise<InferenceResult> {
+// The native llama.cpp backend is a single process-global (`LlamaBackend::init()` at the top of every
+// inference) that is NOT re-entrant: two overlapping calls make the second fail with
+// "BackendAlreadyInitialized", and each call also reloads the whole model. Several independent callers
+// exist (AI-action extraction, the /ai command, …), so funnel every inference through one queue — at
+// most one runs at a time; the rest await their turn. Failures don't break the chain.
+let inferenceQueue: Promise<unknown> = Promise.resolve();
+
+export function inferOnDevice(request: InferenceRequest): Promise<InferenceResult> {
+    const run = inferenceQueue.then(() => runInference(request));
+    inferenceQueue = run.catch(() => undefined);
+    return run;
+}
+
+async function runInference(request: InferenceRequest): Promise<InferenceResult> {
     if (!isNativeClient() || SUPPORTED_RUNTIMES.length === 0) {
         return { kind: "unavailable", reason: "on-device inference requires the native client" };
     }
