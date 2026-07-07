@@ -35,8 +35,13 @@ export type LocalAiResult =
     | { kind: "unavailable"; reason: string }
     | { kind: "error"; error: string };
 
-export async function runLocalAiCommand(prompt: string): Promise<LocalAiResult> {
-    const result = await inferOnDevice({ prompt, maxTokens: MAX_REPLY_TOKENS });
+// `image` (raw bytes of a staged image attachment) is forwarded to the model so a multimodal model
+// can answer about the picture — e.g. reading a receipt. Omit it for a text-only prompt.
+export async function runLocalAiCommand(
+    prompt: string,
+    image?: Uint8Array,
+): Promise<LocalAiResult> {
+    const result = await inferOnDevice({ prompt, image, maxTokens: MAX_REPLY_TOKENS });
     switch (result.kind) {
         case "ok":
             return { kind: "ok", reply: result.text.trim() };

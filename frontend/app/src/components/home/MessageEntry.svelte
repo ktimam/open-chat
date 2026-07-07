@@ -313,10 +313,9 @@
         const txt = editor?.getMarkdown() ?? "";
 
         // "/ai <prompt>" runs the on-device model locally instead of sending a message. Only outside
-        // edit mode (editing a message to start with /ai must still just edit it) and only for
-        // pure-text input — with an attachment staged, fall through to the normal send so the
-        // attachment is never silently dropped.
-        if (editingEvent === undefined && attachment === undefined && isLocalAiCommandPrefix(txt)) {
+        // edit mode — editing a message to start with /ai must still just edit it. A staged image
+        // attachment is fed to the (multimodal) model so you can ask about a picture, e.g. a receipt.
+        if (editingEvent === undefined && isLocalAiCommandPrefix(txt)) {
             const prompt = parseLocalAiCommand(txt);
             if (prompt === undefined) {
                 toastStore.showFailureToast(i18nKey("Type a prompt after /ai"));
@@ -338,10 +337,13 @@
 
     // Post the prompt as the user's message (so the question is visible in-chat), run the on-device
     // model, then post its reply as a real message marked with a robot glyph. The reply is sent by
-    // the current user because the local model has no on-chain identity of its own.
+    // the current user because the local model has no on-chain identity of its own. A staged image
+    // is captured before the send clears it and handed to the multimodal model as vision input; the
+    // image itself is posted (as the prompt's attachment) by the normal onSendMessage path.
     async function handleLocalAiCommand(prompt: string) {
+        const image = attachment?.kind === "image_content" ? attachment.blobData : undefined;
         onSendMessage([prompt, [], containsMarkdown]);
-        const outcome = await runLocalAiCommand(prompt);
+        const outcome = await runLocalAiCommand(prompt, image);
         if (outcome.kind === "ok") {
             const reply = outcome.reply.length > 0 ? outcome.reply : "(no output)";
             client.sendMessageWithContent(
