@@ -40,9 +40,11 @@
     import HoverIcon from "../HoverIcon.svelte";
     import Link from "../Link.svelte";
     import ModalContent from "../ModalContent.svelte";
+    import AiAppLinkModal from "./AiAppLinkModal.svelte";
     import Overlay from "../Overlay.svelte";
     import Translatable from "../Translatable.svelte";
     import AutoProposeChip from "./AutoProposeChip.svelte";
+    import Spinner from "../icons/Spinner.svelte";
     import ChatMessageContent from "./ChatMessageContent.svelte";
     import ChatMessageMenu from "./ChatMessageMenu.svelte";
     import EmojiPicker from "./EmojiPickerWrapper.svelte";
@@ -302,32 +304,49 @@
         return candidates[parseInt(raw, 10) - 1];
     }
 
-    // ... and no consent sheet — a blocking alert displays the one-time pairing code for a
-    // per-user-keys app; when the user confirms they entered it in the app, the key is re-checked
-    // and the propose that triggered it resumes.
+    // A per-user-keys app the user hasn't linked opens the proper pairing modal (AiAppLinkModal: a
+    // 6-digit code, countdown, and "Check connection" that only reports success once my_ai_app_keys
+    // actually shows the key). `linkModalApp` renders it; `linkModalResolve` bridges its async result
+    // back to this imperative flow so the propose that triggered it resumes on success.
+    let linkModalApp = $state<AiAppRegistration | undefined>(undefined);
+    let linkModalResolve: ((linked: boolean) => void) | undefined;
+
+    function closeLinkModal(linked: boolean) {
+        linkModalApp = undefined;
+        const resolve = linkModalResolve;
+        linkModalResolve = undefined;
+        resolve?.(linked);
+    }
+
     async function linkAppAndResume(
         app: AiAppRegistration,
         manualExtraction?: Record<string, unknown>,
     ): Promise<ProposeResult | undefined> {
-        const link = await client.createAiAppLinkCode(app.id);
-        if (link === undefined) {
-            toastStore.showFailureToast(i18nKey("Couldn't create a connection code"));
-            return undefined;
-        }
-        window.alert(
-            `${app.manifest.name} delivers your confirmed actions encrypted to a key only your app holds. Connect once to link them.\n\n` +
-                `Your code: ${link.code}\n\n` +
-                `Open ${app.manifest.name} and enter this code in its Connect to OpenChat screen, then press OK.`,
-        );
-        const keys = await client.myAiAppKeys();
-        if (!keys.some((k) => k.appId === app.id && k.publicKey.length > 0)) {
-            toastStore.showFailureToast(i18nKey(`${app.manifest.name} isn't connected yet`));
-            return undefined;
-        }
+        const linked = await new Promise<boolean>((resolve) => {
+            linkModalResolve = resolve;
+            linkModalApp = app;
+        });
+        // The modal only resolves `true` once the key is registered, so no re-check is needed.
+        if (!linked) return undefined;
         return proposeAndPost(client, messageContext, msg.content, manualExtraction);
     }
 
+    // Busy flag for an in-flight propose, so the trigger (the auto-propose chip) can show progress:
+    // the on-device model's first call cold-loads the multi-GB GGUF and, with no token streaming,
+    // otherwise reads as a frozen UI. Also guards against a double-run.
+    let proposing = $state(false);
+
     async function runAiActionHandler() {
+        if (proposing) return;
+        proposing = true;
+        try {
+            await runAiActionInner();
+        } finally {
+            proposing = false;
+        }
+    }
+
+    async function runAiActionInner() {
         // Native clients run the on-device model. A browser — or a native client with no model downloaded —
         // falls back to a manually-supplied extraction so the confirm → deposit cycle can still be driven.
         let manualExtraction: Record<string, unknown> | undefined;
@@ -512,15 +531,25 @@
             });
     }
 
-    function onRespondToActionCard(response: "confirm" | "cancel") {
+    function onRespondToActionCard(response: "confirm" | "cancel"): Promise<void> {
         // Capture before the async round-trip: the card content is replaced when its state
-        // refreshes to "confirmed".
+        // refreshes to "confirmed". The promise is returned so the card can show a spinner and lock
+        // its buttons until the confirm/cancel (and its downstream deposit) resolves.
         const actionId =
             msg.content.kind === "action_card_content" ? msg.content.actionId : undefined;
-        void client
+        return client
             .respondToActionCard(chatId, threadRootMessageIndex, msg.messageId, response)
             .then(async (success) => {
-                if (!success || response !== "confirm" || actionId === undefined) return;
+                if (!success) {
+                    // The round-trip failed — most often a confirm whose deposit to the app's inbox
+                    // errored. The canister now leaves the card Pending (it does NOT commit "confirmed"
+                    // on a failed deposit), so surface the failure and let the still-live buttons retry.
+                    if (response === "confirm") {
+                        toastStore.showFailureToast(i18nKey("aiActions.confirmFailed"));
+                    }
+                    return;
+                }
+                if (response !== "confirm" || actionId === undefined) return;
                 // After the first successfully confirmed action in a chat, open the owning app's
                 // "chat_link" surface (when it declares one) so the user can finish configuring
                 // the chat inside the app. The classic layout keeps this minimal: whatever the
@@ -617,6 +646,13 @@
 
 {#if tipping !== undefined}
     <TipBuilder ledger={tipping} onClose={() => (tipping = undefined)} {msg} {messageContext} />
+{/if}
+
+{#if linkModalApp !== undefined}
+    <AiAppLinkModal
+        app={linkModalApp}
+        onLinked={() => closeLinkModal(true)}
+        onDismiss={() => closeLinkModal(false)} />
 {/if}
 
 {#if showEmojiPicker && canReact}
@@ -967,9 +1003,22 @@
                         <AutoProposeChip
                             {me}
                             title={autoProposeSuggestion.title}
+                            busy={proposing}
                             onPropose={proposeSuggestedAiAction}
                             onDismiss={() => dismissAutoProposeSuggestion(msg.messageId)}
                             onMute={muteAutoProposeSuggestions} />
+                    </div>
+                {/if}
+
+                {#if proposing && autoProposeSuggestion === undefined}
+                    <!-- Menu-triggered propose (no auto-propose chip is shown for this message):
+                         surface the in-flight on-device inference so a cold multi-GB model load
+                         reads as progress instead of a frozen UI. -->
+                    <div class="propose-working" class:me class:indent={showAvatar}>
+                        <span class="pill">
+                            <Spinner size={"1rem"} foregroundColour={"var(--primary)"} />
+                            <Translatable resourceKey={i18nKey("aiApps.autoPropose.working")} />
+                        </span>
                     </div>
                 {/if}
             {/snippet}
@@ -1099,6 +1148,35 @@
             @include mobile() {
                 margin-left: $avatar-width-mob;
             }
+        }
+    }
+
+    .propose-working {
+        display: flex;
+        justify-content: flex-start;
+        margin-top: 2px;
+
+        &.me {
+            justify-content: flex-end;
+        }
+
+        &.indent {
+            margin-left: $avatar-width;
+            @include mobile() {
+                margin-left: $avatar-width-mob;
+            }
+        }
+
+        .pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 2px 10px;
+            border-radius: 999px;
+            background-color: var(--input-bg);
+            border: var(--bw) solid var(--bd);
+            color: var(--txt-light);
+            font-size: 0.75rem;
         }
     }
 

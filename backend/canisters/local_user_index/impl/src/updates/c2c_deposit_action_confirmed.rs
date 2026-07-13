@@ -7,6 +7,7 @@ use canister_tracing_macros::trace;
 use jwt::sign_bytes;
 use local_user_index_canister::c2c_deposit_action_confirmed::{Response::*, *};
 use serde_bytes::ByteBuf;
+use tracing::{error, info};
 use types::CanisterId;
 
 // A chat canister forwards an opaque confirmed-action payload + the recipient consumer's public key + the
@@ -21,15 +22,30 @@ async fn c2c_deposit_action_confirmed(args: Args) -> Response {
         Err(response) => return response,
     };
 
+    // Observability: a confirmed-action deposit is routed to `target` and keyed by the consumer key
+    // fingerprint. Recording both (and the store outcome) lets a deposit that "succeeds" for the confirming
+    // user yet never surfaces in the consumer's inbox be traced to a routing/key mismatch rather than a
+    // silent drop. The fingerprint is a public hash (the on-chain routing key), not a secret.
+    let fingerprint: String = deposit.consumer_key_fingerprint.iter().map(|b| format!("{b:02x}")).collect();
+
     match action_inbox_canister_c2c_client::c2c_notify_actions(
         target,
         &action_inbox_canister::c2c_notify_actions::Args { deposits: vec![deposit] },
     )
     .await
     {
-        Ok(action_inbox_canister::c2c_notify_actions::Response::Success) => Success,
-        Ok(action_inbox_canister::c2c_notify_actions::Response::Error(error)) => Error(format!("{error:?}")),
-        Err(error) => Error(format!("{error:?}")),
+        Ok(action_inbox_canister::c2c_notify_actions::Response::Success) => {
+            info!(%target, %fingerprint, "action deposit stored");
+            Success
+        }
+        Ok(action_inbox_canister::c2c_notify_actions::Response::Error(error)) => {
+            error!(%target, %fingerprint, ?error, "action deposit rejected by inbox");
+            Error(format!("{error:?}"))
+        }
+        Err(error) => {
+            error!(%target, %fingerprint, ?error, "action deposit call failed");
+            Error(format!("{error:?}"))
+        }
     }
 }
 
@@ -52,9 +68,15 @@ fn prepare(args: Args, state: &mut RuntimeState) -> Result<(CanisterId, ActionDe
     let signature = sign_bytes(&envelope.signing_preimage(args.created_at), secret_key_der, state.env.rng())
         .map_err(|e| Error(format!("{e:?}")))?;
 
-    // Deterministic dedupe key: the ciphertext is unique per deposit (fresh random ephemeral key), so a c2c
-    // retry of the same built deposit carries the same id and is deduped by the inbox.
-    let digest = sha256::sha256(&envelope.ciphertext);
+    // Deterministic dedupe key: the LOGICAL identity of the confirmed card — its message id plus the
+    // opaque confirm payload — NOT the ciphertext (which is unique per attempt: fresh random ephemeral
+    // key). Two-phase confirm leaves the card Pending on a failed deposit, so a user RETRY re-encrypts
+    // with a new ephemeral key; keying on the ciphertext would have made every retry a fresh inbox entry.
+    // Keying on (message_id, payload) means a retry — or the platform's automatic c2c retry — dedupes to
+    // a single entry within the recipient's fingerprint bucket.
+    let mut dedupe_input = args.plaintext.as_ref().to_vec();
+    dedupe_input.extend_from_slice(&args.context.message_id.as_u64().to_be_bytes());
+    let digest = sha256::sha256(&dedupe_input);
     let idempotency_id = u64::from_le_bytes(digest[..8].try_into().unwrap());
 
     Ok((

@@ -78,6 +78,32 @@ async function runInference(request: InferenceRequest): Promise<InferenceResult>
     }
 }
 
+// Tracks the model we've already kicked a warm-up for, so re-selecting the same model doesn't reload
+// it. Cleared again if the warm-up didn't actually load a model, so a later attempt can retry.
+let warmedModelId: string | undefined;
+
+// Pre-load the selected model into the native cache with a throwaway 1-token inference, so the first
+// REAL inference (an AI-action propose/extract, or an /ai command) doesn't pay the multi-GB cold load
+// — which, with no token streaming, otherwise reads as a frozen UI. Fire-and-forget and idempotent per
+// model: failures are swallowed (the real call surfaces any error), and it no-ops off the native client
+// or with no model selected. Routed through the same queue, so a real inference just waits behind it.
+export function prewarmSelectedModel(modelId?: string): void {
+    if (!isNativeClient()) return;
+    const id = modelId ?? get(selectedModelId);
+    if (id === undefined || id === "" || id === warmedModelId) return;
+    warmedModelId = id;
+    void inferOnDevice({ modelId: id, prompt: "hi", maxTokens: 1 }).then(
+        (result) => {
+            // Only a real model load counts as warmed; anything else clears the marker so selecting
+            // the model again (e.g. after downloading it) can retry the warm-up.
+            if (result.kind !== "ok") warmedModelId = undefined;
+        },
+        () => {
+            warmedModelId = undefined;
+        },
+    );
+}
+
 export function onDeviceInferenceCapability(): OnDeviceInferenceCapability {
     const selected = get(selectedModelId);
     // Modalities come from the catalog entry for the selected model (the native store doesn't track them).

@@ -828,7 +828,7 @@ pub enum ActionCardState {
 }
 
 #[ts_export]
-#[derive(CandidType, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(CandidType, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ActionCardResponse {
     Confirm,
     Cancel,

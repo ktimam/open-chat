@@ -100,7 +100,7 @@ describe("runAiAction", () => {
         const r = await runAiAction(DEF, {}, RECIPIENT, okInfer("I couldn't find a transaction."));
         expect(r.kind).toBe("no_extraction");
     });
-    it("passes the declared prompt + schema + image to the model", async () => {
+    it("passes the declared prompt + image to the model, but NOT the response schema", async () => {
         let seen: InferenceRequest | undefined;
         await runAiAction(DEF, { image: new Uint8Array([1, 2, 3]) }, RECIPIENT, async (req) => {
             seen = req;
@@ -109,7 +109,10 @@ describe("runAiAction", () => {
         const today = new Date().toISOString().slice(0, 10);
         // No rules and no message text: template + the dateline only.
         expect(seen?.prompt).toBe(`${DEF.promptTemplate}\n\nToday is ${today}.`);
-        expect(seen?.responseSchema).toBe(DEF.responseSchema);
+        // The schema is enforced deterministically AFTER generation (conformToSchema), NOT as a
+        // generation-time grammar constraint — constrained decoding collapses number fields (e.g. amount)
+        // to a degenerate 0 on small models. So the model must NOT receive the schema.
+        expect(seen?.responseSchema).toBeUndefined();
         expect(seen?.image).toEqual(new Uint8Array([1, 2, 3]));
     });
 
@@ -317,6 +320,26 @@ describe("applyRulesPostPass", () => {
         expect(applyRulesPostPass(rules, { amount: "42" }, undefined)).toEqual({ amount: 42 });
         expect(applyRulesPostPass(rules, { amount: 42 }, undefined)).toEqual({ amount: 42 });
         expect(applyRulesPostPass(rules, { amount: "not a number" }, undefined)).toEqual({ amount: "not a number" });
+        // A currency code the model folded into the amount is tolerated — the LEADING number is
+        // recovered so it survives the number-typed schema field instead of being dropped as a string.
+        expect(applyRulesPostPass(rules, { amount: "2000 usd" }, undefined)).toEqual({ amount: 2000 });
+        expect(applyRulesPostPass(rules, { amount: "2000usd" }, undefined)).toEqual({ amount: 2000 });
+        expect(applyRulesPostPass(rules, { amount: "2.5m dollars" }, undefined)).toEqual({ amount: 2500000 });
+    });
+    it("recovers a model-folded currency amount ('2000 usd') through normalize + schema conformance", () => {
+        // Repro of the "invalid draft / amount set to 0" report: the model emitted amount as the string
+        // "2000 usd". Without the leading-number normalize it stays a string, the number-typed schema
+        // field drops it, and the consumer (IOU) gets no amount -> "invalid draft" + amount 0. With the
+        // k_m_suffix normalize the leading number is recovered and kept.
+        const schema = {
+            type: "object",
+            properties: { amount: { type: "number" }, currency: { type: "string" } },
+        };
+        const rules: AiActionRule[] = [{ kind: "normalize", field: "amount", ops: ["k_m_suffix"] }];
+        expect(applyRulesPostPass(rules, { amount: "2000 usd", currency: "USD" }, undefined, schema)).toEqual({
+            amount: 2000,
+            currency: "USD",
+        });
     });
     it("normalize strip_symbols removes currency symbols/commas/spaces and parses numerics", () => {
         const rules: AiActionRule[] = [{ kind: "normalize", field: "amount", ops: ["strip_symbols"] }];

@@ -61,6 +61,9 @@ export interface AiActionDefinition {
     consumerPublicKey?: string;
     // Optional extraction rules (absent === []).
     rules?: AiActionRule[];
+    // True if the action can extract from an IMAGE message; drives the auto-propose image chip
+    // (only image-capable actions are offered on images). Absent === false (the mapper defaults it).
+    acceptsImage?: boolean;
 }
 
 // --- AI-app directory (Phase A) --------------------------------------------------------------------------------
@@ -212,11 +215,16 @@ export function compileRules(rules: AiActionRule[]): string[] {
     return lines;
 }
 
-// "26k" / "1.5m" (optional commas/spaces) -> number; plain numeric strings -> number; real numbers untouched.
+// "26k" / "1.5m" (optional commas/spaces) -> number; plain numeric strings -> number; real numbers
+// untouched. The number is matched at the START of the string, tolerating trailing text a model may
+// append — most importantly a currency code folded into the amount: "2000 usd" / "2000usd" -> 2000.
+// Without this, such a value stays a string and the schema-conformance pass DROPS it (a `number` field
+// can't hold a string), so the consumer receives no amount at all. Anchored at `^` so a number is never
+// plucked from the middle of a word.
 function normalizeKMSuffix(v: unknown): unknown {
     if (typeof v !== "string") return v;
     const compact = v.trim().replace(/[,\s]/g, "");
-    const m = compact.match(/^([+-]?\d+(?:\.\d+)?)([kKmM])?$/);
+    const m = compact.match(/^([+-]?\d+(?:\.\d+)?)([kKmM])?/);
     if (m === null) return v;
     const n = parseFloat(m[1]);
     if (Number.isNaN(n)) return v;
@@ -385,12 +393,18 @@ export async function runAiAction(
         prompt += `\n\nMessage:\n${input.text}`;
     }
 
+    // NB: the response schema is deliberately NOT passed to the model. Grammar/JSON-schema-CONSTRAINED
+    // decoding makes a small on-device model emit a degenerate value under the constraint — in practice a
+    // number field like `amount` collapses to 0 for some inputs (e.g. "reservation 3-8 august 7777 gbp"
+    // yielded amount 0, which the consumer then rejects as "must be positive" → an invalid draft), even
+    // though UNCONSTRAINED decoding extracts the right number. The schema is still enforced deterministically
+    // AFTER generation by `applyRulesPostPass`/`conformToSchema` below, so nothing is lost by dropping the
+    // generation-time constraint — we just let the model pick the value freely first.
     const result = await infer({
         modelId: input.modelId,
         prompt,
         image: input.image,
         text: input.text,
-        responseSchema: def.responseSchema,
     });
 
     if (result.kind === "unavailable") return { kind: "unavailable", reason: result.reason };
@@ -441,6 +455,7 @@ export interface AiActionDefinitionWire {
         rows: { field: string; label: string }[];
     };
     rules?: AiActionRuleWire[];
+    accepts_image?: boolean;
 }
 
 // A surface as serde encodes the Rust AiAppSurface: field names already match the domain shape and
@@ -583,6 +598,7 @@ export function aiActionDefinitionFromWire(d: AiActionDefinitionWire): AiActionD
             rows: d.card.rows.map((r) => ({ label: r.label, valueKey: r.field })),
         },
         rules: rulesFromWire(d.rules),
+        acceptsImage: d.accepts_image ?? false,
     };
 }
 

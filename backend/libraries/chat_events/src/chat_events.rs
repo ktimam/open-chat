@@ -713,6 +713,44 @@ impl ChatEvents {
         })
     }
 
+    // Two-phase confirm, READ side: returns the deposit instruction for confirming a card that is
+    // currently Pending, un-expired, and carries delivery routing — WITHOUT committing the confirm.
+    // The canister deposits first and only commits `Confirmed` once the deposit is stored (see the
+    // `respond_to_action_card` handlers), so a failed deposit leaves the card Pending (retryable)
+    // instead of a Confirmed-but-undelivered card. Returns None for every other case (message not
+    // found / not an action card / expired / already responded / no routing); the caller then falls
+    // back to the normal `respond_to_action_card` commit, which handles those exactly as before (a
+    // routing-less confirm commits with no deposit; an expired/non-pending card yields the usual
+    // NoChange/expiry outcome). Pure read — never mutates the event log.
+    pub fn action_card_confirm_deposit(
+        &self,
+        thread_root_message_index: Option<MessageIndex>,
+        message_id: MessageId,
+        min_visible_event_index: EventIndex,
+        user_id: UserId,
+        now: TimestampMillis,
+    ) -> Option<ActionCardDeposit> {
+        let (message, _) = self.message_internal(min_visible_event_index, thread_root_message_index, message_id.into())?;
+        let MessageContentInternal::ActionCard(card) = &message.content else {
+            return None;
+        };
+        let expired = card.expires_at.is_some_and(|e| now > e);
+        if expired || !matches!(card.state, ActionCardState::Pending) {
+            return None;
+        }
+        match (&card.recipient_public_key, &card.confirm_payload) {
+            (Some(recipient_public_key), Some(confirm_payload)) => Some(ActionCardDeposit {
+                recipient_public_key: recipient_public_key.clone(),
+                confirm_payload: confirm_payload.clone(),
+                responded_at: now,
+                message_id,
+                confirmed_by: user_id,
+                inbox_canister_id: card.inbox_canister_id.clone(),
+            }),
+            _ => None,
+        }
+    }
+
     /// Applies an action-card state change decided on ANOTHER canister. The two copies of a
     /// direct chat live on the two participants' canisters: the responder's canister runs the real
     /// transition (and emits the deposit); the other copy mirrors the outcome through this —

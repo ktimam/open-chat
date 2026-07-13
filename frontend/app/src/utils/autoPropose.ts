@@ -99,22 +99,31 @@ interface VocabularyEntry {
     keywords: string[];
 }
 
+// A chat's auto-propose vocabulary: keyword-bearing actions drive the TEXT path; `imageTitle` drives
+// the IMAGE path (see buildVocabulary).
+interface Vocabulary {
+    keywordEntries: VocabularyEntry[];
+    // The card title for the IMAGE chip: the first candidate action that declares image support
+    // (manifest `acceptsImage`). Undefined when no candidate action opts into images.
+    imageTitle?: string;
+}
+
 const VOCABULARY_TTL_MS = 60_000;
-const vocabularyCache = new Map<string, { expiresAt: number; entries: Promise<VocabularyEntry[]> }>();
+const vocabularyCache = new Map<string, { expiresAt: number; entries: Promise<Vocabulary> }>();
 
 async function buildVocabulary(
     client: OpenChat,
     chatId: ChatIdentifier,
-): Promise<VocabularyEntry[]> {
+): Promise<Vocabulary> {
     const { candidates, linkRequired } = await resolveCandidates(client, chatId);
-    // Link-required apps (per-user keys, not yet paired) MUST contribute their keywords too:
-    // tapping the chip runs the propose flow, which is exactly where the pairing consent sheet
-    // lives — excluding them would make pairing unreachable from the suggestion path.
+    // Link-required apps (per-user keys, not yet paired) MUST contribute too: tapping the chip runs
+    // the propose flow, which is exactly where the pairing consent sheet lives — excluding them would
+    // make pairing unreachable from the suggestion path.
     const actions = [
         ...candidates.map((c) => c.action),
         ...linkRequired.flatMap((app) => app.manifest.actions),
     ];
-    const entries: VocabularyEntry[] = [];
+    const keywordEntries: VocabularyEntry[] = [];
     for (const action of actions) {
         const keywords = new Set<string>();
         for (const rule of action.rules ?? []) {
@@ -126,15 +135,18 @@ async function buildVocabulary(
                 }
             }
         }
-        // No keywords -> the action never auto-proposes.
+        // No keywords -> the action never auto-proposes on TEXT (it can still be offered on an image).
         if (keywords.size > 0) {
-            entries.push({ title: action.card.title, keywords: [...keywords] });
+            keywordEntries.push({ title: action.card.title, keywords: [...keywords] });
         }
     }
-    return entries;
+    // The image chip fires only for actions that DECLARE image support (manifest `acceptsImage`), so a
+    // text-only app doesn't offer to extract from every photo. First image-capable action wins.
+    const imageAction = actions.find((a) => a.acceptsImage);
+    return { keywordEntries, imageTitle: imageAction?.card.title };
 }
 
-function vocabularyFor(client: OpenChat, chatId: ChatIdentifier): Promise<VocabularyEntry[]> {
+function vocabularyFor(client: OpenChat, chatId: ChatIdentifier): Promise<Vocabulary> {
     const chatKey = chatIdentifierToString(chatId);
     const now = Date.now();
     const cached = vocabularyCache.get(chatKey);
@@ -143,7 +155,7 @@ function vocabularyFor(client: OpenChat, chatId: ChatIdentifier): Promise<Vocabu
     }
     // A failed lookup caches as empty for the TTL so a flaky connection never turns the message
     // path into a canister-call loop.
-    const entries = buildVocabulary(client, chatId).catch(() => [] as VocabularyEntry[]);
+    const entries = buildVocabulary(client, chatId).catch(() => ({ keywordEntries: [] }) as Vocabulary);
     vocabularyCache.set(chatKey, { expiresAt: now + VOCABULARY_TTL_MS, entries });
     return entries;
 }
@@ -166,8 +178,9 @@ export function evaluateForAutoPropose(
 
     const fresh = messages.filter(
         (ev) =>
-            // Text only — action cards and every other content kind never auto-propose.
-            ev.event.content.kind === "text_content" &&
+            // Text keyword-matches; an image offers extraction directly. Every other content kind
+            // (action cards, video, files, …) never auto-proposes.
+            (ev.event.content.kind === "text_content" || ev.event.content.kind === "image_content") &&
             Number(ev.timestamp) >= sessionStart &&
             !evaluated.has(ev.event.messageId),
     );
@@ -179,17 +192,23 @@ export function evaluateForAutoPropose(
     }
 
     void vocabularyFor(client, chatId).then((vocabulary) => {
-        if (vocabulary.length === 0) return;
+        if (vocabulary.keywordEntries.length === 0 && vocabulary.imageTitle === undefined) return;
         const chatKey = chatIdentifierToString(chatId);
         const matched: [bigint, AutoProposeSuggestion][] = [];
         for (const ev of fresh) {
-            if (ev.event.content.kind !== "text_content") continue;
-            const text = ev.event.content.text.toLowerCase();
-            // First matching action wins; tapping the chip re-runs the full propose flow, which
-            // shows the chooser anyway when several actions apply.
-            const entry = vocabulary.find((v) => v.keywords.some((k) => text.includes(k)));
-            if (entry !== undefined) {
-                matched.push([ev.event.messageId, { chatKey, title: entry.title }]);
+            const content = ev.event.content;
+            if (content.kind === "text_content") {
+                // First matching action wins; tapping the chip re-runs the full propose flow, which
+                // shows the chooser anyway when several actions apply.
+                const text = content.text.toLowerCase();
+                const entry = vocabulary.keywordEntries.find((v) => v.keywords.some((k) => text.includes(k)));
+                if (entry !== undefined) {
+                    matched.push([ev.event.messageId, { chatKey, title: entry.title }]);
+                }
+            } else if (content.kind === "image_content" && vocabulary.imageTitle !== undefined) {
+                // An image carries no keywords to match — offer to extract from it whenever the chat
+                // has any candidate app, mirroring the manual "Propose action" on an image.
+                matched.push([ev.event.messageId, { chatKey, title: vocabulary.imageTitle }]);
             }
         }
         if (matched.length === 0) return;

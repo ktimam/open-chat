@@ -6071,6 +6071,7 @@ export const UserIndexAiActionsDefinition = Type.Object({
     endpoint: Type.String(),
     consumer_public_key: Type.Optional(Type.String()),
     rules: Type.Optional(Type.Array(UserIndexAiActionsRule)),
+    accepts_image: Type.Optional(Type.Boolean()),
 });
 
 export type UserIndexAiAppSurfaceDisplay = Static<typeof UserIndexAiAppSurfaceDisplay>;

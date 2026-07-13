@@ -518,15 +518,24 @@
             });
     }
 
-    function onRespondToActionCard(response: "confirm" | "cancel") {
+    function onRespondToActionCard(response: "confirm" | "cancel"): Promise<void> {
         // Capture before the async round-trip: the card content is replaced when its state
-        // refreshes to "confirmed".
+        // refreshes to "confirmed". The promise is returned so the card can show a spinner and lock
+        // its buttons until the confirm/cancel (and its downstream deposit) resolves.
         const actionId =
             msg.content.kind === "action_card_content" ? msg.content.actionId : undefined;
-        void client
+        return client
             .respondToActionCard(chatId, threadRootMessageIndex, msg.messageId, response)
             .then((success) => {
-                if (success && response === "confirm" && actionId !== undefined) {
+                if (!success) {
+                    // A failed confirm (usually a deposit error) now leaves the card Pending on the
+                    // canister rather than committing "confirmed" — surface it so the user can retry.
+                    if (response === "confirm") {
+                        toastStore.showFailureToast(i18nKey("aiActions.confirmFailed"));
+                    }
+                    return;
+                }
+                if (response === "confirm" && actionId !== undefined) {
                     void openSurfaceAfterConfirm(actionId);
                 }
             });

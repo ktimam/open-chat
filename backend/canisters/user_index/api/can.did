@@ -76,6 +76,7 @@ type AiActionDefinition = record {
     endpoint : text;
     consumer_public_key : opt text;
     rules : vec AiActionRule;
+    accepts_image : bool;
 };
 
 type AiAppSurface = record {

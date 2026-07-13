@@ -1671,14 +1671,16 @@
         "welcome": "Welcome to OpenChat"
     },
     "aiActions": {
-        "propose": "Propose action"
+        "propose": "Propose action",
+        "confirmFailed": "Couldn't deliver the confirmed action. It wasn't sent — please try again."
     },
     "aiApps": {
         "autoPropose": {
             "mute": "Mute suggestions in this chat",
             "muted": "AI action suggestions muted in this chat",
             "setting": "Suggest AI actions",
-            "suggestion": "Propose {title}?"
+            "suggestion": "Propose {title}?",
+            "working": "Working…"
         },
         "checkConnection": "Check connection",
         "chooseAction": "Choose an action",

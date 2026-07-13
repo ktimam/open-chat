@@ -123,17 +123,38 @@
         }
     }
 
-    // On-demand pairing for per-user-keys apps: "Connect" when no key is registered, "Reconnect"
-    // when one is. Reconnect matters when the APP side dropped its half of the pairing (e.g. the
-    // user disconnected inside the app): OpenChat still holds a stale key, so the propose flow never
-    // re-offers the consent sheet — this opens it explicitly, and claiming the fresh code simply
-    // upserts (replaces) the key. One-sided, no disconnect required first.
+    // `linkingApp` drives the AiAppLinkModal (a 6-digit pairing code). `pendingSetup` is the per-chat
+    // setup surface to open ONCE the pairing completes — together they implement the MERGED action:
+    // one "Connect" pairs the delivery key (if the user has none) and then hands them straight to the
+    // chat setup surface, instead of two separate "Connect" + "Open setup" steps. Reconnect (an
+    // already-linked user re-pairing after the app dropped its half) sets `linkingApp` directly with
+    // no `pendingSetup`, so it just re-pairs.
     let linkingApp = $state<AiAppRegistration | undefined>(undefined);
+    let pendingSetup = $state<SurfaceOpening | undefined>(undefined);
+
+    // Single entry point for the merged "Connect" / "Open setup" action: pair first if needed
+    // (deferring the setup surface to onLinked), otherwise open the setup surface right away.
+    function startConnect(app: AiAppRegistration) {
+        const setup = chatLinkSurfaceOpening(app, chat.id);
+        const needsPairing = app.manifest.perUserKeys && !connected.has(app.id);
+        if (needsPairing) {
+            pendingSetup = setup; // opened by onLinked() once the key is registered
+            linkingApp = app;
+        } else if (setup !== undefined) {
+            openSetup(setup);
+        }
+    }
 
     function onLinked() {
         linkingApp = undefined;
         toastStore.showSuccessToast(i18nKey("aiApps.linkComplete"));
         load(); // refresh the connected set
+        // Merge: after pairing, continue straight to the per-chat setup surface (if the app has one).
+        const setup = pendingSetup;
+        pendingSetup = undefined;
+        if (setup !== undefined) {
+            openSetup(setup);
+        }
     }
 </script>
 
@@ -145,32 +166,40 @@
         <div class="apps">
             {#each apps as app (app.id)}
                 {@const setup = chatLinkSurfaceOpening(app, chat.id)}
+                {@const needsPairing = app.manifest.perUserKeys && !connected.has(app.id)}
+                {@const showPrimary = needsPairing || setup !== undefined}
                 <div class="app">
                     <div class="app-info">
                         <div class="name">{app.manifest.name}</div>
                         {#if app.manifest.description.length > 0}
                             <div class="desc">{app.manifest.description}</div>
                         {/if}
-                        {#if setup !== undefined || connected.has(app.id) || app.manifest.perUserKeys}
+                        {#if showPrimary || connected.has(app.id)}
                             <div class="app-actions">
-                                {#if setup !== undefined}
-                                    <Button tiny hollow onClick={() => openSetup(setup)}>
-                                        <OpenInNew size="1em" color="currentColor" />
-                                        <Translatable resourceKey={i18nKey("aiApps.openSetup")} />
-                                    </Button>
-                                {/if}
-                                {#if app.manifest.perUserKeys}
-                                    <Button tiny hollow onClick={() => (linkingApp = app)}>
-                                        <LinkVariant size="1em" color="currentColor" />
+                                {#if showPrimary}
+                                    <!-- Merged Connect + Open setup: when unpaired, "Connect" pairs
+                                         the delivery key AND then opens the chat setup surface; once
+                                         paired it's just "Open setup" for the per-chat surface. -->
+                                    <Button tiny hollow onClick={() => startConnect(app)}>
+                                        {#if needsPairing}
+                                            <LinkVariant size="1em" color="currentColor" />
+                                        {:else}
+                                            <OpenInNew size="1em" color="currentColor" />
+                                        {/if}
                                         <Translatable
                                             resourceKey={i18nKey(
-                                                connected.has(app.id)
-                                                    ? "aiApps.reconnect"
-                                                    : "aiApps.connect",
+                                                needsPairing ? "aiApps.connect" : "aiApps.openSetup",
                                             )} />
                                     </Button>
                                 {/if}
                                 {#if connected.has(app.id)}
+                                    {#if app.manifest.perUserKeys}
+                                        <Button tiny hollow onClick={() => (linkingApp = app)}>
+                                            <LinkVariant size="1em" color="currentColor" />
+                                            <Translatable
+                                                resourceKey={i18nKey("aiApps.reconnect")} />
+                                        </Button>
+                                    {/if}
                                     <Button
                                         tiny
                                         hollow
@@ -205,7 +234,13 @@
 {/if}
 
 {#if linkingApp !== undefined}
-    <AiAppLinkModal app={linkingApp} onDismiss={() => (linkingApp = undefined)} {onLinked} />
+    <AiAppLinkModal
+        app={linkingApp}
+        onDismiss={() => {
+            linkingApp = undefined;
+            pendingSetup = undefined;
+        }}
+        {onLinked} />
 {/if}
 
 <style lang="scss">

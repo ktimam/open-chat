@@ -1,7 +1,7 @@
 <script lang="ts">
     import { selectedModelId } from "@src/stores/onDeviceModels";
     import { defaultModelCatalog } from "@utils/modelCatalog";
-    import { isNativeClient } from "@utils/onDeviceInference";
+    import { isNativeClient, prewarmSelectedModel } from "@utils/onDeviceInference";
     import type { ModelCatalogEntry } from "openchat-shared";
     import { onDestroy, onMount } from "svelte";
     import { get } from "svelte/store";
@@ -67,6 +67,8 @@
     function select(id: string) {
         selectedModelId.set(id);
         selected = id;
+        // Warm the model into the native cache now, so the first inference isn't a multi-GB cold load.
+        prewarmSelectedModel(id);
     }
 
     async function remove(id: string) {

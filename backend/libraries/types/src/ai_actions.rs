@@ -133,6 +133,10 @@ pub struct AiActionDefinition {
     /// output on the client. Absent means no rules.
     #[serde(default)]
     pub rules: Vec<AiActionRule>,
+    /// When true, this action can extract from an IMAGE message, so OpenChat's auto-propose chip
+    /// offers it on images. Absent (manifests predating the flag) === false — an app opts in.
+    #[serde(default)]
+    pub accepts_image: bool,
 }
 
 /// A single, generic extraction rule. Rules are declared by whoever registers the action and are

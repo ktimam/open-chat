@@ -1,15 +1,32 @@
 <script lang="ts">
     import type { ActionCardContent } from "openchat-client";
+    import Spinner from "../icons/Spinner.svelte";
 
     // Generic interactive confirm card. The `rows` shown here ARE the exact values that will be
     // forwarded to the registered app on confirm — what the human sees is what gets sent.
     interface Props {
         content: ActionCardContent;
         readonly: boolean;
-        onRespond?: (response: "confirm" | "cancel") => void;
+        onRespond?: (response: "confirm" | "cancel") => void | Promise<unknown>;
     }
 
     let { content, readonly, onRespond }: Props = $props();
+
+    // While a confirm/cancel round-trips to the canister (and, on confirm, encrypts + deposits the
+    // action), show a spinner and lock both buttons so the press is acknowledged and can't be
+    // double-fired. Resets on completion whether the call succeeds OR fails — a failed deposit now
+    // surfaces as an error, and the card must become actionable again rather than spin forever.
+    let busy = $state(false);
+    async function respond(response: "confirm" | "cancel", e: Event) {
+        e.stopPropagation();
+        if (busy) return;
+        busy = true;
+        try {
+            await onRespond?.(response);
+        } finally {
+            busy = false;
+        }
+    }
 
     // A card past its expiry is treated as no longer actionable, matching the canister (which rejects
     // a confirm/cancel on an expired card). Guards against showing live buttons on a stale card.
@@ -88,21 +105,19 @@
             <div class="actions">
                 <button
                     class="cancel"
-                    disabled={readonly}
-                    onclick={(e) => {
-                        e.stopPropagation();
-                        onRespond?.("cancel");
-                    }}>
+                    disabled={readonly || busy}
+                    onclick={(e) => respond("cancel", e)}>
                     {content.cancelLabel}
                 </button>
                 <button
                     class="confirm"
-                    disabled={!canConfirm}
-                    onclick={(e) => {
-                        e.stopPropagation();
-                        onRespond?.("confirm");
-                    }}>
-                    {content.confirmLabel}
+                    disabled={!canConfirm || busy}
+                    onclick={(e) => respond("confirm", e)}>
+                    {#if busy}
+                        <Spinner size="1.1em" foregroundColour="transparent" />
+                    {:else}
+                        {content.confirmLabel}
+                    {/if}
                 </button>
             </div>
         {/if}
@@ -197,6 +212,9 @@
             padding: $sp2 $sp4;
             border-radius: var(--rd);
             cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
 
             &:disabled {
                 opacity: 0.5;
@@ -207,6 +225,8 @@
                 background-color: var(--button-bg);
                 color: var(--button-txt);
                 border: none;
+                // Hold width when the label swaps to the spinner so the button doesn't collapse.
+                min-width: 6rem;
             }
 
             &.cancel {

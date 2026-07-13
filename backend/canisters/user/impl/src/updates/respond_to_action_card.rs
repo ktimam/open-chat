@@ -6,43 +6,55 @@ use chat_events::RespondToActionCardArgs;
 use local_user_index_canister::c2c_deposit_action_confirmed::ActionDepositContext;
 use oc_error_codes::OCErrorCode;
 use serde_bytes::ByteBuf;
-use types::{ActionCardState, CanisterId, Chat, EventIndex, OCResult, TimestampMillis, UserId};
+use types::{ActionCardResponse, ActionCardState, CanisterId, Chat, EventIndex, OCResult, TimestampMillis, UserId};
 use user_canister::respond_to_action_card::{Response::*, *};
 use user_canister::{ActionCardStatusChange, UserCanisterEvent};
 
-// The direct-chat confirm path. The responder's OWN canister runs the state transition and emits
-// the deposit (mirroring the group/community canisters), then syncs the outcome onto the other
-// participant's copy via ActionCardStatusChange (apply-only there — one deposit per response).
+// The direct-chat confirm path. Two-phase like the group/community canisters: a confirm that carries
+// delivery routing DEPOSITS FIRST and only commits `Confirmed` (and mirrors that onto the other
+// participant's copy) once the deposit is stored — so a FAILED deposit leaves the card Pending
+// (retryable) and never mirrors a Confirmed-but-undelivered state to the peer. Cancels and
+// routing-less confirms commit in a single synchronous pass.
 #[update(guard = "caller_is_owner", msgpack = true)]
 #[trace]
 async fn respond_to_action_card(args: Args) -> Response {
-    let result = match execute_update(|state| respond_to_action_card_impl(args, state)) {
-        Ok(result) => result,
+    let deposit = match execute_update(|state| prepare(&args, state)) {
+        Ok(Prepared::Committed(state)) => return Success(state),
+        Ok(Prepared::NeedsDeposit(deposit)) => deposit,
         Err(error) => return Error(error.into()),
     };
 
-    if let Some(deposit) = result.deposit {
-        // Forward the confirmed action to local_user_index (wraps, encrypts, signs, deposits).
-        // The card state is already committed; this is a downstream effect.
-        let _ = local_user_index_canister_c2c_client::c2c_deposit_action_confirmed(
-            deposit.local_user_index_canister_id,
-            &local_user_index_canister::c2c_deposit_action_confirmed::Args {
-                consumer_public_key_pem: deposit.recipient_public_key,
-                plaintext: deposit.confirm_payload,
-                created_at: deposit.created_at,
-                inbox_canister_id: deposit.inbox_canister_id,
-                context: deposit.context,
-            },
-        )
-        .await;
+    match local_user_index_canister_c2c_client::c2c_deposit_action_confirmed(
+        deposit.local_user_index_canister_id,
+        &local_user_index_canister::c2c_deposit_action_confirmed::Args {
+            consumer_public_key_pem: deposit.recipient_public_key,
+            plaintext: deposit.confirm_payload,
+            created_at: deposit.created_at,
+            inbox_canister_id: deposit.inbox_canister_id,
+            context: deposit.context,
+        },
+    )
+    .await
+    {
+        Ok(local_user_index_canister::c2c_deposit_action_confirmed::Response::Success) => {}
+        Ok(response) => {
+            return Error(OCErrorCode::C2CError.with_message(format!("action deposit was not stored: {response:?}")));
+        }
+        Err(error) => {
+            return Error(OCErrorCode::C2CError.with_message(format!("action deposit call failed: {error:?}")));
+        }
     }
 
-    Success(result.state)
+    // Deposit stored — commit the confirm (and mirror it to the peer) now.
+    match execute_update(|state| commit_response(&args, state)) {
+        Ok(state) => Success(state),
+        Err(error) => Error(error.into()),
+    }
 }
 
-struct RespondResult {
-    state: ActionCardState,
-    deposit: Option<DepositInstruction>,
+enum Prepared {
+    Committed(ActionCardState),
+    NeedsDeposit(DepositInstruction),
 }
 
 struct DepositInstruction {
@@ -54,7 +66,50 @@ struct DepositInstruction {
     context: ActionDepositContext,
 }
 
-fn respond_to_action_card_impl(args: Args, state: &mut RuntimeState) -> OCResult<RespondResult> {
+fn prepare(args: &Args, state: &mut RuntimeState) -> OCResult<Prepared> {
+    state.data.verify_not_suspended()?;
+
+    let my_user_id: UserId = state.env.canister_id().into();
+    let now = state.env.now();
+
+    // Confirm of a Pending, routing-bearing card: peek the deposit (no state change, no mirror) and
+    // defer the commit until the deposit lands.
+    if matches!(args.response, ActionCardResponse::Confirm) {
+        let Some(chat) = state.data.direct_chats.get_mut(&args.user_id.into()) else {
+            return Err(OCErrorCode::ChatNotFound.into());
+        };
+        let peeked = chat.events.action_card_confirm_deposit(
+            args.thread_root_message_index,
+            args.message_id,
+            EventIndex::default(),
+            my_user_id,
+            now,
+        );
+        // `chat`'s borrow of `state.data.direct_chats` ends here — `peeked` is owned.
+        if let Some(deposit) = peeked {
+            // The canonical direct-chat key is rendered per participant: each side identifies the chat
+            // by the OTHER participant ("direct:<them>"), which is what the responder's deposit carries.
+            let chat_identity = Chat::Direct(args.user_id.into());
+            return Ok(Prepared::NeedsDeposit(DepositInstruction {
+                local_user_index_canister_id: state.data.local_user_index_canister_id,
+                recipient_public_key: deposit.recipient_public_key,
+                confirm_payload: deposit.confirm_payload,
+                created_at: deposit.responded_at,
+                inbox_canister_id: deposit.inbox_canister_id,
+                context: ActionDepositContext {
+                    chat: chat_identity,
+                    message_id: deposit.message_id,
+                    confirmed_by: deposit.confirmed_by,
+                },
+            }));
+        }
+    }
+
+    // Cancel, or a confirm with nothing to deposit — commit synchronously.
+    commit_response(args, state).map(Prepared::Committed)
+}
+
+fn commit_response(args: &Args, state: &mut RuntimeState) -> OCResult<ActionCardState> {
     state.data.verify_not_suspended()?;
 
     let my_user_id: UserId = state.env.canister_id().into();
@@ -75,7 +130,8 @@ fn respond_to_action_card_impl(args: Args, state: &mut RuntimeState) -> OCResult
 
     let thread_root_message_id = args.thread_root_message_index.map(|i| chat.main_message_index_to_id(i));
 
-    // Mirror the outcome onto the other participant's copy (apply-only there).
+    // Mirror the committed outcome onto the other participant's copy (apply-only there). Deferred to
+    // the commit, so a confirm whose deposit FAILED never mirrors a Confirmed state to the peer.
     state.push_user_canister_event(
         args.user_id.into(),
         UserCanisterEvent::ActionCardStatusChange(Box::new(ActionCardStatusChange {
@@ -87,25 +143,5 @@ fn respond_to_action_card_impl(args: Args, state: &mut RuntimeState) -> OCResult
         })),
     );
 
-    let local_user_index_canister_id = state.data.local_user_index_canister_id;
-    // The canonical direct-chat key is rendered per participant: each side identifies the chat by
-    // the OTHER participant ("direct:<them>"), which is what the responder's deposit carries.
-    let chat_identity = Chat::Direct(args.user_id.into());
-    let deposit = result.value.deposit.map(|d| DepositInstruction {
-        local_user_index_canister_id,
-        recipient_public_key: d.recipient_public_key,
-        confirm_payload: d.confirm_payload,
-        created_at: d.responded_at,
-        inbox_canister_id: d.inbox_canister_id,
-        context: ActionDepositContext {
-            chat: chat_identity,
-            message_id: d.message_id,
-            confirmed_by: d.confirmed_by,
-        },
-    });
-
-    Ok(RespondResult {
-        state: result.value.state,
-        deposit,
-    })
+    Ok(result.value.state)
 }

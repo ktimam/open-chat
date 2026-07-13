@@ -7,18 +7,22 @@
     import { _ } from "svelte-i18n";
     import Close from "svelte-material-icons/Close.svelte";
     import Robot from "svelte-material-icons/RobotOutline.svelte";
+    import Spinner from "../icons/Spinner.svelte";
     import Translatable from "../Translatable.svelte";
 
     interface Props {
         me: boolean;
         // The matched action's card title.
         title: string;
+        // The propose flow is running (the on-device model is loading/inferring) — show a spinner and
+        // swallow taps so the chip reads as "working" instead of silently doing nothing.
+        busy?: boolean;
         onPropose: () => void;
         onDismiss: () => void;
         onMute: () => void;
     }
 
-    let { me, title, onPropose, onDismiss, onMute }: Props = $props();
+    let { me, title, busy = false, onPropose, onDismiss, onMute }: Props = $props();
 
     const LONG_PRESS_MS = 600;
     let pressTimer: number | undefined = undefined;
@@ -52,10 +56,18 @@
 <div class="auto-propose" class:me>
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="chip" onclick={onPropose}>
-        <Robot size={"1rem"} color={"var(--primary)"} />
+    <div class="chip" class:busy onclick={() => !busy && onPropose()}>
+        {#if busy}
+            <Spinner size={"1rem"} foregroundColour={"var(--primary)"} />
+        {:else}
+            <Robot size={"1rem"} color={"var(--primary)"} />
+        {/if}
         <span class="label">
-            <Translatable resourceKey={i18nKey("aiApps.autoPropose.suggestion", { title })} />
+            {#if busy}
+                <Translatable resourceKey={i18nKey("aiApps.autoPropose.working")} />
+            {:else}
+                <Translatable resourceKey={i18nKey("aiApps.autoPropose.suggestion", { title })} />
+            {/if}
         </span>
         <button
             type="button"
@@ -95,6 +107,10 @@
 
         &:hover {
             background-color: var(--chatSummary-hv, var(--input-bg));
+        }
+
+        &.busy {
+            cursor: default;
         }
     }
 

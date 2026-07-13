@@ -1,5 +1,5 @@
 use chat_events::{
-    AddRemoveReactionArgs, ChatEventInternal, ChatEvents, ChatEventsListReader, DeleteMessageSuccess,
+    ActionCardDeposit, AddRemoveReactionArgs, ChatEventInternal, ChatEvents, ChatEventsListReader, DeleteMessageSuccess,
     DeleteUndeleteMessagesArgs, EditMessageArgs, EventPusher, ExpiredThread, GroupGateUpdatedInternal, MessageContentInternal,
     MessageInternal, NullEventPusher, PushEventResultInternal, PushMessageArgs, Reader, RegisterPollVoteArgs,
     RegisterPollVoteSuccess, RemoveEventsResult, ReservePrizeSuccess, RespondToActionCardArgs, RespondToActionCardResult,
@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use std::cmp::{Reverse, max, min};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use types::{
-    AccessGateConfig, AccessGateConfigInternal, ActionCardResponse, ActionCardState, AvatarChanged, BotMessageContext,
+    AccessGateConfig, AccessGateConfigInternal, ActionCardResponse, AvatarChanged, BotMessageContext,
     BotNotification, Caller, Chat,
     CustomPermission, DiamondMembershipStatus, Document, EventIndex, EventOrExpiredRange, EventWrapper, EventsCaller,
     EventsResponse, ExternalUrlUpdated, GroupDescriptionChanged, GroupMember, GroupNameChanged, GroupPermissions,
@@ -1782,6 +1782,23 @@ impl GroupChatCore {
             response,
             now,
         })
+    }
+
+    // Two-phase confirm, READ side (mirrors `respond_to_action_card`'s member/visibility resolution):
+    // the deposit instruction for confirming a Pending, un-expired, routing-bearing card, WITHOUT
+    // committing. None => there is nothing to deposit up-front (unverified member, or the card is not
+    // a confirmable routing-bearing card); the caller then commits via `respond_to_action_card`.
+    pub fn action_card_confirm_deposit(
+        &self,
+        user_id: UserId,
+        thread_root_message_index: Option<MessageIndex>,
+        message_id: MessageId,
+        now: TimestampMillis,
+    ) -> Option<ActionCardDeposit> {
+        let member = self.members.get_verified_member(user_id).ok()?;
+        let min_visible_event_index = member.min_visible_event_index();
+        self.events
+            .action_card_confirm_deposit(thread_root_message_index, message_id, min_visible_event_index, user_id, now)
     }
 
     pub fn reserve_prize(

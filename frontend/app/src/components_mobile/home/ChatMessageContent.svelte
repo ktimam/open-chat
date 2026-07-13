@@ -51,7 +51,7 @@
         onExpandMessage?: (() => void) | undefined;
         onRemovePreview?: (url: string) => void;
         onRegisterVote?: (vote: { type: "delete" | "register"; answerIndex: number }) => void;
-        onRespondToActionCard?: (response: "confirm" | "cancel") => void;
+        onRespondToActionCard?: (response: "confirm" | "cancel") => void | Promise<unknown>;
         ogPreviews?: OgPreview[];
         messagePreviews?: RehydratedMessagePreview[];
     }
