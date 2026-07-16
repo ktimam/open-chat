@@ -5957,6 +5957,7 @@ dependencies = [
  "oc_error_codes",
  "online_users_canister",
  "openchat_installer_canister",
+ "p256",
  "p256_key_pair",
  "pocket-ic",
  "proposals_bot_canister",
