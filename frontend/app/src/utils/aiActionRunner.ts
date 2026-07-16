@@ -136,13 +136,21 @@ async function contentToInput(
     if (content.kind === "text_content") {
         return { text: content.text };
     }
-    if (content.kind === "image_content" && content.blobUrl !== undefined) {
-        try {
-            const resp = await fetch(content.blobUrl);
-            if (!resp.ok) return undefined;
-            return { image: new Uint8Array(await resp.arrayBuffer()) };
-        } catch {
-            return undefined;
+    if (content.kind === "image_content") {
+        // Prefer the raw bytes when present: a just-sent image carries `blobData` but often has no
+        // `blobUrl` yet (that object URL is populated lazily when the blob is loaded for display).
+        // Reading ONLY blobUrl made propose fail with "unsupported_content" on freshly-sent images
+        // even though their bytes were already in hand. Fall back to fetching the display URL.
+        if (content.blobData !== undefined && content.blobData.length > 0) {
+            return { image: content.blobData };
+        }
+        if (content.blobUrl !== undefined) {
+            try {
+                const resp = await fetch(content.blobUrl);
+                if (resp.ok) return { image: new Uint8Array(await resp.arrayBuffer()) };
+            } catch {
+                /* fall through — nothing usable */
+            }
         }
     }
     return undefined;
