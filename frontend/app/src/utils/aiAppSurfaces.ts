@@ -39,9 +39,11 @@ function substitutePlaceholders(template: string, chatKey: string, appId: number
         .replaceAll("{appId}", encodeURIComponent(appId.toString()));
 }
 
-// The app's "chat_link" surface resolved against a chat, or undefined when the app declares none
-// or the chat has no canonical key (direct chats — no confirm path exists for them). NOT gated by
-// the shown-marker: this is what the ungated "Open setup" affordance uses.
+// The app's "chat_link" surface resolved against a chat, or undefined when the app declares none.
+// chatKeyFor returns a canonical key for EVERY chat kind — group, channel AND direct (a direct chat
+// keys by the other participant) — so this resolves for direct chats too. NOT gated by the
+// shown-marker: this is what the ungated "Open setup" affordance uses (groupdetails/AiAppsSummary
+// for group chats, groupdetails/AiAppsDirectSummary for direct chats).
 export function chatLinkSurfaceOpening(
     app: AiAppRegistration,
     chatId: ChatIdentifier,
