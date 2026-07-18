@@ -167,6 +167,7 @@ import {
     type AiAppLinkCode,
     type ExploreAiAppsResponse,
     type AiAppRegistration,
+    type AiAppMemberKey,
     type AiAppUserKey,
     type DiamondMembershipStatus,
     type DiamondRoute,
@@ -7085,6 +7086,18 @@ export class OpenChat {
         return this.#worker
             .send({
                 kind: "myAiAppKeys",
+            })
+            .catch(() => []);
+    }
+
+    // Fan-out lookup: the registered delivery keys of the given users for one app (public keys
+    // only; users with no key are absent). Rejection -> [] (fan-out then degrades to self-only).
+    aiAppUserKeys(appId: number, userIds: string[]): Promise<AiAppMemberKey[]> {
+        return this.#worker
+            .send({
+                kind: "aiAppUserKeys",
+                appId,
+                userIds,
             })
             .catch(() => []);
     }

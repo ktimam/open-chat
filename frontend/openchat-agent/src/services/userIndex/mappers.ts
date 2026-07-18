@@ -39,6 +39,7 @@ import type {
     AiAppManifest,
     AiAppManifestWire,
     AiAppRegistration,
+    AiAppMemberKey,
     AiAppUserKey,
 } from "openchat-shared";
 import { aiAppFromRegistration, CommonResponses, UnsupportedValueError } from "openchat-shared";
@@ -88,6 +89,7 @@ import type {
     UserIndexAiAppManifest,
     UserIndexAiAppsResponse,
     UserIndexRegisterAiAppResponse,
+    UserIndexAiAppUserKeysResponse,
     UserIndexMyAiAppKeysResponse,
     UserIndexCreateAiAppLinkCodeResponse,
     UserIndexExploreAiAppsResponse,
@@ -724,6 +726,16 @@ export function myAiAppKeysResponse(value: UserIndexMyAiAppKeysResponse): AiAppU
         }));
     }
     throw new UnsupportedValueError("Unexpected MyAiAppKeysResponse type received", value);
+}
+
+export function aiAppUserKeysResponse(value: UserIndexAiAppUserKeysResponse): AiAppMemberKey[] {
+    if ("Success" in value) {
+        return value.Success.keys.map((k) => ({
+            userId: principalBytesToString(k.user_id),
+            publicKey: k.public_key,
+        }));
+    }
+    throw new UnsupportedValueError("Unexpected AiAppUserKeysResponse type received", value);
 }
 
 // AppNotFound / Error both resolve to undefined — the caller has no code to display either way.

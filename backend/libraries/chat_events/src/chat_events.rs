@@ -690,14 +690,15 @@ impl ChatEvents {
         }
 
         // On the confirm transition (returned exactly once), emit a deposit instruction if the card carries
-        // delivery routing. The payload stays opaque — chat_events never inspects it.
+        // delivery routing. The payload stays opaque — chat_events never inspects it. Fan-out: one
+        // instruction carrying ALL recipient keys (legacy single + per-member list, deduped).
+        let recipient_keys = card.all_recipient_keys();
         let deposit = match (
-            matches!(args.response, ActionCardResponse::Confirm),
-            &card.recipient_public_key,
+            matches!(args.response, ActionCardResponse::Confirm) && !recipient_keys.is_empty(),
             &card.confirm_payload,
         ) {
-            (true, Some(recipient_public_key), Some(confirm_payload)) => Some(ActionCardDeposit {
-                recipient_public_key: recipient_public_key.clone(),
+            (true, Some(confirm_payload)) => Some(ActionCardDeposit {
+                recipient_public_keys: recipient_keys,
                 confirm_payload: confirm_payload.clone(),
                 responded_at: args.now,
                 message_id: args.message_id,
@@ -738,9 +739,10 @@ impl ChatEvents {
         if expired || !matches!(card.state, ActionCardState::Pending) {
             return None;
         }
-        match (&card.recipient_public_key, &card.confirm_payload) {
-            (Some(recipient_public_key), Some(confirm_payload)) => Some(ActionCardDeposit {
-                recipient_public_key: recipient_public_key.clone(),
+        let recipient_keys = card.all_recipient_keys();
+        match (!recipient_keys.is_empty(), &card.confirm_payload) {
+            (true, Some(confirm_payload)) => Some(ActionCardDeposit {
+                recipient_public_keys: recipient_keys,
                 confirm_payload: confirm_payload.clone(),
                 responded_at: now,
                 message_id,
@@ -2727,11 +2729,13 @@ pub struct RespondToActionCardResult {
     pub deposit: Option<ActionCardDeposit>,
 }
 
-// An opaque confirmed-action payload to be encrypted to `recipient_public_key` and deposited to action_inbox.
-// `message_id`/`confirmed_by` identify WHERE/BY WHOM the confirm happened; the chat identity itself is added
-// at the canister layer (each canister knows itself) so the consumer receives full provenance context.
+// An opaque confirmed-action payload to be encrypted to EACH of `recipient_public_keys` (fan-out: the
+// proposer's key plus every chat member with a registered app key, resolved at propose time; deduped,
+// never empty) and deposited to action_inbox. `message_id`/`confirmed_by` identify WHERE/BY WHOM the
+// confirm happened; the chat identity itself is added at the canister layer (each canister knows
+// itself) so the consumer receives full provenance context.
 pub struct ActionCardDeposit {
-    pub recipient_public_key: String,
+    pub recipient_public_keys: Vec<String>,
     pub confirm_payload: ByteBuf,
     pub responded_at: TimestampMillis,
     pub message_id: MessageId,

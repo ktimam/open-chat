@@ -20,6 +20,12 @@ SCRIPT=$(readlink -f "$0")
 SCRIPT_DIR=$(dirname "$SCRIPT")
 cd $SCRIPT_DIR/..
 
+# The prebuilt canister_installer / canister_upgrader binaries read $CARGO_MANIFEST_DIR at RUNTIME
+# (canister_agent_utils::get_canister_wasm -> $CARGO_MANIFEST_DIR/wasms). When run as prebuilt
+# binaries (not `cargo run`) it is unset -> panic "Failed to read CARGO_MANIFEST_DIR". The repo root
+# holds ./wasms, so point it there.
+export CARGO_MANIFEST_DIR="$(pwd)"
+
 if [ $WASM_SRC = "build" ]
 then
     ./scripts/generate-all-canister-wasms.sh
@@ -59,12 +65,12 @@ SIGN_IN_WITH_SOLANA_CANISTER_ID=$(dfx canister --network $NETWORK id sign_in_wit
 WEBSITE_CANISTER_ID=$(dfx canister --network $NETWORK id website)
 
 echo "Building canister_installer"
-cargo build --package canister_installer
+true # prebuilt binary
 echo "Building complete"
 
 echo "Running canister_installer"
-cargo run \
-  --package canister_installer -- \
+./target/debug/canister_installer \
+  \
   --url $IC_URL \
   --test-mode $TEST_MODE \
   --controller $IDENTITY \

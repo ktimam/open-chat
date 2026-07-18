@@ -73,6 +73,20 @@ describe("buildActionCardContent", () => {
         const withoutInbox = buildActionCardContent(DEF, { amount: 1, currency: "USD" }, RECIPIENT);
         expect(withoutInbox.inboxCanisterId).toBeUndefined();
     });
+    it("fan-out: carries additional recipient keys, dropping empties and the primary key", () => {
+        const card = buildActionCardContent(DEF, { amount: 1, currency: "USD" }, RECIPIENT, undefined, [
+            "OTHER_KEY_PEM",
+            "", // empty entries are dropped
+            RECIPIENT, // the primary key never repeats in the fan-out list
+            "SECOND_OTHER_KEY_PEM",
+        ]);
+        expect(card.recipientPublicKey).toBe(RECIPIENT);
+        expect(card.recipientPublicKeys).toEqual(["OTHER_KEY_PEM", "SECOND_OTHER_KEY_PEM"]);
+    });
+    it("fan-out: recipientPublicKeys is undefined when no additional keys are supplied", () => {
+        const card = buildActionCardContent(DEF, { amount: 1, currency: "USD" }, RECIPIENT);
+        expect(card.recipientPublicKeys).toBeUndefined();
+    });
 });
 
 describe("runAiAction", () => {

@@ -389,6 +389,7 @@ impl From<MessageContent> for MessageContentInitial {
                 expires_at: c.expires_at,
                 // Server-only routing fields are not present on the hydrated content.
                 recipient_public_key: None,
+                recipient_public_keys: Vec::new(),
                 confirm_payload: None,
                 inbox_canister_id: None,
             }),
@@ -793,6 +794,13 @@ pub struct ActionCardContentInitial {
     // OpenChat) encrypted to `recipient_public_key` (a P-256 SPKI PEM) into the action_inbox canister.
     #[serde(default)]
     pub recipient_public_key: Option<String>,
+    // Fan-out delivery (per-user-keys apps): ADDITIONAL recipient public keys — one per chat member
+    // with a registered delivery key for the app, resolved at propose time. On confirm the deposit
+    // is encrypted separately to `recipient_public_key` AND each key here (deduped), so EVERY listed
+    // member's app inbox receives the confirmed action — not just the proposer's. Empty for legacy
+    // cards and non-per-user-keys apps.
+    #[serde(default)]
+    pub recipient_public_keys: Vec<String>,
     #[serde(default)]
     #[ts(as = "Option::<ts_export::TSBytes>")]
     pub confirm_payload: Option<ByteBuf>,

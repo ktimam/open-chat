@@ -2061,6 +2061,9 @@ pub struct ActionCardContentInternal {
     // Opaque delivery routing (see ActionCardContentInitial). Server-only: not hydrated to clients.
     #[serde(rename = "rpk", default, skip_serializing_if = "Option::is_none")]
     pub recipient_public_key: Option<String>,
+    // Fan-out delivery: ADDITIONAL recipient keys (one per chat member with a registered app key).
+    #[serde(rename = "rpks", default, skip_serializing_if = "Vec::is_empty")]
+    pub recipient_public_keys: Vec<String>,
     #[serde(rename = "cp", default, skip_serializing_if = "Option::is_none")]
     pub confirm_payload: Option<ByteBuf>,
     // Per-app inbox override (app-declared): deposit here instead of the global action_inbox.
@@ -2101,6 +2104,18 @@ impl ActionCardContentInternal {
     fn is_expired(&self, now: TimestampMillis) -> bool {
         self.expires_at.is_some_and(|e| now > e)
     }
+
+    /// All delivery recipients for this card: the legacy single key plus the fan-out list,
+    /// deduped preserving order (legacy first). Empty when the card carries no routing.
+    pub fn all_recipient_keys(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for k in self.recipient_public_key.iter().chain(self.recipient_public_keys.iter()) {
+            if !k.is_empty() && !out.contains(k) {
+                out.push(k.clone());
+            }
+        }
+        out
+    }
 }
 
 impl From<ActionCardContentInitial> for ActionCardContentInternal {
@@ -2117,6 +2132,7 @@ impl From<ActionCardContentInitial> for ActionCardContentInternal {
             responded_by: None,
             responded_at: None,
             recipient_public_key: value.recipient_public_key,
+            recipient_public_keys: value.recipient_public_keys,
             confirm_payload: value.confirm_payload,
             inbox_canister_id: value.inbox_canister_id,
         }

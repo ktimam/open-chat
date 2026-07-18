@@ -147,6 +147,14 @@ export interface AiAppUserKey {
     publicKey: string;
 }
 
+// One row of the user_index `ai_app_user_keys` fan-out lookup: a chat MEMBER's registered delivery
+// key for one app (public key material only). Used at propose time to address the eventual confirm
+// to every chat member with a key, not just the proposer.
+export interface AiAppMemberKey {
+    userId: string;
+    publicKey: string;
+}
+
 // A one-time pairing code (user_index `create_ai_app_link_code`): the user enters it in the app,
 // which then pushes their public key to OpenChat via `claim_ai_app_link_code`. Single-use, expires
 // at `expiresAt` (epoch millis).
@@ -348,6 +356,9 @@ export function buildActionCardContent(
     extracted: Record<string, unknown>,
     recipientPublicKeyPem: string,
     inboxCanisterId?: string,
+    // Fan-out: additional recipient keys (other chat members' registered app keys). Confirm
+    // encrypts the deposit separately to the primary key AND each of these (deduped server-side).
+    additionalRecipientKeys?: string[],
 ): ActionCardContent {
     const rows: ActionCardRow[] = def.card.rows
         .map((r) => ({ label: r.label, value: formatValue(extracted[r.valueKey]) }))
@@ -363,6 +374,7 @@ export function buildActionCardContent(
         disclosure: def.card.disclosure,
         state: "pending",
         recipientPublicKey: recipientPublicKeyPem,
+        recipientPublicKeys: additionalRecipientKeys?.filter((k) => k.length > 0 && k !== recipientPublicKeyPem),
         confirmPayload: new TextEncoder().encode(JSON.stringify(extracted)),
         inboxCanisterId,
     };
@@ -376,6 +388,7 @@ export async function runAiAction(
     recipientPublicKeyPem: string,
     infer: (req: InferenceRequest) => Promise<InferenceResult>,
     inboxCanisterId?: string,
+    additionalRecipientKeys?: string[],
 ): Promise<RunAiActionResult> {
     // The native runtime reads only `prompt` (its separate `text` field is not consumed), so the
     // message MUST be interpolated into the prompt for the model to see it. A dateline anchors
@@ -419,7 +432,7 @@ export async function runAiAction(
 
     return {
         kind: "ready",
-        card: buildActionCardContent(def, finalExtraction, recipientPublicKeyPem, inboxCanisterId),
+        card: buildActionCardContent(def, finalExtraction, recipientPublicKeyPem, inboxCanisterId, additionalRecipientKeys),
         extracted: finalExtraction,
     };
 }

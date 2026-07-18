@@ -41,6 +41,7 @@ mod message_activity_tests;
 mod notification_tests;
 mod online_users_tests;
 mod p2p_swap_tests;
+mod fan_out_delivery_tests;
 mod per_user_key_isolation_tests;
 mod pin_number_tests;
 mod poll_tests;

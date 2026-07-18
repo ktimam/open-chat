@@ -134,6 +134,7 @@ fn post_and_confirm_card(
         disclosure: None,
         expires_at: None,
         recipient_public_key: Some(recipient_pem),
+        recipient_public_keys: vec![],
         confirm_payload: Some(ByteBuf::from(b"opaque".to_vec())),
         inbox_canister_id: inbox_override,
     });

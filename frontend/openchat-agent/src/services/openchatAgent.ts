@@ -64,6 +64,7 @@ import type {
     ExploreAiAppsResponse,
     AiAppManifest,
     AiAppRegistration,
+    AiAppMemberKey,
     AiAppUserKey,
     DirectChatIdentifier,
     DirectChatSummary,
@@ -3704,6 +3705,10 @@ export class OpenChatAgent extends EventTarget {
 
     myAiAppKeys(): Promise<AiAppUserKey[]> {
         return this._userIndexClient.myAiAppKeys();
+    }
+
+    aiAppUserKeys(appId: number, userIds: string[]): Promise<AiAppMemberKey[]> {
+        return this._userIndexClient.aiAppUserKeys(appId, userIds);
     }
 
     createAiAppLinkCode(appId: number): Promise<AiAppLinkCode | undefined> {

@@ -10,6 +10,7 @@ pub mod explore_ai_apps;
 pub mod explore_bots;
 pub mod external_achievements;
 pub mod http_request;
+pub mod ai_app_user_keys;
 pub mod my_ai_app_keys;
 pub mod platform_moderators;
 pub mod platform_moderators_group;

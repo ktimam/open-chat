@@ -176,6 +176,7 @@ fn post_and_confirm(env: &mut PocketIc, user: &User, group_id: ChatId, recipient
         disclosure: None,
         expires_at: None,
         recipient_public_key: Some(recipient_pem),
+        recipient_public_keys: vec![],
         // Valid JSON so it embeds as a JSON value in the deposit envelope's `payload`.
         confirm_payload: Some(ByteBuf::from(br#"{"amount":"$20"}"#.to_vec())),
         inbox_canister_id: Some(inbox),

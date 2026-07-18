@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use types::{AiAppId, AiAppUserKey, UserId};
+use types::{AiAppId, AiAppMemberKey, AiAppUserKey, UserId};
 
 /// Per-(user, app) delivery keys: when an app's manifest sets `per_user_keys`, each user's confirmed
 /// actions are encrypted to that user's own key registered here rather than the app-level key.
@@ -31,6 +31,21 @@ impl AiAppUserKeys {
         let before = self.keys.len();
         self.keys.retain(|_, key| key != public_key);
         (before - self.keys.len()) as u32
+    }
+
+    /// The registered keys of the REQUESTED users for ONE app, in the input order (users with no
+    /// key are simply absent). Backs the `ai_app_user_keys` fan-out lookup: public-key material
+    /// only, so a proposer can address a confirmed action to every chat member with a key.
+    pub fn keys_for_users(&self, app_id: AiAppId, user_ids: &[UserId]) -> Vec<AiAppMemberKey> {
+        user_ids
+            .iter()
+            .filter_map(|u| {
+                self.keys.get(&(*u, app_id)).map(|public_key| AiAppMemberKey {
+                    user_id: *u,
+                    public_key: public_key.clone(),
+                })
+            })
+            .collect()
     }
 
     /// All of one user's registered keys, ordered by app id (HashMap iteration order is arbitrary

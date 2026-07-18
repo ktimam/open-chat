@@ -472,6 +472,10 @@ export interface ActionCardContent {
     // confirming the card encrypts `confirmPayload` (opaque bytes) to `recipientPublicKey` (a P-256 SPKI
     // PEM) and deposits it into the on-chain action_inbox. OpenChat never interprets the payload.
     recipientPublicKey?: string;
+    // Fan-out delivery: ADDITIONAL recipient keys (one per chat member with a registered app key,
+    // resolved at propose time). On confirm the deposit is encrypted separately to every key
+    // (deduped with `recipientPublicKey`), so each listed member's app inbox receives the action.
+    recipientPublicKeys?: string[];
     confirmPayload?: Uint8Array;
     // Send-only per-app inbox override (from the app manifest). When set, this card's confirmed deposit
     // is routed to this canister instead of the global action_inbox. Never hydrated on receive.

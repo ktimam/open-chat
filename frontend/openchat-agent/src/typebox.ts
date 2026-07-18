@@ -6168,6 +6168,23 @@ export const UserIndexMyAiAppKeysResponse = Type.Object({
     Success: Type.Object({ keys: Type.Array(UserIndexAiAppUserKey) }),
 });
 
+export type UserIndexAiAppMemberKey = Static<typeof UserIndexAiAppMemberKey>;
+export const UserIndexAiAppMemberKey = Type.Object({
+    user_id: UserId,
+    public_key: Type.String(),
+});
+
+export type UserIndexAiAppUserKeysArgs = Static<typeof UserIndexAiAppUserKeysArgs>;
+export const UserIndexAiAppUserKeysArgs = Type.Object({
+    app_id: Type.Number(),
+    user_ids: Type.Array(UserId),
+});
+
+export type UserIndexAiAppUserKeysResponse = Static<typeof UserIndexAiAppUserKeysResponse>;
+export const UserIndexAiAppUserKeysResponse = Type.Object({
+    Success: Type.Object({ keys: Type.Array(UserIndexAiAppMemberKey) }),
+});
+
 export type UserIndexCreateAiAppLinkCodeArgs = Static<typeof UserIndexCreateAiAppLinkCodeArgs>;
 export const UserIndexCreateAiAppLinkCodeArgs = Type.Object({
     app_id: Type.Number(),
@@ -8111,6 +8128,7 @@ export const ActionCardContentInitial = Type.Object({
     disclosure: Type.Optional(Type.String()),
     expires_at: Type.Optional(Type.BigInt()),
     recipient_public_key: Type.Optional(Type.String()),
+    recipient_public_keys: Type.Optional(Type.Array(Type.String())),
     confirm_payload: Type.Optional(TSBytes),
     inbox_canister_id: Type.Optional(TSPrincipal),
 });

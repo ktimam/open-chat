@@ -12,6 +12,7 @@ import type {
     ExploreAiAppsResponse,
     AiAppManifest,
     AiAppRegistration,
+    AiAppMemberKey,
     AiAppUserKey,
     ExploreBotsResponse,
     ExternalAchievementsResponse,
@@ -50,6 +51,8 @@ import {
     UserIndexAiAppsResponse,
     UserIndexRegisterAiAppArgs,
     UserIndexRegisterAiAppResponse,
+    UserIndexAiAppUserKeysArgs,
+    UserIndexAiAppUserKeysResponse,
     UserIndexMyAiAppKeysResponse,
     UserIndexCreateAiAppLinkCodeArgs,
     UserIndexCreateAiAppLinkCodeResponse,
@@ -120,6 +123,7 @@ import {
     aiAppsResponse,
     apiAiAppManifest,
     registerAiAppResponse,
+    aiAppUserKeysResponse,
     myAiAppKeysResponse,
     createAiAppLinkCodeResponse,
     removeMyAiAppKeyResponse,
@@ -596,6 +600,19 @@ export class UserIndexClient extends SingleCanisterMsgpackAgent {
             myAiAppKeysResponse,
             Empty,
             UserIndexMyAiAppKeysResponse,
+        );
+    }
+
+    // Fan-out lookup: the registered delivery keys of the REQUESTED users for one app (public key
+    // material only; users with no key are absent). Lets a proposer address a confirm card to every
+    // chat member with a key.
+    aiAppUserKeys(appId: number, userIds: string[]): Promise<AiAppMemberKey[]> {
+        return this.query(
+            "ai_app_user_keys",
+            { app_id: appId, user_ids: userIds.map(principalStringToBytes) },
+            aiAppUserKeysResponse,
+            UserIndexAiAppUserKeysArgs,
+            UserIndexAiAppUserKeysResponse,
         );
     }
 

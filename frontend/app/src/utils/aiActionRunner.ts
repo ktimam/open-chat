@@ -29,6 +29,10 @@ export interface AiActionCandidate {
     app: AiAppRegistration;
     action: AiActionDefinition;
     recipientKey: string;
+    // Fan-out delivery: the OTHER chat members' registered keys for this app (resolved at propose
+    // time via ai_app_user_keys). On confirm the deposit is encrypted to recipientKey AND each of
+    // these, so every listed member's app inbox receives the action — not just the proposer's.
+    additionalRecipientKeys?: string[];
     // Per-app inbox override from the app's manifest (undefined => global action_inbox).
     inboxCanisterId?: string;
 }
@@ -65,8 +69,9 @@ export async function resolveCandidates(
     chatId: ChatIdentifier,
 ): Promise<ResolvedCandidates> {
     if (chatId.kind === "direct_chat") {
-        // v0 direct-chat enablement: your connected apps ARE the enabled set. Only apps you hold a
-        // key for participate — unconnected apps never inject pairing prompts into personal chats.
+        // v0 direct-chat enablement: your connected apps ARE the enabled set. An app you haven't
+        // connected surfaces as `link_required` (so you can onboard IOU straight from a 1:1 chat —
+        // previously it was silently skipped, and pairing was only reachable from a group).
         const apps = await client.aiApps();
         const perUserApps = apps.filter((app) => app.manifest.perUserKeys === true);
         if (perUserApps.length === 0) return { candidates: [], linkRequired: [] };
@@ -75,14 +80,30 @@ export async function resolveCandidates(
             myKeys.set(key.appId, key.publicKey);
         }
         const candidates: AiActionCandidate[] = [];
+        const linkRequired: AiAppRegistration[] = [];
         for (const app of perUserApps) {
             const myKey = myKeys.get(app.id);
-            if (myKey === undefined || myKey.length === 0) continue;
+            if (myKey === undefined || myKey.length === 0) {
+                linkRequired.push(app);
+                continue;
+            }
+            // Fan-out: the OTHER participant's registered key for this app (if they connected it).
+            // Best-effort — a failed lookup degrades to proposer-only delivery, exactly the old
+            // behaviour. With it, a confirm lands in BOTH members' app inboxes immediately.
+            const otherKeys = (await client.aiAppUserKeys(app.id, [chatId.userId]))
+                .map((k) => k.publicKey)
+                .filter((k) => k.length > 0);
             for (const action of app.manifest.actions) {
-                candidates.push({ app, action, recipientKey: myKey, inboxCanisterId: app.manifest.inboxCanisterId });
+                candidates.push({
+                    app,
+                    action,
+                    recipientKey: myKey,
+                    additionalRecipientKeys: otherKeys.length > 0 ? otherKeys : undefined,
+                    inboxCanisterId: app.manifest.inboxCanisterId,
+                });
             }
         }
-        return { candidates, linkRequired: [] };
+        return { candidates, linkRequired };
     }
     if (chatId.kind !== "group_chat" && chatId.kind !== "channel") {
         return { candidates: [], linkRequired: [] };
@@ -165,16 +186,17 @@ async function runDefinition(
     content: MessageContent,
     manualExtraction?: Record<string, unknown>,
     inboxCanisterId?: string,
+    additionalRecipientKeys?: string[],
 ): Promise<ProposeResult> {
     if (manualExtraction !== undefined) {
-        const card = buildActionCardContent(def, manualExtraction, recipientKey, inboxCanisterId);
+        const card = buildActionCardContent(def, manualExtraction, recipientKey, inboxCanisterId, additionalRecipientKeys);
         return { kind: "ready", card, extracted: manualExtraction };
     }
 
     const input = await contentToInput(content);
     if (input === undefined) return { kind: "unsupported_content" };
 
-    return runAiAction(def, input, recipientKey, inferOnDevice, inboxCanisterId);
+    return runAiAction(def, input, recipientKey, inferOnDevice, inboxCanisterId, additionalRecipientKeys);
 }
 
 // Run the action on offer for a message in this chat, returning a card to propose (or a status).
@@ -191,7 +213,7 @@ export async function proposeAiActionForMessage(
     const { candidates, linkRequired } = await resolveCandidates(client, chatId);
     if (candidates.length === 1) {
         const c = candidates[0];
-        return runDefinition(c.action, c.recipientKey, content, manualExtraction, c.inboxCanisterId);
+        return runDefinition(c.action, c.recipientKey, content, manualExtraction, c.inboxCanisterId, c.additionalRecipientKeys);
     }
     if (candidates.length > 1) {
         return { kind: "choose", candidates };
@@ -236,6 +258,7 @@ export async function proposeAndPostCandidate(
         content,
         manualExtraction,
         candidate.inboxCanisterId,
+        candidate.additionalRecipientKeys,
     );
     if (result.kind === "ready") {
         client.sendMessageWithContent(messageContext, result.card, false, [], false);

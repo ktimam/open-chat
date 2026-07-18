@@ -181,7 +181,7 @@ import type {
     MemberRole,
     OptionalChatPermissions,
 } from "./permission";
-import type { AiAppLinkCode, AiAppRegistration, AiAppUserKey, ExploreAiAppsResponse } from "./aiAction";
+import type { AiAppLinkCode, AiAppMemberKey, AiAppRegistration, AiAppUserKey, ExploreAiAppsResponse } from "./aiAction";
 import type { CandidateProposal } from "./proposals";
 import type {
     StakeNeuronForSubmittingProposalsResponse,
@@ -405,6 +405,7 @@ export type WorkerRequest =
     | SetAiAppEnabled
     | EnabledAiApps
     | MyAiAppKeys
+    | AiAppUserKeysLookup
     | CreateAiAppLinkCode
     | RemoveMyAiAppKey
     | PublishAiApp
@@ -1870,6 +1871,8 @@ export type WorkerResponseInner =
     | DiamondMembershipFees[]
     | AiAppRegistration[]
     | AiAppUserKey[]
+    | AiAppMemberKey[]
+    | ExploreAiAppsResponse
     | AiAppLinkCode
     | number[]
     | TranslationCorrections
@@ -2141,6 +2144,12 @@ type EnabledAiApps = {
 
 type MyAiAppKeys = {
     kind: "myAiAppKeys";
+};
+
+type AiAppUserKeysLookup = {
+    kind: "aiAppUserKeys";
+    appId: number;
+    userIds: string[];
 };
 
 type CreateAiAppLinkCode = {
@@ -2552,6 +2561,8 @@ export type WorkerResult<T> = T extends Init
     ? number[]
     : T extends MyAiAppKeys
     ? AiAppUserKey[]
+    : T extends AiAppUserKeysLookup
+    ? AiAppMemberKey[]
     : T extends CreateAiAppLinkCode
     ? AiAppLinkCode | undefined
     : T extends RemoveMyAiAppKey

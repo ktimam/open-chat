@@ -91,6 +91,17 @@ pub struct AiAppUserKey {
     pub public_key: String,
 }
 
+/// One (user, key) row of an `ai_app_user_keys` lookup — a chat MEMBER's registered delivery key
+/// for one app. Public-key material only; used at propose time to fan a confirmed action out to
+/// every chat member with a registered key (each member's deposit encrypted to their own key).
+#[ts_export]
+#[derive(CandidType, Serialize, Deserialize, Debug, Clone)]
+pub struct AiAppMemberKey {
+    pub user_id: UserId,
+    /// P-256 SPKI PEM public key.
+    pub public_key: String,
+}
+
 /// A registered AI app. The on-chain `id`, `owner` and timestamps are assigned by the canister.
 #[ts_export]
 #[derive(CandidType, Serialize, Deserialize, Debug, Clone)]

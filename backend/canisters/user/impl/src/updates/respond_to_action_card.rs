@@ -27,7 +27,10 @@ async fn respond_to_action_card(args: Args) -> Response {
     match local_user_index_canister_c2c_client::c2c_deposit_action_confirmed(
         deposit.local_user_index_canister_id,
         &local_user_index_canister::c2c_deposit_action_confirmed::Args {
-            consumer_public_key_pem: deposit.recipient_public_key,
+            // Fan-out: every recipient key the card carries travels in the plural field; the legacy
+            // singular stays empty (local_user_index merges + dedupes the two).
+            consumer_public_key_pem: String::new(),
+            consumer_public_key_pems: deposit.recipient_public_keys,
             plaintext: deposit.confirm_payload,
             created_at: deposit.created_at,
             inbox_canister_id: deposit.inbox_canister_id,
@@ -59,7 +62,7 @@ enum Prepared {
 
 struct DepositInstruction {
     local_user_index_canister_id: CanisterId,
-    recipient_public_key: String,
+    recipient_public_keys: Vec<String>,
     confirm_payload: ByteBuf,
     created_at: TimestampMillis,
     inbox_canister_id: Option<CanisterId>,
@@ -92,7 +95,7 @@ fn prepare(args: &Args, state: &mut RuntimeState) -> OCResult<Prepared> {
             let chat_identity = Chat::Direct(args.user_id.into());
             return Ok(Prepared::NeedsDeposit(DepositInstruction {
                 local_user_index_canister_id: state.data.local_user_index_canister_id,
-                recipient_public_key: deposit.recipient_public_key,
+                recipient_public_keys: deposit.recipient_public_keys,
                 confirm_payload: deposit.confirm_payload,
                 created_at: deposit.responded_at,
                 inbox_canister_id: deposit.inbox_canister_id,

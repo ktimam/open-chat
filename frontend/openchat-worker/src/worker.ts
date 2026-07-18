@@ -1098,6 +1098,8 @@ function getAction(
 
         case "myAiAppKeys":
             return agent.myAiAppKeys();
+        case "aiAppUserKeys":
+            return agent.aiAppUserKeys(payload.appId, payload.userIds);
 
         case "createAiAppLinkCode":
             return agent.createAiAppLinkCode(payload.appId);
