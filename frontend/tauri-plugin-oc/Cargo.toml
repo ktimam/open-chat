@@ -12,6 +12,9 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "str
 semver = "1.0"
 sha2 = "0.10"
 hex = "0.4"
+# Preflight for the "add a model from a URL" flow: read total/available RAM and free disk space so the UI
+# can warn before a multi-GB download. Only `system` (memory) + `disk` are needed.
+sysinfo = { version = "0.33", default-features = false, features = ["system", "disk"] }
 llama-cpp-2 = { version = "0.1.150", optional = true, features = ["mtmd"] }
 open = "5"
 minijinja = { version = "2", optional = true, features = ["macros"] }

@@ -21,6 +21,8 @@ permissions = [
     "allow-update-chat-shortcuts",
     "allow-get-pending-deep-link",
     "allow-download-model",
+    "allow-probe-model-url",
+    "allow-system-resources",
     "allow-list-local-models",
     "allow-delete-model",
     "allow-infer",

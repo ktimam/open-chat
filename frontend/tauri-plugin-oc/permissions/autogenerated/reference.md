@@ -24,6 +24,8 @@ Default permissions for the plugin
 - `allow-update-chat-shortcuts`
 - `allow-get-pending-deep-link`
 - `allow-download-model`
+- `allow-probe-model-url`
+- `allow-system-resources`
 - `allow-list-local-models`
 - `allow-delete-model`
 - `allow-infer`
@@ -378,6 +380,32 @@ Denies the open_url command without any pre-configured scope.
 <tr>
 <td>
 
+`oc:allow-probe-model-url`
+
+</td>
+<td>
+
+Enables the probe_model_url command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`oc:deny-probe-model-url`
+
+</td>
+<td>
+
+Denies the probe_model_url command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `oc:allow-registerListener`
 
 </td>
@@ -605,6 +633,32 @@ Enables the svelte_ready command without any pre-configured scope.
 <td>
 
 Denies the svelte_ready command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`oc:allow-system-resources`
+
+</td>
+<td>
+
+Enables the system_resources command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`oc:deny-system-resources`
+
+</td>
+<td>
+
+Denies the system_resources command without any pre-configured scope.
 
 </td>
 </tr>
