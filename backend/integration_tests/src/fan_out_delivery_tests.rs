@@ -197,6 +197,123 @@ fn ai_app_user_keys_returns_only_requested_users_registered_keys() {
     assert!(none.is_empty(), "an unknown app must yield no keys");
 }
 
+// P0-21: recipient keys are FROZEN into the card at post time (client-authored), not gathered from
+// the registry at confirm. A posts a card carrying only A's key (empty fan-out list); B confirms.
+// Exactly one deposit lands — in A's bucket. B, whose key was never on the card, gets nothing.
+#[test]
+fn frozen_recipient_set_is_authoritative() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env, canister_ids, controller, ..
+    } = wrapper.env();
+    let (user_a, user_b, group_id, inbox) = setup_two_member_group_with_inbox(env, canister_ids, controller);
+
+    let mut rng = StdRng::seed_from_u64(4245);
+    let recipient_a = new_recipient(&mut rng);
+    let recipient_b = new_recipient(&mut rng);
+
+    // A's key ONLY — no fan-out list.
+    let message_id = post_card(env, &user_a, group_id, Some(recipient_a.pk_pem.clone()), vec![], inbox);
+    confirm(env, &user_b, group_id, message_id);
+
+    let actions_a = fetch_actions(env, user_a.principal, inbox, &recipient_a.fingerprint);
+    let actions_b = fetch_actions(env, user_b.principal, inbox, &recipient_b.fingerprint);
+    assert_eq!(actions_a.len(), 1, "A's key was on the card → A's bucket receives the deposit");
+    assert_eq!(actions_b.len(), 0, "B's key was NOT on the card → B's bucket stays empty");
+}
+
+// P0-22: a card confirmed when NOBODY's key is on it (no recipient_public_key, empty fan-out list)
+// still commits — a routing-less confirm — and deposits nothing. It must NOT trap.
+#[test]
+fn empty_recipient_card_confirms_safely_with_no_deposit() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env, canister_ids, controller, ..
+    } = wrapper.env();
+    let (user_a, _user_b, group_id, inbox) = setup_two_member_group_with_inbox(env, canister_ids, controller);
+
+    let mut rng = StdRng::seed_from_u64(4246);
+    let bystander = new_recipient(&mut rng);
+
+    // A confirm_payload + inbox but NO recipient key anywhere.
+    let message_id = post_card(env, &user_a, group_id, None, vec![], inbox);
+    confirm(env, &user_a, group_id, message_id); // confirm() asserts Success — proves it does not trap
+
+    // Nothing was deposited: an uninvolved fingerprint has no actions.
+    let actions = fetch_actions(env, user_a.principal, inbox, &bystander.fingerprint);
+    assert_eq!(actions.len(), 0, "an empty-recipient card deposits nothing");
+}
+
+// P0-22 (late link): registering a delivery key AFTER the card was posted does NOT retroactively add
+// the late member to that card's recipient set. B links a key post-hoc, then confirms; nothing lands
+// in B's newly-registered-key bucket — recipients were frozen at post time.
+#[test]
+fn late_link_does_not_retroactively_deliver() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env, canister_ids, controller, ..
+    } = wrapper.env();
+    let (user_a, user_b, group_id, inbox) = setup_two_member_group_with_inbox(env, canister_ids, controller);
+
+    let mut rng = StdRng::seed_from_u64(4247);
+    let recipient_a = new_recipient(&mut rng);
+    let recipient_b = new_recipient(&mut rng);
+
+    // A posts a card carrying ONLY A's key (B hasn't linked yet).
+    let message_id = post_card(env, &user_a, group_id, Some(recipient_a.pk_pem.clone()), vec![], inbox);
+
+    // B links a delivery key AFTER the post.
+    let app_id = register_per_user_app(env, user_a.principal, canister_ids.user_index);
+    let set: user_index_canister::set_my_ai_app_key::Response = client::execute_msgpack_update(
+        env,
+        user_b.principal,
+        canister_ids.user_index,
+        "set_my_ai_app_key_msgpack",
+        &user_index_canister::set_my_ai_app_key::Args {
+            app_id,
+            public_key: recipient_b.pk_pem.clone(),
+        },
+    );
+    assert!(matches!(set, user_index_canister::set_my_ai_app_key::Response::Success));
+
+    confirm(env, &user_b, group_id, message_id);
+
+    let actions_a = fetch_actions(env, user_a.principal, inbox, &recipient_a.fingerprint);
+    let actions_b = fetch_actions(env, user_b.principal, inbox, &recipient_b.fingerprint);
+    assert_eq!(actions_a.len(), 1, "A (on the card) receives the deposit");
+    assert_eq!(actions_b.len(), 0, "B linked AFTER the post → no retroactive delivery");
+}
+
+// Shared setup: two diamond users, a group with both as members, and a freshly installed action_inbox
+// authorized to receive deposits from the group's local_user_index.
+fn setup_two_member_group_with_inbox(
+    env: &mut PocketIc,
+    canister_ids: &crate::CanisterIds,
+    controller: &Principal,
+) -> (User, User, ChatId, CanisterId) {
+    let user_a = client::register_diamond_user(env, canister_ids, *controller);
+    let user_b = client::register_diamond_user(env, canister_ids, *controller);
+    let group_id = client::user::happy_path::create_group(env, &user_a, &random_string(), true, true);
+    tick_many(env, 3);
+    let group_lui = client::group::happy_path::local_user_index(env, group_id);
+    client::local_user_index::happy_path::add_users_to_group(
+        env,
+        &user_a,
+        group_lui,
+        group_id,
+        vec![(user_b.user_id, user_b.principal)],
+    );
+    let local_user_index_canister::oc_signing_public_key::Response::Success(oc_pem) = client::execute_msgpack_query(
+        env,
+        Principal::anonymous(),
+        group_lui,
+        "oc_signing_public_key_msgpack",
+        &local_user_index_canister::oc_signing_public_key::Args {},
+    );
+    let inbox = install_inbox(env, *controller, canister_ids, group_lui, oc_pem);
+    (user_a, user_b, group_id, inbox)
+}
+
 fn lookup_keys(
     env: &mut PocketIc,
     caller: Principal,
