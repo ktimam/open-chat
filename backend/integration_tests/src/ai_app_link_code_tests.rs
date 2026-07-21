@@ -256,3 +256,223 @@ fn set_and_remove_my_key_is_idempotent() {
         "removing an absent key must still be Success (idempotent), got {remove_again:?}"
     );
 }
+
+// A claim whose public_key fails validation is rejected BEFORE the code store is touched, so the
+// code is NOT burned: the same code subsequently claims with a valid key. A regression that
+// reordered validation after claim() would silently consume codes on malformed requests.
+#[test]
+fn claim_with_invalid_key_does_not_burn_the_code() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env, canister_ids, controller, ..
+    } = wrapper.env();
+
+    let owner = client::register_diamond_user(env, canister_ids, *controller);
+    let app_id = register_per_user_app(env, owner.principal, canister_ids.user_index);
+    let code = create_link_code(env, owner.principal, canister_ids.user_index, app_id);
+
+    let claimer = testing::rng::random_principal();
+
+    // Malformed key (no "BEGIN PUBLIC KEY") -> InvalidRequest, and the code must survive.
+    assert!(
+        matches!(
+            claim(env, claimer, canister_ids.user_index, code.clone(), "not-a-pem".to_string()),
+            user_index_canister::claim_ai_app_link_code::Response::InvalidRequest(_)
+        ),
+        "malformed key must be InvalidRequest"
+    );
+
+    // The SAME code still claims with a valid key — the invalid attempt did not consume it.
+    let mut rng = StdRng::seed_from_u64(404);
+    let delivery_pem = P256KeyPair::new(&mut rng).public_key_pem().to_string();
+    assert!(
+        matches!(
+            claim(env, claimer, canister_ids.user_index, code, delivery_pem.clone()),
+            user_index_canister::claim_ai_app_link_code::Response::Success
+        ),
+        "claim with a valid key after a rejected invalid claim must Succeed (code not burned)"
+    );
+
+    // And the key landed for the code's (user, app) pair.
+    assert!(
+        my_keys(env, owner.principal, canister_ids.user_index)
+            .iter()
+            .any(|k| k.app_id == app_id && k.public_key == delivery_pem),
+        "owner's key list must contain the delivery key"
+    );
+}
+
+// A NEW code for the same (user, app) pair retires the prior one: only the latest code is claimable.
+#[test]
+fn new_link_code_retires_prior_code_for_same_pair() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env, canister_ids, controller, ..
+    } = wrapper.env();
+
+    let owner = client::register_diamond_user(env, canister_ids, *controller);
+    let app_id = register_per_user_app(env, owner.principal, canister_ids.user_index);
+
+    let mut rng = StdRng::seed_from_u64(405);
+    let delivery_pem = P256KeyPair::new(&mut rng).public_key_pem().to_string();
+
+    let code1 = create_link_code(env, owner.principal, canister_ids.user_index, app_id);
+    let code2 = create_link_code(env, owner.principal, canister_ids.user_index, app_id);
+
+    let claimer = testing::rng::random_principal();
+    // The retired first code is dead — reported exactly like a code that never existed.
+    assert!(
+        matches!(
+            claim(env, claimer, canister_ids.user_index, code1, delivery_pem.clone()),
+            user_index_canister::claim_ai_app_link_code::Response::CodeNotFound
+        ),
+        "a retired (superseded) code must be CodeNotFound"
+    );
+    // Only the LATEST code claims.
+    assert!(
+        matches!(
+            claim(env, claimer, canister_ids.user_index, code2, delivery_pem.clone()),
+            user_index_canister::claim_ai_app_link_code::Response::Success
+        ),
+        "the replacement code must claim successfully"
+    );
+    assert!(
+        my_keys(env, owner.principal, canister_ids.user_index)
+            .iter()
+            .any(|k| k.app_id == app_id && k.public_key == delivery_pem),
+        "the key claimed via the replacement code must be registered"
+    );
+}
+
+// Rotation: set_my_ai_app_key UPSERTS by (user, app) — the new key REPLACES the old (exactly one
+// row remains) and the fan-out lookup only ever sees the latest key.
+#[test]
+fn set_my_ai_app_key_rotation_replaces_previous_key() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env, canister_ids, controller, ..
+    } = wrapper.env();
+
+    let owner = client::register_diamond_user(env, canister_ids, *controller);
+    let app_id = register_per_user_app(env, owner.principal, canister_ids.user_index);
+
+    let mut rng = StdRng::seed_from_u64(505);
+    let key1 = P256KeyPair::new(&mut rng).public_key_pem().to_string();
+    let key2 = P256KeyPair::new(&mut rng).public_key_pem().to_string();
+
+    for key in [&key1, &key2] {
+        let set: user_index_canister::set_my_ai_app_key::Response = client::execute_msgpack_update(
+            env,
+            owner.principal,
+            canister_ids.user_index,
+            "set_my_ai_app_key_msgpack",
+            &user_index_canister::set_my_ai_app_key::Args {
+                app_id,
+                public_key: key.clone(),
+            },
+        );
+        assert!(matches!(set, user_index_canister::set_my_ai_app_key::Response::Success), "set failed: {set:?}");
+    }
+
+    // my_ai_app_keys: exactly ONE row for the app, and it is key2 (replaced, not appended).
+    let rows: Vec<_> = my_keys(env, owner.principal, canister_ids.user_index)
+        .into_iter()
+        .filter(|k| k.app_id == app_id)
+        .collect();
+    assert_eq!(rows.len(), 1, "rotation must not leave a second row: {rows:?}");
+    assert_eq!(rows[0].public_key, key2, "the LATEST key must have replaced the old one");
+
+    // The fan-out lookup (what a proposer uses to address deposits) also returns ONLY key2 — a
+    // lingering key1 would keep receiving fan-out envelopes after rotation.
+    let response: user_index_canister::ai_app_user_keys::Response = client::execute_msgpack_query(
+        env,
+        owner.principal,
+        canister_ids.user_index,
+        "ai_app_user_keys_msgpack",
+        &user_index_canister::ai_app_user_keys::Args {
+            app_id,
+            user_ids: vec![owner.user_id],
+        },
+    );
+    let user_index_canister::ai_app_user_keys::Response::Success(result) = response;
+    assert_eq!(result.keys.len(), 1);
+    assert_eq!(result.keys[0].public_key, key2, "fan-out lookup must resolve to the rotated key only");
+}
+
+// delete_ai_app removes ONLY the registry entry: the user's paired delivery key and any
+// outstanding link code survive (orphan cleanup is not implemented — despite the
+// AiAppUserKeys::remove doc comment claiming it backs 'app-deletion cleanup').
+// Pinned here so the leak is either fixed deliberately or accepted explicitly.
+#[test]
+fn delete_ai_app_leaves_per_user_keys_and_outstanding_codes_behind() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env, canister_ids, controller, ..
+    } = wrapper.env();
+
+    let owner = client::register_diamond_user(env, canister_ids, *controller);
+    let name = random_string();
+    let app_id = client::user_index::happy_path::register_ai_app(
+        env,
+        owner.principal,
+        canister_ids.user_index,
+        AiAppManifest {
+            name: name.clone(),
+            description: "orphan cleanup pin".to_string(),
+            icon_url: None,
+            app_canister_id: None,
+            inbox_canister_id: None,
+            consumer_public_key: String::new(),
+            per_user_keys: true,
+            actions: vec![],
+            surfaces: vec![],
+        },
+    );
+
+    // Pair a delivery key via the claim path, and mint a SECOND, still-outstanding code.
+    let mut rng = StdRng::seed_from_u64(406);
+    let pem1 = P256KeyPair::new(&mut rng).public_key_pem().to_string();
+    let code1 = create_link_code(env, owner.principal, canister_ids.user_index, app_id);
+    assert!(matches!(
+        claim(env, testing::rng::random_principal(), canister_ids.user_index, code1, pem1.clone()),
+        user_index_canister::claim_ai_app_link_code::Response::Success
+    ));
+    let code2 = create_link_code(env, owner.principal, canister_ids.user_index, app_id);
+
+    let deleted: user_index_canister::delete_ai_app::Response = client::execute_msgpack_update(
+        env,
+        owner.principal,
+        canister_ids.user_index,
+        "delete_ai_app_msgpack",
+        &user_index_canister::delete_ai_app::Args { name },
+    );
+    assert!(matches!(deleted, user_index_canister::delete_ai_app::Response::Success));
+
+    // PINNED LEAK 1: the per-user delivery key is still listed for the dead app id...
+    assert!(
+        my_keys(env, owner.principal, canister_ids.user_index)
+            .iter()
+            .any(|k| k.app_id == app_id && k.public_key == pem1),
+        "delete_ai_app currently leaves the paired key behind"
+    );
+    // ...and still served to fan-out lookups.
+    let user_index_canister::ai_app_user_keys::Response::Success(result) = client::execute_msgpack_query(
+        env,
+        owner.principal,
+        canister_ids.user_index,
+        "ai_app_user_keys_msgpack",
+        &user_index_canister::ai_app_user_keys::Args {
+            app_id,
+            user_ids: vec![owner.user_id],
+        },
+    );
+    assert_eq!(result.keys.len(), 1, "fan-out lookup still returns the orphaned key");
+
+    // PINNED LEAK 2: an outstanding code minted before deletion still claims successfully,
+    // registering a key for an app that no longer exists (claim never checks app existence).
+    let pem2 = P256KeyPair::new(&mut rng).public_key_pem().to_string();
+    assert!(matches!(
+        claim(env, testing::rng::random_principal(), canister_ids.user_index, code2, pem2),
+        user_index_canister::claim_ai_app_link_code::Response::Success
+    ));
+}

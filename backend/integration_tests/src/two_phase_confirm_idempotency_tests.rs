@@ -206,6 +206,85 @@ fn confirm_twice_via_card_deposits_once() {
     );
 }
 
+// A FAILED routing-bearing confirm carrying a FAN-OUT list, retried after the failure is fixed,
+// delivers exactly ONE action per recipient — no duplicates in any bucket. (True partial delivery
+// cannot occur: the LUI builds every envelope then deposits the whole batch in ONE atomic
+// c2c_notify_actions call, and a malformed key fails prepare before anything is sent. What CAN
+// regress is the cross-recipient retry: one shared idempotency_id, deduped per fingerprint.)
+#[test]
+fn failed_fanout_confirm_retry_deposits_once_per_recipient() {
+    let seed = generate_seed();
+    let mut wrapper = ENV.deref().get_with_seed(seed); // fresh env: the LUI global inbox starts unset
+    let TestEnv {
+        env, canister_ids, controller, ..
+    } = wrapper.env();
+
+    let user = client::register_diamond_user(env, canister_ids, *controller);
+    let group_id = client::user::happy_path::create_group(env, &user, &random_string(), true, true);
+    tick_many(env, 3);
+    let group_lui = client::group::happy_path::local_user_index(env, group_id);
+
+    let mut rng = StdRng::seed_from_u64(9_004);
+    let pem_a = P256KeyPair::new(&mut rng).public_key_pem().to_string();
+    let pem_b = P256KeyPair::new(&mut rng).public_key_pem().to_string();
+    let fp_a = ecies_payload::key_fingerprint(&pem_a).unwrap();
+    let fp_b = ecies_payload::key_fingerprint(&pem_b).unwrap();
+
+    // Card carrying BOTH keys (legacy + fan-out list), NO per-card inbox; global inbox unset.
+    let message_id = random_from_u128();
+    let content = MessageContentInitial::ActionCard(ActionCardContentInitial {
+        title: "Pay".to_string(),
+        rows: vec![ActionCardRow {
+            label: "Amount".to_string(),
+            value: "$20".to_string(),
+        }],
+        confirm_label: "Confirm".to_string(),
+        cancel_label: "Cancel".to_string(),
+        action_id: "act-2pc-fanout".to_string(),
+        disclosure: None,
+        expires_at: None,
+        recipient_public_key: Some(pem_a),
+        recipient_public_keys: vec![pem_b],
+        confirm_payload: Some(ByteBuf::from(br#"{"amount":"$20"}"#.to_vec())),
+        inbox_canister_id: None,
+    });
+    client::group::happy_path::send_message(env, &user, group_id, None, content, None, Some(message_id));
+
+    // First confirm: nowhere to deposit -> fails; two-phase leaves the card Pending; NOBODY got anything.
+    let failed = confirm(env, &user, group_id, message_id);
+    assert!(
+        matches!(failed, group_canister::respond_to_action_card::Response::Error(_)),
+        "unconfigured confirm must fail, got {failed:?}"
+    );
+
+    // Configure a global inbox on the LUI, then retry the SAME card.
+    let local_user_index_canister::oc_signing_public_key::Response::Success(oc_pem) = client::execute_msgpack_query(
+        env,
+        Principal::anonymous(),
+        group_lui,
+        "oc_signing_public_key_msgpack",
+        &local_user_index_canister::oc_signing_public_key::Args {},
+    );
+    let inbox = install_inbox(env, *controller, canister_ids, group_lui, oc_pem);
+    let _: local_user_index_canister::set_action_inbox_canister::Response = client::execute_msgpack_update(
+        env,
+        user.principal,
+        group_lui,
+        "set_action_inbox_canister_msgpack",
+        &local_user_index_canister::set_action_inbox_canister::Args { canister_id: inbox },
+    );
+    let retried = confirm(env, &user, group_id, message_id);
+    assert!(
+        matches!(retried, group_canister::respond_to_action_card::Response::Success(_)),
+        "retry after configuring the inbox must Succeed, got {retried:?}"
+    );
+    tick_many(env, 10);
+
+    // Exactly one action per recipient bucket — the failed attempt + retry duplicated nothing.
+    assert_eq!(count_actions(env, user.principal, inbox, &fp_a), 1, "recipient A: exactly one deposit");
+    assert_eq!(count_actions(env, user.principal, inbox, &fp_b), 1, "recipient B: exactly one deposit");
+}
+
 fn post_card(
     env: &mut PocketIc,
     user: &User,

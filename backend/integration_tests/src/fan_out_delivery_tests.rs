@@ -454,3 +454,390 @@ fn confirm(env: &mut PocketIc, user: &User, group_id: ChatId, message_id: types:
     );
     tick_many(env, 10);
 }
+
+// One malformed key among valid recipients fails the WHOLE fan-out batch: no partial deposit to
+// the good key, and the two-phase confirm leaves the card Pending (still cancellable/retryable).
+#[test]
+fn malformed_recipient_key_fails_whole_batch_leaving_card_pending() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env, canister_ids, controller, ..
+    } = wrapper.env();
+    let (user_a, user_b, group_id, inbox) = setup_two_member_group_with_inbox(env, canister_ids, controller);
+
+    let mut rng = StdRng::seed_from_u64(4249);
+    let recipient_a = new_recipient(&mut rng);
+    let bad_pem = "-----BEGIN PUBLIC KEY-----\nnot-a-key\n-----END PUBLIC KEY-----\n".to_string();
+
+    let message_id = post_card(env, &user_a, group_id, Some(recipient_a.pk_pem.clone()), vec![bad_pem], inbox);
+
+    // Confirm: ECIES encrypt fails on the bad key -> the LUI rejects the whole batch -> Error.
+    let response: group_canister::respond_to_action_card::Response = client::execute_msgpack_update(
+        env,
+        user_b.principal,
+        group_id.into(),
+        "respond_to_action_card_msgpack",
+        &group_canister::respond_to_action_card::Args {
+            thread_root_message_index: None,
+            message_id,
+            response: ActionCardResponse::Confirm,
+        },
+    );
+    assert!(
+        !matches!(response, group_canister::respond_to_action_card::Response::Success(_)),
+        "a batch containing a malformed key must not confirm: {response:?}"
+    );
+    tick_many(env, 10);
+
+    // Atomic: the GOOD key received nothing — no partial deposit.
+    assert_eq!(
+        fetch_actions(env, user_a.principal, inbox, &recipient_a.fingerprint).len(),
+        0,
+        "the valid recipient must NOT receive a partial deposit"
+    );
+
+    // The card stayed Pending: a Cancel still transitions (only possible from Pending).
+    let cancel: group_canister::respond_to_action_card::Response = client::execute_msgpack_update(
+        env,
+        user_b.principal,
+        group_id.into(),
+        "respond_to_action_card_msgpack",
+        &group_canister::respond_to_action_card::Args {
+            thread_root_message_index: None,
+            message_id,
+            response: ActionCardResponse::Cancel,
+        },
+    );
+    assert!(
+        matches!(cancel, group_canister::respond_to_action_card::Response::Success(_)),
+        "the failed confirm must leave the card Pending (cancellable): {cancel:?}"
+    );
+}
+
+// Two DIFFERENT members confirm the same card (B first, then A). The second confirm must be a
+// no-op — each recipient bucket ends with exactly ONE action, not two. (Even a true in-flight race
+// collapses: idempotency_id = sha256(payload || message_id) is confirmer-independent, and the inbox
+// dedupes on (fingerprint, idempotency_id).)
+#[test]
+fn different_member_second_confirm_adds_no_deposit() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env, canister_ids, controller, ..
+    } = wrapper.env();
+    let (user_a, user_b, group_id, inbox) = setup_two_member_group_with_inbox(env, canister_ids, controller);
+
+    let mut rng = StdRng::seed_from_u64(4250);
+    let recipient_a = new_recipient(&mut rng);
+    let recipient_b = new_recipient(&mut rng);
+
+    let message_id = post_card(
+        env,
+        &user_a,
+        group_id,
+        Some(recipient_a.pk_pem.clone()),
+        vec![recipient_b.pk_pem.clone()],
+        inbox,
+    );
+
+    // B confirms first: Success, fan-out deposits to both buckets (helper asserts Success + ticks).
+    confirm(env, &user_b, group_id, message_id);
+
+    // A's confirm of the now-Confirmed card must NOT succeed (NoChange) and must not re-deposit.
+    let second: group_canister::respond_to_action_card::Response = client::execute_msgpack_update(
+        env,
+        user_a.principal,
+        group_id.into(),
+        "respond_to_action_card_msgpack",
+        &group_canister::respond_to_action_card::Args {
+            thread_root_message_index: None,
+            message_id,
+            response: ActionCardResponse::Confirm,
+        },
+    );
+    assert!(
+        !matches!(second, group_canister::respond_to_action_card::Response::Success(_)),
+        "a second member's confirm of a Confirmed card must not Succeed: {second:?}"
+    );
+    tick_many(env, 10);
+
+    for (recipient, who) in [(&recipient_a, "A"), (&recipient_b, "B")] {
+        let actions = fetch_actions(env, user_a.principal, inbox, &recipient.fingerprint);
+        assert_eq!(actions.len(), 1, "{who}'s bucket must hold exactly one action after two confirms");
+        // The stored copy attributes the confirm to B — the member whose confirm won.
+        let plaintext = decrypt(&actions[0], &recipient.sk_pem).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&plaintext).unwrap();
+        assert_eq!(json["context"]["confirmedBy"], user_b.user_id.to_string());
+    }
+}
+
+// DIRECT chat: only the responder's canister emits the deposit; the peer's mirror copy is
+// apply-only. Exactly one deposit per recipient key — never doubled by the mirror.
+#[test]
+fn direct_chat_mirror_copy_never_emits_second_deposit() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env, canister_ids, controller, ..
+    } = wrapper.env();
+
+    let user_a = client::register_diamond_user(env, canister_ids, *controller);
+    let user_b = client::register_diamond_user(env, canister_ids, *controller);
+
+    // Authorize BOTH LUIs: if the mirror side ever (wrongly) deposited, it would come from A's LUI
+    // and must be COUNTED, not rejected by the depositor guard.
+    let a_lui = canister_ids.local_user_index(env, user_a.canister());
+    let b_lui = canister_ids.local_user_index(env, user_b.canister());
+    let local_user_index_canister::oc_signing_public_key::Response::Success(oc_pem) = client::execute_msgpack_query(
+        env,
+        Principal::anonymous(),
+        b_lui,
+        "oc_signing_public_key_msgpack",
+        &local_user_index_canister::oc_signing_public_key::Args {},
+    );
+    let mut depositors = vec![a_lui, b_lui];
+    depositors.dedup();
+    let inbox = client::create_canister(env, *controller);
+    client::install_canister(
+        env,
+        *controller,
+        inbox,
+        wasms::ACTION_INBOX.clone(),
+        action_inbox_canister::init::Args {
+            user_index_canister_id: canister_ids.user_index,
+            cycles_dispenser_canister_id: canister_ids.cycles_dispenser,
+            deployment_operators: vec![*controller],
+            authorized_depositors: depositors,
+            oc_signing_public_key_pem: oc_pem,
+            wasm_version: wasms::ACTION_INBOX.version,
+            test_mode: true,
+        },
+    );
+
+    let mut rng = StdRng::seed_from_u64(4251);
+    let recipient_a = new_recipient(&mut rng);
+    let recipient_b = new_recipient(&mut rng);
+
+    // A sends B a routing-bearing card in their DIRECT chat, carrying both members' keys.
+    let message_id = random_from_u128();
+    let content = MessageContentInitial::ActionCard(ActionCardContentInitial {
+        title: "Pay".to_string(),
+        rows: vec![ActionCardRow {
+            label: "Amount".to_string(),
+            value: "$20".to_string(),
+        }],
+        confirm_label: "Confirm".to_string(),
+        cancel_label: "Cancel".to_string(),
+        action_id: "act-direct".to_string(),
+        disclosure: None,
+        expires_at: None,
+        recipient_public_key: Some(recipient_a.pk_pem.clone()),
+        recipient_public_keys: vec![recipient_b.pk_pem.clone()],
+        confirm_payload: Some(ByteBuf::from(br#"{"amount":"$20"}"#.to_vec())),
+        inbox_canister_id: Some(inbox),
+    });
+    client::user::happy_path::send_message(env, &user_a, user_b.user_id, None, content, None, Some(message_id));
+    tick_many(env, 5); // the card reaches B's copy of the direct chat
+
+    // B confirms on B's OWN canister (Args.user_id = the OTHER participant).
+    let response: user_canister::respond_to_action_card::Response = client::execute_msgpack_update(
+        env,
+        user_b.principal,
+        user_b.canister(),
+        "respond_to_action_card_msgpack",
+        &user_canister::respond_to_action_card::Args {
+            user_id: user_a.user_id,
+            thread_root_message_index: None,
+            message_id,
+            response: ActionCardResponse::Confirm,
+        },
+    );
+    assert!(
+        matches!(response, user_canister::respond_to_action_card::Response::Success(_)),
+        "direct-chat confirm failed: {response:?}"
+    );
+    tick_many(env, 10); // deposit lands AND the mirror event reaches A's canister
+
+    // Exactly one deposit per recipient: the mirror on A's canister applied state without depositing.
+    assert_eq!(
+        fetch_actions(env, user_a.principal, inbox, &recipient_a.fingerprint).len(),
+        1,
+        "A's bucket: exactly one deposit (mirror must not double it)"
+    );
+    assert_eq!(
+        fetch_actions(env, user_b.principal, inbox, &recipient_b.fingerprint).len(),
+        1,
+        "B's bucket: exactly one deposit"
+    );
+}
+
+// Key rotation between post and confirm: the deposit goes to the STALE key frozen on the card (K1),
+// never the new key (K2) — and the registry now returns only K2 (upsert, not append).
+#[test]
+fn rotation_after_post_delivers_to_stale_key_frozen_on_card() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env, canister_ids, controller, ..
+    } = wrapper.env();
+    let (user_a, user_b, group_id, inbox) = setup_two_member_group_with_inbox(env, canister_ids, controller);
+
+    let app_id = register_per_user_app(env, user_a.principal, canister_ids.user_index);
+    let mut rng = StdRng::seed_from_u64(4252);
+    let k1 = new_recipient(&mut rng);
+    let k2 = new_recipient(&mut rng);
+
+    // A registers K1, and the card is posted carrying K1 (what a proposer's lookup would capture).
+    let set1: user_index_canister::set_my_ai_app_key::Response = client::execute_msgpack_update(
+        env,
+        user_a.principal,
+        canister_ids.user_index,
+        "set_my_ai_app_key_msgpack",
+        &user_index_canister::set_my_ai_app_key::Args {
+            app_id,
+            public_key: k1.pk_pem.clone(),
+        },
+    );
+    assert!(matches!(set1, user_index_canister::set_my_ai_app_key::Response::Success));
+    let message_id = post_card(env, &user_a, group_id, Some(k1.pk_pem.clone()), vec![], inbox);
+
+    // A rotates to K2 BEFORE the confirm.
+    let set2: user_index_canister::set_my_ai_app_key::Response = client::execute_msgpack_update(
+        env,
+        user_a.principal,
+        canister_ids.user_index,
+        "set_my_ai_app_key_msgpack",
+        &user_index_canister::set_my_ai_app_key::Args {
+            app_id,
+            public_key: k2.pk_pem.clone(),
+        },
+    );
+    assert!(matches!(set2, user_index_canister::set_my_ai_app_key::Response::Success));
+
+    confirm(env, &user_b, group_id, message_id);
+
+    // Delivery targets the key BAKED ON THE CARD (K1), not the rotated key.
+    assert_eq!(
+        fetch_actions(env, user_a.principal, inbox, &k1.fingerprint).len(),
+        1,
+        "the stale key frozen on the card must receive the deposit"
+    );
+    assert_eq!(
+        fetch_actions(env, user_a.principal, inbox, &k2.fingerprint).len(),
+        0,
+        "the rotated-to key was never on the card — nothing lands there"
+    );
+
+    // Rotation REPLACED the registry row (upsert): the fan-out lookup returns only K2 now.
+    let keys = lookup_keys(env, user_a.principal, canister_ids.user_index, app_id, vec![user_a.user_id]);
+    assert_eq!(keys.len(), 1, "rotation must replace, not append: {keys:?}");
+    assert_eq!(keys[0].public_key, k2.pk_pem, "only the new key remains registered");
+}
+
+// One malformed key among the fan-out recipients fails the WHOLE batch atomically: the confirm
+// errors, the card stays Pending (retryable), and the VALID recipient receives NOTHING — never a
+// partial fan-out that silently dropped one member.
+#[test]
+fn malformed_recipient_key_fails_whole_fanout_batch_atomically() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env, canister_ids, controller, ..
+    } = wrapper.env();
+    let (user_a, user_b, group_id, inbox) = setup_two_member_group_with_inbox(env, canister_ids, controller);
+
+    let mut rng = StdRng::seed_from_u64(4248);
+    let recipient_a = new_recipient(&mut rng);
+
+    // A's VALID key plus a garbage "PEM" in the fan-out list.
+    let message_id = post_card(
+        env,
+        &user_a,
+        group_id,
+        Some(recipient_a.pk_pem.clone()),
+        vec!["-----BEGIN PUBLIC KEY-----\nnot a key\n-----END PUBLIC KEY-----\n".to_string()],
+        inbox,
+    );
+
+    // confirm() helper asserts Success, so drive the update raw and expect the C2C error.
+    let confirm_raw = |env: &mut PocketIc| -> group_canister::respond_to_action_card::Response {
+        client::execute_msgpack_update(
+            env,
+            user_b.principal,
+            group_id.into(),
+            "respond_to_action_card_msgpack",
+            &group_canister::respond_to_action_card::Args {
+                thread_root_message_index: None,
+                message_id,
+                response: ActionCardResponse::Confirm,
+            },
+        )
+    };
+
+    let response = confirm_raw(env);
+    assert!(
+        matches!(response, group_canister::respond_to_action_card::Response::Error(_)),
+        "a malformed recipient key must fail the confirm, got {response:?}"
+    );
+    tick_many(env, 10);
+
+    // ATOMIC: the valid recipient got nothing — deposits are built before the single batch call,
+    // so an error on the bad key means the good key's envelope was never sent either.
+    let actions_a = fetch_actions(env, user_a.principal, inbox, &recipient_a.fingerprint);
+    assert_eq!(actions_a.len(), 0, "no partial deposit to the valid key");
+
+    // PENDING, not Confirmed: a re-confirm attempts (and fails) the deposit again, proving the
+    // failed confirm did not commit the card.
+    let retry = confirm_raw(env);
+    assert!(
+        matches!(retry, group_canister::respond_to_action_card::Response::Error(_)),
+        "the card must remain Pending/retryable after the failed batch, got {retry:?}"
+    );
+}
+
+// A member removed from the group BETWEEN post and confirm still receives the fan-out deposit:
+// the recipient set was frozen into the card at post time and delivery never re-consults
+// membership. (If pruning-on-departure is ever the intended contract, this test is the tripwire.)
+#[test]
+fn removed_member_still_receives_frozen_fanout_deposit() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env, canister_ids, controller, ..
+    } = wrapper.env();
+    let (user_a, user_b, group_id, inbox) = setup_two_member_group_with_inbox(env, canister_ids, controller);
+
+    let mut rng = StdRng::seed_from_u64(4253);
+    let recipient_a = new_recipient(&mut rng);
+    let recipient_b = new_recipient(&mut rng);
+
+    // Card frozen with BOTH members' keys while B is still a member.
+    let message_id = post_card(
+        env,
+        &user_a,
+        group_id,
+        Some(recipient_a.pk_pem.clone()),
+        vec![recipient_b.pk_pem.clone()],
+        inbox,
+    );
+
+    // B is removed BEFORE the confirm.
+    let removed = client::group::remove_participant(
+        env,
+        user_a.principal,
+        group_id.into(),
+        &group_canister::remove_participant::Args { user_id: user_b.user_id },
+    );
+    assert!(
+        matches!(removed, group_canister::remove_participant::Response::Success),
+        "removal must Succeed: {removed:?}"
+    );
+    tick_many(env, 3);
+
+    // A (still a member) confirms.
+    confirm(env, &user_a, group_id, message_id);
+
+    let actions_a = fetch_actions(env, user_a.principal, inbox, &recipient_a.fingerprint);
+    let actions_b = fetch_actions(env, user_b.principal, inbox, &recipient_b.fingerprint);
+    assert_eq!(actions_a.len(), 1, "the confirmer's bucket receives its deposit");
+    assert_eq!(
+        actions_b.len(),
+        1,
+        "the DEPARTED member's key was frozen on the card at post time → the envelope still lands"
+    );
+}

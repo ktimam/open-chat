@@ -259,3 +259,134 @@ fn repeated_failed_claims_are_throttled() {
         other => panic!("11th failed claim must be Error(Throttled), got {other:?}"),
     }
 }
+
+// Full round-trip: CLAIM (pair) -> REVOKE -> RECONNECT with a FRESH keypair. After the round-trip
+// the (user, app) row must hold ONLY the new key — deposits target the new fingerprint.
+#[test]
+fn claim_revoke_reclaim_round_trip_uses_fresh_key() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env, canister_ids, controller, ..
+    } = wrapper.env();
+    let user_index = canister_ids.user_index;
+
+    let owner = client::register_diamond_user(env, canister_ids, *controller);
+    let app_id = register_per_user_app(env, owner.principal, user_index);
+    let mut rng = StdRng::seed_from_u64(5_005);
+
+    // 1) CLAIM happy path: pair kp1 via a link code.
+    let kp1 = pair_key(env, owner.principal, user_index, app_id, &mut rng);
+    let pem1 = kp1.public_key_pem().to_string();
+
+    // 2) REVOKE happy path: valid challenge signature over the canonical preimage.
+    let timestamp = now_millis(env);
+    let preimage = revoke_challenge_preimage(user_index, &pem1, timestamp);
+    let signature = jwt::sign_bytes(&preimage, kp1.secret_key_der(), &mut rng).unwrap();
+    let revoked = revoke(env, random_principal(), user_index, pem1.clone(), signature, timestamp);
+    assert!(
+        matches!(revoked, user_index_canister::revoke_ai_app_user_key::Response::Success),
+        "revoke must Succeed: {revoked:?}"
+    );
+
+    // 3) RECONNECT: a fresh code + a FRESH keypair claims successfully (old one was cleared).
+    let kp2 = pair_key(env, owner.principal, user_index, app_id, &mut rng);
+    let pem2 = kp2.public_key_pem().to_string();
+    assert_ne!(pem1, pem2, "the reconnect must use a new keypair");
+    assert_ne!(
+        ecies_payload::key_fingerprint(&pem1).unwrap(),
+        ecies_payload::key_fingerprint(&pem2).unwrap(),
+        "the delivery fingerprint must change across the round-trip"
+    );
+
+    // The (user, app) row holds ONLY the new key: deposits after reconnect target pem2.
+    let user_index_canister::my_ai_app_keys::Response::Success(result) = client::execute_msgpack_query(
+        env,
+        owner.principal,
+        user_index,
+        "my_ai_app_keys_msgpack",
+        &user_index_canister::my_ai_app_keys::Args {},
+    );
+    let keys: Vec<_> = result.keys.iter().filter(|k| k.app_id == app_id).collect();
+    assert_eq!(keys.len(), 1, "exactly one key after the round-trip: {keys:?}");
+    assert_eq!(keys[0].public_key, pem2, "only the reconnect key must remain");
+}
+
+// Recovery: after the 1-hour window elapses, a previously-throttled caller's legitimate claim
+// succeeds — the throttle is a sliding window, not a permanent lock-out.
+#[test]
+fn throttled_caller_recovers_after_window() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env, canister_ids, controller, ..
+    } = wrapper.env();
+    let user_index = canister_ids.user_index;
+
+    let mut rng = StdRng::seed_from_u64(6_006);
+    let pem = P256KeyPair::new(&mut rng).public_key_pem().to_string();
+    let caller = random_principal();
+
+    // Trip the per-caller throttle: 10 genuine misses...
+    for i in 0..10 {
+        let response: user_index_canister::claim_ai_app_link_code::Response = client::execute_msgpack_update(
+            env,
+            caller,
+            user_index,
+            "claim_ai_app_link_code_msgpack",
+            &user_index_canister::claim_ai_app_link_code::Args {
+                code: format!("miss-{i}-{}", random_string()),
+                public_key: pem.clone(),
+            },
+        );
+        assert!(matches!(
+            response,
+            user_index_canister::claim_ai_app_link_code::Response::CodeNotFound
+        ));
+    }
+    // ...and prove it tripped (11th call is Throttled).
+    let throttled: user_index_canister::claim_ai_app_link_code::Response = client::execute_msgpack_update(
+        env,
+        caller,
+        user_index,
+        "claim_ai_app_link_code_msgpack",
+        &user_index_canister::claim_ai_app_link_code::Args {
+            code: random_string(),
+            public_key: pem.clone(),
+        },
+    );
+    match throttled {
+        user_index_canister::claim_ai_app_link_code::Response::Error(e) => {
+            assert!(e.matches_code(OCErrorCode::Throttled), "expected Throttled, got {e:?}");
+        }
+        other => panic!("11th failed claim must be Error(Throttled), got {other:?}"),
+    }
+
+    // Let every counted failure age out of the sliding 1-hour WINDOW.
+    env.advance_time(std::time::Duration::from_secs(61 * 60));
+    env.tick();
+
+    // Mint a REAL code AFTER the advance (codes carry a 10-minute TTL)...
+    let owner = client::register_diamond_user(env, canister_ids, *controller);
+    let app_id = register_per_user_app(env, owner.principal, user_index);
+    let code = match client::execute_msgpack_update::<_, user_index_canister::create_ai_app_link_code::Response>(
+        env,
+        owner.principal,
+        user_index,
+        "create_ai_app_link_code_msgpack",
+        &user_index_canister::create_ai_app_link_code::Args { app_id },
+    ) {
+        user_index_canister::create_ai_app_link_code::Response::Success(r) => r.code,
+        other => panic!("expected code, got {other:?}"),
+    };
+    // ...and claim it from the PREVIOUSLY-THROTTLED caller: the failure bucket was pruned.
+    let recovered: user_index_canister::claim_ai_app_link_code::Response = client::execute_msgpack_update(
+        env,
+        caller,
+        user_index,
+        "claim_ai_app_link_code_msgpack",
+        &user_index_canister::claim_ai_app_link_code::Args { code, public_key: pem },
+    );
+    assert!(
+        matches!(recovered, user_index_canister::claim_ai_app_link_code::Response::Success),
+        "post-window claim must Succeed (no permanent lock-out), got {recovered:?}"
+    );
+}
