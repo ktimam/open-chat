@@ -1,6 +1,7 @@
 use crate::client;
 use crate::env::ENV;
 use crate::utils::tick_many;
+use crate::wasms;
 use crate::TestEnv;
 use candid::Principal;
 use pocket_ic::PocketIc;
@@ -508,5 +509,79 @@ fn delete_then_re_register_mints_a_new_id() {
             assert_ne!(reg.id, id1, "delete + re-register mints a FRESH id (unlike the in-place upsert)");
         }
         other => panic!("expected Success on re-register, got {other:?}"),
+    }
+}
+
+// HAPPY path of the anti-squat gate with a REAL verifier: publish succeeds when the canister the
+// manifest points at vouches over the generic `c2c_verify_ai_app` contract. The verifier here is
+// the actual IOU app canister wasm (it implements the candid query and vouches ONLY for the name
+// "iou"), so this exercises the full candid c2c round-trip rather than a stub — and the app then
+// becomes visible to non-owners and in the public explorer.
+#[test]
+fn publish_succeeds_when_app_canister_vouches() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env, canister_ids, controller, ..
+    } = wrapper.env();
+    let user_index = canister_ids.user_index;
+
+    // Install the real IOU app wasm on a fresh canister. IOU's init takes no args: `()` encodes as
+    // a single candid `null`, which a no-arg init accepts (extra trailing args are ignored).
+    let iou_canister = client::create_canister(env, *controller);
+    client::install_canister(env, *controller, iou_canister, wasms::IOU_BACKEND.clone(), ());
+
+    let owner = client::register_diamond_user(env, canister_ids, *controller);
+
+    // The IOU verifier vouches ONLY for the name "iou".
+    let mut m = manifest("iou".to_string(), "the real IOU app");
+    m.app_canister_id = Some(iou_canister);
+    m.per_user_keys = true;
+    let id = match register(env, owner.principal, user_index, m) {
+        user_index_canister::register_ai_app::Response::Success(reg) => reg.id,
+        other => panic!("expected Success, got {other:?}"),
+    };
+
+    let publish: user_index_canister::publish_ai_app::Response = client::execute_msgpack_update(
+        env,
+        owner.principal,
+        user_index,
+        "publish_ai_app_msgpack",
+        &user_index_canister::publish_ai_app::Args { app_id: id },
+    );
+    assert!(
+        matches!(publish, user_index_canister::publish_ai_app::Response::Success),
+        "a vouching app canister must publish with Success, got {publish:?}"
+    );
+
+    // Read back the same two ways the negative tests use.
+    // 1. A NON-owner now sees the app over ai_apps, flagged published.
+    let other_user = client::register_diamond_user(env, canister_ids, *controller);
+    let apps = ai_apps(env, other_user.principal, user_index);
+    let app = apps
+        .iter()
+        .find(|a| a.id == id)
+        .expect("a published app must be visible to non-owners");
+    assert!(app.published, "read-back must carry published = true");
+
+    // 2. It appears in the public explorer (search covers PUBLISHED apps only).
+    let explore: user_index_canister::explore_ai_apps::Response = client::execute_msgpack_query(
+        env,
+        other_user.principal,
+        user_index,
+        "explore_ai_apps_msgpack",
+        &user_index_canister::explore_ai_apps::Args {
+            search_term: Some("iou".to_string()),
+            page_index: 0,
+            page_size: 10,
+        },
+    );
+    match explore {
+        user_index_canister::explore_ai_apps::Response::Success(result) => {
+            assert!(
+                result.matches.iter().any(|a| a.id == id),
+                "the published app must appear in explore"
+            );
+        }
+        other => panic!("explore must Succeed, got {other:?}"),
     }
 }
