@@ -80,6 +80,20 @@ export function toPixel(rem: number): number {
     return pixelsFromRems(rem, dimensionsWidth.value);
 }
 const v2Mobile = import.meta.env.OC_MOBILE_LAYOUT === "v2";
+// True when the v2 (components_mobile) tree is the one actually mounted. The variant is
+// chosen ONCE at boot (app main.ts), but `mobileWidth` keeps tracking the live window
+// width — if the window later grows to >=768px the mounted v2 UI must NOT fall into the
+// desktop layout branch (squished bottom bar) or auto-reselect the chat the user just
+// backed out of. Set from app main.ts exactly when AppV2 is mounted; the env flag alone
+// is not enough because a wide boot with the flag set still mounts v1.
+export const mountedV2Layout = writable<boolean>(false);
+// Whether it is ok to automatically select a default chat when none is selected.
+// Only desktop v1 wants this: at mobile widths, and in the mounted v2 single-panel
+// tree at ANY width, auto-selection would immediately bounce the user back into the
+// chat they just left.
+export function autoSelectDefaultChatAllowed(): boolean {
+    return !mobileWidth.value && !mountedV2Layout.value;
+}
 export const iconSize = derived(mobileWidth, (mobileWidth) => (mobileWidth ? "1.6em" : "1.4em"));
 export const baseFontSize = derived(mobileWidth, (mobileWidth) => {
     if (v2Mobile) {
@@ -143,13 +157,13 @@ export const restrictToSelectedChat = derived(xframeOverrides, ({ restrictTo }) 
 });
 
 export const layout = derived(
-    [mobileWidth, fullWidth, rightPanelHistory, xframeOverrides, routeStore],
-    ([mobileWidth, fullWidth, rightPanelHistory, xframeOverrides, route]) => {
+    [mobileWidth, fullWidth, rightPanelHistory, xframeOverrides, routeStore, mountedV2Layout],
+    ([mobileWidth, fullWidth, rightPanelHistory, xframeOverrides, route, mountedV2Layout]) => {
         const disableLeftNav =
             xframeOverrides.restrictTo !== undefined || xframeOverrides.disableLeftNav;
         const disableLeft = xframeOverrides.restrictTo === "selected_chat";
-        if (mobileWidth) {
-            const showRight = v2Mobile ? false : rightPanelHistory.length > 0;
+        if (mobileWidth || mountedV2Layout) {
+            const showRight = v2Mobile || mountedV2Layout ? false : rightPanelHistory.length > 0;
             const showMiddle = !someHomeRoute(route.kind) && !showRight;
             const showLeft = !showMiddle && !showRight && !disableLeft;
             const showNav =

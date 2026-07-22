@@ -337,6 +337,7 @@ import {
     allUsersStore,
     anonUserStore,
     askForNotificationPermission,
+    autoSelectDefaultChatAllowed,
     bitcoinAddress,
     chatListScopeStore,
     chatSummariesListStore,
@@ -8667,7 +8668,10 @@ export class OpenChat {
     }
 
     selectDefaultChat(desktopOnly: boolean = true): boolean {
-        if (!desktopOnly || !get(mobileWidth)) {
+        // Auto-selection is a desktop-v1 affordance: the mounted v2 single-panel tree
+        // must never auto-reopen the chat the user just backed out of, even when the
+        // live window width is desktop-sized (v2 is chosen once at boot).
+        if (!desktopOnly || autoSelectDefaultChatAllowed()) {
             if (!this.#selectLastSelectedChat()) {
                 return this.#selectFirstChat();
             }
