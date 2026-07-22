@@ -10,6 +10,7 @@ import {
     buildActionCardContent,
     chatKeyFor,
     compileRules,
+    missingRequired,
     parseExtraction,
     runAiAction,
 } from "./aiAction";
@@ -222,6 +223,56 @@ describe("runAiAction", () => {
         }
     });
 
+    it("degenerate extraction: a required amount deleted by exclusiveMinimum 0 yields no_extraction (no card)", async () => {
+        // Live repro: the model "extracted" a settlement with amount 0 from the message "hi". The
+        // conformance pass deletes the degenerate amount, and with `amount` required the runner must
+        // NOT post a card the consumer will reject — it reports "model found no action" instead.
+        const def: AiActionDefinition = {
+            ...DEF,
+            responseSchema: {
+                type: "object",
+                properties: {
+                    kind: { type: "string" },
+                    amount: { type: "number", exclusiveMinimum: 0 },
+                    currency: { type: "string" },
+                },
+                required: ["amount"],
+            },
+        };
+        const raw = '{"kind":"settlement","amount":0,"currency":"USD"}';
+        const r = await runAiAction(def, { text: "hi" }, RECIPIENT, okInfer(raw));
+        expect(r.kind).toBe("no_extraction");
+        if (r.kind === "no_extraction") {
+            expect(r.raw).toBe(raw);
+        }
+    });
+
+    it("a positive amount under the same required + exclusiveMinimum schema still yields a ready card", async () => {
+        const def: AiActionDefinition = {
+            ...DEF,
+            responseSchema: {
+                type: "object",
+                properties: {
+                    kind: { type: "string" },
+                    amount: { type: "number", exclusiveMinimum: 0 },
+                    currency: { type: "string" },
+                },
+                required: ["amount"],
+            },
+        };
+        const r = await runAiAction(
+            def,
+            { text: "settle 350 USD" },
+            RECIPIENT,
+            okInfer('{"kind":"settlement","amount":350,"currency":"USD"}'),
+        );
+        expect(r.kind).toBe("ready");
+        if (r.kind === "ready") {
+            expect(r.extracted.amount).toBe(350);
+            expect(r.card.rows).toContainEqual({ label: "Amount", value: "350" });
+        }
+    });
+
     it("schema conformance deletes a field violating an enum", async () => {
         const def: AiActionDefinition = {
             ...DEF,
@@ -381,6 +432,62 @@ describe("applyRulesPostPass", () => {
         expect(applyRulesPostPass([], { amount: 20, code: "usd" }, undefined, schema)).toEqual({
             amount: 20,
         });
+    });
+    it("schema conformance keeps a number meeting its minimum and deletes one below it", () => {
+        const schema = {
+            type: "object",
+            properties: { amount: { type: "number", minimum: 10 } },
+        };
+        expect(applyRulesPostPass([], { amount: 10 }, undefined, schema)).toEqual({ amount: 10 });
+        expect(applyRulesPostPass([], { amount: 9.99 }, undefined, schema)).toEqual({});
+    });
+    it("schema conformance deletes a number EQUAL to its exclusiveMinimum bound", () => {
+        const schema = {
+            type: "object",
+            properties: { amount: { type: "number", exclusiveMinimum: 0 } },
+        };
+        expect(applyRulesPostPass([], { amount: 0 }, undefined, schema)).toEqual({});
+        expect(applyRulesPostPass([], { amount: 0.01 }, undefined, schema)).toEqual({ amount: 0.01 });
+    });
+    it("minimum never applies to non-number values", () => {
+        // An untyped field carrying a (nonsensical) numeric bound: a string value is untouched —
+        // the bound constrains numbers only, exactly like JSON schema.
+        const schema = {
+            type: "object",
+            properties: { note: { minimum: 5 }, code: { exclusiveMinimum: 5 } },
+        };
+        expect(applyRulesPostPass([], { note: "hi", code: "ab" }, undefined, schema)).toEqual({
+            note: "hi",
+            code: "ab",
+        });
+    });
+    it("no schema passes a violating-looking value straight through", () => {
+        expect(applyRulesPostPass([], { amount: -5 }, undefined, undefined)).toEqual({ amount: -5 });
+    });
+});
+
+describe("missingRequired", () => {
+    const schema = {
+        type: "object",
+        properties: {
+            amount: { type: "number", exclusiveMinimum: 0 },
+            currency: { type: "string" },
+        },
+        required: ["amount", "currency"],
+    };
+    it("reports required fields absent from the extraction", () => {
+        expect(missingRequired({ currency: "USD" }, schema)).toEqual(["amount"]);
+    });
+    it("passes when every required field is present", () => {
+        expect(missingRequired({ amount: 1, currency: "USD" }, schema)).toEqual([]);
+    });
+    it("reports a required field the conformance pass deleted", () => {
+        const conformed = applyRulesPostPass([], { amount: 0, currency: "USD" }, undefined, schema);
+        expect(missingRequired(conformed, schema)).toEqual(["amount"]);
+    });
+    it("returns [] when the schema declares no required fields, or there is no schema", () => {
+        expect(missingRequired({}, { type: "object" })).toEqual([]);
+        expect(missingRequired({}, undefined)).toEqual([]);
     });
 });
 

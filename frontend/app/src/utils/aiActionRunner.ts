@@ -12,7 +12,9 @@
 // enablement yet (Phase A.1) — offers no actions.
 
 import {
+    applyRulesPostPass,
     buildActionCardContent,
+    missingRequired,
     runAiAction,
     type AiActionDefinition,
     type AiAppRegistration,
@@ -177,9 +179,44 @@ async function contentToInput(
     return undefined;
 }
 
+// The manual-extraction half of runDefinition, exported as a pure seam for tests. A caller-supplied
+// extraction goes through the SAME deterministic gate as the model path — the rules post-pass
+// (schema conformance included) and the required-fields check — so the manual path can never post a
+// card the model path would have refused (e.g. a degenerate amount 0 against a schema requiring
+// amount > 0, which the consumer then rejects as an invalid draft). On failure the caller gets the
+// existing "model found no action" UX; `raw` carries the ORIGINAL manual extraction for surfacing.
+export function buildManualCard(
+    def: AiActionDefinition,
+    manualExtraction: Record<string, unknown>,
+    recipientKey: string,
+    inboxCanisterId?: string,
+    additionalRecipientKeys?: string[],
+): ProposeResult {
+    // No message text: message-driven rules (from_message / keyword_map override) don't apply to a
+    // manual extraction — normalize + schema conformance still run.
+    const finalExtraction = applyRulesPostPass(
+        def.rules ?? [],
+        manualExtraction,
+        undefined,
+        def.responseSchema,
+    );
+    if (missingRequired(finalExtraction, def.responseSchema).length > 0) {
+        return { kind: "no_extraction", raw: JSON.stringify(manualExtraction) };
+    }
+    const card = buildActionCardContent(
+        def,
+        finalExtraction,
+        recipientKey,
+        inboxCanisterId,
+        additionalRecipientKeys,
+    );
+    return { kind: "ready", card, extracted: finalExtraction };
+}
+
 // Run one action definition against the message content, delivering to the given recipient key.
 // When the caller supplies an extraction directly (no on-device runtime, or a native client with no
-// model), the card is built from it with no inference — the rest of the cycle is identical.
+// model), the card is built from it with no inference — the rest of the cycle is identical, INCLUDING
+// the deterministic post-pass + required-fields gate (buildManualCard).
 async function runDefinition(
     def: AiActionDefinition,
     recipientKey: string,
@@ -189,8 +226,7 @@ async function runDefinition(
     additionalRecipientKeys?: string[],
 ): Promise<ProposeResult> {
     if (manualExtraction !== undefined) {
-        const card = buildActionCardContent(def, manualExtraction, recipientKey, inboxCanisterId, additionalRecipientKeys);
-        return { kind: "ready", card, extracted: manualExtraction };
+        return buildManualCard(def, manualExtraction, recipientKey, inboxCanisterId, additionalRecipientKeys);
     }
 
     const input = await contentToInput(content);

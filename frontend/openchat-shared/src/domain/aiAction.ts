@@ -264,9 +264,9 @@ function applyNormalizeOp(op: AiActionNormalizeOp, v: unknown): unknown {
     }
 }
 
-// Tiny local schema conformance pass (type/enum/pattern only — deliberately not a full JSON-schema
-// validator and no added dependency). Drops keys the schema doesn't declare and DELETES fields that
-// violate their declared constraint: visible omission beats silent wrongness.
+// Tiny local schema conformance pass (type/enum/pattern/minimum/exclusiveMinimum only — deliberately
+// not a full JSON-schema validator and no added dependency). Drops keys the schema doesn't declare and
+// DELETES fields that violate their declared constraint: visible omission beats silent wrongness.
 function conformToSchema(
     extracted: Record<string, unknown>,
     schema: object | undefined,
@@ -284,10 +284,30 @@ function conformToSchema(
             out[key] = value;
             continue;
         }
-        const p = propSchema as { type?: unknown; enum?: unknown; pattern?: unknown };
+        const p = propSchema as {
+            type?: unknown;
+            enum?: unknown;
+            pattern?: unknown;
+            minimum?: unknown;
+            exclusiveMinimum?: unknown;
+        };
         if (p.type === "number" && typeof value !== "number") continue;
         if (p.type === "string" && typeof value !== "string") continue;
         if (Array.isArray(p.enum) && !p.enum.some((e) => e === value)) continue;
+        // Numeric lower bounds constrain number values only, exactly like JSON schema. A model can
+        // emit a degenerate value that IS the declared type (e.g. amount 0 against exclusiveMinimum
+        // 0, live-reproduced from the message "hi") — deleting it here lets the required-fields
+        // check refuse the whole extraction instead of posting an unusable card.
+        if (typeof p.minimum === "number" && typeof value === "number" && value < p.minimum) {
+            continue;
+        }
+        if (
+            typeof p.exclusiveMinimum === "number" &&
+            typeof value === "number" &&
+            value <= p.exclusiveMinimum
+        ) {
+            continue;
+        }
         if (typeof p.pattern === "string" && typeof value === "string") {
             try {
                 if (!new RegExp(p.pattern).test(value)) continue;
@@ -346,6 +366,22 @@ export function applyRulesPostPass(
 
     out = conformToSchema(out, responseSchema);
     return out;
+}
+
+// The schema's `required` field names absent (or undefined) in the extraction — checked AFTER the
+// conformance pass, so a field conformance deleted counts as missing. Generic JSON-schema mechanics
+// only: no schema, or no (array) `required`, means nothing is required. Callers gate on a non-empty
+// result to refuse a degenerate extraction instead of posting a card the consumer must reject.
+export function missingRequired(
+    extraction: Record<string, unknown>,
+    schema: object | undefined,
+): string[] {
+    if (schema === undefined) return [];
+    const required: unknown = (schema as { required?: unknown }).required;
+    if (!Array.isArray(required)) return [];
+    return required.filter(
+        (name): name is string => typeof name === "string" && extraction[name] === undefined,
+    );
 }
 
 // Pure: turn a registered action + a structured extraction + the recipient key into a postable ActionCard.
@@ -429,6 +465,13 @@ export async function runAiAction(
     // Deterministic post-pass over the model output — the card AND the confirmPayload are built from
     // the post-passed object, never the raw extraction.
     const finalExtraction = applyRulesPostPass(rules, extracted, input.text, def.responseSchema);
+
+    // A degenerate extraction (a required field the model omitted, or one the conformance pass
+    // deleted for violating its constraint — e.g. amount 0 against exclusiveMinimum 0) must NOT
+    // become a card: the consumer would reject it on confirm. Same UX as "model found no action".
+    if (missingRequired(finalExtraction, def.responseSchema).length > 0) {
+        return { kind: "no_extraction", raw: result.text };
+    }
 
     return {
         kind: "ready",

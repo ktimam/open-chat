@@ -1,0 +1,99 @@
+import { describe, expect, it, vi } from "vitest";
+
+// These specs pin the MANUAL-extraction gate: the manual path (no on-device runtime — the caller
+// supplies the extraction) must run the SAME deterministic pass as the model path (rules post-pass +
+// schema conformance + required-fields check) before a card is built. Previously it built the card
+// straight from the caller-supplied object, so a degenerate value (e.g. amount 0 against a schema
+// requiring amount > 0) posted a confirm card the consumer app then rejected as an invalid draft.
+
+// aiActionRunner imports the on-device inference facade at module level; stub it so importing the
+// module never touches the Tauri bridge (the manual path performs no inference at all).
+vi.mock("./onDeviceInference", () => ({
+    inferOnDevice: vi.fn(async () => ({ kind: "unavailable", reason: "not in tests" })),
+}));
+
+import type { AiActionDefinition } from "openchat-shared";
+import { buildManualCard } from "./aiActionRunner";
+
+const RECIPIENT = "-----BEGIN PUBLIC KEY-----\nABC\n-----END PUBLIC KEY-----\n";
+
+const DEF: AiActionDefinition = {
+    name: "demo.expense.add",
+    description: "Log expense",
+    promptTemplate: "extract the transaction as JSON",
+    responseSchema: {
+        type: "object",
+        properties: {
+            kind: { type: "string", enum: ["expense", "settlement"] },
+            amount: { type: "number", exclusiveMinimum: 0 },
+            currency: { type: "string" },
+        },
+        required: ["amount"],
+    },
+    card: {
+        title: "Log expense",
+        rows: [
+            { label: "Amount", valueKey: "amount" },
+            { label: "Currency", valueKey: "currency" },
+        ],
+        confirmLabel: "Add",
+        cancelLabel: "Dismiss",
+    },
+};
+
+describe("buildManualCard (manual-extraction gate)", () => {
+    it("gates a degenerate manual extraction (required amount 0) to no_extraction — no card", () => {
+        const manual = { kind: "settlement", amount: 0, currency: "USD" };
+        const r = buildManualCard(DEF, manual, RECIPIENT);
+        expect(r.kind).toBe("no_extraction");
+        if (r.kind === "no_extraction") {
+            // raw carries the ORIGINAL manual extraction for the caller to surface/debug.
+            expect(JSON.parse(r.raw)).toEqual(manual);
+        }
+    });
+
+    it("builds a ready card from a valid manual extraction, post-passed like the model path", () => {
+        const r = buildManualCard(
+            DEF,
+            { kind: "settlement", amount: 350, currency: "USD", extra: 1 },
+            RECIPIENT,
+        );
+        expect(r.kind).toBe("ready");
+        if (r.kind === "ready") {
+            // Undeclared keys are dropped by the same conformance pass the model path runs.
+            expect(r.extracted).toEqual({ kind: "settlement", amount: 350, currency: "USD" });
+            expect(r.card.rows).toEqual([
+                { label: "Amount", value: "350" },
+                { label: "Currency", value: "USD" },
+            ]);
+            expect(r.card.recipientPublicKey).toBe(RECIPIENT);
+        }
+    });
+
+    it("runs declared normalize rules over the manual extraction ('350 usd' -> 350)", () => {
+        const def: AiActionDefinition = {
+            ...DEF,
+            rules: [{ kind: "normalize", field: "amount", ops: ["k_m_suffix"] }],
+        };
+        const r = buildManualCard(def, { amount: "350 usd" }, RECIPIENT);
+        expect(r.kind).toBe("ready");
+        if (r.kind === "ready") {
+            expect(r.extracted.amount).toBe(350);
+        }
+    });
+
+    it("no schema: the manual extraction passes through and builds a card", () => {
+        const def: AiActionDefinition = { ...DEF, responseSchema: undefined };
+        const r = buildManualCard(def, { amount: 0 }, RECIPIENT);
+        expect(r.kind).toBe("ready");
+    });
+
+    it("threads the inbox + fan-out keys onto the card", () => {
+        const r = buildManualCard(DEF, { amount: 5 }, RECIPIENT, "aaaaa-aa", ["OTHER_KEY_PEM"]);
+        expect(r.kind).toBe("ready");
+        if (r.kind === "ready") {
+            expect(r.card.inboxCanisterId).toBe("aaaaa-aa");
+            expect(r.card.recipientPublicKeys).toEqual(["OTHER_KEY_PEM"]);
+        }
+    });
+});
