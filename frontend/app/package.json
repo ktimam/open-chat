@@ -82,6 +82,7 @@
         "@wagmi/chains": "^1.8.0",
         "@wagmi/connectors": "^5.1.10",
         "@wagmi/core": "^2.13.5",
+        "@wllama/wllama": "^3.5.1",
         "bs58": "^5.0.0",
         "component-lib": "file:../component-lib",
         "dompurify": "^3.4.10",

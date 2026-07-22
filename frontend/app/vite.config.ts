@@ -56,6 +56,12 @@ export default defineConfig({
               },
         headers: {
             "Cache-Control": "no-store",
+            // Cross-origin isolation enables SharedArrayBuffer → MULTITHREADED llama.cpp-WASM for
+            // the browser model-from-disk path (single-thread is unusably slow for 1B+ models).
+            // "credentialless" (not require-corp) keeps no-credential cross-origin subresources
+            // (canister media, embedded surfaces) loading without CORP headers.
+            "Cross-Origin-Opener-Policy": "same-origin",
+            "Cross-Origin-Embedder-Policy": "credentialless",
         },
     },
     build: isNativeApp
@@ -86,6 +92,12 @@ export default defineConfig({
 
                         if (fs.existsSync(fullPath)) {
                             res.setHeader("Content-Type", "text/javascript");
+                            // This middleware writes the response itself, so `server.headers` does
+                            // NOT apply — without a COEP here the cross-origin-isolated document
+                            // (see the headers block below) blocks the worker script with
+                            // ERR_BLOCKED_BY_RESPONSE, and the app boots to a blank page.
+                            res.setHeader("Cross-Origin-Embedder-Policy", "credentialless");
+                            res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
                             fs.createReadStream(fullPath).pipe(res);
                             return true;
                         } else {

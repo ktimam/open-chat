@@ -6,7 +6,7 @@
         type AiActionCandidate,
         type ProposeResult,
     } from "@utils/aiActionRunner";
-    import { isNativeClient } from "@utils/onDeviceInference";
+    import { canInferOnDevice } from "@utils/onDeviceInference";
     import {
         openSurfaceExternally,
         surfaceToOpenAfterConfirm,
@@ -342,7 +342,7 @@
         // Native clients run the on-device model. A browser — or a native client with no model downloaded —
         // falls back to a manually-supplied extraction so the confirm → deposit cycle can still be driven.
         let manualExtraction: Record<string, unknown> | undefined;
-        if (!isNativeClient()) {
+        if (!canInferOnDevice()) {
             manualExtraction = promptForExtraction();
             if (manualExtraction === undefined) return;
         }

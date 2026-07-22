@@ -8,6 +8,7 @@ import { get } from "svelte/store";
 import { infer as nativeInfer, listLocalModels } from "tauri-plugin-oc-api";
 import { selectedModelId } from "../stores/onDeviceModels";
 import { defaultModelCatalog } from "./modelCatalog";
+import { isWebInferenceReady, webInfer, webModelLabel } from "./webInference";
 
 // Generic on-device inference facade (design deliverable A). This is the seam any in-client feature calls
 // to run the user's selected model with its OWN prompt. It feature-detects the native runtime and degrades
@@ -25,6 +26,14 @@ export function isNativeClient(): boolean {
     return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
+// Can THIS client run an on-device inference right now — natively (Tauri + llama.cpp) or in the
+// BROWSER (llama.cpp-WASM over a GGUF the user attached from disk; see webInference.ts)? This is
+// the gate propose flows should use: a browser with a model attached runs the model exactly like
+// the native app, and only clients with NEITHER degrade to the manual-extraction fallback.
+export function canInferOnDevice(): boolean {
+    return isNativeClient() || isWebInferenceReady();
+}
+
 // The native llama.cpp backend is a single process-global (`LlamaBackend::init()` at the top of every
 // inference) that is NOT re-entrant: two overlapping calls make the second fail with
 // "BackendAlreadyInitialized", and each call also reloads the whole model. Several independent callers
@@ -40,6 +49,11 @@ export function inferOnDevice(request: InferenceRequest): Promise<InferenceResul
 
 async function runInference(request: InferenceRequest): Promise<InferenceResult> {
     if (!isNativeClient() || SUPPORTED_RUNTIMES.length === 0) {
+        // Browser path: a GGUF attached from a normal disk location runs via llama.cpp-WASM. Image
+        // requests (and no-model browsers) still degrade to "unavailable" exactly as before.
+        if (isWebInferenceReady()) {
+            return webInfer(request);
+        }
         return { kind: "unavailable", reason: "on-device inference requires the native client" };
     }
 
@@ -108,6 +122,15 @@ export function onDeviceInferenceCapability(): OnDeviceInferenceCapability {
     const selected = get(selectedModelId);
     // Modalities come from the catalog entry for the selected model (the native store doesn't track them).
     const entry = defaultModelCatalog.models.find((m) => m.id === selected);
+    if (!isNativeClient() && isWebInferenceReady()) {
+        // Browser model attached from disk: text-only (vision needs the native mmproj path).
+        return {
+            available: true,
+            runtimesSupported: ["llama-cpp"],
+            selectedModelId: webModelLabel(),
+            selectedModalities: ["text"],
+        };
+    }
     return {
         available: isNativeClient() && SUPPORTED_RUNTIMES.length > 0 && selected !== "",
         runtimesSupported: SUPPORTED_RUNTIMES,
