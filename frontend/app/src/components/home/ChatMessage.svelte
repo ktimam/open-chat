@@ -2,6 +2,7 @@
 <script lang="ts">
     import { navigate } from "@utils/navigation";
     import {
+        manualExtractEnabled,
         proposeAndPost,
         proposeAndPostCandidate,
         type AiActionCandidate,
@@ -279,14 +280,19 @@
         tipping = ledger;
     }
 
-    function promptForExtraction(): Record<string, unknown> | undefined {
+    // The raw-JSON extraction prompt is a TEST SEAM only (Issue 1): real users with no on-device
+    // model must never see a raw JSON box — they're guided to set one up (see runAiActionInner). It
+    // runs solely when `manualExtractEnabled()` is set (localStorage flag / ?manualExtract=1), which
+    // the automated journey harness uses to drive the confirm → deposit cycle without a model.
+    function promptForExtraction(): Record<string, unknown> | Record<string, unknown>[] | undefined {
+        if (!manualExtractEnabled()) return undefined;
         const raw = window.prompt(
             'Enter the action\'s fields as JSON to propose it, e.g. {"amount":20,"currency":"USD"}',
             "{}",
         );
         if (raw === null) return undefined;
         try {
-            return JSON.parse(raw) as Record<string, unknown>;
+            return JSON.parse(raw) as Record<string, unknown> | Record<string, unknown>[];
         } catch {
             toastStore.showFailureToast(i18nKey("That isn't valid JSON"));
             return undefined;
@@ -294,8 +300,9 @@
     }
 
     // This (classic) UI has no chooser sheet — a numbered prompt picks between multiple enabled app
-    // actions, in keeping with the manual-extraction prompt fallback above.
+    // actions, behind the same manual-extract test seam as the JSON prompt above.
     function promptForCandidate(candidates: AiActionCandidate[]): AiActionCandidate | undefined {
+        if (!manualExtractEnabled()) return undefined;
         const list = candidates
             .map((c, i) => `${i + 1}: ${c.app.manifest.name} — ${c.action.name}`)
             .join("\n");
@@ -320,7 +327,7 @@
 
     async function linkAppAndResume(
         app: AiAppRegistration,
-        manualExtraction?: Record<string, unknown>,
+        manualExtraction?: Record<string, unknown> | Record<string, unknown>[],
     ): Promise<ProposeResult | undefined> {
         const linked = await new Promise<boolean>((resolve) => {
             linkModalResolve = resolve;
@@ -347,10 +354,18 @@
     }
 
     async function runAiActionInner() {
-        // Native clients run the on-device model. A browser — or a native client with no model downloaded —
-        // falls back to a manually-supplied extraction so the confirm → deposit cycle can still be driven.
-        let manualExtraction: Record<string, unknown> | undefined;
+        // Native clients run the on-device model. With NO model (a plain browser, or a native client
+        // with none downloaded) we do NOT show a raw JSON box: real users are guided to set one up
+        // (Issue 1). The manual-JSON path stays available only behind the test seam
+        // (manualExtractEnabled) so the automated journey can still drive the confirm → deposit cycle.
+        let manualExtraction: Record<string, unknown> | Record<string, unknown>[] | undefined;
         if (!canInferOnDevice()) {
+            if (!manualExtractEnabled()) {
+                toastStore.showFailureToast(
+                    i18nKey("Select an on-device model to propose actions"),
+                );
+                return;
+            }
             manualExtraction = promptForExtraction();
             if (manualExtraction === undefined) return;
         }

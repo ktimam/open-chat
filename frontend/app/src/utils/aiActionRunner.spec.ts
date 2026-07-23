@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // These specs pin the MANUAL-extraction gate: the manual path (no on-device runtime — the caller
 // supplies the extraction) must run the SAME deterministic pass as the model path (rules post-pass +
@@ -13,7 +13,7 @@ vi.mock("./onDeviceInference", () => ({
 }));
 
 import type { AiActionDefinition } from "openchat-shared";
-import { buildManualCard } from "./aiActionRunner";
+import { buildManualCard, manualExtractEnabled } from "./aiActionRunner";
 
 const RECIPIENT = "-----BEGIN PUBLIC KEY-----\nABC\n-----END PUBLIC KEY-----\n";
 
@@ -95,5 +95,76 @@ describe("buildManualCard (manual-extraction gate)", () => {
             expect(r.card.inboxCanisterId).toBe("aaaaa-aa");
             expect(r.card.recipientPublicKeys).toEqual(["OTHER_KEY_PEM"]);
         }
+    });
+
+    it("an ARRAY of two valid entries builds ONE multi card with an array confirmPayload", () => {
+        const r = buildManualCard(
+            DEF,
+            [
+                { kind: "expense", amount: 20, currency: "USD" },
+                { kind: "expense", amount: 30, currency: "EUR" },
+            ],
+            RECIPIENT,
+        );
+        expect(r.kind).toBe("ready_multi");
+        if (r.kind === "ready_multi") {
+            expect(JSON.parse(new TextDecoder().decode(r.card.confirmPayload!))).toEqual([
+                { kind: "expense", amount: 20, currency: "USD" },
+                { kind: "expense", amount: 30, currency: "EUR" },
+            ]);
+            expect(r.card.rows.length).toBe(2);
+            expect(r.card.title).toContain("2");
+        }
+    });
+
+    it("an ARRAY with one valid + one degenerate element drops the bad one → single OBJECT card", () => {
+        const r = buildManualCard(
+            DEF,
+            [
+                { kind: "expense", amount: 0, currency: "USD" },
+                { kind: "expense", amount: 30, currency: "EUR" },
+            ],
+            RECIPIENT,
+        );
+        expect(r.kind).toBe("ready");
+        if (r.kind === "ready") {
+            const payload = JSON.parse(new TextDecoder().decode(r.card.confirmPayload!)) as unknown;
+            expect(Array.isArray(payload)).toBe(false);
+            expect(payload).toEqual({ kind: "expense", amount: 30, currency: "EUR" });
+        }
+    });
+
+    it("an all-invalid ARRAY yields no_extraction — no card", () => {
+        const arr = [
+            { kind: "expense", amount: 0, currency: "USD" },
+            { kind: "expense", currency: "EUR" },
+        ];
+        const r = buildManualCard(DEF, arr, RECIPIENT);
+        expect(r.kind).toBe("no_extraction");
+        if (r.kind === "no_extraction") {
+            expect(JSON.parse(r.raw)).toEqual(arr);
+        }
+    });
+});
+
+describe("manualExtractEnabled", () => {
+    beforeEach(() => {
+        localStorage.clear();
+        history.replaceState({}, "", "/");
+    });
+    it("is false when neither the flag nor the query param is set", () => {
+        expect(manualExtractEnabled()).toBe(false);
+    });
+    it('is true when localStorage["oc:manualExtract"] === "1"', () => {
+        localStorage.setItem("oc:manualExtract", "1");
+        expect(manualExtractEnabled()).toBe(true);
+    });
+    it("is false for any other localStorage value", () => {
+        localStorage.setItem("oc:manualExtract", "yes");
+        expect(manualExtractEnabled()).toBe(false);
+    });
+    it("is true when the URL carries ?manualExtract=1", () => {
+        history.replaceState({}, "", "/?manualExtract=1");
+        expect(manualExtractEnabled()).toBe(true);
     });
 });

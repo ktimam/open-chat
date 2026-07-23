@@ -8,10 +8,12 @@ import {
     aiAppManifestFromWire,
     applyRulesPostPass,
     buildActionCardContent,
+    buildMultiActionCardContent,
     chatKeyFor,
     compileRules,
     missingRequired,
     parseExtraction,
+    parseExtractionList,
     runAiAction,
 } from "./aiAction";
 import type { InferenceRequest, InferenceResult } from "./onDeviceModel";
@@ -35,6 +37,49 @@ const DEF: AiActionDefinition = {
 };
 
 const RECIPIENT = "-----BEGIN PUBLIC KEY-----\nABC\n-----END PUBLIC KEY-----\n";
+
+// A definition whose schema requires a POSITIVE amount — used by the multi-entry tests so a
+// degenerate element (amount 0) is dropped by the same viability gate the single-entry path uses.
+const MULTI_DEF: AiActionDefinition = {
+    ...DEF,
+    responseSchema: {
+        type: "object",
+        properties: {
+            kind: { type: "string" },
+            amount: { type: "number", exclusiveMinimum: 0 },
+            currency: { type: "string" },
+            note: { type: "string" },
+        },
+        required: ["amount"],
+    },
+};
+
+describe("parseExtractionList", () => {
+    it("wraps a single bare object in a one-element list", () => {
+        expect(parseExtractionList('{"amount":20,"currency":"USD"}')).toEqual([
+            { amount: 20, currency: "USD" },
+        ]);
+    });
+    it("parses a bare JSON array of objects", () => {
+        expect(parseExtractionList('[{"amount":20},{"amount":30}]')).toEqual([
+            { amount: 20 },
+            { amount: 30 },
+        ]);
+    });
+    it("parses an array wrapped in prose + ```json fences", () => {
+        const text = 'Sure!\n```json\n[{"amount":20},{"amount":30}]\n```\ndone';
+        expect(parseExtractionList(text)).toEqual([{ amount: 20 }, { amount: 30 }]);
+    });
+    it("keeps only object elements of the array, dropping scalars", () => {
+        expect(parseExtractionList('[1, {"amount":5}, "x"]')).toEqual([{ amount: 5 }]);
+    });
+    it("returns undefined for an array with no object elements", () => {
+        expect(parseExtractionList("[1, 2, 3]")).toBeUndefined();
+    });
+    it("returns undefined when there is no JSON at all", () => {
+        expect(parseExtractionList("no json here")).toBeUndefined();
+    });
+});
 
 describe("parseExtraction", () => {
     it("parses a bare JSON object", () => {
@@ -315,6 +360,101 @@ describe("runAiAction", () => {
         if (r.kind === "ready") {
             expect(r.extracted).toEqual({ amount: 20, currency: "USD", extra: true });
         }
+    });
+
+    // --- multi-entry (array) extraction -----------------------------------------------------------
+    it("a single OBJECT still yields a `ready` card with an OBJECT confirmPayload (byte-identical)", async () => {
+        const r = await runAiAction(
+            MULTI_DEF,
+            { text: "I paid 20 USD for lunch" },
+            RECIPIENT,
+            okInfer('{"amount":20,"currency":"USD","note":"lunch"}'),
+        );
+        expect(r.kind).toBe("ready");
+        if (r.kind === "ready") {
+            const payload = JSON.parse(new TextDecoder().decode(r.card.confirmPayload!)) as unknown;
+            expect(Array.isArray(payload)).toBe(false);
+            expect(payload).toEqual({ amount: 20, currency: "USD", note: "lunch" });
+            expect(r.card.title).toBe(DEF.card.title);
+        }
+    });
+
+    it("an ARRAY of [valid, invalid(amount 0), valid] drops the degenerate element and builds ONE multi card", async () => {
+        const raw =
+            '[{"amount":20,"currency":"USD","note":"lunch"},' +
+            '{"amount":0,"currency":"USD"},' +
+            '{"amount":30,"currency":"EUR","note":"dinner"}]';
+        const r = await runAiAction(MULTI_DEF, { text: "two expenses and a bad one" }, RECIPIENT, okInfer(raw));
+        expect(r.kind).toBe("ready_multi");
+        if (r.kind === "ready_multi") {
+            // The confirmPayload round-trips to EXACTLY the two valid entries, in order.
+            const payload = JSON.parse(new TextDecoder().decode(r.card.confirmPayload!)) as unknown;
+            expect(payload).toEqual([
+                { amount: 20, currency: "USD", note: "lunch" },
+                { amount: 30, currency: "EUR", note: "dinner" },
+            ]);
+            // Title reflects the count (2) and derives from the definition's card title.
+            expect(r.card.title).toContain("2");
+            expect(r.card.title).toContain(DEF.card.title);
+            // One readable row per entry, composed from the def's row valueKeys.
+            expect(r.card.rows).toEqual([
+                { label: "Entry 1", value: "20 USD lunch" },
+                { label: "Entry 2", value: "30 EUR dinner" },
+            ]);
+            // extracted mirrors the valid array.
+            expect(r.extracted).toEqual([
+                { amount: 20, currency: "USD", note: "lunch" },
+                { amount: 30, currency: "EUR", note: "dinner" },
+            ]);
+        }
+    });
+
+    it("an ARRAY with a SINGLE valid entry collapses to the single-entry OBJECT card", async () => {
+        const raw = '[{"amount":0,"currency":"USD"},{"amount":42,"currency":"USD","note":"taxi"}]';
+        const r = await runAiAction(MULTI_DEF, { text: "one good one bad" }, RECIPIENT, okInfer(raw));
+        expect(r.kind).toBe("ready");
+        if (r.kind === "ready") {
+            const payload = JSON.parse(new TextDecoder().decode(r.card.confirmPayload!)) as unknown;
+            expect(Array.isArray(payload)).toBe(false);
+            expect(payload).toEqual({ amount: 42, currency: "USD", note: "taxi" });
+        }
+    });
+
+    it("an all-invalid ARRAY yields no_extraction (no card)", async () => {
+        const raw = '[{"amount":0,"currency":"USD"},{"currency":"EUR"}]';
+        const r = await runAiAction(MULTI_DEF, { text: "nothing usable" }, RECIPIENT, okInfer(raw));
+        expect(r.kind).toBe("no_extraction");
+        if (r.kind === "no_extraction") {
+            expect(r.raw).toBe(raw);
+        }
+    });
+});
+
+describe("buildMultiActionCardContent", () => {
+    const entries = [
+        { amount: 20, currency: "USD", note: "lunch" },
+        { amount: 30, currency: "EUR", note: "dinner" },
+    ];
+    it("builds one card per-entry-row with the array as confirmPayload", () => {
+        const card = buildMultiActionCardContent(DEF, entries, RECIPIENT);
+        expect(card.kind).toBe("action_card_content");
+        expect(card.actionId).toBe(DEF.name);
+        expect(card.title).toContain("2");
+        expect(card.rows).toEqual([
+            { label: "Entry 1", value: "20 USD lunch" },
+            { label: "Entry 2", value: "30 EUR dinner" },
+        ]);
+        expect(JSON.parse(new TextDecoder().decode(card.confirmPayload!))).toEqual(entries);
+    });
+    it("threads the inbox + fan-out keys exactly like the single-entry builder", () => {
+        const card = buildMultiActionCardContent(DEF, entries, RECIPIENT, "aaaaa-aa", [
+            "OTHER_KEY_PEM",
+            "",
+            RECIPIENT,
+        ]);
+        expect(card.inboxCanisterId).toBe("aaaaa-aa");
+        expect(card.recipientPublicKey).toBe(RECIPIENT);
+        expect(card.recipientPublicKeys).toEqual(["OTHER_KEY_PEM"]);
     });
 });
 

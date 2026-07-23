@@ -14,6 +14,7 @@
 import {
     applyRulesPostPass,
     buildActionCardContent,
+    buildMultiActionCardContent,
     missingRequired,
     runAiAction,
     type AiActionDefinition,
@@ -179,38 +180,81 @@ async function contentToInput(
     return undefined;
 }
 
+// A manual extraction is either a single entry (OBJECT) or several (ARRAY of objects) — the test/
+// manual prompt answer may be either, mirroring what the model may emit.
+export type ManualExtraction = Record<string, unknown> | Record<string, unknown>[];
+
 // The manual-extraction half of runDefinition, exported as a pure seam for tests. A caller-supplied
 // extraction goes through the SAME deterministic gate as the model path — the rules post-pass
-// (schema conformance included) and the required-fields check — so the manual path can never post a
-// card the model path would have refused (e.g. a degenerate amount 0 against a schema requiring
-// amount > 0, which the consumer then rejects as an invalid draft). On failure the caller gets the
-// existing "model found no action" UX; `raw` carries the ORIGINAL manual extraction for surfacing.
+// (schema conformance included) and the required-fields check, applied PER ELEMENT — so the manual
+// path can never post a card the model path would have refused (e.g. a degenerate amount 0 against a
+// schema requiring amount > 0, which the consumer then rejects as an invalid draft). Degenerate
+// elements are dropped; 0 valid → the existing "model found no action" UX (`raw` carries the ORIGINAL
+// manual extraction for surfacing), 1 valid → the single-entry OBJECT card, ≥2 valid → ONE multi
+// card whose confirmPayload is the JSON ARRAY.
 export function buildManualCard(
     def: AiActionDefinition,
-    manualExtraction: Record<string, unknown>,
+    manualExtraction: ManualExtraction,
     recipientKey: string,
     inboxCanisterId?: string,
     additionalRecipientKeys?: string[],
 ): ProposeResult {
+    const candidates = Array.isArray(manualExtraction) ? manualExtraction : [manualExtraction];
     // No message text: message-driven rules (from_message / keyword_map override) don't apply to a
-    // manual extraction — normalize + schema conformance still run.
-    const finalExtraction = applyRulesPostPass(
-        def.rules ?? [],
-        manualExtraction,
-        undefined,
-        def.responseSchema,
-    );
-    if (missingRequired(finalExtraction, def.responseSchema).length > 0) {
+    // manual extraction — normalize + schema conformance still run, per element.
+    const valid: Record<string, unknown>[] = [];
+    for (const candidate of candidates) {
+        const finalExtraction = applyRulesPostPass(
+            def.rules ?? [],
+            candidate,
+            undefined,
+            def.responseSchema,
+        );
+        if (missingRequired(finalExtraction, def.responseSchema).length === 0) {
+            valid.push(finalExtraction);
+        }
+    }
+    if (valid.length === 0) {
         return { kind: "no_extraction", raw: JSON.stringify(manualExtraction) };
     }
-    const card = buildActionCardContent(
+    if (valid.length === 1) {
+        const card = buildActionCardContent(
+            def,
+            valid[0],
+            recipientKey,
+            inboxCanisterId,
+            additionalRecipientKeys,
+        );
+        return { kind: "ready", card, extracted: valid[0] };
+    }
+    const card = buildMultiActionCardContent(
         def,
-        finalExtraction,
+        valid,
         recipientKey,
         inboxCanisterId,
         additionalRecipientKeys,
     );
-    return { kind: "ready", card, extracted: finalExtraction };
+    return { kind: "ready_multi", card, extracted: valid };
+}
+
+// Test seam for the manual-JSON extraction prompt (Issue 1): the raw `window.prompt` fallback for
+// clients with no on-device model runs ONLY when this is enabled — either
+// `localStorage["oc:manualExtract"] === "1"` or the URL carries `?manualExtract=1`. Real users
+// (seam OFF) are guided to set up an on-device model instead of seeing a raw JSON box; the automated
+// journey harness sets the flag to keep driving the confirm → deposit cycle without a model.
+export function manualExtractEnabled(): boolean {
+    if (typeof window === "undefined") return false;
+    try {
+        if (window.localStorage?.getItem("oc:manualExtract") === "1") return true;
+    } catch {
+        // localStorage can throw in locked-down sandboxes — treat as disabled.
+    }
+    try {
+        if (new URLSearchParams(window.location.search).get("manualExtract") === "1") return true;
+    } catch {
+        // no parseable query string — treat as disabled.
+    }
+    return false;
 }
 
 // Run one action definition against the message content, delivering to the given recipient key.
@@ -221,7 +265,7 @@ async function runDefinition(
     def: AiActionDefinition,
     recipientKey: string,
     content: MessageContent,
-    manualExtraction?: Record<string, unknown>,
+    manualExtraction?: ManualExtraction,
     inboxCanisterId?: string,
     additionalRecipientKeys?: string[],
 ): Promise<ProposeResult> {
@@ -244,7 +288,7 @@ export async function proposeAiActionForMessage(
     client: OpenChat,
     chatId: ChatIdentifier,
     content: MessageContent,
-    manualExtraction?: Record<string, unknown>,
+    manualExtraction?: ManualExtraction,
 ): Promise<ProposeResult> {
     const { candidates, linkRequired } = await resolveCandidates(client, chatId);
     if (candidates.length === 1) {
@@ -265,7 +309,7 @@ export async function proposeAndPost(
     client: OpenChat,
     messageContext: MessageContext,
     content: MessageContent,
-    manualExtraction?: Record<string, unknown>,
+    manualExtraction?: ManualExtraction,
 ): Promise<ProposeResult> {
     const result = await proposeAiActionForMessage(
         client,
@@ -273,7 +317,7 @@ export async function proposeAndPost(
         content,
         manualExtraction,
     );
-    if (result.kind === "ready") {
+    if (result.kind === "ready" || result.kind === "ready_multi") {
         client.sendMessageWithContent(messageContext, result.card, false, [], false);
     }
     return result;
@@ -286,7 +330,7 @@ export async function proposeAndPostCandidate(
     messageContext: MessageContext,
     content: MessageContent,
     candidate: AiActionCandidate,
-    manualExtraction?: Record<string, unknown>,
+    manualExtraction?: ManualExtraction,
 ): Promise<ProposeResult> {
     const result = await runDefinition(
         candidate.action,
@@ -296,7 +340,7 @@ export async function proposeAndPostCandidate(
         candidate.inboxCanisterId,
         candidate.additionalRecipientKeys,
     );
-    if (result.kind === "ready") {
+    if (result.kind === "ready" || result.kind === "ready_multi") {
         client.sendMessageWithContent(messageContext, result.card, false, [], false);
     }
     return result;

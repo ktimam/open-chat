@@ -1,6 +1,7 @@
 <script lang="ts">
     import { navigate } from "@utils/navigation";
     import {
+        manualExtractEnabled,
         proposeAndPost,
         proposeAndPostCandidate,
         type AiActionCandidate,
@@ -266,14 +267,19 @@
         publish("replyPrivatelyTo", createReplyContext());
     }
 
-    function promptForExtraction(): Record<string, unknown> | undefined {
+    // The raw-JSON extraction prompt is a TEST SEAM only (Issue 1): real users with no on-device
+    // model must never see a raw JSON box — they're guided to set one up (see runAiActionHandler). It
+    // runs solely when `manualExtractEnabled()` is set (localStorage flag / ?manualExtract=1), which
+    // the automated journey harness uses to drive the confirm → deposit cycle without a model.
+    function promptForExtraction(): Record<string, unknown> | Record<string, unknown>[] | undefined {
+        if (!manualExtractEnabled()) return undefined;
         const raw = window.prompt(
             'Enter the action\'s fields as JSON to propose it, e.g. {"amount":20,"currency":"USD"}',
             "{}",
         );
         if (raw === null) return undefined;
         try {
-            return JSON.parse(raw) as Record<string, unknown>;
+            return JSON.parse(raw) as Record<string, unknown> | Record<string, unknown>[];
         } catch {
             toastStore.showFailureToast(i18nKey("That isn't valid JSON"));
             return undefined;
@@ -282,13 +288,18 @@
 
     // More than one enabled app action applies to this message — the user picks one from a sheet.
     let aiActionChooser = $state<
-        { candidates: AiActionCandidate[]; extraction?: Record<string, unknown> } | undefined
+        | {
+              candidates: AiActionCandidate[];
+              extraction?: Record<string, unknown> | Record<string, unknown>[];
+          }
+        | undefined
     >(undefined);
 
     // A per-user-keys app needs the one-time link-code pairing before its actions can run — the
     // consent sheet is showing; the propose that triggered it resumes when the link completes.
     let aiAppLink = $state<
-        { app: AiAppRegistration; extraction?: Record<string, unknown> } | undefined
+        | { app: AiAppRegistration; extraction?: Record<string, unknown> | Record<string, unknown>[] }
+        | undefined
     >(undefined);
 
     // A "sheet"-display chat_link surface to host after a successful confirm (see
@@ -320,7 +331,9 @@
 
     // The propose flow proper — also re-entered (with the same extraction) when the consent sheet
     // completes, so the action the user asked for resumes automatically after linking.
-    async function proposeWithExtraction(manualExtraction?: Record<string, unknown>) {
+    async function proposeWithExtraction(
+        manualExtraction?: Record<string, unknown> | Record<string, unknown>[],
+    ) {
         let result = await proposeAndPost(client, messageContext, msg.content, manualExtraction);
         if (result.kind === "choose") {
             aiActionChooser = { candidates: result.candidates, extraction: manualExtraction };
@@ -339,10 +352,18 @@
     }
 
     async function runAiActionHandler() {
-        // Native clients run the on-device model. A browser — or a native client with no model downloaded —
-        // falls back to a manually-supplied extraction so the confirm → deposit cycle can still be driven.
-        let manualExtraction: Record<string, unknown> | undefined;
+        // Native clients run the on-device model. With NO model (a plain browser, or a native client
+        // with none downloaded) we do NOT show a raw JSON box: real users are guided to set one up
+        // (Issue 1). The manual-JSON path stays available only behind the test seam
+        // (manualExtractEnabled) so the automated journey can still drive the confirm → deposit cycle.
+        let manualExtraction: Record<string, unknown> | Record<string, unknown>[] | undefined;
         if (!canInferOnDevice()) {
+            if (!manualExtractEnabled()) {
+                toastStore.showFailureToast(
+                    i18nKey("Select an on-device model to propose actions"),
+                );
+                return;
+            }
             manualExtraction = promptForExtraction();
             if (manualExtraction === undefined) return;
         }

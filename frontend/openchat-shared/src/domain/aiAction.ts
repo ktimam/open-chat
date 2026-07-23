@@ -165,6 +165,9 @@ export interface AiAppLinkCode {
 
 export type RunAiActionResult =
     | { kind: "ready"; card: ActionCardContent; extracted: Record<string, unknown> }
+    // Several valid entries extracted from one message: ONE card carrying the whole array (its
+    // confirmPayload is the JSON array). The caller posts + confirms it exactly like a `ready` card.
+    | { kind: "ready_multi"; card: ActionCardContent; extracted: Record<string, unknown>[] }
     // No native runtime / no model selected — the caller must degrade gracefully (no autonomous fallback).
     | { kind: "unavailable"; reason: string }
     // The model ran but produced nothing parseable as the declared structured output.
@@ -191,6 +194,38 @@ export function parseExtraction(text: string): Record<string, unknown> | undefin
     } catch {
         return undefined;
     }
+}
+
+// Tolerantly pull a LIST of candidate objects out of a model's text. The model may emit either a
+// single object (one transaction) or a JSON ARRAY of objects (several transactions in one message).
+// An array that opens before any bare object is treated as the multi-entry form; only its object
+// elements are kept. Anything else falls back to the single-object parse (wrapped in a one-element
+// list), so the single-entry path is byte-identical to `parseExtraction`. Returns undefined when
+// nothing object-shaped is found.
+export function parseExtractionList(text: string): Record<string, unknown>[] | undefined {
+    const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    const candidate = fenced ? fenced[1] : text;
+    const arrStart = candidate.indexOf("[");
+    const objStart = candidate.indexOf("{");
+    if (arrStart >= 0 && (objStart < 0 || arrStart < objStart)) {
+        const arrEnd = candidate.lastIndexOf("]");
+        if (arrEnd > arrStart) {
+            try {
+                const parsed: unknown = JSON.parse(candidate.slice(arrStart, arrEnd + 1));
+                if (Array.isArray(parsed)) {
+                    const objs = parsed.filter(
+                        (e): e is Record<string, unknown> =>
+                            e !== null && typeof e === "object" && !Array.isArray(e),
+                    );
+                    return objs.length > 0 ? objs : undefined;
+                }
+            } catch {
+                // not a clean array — fall through to single-object parsing
+            }
+        }
+    }
+    const obj = parseExtraction(text);
+    return obj === undefined ? undefined : [obj];
 }
 
 // --- Rules ---------------------------------------------------------------------------------------------------
@@ -416,6 +451,47 @@ export function buildActionCardContent(
     };
 }
 
+// Pure: turn a registered action + SEVERAL structured extractions into ONE postable ActionCard. The
+// confirmPayload is the verbatim JSON ARRAY of the entries (the multi form of the wire contract); the
+// consumer parses an array and adds every element on a single confirm. Each card row summarises one
+// entry — its value composed from the SAME template row valueKeys the single-entry card uses (so a
+// direction/kind field renders through its declared value exactly as today), joined into one readable
+// line. The title reflects the entry count while deriving from the definition's own card title (no
+// app name is hardcoded). Routing (recipient key, fan-out keys, inbox) is threaded identically to the
+// single-entry builder, so one confirm → one deposit → one fanned-out envelope per member.
+export function buildMultiActionCardContent(
+    def: AiActionDefinition,
+    extractedList: Record<string, unknown>[],
+    recipientPublicKeyPem: string,
+    inboxCanisterId?: string,
+    additionalRecipientKeys?: string[],
+): ActionCardContent {
+    const rows: ActionCardRow[] = extractedList.map((entry, i) => ({
+        label: `Entry ${i + 1}`,
+        value: def.card.rows
+            .map((r) => formatValue(entry[r.valueKey]))
+            .filter((v) => v.length > 0)
+            .join(" "),
+    }));
+
+    return {
+        kind: "action_card_content",
+        title: `${def.card.title} (${extractedList.length} entries)`,
+        rows,
+        confirmLabel: def.card.confirmLabel,
+        cancelLabel: def.card.cancelLabel,
+        actionId: def.name,
+        disclosure: def.card.disclosure,
+        state: "pending",
+        recipientPublicKey: recipientPublicKeyPem,
+        recipientPublicKeys: additionalRecipientKeys?.filter(
+            (k) => k.length > 0 && k !== recipientPublicKeyPem,
+        ),
+        confirmPayload: new TextEncoder().encode(JSON.stringify(extractedList)),
+        inboxCanisterId,
+    };
+}
+
 // Orchestrates the full proposal: run the on-device model against the declared prompt, parse, and build the
 // card. `infer` is the on-device inference facade (injected so this is unit-testable without a native runtime).
 export async function runAiAction(
@@ -459,24 +535,50 @@ export async function runAiAction(
     if (result.kind === "unavailable") return { kind: "unavailable", reason: result.reason };
     if (result.kind === "error") return { kind: "error", error: result.error };
 
-    const extracted = parseExtraction(result.text);
-    if (extracted === undefined) return { kind: "no_extraction", raw: result.text };
+    // The model text is accepted as a single OBJECT or an ARRAY of objects (several transactions in
+    // one message). Normalize to a list of candidate objects.
+    const candidates = parseExtractionList(result.text);
+    if (candidates === undefined) return { kind: "no_extraction", raw: result.text };
 
-    // Deterministic post-pass over the model output — the card AND the confirmPayload are built from
-    // the post-passed object, never the raw extraction.
-    const finalExtraction = applyRulesPostPass(rules, extracted, input.text, def.responseSchema);
-
-    // A degenerate extraction (a required field the model omitted, or one the conformance pass
-    // deleted for violating its constraint — e.g. amount 0 against exclusiveMinimum 0) must NOT
-    // become a card: the consumer would reject it on confirm. Same UX as "model found no action".
-    if (missingRequired(finalExtraction, def.responseSchema).length > 0) {
-        return { kind: "no_extraction", raw: result.text };
+    // Deterministic post-pass over EACH candidate — the card AND the confirmPayload are built from
+    // the post-passed objects, never the raw extraction. A degenerate element (a required field the
+    // model omitted, or one the conformance pass deleted for violating its constraint — e.g. amount 0
+    // against exclusiveMinimum 0) is DROPPED here, exactly as the single-entry gate refused it.
+    const valid: Record<string, unknown>[] = [];
+    for (const candidate of candidates) {
+        const finalExtraction = applyRulesPostPass(rules, candidate, input.text, def.responseSchema);
+        if (missingRequired(finalExtraction, def.responseSchema).length === 0) {
+            valid.push(finalExtraction);
+        }
     }
 
+    // 0 valid → no card (same UX as "model found no action"). 1 valid → the single-entry card, its
+    // confirmPayload a JSON OBJECT (byte-identical to before). ≥2 valid → ONE multi-entry card whose
+    // confirmPayload is the JSON ARRAY of the valid entries.
+    if (valid.length === 0) return { kind: "no_extraction", raw: result.text };
+    if (valid.length === 1) {
+        return {
+            kind: "ready",
+            card: buildActionCardContent(
+                def,
+                valid[0],
+                recipientPublicKeyPem,
+                inboxCanisterId,
+                additionalRecipientKeys,
+            ),
+            extracted: valid[0],
+        };
+    }
     return {
-        kind: "ready",
-        card: buildActionCardContent(def, finalExtraction, recipientPublicKeyPem, inboxCanisterId, additionalRecipientKeys),
-        extracted: finalExtraction,
+        kind: "ready_multi",
+        card: buildMultiActionCardContent(
+            def,
+            valid,
+            recipientPublicKeyPem,
+            inboxCanisterId,
+            additionalRecipientKeys,
+        ),
+        extracted: valid,
     };
 }
 
