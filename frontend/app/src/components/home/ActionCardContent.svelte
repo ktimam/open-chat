@@ -133,6 +133,11 @@
         border: var(--bw) solid var(--bd);
         border-radius: var(--rd);
         background-color: var(--currentChat-msg-bg);
+        // Pair the text with the message-bubble background this card sits on. Without this the card
+        // inherited the surrounding bubble's colour (e.g. the sender's white "me"-bubble text) while
+        // forcing the received-message background — rendering white-on-light-grey (~1.1:1, unreadable).
+        // Every theme defines msg-bg/msg-txt as a readable pair, so this is correct light AND dark.
+        color: var(--currentChat-msg-txt);
         max-width: 360px;
 
         // Collapsed (consumed) cards shrink to a slim, full-width strip: just the header line
@@ -169,7 +174,7 @@
     }
 
     .chevron {
-        color: var(--txt-light);
+        color: var(--currentChat-msg-muted);
         font-size: 0.9em;
         transition: transform 0.15s ease;
 
@@ -183,7 +188,7 @@
         width: 100%;
 
         .label {
-            color: var(--txt-light);
+            color: var(--currentChat-msg-muted);
             padding-right: $sp4;
             white-space: nowrap;
             vertical-align: top;
@@ -200,7 +205,7 @@
         gap: $sp2;
         align-items: flex-start;
         font-size: var(--font-size-small, 0.85em);
-        color: var(--txt-light);
+        color: var(--currentChat-msg-muted);
     }
 
     .actions {
@@ -231,7 +236,7 @@
 
             &.cancel {
                 background-color: transparent;
-                color: var(--txt);
+                color: var(--currentChat-msg-txt);
                 border: var(--bw) solid var(--bd);
             }
         }
@@ -239,7 +244,7 @@
 
     .state {
         text-transform: capitalize;
-        color: var(--txt-light);
+        color: var(--currentChat-msg-muted);
         font-weight: 600;
         white-space: nowrap;
     }
