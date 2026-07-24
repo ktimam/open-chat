@@ -102,3 +102,24 @@ UI prefilled from `data`:
 
 Cards from apps that declare no `card` surface render exactly as today (OC rows). The canister
 override is optional; a confirm with no override behaves identically to today.
+
+## Addenda (2026-07-24) — multi-entry + default-currency, both live-verified
+
+- **Multi-entry through the app card.** A propose yielding several extractions posts ONE card whose
+  hidden `__oc_entries__` sentinel row carries the exact validated entry array (rows ARE hydrated on
+  read; `confirm_payload` is not). `ActionCardContent.postInit` prefers `extractEntriesRow(rows)` and
+  sends `data = { entries: [...] }`; the app draws N editable rows and confirms the WHOLE batch as a
+  single envelope via `confirm_payload_override` (a top-level array). "Several entries, ONE message
+  consumed." Verify: `IOU/scripts/live/verify-app-card-multi.ts` (edit + currency/direction preserved)
+  and `verify-multi-entry.ts` (the IOU BatchConfirmModal import → both land, messageId consumed).
+- **Missing currency defers to the IOU default (app-side).** The card iframe is storage-partitioned
+  and cannot read `prefs.defaultCurrency`, so it must NOT invent a currency. When the extraction has
+  none, IOU's card shows a "Default currency" option (`""`) and OMITS currency from the confirm
+  payload; the REAL IOU app injects the default at import (`baseWithDefaultCurrency`). A hardcoded USD
+  would have silently regressed Issue 3 for non-USD users. Verify:
+  `IOU/scripts/live/verify-default-currency.ts` (deposit carries no `currency` field).
+- **Live harnesses confirm INSIDE the iframe.** `journey-fanout.ts` / `verify-multi-entry.ts` match
+  this run's card by the unique note in the iframe's inputs (not `.action-card` innerText) and click
+  the iframe's button — no OC disclosure checkbox (the app-card bridge confirm is screened by
+  `pending && !readonly`; the app owns any disclosure). The CONFIRMER (non-proposer, `readonly=false`
+  in a DM) can act from their own iframe; fan-out delivers to both buckets.
