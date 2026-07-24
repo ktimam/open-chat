@@ -7,8 +7,10 @@ import {
     extractEntriesRow,
     isRecord,
     reverseMapRows,
+    visibleRows,
     type CardInitContext,
 } from "./cardBridge";
+import { OC_ENTRIES_ROW_LABEL } from "openchat-shared";
 
 describe("deriveCardOrigin", () => {
     test("returns the origin for an https url", () => {
@@ -130,6 +132,33 @@ describe("reverseMapRows", () => {
             { label: "__oc_entries__", value: '[{"amount":10},{"amount":20}]' },
         ];
         expect(reverseMapRows(rows, iouMap)).toEqual({ amount: "10" });
+    });
+});
+
+describe("visibleRows (classic fallback display filter)", () => {
+    test("drops hidden __oc_ control rows, keeps human rows in order", () => {
+        const rows = [
+            { label: "Amount", value: "350" },
+            { label: OC_ENTRIES_ROW_LABEL, value: "[{},{}]" }, // the multi-entry sentinel — must NOT render
+            { label: "Currency", value: "EGP" },
+        ];
+        // If this filter regressed, the raw __oc_entries__ JSON blob would render as a visible row.
+        expect(visibleRows(rows)).toEqual([
+            { label: "Amount", value: "350" },
+            { label: "Currency", value: "EGP" },
+        ]);
+    });
+
+    test("drops any __oc_-prefixed label, not just the entries sentinel", () => {
+        expect(visibleRows([{ label: "__oc_future_control__", value: "x" }, { label: "Note", value: "n" }])).toEqual([
+            { label: "Note", value: "n" },
+        ]);
+    });
+
+    test("passes ordinary rows through unchanged, and [] -> []", () => {
+        const rows = [{ label: "Amount", value: "1" }];
+        expect(visibleRows(rows)).toEqual(rows);
+        expect(visibleRows([])).toEqual([]);
     });
 });
 

@@ -86,6 +86,15 @@ export function reverseMapRows(
     return out;
 }
 
+// The rows a HUMAN should see in the classic (OC-rendered) fallback card: every row EXCEPT the hidden
+// `__oc_` control rows (e.g. a multi-entry card's OC_ENTRIES_ROW_LABEL sentinel), which ride through
+// the hydrated rows so the app card can read them but must never render as a visible row. Generic over
+// the row shape so the Svelte `{#each}` keeps its own row type. If this drop is removed, a raw
+// __oc_entries__ JSON blob would render as a visible row whenever the app-card surface lookup fails.
+export function visibleRows<R extends { label: string }>(rows: readonly R[]): R[] {
+    return rows.filter((r) => !r.label.startsWith(OC_HIDDEN_ROW_PREFIX));
+}
+
 // A multi-entry card carries its EXACT validated entry array through a hidden sentinel row
 // (OC_ENTRIES_ROW_LABEL) because the read path strips confirm_payload while still hydrating rows.
 // Find that row and JSON.parse its value back into the array, so the app-rendered card receives every

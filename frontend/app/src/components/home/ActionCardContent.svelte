@@ -3,7 +3,6 @@
         type ActionCardContent,
         type ChatIdentifier,
         chatKeyFor,
-        OC_HIDDEN_ROW_PREFIX,
         OpenChat,
     } from "openchat-client";
     import { getContext, onMount } from "svelte";
@@ -17,6 +16,7 @@
         extractEntriesRow,
         isRecord,
         reverseMapRows,
+        visibleRows,
     } from "../../utils/cardBridge";
     import Spinner from "../icons/Spinner.svelte";
 
@@ -262,7 +262,7 @@
                 <tbody>
                     <!-- Hidden control rows (a multi-entry card's __oc_ sentinel) carry data to the app
                          card only; the classic renderer never displays them. -->
-                    {#each content.rows.filter((r) => !r.label.startsWith(OC_HIDDEN_ROW_PREFIX)) as row}
+                    {#each visibleRows(content.rows) as row}
                         <tr>
                             <td class="label">{row.label}</td>
                             <td class="value">{row.value}</td>
