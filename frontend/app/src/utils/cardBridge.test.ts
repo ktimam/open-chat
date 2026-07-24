@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+    buildCardBusy,
     buildCardInit,
     clampCardHeight,
     decodeConfirmPayload,
@@ -79,6 +80,13 @@ describe("buildCardInit", () => {
             data: { amount: 5 },
             context,
         });
+    });
+});
+
+describe("buildCardBusy", () => {
+    test("wraps a bare boolean progress flag (no app/canister data)", () => {
+        expect(buildCardBusy(true)).toEqual({ type: "oc:card:busy", version: 1, busy: true });
+        expect(buildCardBusy(false)).toEqual({ type: "oc:card:busy", version: 1, busy: false });
     });
 });
 

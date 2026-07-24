@@ -9,6 +9,7 @@
     import { currentTheme } from "../../theme/themes";
     import { cardSurfaceForAction } from "../../utils/aiAppSurfaces";
     import {
+        buildCardBusy,
         buildCardInit,
         clampCardHeight,
         decodeConfirmPayload,
@@ -211,6 +212,18 @@
         void _mode;
         void _readonly;
         if (readySeen) postInit();
+    });
+
+    $effect(() => {
+        // Relay the confirm/cancel round-trip state (`busy`) into the app card so it can lock its own
+        // in-frame buttons and show progress. Reading `busy` registers it as the dependency. Posted only
+        // to the card's own origin, only after the handshake; a bare boolean carries no data. The confirm
+        // handler already screens re-entrancy (`!cardActionable || busy`), so this is presentation-only.
+        const _busy = busy;
+        const target = iframeEl?.contentWindow;
+        if (readySeen && cardUrl !== undefined && cardOrigin !== undefined && target != null) {
+            target.postMessage(buildCardBusy(_busy), cardOrigin);
+        }
     });
 </script>
 

@@ -121,6 +121,14 @@ export function buildCardInit(
     return { type: "oc:card:init", version: 1, data, context };
 }
 
+// A generic host→iframe progress signal: OpenChat relays the confirm/cancel round-trip state so the
+// app card (whose buttons live inside the iframe now) can lock its controls and show progress. A bare
+// boolean — no app or canister data — posted only to the card's own origin; `busy` already resets on
+// success OR failure (doRespond's finally), so the app re-enables correctly either way.
+export function buildCardBusy(busy: boolean): { type: "oc:card:busy"; version: 1; busy: boolean } {
+    return { type: "oc:card:busy", version: 1, busy };
+}
+
 // Clamp a resize request to a sane range so a misbehaving (or hostile) iframe cannot collapse the
 // bubble to nothing or grow it without bound. Non-finite requests fall back to the minimum.
 export function clampCardHeight(height: number, min: number, max: number): number {
