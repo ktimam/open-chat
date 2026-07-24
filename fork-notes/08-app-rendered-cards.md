@@ -129,3 +129,39 @@ override is optional; a confirm with no override behaves identically to today.
   the iframe's button — no OC disclosure checkbox (the app-card bridge confirm is screened by
   `pending && !readonly`; the app owns any disclosure). The CONFIRMER (non-proposer, `readonly=false`
   in a DM) can act from their own iframe; fan-out delivers to both buckets.
+
+## Security review (2026-07-24) — verdict + residual hardening
+
+Adversarial review of the whole iframe addition (5 dimensions × find→refute→verify, 19 agents).
+**Verdict: ship-safe — no medium-or-higher survived; all 9 confirmed findings are low/info** (four
+originally-"medium" findings collapsed to low under the governance publish-gate, IOU's strict
+`messageId` dedup, the visible-values + per-member second-review gates, and site-isolation). A formal
+deeper review is not a blocker. Done as a fast-follow: the IOU card listener now pins
+`event.source === window.parent` (rejects a co-resident sibling frame forging `oc:card:init`/`busy`)
+and caps parsed `entries` at `MAX_CARD_ENTRIES` — closing the init-injection, busy-spoof and
+entries-DoS findings at once.
+
+Residual low/info hardening (tracked, not shipping blockers):
+- **Framing carve-out.** IOU `/openchat/card` framing is all-or-nothing (dev = no XFO; prod
+  `.ic-assets.json5` = `frame-ancestors 'none'` for `**/*`, which also blocks OpenChat). Add a
+  per-path `frame-ancestors https://<oc-origin>` for `/openchat/card` so it productionizes without
+  opening framing to everyone. Impact low (page is session-free/partitioned; confirm does nothing
+  privileged).
+- **Deposit-before-commit TOCTOU.** The Pending check is `&self` and the flip happens after the c2c
+  `.await`, and the inbox idempotency key is `sha256(payload‖message_id)` — so concurrent confirms
+  with *distinct* in-bounds overrides all deposit. Neutralized end-to-end by IOU's `messageId` dedup
+  (`collapseByMessageId` / `import_message_id` / `importedMessageIds`); residual is attacker-self-funded
+  griefing. Fix: key the inbox idempotency on `sha256(chat‖message_id)` (stable card identity) or add a
+  per-card single-flight that leaves Pending before the await.
+- **Card not bound to its producing app.** Owner resolved by non-namespaced action `name` +
+  `owners.find(enabled) ?? owners[0]`; `validate_surface` accepts any http(s) URL. Not exploitable today
+  (SNS publish-gate + vouch; lowest-id wins for established apps; 1:1 direct chats safe). Harden: carry an
+  owning `appId` on the card and resolve the surface by it; constrain card-surface origin to the app's
+  verified domain; re-vouch surfaces on re-registration.
+- **No third-party-embed provenance chrome** + `deriveCardOrigin` accepts same-origin-as-host and
+  `http:`. Add a host-drawn "external content from <origin>" badge OUTSIDE the frame; reject
+  `parsed.origin === location.origin` and require https (localhost-exempt for dev). Note an app-origin
+  allow-list does NOT help a malicious own-app.
+- **No inbound throttle** on the host bridge (`oc:card:resize`/`ready` spam → frame-capped host reflow,
+  info). Coalesce resize in a rAF; once-guard `ready`.
+- **Outbound `targetOrigin "*"`** (host + IOU): pin to the concrete peer origin once known.
