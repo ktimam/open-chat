@@ -2345,6 +2345,10 @@ export class OpenChat {
         threadRootMessageIndex: number | undefined,
         messageId: bigint,
         response: "confirm" | "cancel",
+        // App-rendered cards (surface kind "card") let the user edit the card's values inside the app's
+        // iframe; the edited object arrives here via the postMessage bridge in ActionCardContent. Absent
+        // for classic OC-rendered cards, which behave exactly as before.
+        payload?: Record<string, unknown>,
     ): Promise<boolean> {
         return this.#worker
             .send({
@@ -2353,6 +2357,12 @@ export class OpenChat {
                 threadRootMessageIndex,
                 messageId,
                 response,
+                // TODO(phase2): thread confirmPayloadOverride onward — worker `respondToActionCard` →
+                // agent → group/community/user client → `respond_to_action_card`'s canister Args (as a
+                // bounded `confirm_payload_override`), so the on-chain deposit uses these edited values
+                // in place of the frozen confirm_payload. Phase 1 intentionally stops at this boundary:
+                // the worker/agent/canister ignore the field for now.
+                confirmPayloadOverride: payload,
             })
             .then((resp) => resp.kind === "success")
             .catch(() => false);

@@ -19,6 +19,16 @@ export interface SurfaceOpening {
     url: string;
 }
 
+// A "card" surface resolved for a specific action, carrying the extra data the in-bubble card renderer
+// needs beyond the URL.
+export interface CardSurfaceOpening extends SurfaceOpening {
+    // The OWNING action's manifest card template as a label -> field-key map (from card.rows'
+    // {label, valueKey}). Lets ActionCardContent reverse-map the message's hydrated {label, value}
+    // rows back into the structured {field: value} object the card page consumes — needed because the
+    // frozen confirmPayload is not hydrated on a received card today.
+    labelToField: Record<string, string>;
+}
+
 // The surface kinds OpenChat knows how to act on.
 // "chat_link": a page where the user configures/links a CHAT inside the app.
 const CHAT_LINK_KIND = "chat_link";
@@ -29,6 +39,10 @@ const CONNECT_KIND = "connect";
 // "home": the app's own webpage, offered from its directory detail sheet. display "sheet" embeds
 // it right in the OpenChat window (the iframe host); "external" hands off to the OS browser.
 const HOME_KIND = "home";
+// "card": the app's confirmable-card renderer, embedded IN the chat bubble (see
+// fork-notes/08-app-rendered-cards.md). When an app declares one, OpenChat embeds this page in an
+// iframe in place of its own OC-rendered rows/buttons, and the postMessage bridge relays confirm/cancel.
+const CARD_KIND = "card";
 
 function substitutePlaceholders(template: string, chatKey: string, appId: number): string {
     // Values are URI-component encoded so the substituted URL stays parseable wherever the
@@ -53,6 +67,59 @@ export function chatLinkSurfaceOpening(
     const chatKey = chatKeyFor(chatId);
     if (chatKey === undefined) return undefined;
     return { app, surface, url: substitutePlaceholders(surface.url, chatKey, app.id) };
+}
+
+// The app's "card" surface resolved against a chat: the in-bubble card renderer OpenChat embeds.
+// Same {chatKey}/{appId} substitution as chat_link (so the card page can correlate the chat), and
+// like chat_link it resolves for every chat kind chatKeyFor supports.
+export function cardSurfaceOpening(
+    app: AiAppRegistration,
+    chatId: ChatIdentifier,
+): SurfaceOpening | undefined {
+    const surface = (app.manifest.surfaces ?? []).find((s) => s.kind === CARD_KIND);
+    if (surface === undefined) return undefined;
+    const chatKey = chatKeyFor(chatId);
+    if (chatKey === undefined) return undefined;
+    return { app, surface, url: substitutePlaceholders(surface.url, chatKey, app.id) };
+}
+
+// The card surface for the app that OWNS a given action (its manifest declares an action named
+// `actionId`), resolved against the chat. Owner resolution mirrors surfaceToOpenAfterConfirm: prefer
+// an app enabled in the chat, else the first owner. Also returns the owning action's label -> field-key
+// map so the renderer can reverse-map the message's hydrated rows into structured prefill data. Returns
+// undefined (→ OpenChat renders its own rows, fully backward compatible) when no owning app declares a
+// "card" surface, or on any lookup failure.
+export async function cardSurfaceForAction(
+    client: OpenChat,
+    chatId: ChatIdentifier,
+    actionId: string,
+): Promise<CardSurfaceOpening | undefined> {
+    try {
+        // Both facades resolve to [] on failure, so a lookup error degrades to "no app card".
+        const [apps, enabledIds] = await Promise.all([
+            client.aiApps(),
+            client.enabledAiApps(chatId),
+        ]);
+        const owners = apps.filter((app) =>
+            app.manifest.actions.some((a) => a.name === actionId),
+        );
+        if (owners.length === 0) return undefined;
+        const enabled = new Set(enabledIds);
+        const app = owners.find((o) => enabled.has(o.id)) ?? owners[0];
+        const opening = cardSurfaceOpening(app, chatId);
+        if (opening === undefined) return undefined;
+        // Build the label -> field-key map from the OWNING action's card template. `card.rows` here are
+        // the client-side {label, valueKey} shape (aiActionDefinitionFromWire maps wire `field` ->
+        // `valueKey`), so valueKey IS the structured field key the app expects.
+        const action = app.manifest.actions.find((a) => a.name === actionId);
+        const labelToField: Record<string, string> = {};
+        for (const row of action?.card.rows ?? []) {
+            labelToField[row.label] = row.valueKey;
+        }
+        return { ...opening, labelToField };
+    } catch {
+        return undefined;
+    }
 }
 
 // The app's "connect" surface (its pairing-code entry page), or undefined when it declares none.

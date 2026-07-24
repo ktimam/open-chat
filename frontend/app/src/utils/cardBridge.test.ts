@@ -1,0 +1,137 @@
+import { describe, expect, test } from "vitest";
+import {
+    buildCardInit,
+    clampCardHeight,
+    decodeConfirmPayload,
+    deriveCardOrigin,
+    isRecord,
+    reverseMapRows,
+    type CardInitContext,
+} from "./cardBridge";
+
+describe("deriveCardOrigin", () => {
+    test("returns the origin for an https url", () => {
+        expect(deriveCardOrigin("https://iou.example/openchat/card?x=1")).toBe(
+            "https://iou.example",
+        );
+    });
+    test("keeps a non-default port in the origin", () => {
+        expect(deriveCardOrigin("http://localhost:5341/openchat/card")).toBe(
+            "http://localhost:5341",
+        );
+    });
+    test("returns undefined for an unparseable url", () => {
+        expect(deriveCardOrigin("not a url")).toBeUndefined();
+    });
+    test("returns undefined for a non-http(s) scheme", () => {
+        expect(deriveCardOrigin("javascript:alert(1)")).toBeUndefined();
+        expect(deriveCardOrigin("data:text/html,<h1>x</h1>")).toBeUndefined();
+    });
+});
+
+describe("decodeConfirmPayload", () => {
+    const enc = (o: unknown) => new TextEncoder().encode(JSON.stringify(o));
+
+    test("decodes a JSON object", () => {
+        expect(decodeConfirmPayload(enc({ amount: 20, currency: "USD" }))).toEqual({
+            amount: 20,
+            currency: "USD",
+        });
+    });
+    test("empty / absent bytes -> {}", () => {
+        expect(decodeConfirmPayload(undefined)).toEqual({});
+        expect(decodeConfirmPayload(new Uint8Array())).toEqual({});
+    });
+    test("non-JSON bytes -> {}", () => {
+        expect(decodeConfirmPayload(new TextEncoder().encode("{not json"))).toEqual({});
+    });
+    test("a JSON array (non-object top level) -> {}", () => {
+        expect(decodeConfirmPayload(enc([1, 2, 3]))).toEqual({});
+    });
+});
+
+describe("isRecord", () => {
+    test("true only for plain objects", () => {
+        expect(isRecord({})).toBe(true);
+        expect(isRecord({ a: 1 })).toBe(true);
+        expect(isRecord([])).toBe(false);
+        expect(isRecord(null)).toBe(false);
+        expect(isRecord("x")).toBe(false);
+        expect(isRecord(3)).toBe(false);
+    });
+});
+
+describe("buildCardInit", () => {
+    test("wraps data + context in the init envelope", () => {
+        const context: CardInitContext = {
+            chatKey: "group:abc",
+            appId: 7,
+            actionId: "iou.add",
+            theme: "dark",
+            readonly: false,
+        };
+        expect(buildCardInit({ amount: 5 }, context)).toEqual({
+            type: "oc:card:init",
+            version: 1,
+            data: { amount: 5 },
+            context,
+        });
+    });
+});
+
+describe("reverseMapRows", () => {
+    // The manifest card template's label -> field-key map (client-side card.rows use `valueKey`).
+    const iouMap: Record<string, string> = {
+        Amount: "amount",
+        Currency: "currency",
+        Direction: "direction",
+        Note: "note",
+    };
+
+    test("joins hydrated {label,value} rows onto field keys", () => {
+        const rows = [
+            { label: "Amount", value: "350" },
+            { label: "Currency", value: "EGP" },
+            { label: "Direction", value: "credit" },
+            { label: "Note", value: "lunch" },
+        ];
+        expect(reverseMapRows(rows, iouMap)).toEqual({
+            amount: "350",
+            currency: "EGP",
+            direction: "credit",
+            note: "lunch",
+        });
+    });
+
+    test("unmatched label falls back to a lowercased-label key (nothing dropped)", () => {
+        const rows = [
+            { label: "Amount", value: "10" },
+            { label: "Mystery Field", value: "x" },
+        ];
+        expect(reverseMapRows(rows, iouMap)).toEqual({
+            amount: "10",
+            "mystery field": "x",
+        });
+    });
+
+    test("empty rows -> {}", () => {
+        expect(reverseMapRows([], iouMap)).toEqual({});
+        expect(reverseMapRows([], {})).toEqual({});
+    });
+
+    test("empty map -> every key is the lowercased label", () => {
+        expect(reverseMapRows([{ label: "Amount", value: "5" }], {})).toEqual({ amount: "5" });
+    });
+});
+
+describe("clampCardHeight", () => {
+    test("clamps within range and rounds up", () => {
+        expect(clampCardHeight(300.2, 120, 1200)).toBe(301);
+        expect(clampCardHeight(50, 120, 1200)).toBe(120);
+        expect(clampCardHeight(5000, 120, 1200)).toBe(1200);
+    });
+    test("non-finite -> min", () => {
+        expect(clampCardHeight(Number.NaN, 120, 1200)).toBe(120);
+        expect(clampCardHeight(Number.POSITIVE_INFINITY, 120, 1200)).toBe(120);
+    });
+});

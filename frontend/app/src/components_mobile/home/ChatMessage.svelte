@@ -539,14 +539,19 @@
             });
     }
 
-    function onRespondToActionCard(response: "confirm" | "cancel"): Promise<void> {
+    function onRespondToActionCard(
+        response: "confirm" | "cancel",
+        // App-rendered cards pass the user's edited object here (from the iframe bridge); classic
+        // OC-rendered cards omit it.
+        payload?: Record<string, unknown>,
+    ): Promise<void> {
         // Capture before the async round-trip: the card content is replaced when its state
         // refreshes to "confirmed". The promise is returned so the card can show a spinner and lock
         // its buttons until the confirm/cancel (and its downstream deposit) resolves.
         const actionId =
             msg.content.kind === "action_card_content" ? msg.content.actionId : undefined;
         return client
-            .respondToActionCard(chatId, threadRootMessageIndex, msg.messageId, response)
+            .respondToActionCard(chatId, threadRootMessageIndex, msg.messageId, response, payload)
             .then((success) => {
                 if (!success) {
                     // A failed confirm (usually a deposit error) now leaves the card Pending on the

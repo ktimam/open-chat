@@ -48,7 +48,10 @@
         onExpandMessage?: (() => void) | undefined;
         onRemovePreview?: (url: string) => void;
         onRegisterVote?: (vote: { type: "delete" | "register"; answerIndex: number }) => void;
-        onRespondToActionCard?: (response: "confirm" | "cancel") => void | Promise<unknown>;
+        onRespondToActionCard?: (
+            response: "confirm" | "cancel",
+            payload?: Record<string, unknown>,
+        ) => void | Promise<unknown>;
         ogPreviews?: OgPreview[];
         messagePreviews?: RehydratedMessagePreview[];
     }
@@ -137,7 +140,11 @@
 {:else if content.kind === "poll_content"}
     <PollContent {readonly} {me} {content} {senderId} {onRegisterVote} />
 {:else if content.kind === "action_card_content"}
-    <ActionCardContent {content} {readonly} onRespond={onRespondToActionCard} />
+    <ActionCardContent
+        {content}
+        {readonly}
+        chatId={messageContext.chatId}
+        onRespond={onRespondToActionCard} />
 {:else if content.kind === "giphy_content"}
     <GiphyContent {edited} {intersecting} {fill} {content} {reply} {height} {blockLevelMarkdown} />
 {:else if content.kind === "proposal_content"}

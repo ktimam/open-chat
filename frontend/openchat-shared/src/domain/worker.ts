@@ -1215,6 +1215,11 @@ type RespondToActionCard = {
     threadRootMessageIndex: number | undefined;
     messageId: bigint;
     response: "confirm" | "cancel";
+    // App-rendered cards (surface kind "card") let the user edit the card's values in the app's iframe;
+    // the edited object rides across the postMessage bridge to here. Phase 1 only carries it to the
+    // client/worker boundary — the worker/agent/canister do NOT consume it yet (Phase 2 wires the
+    // on-chain deposit override). Optional + JSON-encodable so structured clone across the worker is clean.
+    confirmPayloadOverride?: Record<string, unknown>;
     kind: "respondToActionCard";
 };
 
