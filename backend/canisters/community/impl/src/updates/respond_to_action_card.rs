@@ -14,8 +14,8 @@ const MAX_OVERRIDE_BYTES: usize = 16_384;
 
 // Pick the bytes to deposit: the confirmer's edited `confirm_payload_override` when it is present and
 // within `1..=MAX_OVERRIDE_BYTES`, else the frozen stored payload. OpenChat never interprets either.
-fn resolve_confirm_payload(args: &Args, stored: ByteBuf) -> ByteBuf {
-    match &args.confirm_payload_override {
+fn resolve_confirm_payload(override_bytes: &Option<ByteBuf>, stored: ByteBuf) -> ByteBuf {
+    match override_bytes {
         Some(bytes) if (1..=MAX_OVERRIDE_BYTES).contains(&bytes.len()) => bytes.clone(),
         _ => stored,
     }
@@ -105,7 +105,7 @@ fn prepare(args: &Args, state: &mut RuntimeState) -> OCResult<Prepared> {
             // already the authed confirmer (a chat member); the size bound stops an oversized blob;
             // and the consumer app re-validates the payload against its own schema — so OpenChat stays
             // semantics-blind, depositing opaque bytes exactly as today.
-            let confirm_payload = resolve_confirm_payload(args, deposit.confirm_payload);
+            let confirm_payload = resolve_confirm_payload(&args.confirm_payload_override, deposit.confirm_payload);
             return Ok(Prepared::NeedsDeposit {
                 user_id,
                 deposit: DepositInstruction {
@@ -142,4 +142,45 @@ fn commit_response(args: &Args, user_id: UserId, state: &mut RuntimeState) -> OC
     handle_activity_notification(state);
 
     Ok(result.value.state)
+}
+#[cfg(test)]
+mod tests {
+    use super::{resolve_confirm_payload, MAX_OVERRIDE_BYTES};
+    use serde_bytes::ByteBuf;
+
+    // The frozen payload posted at propose time — the fallback whenever the override is absent/invalid.
+    fn stored() -> ByteBuf {
+        ByteBuf::from(b"STORED".to_vec())
+    }
+
+    #[test]
+    fn none_override_keeps_stored() {
+        assert_eq!(resolve_confirm_payload(&None, stored()), stored());
+    }
+
+    #[test]
+    fn empty_override_keeps_stored() {
+        // len 0 is outside 1..=MAX — a member must not be able to blank the payload to empty bytes.
+        assert_eq!(resolve_confirm_payload(&Some(ByteBuf::new()), stored()), stored());
+    }
+
+    #[test]
+    fn in_bounds_override_wins() {
+        let edited = ByteBuf::from(b"EDITED".to_vec());
+        assert_eq!(resolve_confirm_payload(&Some(edited.clone()), stored()), edited);
+    }
+
+    #[test]
+    fn max_len_override_accepted() {
+        // The 16_384-byte bound is INCLUSIVE — exactly MAX is deposited.
+        let edited = ByteBuf::from(vec![b'x'; MAX_OVERRIDE_BYTES]);
+        assert_eq!(resolve_confirm_payload(&Some(edited.clone()), stored()), edited);
+    }
+
+    #[test]
+    fn oversized_override_keeps_stored() {
+        // One byte over MAX (16_385) is rejected — the cap limits how much a member can deposit.
+        let edited = ByteBuf::from(vec![b'x'; MAX_OVERRIDE_BYTES + 1]);
+        assert_eq!(resolve_confirm_payload(&Some(edited), stored()), stored());
+    }
 }
