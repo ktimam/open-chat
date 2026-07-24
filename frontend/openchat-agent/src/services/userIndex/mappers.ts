@@ -84,9 +84,9 @@ import type {
     UserIndexUnsuspendUserResponse,
     UserIndexUserRegistrationCanisterResponse,
     UserIndexUsersResponse,
-    UserIndexAiActionsDefinition,
-    UserIndexAiActionsRule,
-    UserIndexAiAppManifest,
+    AiActionDefinition as TAiActionDefinition,
+    AiActionRule as TAiActionRule,
+    AiAppManifest as TAiAppManifest,
     UserIndexAiAppsResponse,
     UserIndexRegisterAiAppResponse,
     UserIndexAiAppUserKeysResponse,
@@ -621,7 +621,7 @@ export function diamondMembershipFeesResponse(
 // Maps a domain rule (flat, camelCase discriminated union) into the wire shape serde expects for the
 // externally tagged Rust AiActionRule enum: a single-key map { variant_name: payload } with snake_case
 // field names, unit enum values (mode/ops/provide items) travelling as plain snake_case strings.
-function apiAiActionRule(rule: AiActionRule): UserIndexAiActionsRule {
+function apiAiActionRule(rule: AiActionRule): TAiActionRule {
     switch (rule.kind) {
         case "keyword_map":
             return {
@@ -645,7 +645,7 @@ function apiAiActionRule(rule: AiActionRule): UserIndexAiActionsRule {
 // The inverse of aiActionDefinitionFromWire: maps the runner's camelCase AiActionDefinition into the on-chain
 // snake_case wire shape (response_schema as a JSON string, card rows keyed by `field`, endpoint required).
 // Absent rules are sent as [] (the backend field also has serde(default), but sending [] is explicit).
-export function apiAiActionDefinition(def: AiActionDefinition): UserIndexAiActionsDefinition {
+export function apiAiActionDefinition(def: AiActionDefinition): TAiActionDefinition {
     return {
         name: def.name,
         description: def.description,
@@ -661,13 +661,16 @@ export function apiAiActionDefinition(def: AiActionDefinition): UserIndexAiActio
             rows: def.card.rows.map((r) => ({ field: r.valueKey, label: r.label })),
         },
         rules: (def.rules ?? []).map(apiAiActionRule),
+        // Regen made accepts_image a required wire field (bare ts-rs export of a serde(default) bool);
+        // the domain flag is optional (absent === false), matching aiActionDefinitionFromWire's default.
+        accepts_image: def.acceptsImage ?? false,
     };
 }
 
 // The manifest's principal-typed fields (inbox_canister_id) arrive as raw bytes off msgpack; decode
 // them to a text principal here — mirroring how `owner` is decoded — so the shared
 // aiAppManifestFromWire (which has no principal decoder) receives the AiAppManifestWire string shape.
-function aiAppManifestWithDecodedPrincipals(m: UserIndexAiAppManifest): AiAppManifestWire {
+function aiAppManifestWithDecodedPrincipals(m: TAiAppManifest): AiAppManifestWire {
     return {
         ...m,
         inbox_canister_id:
@@ -695,7 +698,7 @@ export function aiAppsResponse(value: UserIndexAiAppsResponse): AiAppRegistratio
 // per-action mapping above. Absent surfaces are sent as [] (the backend field also has
 // serde(default), but sending [] is explicit); the surface fields and the display strings
 // ("sheet" / "external") already match the wire shape byte-for-byte.
-export function apiAiAppManifest(manifest: AiAppManifest): UserIndexAiAppManifest {
+export function apiAiAppManifest(manifest: AiAppManifest): TAiAppManifest {
     return {
         name: manifest.name,
         description: manifest.description,

@@ -68,6 +68,7 @@ fn main() {
 
     generate_ts_method!(user_index, pay_for_diamond_membership);
     generate_ts_method!(user_index, ai_apps);
+    generate_ts_method!(user_index, ai_app_user_keys);
     generate_ts_method!(user_index, claim_ai_app_link_code);
     generate_ts_method!(user_index, create_ai_app_link_code);
     generate_ts_method!(user_index, delete_ai_app);
