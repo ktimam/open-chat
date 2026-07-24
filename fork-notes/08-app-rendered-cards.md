@@ -38,7 +38,13 @@ Host (OpenChat) → iframe (app):
 { type: "oc:card:init", version: 1,
   data: <the extraction object>,            // prefill values
   context: { chatKey, appId, actionId, theme: "light"|"dark", readonly: boolean } }
+{ type: "oc:card:busy", version: 1, busy: boolean }   // confirm/cancel round-trip in progress
 ```
+`oc:card:busy` is a generic progress signal so the app can lock its own in-frame buttons and show a
+spinner while a confirm/cancel deposits + fans out (the buttons live in the iframe now). It is a bare
+boolean — no app or canister data — posted to the card origin whenever the host's `busy` flips, and it
+resets on success OR failure. Presentation-only: the host's `confirm`/`cancel` handlers still screen
+`!cardActionable || busy`, so a card that ignores the signal is no less safe.
 iframe (app) → host:
 ```
 { type: "oc:card:ready" }                    // mounted; host may (re)send init
