@@ -4,6 +4,8 @@
 // the messages that flow across the seam. All functions here are pure so they can be unit-tested away
 // from the DOM; ActionCardContent.svelte owns the actual window listener + iframe wiring.
 
+import { OC_ENTRIES_ROW_LABEL, OC_HIDDEN_ROW_PREFIX } from "openchat-shared";
+
 // The context OpenChat hands the card iframe alongside the prefill data.
 export interface CardInitContext {
     // The canonical chat key for this chat (chatKeyFor); undefined only for chat kinds that render none.
@@ -75,10 +77,32 @@ export function reverseMapRows(
 ): Record<string, unknown> {
     const out: Record<string, unknown> = {};
     for (const row of rows) {
+        // Hidden control rows (e.g. a multi-entry card's OC_ENTRIES_ROW_LABEL sentinel) ride through the
+        // hydrated rows for the app card to read; they are never fields, so never reverse-map them.
+        if (row.label.startsWith(OC_HIDDEN_ROW_PREFIX)) continue;
         const key = labelToField[row.label] ?? row.label.toLowerCase();
         out[key] = row.value;
     }
     return out;
+}
+
+// A multi-entry card carries its EXACT validated entry array through a hidden sentinel row
+// (OC_ENTRIES_ROW_LABEL) because the read path strips confirm_payload while still hydrating rows.
+// Find that row and JSON.parse its value back into the array, so the app-rendered card receives every
+// entry (2..N) instead of the flattened per-entry summaries. Returns the array when the sentinel is
+// present AND decodes to an array; undefined otherwise (single-entry cards, or a malformed sentinel,
+// fall back to the normal decoded-payload / reverse-map prefill path).
+export function extractEntriesRow(
+    rows: readonly { label: string; value: string }[],
+): unknown[] | undefined {
+    const row = rows.find((r) => r.label === OC_ENTRIES_ROW_LABEL);
+    if (row === undefined) return undefined;
+    try {
+        const parsed: unknown = JSON.parse(row.value);
+        return Array.isArray(parsed) ? parsed : undefined;
+    } catch {
+        return undefined;
+    }
 }
 
 export function buildCardInit(

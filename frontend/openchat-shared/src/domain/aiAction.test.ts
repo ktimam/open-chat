@@ -10,6 +10,7 @@ import {
     buildActionCardContent,
     buildMultiActionCardContent,
     chatKeyFor,
+    OC_ENTRIES_ROW_LABEL,
     compileRules,
     missingRequired,
     parseExtraction,
@@ -132,6 +133,10 @@ describe("buildActionCardContent", () => {
     it("fan-out: recipientPublicKeys is undefined when no additional keys are supplied", () => {
         const card = buildActionCardContent(DEF, { amount: 1, currency: "USD" }, RECIPIENT);
         expect(card.recipientPublicKeys).toBeUndefined();
+    });
+    it("single-entry card carries NO hidden __oc_ sentinel row", () => {
+        const card = buildActionCardContent(DEF, { amount: 20, currency: "USD", note: "lunch" }, RECIPIENT);
+        expect(card.rows.some((r) => r.label.startsWith("__oc_"))).toBe(false);
     });
 });
 
@@ -396,10 +401,18 @@ describe("runAiAction", () => {
             // Title reflects the count (2) and derives from the definition's card title.
             expect(r.card.title).toContain("2");
             expect(r.card.title).toContain(DEF.card.title);
-            // One readable row per entry, composed from the def's row valueKeys.
+            // One readable row per entry, composed from the def's row valueKeys, plus the hidden
+            // sentinel carrying the exact validated array to the app-rendered card.
             expect(r.card.rows).toEqual([
                 { label: "Entry 1", value: "20 USD lunch" },
                 { label: "Entry 2", value: "30 EUR dinner" },
+                {
+                    label: OC_ENTRIES_ROW_LABEL,
+                    value: JSON.stringify([
+                        { amount: 20, currency: "USD", note: "lunch" },
+                        { amount: 30, currency: "EUR", note: "dinner" },
+                    ]),
+                },
             ]);
             // extracted mirrors the valid array.
             expect(r.extracted).toEqual([
@@ -435,7 +448,7 @@ describe("buildMultiActionCardContent", () => {
         { amount: 20, currency: "USD", note: "lunch" },
         { amount: 30, currency: "EUR", note: "dinner" },
     ];
-    it("builds one card per-entry-row with the array as confirmPayload", () => {
+    it("builds one summary row per entry, plus the hidden sentinel row, with the array as confirmPayload", () => {
         const card = buildMultiActionCardContent(DEF, entries, RECIPIENT);
         expect(card.kind).toBe("action_card_content");
         expect(card.actionId).toBe(DEF.name);
@@ -443,8 +456,18 @@ describe("buildMultiActionCardContent", () => {
         expect(card.rows).toEqual([
             { label: "Entry 1", value: "20 USD lunch" },
             { label: "Entry 2", value: "30 EUR dinner" },
+            { label: OC_ENTRIES_ROW_LABEL, value: JSON.stringify(entries) },
         ]);
         expect(JSON.parse(new TextDecoder().decode(card.confirmPayload!))).toEqual(entries);
+    });
+    it("the hidden sentinel row round-trips the EXACT validated entry array (== the confirmPayload)", () => {
+        const card = buildMultiActionCardContent(DEF, entries, RECIPIENT);
+        const sentinel = card.rows.find((r) => r.label === OC_ENTRIES_ROW_LABEL);
+        expect(sentinel).toBeDefined();
+        // JSON.parse recovers every entry (nothing flattened / lost).
+        expect(JSON.parse(sentinel!.value)).toEqual(entries);
+        // The sentinel value is byte-identical to the array serialized as the confirmPayload.
+        expect(sentinel!.value).toBe(new TextDecoder().decode(card.confirmPayload!));
     });
     it("threads the inbox + fan-out keys exactly like the single-entry builder", () => {
         const card = buildMultiActionCardContent(DEF, entries, RECIPIENT, "aaaaa-aa", [

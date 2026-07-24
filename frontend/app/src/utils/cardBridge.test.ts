@@ -4,6 +4,7 @@ import {
     clampCardHeight,
     decodeConfirmPayload,
     deriveCardOrigin,
+    extractEntriesRow,
     isRecord,
     reverseMapRows,
     type CardInitContext,
@@ -121,6 +122,45 @@ describe("reverseMapRows", () => {
 
     test("empty map -> every key is the lowercased label", () => {
         expect(reverseMapRows([{ label: "Amount", value: "5" }], {})).toEqual({ amount: "5" });
+    });
+
+    test("skips hidden __oc_ rows (the sentinel is never reverse-mapped)", () => {
+        const rows = [
+            { label: "Amount", value: "10" },
+            { label: "__oc_entries__", value: '[{"amount":10},{"amount":20}]' },
+        ];
+        expect(reverseMapRows(rows, iouMap)).toEqual({ amount: "10" });
+    });
+});
+
+describe("extractEntriesRow", () => {
+    test("returns the parsed array from a __oc_entries__ sentinel row", () => {
+        const rows = [
+            { label: "Entry 1", value: "20 USD lunch" },
+            { label: "Entry 2", value: "30 EUR dinner" },
+            {
+                label: "__oc_entries__",
+                value: '[{"amount":20,"currency":"USD"},{"amount":30,"currency":"EUR"}]',
+            },
+        ];
+        expect(extractEntriesRow(rows)).toEqual([
+            { amount: 20, currency: "USD" },
+            { amount: 30, currency: "EUR" },
+        ]);
+    });
+
+    test("returns undefined when no sentinel row is present (single-entry card)", () => {
+        expect(
+            extractEntriesRow([
+                { label: "Amount", value: "10" },
+                { label: "Currency", value: "USD" },
+            ]),
+        ).toBeUndefined();
+    });
+
+    test("returns undefined when the sentinel value is not JSON or not an array", () => {
+        expect(extractEntriesRow([{ label: "__oc_entries__", value: "{not json" }])).toBeUndefined();
+        expect(extractEntriesRow([{ label: "__oc_entries__", value: '{"a":1}' }])).toBeUndefined();
     });
 });
 

@@ -1,5 +1,11 @@
 <script lang="ts">
-    import { type ActionCardContent, type ChatIdentifier, chatKeyFor, OpenChat } from "openchat-client";
+    import {
+        type ActionCardContent,
+        type ChatIdentifier,
+        chatKeyFor,
+        OC_HIDDEN_ROW_PREFIX,
+        OpenChat,
+    } from "openchat-client";
     import { getContext, onMount } from "svelte";
     import { currentTheme } from "../../theme/themes";
     import { cardSurfaceForAction } from "../../utils/aiAppSurfaces";
@@ -8,6 +14,7 @@
         clampCardHeight,
         decodeConfirmPayload,
         deriveCardOrigin,
+        extractEntriesRow,
         isRecord,
         reverseMapRows,
     } from "../../utils/cardBridge";
@@ -131,16 +138,23 @@
     function postInit() {
         const target = iframeEl?.contentWindow;
         if (target === null || target === undefined || cardOrigin === undefined) return;
-        // Prefill precedence: the decoded confirmPayload wins WHEN present (future-proof — the moment
-        // the canister hydrates confirm_payload on receive, the exact frozen object flows straight
-        // through). Today it decodes to {} on a received card, so we fall back to reverse-mapping the
-        // hydrated {label, value} rows onto the manifest's field keys — recovering the real extracted
-        // values (e.g. { amount, currency, direction, note }) instead of an empty form.
+        // Prefill precedence:
+        //   1. A MULTI-entry card carries its exact validated entry array through a hidden sentinel row
+        //      (confirm_payload is stripped on read, but rows are hydrated). When present we deliver
+        //      `{ entries: [...] }` so the app card renders every entry (2..N) instead of the flattened
+        //      per-entry summaries reverse-mapped into one object.
+        //   2. Else the decoded confirmPayload wins WHEN present (future-proof — the moment the canister
+        //      hydrates confirm_payload on receive, the exact frozen object flows straight through).
+        //   3. Else (today's single-entry received card) reverse-map the hydrated {label, value} rows onto
+        //      the manifest's field keys — recovering the real extracted values instead of an empty form.
+        const entries = extractEntriesRow(content.rows);
         const decoded = decodeConfirmPayload(content.confirmPayload);
-        const data =
-            Object.keys(decoded).length > 0
-                ? decoded
-                : reverseMapRows(content.rows, cardLabelToField);
+        const data: Record<string, unknown> =
+            entries !== undefined
+                ? { entries }
+                : Object.keys(decoded).length > 0
+                  ? decoded
+                  : reverseMapRows(content.rows, cardLabelToField);
         const init = buildCardInit(data, {
             chatKey: chatKeyFor(chatId),
             appId: cardAppId ?? 0,
@@ -246,7 +260,9 @@
         {:else}
             <table class="rows">
                 <tbody>
-                    {#each content.rows as row}
+                    <!-- Hidden control rows (a multi-entry card's __oc_ sentinel) carry data to the app
+                         card only; the classic renderer never displays them. -->
+                    {#each content.rows.filter((r) => !r.label.startsWith(OC_HIDDEN_ROW_PREFIX)) as row}
                         <tr>
                             <td class="label">{row.label}</td>
                             <td class="value">{row.value}</td>

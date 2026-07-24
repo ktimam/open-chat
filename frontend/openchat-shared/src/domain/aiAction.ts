@@ -451,6 +451,17 @@ export function buildActionCardContent(
     };
 }
 
+// Rows whose label starts with this prefix are HIDDEN control rows: they ride through the hydrated
+// rows to the client (the read path strips confirm_payload but keeps rows) so the app-rendered card
+// can read them, but the classic OC renderer never displays them and reverseMapRows never maps them.
+export const OC_HIDDEN_ROW_PREFIX = "__oc_";
+
+// The hidden control row a multi-entry card carries: its value is the JSON of the EXACT validated
+// entry array (byte-identical to the array that becomes the confirmPayload). Because confirm_payload
+// is stripped on read, this row is the only place the exact array survives to the app card, which
+// reverse-maps it into { entries: [...] } instead of flattening the per-entry summary rows.
+export const OC_ENTRIES_ROW_LABEL = `${OC_HIDDEN_ROW_PREFIX}entries__`;
+
 // Pure: turn a registered action + SEVERAL structured extractions into ONE postable ActionCard. The
 // confirmPayload is the verbatim JSON ARRAY of the entries (the multi form of the wire contract); the
 // consumer parses an array and adds every element on a single confirm. Each card row summarises one
@@ -473,6 +484,13 @@ export function buildMultiActionCardContent(
             .filter((v) => v.length > 0)
             .join(" "),
     }));
+
+    // Append the hidden sentinel carrying the EXACT validated entry array. On read the canister strips
+    // confirm_payload but hydrates rows, so this row is the only channel by which the app-rendered card
+    // recovers every entry (2..N) instead of reverse-mapping the flattened per-entry summaries into one
+    // object. The classic OC renderer + reverseMapRows skip any "__oc_" row, so this is invisible to the
+    // non-app render and never pollutes the single-entry reverse-map.
+    rows.push({ label: OC_ENTRIES_ROW_LABEL, value: JSON.stringify(extractedList) });
 
     return {
         kind: "action_card_content",

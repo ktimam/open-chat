@@ -112,7 +112,9 @@ describe("buildManualCard (manual-extraction gate)", () => {
                 { kind: "expense", amount: 20, currency: "USD" },
                 { kind: "expense", amount: 30, currency: "EUR" },
             ]);
-            expect(r.card.rows.length).toBe(2);
+            // One visible summary row per entry; the multi card also appends a hidden "__oc_" sentinel
+            // row carrying the exact entry array to the app-rendered card, so filter it out here.
+            expect(r.card.rows.filter((row) => !row.label.startsWith("__oc_")).length).toBe(2);
             expect(r.card.title).toContain("2");
         }
     });
