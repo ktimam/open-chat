@@ -784,6 +784,7 @@ export class GroupClient
         messageId: bigint,
         threadRootMessageIndex: number | undefined,
         response: "confirm" | "cancel",
+        confirmPayloadOverride?: Record<string, unknown>,
     ): Promise<RespondToActionCardResponse> {
         return this.update(
             groupId,
@@ -792,6 +793,10 @@ export class GroupClient
                 thread_root_message_index: threadRootMessageIndex,
                 message_id: messageId,
                 response: response === "confirm" ? "Confirm" : "Cancel",
+                confirm_payload_override:
+                    confirmPayloadOverride !== undefined
+                        ? new TextEncoder().encode(JSON.stringify(confirmPayloadOverride))
+                        : undefined,
             },
             unitResult,
             GroupRespondToActionCardArgs,

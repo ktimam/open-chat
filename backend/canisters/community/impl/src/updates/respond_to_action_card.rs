@@ -8,6 +8,19 @@ use oc_error_codes::OCErrorCode;
 use serde_bytes::ByteBuf;
 use types::{ActionCardResponse, ActionCardState, CanisterId, Chat, OCResult, TimestampMillis, UserId};
 
+// Upper bound on an app-supplied edited payload (Phase 2 / app-rendered cards). A member can't
+// deposit an arbitrary blob; anything larger (or empty) falls back to the stored payload.
+const MAX_OVERRIDE_BYTES: usize = 16_384;
+
+// Pick the bytes to deposit: the confirmer's edited `confirm_payload_override` when it is present and
+// within `1..=MAX_OVERRIDE_BYTES`, else the frozen stored payload. OpenChat never interprets either.
+fn resolve_confirm_payload(args: &Args, stored: ByteBuf) -> ByteBuf {
+    match &args.confirm_payload_override {
+        Some(bytes) if (1..=MAX_OVERRIDE_BYTES).contains(&bytes.len()) => bytes.clone(),
+        _ => stored,
+    }
+}
+
 // Two-phase confirm: a confirm that carries delivery routing DEPOSITS FIRST and only commits
 // `Confirmed` once the deposit is stored — so a FAILED deposit leaves the card Pending (the user can
 // retry) rather than a Confirmed-but-undelivered card that silently reached no inbox. Cancels and
@@ -86,12 +99,19 @@ fn prepare(args: &Args, state: &mut RuntimeState) -> OCResult<Prepared> {
         if let Some(deposit) = peeked {
             // This canister IS the community, so it supplies the chat identity for the deposit context.
             let chat = Chat::Channel(state.env.canister_id().into(), args.channel_id);
+            // App-rendered cards (Phase 2): if the confirmer's app sent an edited payload within
+            // bounds, deposit THOSE bytes instead of the frozen stored payload; otherwise (None /
+            // empty / oversized) keep the stored bytes exactly as before. SECURITY: the caller is
+            // already the authed confirmer (a chat member); the size bound stops an oversized blob;
+            // and the consumer app re-validates the payload against its own schema — so OpenChat stays
+            // semantics-blind, depositing opaque bytes exactly as today.
+            let confirm_payload = resolve_confirm_payload(args, deposit.confirm_payload);
             return Ok(Prepared::NeedsDeposit {
                 user_id,
                 deposit: DepositInstruction {
                     local_user_index_canister_id: state.data.local_user_index_canister_id,
                     recipient_public_keys: deposit.recipient_public_keys,
-                    confirm_payload: deposit.confirm_payload,
+                    confirm_payload,
                     created_at: deposit.responded_at,
                     inbox_canister_id: deposit.inbox_canister_id,
                     context: ActionDepositContext {

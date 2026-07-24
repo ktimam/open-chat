@@ -2856,6 +2856,7 @@ export class OpenChatAgent extends EventTarget {
         threadRootMessageIndex: number | undefined,
         messageId: bigint,
         response: "confirm" | "cancel",
+        confirmPayloadOverride?: Record<string, unknown>,
     ): Promise<RespondToActionCardResponse> {
         if (offline()) return Promise.resolve(CommonResponses.offline());
 
@@ -2866,6 +2867,7 @@ export class OpenChatAgent extends EventTarget {
                     messageId,
                     threadRootMessageIndex,
                     response,
+                    confirmPayloadOverride,
                 );
             case "channel":
                 return this._communityClient.respondToActionCard(
@@ -2873,6 +2875,7 @@ export class OpenChatAgent extends EventTarget {
                     messageId,
                     threadRootMessageIndex,
                     response,
+                    confirmPayloadOverride,
                 );
             case "direct_chat":
                 return this.userClient.respondToActionCard(
@@ -2880,6 +2883,7 @@ export class OpenChatAgent extends EventTarget {
                     messageId,
                     threadRootMessageIndex,
                     response,
+                    confirmPayloadOverride,
                 );
         }
     }

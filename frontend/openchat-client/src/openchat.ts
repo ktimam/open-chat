@@ -2357,11 +2357,11 @@ export class OpenChat {
                 threadRootMessageIndex,
                 messageId,
                 response,
-                // TODO(phase2): thread confirmPayloadOverride onward — worker `respondToActionCard` →
-                // agent → group/community/user client → `respond_to_action_card`'s canister Args (as a
-                // bounded `confirm_payload_override`), so the on-chain deposit uses these edited values
-                // in place of the frozen confirm_payload. Phase 1 intentionally stops at this boundary:
-                // the worker/agent/canister ignore the field for now.
+                // Edited app-card values ride onward: worker `respondToActionCard` → agent →
+                // group/community/user client → `respond_to_action_card`'s canister Args (as the
+                // bounded `confirm_payload_override`, JSON-encoded at the client layer), so the
+                // on-chain deposit uses these edited values in place of the frozen confirm_payload.
+                // Classic OC-rendered cards pass nothing here — behaviour is unchanged for them.
                 confirmPayloadOverride: payload,
             })
             .then((resp) => resp.kind === "success")

@@ -1,5 +1,14 @@
 # App-rendered confirmable cards (design + build contract)
 
+**STATUS: DONE + live-verified (2026-07-24)** — all 3 phases shipped. IOU renders its own card in an
+`<iframe credentialless>` inside the OpenChat chat, prefilled + editable; "Add to IOU" deposits the
+EDITED values on-chain via `respond_to_action_card`'s `confirm_payload_override` (bounded 16 KB,
+authed confirmer). Live proof: extraction 350/EGP/credit → edited 724699/USD/debt round-trips into
+the inbox. Verify: `IOU/scripts/live/{verify-app-card,verify-app-card-edit}.ts`. Caveat: Phase-2's
+`generate-typebox-types.sh` full-regen surfaced pre-existing typebox drift (stale AI-app symbols the
+committed frontend still imports), so the 3 new typebox fields were hand-added on HEAD instead of a
+full regen — reconciling that drift is a separate, out-of-scope AI-app-API migration.
+
 **Principle:** the confirmable-action card's look AND function belong to the **app**, not OpenChat.
 OpenChat becomes a generic, card-agnostic host: it embeds the app's card page in the chat bubble and
 relays confirm/cancel. Added once, then no OpenChat change per app.

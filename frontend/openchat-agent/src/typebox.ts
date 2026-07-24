@@ -8155,6 +8155,7 @@ export const GroupRespondToActionCardArgs = Type.Object({
     thread_root_message_index: Type.Optional(MessageIndex),
     message_id: MessageId,
     response: ActionCardResponse,
+    confirm_payload_override: Type.Optional(TSBytes),
 });
 
 export type GroupRespondToActionCardResponse = Static<typeof GroupRespondToActionCardResponse>;
@@ -8173,6 +8174,7 @@ export const UserRespondToActionCardArgs = Type.Object({
     thread_root_message_index: Type.Optional(MessageIndex),
     message_id: MessageId,
     response: ActionCardResponse,
+    confirm_payload_override: Type.Optional(TSBytes),
 });
 
 export type UserRespondToActionCardResponse = Static<typeof UserRespondToActionCardResponse>;
@@ -8191,6 +8193,7 @@ export const CommunityRespondToActionCardArgs = Type.Object({
     thread_root_message_index: Type.Optional(MessageIndex),
     message_id: MessageId,
     response: ActionCardResponse,
+    confirm_payload_override: Type.Optional(TSBytes),
 });
 
 export type CommunityRespondToActionCardResponse = Static<typeof CommunityRespondToActionCardResponse>;

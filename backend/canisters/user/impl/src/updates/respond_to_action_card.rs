@@ -10,6 +10,19 @@ use types::{ActionCardResponse, ActionCardState, CanisterId, Chat, EventIndex, O
 use user_canister::respond_to_action_card::{Response::*, *};
 use user_canister::{ActionCardStatusChange, UserCanisterEvent};
 
+// Upper bound on an app-supplied edited payload (Phase 2 / app-rendered cards). A member can't
+// deposit an arbitrary blob; anything larger (or empty) falls back to the stored payload.
+const MAX_OVERRIDE_BYTES: usize = 16_384;
+
+// Pick the bytes to deposit: the confirmer's edited `confirm_payload_override` when it is present and
+// within `1..=MAX_OVERRIDE_BYTES`, else the frozen stored payload. OpenChat never interprets either.
+fn resolve_confirm_payload(args: &Args, stored: ByteBuf) -> ByteBuf {
+    match &args.confirm_payload_override {
+        Some(bytes) if (1..=MAX_OVERRIDE_BYTES).contains(&bytes.len()) => bytes.clone(),
+        _ => stored,
+    }
+}
+
 // The direct-chat confirm path. Two-phase like the group/community canisters: a confirm that carries
 // delivery routing DEPOSITS FIRST and only commits `Confirmed` (and mirrors that onto the other
 // participant's copy) once the deposit is stored — so a FAILED deposit leaves the card Pending
@@ -93,10 +106,17 @@ fn prepare(args: &Args, state: &mut RuntimeState) -> OCResult<Prepared> {
             // The canonical direct-chat key is rendered per participant: each side identifies the chat
             // by the OTHER participant ("direct:<them>"), which is what the responder's deposit carries.
             let chat_identity = Chat::Direct(args.user_id.into());
+            // App-rendered cards (Phase 2): if the confirmer's app sent an edited payload within
+            // bounds, deposit THOSE bytes instead of the frozen stored payload; otherwise (None /
+            // empty / oversized) keep the stored bytes exactly as before. SECURITY: the caller is
+            // already the authed owner (caller_is_owner guard); the size bound stops an oversized blob;
+            // and the consumer app re-validates the payload against its own schema — so OpenChat stays
+            // semantics-blind, depositing opaque bytes exactly as today.
+            let confirm_payload = resolve_confirm_payload(args, deposit.confirm_payload);
             return Ok(Prepared::NeedsDeposit(DepositInstruction {
                 local_user_index_canister_id: state.data.local_user_index_canister_id,
                 recipient_public_keys: deposit.recipient_public_keys,
-                confirm_payload: deposit.confirm_payload,
+                confirm_payload,
                 created_at: deposit.responded_at,
                 inbox_canister_id: deposit.inbox_canister_id,
                 context: ActionDepositContext {

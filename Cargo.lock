@@ -12573,6 +12573,7 @@ dependencies = [
  "icrc-ledger-types",
  "oc_error_codes",
  "serde",
+ "serde_bytes",
  "ts-rs",
  "ts_export",
  "types",

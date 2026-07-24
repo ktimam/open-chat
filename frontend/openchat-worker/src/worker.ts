@@ -504,6 +504,7 @@ function getAction(
                 payload.threadRootMessageIndex,
                 payload.messageId,
                 payload.response,
+                payload.confirmPayloadOverride,
             );
 
         case "deleteMessage":
