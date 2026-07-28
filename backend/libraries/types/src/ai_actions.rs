@@ -54,8 +54,10 @@ pub struct AiAppManifest {
 
 /// A UI surface an app declares in its manifest: a URL OpenChat opens at well-known moments so the
 /// user can configure the app without leaving the chat client.
+// PartialEq/Eq so a re-registration can detect a changed surface set (which must re-run the publish
+// vouch — see AiAppRegistry::register).
 #[ts_export]
-#[derive(CandidType, Serialize, Deserialize, Debug, Clone)]
+#[derive(CandidType, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct AiAppSurface {
     /// What the surface is for. "chat_link" = configure/link a chat inside the app (opened by
     /// OpenChat after the first confirmed action in a chat). Other kinds are app-defined; OpenChat
@@ -70,7 +72,7 @@ pub struct AiAppSurface {
 
 /// How OpenChat presents a surface when it opens it.
 #[ts_export]
-#[derive(CandidType, Serialize, Deserialize, Debug, Clone)]
+#[derive(CandidType, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 // Per-variant renames — see AiActionRule for why rename_all cannot be used with candid.
 pub enum SurfaceDisplay {
     /// Embedded in-app (an iframe hosted in a bottom sheet).

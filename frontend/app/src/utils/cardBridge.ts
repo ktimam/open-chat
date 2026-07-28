@@ -32,11 +32,42 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+// Loopback hosts where http is tolerated for local development. WHATWG URL reports an IPv6 host with
+// its brackets (e.g. "[::1]"), so both bracketed and bare forms are listed.
+function isLoopbackHost(hostname: string): boolean {
+    return (
+        hostname === "localhost" ||
+        hostname === "127.0.0.1" ||
+        hostname === "[::1]" ||
+        hostname === "::1"
+    );
+}
+
+// The OpenChat host's own origin, read guardedly so this module stays unit-testable away from the DOM
+// (window may be absent). Tests inject `hostOrigin` explicitly instead of relying on this.
+function defaultHostOrigin(): string | undefined {
+    try {
+        if (typeof window !== "undefined" && typeof window.location?.origin === "string") {
+            return window.location.origin;
+        }
+    } catch {
+        // window/location access can throw in locked-down sandboxes — treat as "unknown host".
+    }
+    return undefined;
+}
+
 // The card iframe's origin, derived from its (already placeholder-substituted) surface URL. Used both
-// as the postMessage targetOrigin and as the allow-list for inbound messages. Returns undefined for a
-// URL we cannot parse (or a non-http(s) scheme) — the caller then declines to embed, staying on the
-// backward-compatible OC-rendered rows rather than talking to an unknown origin.
-export function deriveCardOrigin(url: string): string | undefined {
+// as the postMessage targetOrigin and as the allow-list for inbound messages. Returns undefined — the
+// caller then declines to embed, staying on the backward-compatible OC-rendered rows rather than
+// talking to an origin we won't trust — when the URL is:
+//   - unparseable, or a non-http(s) scheme (javascript:/data:/…);
+//   - plaintext http on a NON-loopback host (a downgrade / network-tamper vector — a legitimate app
+//     card is served over https; loopback http is kept for local dev);
+//   - the OpenChat host's OWN origin (defense-in-depth: a card must be THIRD-PARTY, storage-partitioned
+//     content — host-origin content in the frame could reach the host's own session/storage, and an
+//     app card is never legitimately served from the host origin). Pass `hostOrigin` to override the
+//     host detection (tests); it defaults to window.location.origin when a DOM is present.
+export function deriveCardOrigin(url: string, hostOrigin?: string): string | undefined {
     let parsed: URL;
     try {
         parsed = new URL(url);
@@ -44,6 +75,9 @@ export function deriveCardOrigin(url: string): string | undefined {
         return undefined;
     }
     if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return undefined;
+    if (parsed.protocol === "http:" && !isLoopbackHost(parsed.hostname)) return undefined;
+    const host = hostOrigin ?? defaultHostOrigin();
+    if (host !== undefined && parsed.origin === host) return undefined;
     return parsed.origin;
 }
 

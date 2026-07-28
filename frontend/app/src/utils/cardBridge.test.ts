@@ -31,6 +31,22 @@ describe("deriveCardOrigin", () => {
         expect(deriveCardOrigin("javascript:alert(1)")).toBeUndefined();
         expect(deriveCardOrigin("data:text/html,<h1>x</h1>")).toBeUndefined();
     });
+    test("rejects plaintext http on a non-loopback host (downgrade vector)", () => {
+        expect(deriveCardOrigin("http://iou.example/openchat/card")).toBeUndefined();
+    });
+    test("keeps allowing loopback http for local dev", () => {
+        expect(deriveCardOrigin("http://localhost:5341/openchat/card")).toBe("http://localhost:5341");
+        expect(deriveCardOrigin("http://127.0.0.1:3000/openchat/card")).toBe("http://127.0.0.1:3000");
+    });
+    test("rejects a card origin equal to the OpenChat host origin (must be third-party)", () => {
+        expect(
+            deriveCardOrigin("https://oc.example/openchat/card", "https://oc.example"),
+        ).toBeUndefined();
+        // A different origin under the same host detection still resolves.
+        expect(deriveCardOrigin("https://iou.example/openchat/card", "https://oc.example")).toBe(
+            "https://iou.example",
+        );
+    });
 });
 
 describe("decodeConfirmPayload", () => {

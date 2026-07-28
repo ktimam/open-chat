@@ -425,6 +425,7 @@ fn post_card(
         confirm_label: "Confirm".to_string(),
         cancel_label: "Cancel".to_string(),
         action_id: "act-fanout".to_string(),
+        app_id: None,
         disclosure: None,
         expires_at: None,
         recipient_public_key: recipient_pem,
@@ -446,6 +447,7 @@ fn confirm(env: &mut PocketIc, user: &User, group_id: ChatId, message_id: types:
             thread_root_message_index: None,
             message_id,
             response: ActionCardResponse::Confirm,
+            confirm_payload_override: None,
         },
     );
     assert!(
@@ -481,6 +483,7 @@ fn malformed_recipient_key_fails_whole_batch_leaving_card_pending() {
             thread_root_message_index: None,
             message_id,
             response: ActionCardResponse::Confirm,
+            confirm_payload_override: None,
         },
     );
     assert!(
@@ -506,6 +509,7 @@ fn malformed_recipient_key_fails_whole_batch_leaving_card_pending() {
             thread_root_message_index: None,
             message_id,
             response: ActionCardResponse::Cancel,
+            confirm_payload_override: None,
         },
     );
     assert!(
@@ -552,6 +556,7 @@ fn different_member_second_confirm_adds_no_deposit() {
             thread_root_message_index: None,
             message_id,
             response: ActionCardResponse::Confirm,
+            confirm_payload_override: None,
         },
     );
     assert!(
@@ -627,6 +632,7 @@ fn direct_chat_mirror_copy_never_emits_second_deposit() {
         confirm_label: "Confirm".to_string(),
         cancel_label: "Cancel".to_string(),
         action_id: "act-direct".to_string(),
+        app_id: None,
         disclosure: None,
         expires_at: None,
         recipient_public_key: Some(recipient_a.pk_pem.clone()),
@@ -648,6 +654,7 @@ fn direct_chat_mirror_copy_never_emits_second_deposit() {
             thread_root_message_index: None,
             message_id,
             response: ActionCardResponse::Confirm,
+            confirm_payload_override: None,
         },
     );
     assert!(
@@ -766,6 +773,7 @@ fn malformed_recipient_key_fails_whole_fanout_batch_atomically() {
                 thread_root_message_index: None,
                 message_id,
                 response: ActionCardResponse::Confirm,
+                confirm_payload_override: None,
             },
         )
     };

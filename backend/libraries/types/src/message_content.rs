@@ -1,8 +1,8 @@
 use crate::polls::{InvalidPollReason, PollConfig, PollVotes};
 use crate::{
-    Achievement, CanisterId, CompletedCryptoTransaction, CryptoTransaction, CryptoTransferDetails, EncryptionKey, MessageIndex,
-    MessagePermission, Milliseconds, P2PSwapStatus, PendingCryptoTransaction, ProposalContent, TimestampMillis, TokenInfo,
-    TotalVotes, User, UserId, VideoCallType,
+    Achievement, AiAppId, CanisterId, CompletedCryptoTransaction, CryptoTransaction, CryptoTransferDetails, EncryptionKey,
+    MessageIndex, MessagePermission, Milliseconds, P2PSwapStatus, PendingCryptoTransaction, ProposalContent, TimestampMillis,
+    TokenInfo, TotalVotes, User, UserId, VideoCallType,
 };
 use candid::CandidType;
 use oc_error_codes::{OCError, OCErrorCode};
@@ -385,6 +385,8 @@ impl From<MessageContent> for MessageContentInitial {
                 confirm_label: c.confirm_label,
                 cancel_label: c.cancel_label,
                 action_id: c.action_id,
+                // app_id IS present on the hydrated content (unlike the routing fields below).
+                app_id: c.app_id,
                 disclosure: c.disclosure,
                 expires_at: c.expires_at,
                 // Server-only routing fields are not present on the hydrated content.
@@ -440,6 +442,7 @@ impl From<MessageContentInitial> for MessageContent {
                 confirm_label: c.confirm_label,
                 cancel_label: c.cancel_label,
                 action_id: c.action_id,
+                app_id: c.app_id,
                 disclosure: c.disclosure,
                 state: ActionCardState::Pending,
                 responded_by: None,
@@ -788,6 +791,12 @@ pub struct ActionCardContentInitial {
     pub confirm_label: String,
     pub cancel_label: String,
     pub action_id: String,
+    // The directory app that OWNS (posts) this card. Set at propose/post time — the same point
+    // `recipient_public_key` is baked — and UNLIKE the routing fields below it is HYDRATED back to
+    // clients (see ActionCardContent), so a recipient can bind card-surface resolution to the exact
+    // producing app instead of guessing by the non-namespaced `action_id`. Absent on legacy cards.
+    #[serde(default)]
+    pub app_id: Option<AiAppId>,
     pub disclosure: Option<String>,
     pub expires_at: Option<TimestampMillis>,
     // If both are set, confirming the card deposits `confirm_payload` (opaque bytes, never interpreted by
@@ -819,6 +828,10 @@ pub struct ActionCardContent {
     pub confirm_label: String,
     pub cancel_label: String,
     pub action_id: String,
+    // The directory app that owns this card, hydrated so recipients bind the card surface to the exact
+    // producing app (see ActionCardContentInitial). Absent on legacy cards posted before this field.
+    #[serde(default)]
+    pub app_id: Option<AiAppId>,
     pub disclosure: Option<String>,
     pub state: ActionCardState,
     pub responded_by: Option<UserId>,

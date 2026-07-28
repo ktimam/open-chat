@@ -138,6 +138,12 @@ describe("buildActionCardContent", () => {
         const card = buildActionCardContent(DEF, { amount: 20, currency: "USD", note: "lunch" }, RECIPIENT);
         expect(card.rows.some((r) => r.label.startsWith("__oc_"))).toBe(false);
     });
+    it("bakes the owning appId onto the card (undefined when omitted)", () => {
+        const withApp = buildActionCardContent(DEF, { amount: 1, currency: "USD" }, RECIPIENT, undefined, undefined, 42);
+        expect(withApp.appId).toBe(42);
+        const withoutApp = buildActionCardContent(DEF, { amount: 1, currency: "USD" }, RECIPIENT);
+        expect(withoutApp.appId).toBeUndefined();
+    });
 });
 
 describe("runAiAction", () => {
@@ -478,6 +484,10 @@ describe("buildMultiActionCardContent", () => {
         expect(card.inboxCanisterId).toBe("aaaaa-aa");
         expect(card.recipientPublicKey).toBe(RECIPIENT);
         expect(card.recipientPublicKeys).toEqual(["OTHER_KEY_PEM"]);
+    });
+    it("bakes the owning appId onto the multi card", () => {
+        const card = buildMultiActionCardContent(DEF, entries, RECIPIENT, undefined, undefined, 7);
+        expect(card.appId).toBe(7);
     });
 });
 

@@ -2,7 +2,7 @@ use crate::guards::caller_is_openchat_user_or_test_mode;
 use crate::{RuntimeState, mutate_state};
 use canister_api_macros::update;
 use canister_tracing_macros::trace;
-use types::{AiActionDefinition, AiActionRule, AiAppManifest, AiAppSurface, UserId};
+use types::{AiActionDefinition, AiActionRule, AiAppManifest, AiAppSurface, SurfaceDisplay, UserId};
 use url::Url;
 use user_index_canister::register_ai_app::{Response::*, *};
 
@@ -117,10 +117,29 @@ fn validate_surface(surface: &AiAppSurface) -> Result<(), String> {
     // The url is a template; substitute the placeholders with dummy values so that an otherwise
     // valid templated URL (e.g. ".../link?chat={chatKey}") passes URL parsing.
     let substituted = surface.url.replace("{chatKey}", "group:aaaaa-aa").replace("{appId}", "1");
-    if Url::parse(&substituted).is_err() {
-        return Err("url must be a valid URL".to_string());
+    let parsed = Url::parse(&substituted).map_err(|_| "url must be a valid URL".to_string())?;
+    // A surface OpenChat EMBEDS in an iframe (display "sheet" — e.g. the in-bubble "card" renderer)
+    // must be served over https, so the host is never wired to a plaintext, network-tamperable origin
+    // standing in for the app. Loopback hosts stay exempt so local dev (http://127.0.0.1:<port>) still
+    // registers. "external" surfaces open in a normal browser tab, so their scheme is left to the
+    // OS/browser (unchanged). Fully binding the origin to the app's vouched identity is a separate,
+    // larger change tracked in fork-notes/08-app-rendered-cards.md.
+    if matches!(surface.display, SurfaceDisplay::Sheet) && !is_https_or_loopback_http(&parsed) {
+        return Err("an embedded (display \"sheet\") surface url must use https".to_string());
     }
     Ok(())
+}
+
+/// https on any host, or http only on a loopback host (local dev). Mirrors the client-side
+/// deriveCardOrigin gate (frontend/app/src/utils/cardBridge.ts).
+fn is_https_or_loopback_http(url: &Url) -> bool {
+    match url.scheme() {
+        "https" => true,
+        "http" => url
+            .host_str()
+            .is_some_and(|h| matches!(h, "localhost" | "127.0.0.1" | "::1" | "[::1]")),
+        _ => false,
+    }
 }
 
 /// Validates a single action definition embedded in an app manifest.
@@ -196,4 +215,42 @@ fn validate_rule_string(label: &str, value: &str) -> Result<(), String> {
         return Err(format!("{label} must be between 1 and {MAX_RULE_STRING_LENGTH} characters"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn surface(kind: &str, url: &str, display: SurfaceDisplay) -> AiAppSurface {
+        AiAppSurface { kind: kind.to_string(), url: url.to_string(), display }
+    }
+
+    // An embedded (display "sheet") surface — the in-bubble card renderer — must be https on a real
+    // host; plaintext http there is a downgrade vector and is rejected.
+    #[test]
+    fn sheet_surface_requires_https_on_a_real_host() {
+        assert!(validate_surface(&surface("card", "http://iou.example/openchat/card", SurfaceDisplay::Sheet)).is_err());
+        assert!(validate_surface(&surface("card", "https://iou.example/openchat/card", SurfaceDisplay::Sheet)).is_ok());
+    }
+
+    // Loopback http stays allowed so local dev (127.0.0.1 / localhost) can still register a card surface.
+    #[test]
+    fn sheet_surface_allows_loopback_http_for_dev() {
+        assert!(validate_surface(&surface("card", "http://127.0.0.1:3000/openchat/card", SurfaceDisplay::Sheet)).is_ok());
+        assert!(validate_surface(&surface("home", "http://localhost:5341/", SurfaceDisplay::Sheet)).is_ok());
+    }
+
+    // "external" surfaces open in a browser tab, so their scheme is left to the OS/browser (unchanged).
+    #[test]
+    fn external_surface_scheme_is_not_gated() {
+        assert!(
+            validate_surface(&surface("chat_link", "http://iou.example/link?chat={chatKey}", SurfaceDisplay::External)).is_ok()
+        );
+    }
+
+    // The pre-existing "must parse" check still applies regardless of display.
+    #[test]
+    fn surface_url_must_still_parse() {
+        assert!(validate_surface(&surface("card", "not a url", SurfaceDisplay::Sheet)).is_err());
+    }
 }

@@ -9,7 +9,8 @@ use serde_bytes::ByteBuf;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use types::icrc1::{Account, CryptoAccount};
 use types::{
-    ActionCardContent, ActionCardContentInitial, ActionCardRow, ActionCardState, AudioContent, BlobReference, CallParticipant,
+    ActionCardContent, ActionCardContentInitial, ActionCardRow, ActionCardState, AiAppId, AudioContent, BlobReference,
+    CallParticipant,
     CanisterId, CompletedCryptoTransaction, ContentValidationError, ContentWithCaptionEventPayload, CryptoContent,
     CryptoContentEventPayload, CryptoTransaction, Cryptocurrency, CustomContent, EncryptedContent,
     EncryptedContentEventPayload, EncryptedMessageContentType, EncryptionKey, FileContent, FileContentEventPayload,
@@ -2048,6 +2049,11 @@ pub struct ActionCardContentInternal {
     pub cancel_label: String,
     #[serde(rename = "ai")]
     pub action_id: String,
+    // The owning directory app (set at post time). Distinct from the server-only routing fields below:
+    // this IS hydrated to clients so a recipient binds card-surface resolution to the exact producing
+    // app rather than the non-namespaced action_id. Absent on legacy cards.
+    #[serde(rename = "aid", default, skip_serializing_if = "Option::is_none")]
+    pub app_id: Option<AiAppId>,
     #[serde(rename = "d", default, skip_serializing_if = "Option::is_none")]
     pub disclosure: Option<String>,
     #[serde(rename = "s")]
@@ -2126,6 +2132,7 @@ impl From<ActionCardContentInitial> for ActionCardContentInternal {
             confirm_label: value.confirm_label,
             cancel_label: value.cancel_label,
             action_id: value.action_id,
+            app_id: value.app_id,
             disclosure: value.disclosure,
             state: ActionCardState::Pending,
             expires_at: value.expires_at,
@@ -2149,6 +2156,7 @@ impl MessageContentInternalSubtype for ActionCardContentInternal {
             confirm_label: self.confirm_label,
             cancel_label: self.cancel_label,
             action_id: self.action_id,
+            app_id: self.app_id,
             disclosure: self.disclosure,
             state: self.state,
             responded_by: self.responded_by,

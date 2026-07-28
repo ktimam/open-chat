@@ -115,12 +115,14 @@
     // context (theme / readonly) changes while the card is open.
     let readySeen = $state(false);
 
-    // Detect the owning app's card surface once. actionId + chatId are stable for a given card message
-    // (state transitions replace `content` but not its actionId), so a single lookup on mount suffices;
-    // a cancel token guards the async resolve against a teardown mid-flight.
+    // Detect the owning app's card surface once. actionId + appId + chatId are stable for a given card
+    // message (state transitions replace `content` but not its identity), so a single lookup on mount
+    // suffices; a cancel token guards the async resolve against a teardown mid-flight. Passing
+    // `content.appId` binds resolution to the EXACT producing app (see cardSurfaceForAction) — a legacy
+    // card with no appId falls back to name-based resolution.
     onMount(() => {
         let cancelled = false;
-        void cardSurfaceForAction(client, chatId, content.actionId).then((opening) => {
+        void cardSurfaceForAction(client, chatId, content.actionId, content.appId).then((opening) => {
             if (cancelled || opening === undefined) return;
             const origin = deriveCardOrigin(opening.url);
             // No parseable origin → decline to embed; stay on the OC-rendered rows rather than talk to

@@ -463,6 +463,11 @@ export interface ActionCardContent {
     confirmLabel: string;
     cancelLabel: string;
     actionId: string;
+    // The id of the directory app that OWNS (posted) this card. Set at propose/post time — the same
+    // point `recipientPublicKey` is baked — AND hydrated on receive (unlike the send-only routing
+    // fields below), so a recipient binds card-surface resolution to the exact producing app instead
+    // of guessing by the non-namespaced `actionId`. Absent on legacy cards posted before this field.
+    appId?: number;
     disclosure?: string;
     state: ActionCardState;
     respondedBy?: string;

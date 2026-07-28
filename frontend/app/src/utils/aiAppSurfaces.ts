@@ -83,16 +83,24 @@ export function cardSurfaceOpening(
     return { app, surface, url: substitutePlaceholders(surface.url, chatKey, app.id) };
 }
 
-// The card surface for the app that OWNS a given action (its manifest declares an action named
-// `actionId`), resolved against the chat. Owner resolution mirrors surfaceToOpenAfterConfirm: prefer
-// an app enabled in the chat, else the first owner. Also returns the owning action's label -> field-key
-// map so the renderer can reverse-map the message's hydrated rows into structured prefill data. Returns
-// undefined (→ OpenChat renders its own rows, fully backward compatible) when no owning app declares a
-// "card" surface, or on any lookup failure.
+// The card surface for the app that OWNS a given action, resolved against the chat. Also returns the
+// owning action's label -> field-key map so the renderer can reverse-map the message's hydrated rows
+// into structured prefill data. Returns undefined (→ OpenChat renders its own rows, fully backward
+// compatible) when the owner declares no "card" surface, or on any lookup failure.
+//
+// Owner resolution (security-critical — a wrongly-resolved owner lets a DIFFERENT app render the card):
+//   - When the card carries its producing app's `appId` (cards posted after the app-binding change),
+//     bind to THAT exact app and no other. A second app that merely declares an action with the same
+//     non-namespaced `name` can never capture the card. The bound app must still actually declare
+//     `actionId` (else the card is treated as unresolvable — we render OC rows rather than silently
+//     re-bind to some other owner).
+//   - Only for LEGACY cards with no `appId` do we fall back to name-based owner resolution (prefer an
+//     app enabled in the chat, else the first owner), preserving pre-binding behaviour.
 export async function cardSurfaceForAction(
     client: OpenChat,
     chatId: ChatIdentifier,
     actionId: string,
+    appId?: number,
 ): Promise<CardSurfaceOpening | undefined> {
     try {
         // Both facades resolve to [] on failure, so a lookup error degrades to "no app card".
@@ -100,12 +108,18 @@ export async function cardSurfaceForAction(
             client.aiApps(),
             client.enabledAiApps(chatId),
         ]);
-        const owners = apps.filter((app) =>
-            app.manifest.actions.some((a) => a.name === actionId),
-        );
-        if (owners.length === 0) return undefined;
-        const enabled = new Set(enabledIds);
-        const app = owners.find((o) => enabled.has(o.id)) ?? owners[0];
+        let app: AiAppRegistration | undefined;
+        if (appId !== undefined) {
+            app = apps.find((a) => a.id === appId);
+            if (app === undefined || !app.manifest.actions.some((a) => a.name === actionId)) {
+                return undefined;
+            }
+        } else {
+            const owners = apps.filter((a) => a.manifest.actions.some((action) => action.name === actionId));
+            if (owners.length === 0) return undefined;
+            const enabled = new Set(enabledIds);
+            app = owners.find((o) => enabled.has(o.id)) ?? owners[0];
+        }
         const opening = cardSurfaceOpening(app, chatId);
         if (opening === undefined) return undefined;
         // Build the label -> field-key map from the OWNING action's card template. `card.rows` here are

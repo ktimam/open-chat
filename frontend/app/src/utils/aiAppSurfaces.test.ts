@@ -96,3 +96,63 @@ describe("cardSurfaceForAction — owner resolution + labelToField", () => {
         expect(await cardSurfaceForAction(throwing, CHAT, ACTION)).toBeUndefined();
     });
 });
+
+describe("cardSurfaceForAction — appId binding (anti-impersonation)", () => {
+    const ACTION = "iou.entry.import";
+    const withCard = (id: number, action = ACTION) =>
+        app(id, {
+            surfaces: [{ kind: "card", url: CARD_URL }],
+            actions: [{ name: action, rows: [{ label: "Amount", valueKey: "amount" }] }],
+        });
+
+    it("binds to the EXACT producing app even when another app declares the same action name", async () => {
+        // app 1 is the real producer (carried on the card); app 2 is a squatter declaring the same
+        // action name and even ENABLED in the chat — pre-binding, name-resolution would have preferred
+        // it. With the appId carried, resolution must ignore the squatter entirely.
+        const producer = withCard(1);
+        const squatter = withCard(2);
+        const opening = await cardSurfaceForAction(
+            stubClient([producer, squatter], [2]),
+            CHAT,
+            ACTION,
+            1,
+        );
+        expect(opening?.app.id).toBe(1);
+        expect(opening?.url).toContain("app=1");
+    });
+
+    it("returns undefined when the carried appId no longer owns the action (never re-binds)", async () => {
+        // The card names app 1, but app 1 no longer declares ACTION (manifest changed). We must NOT
+        // silently re-bind to app 2 which does — render OC rows instead.
+        const staleProducer = withCard(1, "some.other.action");
+        const otherOwner = withCard(2);
+        expect(
+            await cardSurfaceForAction(stubClient([staleProducer, otherOwner], [2]), CHAT, ACTION, 1),
+        ).toBeUndefined();
+    });
+
+    it("returns undefined when the carried appId matches no known app", async () => {
+        expect(
+            await cardSurfaceForAction(stubClient([withCard(2)], [2]), CHAT, ACTION, 99),
+        ).toBeUndefined();
+    });
+
+    it("still resolves by name when the card carries no appId (legacy card)", async () => {
+        const owner = withCard(5);
+        const opening = await cardSurfaceForAction(stubClient([owner], [5]), CHAT, ACTION);
+        expect(opening?.app.id).toBe(5);
+    });
+
+    it("returns undefined when the bound app owns the action but declares NO 'card' surface", async () => {
+        // app 1 IS the producer and still owns the action, but its manifest has no card surface. We
+        // must render OC rows — never fall through to app 2's card surface just because it has one.
+        const boundNoCard = app(1, {
+            surfaces: [{ kind: "chat_link", url: CARD_URL }],
+            actions: [{ name: ACTION }],
+        });
+        const otherWithCard = withCard(2);
+        expect(
+            await cardSurfaceForAction(stubClient([boundNoCard, otherWithCard], [2]), CHAT, ACTION, 1),
+        ).toBeUndefined();
+    });
+});

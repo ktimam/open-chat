@@ -430,6 +430,9 @@ export function buildActionCardContent(
     // Fan-out: additional recipient keys (other chat members' registered app keys). Confirm
     // encrypts the deposit separately to the primary key AND each of these (deduped server-side).
     additionalRecipientKeys?: string[],
+    // The id of the app that owns this action, baked onto the card so a recipient binds card-surface
+    // resolution to the exact producing app (not the non-namespaced actionId). See ActionCardContent.
+    appId?: number,
 ): ActionCardContent {
     const rows: ActionCardRow[] = def.card.rows
         .map((r) => ({ label: r.label, value: formatValue(extracted[r.valueKey]) }))
@@ -442,6 +445,7 @@ export function buildActionCardContent(
         confirmLabel: def.card.confirmLabel,
         cancelLabel: def.card.cancelLabel,
         actionId: def.name,
+        appId,
         disclosure: def.card.disclosure,
         state: "pending",
         recipientPublicKey: recipientPublicKeyPem,
@@ -476,6 +480,8 @@ export function buildMultiActionCardContent(
     recipientPublicKeyPem: string,
     inboxCanisterId?: string,
     additionalRecipientKeys?: string[],
+    // The owning app id, baked onto the card (see buildActionCardContent).
+    appId?: number,
 ): ActionCardContent {
     const rows: ActionCardRow[] = extractedList.map((entry, i) => ({
         label: `Entry ${i + 1}`,
@@ -499,6 +505,7 @@ export function buildMultiActionCardContent(
         confirmLabel: def.card.confirmLabel,
         cancelLabel: def.card.cancelLabel,
         actionId: def.name,
+        appId,
         disclosure: def.card.disclosure,
         state: "pending",
         recipientPublicKey: recipientPublicKeyPem,
@@ -519,6 +526,8 @@ export async function runAiAction(
     infer: (req: InferenceRequest) => Promise<InferenceResult>,
     inboxCanisterId?: string,
     additionalRecipientKeys?: string[],
+    // The owning app id, baked onto the built card (see buildActionCardContent).
+    appId?: number,
 ): Promise<RunAiActionResult> {
     // The native runtime reads only `prompt` (its separate `text` field is not consumed), so the
     // message MUST be interpolated into the prompt for the model to see it. A dateline anchors
@@ -583,6 +592,7 @@ export async function runAiAction(
                 recipientPublicKeyPem,
                 inboxCanisterId,
                 additionalRecipientKeys,
+                appId,
             ),
             extracted: valid[0],
         };
@@ -595,6 +605,7 @@ export async function runAiAction(
             recipientPublicKeyPem,
             inboxCanisterId,
             additionalRecipientKeys,
+            appId,
         ),
         extracted: valid,
     };

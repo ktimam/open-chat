@@ -142,26 +142,91 @@ and caps parsed `entries` at `MAX_CARD_ENTRIES` — closing the init-injection, 
 entries-DoS findings at once.
 
 Residual low/info hardening (tracked, not shipping blockers):
-- **Framing carve-out.** IOU `/openchat/card` framing is all-or-nothing (dev = no XFO; prod
-  `.ic-assets.json5` = `frame-ancestors 'none'` for `**/*`, which also blocks OpenChat). Add a
-  per-path `frame-ancestors https://<oc-origin>` for `/openchat/card` so it productionizes without
-  opening framing to everyone. Impact low (page is session-free/partitioned; confirm does nothing
-  privileged).
-- **Deposit-before-commit TOCTOU.** The Pending check is `&self` and the flip happens after the c2c
-  `.await`, and the inbox idempotency key is `sha256(payload‖message_id)` — so concurrent confirms
-  with *distinct* in-bounds overrides all deposit. Neutralized end-to-end by IOU's `messageId` dedup
-  (`collapseByMessageId` / `import_message_id` / `importedMessageIds`); residual is attacker-self-funded
-  griefing. Fix: key the inbox idempotency on `sha256(chat‖message_id)` (stable card identity) or add a
-  per-card single-flight that leaves Pending before the await.
-- **Card not bound to its producing app.** Owner resolved by non-namespaced action `name` +
-  `owners.find(enabled) ?? owners[0]`; `validate_surface` accepts any http(s) URL. Not exploitable today
-  (SNS publish-gate + vouch; lowest-id wins for established apps; 1:1 direct chats safe). Harden: carry an
-  owning `appId` on the card and resolve the surface by it; constrain card-surface origin to the app's
-  verified domain; re-vouch surfaces on re-registration.
-- **No third-party-embed provenance chrome** + `deriveCardOrigin` accepts same-origin-as-host and
-  `http:`. Add a host-drawn "external content from <origin>" badge OUTSIDE the frame; reject
-  `parsed.origin === location.origin` and require https (localhost-exempt for dev). Note an app-origin
-  allow-list does NOT help a malicious own-app.
+- **Framing carve-out.** ✅ DONE (2026-07-24, IOU repo). Goal: OpenChat-only framing — close the dev
+  "any origin can frame" hole and stop prod blocking OpenChat, without opening framing to the world.
+  Not implementable as a literal per-*path* rule: IOU is a single-page app, so `/openchat/card` (and
+  the `display:"sheet"` "home" surface at `/`) are client-side routes served from the SAME physical
+  asset, `index.html`; the IC asset canister matches `.ic-assets.json5` globs against asset KEYS, not
+  request paths, so a `/openchat/card` match hits nothing. Implemented instead as a per-*asset*
+  carve-out on `index.html`:
+  - `public/.ic-assets.json5`: `**/*` stays `frame-ancestors 'none'` + `X-Frame-Options: DENY`; a new
+    `index.html` entry (placed after `**/*`, so it wins) sets `frame-ancestors https://oc.app` and
+    drops XFO to `""` (XFO can't express an allowlist and a lingering DENY would veto frame-ancestors).
+    Other real OpenChat origins (test.oc.app, a fork's custom domain, local `:5003`/`:5001` for a
+    locally-deployed asset canister) go in that one allowlist. Full header set is re-declared on the
+    entry so nosniff/Referrer/Permissions survive regardless of the canister's match-merge rule.
+  - `vite.config.ts`: a `configureServer` middleware mirrors the posture on the dev server (which
+    previously sent NO framing headers) — HTML-document responses get the OpenChat dev-origin
+    allowlist (`http://localhost:5003`/`:5001` + 127.0.0.1), everything else gets `frame-ancestors
+    'none'`; no XFO. Verified live: `/openchat/card` + `/` → allowlist, `/favicon.svg` → 'none'.
+  Residual (unchanged, low): relaxing `index.html` lets OpenChat frame ALL SPA routes, not just the
+  card — but a cross-origin embed is storage-partitioned (framed app sees no IOU session → signed-out
+  shell), and the card is session-free by design, so impact stays low. A truly path-scoped rule would
+  require promoting `/openchat/card` to its own physical HTML entry point (multi-page Vite build) —
+  deferred as disproportionate for a low-sev item, and it would leave the "home" sheet surface
+  unframeable. Separately, prod canister serving of deep SPA routes (`/openchat/card`) still depends on
+  an index.html fallback being configured — out of scope here, but needed before the card renders from
+  a real IC deployment.
+- **Deposit-before-commit TOCTOU. — FIXED (2026-07-24).** The Pending check is `&self` and the flip
+  happens after the c2c `.await`, so concurrent confirms with *distinct* in-bounds overrides all pass the
+  peek and deposit. It was already neutralized end-to-end by IOU's `messageId` dedup (`collapseByMessageId`
+  / `import_message_id` / `importedMessageIds`) — residual was attacker-self-funded griefing — but the
+  inbox idempotency key was `sha256(payload‖message_id)`, i.e. derived from the MUTABLE payload, so N
+  distinct-payload confirms produced N distinct ids → N stored envelopes for the one card, and a future
+  naive consumer without strict `messageId` dedup could regress. Restored a true "at most one deposit per
+  card" guarantee at the inbox layer: `c2c_deposit_action_confirmed` now keys idempotency on the STABLE
+  card identity — `sha256(chat_key(chat) ‖ 0x00 ‖ message_id)` — instead of the payload, so a user retry,
+  the platform's automatic c2c retry, AND a concurrent distinct-payload confirm all dedupe to one entry
+  per recipient fingerprint bucket. Regression guards: the pocket-ic `two_phase_confirm_idempotency_tests::
+  concurrent_distinct_payload_confirms_deposit_once` SUBMITs two confirms of one card with distinct
+  `confirm_payload_override`s before awaiting either (so both pass the `&self` peek and both deposit) and
+  asserts a single stored action — verified to FAIL (2 actions) against the old payload-keyed build; plus
+  unit tests on the extracted `card_idempotency_id` helper (`same_card_yields_same_id` etc.) that lock the
+  key to card identity alone. The alternative (a per-card single-flight leaving Pending before the await)
+  was not needed once the dedup layer enforces the guarantee.
+- **Card not bound to its producing app. — MOSTLY DONE (2026-07-24, see fast-follow below).** Owner was
+  resolved by non-namespaced action `name` + `owners.find(enabled) ?? owners[0]`, and `validate_surface`
+  accepted any http(s) URL — so a second app declaring the same action `name` could resolve the card to
+  ITS surface. Never exploitable today (SNS publish-gate + `c2c_verify_ai_app` vouch; lowest-id wins for
+  established apps; 1:1 direct chats safe), but the resolution was authority-blind. Now: the card carries
+  its owning `appId` (hydrated on receive) and the surface resolves by that exact id; embedded (sheet)
+  surfaces must be https; a re-registration that changes surfaces re-runs the vouch. **Residual:** the
+  card-surface origin is only https-tightened, not bound to the app's *vouched* web origin — full binding
+  needs `c2c_verify_ai_app` to attest an allowed origin (cross-repo: IOU's card surface is its FRONTEND
+  origin, a different canister from the `app_canister_id` the vouch targets, so a strict host==canister
+  check would be wrong). Optional: namespace action names to the owner.
+- **No third-party-embed provenance chrome** + ~~`deriveCardOrigin` accepts same-origin-as-host and
+  `http:`~~. **`deriveCardOrigin` hardened (2026-07-24):** rejects `parsed.origin ===
+  window.location.origin` and requires https (loopback http exempt for dev). Still to do: a host-drawn
+  "external content from <origin>" badge OUTSIDE the frame. Note an app-origin allow-list does NOT help a
+  malicious own-app.
 - **No inbound throttle** on the host bridge (`oc:card:resize`/`ready` spam → frame-capped host reflow,
   info). Coalesce resize in a rAF; once-guard `ready`.
 - **Outbound `targetOrigin "*"`** (host + IOU): pin to the concrete peer origin once known.
+
+### Fast-follow shipped (2026-07-24) — bind the card to its producing app
+
+Closes the "wrong app renders the card" structural phishing gap. Code-complete + unit-tested; the wire
+change needs a **candid regen + rebuild/redeploy of the group / community / user + user_index canisters**
+to take effect (same phasing as the Phase-2 override). Compiles clean (`cargo check` on `types`,
+`chat_events`, `user_index_canister_impl`, `integration_tests`); all touched TS + Rust unit suites green.
+
+1. **`appId` on the card, hydrated on receive.** `ActionCardContent(Initial)` +
+   `ActionCardContentInternal` carry `app_id: Option<AiAppId>` — set at propose/post time (where
+   `recipient_public_key` is baked) and, UNLIKE the send-only routing fields, HYDRATED back to clients.
+   Threaded through `buildActionCardContent`/`buildMultiActionCardContent` → `runAiAction` /
+   `buildManualCard` / `runDefinition` (from the resolved candidate's `app.id`), chatMappersV2 both ways,
+   and the hand-maintained typebox schemas. Legacy cards (no `appId`) still resolve by name.
+2. **Resolve the surface by that exact `appId`.** `cardSurfaceForAction` binds to the one app whose
+   `id === appId` (still verifying it declares `actionId`, else render OC rows — never silently re-bind);
+   the Svelte card passes `content.appId`. Name-based resolution stays only as the legacy fallback.
+3. **Registration https-tightening (partial item 3).** `validate_surface` requires embedded (display
+   `"sheet"`) surfaces to be https (loopback http exempt), mirroring `deriveCardOrigin`.
+4. **Re-vouch on surface change.** `AiAppRegistry::register` un-publishes (resets `published = false`)
+   when an upsert changes the manifest's `surfaces` or `app_canister_id`, forcing `publish_ai_app` to
+   re-run the vouch; an unchanged re-sync stays published.
+
+Tests: `frontend/app/src/utils/{cardBridge,aiAppSurfaces}.test.ts`,
+`frontend/openchat-shared/src/domain/aiAction.test.ts` (builder `appId`); Rust unit tests in
+`ai_app_registry.rs` (un-publish on surface/canister change) + `register_ai_app.rs` (sheet-surface scheme
+gate). The 6 integration-test `ActionCardContentInitial` literals gained `app_id: None`.

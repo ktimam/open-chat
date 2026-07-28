@@ -43,9 +43,20 @@ impl AiAppRegistry {
             if existing.owner != owner && !allow_reown {
                 return Err(NameTakenByAnotherOwner);
             }
+            // A re-registration that changes the app's SURFACES or its verified `app_canister_id` must
+            // NOT keep the published (vouched) status: `publish_ai_app` vouches the app_canister_id, and
+            // the surfaces (e.g. the in-bubble "card" renderer OpenChat embeds) are the origin clients
+            // then trust. Silently swapping a card surface to a new origin AFTER publishing would bypass
+            // that authority — so un-publish, forcing publish_ai_app to re-run the vouch. An unchanged
+            // manifest (a plain re-sync redeploy) keeps its published status, exactly as before.
+            let must_reverify = existing.manifest.surfaces != manifest.surfaces
+                || existing.manifest.app_canister_id != manifest.app_canister_id;
             existing.owner = owner;
             existing.manifest = manifest;
             existing.updated = now;
+            if must_reverify {
+                existing.published = false;
+            }
             return Ok(existing.clone());
         }
 
@@ -220,6 +231,70 @@ mod tests {
         assert_eq!(entry.manifest.description, "v2", "manifest is replaced");
         assert_eq!(entry.updated, 3, "updated is bumped");
         assert_eq!(entry.created, 1, "created survives the upsert");
+    }
+
+    fn card_surface(url: &str) -> types::AiAppSurface {
+        types::AiAppSurface {
+            kind: "card".to_string(),
+            url: url.to_string(),
+            display: types::SurfaceDisplay::Sheet,
+        }
+    }
+
+    // A re-registration that CHANGES the surface set must drop the published (vouched) status, so the
+    // app has to re-run publish_ai_app (and its anti-squat vouch) before the new surface is trusted.
+    // Otherwise a published app could silently swap its embedded "card" surface to an attacker origin.
+    #[test]
+    fn re_register_changing_surfaces_unpublishes() {
+        let mut registry = AiAppRegistry::default();
+        let owner = user(1);
+
+        let id = registry.register(owner, manifest("X"), 1, false).ok().unwrap().id;
+        assert!(registry.publish(id, 2));
+
+        let mut v2 = manifest("X");
+        v2.surfaces = vec![card_surface("https://evil.example/openchat/card")];
+        let re = registry.register(owner, v2, 3, false).ok().unwrap();
+
+        assert_eq!(re.id, id, "upsert keeps the id");
+        assert!(!re.published, "changing surfaces must un-publish (force a re-vouch)");
+        assert!(!registry.get(id).unwrap().published, "stored entry is un-published");
+    }
+
+    // The same applies to a change of the verified `app_canister_id` — that IS the vouch target, so a
+    // new value must be re-vouched before the app is trusted again.
+    #[test]
+    fn re_register_changing_app_canister_id_unpublishes() {
+        let mut registry = AiAppRegistry::default();
+        let owner = user(1);
+
+        let id = registry.register(owner, manifest("X"), 1, false).ok().unwrap().id;
+        assert!(registry.publish(id, 2));
+
+        let mut v2 = manifest("X");
+        v2.app_canister_id = Some(Principal::from_slice(&[9, 9, 9]));
+        let re = registry.register(owner, v2, 3, false).ok().unwrap();
+        assert!(!re.published, "changing app_canister_id must un-publish (force a re-vouch)");
+    }
+
+    // An UNCHANGED surface set + app_canister_id keeps the app published across a re-sync, even when
+    // other manifest fields change (complements re_register_upsert_preserves_published_flag, which
+    // changes only the description with no surfaces at all).
+    #[test]
+    fn re_register_same_surfaces_keeps_published() {
+        let mut registry = AiAppRegistry::default();
+        let owner = user(1);
+
+        let mut v1 = manifest("X");
+        v1.surfaces = vec![card_surface("https://iou.example/openchat/card")];
+        let id = registry.register(owner, v1, 1, false).ok().unwrap().id;
+        assert!(registry.publish(id, 2));
+
+        let mut v2 = manifest("X");
+        v2.surfaces = vec![card_surface("https://iou.example/openchat/card")];
+        v2.description = "changed".to_string();
+        let re = registry.register(owner, v2, 3, false).ok().unwrap();
+        assert!(re.published, "an unchanged surface set (only description changed) stays published");
     }
 
     // Visibility boundary: an unpublished app is absent from search (the explorer surface) and from

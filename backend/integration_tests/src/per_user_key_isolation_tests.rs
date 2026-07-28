@@ -173,6 +173,7 @@ fn post_and_confirm(env: &mut PocketIc, user: &User, group_id: ChatId, recipient
         confirm_label: "Confirm".to_string(),
         cancel_label: "Cancel".to_string(),
         action_id: "act-iso".to_string(),
+        app_id: None,
         disclosure: None,
         expires_at: None,
         recipient_public_key: Some(recipient_pem),
@@ -192,6 +193,7 @@ fn post_and_confirm(env: &mut PocketIc, user: &User, group_id: ChatId, recipient
             thread_root_message_index: None,
             message_id,
             response: ActionCardResponse::Confirm,
+            confirm_payload_override: None,
         },
     );
     assert!(

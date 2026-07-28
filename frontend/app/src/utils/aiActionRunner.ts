@@ -198,6 +198,8 @@ export function buildManualCard(
     recipientKey: string,
     inboxCanisterId?: string,
     additionalRecipientKeys?: string[],
+    // The owning app id, baked onto the built card so the recipient binds the surface to this app.
+    appId?: number,
 ): ProposeResult {
     const candidates = Array.isArray(manualExtraction) ? manualExtraction : [manualExtraction];
     // No message text: message-driven rules (from_message / keyword_map override) don't apply to a
@@ -224,6 +226,7 @@ export function buildManualCard(
             recipientKey,
             inboxCanisterId,
             additionalRecipientKeys,
+            appId,
         );
         return { kind: "ready", card, extracted: valid[0] };
     }
@@ -233,6 +236,7 @@ export function buildManualCard(
         recipientKey,
         inboxCanisterId,
         additionalRecipientKeys,
+        appId,
     );
     return { kind: "ready_multi", card, extracted: valid };
 }
@@ -268,15 +272,17 @@ async function runDefinition(
     manualExtraction?: ManualExtraction,
     inboxCanisterId?: string,
     additionalRecipientKeys?: string[],
+    // The id of the app that owns this action, baked onto the built card (see ActionCardContent.appId).
+    appId?: number,
 ): Promise<ProposeResult> {
     if (manualExtraction !== undefined) {
-        return buildManualCard(def, manualExtraction, recipientKey, inboxCanisterId, additionalRecipientKeys);
+        return buildManualCard(def, manualExtraction, recipientKey, inboxCanisterId, additionalRecipientKeys, appId);
     }
 
     const input = await contentToInput(content);
     if (input === undefined) return { kind: "unsupported_content" };
 
-    return runAiAction(def, input, recipientKey, inferOnDevice, inboxCanisterId, additionalRecipientKeys);
+    return runAiAction(def, input, recipientKey, inferOnDevice, inboxCanisterId, additionalRecipientKeys, appId);
 }
 
 // Run the action on offer for a message in this chat, returning a card to propose (or a status).
@@ -293,7 +299,15 @@ export async function proposeAiActionForMessage(
     const { candidates, linkRequired } = await resolveCandidates(client, chatId);
     if (candidates.length === 1) {
         const c = candidates[0];
-        return runDefinition(c.action, c.recipientKey, content, manualExtraction, c.inboxCanisterId, c.additionalRecipientKeys);
+        return runDefinition(
+            c.action,
+            c.recipientKey,
+            content,
+            manualExtraction,
+            c.inboxCanisterId,
+            c.additionalRecipientKeys,
+            c.app.id,
+        );
     }
     if (candidates.length > 1) {
         return { kind: "choose", candidates };
@@ -339,6 +353,7 @@ export async function proposeAndPostCandidate(
         manualExtraction,
         candidate.inboxCanisterId,
         candidate.additionalRecipientKeys,
+        candidate.app.id,
     );
     if (result.kind === "ready" || result.kind === "ready_multi") {
         client.sendMessageWithContent(messageContext, result.card, false, [], false);

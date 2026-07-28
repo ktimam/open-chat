@@ -131,6 +131,7 @@ fn post_and_confirm_card(
         confirm_label: "Confirm".to_string(),
         cancel_label: "Cancel".to_string(),
         action_id: "act-1".to_string(),
+        app_id: None,
         disclosure: None,
         expires_at: None,
         recipient_public_key: Some(recipient_pem),
@@ -149,6 +150,7 @@ fn post_and_confirm_card(
             thread_root_message_index: None,
             message_id,
             response: ActionCardResponse::Confirm,
+            confirm_payload_override: None,
         },
     );
     assert!(
