@@ -86,7 +86,7 @@ fn misconfigured_confirm_leaves_card_pending_then_succeeds() {
 
 // The action_inbox dedupes on (fingerprint, idempotency_id): the depositor queue may retry, and the
 // two-phase confirm re-encrypts (fresh ephemeral key) on a user retry, so identity is the LOGICAL
-// (message, payload) key, not the ciphertext. Depositing the same idempotency_id twice stores once.
+// (chat, message_id) card key, not the ciphertext. Depositing the same idempotency_id twice stores once.
 #[test]
 fn duplicate_deposit_id_dedupes_to_single_action() {
     let mut wrapper = ENV.deref().get();
@@ -241,6 +241,7 @@ fn failed_fanout_confirm_retry_deposits_once_per_recipient() {
         confirm_label: "Confirm".to_string(),
         cancel_label: "Cancel".to_string(),
         action_id: "act-2pc-fanout".to_string(),
+        app_id: None,
         disclosure: None,
         expires_at: None,
         recipient_public_key: Some(pem_a),
@@ -285,6 +286,95 @@ fn failed_fanout_confirm_retry_deposits_once_per_recipient() {
     assert_eq!(count_actions(env, user.principal, inbox, &fp_b), 1, "recipient B: exactly one deposit");
 }
 
+// The deposit-before-commit TOCTOU, exercised end-to-end through the REAL confirm path. Two confirms
+// of the SAME card are SUBMITTED before either is driven to completion, so both run `prepare` (the
+// `&self` Pending peek) before either flips the card Confirmed after its deposit `.await` — and each
+// carries a DISTINCT in-bounds `confirm_payload_override`, so both deposit validly-signed but
+// different-payload envelopes. Because the inbox idempotency key is derived from the card's STABLE
+// identity (chat + message_id), NOT the mutable payload, the two deposits collapse to a SINGLE stored
+// action. Keying on the payload (the pre-fix behaviour) would have stored two. Exactly one confirm wins
+// the Pending->Confirmed transition; the loser deposited first, then found the card already Confirmed at
+// commit time and returned Error — the asymmetry proves both raced against the same Pending card.
+#[test]
+fn concurrent_distinct_payload_confirms_deposit_once() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env, canister_ids, controller, ..
+    } = wrapper.env();
+
+    let user = client::register_diamond_user(env, canister_ids, *controller);
+    let group_id = client::user::happy_path::create_group(env, &user, &random_string(), true, true);
+    tick_many(env, 3);
+    let group_lui = client::group::happy_path::local_user_index(env, group_id);
+
+    let local_user_index_canister::oc_signing_public_key::Response::Success(oc_pem) = client::execute_msgpack_query(
+        env,
+        Principal::anonymous(),
+        group_lui,
+        "oc_signing_public_key_msgpack",
+        &local_user_index_canister::oc_signing_public_key::Args {},
+    );
+    let inbox = install_inbox(env, *controller, canister_ids, group_lui, oc_pem);
+
+    let mut rng = StdRng::seed_from_u64(9_005);
+    let pem = P256KeyPair::new(&mut rng).public_key_pem().to_string();
+    let fingerprint = ecies_payload::key_fingerprint(&pem).unwrap();
+
+    // Per-card override routes both deposits to `inbox` regardless of the LUI global setting.
+    let message_id = post_card(env, &user, group_id, pem, Some(inbox));
+
+    // Fire two confirms of the SAME card with DIFFERENT edited payloads, submitting BOTH before awaiting
+    // either — so both execute `prepare` against the still-Pending card (the c2c deposit round trip that
+    // precedes each commit guarantees the second's peek runs before the first commits).
+    let confirm_bytes = |payload: &[u8]| {
+        msgpack::serialize_then_unwrap(&group_canister::respond_to_action_card::Args {
+            thread_root_message_index: None,
+            message_id,
+            response: ActionCardResponse::Confirm,
+            confirm_payload_override: Some(ByteBuf::from(payload.to_vec())),
+        })
+    };
+    let m1 = env
+        .submit_call(
+            group_id.into(),
+            user.principal,
+            "respond_to_action_card_msgpack",
+            confirm_bytes(br#"{"amount":"$20","currency":"USD"}"#),
+        )
+        .expect("submit confirm 1");
+    let m2 = env
+        .submit_call(
+            group_id.into(),
+            user.principal,
+            "respond_to_action_card_msgpack",
+            confirm_bytes(br#"{"amount":"$999","currency":"EGP"}"#),
+        )
+        .expect("submit confirm 2");
+
+    let r1: group_canister::respond_to_action_card::Response =
+        msgpack::deserialize_then_unwrap(&env.await_call(m1).expect("await confirm 1"));
+    let r2: group_canister::respond_to_action_card::Response =
+        msgpack::deserialize_then_unwrap(&env.await_call(m2).expect("await confirm 2"));
+    tick_many(env, 10);
+
+    // Exactly one racing confirm commits Confirmed; the other deposited during the race, then found the
+    // card already Confirmed at commit time -> Error. This asymmetry is the proof both confirms deposited
+    // against the SAME Pending card (a purely sequential run would also land here, but then the loser
+    // never deposited — the deposit count below is what distinguishes the fix from the pre-fix bug).
+    let successes = [&r1, &r2]
+        .into_iter()
+        .filter(|r| matches!(r, group_canister::respond_to_action_card::Response::Success(_)))
+        .count();
+    assert_eq!(successes, 1, "exactly one racing confirm must commit; got r1={r1:?} r2={r2:?}");
+
+    assert_eq!(
+        count_actions(env, user.principal, inbox, &fingerprint),
+        1,
+        "two concurrent confirms of the SAME card with DISTINCT payloads must dedupe to a single stored \
+         action; keying inbox idempotency on the mutable payload would have stored two"
+    );
+}
+
 fn post_card(
     env: &mut PocketIc,
     user: &User,
@@ -302,6 +392,7 @@ fn post_card(
         confirm_label: "Confirm".to_string(),
         cancel_label: "Cancel".to_string(),
         action_id: "act-2pc".to_string(),
+        app_id: None,
         disclosure: None,
         expires_at: None,
         recipient_public_key: Some(recipient_pem),
@@ -328,6 +419,7 @@ fn confirm(
             thread_root_message_index: None,
             message_id,
             response: ActionCardResponse::Confirm,
+            confirm_payload_override: None,
         },
     )
 }

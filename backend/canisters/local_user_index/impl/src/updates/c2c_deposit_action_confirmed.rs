@@ -86,17 +86,11 @@ fn prepare(args: Args, state: &mut RuntimeState) -> Result<(CanisterId, Vec<Acti
     // The SAME plaintext (context + payload) goes to every recipient; only the encryption differs.
     let plaintext = action_deposit_envelope::wrap_plaintext(&args.context, args.created_at, args.plaintext.as_ref());
 
-    // Deterministic dedupe key: the LOGICAL identity of the confirmed card — its message id plus the
-    // opaque confirm payload — NOT the ciphertext (which is unique per attempt: fresh random ephemeral
-    // key). Two-phase confirm leaves the card Pending on a failed deposit, so a user RETRY re-encrypts
-    // with a new ephemeral key; keying on the ciphertext would have made every retry a fresh inbox entry.
-    // Keying on (message_id, payload) means a retry — or the platform's automatic c2c retry — dedupes to
-    // a single entry within EACH recipient's fingerprint bucket (the inbox scopes `seen` per fingerprint,
-    // so one shared id across the fan-out batch dedupes independently per recipient).
-    let mut dedupe_input = args.plaintext.as_ref().to_vec();
-    dedupe_input.extend_from_slice(&args.context.message_id.as_u64().to_be_bytes());
-    let digest = sha256::sha256(&dedupe_input);
-    let idempotency_id = u64::from_le_bytes(digest[..8].try_into().unwrap());
+    // Deterministic dedupe key: the STABLE identity of the confirmed card (chat + message id), NOT the
+    // confirm payload. See `card_idempotency_id` for the full rationale — the short of it is that a user
+    // retry, the platform's automatic c2c retry, AND a concurrent distinct-payload confirm all dedupe to
+    // a single deposit per recipient fingerprint bucket.
+    let idempotency_id = card_idempotency_id(&args.context.chat, args.context.message_id);
 
     let secret_key_der = state.data.oc_key_pair.secret_key_der();
     let mut deposits = Vec::with_capacity(recipients.len());
@@ -118,4 +112,69 @@ fn prepare(args: Args, state: &mut RuntimeState) -> Result<(CanisterId, Vec<Acti
     }
 
     Ok((target, deposits))
+}
+
+// The inbox idempotency key for a confirmed card, derived from its STABLE identity — chat + message id —
+// and NOTHING else. In particular it does NOT depend on the confirm payload or the ciphertext:
+//
+//   - `respond_to_action_card` peeks the Pending card with `&self` and only flips it Confirmed AFTER the
+//     c2c deposit `.await`, so N concurrent confirms all pass the peek. If this key mixed in the
+//     (app-editable) confirm payload, N confirms each carrying a DISTINCT in-bounds
+//     `confirm_payload_override` would derive N distinct ids and deposit N validly-signed envelopes for
+//     the ONE card.
+//   - The ciphertext is unique per attempt (fresh random ephemeral key), so a user retry — two-phase
+//     confirm re-encrypts after a failed deposit — would never dedupe if the key were the ciphertext.
+//
+// Keying purely on the card identity makes every deposit for a given card — a retry, the platform's
+// automatic c2c retry, OR a concurrent distinct-payload confirm — collapse to a single entry within EACH
+// recipient's fingerprint bucket (the inbox scopes `seen` per fingerprint, so one shared id across the
+// fan-out batch dedupes independently per recipient). A card is one logical action → at most one deposit.
+//
+// The chat is rendered via the same canonical `chat_key` used in the envelope; the message id follows a
+// NUL byte (chat_key is printable ASCII, so a NUL can't be confused for chat bytes) so the two fields
+// stay unambiguous.
+fn card_idempotency_id(chat: &types::Chat, message_id: types::MessageId) -> u64 {
+    let mut dedupe_input = action_deposit_envelope::chat_key(chat).into_bytes();
+    dedupe_input.push(0);
+    dedupe_input.extend_from_slice(&message_id.as_u64().to_be_bytes());
+    let digest = sha256::sha256(&dedupe_input);
+    u64::from_le_bytes(digest[..8].try_into().unwrap())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::card_idempotency_id;
+    use candid::Principal;
+    use types::{Chat, MessageId};
+
+    fn group_chat() -> Chat {
+        Chat::Group(Principal::from_slice(&[1, 2, 3]).into())
+    }
+
+    // The regression guard for the deposit-before-commit TOCTOU: the id is a function of the card
+    // identity ALONE (the signature carries no payload), so two confirms of the SAME card that carry
+    // DIFFERENT `confirm_payload_override`s derive the SAME idempotency id and dedupe in the inbox.
+    #[test]
+    fn same_card_yields_same_id() {
+        let a = card_idempotency_id(&group_chat(), MessageId::from(42u64));
+        let b = card_idempotency_id(&group_chat(), MessageId::from(42u64));
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn different_message_id_yields_different_id() {
+        let a = card_idempotency_id(&group_chat(), MessageId::from(1u64));
+        let b = card_idempotency_id(&group_chat(), MessageId::from(2u64));
+        assert_ne!(a, b);
+    }
+
+    // Same underlying principal + message id but a different chat KIND must not collide — the chat_key
+    // prefix ("group:" vs "direct:") separates them, so distinct cards never share an inbox dedupe key.
+    #[test]
+    fn different_chat_kind_yields_different_id() {
+        let principal = Principal::from_slice(&[9, 9, 9]);
+        let group = card_idempotency_id(&Chat::Group(principal.into()), MessageId::from(7u64));
+        let direct = card_idempotency_id(&Chat::Direct(principal.into()), MessageId::from(7u64));
+        assert_ne!(group, direct);
+    }
 }
