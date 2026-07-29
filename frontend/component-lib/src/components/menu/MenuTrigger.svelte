@@ -48,6 +48,13 @@
     let menu: HTMLElement;
     let open = $state(false);
     let useLongpress = $derived(mobileMode === "longpress" && isTouchDevice);
+    // A "longpress" trigger on a NON-touch device (the mobile/v2 layout in a desktop browser, or the
+    // desktop app) must NOT fall back to opening on a plain left-click: these triggers wrap content
+    // that already handles clicks — ChatSummary wraps the whole chat row, whose Container onClick
+    // selects the chat — so one click both opened the chat AND its context menu. Left-click stays with
+    // the wrapped content; right-click is the desktop equivalent of a long press.
+    let openOnClick = $derived(!useLongpress && mobileMode === "tap");
+    let openOnContextMenu = $derived(!useLongpress && mobileMode === "longpress");
     let menuClone = $state<HTMLElement>();
 
     const rectRegistry = new WeakMap<HTMLElement, DOMRect>();
@@ -66,6 +73,13 @@
         } else {
             showMenu();
         }
+    }
+
+    // Desktop stand-in for a long press: suppress the browser's own context menu and open ours.
+    function contextMenu(e: MouseEvent) {
+        if (disabled) return;
+        e.preventDefault();
+        click(e);
     }
 
     export function showMenu() {
@@ -243,7 +257,8 @@
         class:open
         class={`menu-trigger ${props.classString}`}
         bind:this={menu}
-        onclick={click}>
+        onclick={openOnClick ? click : undefined}
+        oncontextmenu={openOnContextMenu ? contextMenu : undefined}>
         {@render children()}
     </div>
 {/if}
