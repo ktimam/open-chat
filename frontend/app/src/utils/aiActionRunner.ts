@@ -23,7 +23,7 @@ import {
     type RunAiActionResult,
 } from "openchat-shared";
 import type { ChatIdentifier, MessageContent, MessageContext, OpenChat } from "openchat-client";
-import { inferOnDevice, isNativeClient, onDeviceInferenceCapability } from "./onDeviceInference";
+import { inferOnDevice, onDeviceInferenceCapability } from "./onDeviceInference";
 
 // A directory app's action offered in a chat, with the delivery key already resolved. For a
 // per-user-keys app this is the proposing user's own registered key (from my_ai_app_keys);
@@ -47,10 +47,9 @@ export type ProposeResult =
     | { kind: "no_actions" }
     // The message content isn't something the runner can extract from.
     | { kind: "unsupported_content" }
-    // The message IS an image but the SELECTED MODEL has no image modality. `reason` picks the
-    // remedy: on native, switch to an image-capable model; in a browser none exists yet, so point at
-    // the desktop app. (Browser vision is unimplemented, not impossible — see imageUnsupportedReason.)
-    | { kind: "image_unsupported"; reason: "browser" | "model"; modelId?: string }
+    // The message IS an image but the SELECTED MODEL has no image modality. The remedy is the same
+    // in every client — pick an image-capable model — so this carries only the model that refused.
+    | { kind: "image_unsupported"; modelId?: string }
     // More than one enabled (app, action) pair applies — the UI must show a chooser and run the
     // picked candidate with proposeAndPostCandidate.
     | { kind: "choose"; candidates: AiActionCandidate[] }
@@ -292,7 +291,7 @@ async function runDefinition(
     // native plugin — the user got no explanation either way. Both entry points (the message menu and
     // the auto-propose chip) funnel through here, so one gate covers both.
     if (input.image !== undefined) {
-        const blocked = imageUnsupportedReason(onDeviceInferenceCapability(), isNativeClient());
+        const blocked = imageUnsupportedReason(onDeviceInferenceCapability());
         if (blocked !== undefined) return blocked;
     }
 
@@ -304,24 +303,21 @@ async function runDefinition(
  * explaining why not. Pure (capability + client kind in, verdict out) so the policy is unit-testable
  * without a Tauri bridge or a loaded model.
  *
- * The verdict is always about the MODEL, never about the client being a browser: browser vision is
- * absent today, not impossible. `webEligibleModels` excludes the 2-FILE shape (weights + a separate
- * mmproj projector) within a ~2 GB wasm32 envelope — a single-file vision GGUF under that ceiling
- * would already pass — and `webInfer` then rejects images because the WASM projector path is
- * unimplemented, not because a browser cannot do it. So when a browser-runnable image model appears,
- * the capability probe starts reporting "image" and this function allows it with no change here.
- * `reason` only picks which remedy to offer: on native, switch models; in a browser, no model can do
- * it YET, so point at the desktop app.
+ * The verdict is about the MODEL, never about which client you are in — so this takes ONLY the
+ * capability. Browser vision is absent today, not impossible: `webEligibleModels` excludes the 2-FILE
+ * shape (weights + a separate mmproj projector) within a ~2 GB wasm32 envelope — a single-file vision
+ * GGUF under that ceiling would already pass — and `webInfer` then rejects images because the WASM
+ * projector path is unimplemented, not because a browser cannot do it. So when a browser-runnable
+ * image model appears, the capability probe starts reporting "image" and this allows it with no change
+ * here. Deliberately NOT branching on native-vs-browser: a distinction the UI does not use is the kind
+ * of dead code that let this whole failure go unreported in the first place.
  */
-export function imageUnsupportedReason(
-    capability: { selectedModalities: ModelModality[]; selectedModelId?: string },
-    isNative: boolean,
-): { kind: "image_unsupported"; reason: "browser" | "model"; modelId?: string } | undefined {
+export function imageUnsupportedReason(capability: {
+    selectedModalities: ModelModality[];
+    selectedModelId?: string;
+}): { kind: "image_unsupported"; modelId?: string } | undefined {
     if (capability.selectedModalities.includes("image")) return undefined;
-    // Both branches carry the model name — the message names the MODEL's limitation either way.
-    const modelId = capability.selectedModelId;
-    if (!isNative) return { kind: "image_unsupported", reason: "browser", modelId };
-    return { kind: "image_unsupported", reason: "model", modelId };
+    return { kind: "image_unsupported", modelId: capability.selectedModelId };
 }
 
 // Run the action on offer for a message in this chat, returning a card to propose (or a status).

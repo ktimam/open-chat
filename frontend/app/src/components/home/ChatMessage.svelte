@@ -414,9 +414,7 @@
             case "image_unsupported":
                 toastStore.showFailureToast(
                     i18nKey(
-                        result.reason === "browser"
-                            ? `${result.modelId ?? "This model"} doesn't support images, only text. No browser model supports images yet — the desktop app can run one.`
-                            : `${result.modelId ?? "This model"} doesn't support images, only text. Switch to an image-capable model in profile → App settings → On-device models.`,
+                        `${result.modelId ?? "This model"} doesn't support images, only text. Switch to an image-capable model in profile → App settings → On-device models.`,
                     ),
                 );
                 break;

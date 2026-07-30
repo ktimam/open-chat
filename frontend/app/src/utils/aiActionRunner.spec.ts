@@ -172,38 +172,41 @@ describe("manualExtractEnabled", () => {
 });
 
 
-// Proposing on an IMAGE used to do NOTHING in a browser: the bytes were shipped into a text-only
-// runtime and the failure never surfaced. This gate is what turns that into an explanation, and it
-// distinguishes the two fixes — switch CLIENT (browser) vs switch MODEL (native).
+// Proposing on an IMAGE used to do NOTHING: the bytes were shipped into a text-only runtime and the
+// failure never surfaced. This policy is what turns that into an explanation. It is deliberately about
+// the MODEL only — no native-vs-browser branch — because the remedy ("pick an image-capable model") is
+// the same everywhere, and a distinction the UI never reads is exactly the dead code that hid the
+// original bug.
 describe("imageUnsupportedReason", () => {
     it("allows an image when the selected model has the image modality", () => {
         expect(
-            imageUnsupportedReason({ selectedModalities: ["text", "image"], selectedModelId: "gemma-4-e2b-it-q4" }, true),
+            imageUnsupportedReason({
+                selectedModalities: ["text", "image"],
+                selectedModelId: "gemma-4-e2b-it-q4",
+            }),
         ).toBeUndefined();
     });
 
-    it("blocks a browser text-only model and NAMES it (the message is about the model)", () => {
-        const r = imageUnsupportedReason({ selectedModalities: ["text"], selectedModelId: "local.gguf" }, false);
-        expect(r).toEqual({ kind: "image_unsupported", reason: "browser", modelId: "local.gguf" });
+    it("blocks a text-only model and NAMES it, so the toast can say which one refused", () => {
+        expect(imageUnsupportedReason({ selectedModalities: ["text"], selectedModelId: "gemma-3-1b-it-q4" })).toEqual({
+            kind: "image_unsupported",
+            modelId: "gemma-3-1b-it-q4",
+        });
     });
 
-    it("blocks a NATIVE client whose selected model is text-only, and names it", () => {
-        const r = imageUnsupportedReason({ selectedModalities: ["text"], selectedModelId: "gemma-3-1b-it-q4" }, true);
-        expect(r).toEqual({ kind: "image_unsupported", reason: "model", modelId: "gemma-3-1b-it-q4" });
-    });
-
-    it("blocks a native client with NO model selected (no modalities at all)", () => {
-        const r = imageUnsupportedReason({ selectedModalities: [] }, true);
-        expect(r).toEqual({ kind: "image_unsupported", reason: "model", modelId: undefined });
+    it("blocks when NO model is selected (no modalities at all)", () => {
+        expect(imageUnsupportedReason({ selectedModalities: [] })).toEqual({
+            kind: "image_unsupported",
+            modelId: undefined,
+        });
     });
 
     it("BROWSER vision is absent, not impossible: an image-capable browser model is allowed", () => {
         // webEligibleModels excludes the 2-FILE (mmproj) shape, not vision itself — a single-file
         // vision GGUF under the ~2 GB wasm32 ceiling already passes that filter. The day the browser
-        // capability probe reports "image", this policy must let it through with no edit here.
+        // capability probe reports "image", this must let it through with no edit here.
         expect(
-            imageUnsupportedReason({ selectedModalities: ["text", "image"], selectedModelId: "future-vlm.gguf" }, false),
+            imageUnsupportedReason({ selectedModalities: ["text", "image"], selectedModelId: "future-vlm.gguf" }),
         ).toBeUndefined();
     });
-
 });
