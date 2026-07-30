@@ -47,9 +47,9 @@ export type ProposeResult =
     | { kind: "no_actions" }
     // The message content isn't something the runner can extract from.
     | { kind: "unsupported_content" }
-    // The message IS an image, but this client cannot read one: either we are in a browser (the
-    // WASM path is text-only — vision needs the native mmproj projector) or the selected on-device
-    // model has no image modality. Distinguished so the UI can tell the user WHICH one to fix.
+    // The message IS an image but the SELECTED MODEL has no image modality. `reason` picks the
+    // remedy: on native, switch to an image-capable model; in a browser none exists yet, so point at
+    // the desktop app. (Browser vision is unimplemented, not impossible — see imageUnsupportedReason.)
     | { kind: "image_unsupported"; reason: "browser" | "model"; modelId?: string }
     // More than one enabled (app, action) pair applies — the UI must show a chooser and run the
     // picked candidate with proposeAndPostCandidate.
@@ -304,18 +304,24 @@ async function runDefinition(
  * explaining why not. Pure (capability + client kind in, verdict out) so the policy is unit-testable
  * without a Tauri bridge or a loaded model.
  *
- * A browser is a hard no regardless of the model: the WASM path has no vision projector, and the
- * model catalog excludes every multimodal (2-file / mmproj) entry from browser use. On native the
- * answer depends on the SELECTED model — only entries whose catalog modalities include "image" work,
- * so the fix there is to switch models rather than to switch clients.
+ * The verdict is always about the MODEL, never about the client being a browser: browser vision is
+ * absent today, not impossible. `webEligibleModels` excludes the 2-FILE shape (weights + a separate
+ * mmproj projector) within a ~2 GB wasm32 envelope — a single-file vision GGUF under that ceiling
+ * would already pass — and `webInfer` then rejects images because the WASM projector path is
+ * unimplemented, not because a browser cannot do it. So when a browser-runnable image model appears,
+ * the capability probe starts reporting "image" and this function allows it with no change here.
+ * `reason` only picks which remedy to offer: on native, switch models; in a browser, no model can do
+ * it YET, so point at the desktop app.
  */
 export function imageUnsupportedReason(
     capability: { selectedModalities: ModelModality[]; selectedModelId?: string },
     isNative: boolean,
 ): { kind: "image_unsupported"; reason: "browser" | "model"; modelId?: string } | undefined {
     if (capability.selectedModalities.includes("image")) return undefined;
-    if (!isNative) return { kind: "image_unsupported", reason: "browser" };
-    return { kind: "image_unsupported", reason: "model", modelId: capability.selectedModelId };
+    // Both branches carry the model name — the message names the MODEL's limitation either way.
+    const modelId = capability.selectedModelId;
+    if (!isNative) return { kind: "image_unsupported", reason: "browser", modelId };
+    return { kind: "image_unsupported", reason: "model", modelId };
 }
 
 // Run the action on offer for a message in this chat, returning a card to propose (or a status).

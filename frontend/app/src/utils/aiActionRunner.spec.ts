@@ -182,11 +182,9 @@ describe("imageUnsupportedReason", () => {
         ).toBeUndefined();
     });
 
-    it("blocks the BROWSER even if something claimed image support", () => {
-        // The browser path reports text-only (webInference has no vision projector), so this is the
-        // realistic shape; the point is the reason names the CLIENT, not the model.
+    it("blocks a browser text-only model and NAMES it (the message is about the model)", () => {
         const r = imageUnsupportedReason({ selectedModalities: ["text"], selectedModelId: "local.gguf" }, false);
-        expect(r).toEqual({ kind: "image_unsupported", reason: "browser" });
+        expect(r).toEqual({ kind: "image_unsupported", reason: "browser", modelId: "local.gguf" });
     });
 
     it("blocks a NATIVE client whose selected model is text-only, and names it", () => {
@@ -199,9 +197,13 @@ describe("imageUnsupportedReason", () => {
         expect(r).toEqual({ kind: "image_unsupported", reason: "model", modelId: undefined });
     });
 
-    it("a browser with an image-capable model would still be allowed (policy is modality-first)", () => {
-        // Documents the ordering deliberately: if the browser ever gains a vision path, only the
-        // capability probe needs to change — this policy does not.
-        expect(imageUnsupportedReason({ selectedModalities: ["image"] }, false)).toBeUndefined();
+    it("BROWSER vision is absent, not impossible: an image-capable browser model is allowed", () => {
+        // webEligibleModels excludes the 2-FILE (mmproj) shape, not vision itself — a single-file
+        // vision GGUF under the ~2 GB wasm32 ceiling already passes that filter. The day the browser
+        // capability probe reports "image", this policy must let it through with no edit here.
+        expect(
+            imageUnsupportedReason({ selectedModalities: ["text", "image"], selectedModelId: "future-vlm.gguf" }, false),
+        ).toBeUndefined();
     });
+
 });
