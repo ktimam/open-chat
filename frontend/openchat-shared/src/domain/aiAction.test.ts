@@ -74,7 +74,46 @@ describe("parseExtractionList", () => {
     it("keeps only object elements of the array, dropping scalars", () => {
         expect(parseExtractionList('[1, {"amount":5}, "x"]')).toEqual([{ amount: 5 }]);
     });
-    it("returns undefined for an array with no object elements", () => {
+    // A small on-device model routinely fails to close its JSON. Before the balanced-object scan,
+    // ANY of these fell through to parseExtraction, which slices first-"{" .. last-"}" — for a
+    // multi-object emission that is `{a},{b}`, invalid JSON — so the whole message extracted to
+    // NOTHING and the user got "The model found no action in this message" after a long wait.
+    it("salvages the complete objects of a TRUNCATED array (no closing bracket)", () => {
+        const text = '[{"amount":20,"note":"rent"},{"amount":30,"note":"uber"},{"amount":40,"not';
+        expect(parseExtractionList(text)).toEqual([
+            { amount: 20, note: "rent" },
+            { amount: 30, note: "uber" },
+        ]);
+    });
+    it("survives a stray '[' in prose ahead of the JSON", () => {
+        const text = 'Transactions [see below]:\n{"amount":20}\n{"amount":30}';
+        expect(parseExtractionList(text)).toEqual([{ amount: 20 }, { amount: 30 }]);
+    });
+    it("survives a trailing comma between elements", () => {
+        expect(parseExtractionList('[{"amount":20},{"amount":30},]')).toEqual([
+            { amount: 20 },
+            { amount: 30 },
+        ]);
+    });
+    it("does not split on a brace inside a quoted string", () => {
+        const text = '[{"amount":20,"note":"paid 50 } later"},{"amount":30,"note":"a { b"}';
+        expect(parseExtractionList(text)).toEqual([
+            { amount: 20, note: "paid 50 } later" },
+            { amount: 30, note: "a { b" },
+        ]);
+    });
+    it("does not split on an ESCAPED quote inside a string", () => {
+        const text = '[{"note":"say \\"hi\\" }","amount":20},{"amount":30}';
+        expect(parseExtractionList(text)).toEqual([
+            { note: 'say "hi" }', amount: 20 },
+            { amount: 30 },
+        ]);
+    });
+    it("skips ONE malformed object without losing the others", () => {
+        const text = '[{"amount":20},{"amount":},{"amount":30}]';
+        expect(parseExtractionList(text)).toEqual([{ amount: 20 }, { amount: 30 }]);
+    });
+    it("still returns undefined for an array with no object elements", () => {
         expect(parseExtractionList("[1, 2, 3]")).toBeUndefined();
     });
     it("returns undefined when there is no JSON at all", () => {

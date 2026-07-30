@@ -220,12 +220,65 @@ export function parseExtractionList(text: string): Record<string, unknown>[] | u
                     return objs.length > 0 ? objs : undefined;
                 }
             } catch {
-                // not a clean array — fall through to single-object parsing
+                // not a clean array — fall through to the object scan below
             }
         }
     }
+    // The array fast path failed. DO NOT go straight to parseExtraction: it slices from the first "{"
+    // to the last "}", so a multi-object emission like `[{a},{b}]` becomes `{a},{b}` — invalid JSON,
+    // and the whole message extracts to NOTHING. That is the difference between "we salvaged 2 of the
+    // 3 transactions" and the user seeing "The model found no action in this message" after a long
+    // wait. Scan for balanced objects instead, which also survives the common small-model failures:
+    // a truncated array (no closing "]"), a stray "[" in prose ahead of the JSON, and trailing commas
+    // between elements.
+    const scanned = scanJsonObjects(candidate);
+    if (scanned.length > 0) return scanned;
     const obj = parseExtraction(text);
     return obj === undefined ? undefined : [obj];
+}
+
+// Collect every balanced top-level {...} substring that parses as a JSON object, in order.
+// String-aware (a brace inside a quoted value must not move the depth) and escape-aware, so a note
+// like {"note":"paid 50 } later"} does not derail the scan. An unterminated trailing object is simply
+// dropped — which is what makes a truncated generation degrade to "the objects that DID complete"
+// instead of to nothing.
+function scanJsonObjects(text: string): Record<string, unknown>[] {
+    const out: Record<string, unknown>[] = [];
+    let depth = 0;
+    let start = -1;
+    let inString = false;
+    let escaped = false;
+    for (let i = 0; i < text.length; i++) {
+        const ch = text[i];
+        if (inString) {
+            if (escaped) escaped = false;
+            else if (ch === "\\") escaped = true;
+            else if (ch === '"') inString = false;
+            continue;
+        }
+        if (ch === '"') {
+            inString = true;
+        } else if (ch === "{") {
+            if (depth === 0) start = i;
+            depth++;
+        } else if (ch === "}") {
+            if (depth > 0) {
+                depth--;
+                if (depth === 0 && start >= 0) {
+                    try {
+                        const parsed: unknown = JSON.parse(text.slice(start, i + 1));
+                        if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+                            out.push(parsed as Record<string, unknown>);
+                        }
+                    } catch {
+                        // a malformed object is skipped; the others still count
+                    }
+                    start = -1;
+                }
+            }
+        }
+    }
+    return out;
 }
 
 // --- Rules ---------------------------------------------------------------------------------------------------
