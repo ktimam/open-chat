@@ -120,10 +120,12 @@ override is optional; a confirm with no override behaves identically to today.
   and `verify-multi-entry.ts` (the IOU BatchConfirmModal import → both land, messageId consumed).
 - **Missing currency defers to the IOU default (app-side).** The card iframe is storage-partitioned
   and cannot read `prefs.defaultCurrency`, so it must NOT invent a currency. When the extraction has
-  none, IOU's card shows a "Default currency" option (`""`) and OMITS currency from the confirm
+  none, IOU's card shows a "Your IOU default" option (`""`) and OMITS currency from the confirm
   payload; the REAL IOU app injects the default at import (`baseWithDefaultCurrency`). A hardcoded USD
-  would have silently regressed Issue 3 for non-USD users. Verify:
-  `IOU/scripts/live/verify-default-currency.ts` (deposit carries no `currency` field).
+  would have silently regressed Issue 3 for non-USD users. The card CANNOT show the literal code — see
+  the 2026-07-30 addendum below for the three measurements that rule every channel out. Verify:
+  `IOU/scripts/live/verify-default-currency.ts` (deposit carries no `currency` field) and
+  `IOU/scripts/live/card-default-currency.ts` (the picker itself defers).
 - **Live harnesses confirm INSIDE the iframe.** `journey-fanout.ts` / `verify-multi-entry.ts` match
   this run's card by the unique note in the iframe's inputs (not `.action-card` innerText) and click
   the iframe's button — no OC disclosure checkbox (the app-card bridge confirm is screened by
@@ -230,3 +232,44 @@ Tests: `frontend/app/src/utils/{cardBridge,aiAppSurfaces}.test.ts`,
 `frontend/openchat-shared/src/domain/aiAction.test.ts` (builder `appId`); Rust unit tests in
 `ai_app_registry.rs` (un-publish on surface/canister change) + `register_ai_app.rs` (sheet-surface scheme
 gate). The 6 integration-test `ActionCardContentInitial` literals gained `app_id: None`.
+
+## Why the card cannot SHOW the user's default currency (2026-07-30) — investigated, reverted
+
+The card shows **"Your IOU default"** rather than the literal code (e.g. `EGP`) when a message states no
+currency. That is not a shortcut — it is the only correct option, and this records why so it is not
+"fixed" again. The rejected fix (an anonymous `chat_key -> ISO code` map on the IOU canister, read by the
+card page) was built, deployed locally, live-verified working, and then **reverted**. Three independent
+findings, all measured on the live setup, kill it:
+
+1. **A direct-chat key names only the COUNTERPARTY, so it is not a per-viewer key.** Live proof from two
+   profiles' stored links: child → `direct:wrjd4-…` → sheet `c819f76d…`, mother → `direct:wrjd4-…` →
+   sheet `da0f6b42…`. Byte-identical keys (`wrjd4-…` is father), different sheets — every user chatting
+   with the same person shares one map entry, so their writes clobber each other. The existing
+   `chat_sheet_links` map is safe only because it *is* caller-keyed (`caller\0chat_key`); an anonymous
+   reader cannot supply a caller, which is the whole problem.
+2. **It answers the wrong question.** The map returned the linked sheet's founding
+   `enabled_currencies[0]` — a per-SHEET fact. `c819f76d…` is USD because *father* created it, so the
+   child's card showed **USD** and then CONFIRMED `currency: "USD"`, making the import store USD for a
+   user whose default is EGP. That is exactly the bug the deferral exists to prevent, reintroduced.
+3. **The frame cannot cache anything either.** Measured by injecting both frame types into the live OC
+   page: with `credentialless` (what we use) `localStorage` writes succeed but read back `null` after a
+   top-level reload — the storage is an ephemeral nonce partition. Without `credentialless` the frame
+   **does not load at all** (OC is COEP:credentialless and IOU's page sends no `Cross-Origin-Resource-
+   Policy`). So "remember what the user picked" needs BOTH an OC attribute change and a CORP header.
+
+**Conclusion:** a PER-VIEWER code is impossible without OpenChat passing a viewer identity in
+`oc:card:init`. A SHARED one is not: IOU added `Config.card_currency`, a deployment-wide code the frame
+reads through the ANONYMOUS `get_config` query and pre-selects for everyone (zero OpenChat changes).
+Both members of a card see it and — since a non-empty currency travels in the confirm payload — both
+import it; that sharing is the deliberate trade-off that makes it possible at all, and it is only a
+pre-selection anyone can change before confirming. A currency the MESSAGE stated still wins, and unset
+restores the per-user deferral. Verified live on two members (both showed EGP) plus the clear path:
+`IOU/scripts/live/verify-card-app-currency.ts`.
+
+The per-user default remains what IOU itself uses everywhere (entry form, imports when no card currency
+is set); it now lives on the canister as `UserRecord.default_currency` so it follows the user across
+devices.
+
+Guard: `IOU/scripts/live/card-default-currency.ts` drives `/openchat/card` with an injected init using a
+chat key that IS linked to a sheet, and asserts the card still defers (invented and absent currencies)
+while honouring a currency the message DID state. `IOU/src/lib.rs` documents MemoryId 21 as burned.
