@@ -317,6 +317,15 @@
             case "unsupported_content":
                 toastStore.showFailureToast(i18nKey("This message can't be turned into an action"));
                 break;
+            case "image_unsupported":
+                toastStore.showFailureToast(
+                    i18nKey(
+                        result.reason === "browser"
+                            ? "Reading an image needs the desktop app: the browser can only run text-only models. Open OpenChat in the app and select a model that supports images."
+                            : `${result.modelId ?? "The selected model"} can't read images — switch to an image-capable model in profile → App settings → On-device models.`,
+                    ),
+                );
+                break;
             case "no_extraction":
                 toastStore.showFailureToast(i18nKey("The model found no action in this message"));
                 break;
@@ -543,7 +552,7 @@
         response: "confirm" | "cancel",
         // App-rendered cards pass the user's edited object here (from the iframe bridge); classic
         // OC-rendered cards omit it.
-        payload?: Record<string, unknown>,
+        payload?: Record<string, unknown> | unknown[],
     ): Promise<void> {
         // Capture before the async round-trip: the card content is replaced when its state
         // refreshes to "confirmed". The promise is returned so the card can show a spinner and lock

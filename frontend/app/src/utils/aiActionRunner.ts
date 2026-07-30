@@ -19,10 +19,11 @@ import {
     runAiAction,
     type AiActionDefinition,
     type AiAppRegistration,
+    type ModelModality,
     type RunAiActionResult,
 } from "openchat-shared";
 import type { ChatIdentifier, MessageContent, MessageContext, OpenChat } from "openchat-client";
-import { inferOnDevice } from "./onDeviceInference";
+import { inferOnDevice, isNativeClient, onDeviceInferenceCapability } from "./onDeviceInference";
 
 // A directory app's action offered in a chat, with the delivery key already resolved. For a
 // per-user-keys app this is the proposing user's own registered key (from my_ai_app_keys);
@@ -46,6 +47,10 @@ export type ProposeResult =
     | { kind: "no_actions" }
     // The message content isn't something the runner can extract from.
     | { kind: "unsupported_content" }
+    // The message IS an image, but this client cannot read one: either we are in a browser (the
+    // WASM path is text-only — vision needs the native mmproj projector) or the selected on-device
+    // model has no image modality. Distinguished so the UI can tell the user WHICH one to fix.
+    | { kind: "image_unsupported"; reason: "browser" | "model"; modelId?: string }
     // More than one enabled (app, action) pair applies — the UI must show a chooser and run the
     // picked candidate with proposeAndPostCandidate.
     | { kind: "choose"; candidates: AiActionCandidate[] }
@@ -282,7 +287,35 @@ async function runDefinition(
     const input = await contentToInput(content);
     if (input === undefined) return { kind: "unsupported_content" };
 
+    // An image needs a model with the "image" modality. Without this the bytes were shipped into a
+    // text-only runtime and the propose silently did NOTHING (browser) or failed deep inside the
+    // native plugin — the user got no explanation either way. Both entry points (the message menu and
+    // the auto-propose chip) funnel through here, so one gate covers both.
+    if (input.image !== undefined) {
+        const blocked = imageUnsupportedReason(onDeviceInferenceCapability(), isNativeClient());
+        if (blocked !== undefined) return blocked;
+    }
+
     return runAiAction(def, input, recipientKey, inferOnDevice, inboxCanisterId, additionalRecipientKeys, appId);
+}
+
+/**
+ * Can this client read an IMAGE right now? Returns undefined when it can, else the ProposeResult
+ * explaining why not. Pure (capability + client kind in, verdict out) so the policy is unit-testable
+ * without a Tauri bridge or a loaded model.
+ *
+ * A browser is a hard no regardless of the model: the WASM path has no vision projector, and the
+ * model catalog excludes every multimodal (2-file / mmproj) entry from browser use. On native the
+ * answer depends on the SELECTED model — only entries whose catalog modalities include "image" work,
+ * so the fix there is to switch models rather than to switch clients.
+ */
+export function imageUnsupportedReason(
+    capability: { selectedModalities: ModelModality[]; selectedModelId?: string },
+    isNative: boolean,
+): { kind: "image_unsupported"; reason: "browser" | "model"; modelId?: string } | undefined {
+    if (capability.selectedModalities.includes("image")) return undefined;
+    if (!isNative) return { kind: "image_unsupported", reason: "browser" };
+    return { kind: "image_unsupported", reason: "model", modelId: capability.selectedModelId };
 }
 
 // Run the action on offer for a message in this chat, returning a card to propose (or a status).
@@ -318,6 +351,31 @@ export async function proposeAiActionForMessage(
     return { kind: "no_actions" };
 }
 
+// Post the proposed card. The send was previously FIRE-AND-FORGET (no await, no catch), so if posting
+// the card message failed the whole propose ended in silence: the extraction prompt had been answered,
+// no toast appeared, and simply no card showed up — indistinguishable from "nothing matched". Await it
+// and turn a failure into an "error" result so the caller can surface it.
+async function postCard(
+    client: OpenChat,
+    messageContext: MessageContext,
+    result: ProposeResult & { kind: "ready" | "ready_multi" },
+): Promise<ProposeResult> {
+    try {
+        // NB: this does NOT throw on failure — it RESOLVES with a failure response (e.g. the chat is
+        // missing from the store, or the send is throttled), which is the other half of why a failed
+        // propose was completely silent. Inspect the response, don't just await it.
+        const res = await client.sendMessageWithContent(messageContext, result.card, false, [], false);
+        if (res?.kind !== undefined && res.kind !== "success") {
+            console.error("[aiAction] posting the proposed card was rejected", res);
+            return { kind: "error", error: `could not post the card (${res.kind})` };
+        }
+        return result;
+    } catch (err) {
+        console.error("[aiAction] posting the proposed card failed", err);
+        return { kind: "error", error: String((err as { message?: string })?.message ?? err) };
+    }
+}
+
 // Convenience: run + post. Posts the proposed card into the chat (Pending) for the user to confirm.
 export async function proposeAndPost(
     client: OpenChat,
@@ -332,7 +390,7 @@ export async function proposeAndPost(
         manualExtraction,
     );
     if (result.kind === "ready" || result.kind === "ready_multi") {
-        client.sendMessageWithContent(messageContext, result.card, false, [], false);
+        return postCard(client, messageContext, result);
     }
     return result;
 }
@@ -356,7 +414,7 @@ export async function proposeAndPostCandidate(
         candidate.app.id,
     );
     if (result.kind === "ready" || result.kind === "ready_multi") {
-        client.sendMessageWithContent(messageContext, result.card, false, [], false);
+        return postCard(client, messageContext, result);
     }
     return result;
 }

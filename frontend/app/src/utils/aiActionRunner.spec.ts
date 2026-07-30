@@ -13,7 +13,7 @@ vi.mock("./onDeviceInference", () => ({
 }));
 
 import type { AiActionDefinition } from "openchat-shared";
-import { buildManualCard, manualExtractEnabled } from "./aiActionRunner";
+import { buildManualCard, manualExtractEnabled, imageUnsupportedReason} from "./aiActionRunner";
 
 const RECIPIENT = "-----BEGIN PUBLIC KEY-----\nABC\n-----END PUBLIC KEY-----\n";
 
@@ -168,5 +168,40 @@ describe("manualExtractEnabled", () => {
     it("is true when the URL carries ?manualExtract=1", () => {
         history.replaceState({}, "", "/?manualExtract=1");
         expect(manualExtractEnabled()).toBe(true);
+    });
+});
+
+
+// Proposing on an IMAGE used to do NOTHING in a browser: the bytes were shipped into a text-only
+// runtime and the failure never surfaced. This gate is what turns that into an explanation, and it
+// distinguishes the two fixes — switch CLIENT (browser) vs switch MODEL (native).
+describe("imageUnsupportedReason", () => {
+    it("allows an image when the selected model has the image modality", () => {
+        expect(
+            imageUnsupportedReason({ selectedModalities: ["text", "image"], selectedModelId: "gemma-4-e2b-it-q4" }, true),
+        ).toBeUndefined();
+    });
+
+    it("blocks the BROWSER even if something claimed image support", () => {
+        // The browser path reports text-only (webInference has no vision projector), so this is the
+        // realistic shape; the point is the reason names the CLIENT, not the model.
+        const r = imageUnsupportedReason({ selectedModalities: ["text"], selectedModelId: "local.gguf" }, false);
+        expect(r).toEqual({ kind: "image_unsupported", reason: "browser" });
+    });
+
+    it("blocks a NATIVE client whose selected model is text-only, and names it", () => {
+        const r = imageUnsupportedReason({ selectedModalities: ["text"], selectedModelId: "gemma-3-1b-it-q4" }, true);
+        expect(r).toEqual({ kind: "image_unsupported", reason: "model", modelId: "gemma-3-1b-it-q4" });
+    });
+
+    it("blocks a native client with NO model selected (no modalities at all)", () => {
+        const r = imageUnsupportedReason({ selectedModalities: [] }, true);
+        expect(r).toEqual({ kind: "image_unsupported", reason: "model", modelId: undefined });
+    });
+
+    it("a browser with an image-capable model would still be allowed (policy is modality-first)", () => {
+        // Documents the ordering deliberately: if the browser ever gains a vision path, only the
+        // capability probe needs to change — this policy does not.
+        expect(imageUnsupportedReason({ selectedModalities: ["image"] }, false)).toBeUndefined();
     });
 });
