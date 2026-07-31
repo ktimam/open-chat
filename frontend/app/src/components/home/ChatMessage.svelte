@@ -387,26 +387,38 @@
             );
             if (result.kind === "unavailable") {
                 const me = promptForExtraction();
-                if (me === undefined) return;
-                result = await proposeAndPostCandidate(
-                    client,
-                    messageContext,
-                    msg.content,
-                    candidate,
-                    me,
-                );
+                // The seam supplied nothing (it is OFF for every real user), so FALL THROUGH and let the
+                // result be surfaced. Returning here swallowed it: the button did nothing, said nothing,
+                // and the "unavailable" toast below was unreachable in normal use.
+                if (me !== undefined) {
+                    result = await proposeAndPostCandidate(
+                        client,
+                        messageContext,
+                        msg.content,
+                        candidate,
+                        me,
+                    );
+                }
             }
         } else if (result.kind === "unavailable") {
             const me = promptForExtraction();
-            if (me === undefined) return;
-            result = await proposeAndPost(client, messageContext, msg.content, me);
+            // The seam supplied nothing (it is OFF for every real user), so FALL THROUGH and let the
+            // result be surfaced. Returning here swallowed it: the button did nothing, said nothing,
+            // and the "unavailable" toast below was unreachable in normal use.
+            if (me !== undefined) {
+                result = await proposeAndPost(client, messageContext, msg.content, me);
+            }
         }
         switch (result.kind) {
             case "no_actions":
                 toastStore.showFailureToast(i18nKey("aiApps.noneEnabled"));
                 break;
             case "unavailable":
-                toastStore.showFailureToast(i18nKey("On-device model unavailable"));
+                toastStore.showFailureToast(
+                    i18nKey(
+                        "No on-device model is ready — pick one in profile → App settings → On-device models.",
+                    ),
+                );
                 break;
             case "unsupported_content":
                 toastStore.showFailureToast(i18nKey("This message can't be turned into an action"));

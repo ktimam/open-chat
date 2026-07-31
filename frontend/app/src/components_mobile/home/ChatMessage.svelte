@@ -312,7 +312,11 @@
                 toastStore.showFailureToast(i18nKey("aiApps.noneEnabled"));
                 break;
             case "unavailable":
-                toastStore.showFailureToast(i18nKey("On-device model unavailable"));
+                toastStore.showFailureToast(
+                    i18nKey(
+                        "No on-device model is ready — pick one in profile → App settings → On-device models.",
+                    ),
+                );
                 break;
             case "unsupported_content":
                 toastStore.showFailureToast(i18nKey("This message can't be turned into an action"));
@@ -352,8 +356,12 @@
         }
         if (result.kind === "unavailable") {
             const extraction = promptForExtraction();
-            if (extraction === undefined) return;
-            result = await proposeAndPost(client, messageContext, msg.content, extraction);
+            // The seam supplied nothing (it is OFF for every real user), so FALL THROUGH and let the
+            // result be surfaced. Returning here swallowed it: the button did nothing, said nothing,
+            // and the "unavailable" toast below was unreachable in normal use.
+            if (extraction !== undefined) {
+                result = await proposeAndPost(client, messageContext, msg.content, extraction);
+            }
         }
         showAiActionResult(result);
     }
