@@ -605,11 +605,16 @@ export async function runAiAction(
     // though UNCONSTRAINED decoding extracts the right number. The schema is still enforced deterministically
     // AFTER generation by `applyRulesPostPass`/`conformToSchema` below, so nothing is lost by dropping the
     // generation-time constraint — we just let the model pick the value freely first.
+    // Deliberately NO `text` here. The message is ALREADY inlined into `prompt` above, because the
+    // native runtime reads only `prompt`. The BROWSER backend, however, concatenates prompt + text
+    // (see webInference.ts, which builds its prompt as request.prompt followed by request.text) — so
+    // passing both sent the model the SAME message twice, and it duly extracted some transactions
+    // twice: "owe me 300 uber 150 food" came back with 300 repeated. Native never saw it, which is
+    // why this read like small-model flakiness rather than a bug in our own prompt assembly.
     const result = await infer({
         modelId: input.modelId,
         prompt,
         image: input.image,
-        text: input.text,
     });
 
     if (result.kind === "unavailable") return { kind: "unavailable", reason: result.reason };

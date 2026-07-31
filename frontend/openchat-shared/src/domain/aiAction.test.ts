@@ -202,6 +202,26 @@ describe("runAiAction", () => {
             expect(ArrayBuffer.isView(r.card.confirmPayload)).toBe(true);
         }
     });
+    // The browser backend appends request.text to request.prompt, and the prompt ALREADY carries the
+    // message (the native runtime reads only `prompt`). Passing both sent the model the same message
+    // twice and it extracted some transactions twice — "owe me 300 uber 150 food" came back with 300
+    // repeated. Native never saw it, so it read like small-model flakiness.
+    it("sends the message EXACTLY ONCE — inlined in the prompt, never also as `text`", async () => {
+        const seen: InferenceRequest[] = [];
+        const capture = async (req: InferenceRequest): Promise<InferenceResult> => {
+            seen.push(req);
+            return { kind: "ok", text: '{"amount":20,"currency":"USD","note":"lunch"}' };
+        };
+        const message = "owe me 300 uber 150 food";
+        await runAiAction(DEF, { text: message }, RECIPIENT, capture);
+
+        expect(seen).toHaveLength(1);
+        // No `text` field at all: anything that concatenates prompt+text cannot double the message.
+        expect(seen[0].text).toBeUndefined();
+        expect(seen[0].prompt).toContain(message);
+        expect(seen[0].prompt.split(message).length - 1).toBe(1);
+    });
+
     it("propagates unavailable (no autonomous fallback)", async () => {
         const r = await runAiAction(DEF, {}, RECIPIENT, async () => ({ kind: "unavailable", reason: "no native runtime" }));
         expect(r.kind).toBe("unavailable");
