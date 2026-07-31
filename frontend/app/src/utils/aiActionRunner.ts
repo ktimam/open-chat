@@ -304,13 +304,12 @@ async function runDefinition(
  * without a Tauri bridge or a loaded model.
  *
  * The verdict is about the MODEL, never about which client you are in — so this takes ONLY the
- * capability. Browser vision is absent today, not impossible: `webEligibleModels` excludes the 2-FILE
- * shape (weights + a separate mmproj projector) within a ~2 GB wasm32 envelope — a single-file vision
- * GGUF under that ceiling would already pass — and `webInfer` then rejects images because the WASM
- * projector path is unimplemented, not because a browser cannot do it. So when a browser-runnable
- * image model appears, the capability probe starts reporting "image" and this allows it with no change
- * here. Deliberately NOT branching on native-vs-browser: a distinction the UI does not use is the kind
- * of dead code that let this whole failure go unreported in the first place.
+ * capability. That is what let browser vision arrive without touching this function: the browser used
+ * to look image-blind because `webEligibleModels` counted files (excluding every weights+mmproj VLM),
+ * `webInfer` refused images outright, and the capability probe hardcoded ["text"] — three gates in our
+ * own code, none of them a platform limit. Removing them made the probe report "image" and this
+ * allowed it, unchanged. Deliberately NOT branching on native-vs-browser: a distinction the UI does
+ * not use is the kind of dead code that let this whole failure go unreported in the first place.
  */
 export function imageUnsupportedReason(capability: {
     selectedModalities: ModelModality[];

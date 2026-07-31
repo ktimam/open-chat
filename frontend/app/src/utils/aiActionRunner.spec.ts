@@ -202,9 +202,10 @@ describe("imageUnsupportedReason", () => {
     });
 
     it("BROWSER vision is absent, not impossible: an image-capable browser model is allowed", () => {
-        // webEligibleModels excludes the 2-FILE (mmproj) shape, not vision itself — a single-file
-        // vision GGUF under the ~2 GB wasm32 ceiling already passes that filter. The day the browser
-        // capability probe reports "image", this must let it through with no edit here.
+        // Written when the browser refused every image, to pin that the refusal lived in the model
+        // gates and not here. Browser vision has since landed (webEligibleModels accepts a
+        // weights+mmproj pair, webInfer has a vision path, the probe reports what the model says) —
+        // and this assertion carried it through with no edit, which was the point.
         expect(
             imageUnsupportedReason({ selectedModalities: ["text", "image"], selectedModelId: "future-vlm.gguf" }),
         ).toBeUndefined();
