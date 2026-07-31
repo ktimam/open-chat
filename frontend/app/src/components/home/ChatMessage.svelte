@@ -280,6 +280,11 @@
         tipping = ledger;
     }
 
+    // Every "propose can't run because there is no model" exit says this — the pre-check below and
+    // the `unavailable` result both land here, so the user gets one answer and one place to go.
+    const NO_MODEL_MESSAGE =
+        "No on-device model is ready — pick one in profile → App settings → On-device models.";
+
     // The raw-JSON extraction prompt is a TEST SEAM only (Issue 1): real users with no on-device
     // model must never see a raw JSON box — they're guided to set one up (see runAiActionInner). It
     // runs solely when `manualExtractEnabled()` is set (localStorage flag / ?manualExtract=1), which
@@ -360,14 +365,16 @@
         // (manualExtractEnabled) so the automated journey can still drive the confirm → deposit cycle.
         let manualExtraction: Record<string, unknown> | Record<string, unknown>[] | undefined;
         if (!canInferOnDevice()) {
-            if (!manualExtractEnabled()) {
-                toastStore.showFailureToast(
-                    i18nKey("Select an on-device model to propose actions"),
-                );
+            // One exit, one message. The seam is OFF for real users, and a dev who dismisses its
+            // prompt supplied nothing either — both mean "no extraction available", so both are told.
+            // Bailing out silently on the second case is what made the button look dead: with the
+            // seam left on in a profile (a stale `oc:manualExtract`, or a browser suppressing repeat
+            // dialogs) the prompt is answered with null and propose returned without a word.
+            manualExtraction = promptForExtraction();
+            if (manualExtraction === undefined) {
+                toastStore.showFailureToast(i18nKey(NO_MODEL_MESSAGE));
                 return;
             }
-            manualExtraction = promptForExtraction();
-            if (manualExtraction === undefined) return;
         }
         let result = await proposeAndPost(client, messageContext, msg.content, manualExtraction);
         if (result.kind === "link_required") {
@@ -414,11 +421,7 @@
                 toastStore.showFailureToast(i18nKey("aiApps.noneEnabled"));
                 break;
             case "unavailable":
-                toastStore.showFailureToast(
-                    i18nKey(
-                        "No on-device model is ready — pick one in profile → App settings → On-device models.",
-                    ),
-                );
+                toastStore.showFailureToast(i18nKey(NO_MODEL_MESSAGE));
                 break;
             case "unsupported_content":
                 toastStore.showFailureToast(i18nKey("This message can't be turned into an action"));
