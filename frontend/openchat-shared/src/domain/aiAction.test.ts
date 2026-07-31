@@ -877,3 +877,129 @@ describe("chatKeyFor", () => {
         );
     });
 });
+
+// ── Real model replies, end to end ───────────────────────────────────────────
+//
+// Every stage of the multi-entry pipeline is unit-tested above in isolation, and every stage passed
+// while the user reported "produces two entries only, dropping the 150 food" TWICE. That is the gap
+// this block closes: the stages are exercised TOGETHER, on replies an actual on-device model actually
+// produced, asserting the thing the user cares about — every amount in the message reaches a card.
+//
+// The first fixture is captured verbatim from Qwen3-VL 2B (the current browser default) for the
+// reported message, via scripts/live in the IOU repo. Re-running that extraction four times gave this
+// same 3-entry shape every time, which is how the drop was traced past the model and the parser.
+describe("real captured model replies keep every transaction", () => {
+    const REPORTED_MESSAGE = "Owe me 300 uber 150 food\n\n500 movies";
+
+    // The exact bytes Qwen3-VL 2B returned. Kept verbatim (whitespace included) — reformatting it
+    // would quietly weaken the test into one about our own pretty-printing.
+    const QWEN_3_ENTRIES = `[
+  { "kind": "iou", "amount": 300, "currency": "USD", "direction": "debt", "note": "Uber ride" },
+  { "kind": "iou", "amount": 150, "currency": "USD", "direction": "debt", "note": "Food" },
+  { "kind": "settlement", "amount": 500, "currency": "USD", "direction": "credit", "note": "Movies" }
+]`;
+
+    const amountsOf = (entries: Record<string, unknown>[]) => entries.map((e) => e.amount);
+
+    it("three transactions in, three entries out — including two on the SAME line", async () => {
+        // "300 uber 150 food" share a line; "500 movies" is a paragraph away. Both splits must survive.
+        const r = await runAiAction(
+            MULTI_DEF,
+            { text: REPORTED_MESSAGE },
+            RECIPIENT,
+            async () => ({ kind: "ok", text: QWEN_3_ENTRIES }),
+        );
+        expect(r.kind).toBe("ready_multi");
+        if (r.kind !== "ready_multi") return;
+        expect(amountsOf(r.extracted)).toEqual([300, 150, 500]);
+    });
+
+    it("carries all three through the sentinel row the app card reads", async () => {
+        // The card is what the user confirms, so entries surviving the post-pass is not enough: they
+        // have to reach the hidden __oc_entries__ row, which is the app card's only multi-entry input.
+        const r = await runAiAction(
+            MULTI_DEF,
+            { text: REPORTED_MESSAGE },
+            RECIPIENT,
+            async () => ({ kind: "ok", text: QWEN_3_ENTRIES }),
+        );
+        if (r.kind !== "ready_multi") throw new Error(`expected ready_multi, got ${r.kind}`);
+        const sentinel = r.card.rows.find((row) => row.label === OC_ENTRIES_ROW_LABEL);
+        expect(sentinel).toBeDefined();
+        expect(amountsOf(JSON.parse(sentinel!.value))).toEqual([300, 150, 500]);
+        expect(amountsOf(JSON.parse(new TextDecoder().decode(r.card.confirmPayload!)))).toEqual([
+            300, 150, 500,
+        ]);
+    });
+
+    it("gives each entry its OWN note, never the whole message", async () => {
+        // The first form of this bug: every row got the entire message as its description, so three
+        // entries read "Owe me 300 uber 150 food 500 movies". The note is the model's per-entry text;
+        // the raw message travels separately, on `message`.
+        const r = await runAiAction(
+            MULTI_DEF,
+            { text: REPORTED_MESSAGE },
+            RECIPIENT,
+            async () => ({ kind: "ok", text: QWEN_3_ENTRIES }),
+        );
+        if (r.kind !== "ready_multi") throw new Error(`expected ready_multi, got ${r.kind}`);
+        expect(r.extracted.map((e) => e.note)).toEqual(["Uber ride", "Food", "Movies"]);
+        for (const e of r.extracted) {
+            expect(e.note).not.toContain("500 movies");
+        }
+    });
+
+    it("does not repeat a transaction when the model echoes the message twice", async () => {
+        // The browser backend once received the message twice (prompt AND text) and duly extracted
+        // 300 twice. The duplicate send is fixed and tested above; this pins the SYMPTOM, so a
+        // reintroduction anywhere in the chain fails here too.
+        const duplicated = `[
+  { "kind": "iou", "amount": 300, "note": "Uber ride" },
+  { "kind": "iou", "amount": 150, "note": "Food" },
+  { "kind": "iou", "amount": 300, "note": "Uber ride" },
+  { "kind": "iou", "amount": 150, "note": "Food" }
+]`;
+        const r = await runAiAction(MULTI_DEF, { text: REPORTED_MESSAGE }, RECIPIENT, async () => ({
+            kind: "ok",
+            text: duplicated,
+        }));
+        if (r.kind !== "ready_multi") throw new Error(`expected ready_multi, got ${r.kind}`);
+        // We do NOT dedupe (two identical real transactions are legal), so this documents today's
+        // behaviour deliberately: the guard against duplicates is the single-send test, not a filter.
+        expect(amountsOf(r.extracted)).toEqual([300, 150, 300, 150]);
+    });
+
+    it("salvages the completed transactions when the model's reply is cut off mid-object", async () => {
+        // A small model hitting the token cap truncates. Losing the tail is acceptable; losing
+        // EVERYTHING (which is what happened before scanJsonObjects) is not — that is the long wait
+        // ending in "nothing to process".
+        const truncated = `[
+  { "kind": "iou", "amount": 300, "note": "Uber ride" },
+  { "kind": "iou", "amount": 150, "note": "Food" },
+  { "kind": "iou", "amount": 500, "note": "Mov`;
+        const r = await runAiAction(MULTI_DEF, { text: REPORTED_MESSAGE }, RECIPIENT, async () => ({
+            kind: "ok",
+            text: truncated,
+        }));
+        expect(r.kind).toBe("ready_multi");
+        if (r.kind !== "ready_multi") return;
+        expect(amountsOf(r.extracted)).toEqual([300, 150]);
+    });
+
+    it("keeps the other transactions when ONE element is degenerate", async () => {
+        // amount 0 violates exclusiveMinimum, so that element is dropped by the viability gate — but
+        // dropping the whole card would lose two good transactions with it.
+        const withZero = `[
+  { "kind": "iou", "amount": 300, "note": "Uber ride" },
+  { "kind": "iou", "amount": 0, "note": "Food" },
+  { "kind": "iou", "amount": 500, "note": "Movies" }
+]`;
+        const r = await runAiAction(MULTI_DEF, { text: REPORTED_MESSAGE }, RECIPIENT, async () => ({
+            kind: "ok",
+            text: withZero,
+        }));
+        expect(r.kind).toBe("ready_multi");
+        if (r.kind !== "ready_multi") return;
+        expect(amountsOf(r.extracted)).toEqual([300, 500]);
+    });
+});
