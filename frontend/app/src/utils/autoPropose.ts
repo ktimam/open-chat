@@ -5,13 +5,15 @@
 // candidate (app, action) pairs come from the existing Phase-A resolution (the apps enabled in
 // the chat crossed with the global app directory — resolveCandidates in aiActionRunner.ts), and
 // an action's trigger keywords are the union of the keywords of its keyword_map rules. An action
-// with no keyword_map rules never auto-proposes. Matching mirrors the deterministic rules
-// post-pass: case-insensitive substring of any keyword in the message text.
+// with no keyword_map rules never auto-proposes. A keyword matches when it appears in the message as
+// a WHOLE word/phrase, case-insensitively (see keywordMatch.ts) — raw substring matching made short
+// keywords unusable, e.g. "owe" would have fired on "power"/"shower"/"flower".
 //
 // Performance: the per-chat vocabulary is cached for ~60s, so evaluating a message is pure
 // string work — zero canister calls on the message path while the cache is warm.
 
 import type { ChatIdentifier, EventWrapper, Message, OpenChat } from "openchat-client";
+import { matchesKeyword } from "./keywordMatch";
 import { chatIdentifierToString } from "openchat-client";
 import { writable } from "svelte/store";
 import { autoProposeSuggestions as autoProposeEnabled } from "../stores/settings";
@@ -201,7 +203,9 @@ export function evaluateForAutoPropose(
                 // First matching action wins; tapping the chip re-runs the full propose flow, which
                 // shows the chooser anyway when several actions apply.
                 const text = content.text.toLowerCase();
-                const entry = vocabulary.keywordEntries.find((v) => v.keywords.some((k) => text.includes(k)));
+                const entry = vocabulary.keywordEntries.find((v) =>
+                    v.keywords.some((k) => matchesKeyword(text, k)),
+                );
                 if (entry !== undefined) {
                     matched.push([ev.event.messageId, { chatKey, title: entry.title }]);
                 }

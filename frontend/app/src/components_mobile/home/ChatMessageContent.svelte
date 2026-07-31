@@ -53,7 +53,7 @@
         onRegisterVote?: (vote: { type: "delete" | "register"; answerIndex: number }) => void;
         onRespondToActionCard?: (
             response: "confirm" | "cancel",
-            payload?: Record<string, unknown>,
+            payload?: Record<string, unknown> | unknown[],
         ) => void | Promise<unknown>;
         ogPreviews?: OgPreview[];
         messagePreviews?: RehydratedMessagePreview[];

@@ -226,7 +226,7 @@ export class AnonUserClient implements IChatEventsReader<DirectChatIdentifier> {
         _messageId: bigint,
         _threadRootMessageIndex: number | undefined,
         _response: "confirm" | "cancel",
-        _confirmPayloadOverride?: Record<string, unknown>,
+        _confirmPayloadOverride?: Record<string, unknown> | unknown[],
     ): Promise<RespondToActionCardResponse> {
         throw new AnonymousOperationError();
     }

@@ -15,6 +15,7 @@
         decodeConfirmPayload,
         deriveCardOrigin,
         extractEntriesRow,
+        isCardConfirmPayload,
         isRecord,
         reverseMapRows,
         visibleRows,
@@ -36,9 +37,10 @@
         chatId: ChatIdentifier;
         // On confirm from an app card, `payload` carries the app's final edited object; classic
         // OC-rendered cards call this with no payload.
+        // `payload` is an object for a single-entry card and a top-level ARRAY for a multi-entry one.
         onRespond?: (
             response: "confirm" | "cancel",
-            payload?: Record<string, unknown>,
+            payload?: Record<string, unknown> | unknown[],
         ) => void | Promise<unknown>;
     }
 
@@ -51,7 +53,10 @@
     // double-fired. Resets on completion whether the call succeeds OR fails — a failed deposit now
     // surfaces as an error, and the card must become actionable again rather than spin forever.
     let busy = $state(false);
-    async function doRespond(response: "confirm" | "cancel", payload?: Record<string, unknown>) {
+    async function doRespond(
+        response: "confirm" | "cancel",
+        payload?: Record<string, unknown> | unknown[],
+    ) {
         if (busy) return;
         busy = true;
         try {
@@ -188,7 +193,7 @@
                 break;
             case "oc:card:confirm":
                 if (!cardActionable || busy) return;
-                void doRespond("confirm", isRecord(msg.payload) ? msg.payload : undefined);
+                void doRespond("confirm", isCardConfirmPayload(msg.payload) ? msg.payload : undefined);
                 break;
             case "oc:card:cancel":
                 if (!cardActionable || busy) return;
@@ -345,13 +350,17 @@
             max-width: min(90vw, 420px);
         }
 
-        // Collapsed (consumed) cards shrink to a slim, full-width strip: just the header line
-        // (title + status + chevron), tighter padding, smaller type. The mobile bubble hugs its
-        // content up to a ~75vw cap, so width:100% cannot grow it — a viewport-based min-width
-        // pushes the bubble out to its cap instead (clamped for the wide desktop layout).
+        // Collapsed (consumed) cards shrink to a slim strip: just the header line (title + status +
+        // chevron), tighter padding, smaller type. The min-width nudges the hugging bubble wider, but
+        // it MUST be bounded by the space actually available: the bubble is capped at a percentage of
+        // the message COLUMN, which is far narrower than the viewport (a left panel, and optionally a
+        // right one, sit beside it). A viewport-relative `min(75vw, 480px)` therefore pushed the strip
+        // straight through the bubble — measured up to +285px past its right edge, escaping entirely
+        // because .message-bubble sets no overflow — which is the card visibly outside the UI bounds.
+        // `min(480px, 100%)` keeps the widening intent but can never exceed the parent.
         &.collapsed {
             max-width: none;
-            min-width: min(75vw, 480px);
+            min-width: min(480px, 100%);
             gap: 0;
             padding: $sp2 $sp3;
             font-size: 0.8em;
@@ -389,7 +398,13 @@
     }
 
     .card-frame {
-        width: 100%;
+        // An <iframe> is a replaced element: `width: 100%` contributes NOTHING to intrinsic sizing, so
+        // in a shrink-to-fit bubble the card hugged the iframe's default intrinsic 300px and the
+        // `max-width: min(90vw, 420px)` above was never reached. A narrower frame also makes the same
+        // content taller (measured 487px tall at 300px wide vs 450px at 420px), so this fed the
+        // "too tall when expanded" symptom. Give it the intended width, bounded by the bubble.
+        width: 420px;
+        max-width: 100%;
         border: none;
         border-radius: var(--rd);
         display: block;

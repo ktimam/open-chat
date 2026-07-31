@@ -2348,7 +2348,7 @@ export class OpenChat {
         // App-rendered cards (surface kind "card") let the user edit the card's values inside the app's
         // iframe; the edited object arrives here via the postMessage bridge in ActionCardContent. Absent
         // for classic OC-rendered cards, which behave exactly as before.
-        payload?: Record<string, unknown>,
+        payload?: Record<string, unknown> | unknown[],
     ): Promise<boolean> {
         return this.#worker
             .send({

@@ -1219,7 +1219,8 @@ type RespondToActionCard = {
     // the edited object rides across the postMessage bridge to here. Phase 1 only carries it to the
     // client/worker boundary — the worker/agent/canister do NOT consume it yet (Phase 2 wires the
     // on-chain deposit override). Optional + JSON-encodable so structured clone across the worker is clean.
-    confirmPayloadOverride?: Record<string, unknown>;
+    // Object for a single-entry app card; top-level ARRAY for a multi-entry one.
+    confirmPayloadOverride?: Record<string, unknown> | unknown[];
     kind: "respondToActionCard";
 };
 

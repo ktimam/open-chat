@@ -32,6 +32,18 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+// A confirm payload from an app card is EITHER a single object or a top-level ARRAY (a multi-entry
+// card confirms N entries at once — see buildMultiActionCardContent / the __oc_entries__ sentinel).
+// `isRecord` deliberately excludes arrays, so screening the inbound oc:card:confirm with it silently
+// dropped every multi-entry payload: the override never reached the canister and the FROZEN extraction
+// was deposited instead, losing every in-frame edit (amounts, direction, and a row left on "Default"
+// currency). Screen with this instead, and keep the array shape all the way to the wire.
+export function isCardConfirmPayload(
+    value: unknown,
+): value is Record<string, unknown> | unknown[] {
+    return isRecord(value) || Array.isArray(value);
+}
+
 // Loopback hosts where http is tolerated for local development. WHATWG URL reports an IPv6 host with
 // its brackets (e.g. "[::1]"), so both bracketed and bare forms are listed.
 function isLoopbackHost(hostname: string): boolean {

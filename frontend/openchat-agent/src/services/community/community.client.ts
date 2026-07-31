@@ -1017,7 +1017,7 @@ export class CommunityClient
         messageId: bigint,
         threadRootMessageIndex: number | undefined,
         response: "confirm" | "cancel",
-        confirmPayloadOverride?: Record<string, unknown>,
+        confirmPayloadOverride?: Record<string, unknown> | unknown[],
     ): Promise<RespondToActionCardResponse> {
         return this.update(
             chatId.communityId,

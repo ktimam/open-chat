@@ -2856,7 +2856,7 @@ export class OpenChatAgent extends EventTarget {
         threadRootMessageIndex: number | undefined,
         messageId: bigint,
         response: "confirm" | "cancel",
-        confirmPayloadOverride?: Record<string, unknown>,
+        confirmPayloadOverride?: Record<string, unknown> | unknown[],
     ): Promise<RespondToActionCardResponse> {
         if (offline()) return Promise.resolve(CommonResponses.offline());
 
