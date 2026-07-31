@@ -38,7 +38,7 @@ fn claim_ai_app_link_code_impl(args: Args, state: &mut RuntimeState) -> Response
         ClaimLinkCodeResult::Valid(link) => {
             // Same store `set_my_ai_app_key` writes to, keyed by the code's (user, app) pair.
             state.data.ai_app_user_keys.set(link.user_id, link.app_id, args.public_key);
-            Success
+            Success(SuccessResult { user_id: link.user_id })
         }
         ClaimLinkCodeResult::Expired => CodeExpired,
         ClaimLinkCodeResult::NotFound => {
