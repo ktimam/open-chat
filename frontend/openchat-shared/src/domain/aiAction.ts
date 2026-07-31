@@ -203,38 +203,46 @@ export function parseExtraction(text: string): Record<string, unknown> | undefin
 // list), so the single-entry path is byte-identical to `parseExtraction`. Returns undefined when
 // nothing object-shaped is found.
 export function parseExtractionList(text: string): Record<string, unknown>[] | undefined {
-    const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-    const candidate = fenced ? fenced[1] : text;
-    const arrStart = candidate.indexOf("[");
-    const objStart = candidate.indexOf("{");
-    if (arrStart >= 0 && (objStart < 0 || arrStart < objStart)) {
-        const arrEnd = candidate.lastIndexOf("]");
-        if (arrEnd > arrStart) {
-            try {
-                const parsed: unknown = JSON.parse(candidate.slice(arrStart, arrEnd + 1));
-                if (Array.isArray(parsed)) {
-                    const objs = parsed.filter(
-                        (e): e is Record<string, unknown> =>
-                            e !== null && typeof e === "object" && !Array.isArray(e),
-                    );
-                    return objs.length > 0 ? objs : undefined;
-                }
-            } catch {
-                // not a clean array — fall through to the object scan below
-            }
-        }
-    }
-    // The array fast path failed. DO NOT go straight to parseExtraction: it slices from the first "{"
-    // to the last "}", so a multi-object emission like `[{a},{b}]` becomes `{a},{b}` — invalid JSON,
-    // and the whole message extracts to NOTHING. That is the difference between "we salvaged 2 of the
-    // 3 transactions" and the user seeing "The model found no action in this message" after a long
-    // wait. Scan for balanced objects instead, which also survives the common small-model failures:
-    // a truncated array (no closing "]"), a stray "[" in prose ahead of the JSON, and trailing commas
-    // between elements.
-    const scanned = scanJsonObjects(candidate);
+    // Scan the WHOLE reply. Every earlier version stopped at the first promising REGION and kept only
+    // what it found there, which is how three transactions arrived as two:
+    //
+    //   - the fence match was non-greedy, so a model emitting TWO ```json blocks had only its first
+    //     one read;
+    //   - the array fast path returned the moment one array parsed cleanly, so an afterthought object
+    //     past the "]" ("[{a},{b}] and also {c}") was never looked at.
+    //
+    // Both dropped entries in SILENCE — the card simply had fewer rows than the message had amounts,
+    // which nobody notices unless they count. scanJsonObjects tracks BRACE depth only, so "[" and "]"
+    // never move it: array elements are already found as top-level objects and the fast path bought
+    // nothing this does not. Fence markers carry no braces either, so reading straight through them
+    // costs nothing and recovers transactions stranded outside the fence.
+    //
+    // Degrades exactly as before on a truncated generation (the unterminated tail object is dropped,
+    // the completed ones survive) and on trailing commas between elements.
+    const scanned = scanJsonObjects(text).flatMap(unwrapEntryList);
     if (scanned.length > 0) return scanned;
+    // Last resort: parseExtraction slices from the first "{" to the last "}". It cannot handle a
+    // multi-object emission, but it does salvage a lone object the scanner could not balance.
     const obj = parseExtraction(text);
     return obj === undefined ? undefined : [obj];
+}
+
+// A model asked for "a JSON array of transactions" often returns that array under a KEY instead:
+// {"transactions":[{…},{…},{…}]}. The scanner sees ONE top-level object (the inner ones are nested),
+// so the whole message used to extract to a single candidate — which then failed the required-field
+// gate, because a wrapper has no amount, and surfaced as a long wait ending in "nothing to process".
+//
+// Unwrapped only for the unambiguous shape: exactly one property, holding a non-empty array of
+// objects. A real extraction carries more than one field, so this cannot swallow one. Something like
+// {"schedule":[…]} would be unwrapped too, but a bare schedule is not a valid entry either way — the
+// same required-field gate drops it before and after.
+function unwrapEntryList(obj: Record<string, unknown>): Record<string, unknown>[] {
+    const values = Object.values(obj);
+    if (values.length !== 1 || !Array.isArray(values[0])) return [obj];
+    const objs = values[0].filter(
+        (e): e is Record<string, unknown> => e !== null && typeof e === "object" && !Array.isArray(e),
+    );
+    return objs.length > 0 ? objs : [obj];
 }
 
 // Collect every balanced top-level {...} substring that parses as a JSON object, in order.

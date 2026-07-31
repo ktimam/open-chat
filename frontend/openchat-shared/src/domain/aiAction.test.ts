@@ -1003,3 +1003,56 @@ describe("real captured model replies keep every transaction", () => {
         expect(amountsOf(r.extracted)).toEqual([300, 500]);
     });
 });
+
+// ── The reply SHAPES a small model actually emits ────────────────────────────
+//
+// This is the block that would have caught "produces two entries only, dropping the 150 food".
+//
+// Every one of these carries the same three transactions; only the packaging differs, and the
+// packaging is not something we control — a model wraps its list under a key, splits it across two
+// fenced blocks, or adds an afterthought object after the closing bracket, depending on its mood.
+// The parser used to stop at the first promising REGION, so four of these six silently yielded FEWER
+// entries than the message had amounts. Silently is the operative word: the card just had fewer rows,
+// which nobody notices without counting.
+//
+// Written as a table so a newly observed shape is one line, not a new test.
+describe("parseExtractionList — the reply shapes a small model actually emits", () => {
+    const SHAPES: [string, string][] = [
+        // Used to yield 1: the scanner sees one top-level object and the entries are nested inside it.
+        // That candidate then failed the required-field gate — the long wait ending in "nothing to
+        // process".
+        [
+            "the list wrapped under a key",
+            '{"transactions":[{"amount":300,"note":"uber"},{"amount":150,"note":"food"},{"amount":500,"note":"movies"}]}',
+        ],
+        // Used to yield 2: the fence match was non-greedy, so only the FIRST block was read.
+        ["two separate fenced blocks", '```json\n[{"amount":300},{"amount":150}]\n```\n```json\n[{"amount":500}]\n```'],
+        // Used to yield 2: the array fast path returned as soon as the array parsed, ignoring the rest.
+        ["an array plus an afterthought object", '[{"amount":300},{"amount":150}] and also {"amount":500}'],
+        ["a fenced array plus an afterthought object", 'Sure:\n```json\n[{"amount":300},{"amount":150}]\n```\nplus {"amount":500}'],
+        // These already worked. Kept so a future "simplification" cannot quietly break them.
+        ["bare objects, one per line", '{"amount":300}\n{"amount":150}\n{"amount":500}'],
+        ["objects scattered through prose", '1. {"amount":300}\nThen: {"amount":150}\nFinally {"amount":500}\nThat is all.'],
+        ["a clean array", '[{"amount":300},{"amount":150},{"amount":500}]'],
+    ];
+
+    it.each(SHAPES)("keeps all three transactions: %s", (_name, raw) => {
+        const got = parseExtractionList(raw);
+        expect(got).toBeDefined();
+        expect(got!.map((o) => o.amount)).toEqual([300, 150, 500]);
+    });
+
+    it("still finds nothing in a reply that contains no JSON at all", () => {
+        // The negative control: scanning the whole text more aggressively must not start inventing
+        // entries out of prose.
+        expect(parseExtractionList("I could not find a transaction in that message.")).toBeUndefined();
+    });
+
+    it("does not unwrap a real extraction that happens to hold one array", () => {
+        // {"schedule":[…]} is unwrapped (harmless — a bare schedule fails the required-field gate
+        // anyway), but a genuine entry carries more than one field and must survive intact.
+        const got = parseExtractionList('{"amount":300,"schedule":[{"due_date":"2026-08-01"}]}');
+        expect(got).toHaveLength(1);
+        expect(got![0].amount).toBe(300);
+    });
+});
