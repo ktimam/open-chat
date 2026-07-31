@@ -4,8 +4,8 @@
         manualExtractEnabled,
         proposeAndPost,
         proposeAndPostCandidate,
+        runProposeFlow,
         type AiActionCandidate,
-        type ProposeResult,
     } from "@utils/aiActionRunner";
     import { canInferOnDevice } from "@utils/onDeviceInference";
     import {
@@ -267,13 +267,8 @@
         publish("replyPrivatelyTo", createReplyContext());
     }
 
-    // Every "propose can't run because there is no model" exit says this — the pre-check below and
-    // the `unavailable` result both land here, so the user gets one answer and one place to go.
-    const NO_MODEL_MESSAGE =
-        "No on-device model is ready — pick one in profile → App settings → On-device models.";
-
     // The raw-JSON extraction prompt is a TEST SEAM only (Issue 1): real users with no on-device
-    // model must never see a raw JSON box — they're guided to set one up (see runAiActionHandler). It
+    // model must never see a raw JSON box — they're guided to set one up (runProposeFlow says so). It
     // runs solely when `manualExtractEnabled()` is set (localStorage flag / ?manualExtract=1), which
     // the automated journey harness uses to drive the confirm → deposit cycle without a model.
     function promptForExtraction(): Record<string, unknown> | Record<string, unknown>[] | undefined {
@@ -292,132 +287,68 @@
     }
 
     // More than one enabled app action applies to this message — the user picks one from a sheet.
-    let aiActionChooser = $state<
-        | {
-              candidates: AiActionCandidate[];
-              extraction?: Record<string, unknown> | Record<string, unknown>[];
-          }
-        | undefined
-    >(undefined);
+    // The sheets below are bridged back to the awaiting flow through their `resolve`: the flow keeps
+    // the in-flight extraction, so neither sheet has to carry it, and — the part that matters — a
+    // DISMISSED sheet still answers, instead of stranding the propose half-finished.
+    let aiActionChooser = $state<{ candidates: AiActionCandidate[] } | undefined>(undefined);
+    let chooserResolve: ((candidate: AiActionCandidate | undefined) => void) | undefined;
+
+    function closeChooser(candidate: AiActionCandidate | undefined) {
+        aiActionChooser = undefined;
+        const resolve = chooserResolve;
+        chooserResolve = undefined;
+        resolve?.(candidate);
+    }
+
+    function chooseCandidate(
+        candidates: AiActionCandidate[],
+    ): Promise<AiActionCandidate | undefined> {
+        return new Promise<AiActionCandidate | undefined>((resolve) => {
+            chooserResolve = resolve;
+            aiActionChooser = { candidates };
+        });
+    }
 
     // A per-user-keys app needs the one-time link-code pairing before its actions can run — the
     // consent sheet is showing; the propose that triggered it resumes when the link completes.
-    let aiAppLink = $state<
-        | { app: AiAppRegistration; extraction?: Record<string, unknown> | Record<string, unknown>[] }
-        | undefined
-    >(undefined);
+    let aiAppLink = $state<AiAppRegistration | undefined>(undefined);
+    let linkResolve: ((linked: boolean) => void) | undefined;
+
+    function closeAiAppLink(linked: boolean) {
+        aiAppLink = undefined;
+        const resolve = linkResolve;
+        linkResolve = undefined;
+        resolve?.(linked);
+    }
+
+    // The sheet only reports `true` once the key is registered, so the flow can re-propose on the
+    // strength of this answer alone.
+    function linkApp(app: AiAppRegistration): Promise<boolean> {
+        return new Promise<boolean>((resolve) => {
+            linkResolve = resolve;
+            aiAppLink = app;
+        });
+    }
 
     // A "sheet"-display chat_link surface to host after a successful confirm (see
     // openSurfaceAfterConfirm below).
     let confirmSurface = $state<SurfaceOpening | undefined>(undefined);
 
-    function showAiActionResult(result: ProposeResult) {
-        switch (result.kind) {
-            case "no_actions":
-                toastStore.showFailureToast(i18nKey("aiApps.noneEnabled"));
-                break;
-            case "unavailable":
-                toastStore.showFailureToast(i18nKey(NO_MODEL_MESSAGE));
-                break;
-            case "unsupported_content":
-                toastStore.showFailureToast(i18nKey("This message can't be turned into an action"));
-                break;
-            case "image_unsupported":
-                toastStore.showFailureToast(
-                    i18nKey(
-                        `${result.modelId ?? "This model"} doesn't support images, only text. Switch to an image-capable model in profile → App settings → On-device models.`,
-                    ),
-                );
-                break;
-            case "no_extraction":
-                toastStore.showFailureToast(i18nKey("The model found no action in this message"));
-                break;
-            case "error":
-                toastStore.showFailureToast(i18nKey(`Action failed: ${result.error}`));
-                break;
-            // "ready" -> proposeAndPost already posted the card for the user to confirm.
-            // "choose" -> the chooser sheet is showing; nothing to report yet.
-            // "link_required" -> the consent sheet is showing; the propose resumes after linking.
-        }
-    }
-
-    // The propose flow proper — also re-entered (with the same extraction) when the consent sheet
-    // completes, so the action the user asked for resumes automatically after linking.
-    async function proposeWithExtraction(
-        manualExtraction?: Record<string, unknown> | Record<string, unknown>[],
-    ) {
-        let result = await proposeAndPost(client, messageContext, msg.content, manualExtraction);
-        if (result.kind === "choose") {
-            aiActionChooser = { candidates: result.candidates, extraction: manualExtraction };
-            return;
-        }
-        if (result.kind === "link_required") {
-            aiAppLink = { app: result.app, extraction: manualExtraction };
-            return;
-        }
-        if (result.kind === "unavailable") {
-            const extraction = promptForExtraction();
-            // The seam supplied nothing (it is OFF for every real user), so FALL THROUGH and let the
-            // result be surfaced. Returning here swallowed it: the button did nothing, said nothing,
-            // and the "unavailable" toast below was unreachable in normal use.
-            if (extraction !== undefined) {
-                result = await proposeAndPost(client, messageContext, msg.content, extraction);
-            }
-        }
-        showAiActionResult(result);
-    }
-
+    // The decisions live in runProposeFlow (utils/aiActionRunner), shared with the classic tree; this
+    // component supplies only the surfaces this tree has — the chooser and consent sheets. Both trees
+    // used to keep their own copy of the flow, and this one was left with a chooser branch that
+    // returned without a word: two candidates and no model meant a button that did nothing.
     async function runAiActionHandler() {
-        // Native clients run the on-device model. With NO model (a plain browser, or a native client
-        // with none downloaded) we do NOT show a raw JSON box: real users are guided to set one up
-        // (Issue 1). The manual-JSON path stays available only behind the test seam
-        // (manualExtractEnabled) so the automated journey can still drive the confirm → deposit cycle.
-        let manualExtraction: Record<string, unknown> | Record<string, unknown>[] | undefined;
-        if (!canInferOnDevice()) {
-            // One exit, one message. The seam is OFF for real users, and a dev who dismisses its
-            // prompt supplied nothing either — both mean "no extraction available", so both are told.
-            // Bailing out silently on the second case is what made the button look dead: with the
-            // seam left on in a profile (a stale `oc:manualExtract`, or a browser suppressing repeat
-            // dialogs) the prompt is answered with null and propose returned without a word.
-            manualExtraction = promptForExtraction();
-            if (manualExtraction === undefined) {
-                toastStore.showFailureToast(i18nKey(NO_MODEL_MESSAGE));
-                return;
-            }
-        }
-        await proposeWithExtraction(manualExtraction);
-    }
-
-    // The app has claimed the link code (the user's key is registered) — close the consent sheet
-    // and re-run the propose that triggered it.
-    function resumeAfterAiAppLink() {
-        const extraction = aiAppLink?.extraction;
-        aiAppLink = undefined;
-        void proposeWithExtraction(extraction);
-    }
-
-    async function runChosenAiAction(candidate: AiActionCandidate) {
-        const extraction = aiActionChooser?.extraction;
-        aiActionChooser = undefined;
-        let result = await proposeAndPostCandidate(
-            client,
-            messageContext,
-            msg.content,
-            candidate,
-            extraction,
-        );
-        if (result.kind === "unavailable") {
-            const retry = promptForExtraction();
-            if (retry === undefined) return;
-            result = await proposeAndPostCandidate(
-                client,
-                messageContext,
-                msg.content,
-                candidate,
-                retry,
-            );
-        }
-        showAiActionResult(result);
+        await runProposeFlow({
+            canInfer: canInferOnDevice,
+            promptForExtraction,
+            propose: (extraction) => proposeAndPost(client, messageContext, msg.content, extraction),
+            proposeCandidate: (candidate, extraction) =>
+                proposeAndPostCandidate(client, messageContext, msg.content, candidate, extraction),
+            chooseCandidate,
+            linkApp,
+            toast: (message) => toastStore.showFailureToast(i18nKey(message)),
+        });
     }
 
     function cancelReminder(content: MessageReminderCreatedContent) {
@@ -823,13 +754,13 @@
 {/if}
 
 {#if aiActionChooser !== undefined}
-    <Sheet onDismiss={() => (aiActionChooser = undefined)}>
+    <Sheet onDismiss={() => closeChooser(undefined)}>
         <Column gap="md" padding={["lg", "lg", "xxl", "lg"]} maxHeight="70vh">
             <Body fontWeight={"bold"}>
                 <Translatable resourceKey={i18nKey("aiApps.chooseAction")} />
             </Body>
             {#each aiActionChooser.candidates as candidate (`${candidate.app.id}-${candidate.action.name}`)}
-                <ListAction onClick={() => runChosenAiAction(candidate)}>
+                <ListAction onClick={() => closeChooser(candidate)}>
                     {#snippet icon(color)}
                         <Robot {color} />
                     {/snippet}
@@ -842,9 +773,9 @@
 
 {#if aiAppLink !== undefined}
     <AiAppLinkSheet
-        app={aiAppLink.app}
-        onDismiss={() => (aiAppLink = undefined)}
-        onLinked={resumeAfterAiAppLink} />
+        app={aiAppLink}
+        onDismiss={() => closeAiAppLink(false)}
+        onLinked={() => closeAiAppLink(true)} />
 {/if}
 
 {#if confirmSurface !== undefined}

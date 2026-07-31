@@ -5,8 +5,8 @@
         manualExtractEnabled,
         proposeAndPost,
         proposeAndPostCandidate,
+        runProposeFlow,
         type AiActionCandidate,
-        type ProposeResult,
     } from "@utils/aiActionRunner";
     import { canInferOnDevice } from "@utils/onDeviceInference";
     import { openSurfaceExternally, surfaceToOpenAfterConfirm } from "@utils/aiAppSurfaces";
@@ -280,13 +280,8 @@
         tipping = ledger;
     }
 
-    // Every "propose can't run because there is no model" exit says this — the pre-check below and
-    // the `unavailable` result both land here, so the user gets one answer and one place to go.
-    const NO_MODEL_MESSAGE =
-        "No on-device model is ready — pick one in profile → App settings → On-device models.";
-
     // The raw-JSON extraction prompt is a TEST SEAM only (Issue 1): real users with no on-device
-    // model must never see a raw JSON box — they're guided to set one up (see runAiActionInner). It
+    // model must never see a raw JSON box — they're guided to set one up (runProposeFlow says so). It
     // runs solely when `manualExtractEnabled()` is set (localStorage flag / ?manualExtract=1), which
     // the automated journey harness uses to drive the confirm → deposit cycle without a model.
     function promptForExtraction(): Record<string, unknown> | Record<string, unknown>[] | undefined {
@@ -330,17 +325,13 @@
         resolve?.(linked);
     }
 
-    async function linkAppAndResume(
-        app: AiAppRegistration,
-        manualExtraction?: Record<string, unknown> | Record<string, unknown>[],
-    ): Promise<ProposeResult | undefined> {
-        const linked = await new Promise<boolean>((resolve) => {
+    // The modal only resolves `true` once the key is registered, so the flow can re-propose on the
+    // strength of this answer alone.
+    function linkApp(app: AiAppRegistration): Promise<boolean> {
+        return new Promise<boolean>((resolve) => {
             linkModalResolve = resolve;
             linkModalApp = app;
         });
-        // The modal only resolves `true` once the key is registered, so no re-check is needed.
-        if (!linked) return undefined;
-        return proposeAndPost(client, messageContext, msg.content, manualExtraction);
     }
 
     // Busy flag for an in-flight propose, so the trigger (the auto-propose chip) can show progress:
@@ -348,98 +339,33 @@
     // otherwise reads as a frozen UI. Also guards against a double-run.
     let proposing = $state(false);
 
+    // The decisions live in runProposeFlow (utils/aiActionRunner), shared with the mobile tree; this
+    // component supplies only the surfaces this tree has — window prompts and the link modal. The two
+    // trees each kept their own copy of the flow until one was fixed and the other was not, and the
+    // propose button on the forgotten tree quietly did nothing.
     async function runAiActionHandler() {
         if (proposing) return;
         proposing = true;
         try {
-            await runAiActionInner();
-        } finally {
-            proposing = false;
-        }
-    }
-
-    async function runAiActionInner() {
-        // Native clients run the on-device model. With NO model (a plain browser, or a native client
-        // with none downloaded) we do NOT show a raw JSON box: real users are guided to set one up
-        // (Issue 1). The manual-JSON path stays available only behind the test seam
-        // (manualExtractEnabled) so the automated journey can still drive the confirm → deposit cycle.
-        let manualExtraction: Record<string, unknown> | Record<string, unknown>[] | undefined;
-        if (!canInferOnDevice()) {
-            // One exit, one message. The seam is OFF for real users, and a dev who dismisses its
-            // prompt supplied nothing either — both mean "no extraction available", so both are told.
-            // Bailing out silently on the second case is what made the button look dead: with the
-            // seam left on in a profile (a stale `oc:manualExtract`, or a browser suppressing repeat
-            // dialogs) the prompt is answered with null and propose returned without a word.
-            manualExtraction = promptForExtraction();
-            if (manualExtraction === undefined) {
-                toastStore.showFailureToast(i18nKey(NO_MODEL_MESSAGE));
-                return;
-            }
-        }
-        let result = await proposeAndPost(client, messageContext, msg.content, manualExtraction);
-        if (result.kind === "link_required") {
-            const resumed = await linkAppAndResume(result.app, manualExtraction);
-            if (resumed === undefined) return;
-            result = resumed;
-        }
-        if (result.kind === "choose") {
-            const candidate = promptForCandidate(result.candidates);
-            if (candidate === undefined) return;
-            result = await proposeAndPostCandidate(
-                client,
-                messageContext,
-                msg.content,
-                candidate,
-                manualExtraction,
-            );
-            if (result.kind === "unavailable") {
-                const me = promptForExtraction();
-                // The seam supplied nothing (it is OFF for every real user), so FALL THROUGH and let the
-                // result be surfaced. Returning here swallowed it: the button did nothing, said nothing,
-                // and the "unavailable" toast below was unreachable in normal use.
-                if (me !== undefined) {
-                    result = await proposeAndPostCandidate(
+            await runProposeFlow({
+                canInfer: canInferOnDevice,
+                promptForExtraction,
+                propose: (extraction) =>
+                    proposeAndPost(client, messageContext, msg.content, extraction),
+                proposeCandidate: (candidate, extraction) =>
+                    proposeAndPostCandidate(
                         client,
                         messageContext,
                         msg.content,
                         candidate,
-                        me,
-                    );
-                }
-            }
-        } else if (result.kind === "unavailable") {
-            const me = promptForExtraction();
-            // The seam supplied nothing (it is OFF for every real user), so FALL THROUGH and let the
-            // result be surfaced. Returning here swallowed it: the button did nothing, said nothing,
-            // and the "unavailable" toast below was unreachable in normal use.
-            if (me !== undefined) {
-                result = await proposeAndPost(client, messageContext, msg.content, me);
-            }
-        }
-        switch (result.kind) {
-            case "no_actions":
-                toastStore.showFailureToast(i18nKey("aiApps.noneEnabled"));
-                break;
-            case "unavailable":
-                toastStore.showFailureToast(i18nKey(NO_MODEL_MESSAGE));
-                break;
-            case "unsupported_content":
-                toastStore.showFailureToast(i18nKey("This message can't be turned into an action"));
-                break;
-            case "image_unsupported":
-                toastStore.showFailureToast(
-                    i18nKey(
-                        `${result.modelId ?? "This model"} doesn't support images, only text. Switch to an image-capable model in profile → App settings → On-device models.`,
+                        extraction,
                     ),
-                );
-                break;
-            case "no_extraction":
-                toastStore.showFailureToast(i18nKey("The model found no action in this message"));
-                break;
-            case "error":
-                toastStore.showFailureToast(i18nKey(`Action failed: ${result.error}`));
-                break;
-            // "ready" -> proposeAndPost already posted the card for the user to confirm.
+                chooseCandidate: promptForCandidate,
+                linkApp,
+                toast: (message) => toastStore.showFailureToast(i18nKey(message)),
+            });
+        } finally {
+            proposing = false;
         }
     }
 

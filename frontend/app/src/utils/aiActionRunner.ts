@@ -419,3 +419,132 @@ export async function proposeAndPostCandidate(
     }
     return result;
 }
+
+// Every "propose can't run because there is no model" exit says this — the pre-check and the
+// `unavailable` result both land here, so the user gets one answer and one place to go.
+export const NO_MODEL_MESSAGE =
+    "No on-device model is ready — pick one in profile → App settings → On-device models.";
+
+/**
+ * What to tell the user about a propose result, or undefined when there is nothing to say — the card
+ * was posted, or a chooser/consent surface is now up and the flow continues through it.
+ *
+ * This mapping used to be copied into both ChatMessage trees, and copies drift: the classic tree was
+ * fixed while the mobile one kept its silent exit, so proposing on mobile did nothing and said
+ * nothing. One switch, reachable from a unit test, is the fix. It is EXHAUSTIVE on purpose — a new
+ * ProposeResult kind fails to type as `never` below, so adding one without deciding what the user
+ * hears is a COMPILE error rather than another dead button.
+ */
+export function proposeFailureMessage(result: ProposeResult): string | undefined {
+    switch (result.kind) {
+        case "ready":
+        case "ready_multi":
+            // The card is already in the chat, waiting to be confirmed.
+            return undefined;
+        case "choose":
+        case "link_required":
+            // Not an outcome: runProposeFlow is mid-flight and a surface is up.
+            return undefined;
+        case "no_actions":
+            // The one message here that IS a translation key — it predates the rest and exists in the
+            // locale files. Callers wrap the return in i18nKey, which passes the plain-English
+            // messages below through untranslated.
+            return "aiApps.noneEnabled";
+        case "unavailable":
+            return NO_MODEL_MESSAGE;
+        case "unsupported_content":
+            return "This message can't be turned into an action";
+        case "image_unsupported":
+            return `${result.modelId ?? "This model"} doesn't support images, only text. Switch to an image-capable model in profile → App settings → On-device models.`;
+        case "no_extraction":
+            return "The model found no action in this message";
+        case "error":
+            return `Action failed: ${result.error}`;
+        default: {
+            const unhandled: never = result;
+            // Unreachable while the switch above is complete; still returns a STRING so that even a
+            // kind bolted on at runtime speaks rather than leaving the user staring at nothing.
+            return `Action failed: ${JSON.stringify(unhandled)}`;
+        }
+    }
+}
+
+// Everything the propose flow needs from its host tree. Injected rather than imported so the flow is
+// testable with no model, no Tauri bridge and no mounted component — that this logic was reachable
+// only by clicking is precisely how the same silent-exit bug shipped twice.
+export interface ProposeFlowDeps {
+    // Is an on-device model loaded and usable right now?
+    canInfer: () => boolean;
+    // The manual-JSON seam (a prompt behind `manualExtractEnabled`). Real users are never offered it,
+    // so it answers `undefined` — which means "no extraction available", NOT "stay quiet".
+    promptForExtraction: () => ManualExtraction | undefined;
+    propose: (extraction?: ManualExtraction) => Promise<ProposeResult>;
+    proposeCandidate: (
+        candidate: AiActionCandidate,
+        extraction?: ManualExtraction,
+    ) => Promise<ProposeResult>;
+    // Pick between several offered actions. The classic tree answers synchronously (a numbered
+    // window.prompt), the mobile tree asynchronously (a sheet); undefined means the user backed out.
+    chooseCandidate: (
+        candidates: AiActionCandidate[],
+    ) => AiActionCandidate | undefined | Promise<AiActionCandidate | undefined>;
+    // Run the one-time pairing surface for a per-user-keys app; true once the key is registered.
+    linkApp: (app: AiAppRegistration) => boolean | Promise<boolean>;
+    toast: (message: string) => void;
+}
+
+/**
+ * Propose an action for one message: decide, run, and make sure the user always hears an answer.
+ *
+ * Hoisted out of components/home/ChatMessage.svelte and components_mobile/home/ChatMessage.svelte,
+ * which carried two hand-maintained copies of it. Each tree keeps its own surfaces (prompts vs
+ * sheets) — only the DECISIONS live here.
+ *
+ * The rule the two copies kept breaking: every path that stops early must first say why. A dismissed
+ * seam prompt is not a reason to go quiet — with no model there is nothing to propose and the user
+ * needs to be told where to get one, whether that dead end is reached before proposing, after an
+ * `unavailable`, or after an `unavailable` from a CHOSEN candidate (the branch the mobile tree
+ * returned from in silence, leaving a user with two candidates and no model a dead button).
+ */
+export async function runProposeFlow(deps: ProposeFlowDeps): Promise<void> {
+    let extraction: ManualExtraction | undefined;
+    if (!deps.canInfer()) {
+        extraction = deps.promptForExtraction();
+        if (extraction === undefined) {
+            deps.toast(NO_MODEL_MESSAGE);
+            return;
+        }
+    }
+
+    let result = await deps.propose(extraction);
+
+    if (result.kind === "link_required") {
+        // The pairing surface reports its own outcome, and dismissing it is a deliberate "not now" —
+        // the one early exit that is honest without a toast.
+        if (!(await deps.linkApp(result.app))) return;
+        result = await deps.propose(extraction);
+    }
+
+    if (result.kind === "choose") {
+        const candidate = await deps.chooseCandidate(result.candidates);
+        // Backing out of the chooser is a choice, not a failure.
+        if (candidate === undefined) return;
+        result = await deps.proposeCandidate(candidate, extraction);
+        if (result.kind === "unavailable") {
+            const retry = deps.promptForExtraction();
+            // NB: no early return when the seam gives nothing — falling through to the message below
+            // IS the fix. Returning here is what left the mobile chooser path mute.
+            if (retry !== undefined) {
+                result = await deps.proposeCandidate(candidate, retry);
+            }
+        }
+    } else if (result.kind === "unavailable") {
+        const retry = deps.promptForExtraction();
+        if (retry !== undefined) {
+            result = await deps.propose(retry);
+        }
+    }
+
+    const message = proposeFailureMessage(result);
+    if (message !== undefined) deps.toast(message);
+}

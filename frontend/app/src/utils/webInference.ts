@@ -557,7 +557,12 @@ export async function webInfer(request: InferenceRequest): Promise<InferenceResu
         // json_object response_format (grammar-enforced — stronger than prompt discipline alone).
         const res = await runtime.createChatCompletion({
             messages: [{ role: "user", content }],
-            max_tokens: request.maxTokens ?? 512,
+            // A truncated generation is SILENT data loss: the reply stops mid-array, the salvage scan
+            // dutifully returns the objects that completed, and a three-transaction message imports as
+            // two with nobody the wiser. 512 tokens is comfortably enough for the JSON alone, but not
+            // for a chatty model that reasons first — so budget for the chatter. n_ctx is 4096 and a
+            // prompt (plus up to WEB_IMAGE_MAX_TOKENS of image) leaves ample room for this.
+            max_tokens: request.maxTokens ?? 1024,
             temperature: 0, // deterministic-leaning extraction, same spirit as the native path
             ...(request.responseSchema !== undefined ? { response_format: { type: "json_object" } } : {}),
         });

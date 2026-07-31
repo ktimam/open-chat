@@ -416,10 +416,31 @@ function conformToSchema(
     return out;
 }
 
+// Does the message mention this keyword as a WHOLE WORD? Case-insensitive.
+//
+// Raw `text.includes(keyword)` fired INSIDE other words, which made short keywords unusable: an app
+// listing "owe" (IOU does, and its manifest even carried a comment claiming OpenChat matched on word
+// boundaries — true of the auto-propose chip, false of this deterministic override) force-classified
+// "I lost power yesterday" as an IOU. A keyword_map override cannot be argued with by the model or the
+// user, so a stray substring hit silently mislabels the entry.
+//
+// \b is not usable: keywords may legitimately begin or end with punctuation or spaces (multi-word
+// phrases), so assert a non-alphanumeric character — or the string edge — on each side. \p{L}/\p{N}
+// keep this correct for non-ASCII messages.
+//
+// The auto-propose chip has its own copy of this rule in app/src/utils/keywordMatch.ts (it cannot
+// import openchat-shared without dragging in the client graph). The two MUST agree: a chip that
+// appears on a message this pass then refuses to classify is the confusing half-state.
+export function matchesKeyword(text: string, keyword: string): boolean {
+    if (keyword.length === 0) return false;
+    const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`(?:^|[^\\p{L}\\p{N}])${escaped}(?:[^\\p{L}\\p{N}]|$)`, "iu").test(text);
+}
+
 // Deterministic post-pass over the model's extraction, applied in a fixed order:
 //   1. from_message rules fill their field from the message text itself (trimmed, truncated).
-//   2. keyword_map rules with mode "override" scan the message (case-insensitive substring per keyword);
-//      the first mapping with any match wins. Mode "hint" is prompt-guidance only.
+//   2. keyword_map rules with mode "override" scan the message (case-insensitive WHOLE-WORD match per
+//      keyword); the first mapping with any match wins. Mode "hint" is prompt-guidance only.
 //   3. normalize ops run in order on the field when it is present.
 //   4. schema conformance (type/enum/pattern) deletes violating fields and drops undeclared keys.
 export function applyRulesPostPass(
@@ -437,12 +458,10 @@ export function applyRulesPostPass(
             }
         }
 
-        const msg = messageText.toLowerCase();
+        const msg = messageText;
         for (const rule of rules) {
             if (rule.kind === "keyword_map" && rule.mode === "override") {
-                const hit = rule.map.find((m) =>
-                    m.keywords.some((k) => k.length > 0 && msg.includes(k.toLowerCase())),
-                );
+                const hit = rule.map.find((m) => m.keywords.some((k) => matchesKeyword(msg, k)));
                 if (hit !== undefined) {
                     out[rule.field] = hit.value;
                 }

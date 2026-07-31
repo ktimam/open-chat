@@ -597,6 +597,40 @@ describe("applyRulesPostPass", () => {
         ];
         expect(applyRulesPostPass(rules, {}, "A Hotel Stay")).toEqual({ category: "travel" });
     });
+
+    // The override is deterministic and unarguable — neither the model nor the user gets a say — so a
+    // keyword that fires INSIDE another word silently mislabels the entry. IOU registers the bare
+    // keyword "owe" (its manifest comment even claims OpenChat matches on word boundaries, which was
+    // only ever true of the auto-propose chip), so under substring matching every message containing
+    // "power", "shower" or "flower" came out force-classified as kind "iou".
+    describe("keyword_map override matches WHOLE WORDS", () => {
+        const rules: AiActionRule[] = [
+            {
+                kind: "keyword_map",
+                field: "kind",
+                mode: "override",
+                map: [{ value: "iou", keywords: ["owe", "owed", "owes"] }],
+            },
+        ];
+        const kindFor = (message: string) => applyRulesPostPass(rules, {}, message).kind;
+
+        it("does not fire inside a longer word", () => {
+            expect(kindFor("I lost power yesterday")).toBeUndefined();
+            expect(kindFor("the shower is broken")).toBeUndefined();
+            expect(kindFor("bought her a flower")).toBeUndefined();
+        });
+
+        it("still fires on the real word, wherever it sits and however it is cased", () => {
+            expect(kindFor("Owe me 300 uber")).toBe("iou");
+            expect(kindFor("you owe me")).toBe("iou");
+            expect(kindFor("owes")).toBe("iou");
+            // Punctuation is a boundary, not a mismatch — otherwise the fix just trades one silent
+            // misclassification for a silent miss.
+            expect(kindFor("he owed, then paid")).toBe("iou");
+            expect(kindFor("(owe) 300")).toBe("iou");
+        });
+    });
+
     it("skips message-driven rules when there is no message text", () => {
         const rules: AiActionRule[] = [
             { kind: "from_message", field: "note" },

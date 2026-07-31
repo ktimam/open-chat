@@ -32,6 +32,7 @@ const wl = vi.hoisted(() => ({
     loadParams: undefined as Record<string, unknown> | undefined,
     loadCount: 0,
     lastMessages: undefined as { role: string; content: unknown }[] | undefined,
+    lastCompletionOpts: undefined as Record<string, unknown> | undefined,
     modelSource: undefined as { url: string; mmprojUrl?: string } | undefined,
     progressSeen: [] as { loaded: number; total: number }[],
     removed: false,
@@ -51,6 +52,7 @@ vi.mock("@wllama/wllama", () => {
         }
         async createChatCompletion(opts: { messages: { role: string; content: unknown }[] }) {
             wl.lastMessages = opts.messages;
+            wl.lastCompletionOpts = opts as unknown as Record<string, unknown>;
             if (wl.throwOnInfer !== undefined) throw new Error(wl.throwOnInfer);
             return { choices: [{ message: { content: wl.completion } }] };
         }
@@ -110,6 +112,7 @@ function resetWllama() {
     wl.loadParams = undefined;
     wl.loadCount = 0;
     wl.lastMessages = undefined;
+    wl.lastCompletionOpts = undefined;
     wl.modelSource = undefined;
     wl.progressSeen = [];
     wl.removed = false;
@@ -246,6 +249,24 @@ describe("webInfer", () => {
     it("with no model attached an image is still 'unavailable', exactly as before", async () => {
         const res = await webInfer({ prompt: "read this", image: PIXELS });
         expect(res).toEqual({ kind: "unavailable", reason: "no browser model attached" });
+    });
+
+    // Nobody sets maxTokens: runAiAction never passes one, so every extraction runs on this default.
+    // If the generation is cut short the reply stops mid-array, the parser's salvage scan returns the
+    // objects that finished, and a three-transaction message quietly imports as two — the one remaining
+    // way that failure happens that is NOT the parser. Unlike the parser cases this was not reproduced
+    // from a captured reply; the point of the assertion is that lowering the budget back to 512 fails a
+    // test instead of silently costing the user an entry.
+    it("defaults to a token budget a chatty multi-entry reply can finish inside", async () => {
+        await setWebModelFile(new File([new Uint8Array(8)], "local-model.gguf"));
+        await webInfer({ prompt: "extract the transactions", text: "Owe me 300 uber 150 food\n\n500 movies" });
+        expect(wl.lastCompletionOpts?.max_tokens as number).toBeGreaterThanOrEqual(1024);
+    });
+
+    it("an explicit maxTokens still wins — the default is a floor for callers, not a cap", async () => {
+        await setWebModelFile(new File([new Uint8Array(8)], "local-model.gguf"));
+        await webInfer({ prompt: "hi", maxTokens: 1 });
+        expect(wl.lastCompletionOpts?.max_tokens).toBe(1);
     });
 });
 
