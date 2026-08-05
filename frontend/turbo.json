@@ -14,7 +14,11 @@
         "OC_WEBSITE_VERSION",
         "OC_DISABLE_WALLET",
         "OC_APP_STORE",
-        "OC_OTA_UPDATES"
+        "OC_OTA_UPDATES",
+        "OC_LOCAL_AI_APP_CARDS_ENABLED",
+        "OC_LOCAL_AI_APP_CONTENT_ATTESTATION_ENABLED",
+        "OC_LOCAL_AI_APP_FINAL_CONFIRMATION_ENABLED",
+        "OC_LOCAL_AI_APP_PRIVATE_CONTEXT_ENABLED"
     ],
     "tasks": {
         "deploy:prod": {

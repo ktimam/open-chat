@@ -1,25 +1,77 @@
-// New app-bound action cards must stay disabled until the backend can attest the complete canonical
-// card content (title, rows, exact payload, and producing app/action revision). Coordinate-only
-// provenance is insufficient: a sender can otherwise pair genuine app coordinates with forged card
-// content. Keep this as a production constant, not a local-storage/query flag; enabling it requires
-// the implemented server attestation path to be present in rebuilt canisters and to pass its
-// generated-contract, PocketIC, and live cross-layer gates.
+export interface LocalAiActionAvailabilityEnvironment {
+    buildEnvironment?: string;
+    dfxNetwork?: string;
+    cardsEnabled?: string;
+    contentAttestationEnabled?: string;
+    finalConfirmationEnabled?: string;
+    privateContextEnabled?: string;
+}
+
+export interface AiActionAvailability {
+    contentAttestation: boolean;
+    finalConfirmation: boolean;
+    privateContext: boolean;
+}
+
+const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+
+// These switches are release brakes, not authorization. Even an explicitly armed local build must
+// still receive the backend attestations and scoped grants checked by each call path. Requiring the
+// exact lowercase value and an exact local/development/loopback triple prevents a copied environment
+// file or a Vite server exposed on the LAN from enabling unfinished capabilities.
+export function evaluateLocalAiActionAvailability(
+    environment: LocalAiActionAvailabilityEnvironment,
+    hostname: string | undefined,
+): AiActionAvailability {
+    const locallyArmed =
+        environment.buildEnvironment === "development" &&
+        environment.dfxNetwork === "local" &&
+        hostname !== undefined &&
+        LOOPBACK_HOSTNAMES.has(hostname) &&
+        environment.cardsEnabled === "true";
+    const contentAttestation = locallyArmed && environment.contentAttestationEnabled === "true";
+
+    return {
+        contentAttestation,
+        // Final/private flows both depend on the canonical card content being attested first.
+        finalConfirmation: contentAttestation && environment.finalConfirmationEnabled === "true",
+        privateContext: contentAttestation && environment.privateContextEnabled === "true",
+    };
+}
+
+function currentAvailability(): AiActionAvailability {
+    return evaluateLocalAiActionAvailability(
+        {
+            buildEnvironment: import.meta.env.OC_BUILD_ENV,
+            dfxNetwork: import.meta.env.OC_DFX_NETWORK,
+            cardsEnabled: import.meta.env.OC_LOCAL_AI_APP_CARDS_ENABLED,
+            contentAttestationEnabled: import.meta.env.OC_LOCAL_AI_APP_CONTENT_ATTESTATION_ENABLED,
+            finalConfirmationEnabled: import.meta.env.OC_LOCAL_AI_APP_FINAL_CONFIRMATION_ENABLED,
+            privateContextEnabled: import.meta.env.OC_LOCAL_AI_APP_PRIVATE_CONTEXT_ENABLED,
+        },
+        typeof window === "undefined" ? undefined : window.location.hostname,
+    );
+}
+
 export function appContentAttestationAvailable(): boolean {
-    return false;
+    return currentAvailability().contentAttestation;
 }
 
-// Initial card-content attestation cannot authorize an iframe-edited override. Confirmation remains
-// disabled until the implemented separate server/app grant is deployed and proves that it binds the
-// exact final bytes to the authenticated viewer, chat/message/thread, app revision/action, and
-// replay-safe grant across the release matrix. Cancellation does not need it.
 export function appCardFinalConfirmationAvailable(): boolean {
-    return false;
+    return currentAvailability().finalConfirmation;
 }
 
-// Private context is separately gated from public card rendering and final confirmation. User
-// authorization and source protocol exist, but activation remains false until rebuilt OpenChat
-// canisters and each registered app's redemption/decryption contract pass the end-to-end scope,
-// expiry, replay, upgrade, and four-profile suite.
 export function appCardPrivateContextAvailable(): boolean {
-    return false;
+    return currentAvailability().privateContext;
+}
+
+export function appCardRenderingAllowed(
+    contentAttested: boolean,
+    availability: AiActionAvailability,
+): boolean {
+    return contentAttested && availability.contentAttestation;
+}
+
+export function appCardRenderingAvailable(contentAttested: boolean): boolean {
+    return appCardRenderingAllowed(contentAttested, currentAvailability());
 }

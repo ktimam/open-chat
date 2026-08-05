@@ -11,6 +11,7 @@
     import {
         appCardFinalConfirmationAvailable,
         appCardPrivateContextAvailable,
+        appCardRenderingAvailable,
     } from "../../utils/aiActionAvailability";
     import {
         type AuthoritativeAppIdentity,
@@ -93,6 +94,7 @@
     let appResolutionComplete = $state(false);
     let credentiallessSupported = $state(false);
     let cardContentAttestationBlocked = $state(false);
+    let appCardRenderingBlocked = $state(false);
     let cardContentAttested = $derived(isAppCardContentAttested(content));
     const finalConfirmationAvailable = appCardFinalConfirmationAvailable();
     const privateContextAvailable = appCardPrivateContextAvailable();
@@ -280,6 +282,14 @@
                 // complete canonical card content.
                 resolvedAppIdentity = resolution.identity;
                 cardContentAttestationBlocked = true;
+                return;
+            }
+            if (!appCardRenderingAvailable(cardContentAttested)) {
+                // Backend attestation is necessary but does not by itself activate an unfinished
+                // client capability. Keep the iframe closed unless this exact local client release
+                // has also been explicitly armed.
+                resolvedAppIdentity = resolution.identity;
+                appCardRenderingBlocked = true;
                 return;
             }
             const origin = deriveCardOrigin(opening.url, {
@@ -834,6 +844,11 @@
                     This card's app/revision/action coordinates match the directory, but its title,
                     rows, and payload are not attested as app-authored. App rendering and confirmation
                     are disabled.
+                </div>
+            {/if}
+            {#if appCardRenderingBlocked}
+                <div class="card-load-error" role="status">
+                    App rendering is disabled by this client's release gate.
                 </div>
             {/if}
             {#if cardUrl !== undefined && useClassicFallback}

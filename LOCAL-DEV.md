@@ -70,3 +70,24 @@ The exe loads its UI from the live `:5003` dev server (`devUrl`), so all three m
 - **On-device `/ai`** is a client-side composer command, *not* a bot/slash command — it never appears in
   the `/` autocomplete. Type `/ai <prompt>` and send. Needs a model downloaded + selected (Profile →
   Model Manager) and the inference-enabled exe.
+
+## Local-only AI app-card release gates
+
+The in-chat app-card protocol is generic, but its unfinished capabilities must be explicitly enabled
+for local testing. Add only the capabilities you are testing to `frontend/.env`:
+
+```dotenv
+OC_LOCAL_AI_APP_CARDS_ENABLED=true
+OC_LOCAL_AI_APP_CONTENT_ATTESTATION_ENABLED=true
+OC_LOCAL_AI_APP_FINAL_CONFIRMATION_ENABLED=true
+OC_LOCAL_AI_APP_PRIVATE_CONTEXT_ENABLED=true
+```
+
+Values are exact and case-sensitive: only lowercase `true` enables a switch. All switches also require
+`OC_BUILD_ENV=development`, `OC_DFX_NETWORK=local`, and a browser hostname of `localhost`, `127.0.0.1`,
+or IPv6 loopback. Production/testnet bundles compile these switches to `false`; exposing the Vite dev
+server on a LAN address does not activate them. Restart the frontend after changing the environment.
+
+The master and content-attestation switches are required before either final confirmation or private
+context can activate. These are client release brakes, not security authority: backend content
+attestation and the corresponding viewer/card/app-bound server grants are still mandatory.

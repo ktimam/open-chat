@@ -88,6 +88,32 @@ describe("embedded app surface isolation", () => {
         expect(card).toContain("import.meta.env.DEV");
     });
 
+    it("keeps even backend-attested app rendering behind the client release gate", () => {
+        const card = readFileSync(
+            resolve(process.cwd(), "src/components/home/ActionCardContent.svelte"),
+            "utf8",
+        );
+        expect(card).toContain("appCardRenderingAvailable");
+        expect(card).toContain("appCardRenderingBlocked = true");
+        expect(card).toContain("App rendering is disabled by this client's release gate");
+    });
+
+    it("compiles every experimental app-card switch closed outside local development", () => {
+        const rollup = readFileSync(resolve(process.cwd(), "rollup.config.mjs"), "utf8");
+        expect(rollup).toContain('process.env.OC_BUILD_ENV === "development"');
+        expect(rollup).toContain('process.env.OC_DFX_NETWORK === "local"');
+        for (const flag of [
+            "OC_LOCAL_AI_APP_CARDS_ENABLED",
+            "OC_LOCAL_AI_APP_CONTENT_ATTESTATION_ENABLED",
+            "OC_LOCAL_AI_APP_FINAL_CONFIRMATION_ENABLED",
+            "OC_LOCAL_AI_APP_PRIVATE_CONTEXT_ENABLED",
+        ]) {
+            expect(rollup).toMatch(
+                new RegExp(`localOnlyAiAppCardFlag\\(\\s*"${flag}"\\s*,?\\s*\\)`),
+            );
+        }
+    });
+
     it("keeps capabilities/final grants out of URLs, storage, logs, and unrelated frames", () => {
         const card = readFileSync(
             resolve(process.cwd(), "src/components/home/ActionCardContent.svelte"),
