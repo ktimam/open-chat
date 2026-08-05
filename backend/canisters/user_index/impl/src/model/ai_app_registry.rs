@@ -42,6 +42,7 @@ impl Default for AiAppRegistry {
 #[derive(Debug, PartialEq, Eq)]
 pub enum RegisterAiAppError {
     InvalidName,
+    ExistingAppNotFound,
     NameTakenByPublishedApp,
     UnpublishedOwnerQuotaExceeded,
     RegistryFull,
@@ -56,6 +57,34 @@ pub fn canonical_app_name(name: &str) -> Option<String> {
 }
 
 impl AiAppRegistry {
+    /// Updates one live app already owned by `owner`, without any path that can allocate an id or
+    /// claim a name. This exists only for local test-mode upgrade compatibility with standalone
+    /// registrar principals created before account-only registration was enforced.
+    pub fn update_existing_owned_app(
+        &mut self,
+        owner: UserId,
+        manifest: AiAppManifest,
+        now: TimestampMillis,
+    ) -> Result<AiAppRegistration, RegisterAiAppError> {
+        let name_key = canonical_app_name(&manifest.name).ok_or(RegisterAiAppError::InvalidName)?;
+        let existing_id = self
+            .apps
+            .values()
+            .filter(|registration| {
+                registration.owner == owner
+                    && (registration.published || !Self::unpublished_reservation_expired(registration, now))
+                    && canonical_app_name(&registration.manifest.name).is_some_and(|key| key == name_key)
+            })
+            .min_by_key(|registration| registration.id)
+            .map(|registration| registration.id)
+            .ok_or(RegisterAiAppError::ExistingAppNotFound)?;
+        let existing = self
+            .apps
+            .get_mut(&existing_id)
+            .expect("the exact owned app selected above must still exist");
+        Ok(Self::upsert(existing, owner, manifest, now))
+    }
+
     /// Invalidates every publication made before the exact-manifest V2 verifier existed.
     ///
     /// Advancing `updated` prevents a cached V1 decision from naming the new draft revision, and

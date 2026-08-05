@@ -1,4 +1,4 @@
-use crate::guards::caller_is_openchat_user_or_test_mode;
+use crate::guards::caller_can_register_ai_app;
 use crate::model::ai_app_registry::{MAX_AI_APPS, MAX_UNPUBLISHED_APPS_PER_OWNER, RegisterAiAppError, canonical_app_name};
 use crate::model::ai_app_user_keys::canonicalize_p256_public_key;
 use crate::{RuntimeState, mutate_state};
@@ -10,19 +10,22 @@ use user_index_canister::register_ai_app::{Response::*, *};
 
 // Exposed over candid as well as msgpack so that an external app can register its manifest with a
 // plain candid call from a deploy script.
-#[update(guard = "caller_is_openchat_user_or_test_mode", candid = true, msgpack = true)]
+#[update(guard = "caller_can_register_ai_app", candid = true, msgpack = true)]
 fn register_ai_app(args: Args) -> Response {
     mutate_state(|state| register_ai_app_impl(args, state))
 }
 
 fn register_ai_app_impl(args: Args, state: &mut RuntimeState) -> Response {
     let caller = state.env.caller();
-    // Owner resolution: a registered user's UserId when the caller is one. A standalone deploy
-    // identity is accepted locally only when it is explicitly configured as governance.
-    let owner: UserId = if let Some(user) = state.data.users.get_by_principal(&caller) {
-        user.user_id
+    // Registered accounts retain normal create/upsert behavior. Governance may still bootstrap a
+    // standalone local registrar. Any other test-mode principal receives only the migration path
+    // below: exact-name update of its own already-live row, never allocation.
+    let (owner, existing_standalone_only): (UserId, bool) = if let Some(user) = state.data.users.get_by_principal(&caller) {
+        (user.user_id, false)
     } else if state.data.test_mode && state.is_caller_governance_principal() {
-        caller.into()
+        (caller.into(), false)
+    } else if state.data.test_mode {
+        (caller.into(), true)
     } else {
         return InvalidRequest("caller is not a registered user".to_string());
     };
@@ -35,9 +38,17 @@ fn register_ai_app_impl(args: Args, state: &mut RuntimeState) -> Response {
     let now = state.env.now();
     // Unpublished names are bounded, expiring drafts rather than exclusive namespace claims. Only
     // canister-vouched + governance-published names are globally exclusive in production.
-    match state.data.ai_apps.register(owner, manifest, now, state.data.test_mode) {
+    let result = if existing_standalone_only {
+        state.data.ai_apps.update_existing_owned_app(owner, manifest, now)
+    } else {
+        state.data.ai_apps.register(owner, manifest, now, state.data.test_mode)
+    };
+    match result {
         Ok(registration) => Success(registration),
         Err(RegisterAiAppError::InvalidName) => InvalidRequest(invalid_name_message()),
+        Err(RegisterAiAppError::ExistingAppNotFound) => {
+            InvalidRequest("standalone local registrar may update only its existing app".to_string())
+        }
         Err(RegisterAiAppError::NameTakenByPublishedApp) => {
             InvalidRequest("a verified app already owns this canonical name".to_string())
         }
@@ -458,6 +469,8 @@ fn validate_schema_node(value: &serde_json::Value, depth: usize, nodes: &mut usi
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Data;
+    use utils::env::test::TestEnv;
 
     const VALID_P256_SPKI_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEL4Rj13upzgERFkEaivsNjEA/HvCr\nm+J36bnO257UvRzwEW+OpmmEQt6fZ5lO3So6wXPtuziuv/FXrA6S7sni8g==\n-----END PUBLIC KEY-----\n";
     const MALFORMED_PEM: &str = "-----BEGIN PUBLIC KEY-----\nnot-a-key\n-----END PUBLIC KEY-----\n";
@@ -507,6 +520,75 @@ mod tests {
             actions: Vec::new(),
             surfaces: Vec::new(),
         }
+    }
+
+    #[test]
+    fn legacy_test_mode_standalone_owner_can_only_upsert_its_existing_app() {
+        let env = TestEnv::default();
+        let owner: UserId = env.caller.into();
+        let now = env.now;
+        let mut data = Data::default();
+        data.test_mode = true;
+        assert!(!data.governance_principals.contains(&env.caller));
+
+        let original = data.ai_apps.register(owner, manifest(), now, true).unwrap();
+        let mut state = RuntimeState::new(Box::new(env), data);
+
+        let mut changed = manifest();
+        changed.description = "updated by the same preserved local registrar".to_string();
+        let response = register_ai_app_impl(Args { manifest: changed }, &mut state);
+        let Success(updated) = response else {
+            panic!("the preserved standalone owner must be able to update its own existing app");
+        };
+        assert_eq!(updated.id, original.id);
+        assert_eq!(updated.owner, owner);
+
+        let mut unrelated = manifest();
+        unrelated.name = "another-app".to_string();
+        assert!(matches!(
+            register_ai_app_impl(Args { manifest: unrelated }, &mut state),
+            InvalidRequest(_)
+        ));
+        assert!(state.data.ai_apps.owned_app_id(owner, "another-app").is_none());
+    }
+
+    #[test]
+    fn expired_legacy_draft_does_not_authorize_a_standalone_replacement() {
+        let mut env = TestEnv::default();
+        env.now = crate::model::ai_app_registry::UNPUBLISHED_RESERVATION_TTL + 10;
+        let owner: UserId = env.caller.into();
+        let mut data = Data::default();
+        data.test_mode = true;
+        data.ai_apps.register(owner, manifest(), 1, true).unwrap();
+        let mut state = RuntimeState::new(Box::new(env), data);
+
+        let mut replacement = manifest();
+        replacement.description = "must not revive an expired authorization".to_string();
+        assert!(matches!(
+            register_ai_app_impl(Args { manifest: replacement }, &mut state),
+            InvalidRequest(_)
+        ));
+    }
+
+    #[test]
+    fn legacy_standalone_registrar_cannot_take_over_another_owners_app() {
+        let env = TestEnv::default();
+        let caller: UserId = env.caller.into();
+        let other_owner: UserId = candid::Principal::from_slice(&[9]).into();
+        let now = env.now;
+        let mut data = Data::default();
+        data.test_mode = true;
+        let owned_by_other = data.ai_apps.register(other_owner, manifest(), now, true).unwrap();
+        let mut state = RuntimeState::new(Box::new(env), data);
+
+        let mut attempted = manifest();
+        attempted.description = "takeover attempt".to_string();
+        assert!(matches!(
+            register_ai_app_impl(Args { manifest: attempted }, &mut state),
+            InvalidRequest(_)
+        ));
+        assert_eq!(state.data.ai_apps.get(owned_by_other.id).unwrap().owner, other_owner);
+        assert_ne!(other_owner, caller);
     }
 
     #[test]

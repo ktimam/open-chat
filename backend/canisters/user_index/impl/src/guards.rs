@@ -18,6 +18,18 @@ pub fn caller_is_openchat_user_or_test_mode() -> Result<(), String> {
     }
 }
 
+// Registration has one narrower test-mode compatibility path in the handler: a standalone
+// principal that owned an app before the governance-only hardening may update that same active
+// local app. Let the handler inspect the requested canonical name; it still rejects new apps,
+// expired drafts, and every other owner's registration.
+pub fn caller_can_register_ai_app() -> Result<(), String> {
+    if read_state(|state| state.is_caller_openchat_user() || state.data.test_mode) {
+        Ok(())
+    } else {
+        Err("Caller is not an OpenChat user".to_string())
+    }
+}
+
 pub fn caller_is_governance_principal() -> Result<(), String> {
     if read_state(|state| state.is_caller_governance_principal()) {
         Ok(())
