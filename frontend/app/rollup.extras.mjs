@@ -8,11 +8,11 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 export const __dirname = dirname(__filename);
 
-// Sass relevant files & directives
-// Forward-slash the path: in a Sass `@use` string the backslashes of a Windows absolute path are escape
-// sequences that corrupt it ("Can't find stylesheet"). Forward slashes work on every platform.
-export const mixins = path.join(__dirname, "src", "styles", "mixins.scss").replace(/\\/g, "/");
-export const sassModulesAndMixins = `@use 'sass:math'; @use 'sass:map'; @use '${mixins}' as *;`;
+// Sass relevant files & directives. Resolve the bare `mixins` module through an explicit load path;
+// Dart Sass does not support absolute Windows paths in `@use`, even after slash normalization.
+export const stylesDir = path.join(__dirname, "src", "styles").replace(/\\/g, "/");
+export const mixins = `${stylesDir}/mixins.scss`;
+export const sassModulesAndMixins = "@use 'sass:math'; @use 'sass:map'; @use 'mixins' as *;";
 
 // Generates content security policy (CSP) hash for the provided entry
 function generateCspHashValue(text) {

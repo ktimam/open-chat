@@ -1,87 +1,6 @@
 <!doctype html>
 <html lang="en">
     <head>
-        <!-- OC-DEBUG dev fix: the Tauri webview loads this HTML as a data: URL, so module specifiers have no
-             http base and fail to resolve. Pin the base to the dev server so all imports/assets resolve. -->
-        <base href="http://localhost:5001/" />
-        <!-- OC-DEBUG: createHtmlPlugin's `injectScript` placeholder was removed from this hardcoded dev
-             index.html, so define the version global it normally injects (UpgradeBanner.svelte parses it). -->
-        <script>
-            window.OC_WEBSITE_VERSION = "1000.0.0";
-        </script>
-        <!-- OC-DEBUG: capture boot errors and beacon them to a local log server (temporary, local-only) -->
-        <script>
-            (function () {
-                function send(t, m) {
-                    try {
-                        var i = new Image();
-                        i.src =
-                            "http://127.0.0.1:38291/oc?t=" +
-                            t +
-                            "&m=" +
-                            encodeURIComponent(String(m)).slice(0, 1500) +
-                            "&_=" +
-                            Date.now();
-                    } catch (e) {}
-                }
-                window.__ocsend = send;
-                window.addEventListener("error", function (e) {
-                    send("err", (e.message || "") + " @ " + (e.filename || "") + ":" + (e.lineno || ""));
-                });
-                window.addEventListener("unhandledrejection", function (e) {
-                    var r = e.reason;
-                    send("rej", (r && (r.stack || r.message)) || r);
-                });
-                ["error", "warn", "log"].forEach(function (k) {
-                    var orig = console[k];
-                    console[k] = function () {
-                        send("c" + k, Array.prototype.map.call(arguments, String).join(" "));
-                        orig.apply(console, arguments);
-                    };
-                });
-                var of = window.fetch;
-                window.fetch = function (u) {
-                    var url = typeof u === "string" ? u : u && u.url;
-                    send("fetch", url);
-                    return of.apply(this, arguments).then(
-                        function (r) {
-                            if (!r.ok) send("fetchbad", (r.status || "") + " " + url);
-                            return r;
-                        },
-                        function (e) {
-                            send("fetcherr", url + " :: " + (e && e.message));
-                            throw e;
-                        },
-                    );
-                };
-                var OW = window.Worker;
-                if (OW) {
-                    window.Worker = function (u, o) {
-                        send("worker", "created " + (typeof u === "string" ? u : u && u.href));
-                        var w = new OW(u, o);
-                        w.addEventListener("error", function (e) {
-                            send("workererr", (e.message || "") + " @ " + (e.filename || "") + ":" + (e.lineno || ""));
-                        });
-                        w.addEventListener("messageerror", function (e) {
-                            send("workermsgerr", String(e && e.data));
-                        });
-                        return w;
-                    };
-                    window.Worker.prototype = OW.prototype;
-                }
-                function heartbeat(tag) {
-                    try {
-                        var b = document.body;
-                        var html = ((b && b.innerHTML) || "").replace(/\s+/g, " ").slice(0, 260);
-                        send("dom", tag + " kids=" + (b ? b.children.length : -1) + " html=" + html);
-                    } catch (e) {}
-                }
-                setTimeout(function () { heartbeat("t3"); }, 3000);
-                setTimeout(function () { heartbeat("t9"); }, 9000);
-                setTimeout(function () { heartbeat("t16"); }, 16000);
-                send("boot", "capture-installed");
-            })();
-        </script>
         <!-- Google tag (gtag.js) -->
         <script async src="https://www.googletagmanager.com/gtag/js?id=G-7P9R6CJLNR"></script>
         <script>
@@ -149,7 +68,7 @@
             rel="stylesheet"
         />
         <script async src="https://platform.twitter.com/widgets.js" charset="utf-8"></script>
-        <script type="module" src="/src/main.ts"></script>
+        <%- csp %> <%- injectScript %>
     </head>
     <template
         id="profile-link-template"

@@ -13,6 +13,9 @@ pub enum Error {
     #[error("iOS: invalid file name for download")]
     IOSInvalidFileName,
 
+    #[error("external URL is not allowed")]
+    InvalidExternalUrl,
+
     #[cfg(mobile)]
     #[error(transparent)]
     PluginInvoke(#[from] tauri::plugin::mobile::PluginInvokeError),

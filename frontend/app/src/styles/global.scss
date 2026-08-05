@@ -1,6 +1,4 @@
-/* OC-DEBUG dev fix: the global additionalData already @use's mixins.scss; this relative @use can't
-   resolve when prepended as a string in this dev server. */
-/* @use "./mixins" as *; */
+@use "./mixins" as *;
 
 html,
 body,
