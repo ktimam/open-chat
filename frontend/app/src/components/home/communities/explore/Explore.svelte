@@ -1,5 +1,5 @@
 <script lang="ts">
-    import type { OpenChat } from "@client";
+import type { AiAppRegistration, OpenChat } from "@client";
     import {
         anonUserStore,
         exploreCommunitiesFiltersStore,
@@ -15,18 +15,25 @@
     } from "@client";
     import { getContext, onMount, tick } from "svelte";
     import { _ } from "svelte-i18n";
+    import AccountGroup from "svelte-material-icons/AccountGroupOutline.svelte";
     import ArrowUp from "svelte-material-icons/ArrowUp.svelte";
+    import AutoFix from "svelte-material-icons/AutoFix.svelte";
     import CloudOffOutline from "svelte-material-icons/CloudOffOutline.svelte";
     import Plus from "svelte-material-icons/Plus.svelte";
     import Tune from "svelte-material-icons/Tune.svelte";
     import { i18nKey } from "../../../../i18n/i18n";
-    import { communitySearchState } from "../../../../stores/search.svelte";
+    import { aiAppSearchState, communitySearchState } from "../../../../stores/search.svelte";
+    import type { SurfaceOpening } from "../../../../utils/aiAppSurfaces";
     import Search from "../../..//Search.svelte";
     import Button from "../../../Button.svelte";
     import Fab from "../../../Fab.svelte";
+    import AiAppLinkModal from "../../AiAppLinkModal.svelte";
+    import AiAppModal from "../../AiAppModal.svelte";
+    import AiAppSurfaceModal from "../../AiAppSurfaceModal.svelte";
     import HoverIcon from "../../../HoverIcon.svelte";
     import FancyLoader from "../../../icons/FancyLoader.svelte";
     import Translatable from "../../../Translatable.svelte";
+    import AiAppCard from "./AiAppCard.svelte";
     import CommunityCard from "./CommunityCard.svelte";
     import CommunityCardLink from "./CommunityCardLink.svelte";
 
@@ -37,15 +44,75 @@
     let scrollableElement: HTMLElement | null;
     let initialised = $state(false);
 
-    function calculatePageSize(width: ScreenWidth): number {
-        // make sure we get even rows of results
-        switch (width) {
-            case ScreenWidth.Large:
-            case ScreenWidth.ExtraLarge:
-                return 30;
-            default:
-                return 32;
+    // v1 Explore is communities-only; we add an "AI apps" tab alongside it. Everything below is the
+    // AI-app directory — a generic list of published apps with a per-app detail/connect flow.
+    type View = "communities" | "aiApps";
+    let view = $state<View>("communities");
+    let connectedAppIds = $state(new Set<number>());
+    let selectedApp = $state<AiAppRegistration | undefined>(undefined);
+    let linkingApp = $state<AiAppRegistration | undefined>(undefined);
+    let appSurface = $state<SurfaceOpening | undefined>(undefined);
+    // A single search box drives whichever tab is active; keep its text local and push it onto the
+    // active search state when the user searches.
+    let searchTerm = $state(communitySearchState.term);
+
+    function setView(v: View) {
+        view = v;
+        searchTerm = v === "aiApps" ? aiAppSearchState.term : communitySearchState.term;
+        if (v === "aiApps") {
+            searchAiApps(true);
+        } else {
+            search($exploreCommunitiesFiltersStore, true);
         }
+    }
+
+    function performSearch() {
+        if (view === "aiApps") {
+            aiAppSearchState.term = searchTerm;
+            searchAiApps(true);
+        } else {
+            communitySearchState.term = searchTerm;
+            search($exploreCommunitiesFiltersStore, true);
+        }
+    }
+
+    function searchAiApps(reset = false) {
+        searching = true;
+        if (reset) {
+            aiAppSearchState.reset();
+        } else {
+            aiAppSearchState.nextPage();
+        }
+        // NOTE: exploreAiApps resolves to { matches, total } with NO `.kind` discriminator (unlike
+        // exploreCommunities) — a rejection degrades to an empty page at the client layer.
+        client
+            .exploreAiApps(
+                aiAppSearchState.term === "" ? undefined : aiAppSearchState.term,
+                aiAppSearchState.index,
+                8,
+            )
+            .then((results) => {
+                if (reset) {
+                    aiAppSearchState.results = results.matches;
+                } else {
+                    aiAppSearchState.appendResults(results.matches);
+                }
+                aiAppSearchState.total = results.total;
+            })
+            .finally(() => (searching = false));
+        refreshConnected();
+    }
+
+    function refreshConnected() {
+        client.myAiAppKeys().then((keys) => {
+            connectedAppIds = new Set(keys.filter((k) => k.publicKey.length > 0).map((k) => k.appId));
+        });
+    }
+
+    function calculatePageSize(width: ScreenWidth): number {
+        // Registry manifests are large untrusted records; the backend accepts at most eight per page.
+        void width;
+        return 8;
     }
 
     function createCommunity() {
@@ -125,8 +192,17 @@
         }
     }
     let pageSize = $derived(calculatePageSize($screenWidth));
-    let more = $derived(communitySearchState.total > communitySearchState.results.length);
-    let loading = $derived(searching && communitySearchState.results.length === 0);
+    let more = $derived(
+        view === "aiApps"
+            ? aiAppSearchState.total > aiAppSearchState.results.length
+            : communitySearchState.total > communitySearchState.results.length,
+    );
+    let loading = $derived(
+        searching &&
+            (view === "aiApps"
+                ? aiAppSearchState.results.length === 0
+                : communitySearchState.results.length === 0),
+    );
 
     $effect(() => {
         if (
@@ -153,27 +229,52 @@
                 <div class="search">
                     <Search
                         fill
-                        bind:searchTerm={communitySearchState.term}
+                        bind:searchTerm
                         searching={false}
-                        onPerformSearch={() => search($exploreCommunitiesFiltersStore, true)}
-                        placeholder={i18nKey("communities.search")} />
+                        onPerformSearch={performSearch}
+                        placeholder={i18nKey(
+                            view === "aiApps" ? "aiApps.searchPlaceholder" : "communities.search",
+                        )} />
                 </div>
-                <div class="create">
-                    <Button onClick={createCommunity} hollow
-                        ><Translatable resourceKey={i18nKey("communities.create")} /></Button>
-                </div>
+                {#if view !== "aiApps"}
+                    <div class="create">
+                        <Button onClick={createCommunity} hollow
+                            ><Translatable resourceKey={i18nKey("communities.create")} /></Button>
+                    </div>
+                {/if}
             {/if}
             <div class="buttons">
-                {#if $ipadWidth}
+                {#if $ipadWidth && view !== "aiApps"}
                     <HoverIcon onclick={createCommunity}>
                         <Plus size={$iconSize} color={"var(--icon-txt)"} />
                     </HoverIcon>
                 {/if}
 
-                <HoverIcon title={$_("showFilters")} onclick={showFilters}>
-                    <Tune size={$iconSize} color={"var(--icon-txt)"} />
-                </HoverIcon>
+                {#if view !== "aiApps"}
+                    <HoverIcon title={$_("showFilters")} onclick={showFilters}>
+                        <Tune size={$iconSize} color={"var(--icon-txt)"} />
+                    </HoverIcon>
+                {/if}
             </div>
+        </div>
+
+        <div class="tabs">
+            <button
+                type="button"
+                class="chip"
+                class:selected={view === "communities"}
+                onclick={() => setView("communities")}>
+                <AccountGroup size="1em" color="currentColor" />
+                <Translatable resourceKey={i18nKey("communities.explore")} />
+            </button>
+            <button
+                type="button"
+                class="chip"
+                class:selected={view === "aiApps"}
+                onclick={() => setView("aiApps")}>
+                <AutoFix size="1em" color="currentColor" />
+                <Translatable resourceKey={i18nKey("aiApps.exploreChip")} />
+            </button>
         </div>
         <div class="subtitle-row">
             {#if $ipadWidth}
@@ -181,9 +282,11 @@
                     <Search
                         searching={false}
                         fill
-                        bind:searchTerm={communitySearchState.term}
-                        onPerformSearch={() => search($exploreCommunitiesFiltersStore, true)}
-                        placeholder={i18nKey("communities.search")} />
+                        bind:searchTerm
+                        onPerformSearch={performSearch}
+                        placeholder={i18nKey(
+                            view === "aiApps" ? "aiApps.searchPlaceholder" : "communities.search",
+                        )} />
                 </div>
             {/if}
         </div>
@@ -198,6 +301,30 @@
                 <div class="loading">
                     <FancyLoader />
                 </div>
+            {:else if view === "aiApps"}
+                {#if aiAppSearchState.results.length === 0}
+                    {#if $offlineStore}
+                        <div class="no-match">
+                            <CloudOffOutline size={"1.8em"} color={"var(--txt-light)"} />
+                            <p class="sub-header">
+                                <Translatable resourceKey={i18nKey("offlineError")} />
+                            </p>
+                        </div>
+                    {:else}
+                        <div class="no-match">
+                            <h4 class="header">
+                                <Translatable resourceKey={i18nKey("aiApps.noMatch")} />
+                            </h4>
+                        </div>
+                    {/if}
+                {:else}
+                    {#each aiAppSearchState.results as app (app.id)}
+                        <AiAppCard
+                            {app}
+                            connected={connectedAppIds.has(app.id)}
+                            onSelect={() => (selectedApp = app)} />
+                    {/each}
+                {/if}
             {:else if communitySearchState.results.length === 0}
                 {#if $offlineStore}
                     <div class="no-match">
@@ -240,7 +367,10 @@
                 <Button
                     disabled={searching}
                     loading={searching}
-                    onClick={() => search($exploreCommunitiesFiltersStore, false)}
+                    onClick={() =>
+                        view === "aiApps"
+                            ? searchAiApps(false)
+                            : search($exploreCommunitiesFiltersStore, false)}
                     ><Translatable resourceKey={i18nKey("communities.loadMore")} /></Button>
             </div>
         {/if}
@@ -250,6 +380,40 @@
             <ArrowUp size={$iconSize} color={"#fff"} />
         </Fab>
     </div>
+
+    {#if selectedApp !== undefined}
+        {@const app = selectedApp}
+        <AiAppModal
+            {app}
+            connected={connectedAppIds.has(app.id)}
+            onDismiss={() => (selectedApp = undefined)}
+            onConnect={() => {
+                linkingApp = app;
+                selectedApp = undefined;
+            }}
+            onOpenSurface={(o) => {
+                appSurface = o;
+                selectedApp = undefined;
+            }}
+            onDisconnected={refreshConnected} />
+    {/if}
+    {#if linkingApp !== undefined}
+        <AiAppLinkModal
+            app={linkingApp}
+            onDismiss={() => (linkingApp = undefined)}
+            onLinked={() => {
+                linkingApp = undefined;
+                refreshConnected();
+            }} />
+    {/if}
+    {#if appSurface !== undefined}
+        <AiAppSurfaceModal
+            title={appSurface.app.manifest.name}
+            url={appSurface.url}
+            display={appSurface.surface.display}
+            dataDisclosures={appSurface.dataDisclosures}
+            onDismiss={() => (appSurface = undefined)} />
+    {/if}
 </div>
 
 <style lang="scss">
@@ -313,6 +477,40 @@
 
             @include size-below(lg) {
                 flex-direction: column;
+            }
+        }
+    }
+
+    .tabs {
+        display: flex;
+        gap: $sp3;
+        margin-bottom: $sp4;
+
+        @include size-below(lg) {
+            margin-bottom: $sp3;
+        }
+
+        .chip {
+            display: inline-flex;
+            align-items: center;
+            gap: $sp2;
+            padding: $sp2 $sp4;
+            border-radius: var(--rd);
+            border: 1px solid var(--bd);
+            background: none;
+            color: var(--txt-light);
+            cursor: pointer;
+            white-space: nowrap;
+            @include font(book, normal, fs-90);
+
+            &:hover {
+                border-color: var(--txt-light);
+            }
+
+            &.selected {
+                background-color: var(--primary);
+                border-color: var(--primary);
+                color: var(--button-txt);
             }
         }
     }

@@ -107,7 +107,10 @@ pub async fn make_c2c_call_raw(
                     r.reject_message().to_string(),
                 ),
             };
-            tracing::error!(method_name, %canister_id, ?error_code, error_message, "Error calling c2c");
+            // Reject messages are controlled by the remote canister. Keep them in the typed error
+            // for callers that intentionally handle them, but never copy third-party text into the
+            // platform's shared logs.
+            tracing::error!(method_name, %canister_id, ?error_code, "Error calling c2c");
             Err(C2CError::new(canister_id, method_name, error_code, error_message))
         }
     }

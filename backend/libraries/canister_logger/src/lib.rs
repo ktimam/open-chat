@@ -115,6 +115,33 @@ pub fn export_traces() -> Vec<LogEntry> {
     TRACE.with_borrow(|t| t.iter().cloned().collect())
 }
 
+/// Removes historical logger entries whose serialized message contains one of the supplied
+/// security-sensitive endpoint markers.
+///
+/// The logger's three vectors have the same element type and some older canister builds restored
+/// them into the wrong sinks. Inspect all three vectors so an entry cannot evade an upgrade-time
+/// purge merely because it was previously misclassified. Matching the endpoint marker also keeps
+/// unrelated operational history intact.
+pub fn purge_history_containing(
+    errors: &mut Vec<LogEntry>,
+    logs: &mut Vec<LogEntry>,
+    traces: &mut Vec<LogEntry>,
+    markers: &[&str],
+) -> usize {
+    fn purge(entries: &mut Vec<LogEntry>, markers: &[&str]) -> usize {
+        let original_len = entries.len();
+        entries.retain(|entry| {
+            !markers
+                .iter()
+                .filter(|marker| !marker.is_empty())
+                .any(|marker| entry.message.contains(marker))
+        });
+        original_len - entries.len()
+    }
+
+    purge(errors, markers) + purge(logs, markers) + purge(traces, markers)
+}
+
 #[derive(CandidType, Serialize, Deserialize, Clone)]
 pub struct LogEntry {
     pub timestamp: u64,
@@ -182,5 +209,62 @@ impl FormatTime for Timer {
         let now = canister_time::now_millis();
 
         w.write_str(&format!("{now}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(timestamp: u64, message: &str) -> LogEntry {
+        LogEntry {
+            timestamp,
+            message: message.to_string(),
+        }
+    }
+
+    #[test]
+    fn sensitive_history_is_removed_from_every_sink_without_disturbing_safe_order() {
+        let marker = "respond_to_action_card";
+        let mut errors = vec![
+            entry(1, "SAFE_ERROR_ONE"),
+            entry(
+                2,
+                r#"{"level":"TRACE","target":"group_canister_impl::updates::respond_to_action_card","fields":{"args":"SECRET"}}"#,
+            ),
+            entry(3, "SAFE_ERROR_TWO"),
+        ];
+        let mut logs = vec![entry(4, "respond_to_action_card{args=PLAINTEXT}"), entry(5, "SAFE_LOG")];
+        let mut traces = vec![
+            entry(6, "SAFE_UNRELATED_TRACE"),
+            entry(7, "community_canister_impl::updates::respond_to_action_card result=SECRET"),
+        ];
+
+        assert_eq!(purge_history_containing(&mut errors, &mut logs, &mut traces, &[marker]), 3);
+        assert_eq!(
+            errors.iter().map(|entry| entry.message.as_str()).collect::<Vec<_>>(),
+            vec!["SAFE_ERROR_ONE", "SAFE_ERROR_TWO"]
+        );
+        assert_eq!(
+            logs.iter().map(|entry| entry.message.as_str()).collect::<Vec<_>>(),
+            vec!["SAFE_LOG"]
+        );
+        assert_eq!(
+            traces.iter().map(|entry| entry.message.as_str()).collect::<Vec<_>>(),
+            vec!["SAFE_UNRELATED_TRACE"]
+        );
+
+        // The purge is idempotent, so a later upgrade cannot re-persist a removed record.
+        assert_eq!(purge_history_containing(&mut errors, &mut logs, &mut traces, &[marker]), 0);
+    }
+
+    #[test]
+    fn empty_markers_never_remove_history() {
+        let mut errors = vec![entry(1, "SAFE_ERROR")];
+        let mut logs = vec![entry(2, "SAFE_LOG")];
+        let mut traces = vec![entry(3, "SAFE_TRACE")];
+
+        assert_eq!(purge_history_containing(&mut errors, &mut logs, &mut traces, &[""]), 0);
+        assert_eq!(errors.len() + logs.len() + traces.len(), 3);
     }
 }

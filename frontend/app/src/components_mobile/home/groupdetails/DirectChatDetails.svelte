@@ -22,6 +22,7 @@
     import Video from "svelte-material-icons/VideoOutline.svelte";
     import DisappearingDuration from "../DisappearingDuration.svelte";
     import UserProfileSummaryCard from "../user_profile/UserProfileSummaryCard.svelte";
+    import AiAppsDirectSummary from "./AiAppsDirectSummary.svelte";
 
     const client = getContext<OpenChat>("client");
 
@@ -177,6 +178,8 @@
                     {/snippet}
                 </DisappearingDuration>
             </Container>
+
+            <AiAppsDirectSummary chatId={chat.id} />
 
             <Container gap={"md"} padding={["zero", "lg"]} direction={"vertical"}>
                 <Body fontWeight={"bold"}>

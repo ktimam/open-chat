@@ -7,6 +7,7 @@ mod c2c_bot_members;
 mod c2c_can_issue_access_token_v2;
 mod c2c_name_and_members;
 mod deleted_message;
+mod enabled_ai_apps;
 mod events;
 mod events_by_index;
 mod events_window;

@@ -10,6 +10,10 @@ path = "src/lib.rs"
 crate-type = ["cdylib"]
 
 [dependencies]
+action_inbox_canister = { path = "../../action_inbox/api" }
+action_inbox_canister_c2c_client = { path = "../../action_inbox/c2c_client" }
+ai_app_verifier_canister = { path = "../../../external_canisters/ai_app_verifier/api" }
+ai_app_verifier_canister_c2c_client = { path = "../../../external_canisters/ai_app_verifier/c2c_client" }
 candid = { workspace = true }
 canister_api_macros = { path = "../../../libraries/canister_api_macros" }
 canister_logger = { path = "../../../libraries/canister_logger" }
@@ -25,6 +29,7 @@ cycles_dispenser_canister = { path = "../../cycles_dispenser/api" }
 dataurl = { workspace = true }
 event_store_producer = { workspace = true, features = ["json"] }
 event_store_producer_cdk_runtime = { workspace = true }
+ecies_payload = { path = "../../../libraries/ecies_payload" }
 fire_and_forget_handler = { path = "../../../libraries/fire_and_forget_handler" }
 futures = { workspace = true }
 group_canister = { path = "../../group/api" }
@@ -33,6 +38,7 @@ group_canister_c2c_client = { path = "../../group/c2c_client" }
 group_index_canister = { path = "../../group_index/api" }
 group_index_canister_c2c_client = { path = "../../group_index/c2c_client" }
 hex = { workspace = true }
+hmac-sha256 = { workspace = true }
 http_request = { path = "../../../libraries/http_request" }
 human_readable = { path = "../../../libraries/human_readable" }
 ic-cdk = { workspace = true }
@@ -50,6 +56,7 @@ local_user_index_canister = { path = "../../local_user_index/api" }
 local_user_index_canister_c2c_client = { path = "../../local_user_index/c2c_client" }
 ledger_utils = { path = "../../../libraries/ledger_utils" }
 oc_error_codes = { path = "../../../libraries/error_codes" }
+p256 = { workspace = true, features = ["ecdsa", "pkcs8"] }
 p256_key_pair = { path = "../../../libraries/p256_key_pair" }
 per_round_timer = { path = "../../../libraries/per_round_timer" }
 msgpack = { path = "../../../libraries/msgpack" }
@@ -61,6 +68,7 @@ search = { path = "../../../libraries/search" }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
 serde_json = { workspace = true }
+sha256 = { path = "../../../libraries/sha256" }
 stable_memory = { path = "../../../libraries/stable_memory" }
 stable_memory_map = { path = "../../../libraries/stable_memory_map" }
 storage_bucket_canister = { path = "../../storage_bucket/api" }
@@ -76,6 +84,7 @@ user_canister_c2c_client = { path = "../../user/c2c_client" }
 user_ids_set = { path = "../../../libraries/user_ids_set" }
 user_index_canister = { path = "../api" }
 utils = { path = "../../../libraries/utils" }
+zeroize = { workspace = true }
 
 [dev-dependencies]
 testing = { path = "../../../libraries/testing" }

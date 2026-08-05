@@ -37,6 +37,10 @@ interface ImportMetaEnv {
     readonly OC_SIGN_IN_WITH_SOLANA_CANISTER: string;
     readonly OC_STORAGE_INDEX_CANISTER: string;
     readonly OC_KLIPY_APIKEY: string;
+    readonly OC_LOCAL_AI_APP_CARDS_ENABLED: string | undefined;
+    readonly OC_LOCAL_AI_APP_CONTENT_ATTESTATION_ENABLED: string | undefined;
+    readonly OC_LOCAL_AI_APP_FINAL_CONFIRMATION_ENABLED: string | undefined;
+    readonly OC_LOCAL_AI_APP_PRIVATE_CONTEXT_ENABLED: string | undefined;
     readonly OC_TRANSLATIONS_CANISTER: string;
     readonly OC_USER_INDEX_CANISTER: string;
     readonly OC_USERGEEK_APIKEY: string;

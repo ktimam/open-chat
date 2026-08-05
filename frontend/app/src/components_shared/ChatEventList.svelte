@@ -41,6 +41,7 @@
     } from "@client";
     import { getContext, onMount, tick, untrack, type Snippet } from "svelte";
     import { isSafari, mobileOperatingSystem } from "@utils/devices";
+    import { evaluateForAutoPropose } from "@utils/autoPropose";
     import type { FlatChatItem } from "./flatChatItems";
     import { vclDebug } from "./vclDebug";
     import VirtualChatList from "./VirtualChatList.svelte";
@@ -462,11 +463,14 @@
     }
 
     function sentMessage(payload: { context: MessageContext; event: EventWrapper<Message> }) {
-        tick().then(() => {
-            if (messageContextsEqual(payload.context, messageContext)) {
-                afterSendMessage(payload.context, payload.event);
-            }
-        });
+        if (messageContextsEqual(payload.context, messageContext)) {
+            evaluateForAutoPropose(client, payload.context.chatId, [payload.event]);
+            tick().then(() => {
+                if (messageContextsEqual(payload.context, messageContext)) {
+                    afterSendMessage(payload.context, payload.event);
+                }
+            });
+        }
     }
 
     async function afterReaction({
@@ -1056,6 +1060,20 @@
 
     async function onLoadedNewMessages(context: MessageContext) {
         if (!messageContextsEqual(context, messageContext)) return;
+
+        // The shared list is the single desktop/mobile subscription seam. Wait for its inputs to
+        // contain the new batch, then let the session-level evaluator dedupe overlapping windows.
+        await tick();
+        if (!messageContextsEqual(context, messageContext)) return;
+        evaluateForAutoPropose(
+            client,
+            context.chatId,
+            items.flatMap((item) =>
+                item.kind === "event" && item.event.event.kind === "message"
+                    ? [item.event as EventWrapper<Message>]
+                    : [],
+            ),
+        );
 
         if (
             !loadingFromUserScroll &&

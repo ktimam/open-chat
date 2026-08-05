@@ -1,0 +1,14 @@
+[package]
+name = "ai_app_verifier_test_canister_impl"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+ai_app_verifier_canister = { path = "../api" }
+candid = { workspace = true }
+ic-cdk = { workspace = true }
+serde = { workspace = true }

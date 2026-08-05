@@ -99,6 +99,9 @@ fn process_event(event: UserCanisterEvent, caller_user_id: UserId, state: &mut R
         UserCanisterEvent::P2PSwapStatusChange(c) => {
             p2p_swap_change_status(*c, caller_user_id, state);
         }
+        UserCanisterEvent::ActionCardStatusChange(c) => {
+            action_card_status_change(*c, caller_user_id, state);
+        }
         UserCanisterEvent::JoinVideoCall(c) => {
             if let Some(chat) = state.data.direct_chats.get_mut(&caller_user_id.into()) {
                 let _ = chat.events.set_video_call_presence(
@@ -381,6 +384,23 @@ fn p2p_swap_change_status(args: P2PSwapStatusChange, caller_user_id: UserId, sta
                 timestamp: now,
                 user_id: Some(caller_user_id),
             },
+            now,
+        );
+    }
+}
+
+// Apply-only mirror of an action-card response decided on the OTHER participant's canister (see
+// ChatEvents::apply_action_card_state — transitions a still-Pending local copy, never deposits).
+fn action_card_status_change(args: user_canister::ActionCardStatusChange, caller_user_id: UserId, state: &mut RuntimeState) {
+    if let Some(chat) = state.data.direct_chats.get_mut(&caller_user_id.into()) {
+        let now = state.env.now();
+        let thread_root_message_index = args.thread_root_message_id.map(|id| chat.main_message_id_to_index(id));
+        let _ = chat.events.apply_action_card_state(
+            thread_root_message_index,
+            args.message_id,
+            args.state,
+            args.responded_by,
+            args.responded_at,
             now,
         );
     }

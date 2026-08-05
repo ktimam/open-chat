@@ -30,6 +30,15 @@ declare namespace svelteHTML {
         onleftswipe?: (event: CustomEvent) => void;
         onrightswipe?: (event: CustomEvent) => void;
         "on:profile-clicked"?: (event: CustomEvent) => void;
+        /** Loads a cross-origin iframe in an anonymous context (Credentialless IFrames). */
+        credentialless?: boolean;
+    }
+}
+
+declare module "svelte/elements" {
+    interface HTMLIframeAttributes {
+        /** Loads a cross-origin iframe in an anonymous context (Credentialless IFrames). */
+        credentialless?: boolean;
     }
 }
 

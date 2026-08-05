@@ -62,6 +62,16 @@ import type {
     DexId,
     DiamondMembershipDuration,
     DiamondMembershipFees,
+    AiAppLinkCode,
+    AiAppCardCapability,
+    AiAppCardConfirmationGrant,
+    AiAppCardContentV1,
+    AiAppCardProvenance,
+    ExploreAiAppsResponse,
+    AiAppManifest,
+    AiAppRegistration,
+    AiAppMemberKey,
+    AiAppUserKey,
     DirectChatIdentifier,
     DirectChatSummary,
     DirectChatSummaryUpdates,
@@ -132,6 +142,7 @@ import type {
     Referral,
     RehydratedMessagePreview,
     RegisterPollVoteResponse,
+    RespondToActionCardResponse,
     RegisterProposalVoteResponse,
     RegisterUserResponse,
     RegistryValue,
@@ -2979,6 +2990,47 @@ export class OpenChatAgent extends EventTarget {
         }
     }
 
+    respondToActionCard(
+        chatId: ChatIdentifier,
+        threadRootMessageIndex: number | undefined,
+        messageId: bigint,
+        response: "confirm" | "cancel",
+        confirmPayloadOverride?: Uint8Array,
+        confirmationGrant?: Uint8Array,
+    ): Promise<RespondToActionCardResponse> {
+        if (offline()) return Promise.resolve(CommonResponses.offline());
+
+        switch (chatId.kind) {
+            case "group_chat":
+                return this._groupClient.respondToActionCard(
+                    chatId.groupId,
+                    messageId,
+                    threadRootMessageIndex,
+                    response,
+                    confirmPayloadOverride,
+                    confirmationGrant,
+                );
+            case "channel":
+                return this._communityClient.respondToActionCard(
+                    chatId,
+                    messageId,
+                    threadRootMessageIndex,
+                    response,
+                    confirmPayloadOverride,
+                    confirmationGrant,
+                );
+            case "direct_chat":
+                return this.userClient.respondToActionCard(
+                    chatId.userId,
+                    messageId,
+                    threadRootMessageIndex,
+                    response,
+                    confirmPayloadOverride,
+                    confirmationGrant,
+                );
+        }
+    }
+
     withdrawCryptocurrency(
         domain: PendingCryptocurrencyWithdrawal,
         pin: string | undefined,
@@ -3797,6 +3849,156 @@ export class OpenChatAgent extends EventTarget {
 
     diamondMembershipFees(): Promise<DiamondMembershipFees[]> {
         return this._userIndexClient.diamondMembershipFees();
+    }
+
+    aiApps(lookups: { appId: number; revision?: bigint }[]): Promise<AiAppRegistration[]> {
+        return this._userIndexClient.aiApps(lookups);
+    }
+
+    myAiAppsPage(
+        pageIndex: number,
+        pageSize: number,
+    ): Promise<{ apps: AiAppRegistration[]; total: number }> {
+        return this._userIndexClient.myAiAppsPage(pageIndex, pageSize);
+    }
+
+    registerAiApp(manifest: AiAppManifest): Promise<boolean> {
+        return this._userIndexClient.registerAiApp(manifest);
+    }
+
+    exploreAiApps(
+        searchTerm: string | undefined,
+        pageIndex: number,
+        pageSize: number,
+    ): Promise<ExploreAiAppsResponse> {
+        return this._userIndexClient.exploreAiApps(searchTerm, pageIndex, pageSize);
+    }
+
+    myAiAppKeys(): Promise<AiAppUserKey[]> {
+        return this._userIndexClient.myAiAppKeys();
+    }
+
+    aiAppUserKeys(appId: number, userIds: string[]): Promise<AiAppMemberKey[]> {
+        return this._userIndexClient.aiAppUserKeys(appId, userIds);
+    }
+
+    createAiAppLinkCode(appId: number): Promise<AiAppLinkCode | undefined> {
+        return this._userIndexClient.createAiAppLinkCode(appId);
+    }
+
+    createAiAppCardProvenance(
+        appId: number,
+        appRevision: bigint,
+        actionId: string,
+        content: AiAppCardContentV1,
+        chatId: ChatIdentifier,
+        messageId: bigint,
+        threadRootMessageIndex: number | undefined,
+    ): Promise<AiAppCardProvenance | undefined> {
+        if (offline()) return Promise.resolve(undefined);
+        return this._userIndexClient.createAiAppCardProvenance(
+            appId,
+            appRevision,
+            actionId,
+            content,
+            chatId,
+            messageId,
+            threadRootMessageIndex,
+        );
+    }
+
+    createAiAppCardCapability(
+        chatId: ChatIdentifier,
+        threadRootMessageIndex: number | undefined,
+        messageId: bigint,
+        recipientKeyScheme: string,
+        recipientPublicKey: Uint8Array,
+    ): Promise<AiAppCardCapability | undefined> {
+        if (offline()) return Promise.resolve(undefined);
+        switch (chatId.kind) {
+            case "group_chat":
+                return this._groupClient.createAiAppCardCapability(
+                    chatId.groupId,
+                    messageId,
+                    threadRootMessageIndex,
+                    recipientKeyScheme,
+                    recipientPublicKey,
+                );
+            case "channel":
+                return this._communityClient.createAiAppCardCapability(
+                    chatId,
+                    messageId,
+                    threadRootMessageIndex,
+                    recipientKeyScheme,
+                    recipientPublicKey,
+                );
+            case "direct_chat":
+                // Direct chats have no app enablement yet; fail closed without touching the user
+                // canister even if a raw client forges an app-bound card.
+                return Promise.resolve(undefined);
+        }
+    }
+
+    createAiAppCardConfirmationGrant(
+        chatId: ChatIdentifier,
+        threadRootMessageIndex: number | undefined,
+        messageId: bigint,
+        confirmPayload: Uint8Array,
+    ): Promise<AiAppCardConfirmationGrant | undefined> {
+        if (offline()) return Promise.resolve(undefined);
+        switch (chatId.kind) {
+            case "group_chat":
+                return this._groupClient.createAiAppCardConfirmationGrant(
+                    chatId.groupId,
+                    messageId,
+                    threadRootMessageIndex,
+                    confirmPayload,
+                );
+            case "channel":
+                return this._communityClient.createAiAppCardConfirmationGrant(
+                    chatId,
+                    messageId,
+                    threadRootMessageIndex,
+                    confirmPayload,
+                );
+            case "direct_chat":
+                return Promise.resolve(undefined);
+        }
+    }
+
+    removeMyAiAppKey(appId: number): Promise<boolean> {
+        return this._userIndexClient.removeMyAiAppKey(appId);
+    }
+
+    publishAiApp(appId: number): Promise<boolean> {
+        return this._userIndexClient.publishAiApp(appId);
+    }
+
+    // Per-chat enablement lives on the chat's own canister: groups on the group canister,
+    // channels on the community canister (per channel). Direct chats have no admin-curated set
+    // (the client treats the user's connected apps as enabled there), so they resolve to none.
+    setAiAppEnabled(chatId: ChatIdentifier, appId: number, enabled: boolean): Promise<boolean> {
+        if (offline()) return Promise.resolve(false);
+
+        switch (chatId.kind) {
+            case "group_chat":
+                return this._groupClient.setAiAppEnabled(chatId.groupId, appId, enabled);
+            case "channel":
+                return this._communityClient.setAiAppEnabled(chatId, appId, enabled);
+            default:
+                return Promise.resolve(false);
+        }
+    }
+
+    enabledAiApps(chatId: ChatIdentifier): Promise<number[]> {
+        switch (chatId.kind) {
+            case "group_chat":
+                return this._groupClient.enabledAiApps(chatId.groupId);
+            case "channel":
+                return this._communityClient.enabledAiApps(chatId);
+            default:
+                return Promise.resolve([]);
+        }
     }
 
     setDiamondMembershipFees(fees: DiamondMembershipFees[]): Promise<boolean> {

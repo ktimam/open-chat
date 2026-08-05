@@ -10,9 +10,12 @@ path = "src/lib.rs"
 crate-type = ["cdylib"]
 
 [dependencies]
+action_inbox_canister = { path = "../../action_inbox/api" }
+action_inbox_canister_c2c_client = { path = "../../action_inbox/c2c_client" }
 group_community_common = { path = "../../../libraries/group_community_common" }
 candid = { workspace = true }
 canister_api_macros = { path = "../../../libraries/canister_api_macros" }
+ecies_payload = { path = "../../../libraries/ecies_payload" }
 canister_client = { path = "../../../libraries/canister_client" }
 canister_logger = { path = "../../../libraries/canister_logger" }
 canister_state_macros = { path = "../../../libraries/canister_state_macros" }
@@ -28,6 +31,7 @@ event_store_producer_cdk_runtime = { workspace = true }
 event_store_utils = { workspace = true }
 fire_and_forget_handler = { path = "../../../libraries/fire_and_forget_handler" }
 futures = { workspace = true }
+hex = { workspace = true }
 group_canister = { path = "../../group/api" }
 group_canister_c2c_client = { path = "../../group/c2c_client" }
 http_request = { path = "../../../libraries/http_request" }

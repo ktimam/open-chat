@@ -199,6 +199,18 @@ pub enum UserCanisterEvent {
     JoinVideoCall(Box<JoinVideoCall>),
     SetReferralStatus(Box<ReferralStatus>),
     SetEventsTtl(Box<SetEventsTtl>),
+    // Mirrors an action-card response onto the other participant's copy of a direct chat (see
+    // ChatEvents::apply_action_card_state — apply-only, deposit-free on the receiving side).
+    ActionCardStatusChange(Box<ActionCardStatusChange>),
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ActionCardStatusChange {
+    pub thread_root_message_id: Option<MessageId>,
+    pub message_id: MessageId,
+    pub state: types::ActionCardState,
+    pub responded_by: UserId,
+    pub responded_at: TimestampMillis,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

@@ -68,6 +68,18 @@ const { version, production } = initEnv();
 
 const override = (key, val) => `(window.OC_CONFIG?.${key} ?? ${val})`;
 
+// Never carry experimental app-card activation into production/testnet bundles, even if a caller
+// accidentally exports one of the local flags. Runtime loopback checks add a second boundary in the
+// application; this build-time substitution makes every non-local release a literal false value.
+const localOnlyAiAppCardFlag = (name) =>
+    JSON.stringify(
+        process.env.OC_BUILD_ENV === "development" &&
+            process.env.OC_DFX_NETWORK === "local" &&
+            process.env[name] === "true"
+            ? "true"
+            : "false",
+    );
+
 export default {
     input: `./src/main.ts`,
     output: {
@@ -191,6 +203,18 @@ export default {
             ),
             "import.meta.env.OC_NFID_URL": JSON.stringify(process.env.OC_NFID_URL),
             "import.meta.env.OC_DFX_NETWORK": JSON.stringify(process.env.OC_DFX_NETWORK),
+            "import.meta.env.OC_LOCAL_AI_APP_CARDS_ENABLED": localOnlyAiAppCardFlag(
+                "OC_LOCAL_AI_APP_CARDS_ENABLED",
+            ),
+            "import.meta.env.OC_LOCAL_AI_APP_CONTENT_ATTESTATION_ENABLED": localOnlyAiAppCardFlag(
+                "OC_LOCAL_AI_APP_CONTENT_ATTESTATION_ENABLED",
+            ),
+            "import.meta.env.OC_LOCAL_AI_APP_FINAL_CONFIRMATION_ENABLED": localOnlyAiAppCardFlag(
+                "OC_LOCAL_AI_APP_FINAL_CONFIRMATION_ENABLED",
+            ),
+            "import.meta.env.OC_LOCAL_AI_APP_PRIVATE_CONTEXT_ENABLED": localOnlyAiAppCardFlag(
+                "OC_LOCAL_AI_APP_PRIVATE_CONTEXT_ENABLED",
+            ),
             "import.meta.env.OC_NODE_ENV": JSON.stringify(process.env.NODE_ENV ?? "production"),
             "import.meta.env.OC_WEBSITE_VERSION": JSON.stringify(process.env.OC_WEBSITE_VERSION),
             "import.meta.env.OC_ROLLBAR_ACCESS_TOKEN": JSON.stringify(

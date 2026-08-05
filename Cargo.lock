@@ -18,6 +18,61 @@ dependencies = [
 ]
 
 [[package]]
+name = "action_inbox_canister"
+version = "0.1.0"
+dependencies = [
+ "candid",
+ "candid_gen",
+ "oc_error_codes",
+ "serde",
+ "serde_bytes",
+ "sha256",
+ "types",
+]
+
+[[package]]
+name = "action_inbox_canister_c2c_client"
+version = "0.1.0"
+dependencies = [
+ "action_inbox_canister",
+ "candid",
+ "canister_client",
+ "ic-cdk 0.20.2",
+ "msgpack",
+ "tracing",
+ "types",
+]
+
+[[package]]
+name = "action_inbox_canister_impl"
+version = "0.1.0"
+dependencies = [
+ "action_inbox_canister",
+ "candid",
+ "canister_api_macros",
+ "canister_logger",
+ "canister_state_macros",
+ "canister_tracing_macros",
+ "ecies_payload",
+ "http_request",
+ "ic-cdk 0.20.2",
+ "ic-cdk-timers",
+ "ic-stable-structures",
+ "msgpack",
+ "oc_error_codes",
+ "p256 0.14.0",
+ "rand 0.10.2",
+ "serde",
+ "serde_bytes",
+ "serde_json",
+ "stable_memory",
+ "subtle",
+ "tracing",
+ "types",
+ "utils",
+]
+
+[[package]]
 name = "activity_notification_state"
 version = "0.1.0"
 dependencies = [
@@ -107,6 +162,38 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ddd31a130427c27518df266943a5308ed92d4b226cc639f5a8f1002816174301"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "ai_app_verifier_canister"
+version = "0.1.0"
+dependencies = [
+ "candid",
+ "serde",
+ "serde_bytes",
+ "sha256",
+ "types",
+]
+
+[[package]]
+name = "ai_app_verifier_canister_c2c_client"
+version = "0.1.0"
+dependencies = [
+ "ai_app_verifier_canister",
+ "candid",
+ "canister_client",
+ "ic-cdk 0.20.2",
+ "types",
+]
+
+[[package]]
+name = "ai_app_verifier_test_canister_impl"
+version = "0.1.0"
+dependencies = [
+ "ai_app_verifier_canister",
+ "candid",
+ "ic-cdk 0.20.2",
+ "serde",
 ]
 
 [[package]]
@@ -1192,7 +1279,7 @@ dependencies = [
  "bitflags 2.13.1",
  "cexpr",
  "clang-sys",
- "itertools 0.10.5",
+ "itertools 0.11.0",
  "log",
  "prettyplease",
  "proc-macro2",
@@ -2867,7 +2954,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ccc2776f0c61eca1ca32528f85548abd1a4be8fb53d1b21c013e4f18da1e7090"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -3125,7 +3212,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3308,13 +3395,29 @@ dependencies = [
  "base64 0.21.7",
  "byteorder",
  "hex",
- "hkdf",
+ "hkdf 0.12.4",
  "lazy_static",
  "once_cell",
  "openssl",
  "serde",
  "sha2 0.10.9",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "ecies_payload"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "base64 0.23.0",
+ "candid",
+ "hkdf 0.13.0",
+ "jwt",
+ "p256 0.14.0",
+ "rand 0.10.2",
+ "serde",
+ "serde_bytes",
+ "sha2 0.11.0",
 ]
 
 [[package]]
@@ -3387,7 +3490,7 @@ dependencies = [
  "ff 0.13.1",
  "generic-array",
  "group 0.13.0",
- "hkdf",
+ "hkdf 0.12.4",
  "pem-rfc7468 0.7.0",
  "pkcs8 0.10.2",
  "rand_core 0.6.4",
@@ -3408,6 +3511,7 @@ dependencies = [
  "digest 0.11.3",
  "ff 0.14.0",
  "group 0.14.0",
+ "hkdf 0.13.0",
  "hybrid-array",
  "pem-rfc7468 1.0.0",
  "pkcs8 0.11.0",
@@ -3615,7 +3719,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4605,6 +4709,7 @@ dependencies = [
  "oc_error_codes",
  "serde",
  "serde_bytes",
+ "sha256",
  "ts-rs",
  "ts_export",
  "types",
@@ -4658,6 +4763,7 @@ dependencies = [
  "http_request",
  "human_readable",
  "ic-cdk 0.20.2",
+ "ic-cdk-management-canister",
  "ic-cdk-timers",
  "ic-stable-structures",
  "local_user_index_canister",
@@ -4667,6 +4773,7 @@ dependencies = [
  "rand 0.10.2",
  "search",
  "serde",
+ "serde_bytes",
  "stable_memory",
  "timer_job_queues",
  "tracing",
@@ -4852,6 +4959,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7b5f8eb2ad728638ea2c7d47a21db23b7b58a72ed6a38256b8a1849f15fbbdf7"
 dependencies = [
  "hmac 0.12.1",
+]
+
+[[package]]
+name = "hkdf"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4aaa26c720c68b866f2c96ef5c1264b3e6f473fe5d4ce61cd44bbe913e553018"
+dependencies = [
+ "hmac 0.13.0",
 ]
 
 [[package]]
@@ -5413,7 +5529,7 @@ dependencies = [
  "curve25519-dalek",
  "ed25519-dalek",
  "hex-literal",
- "hkdf",
+ "hkdf 0.12.4",
  "ic_principal",
  "pem 3.0.6",
  "rand 0.8.7",
@@ -6224,13 +6340,17 @@ dependencies = [
 name = "integration_tests"
 version = "0.1.0"
 dependencies = [
+ "action_inbox_canister",
+ "ai_app_verifier_canister",
  "airdrop_bot_canister",
  "candid",
  "chat_events",
  "community_canister",
  "constants",
+ "ct-codecs",
  "cycles_dispenser_canister",
  "cycles_minting_canister",
+ "ecies_payload",
  "escrow_canister",
  "event_relay_canister",
  "event_store_canister",
@@ -6251,12 +6371,15 @@ dependencies = [
  "oc_error_codes",
  "online_users_canister",
  "openchat_installer_canister",
+ "p256 0.14.0",
+ "p256_key_pair",
  "pocket-ic",
  "proposals_bot_canister",
  "rand 0.10.2",
  "registry_canister",
  "reqwest 0.13.4",
  "serde",
+ "serde_bytes",
  "serde_json",
  "sha256",
  "sign_in_with_email_canister",
@@ -6300,7 +6423,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi 0.5.2",
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6854,6 +6977,8 @@ dependencies = [
 name = "local_user_index_canister_impl"
 version = "0.1.0"
 dependencies = [
+ "action_inbox_canister",
+ "action_inbox_canister_c2c_client",
  "candid",
  "canister_api_macros",
  "canister_client",
@@ -6865,6 +6990,7 @@ dependencies = [
  "community_canister_c2c_client",
  "constants",
  "ct-codecs",
+ "ecies_payload",
  "email_address",
  "event_store_producer",
  "event_store_producer_cdk_runtime",
@@ -6874,6 +7000,7 @@ dependencies = [
  "group_canister",
  "group_canister_c2c_client",
  "group_community_common",
+ "hex",
  "http_request",
  "ic-cdk 0.20.2",
  "ic-cdk-management-canister",
@@ -7589,7 +7716,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8969,7 +9096,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "81bddcdb20abf9501610992b6759a4c888aef7d1a7247ef75e2404275ac24af1"
 dependencies = [
  "anyhow",
- "itertools 0.10.5",
+ "itertools 0.11.0",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -9089,7 +9216,7 @@ dependencies = [
  "once_cell",
  "socket2 0.6.5",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9721,7 +9848,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9792,7 +9919,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -11766,10 +11893,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -12793,6 +12920,7 @@ dependencies = [
  "icrc-ledger-types",
  "oc_error_codes",
  "serde",
+ "serde_bytes",
  "ts-rs",
  "ts_export",
  "types",
@@ -12910,9 +13038,11 @@ dependencies = [
 name = "user_index_canister"
 version = "0.1.0"
 dependencies = [
+ "action_inbox_canister",
  "candid",
  "candid_gen",
  "constants",
+ "hex",
  "human_readable",
  "ic-ledger-types",
  "oc_error_codes",
@@ -12952,6 +13082,10 @@ dependencies = [
 name = "user_index_canister_impl"
 version = "0.1.0"
 dependencies = [
+ "action_inbox_canister",
+ "action_inbox_canister_c2c_client",
+ "ai_app_verifier_canister",
+ "ai_app_verifier_canister_c2c_client",
  "candid",
  "canister_api_macros",
  "canister_logger",
@@ -12965,6 +13099,7 @@ dependencies = [
  "constants",
  "cycles_dispenser_canister",
  "dataurl",
+ "ecies_payload",
  "event_store_producer",
  "event_store_producer_cdk_runtime",
  "fire_and_forget_handler",
@@ -12975,6 +13110,7 @@ dependencies = [
  "group_index_canister",
  "group_index_canister_c2c_client",
  "hex",
+ "hmac-sha256",
  "http_request",
  "human_readable",
  "ic-cdk 0.20.2",
@@ -12995,6 +13131,7 @@ dependencies = [
  "oc_error_codes",
  "online_users_canister",
  "online_users_canister_c2c_client",
+ "p256 0.14.0",
  "p256_key_pair",
  "per_round_timer",
  "proof_of_unique_personhood",
@@ -13003,6 +13140,7 @@ dependencies = [
  "serde",
  "serde_bytes",
  "serde_json",
+ "sha256",
  "stable_memory",
  "stable_memory_map",
  "storage_bucket_canister",
@@ -13019,6 +13157,7 @@ dependencies = [
  "user_ids_set",
  "user_index_canister",
  "utils",
+ "zeroize",
 ]
 
 [[package]]
@@ -13455,7 +13594,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -14327,7 +14466,7 @@ dependencies = [
  "ff 0.13.1",
  "group 0.10.0",
  "hex",
- "hkdf",
+ "hkdf 0.12.4",
  "log",
  "rand 0.8.7",
  "serde",

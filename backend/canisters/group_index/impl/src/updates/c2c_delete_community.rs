@@ -91,6 +91,10 @@ fn commit(community_id: CommunityId, deleted_by: UserId, name: String, members: 
     };
 
     state.data.local_index_map.mark_community_deleted(&community_id);
+    state.data.ai_app_card_authority.observe_route(
+        crate::model::ai_app_card_authority::CardRouteKey::Community(community_id),
+        None,
+    );
     state.data.deleted_communities.insert(
         DeletedCommunityInfo {
             id: community_id,

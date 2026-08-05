@@ -11,6 +11,12 @@ use stable_memory::get_reader;
 use tracing::info;
 use utils::env::canister::CanisterEnv;
 
+const PR2_SENSITIVE_HISTORY_MARKERS: &[&str] = &[
+    "respond_to_action_card",
+    "create_ai_app_card_capability",
+    "create_ai_app_card_confirmation_grant",
+];
+
 #[post_upgrade(msgpack = true)]
 #[trace]
 fn post_upgrade(args: Args) {
@@ -19,8 +25,13 @@ fn post_upgrade(args: Args) {
     let memory = get_upgrades_memory();
     let reader = get_reader(&memory);
 
-    let (data, errors, logs, traces): (Data, Vec<LogEntry>, Vec<LogEntry>, Vec<LogEntry>) =
+    let (mut data, mut errors, mut logs, mut traces): (Data, Vec<LogEntry>, Vec<LogEntry>, Vec<LogEntry>) =
         msgpack::deserialize(reader).unwrap();
+    let purged_pr2_history =
+        canister_logger::purge_history_containing(&mut errors, &mut logs, &mut traces, PR2_SENSITIVE_HISTORY_MARKERS);
+
+    data.channels.bound_enabled_ai_apps();
+    data.groups_being_imported.bound_enabled_ai_apps();
 
     canister_logger::init_with_logs(data.test_mode, errors, logs, traces);
 
@@ -34,7 +45,7 @@ fn post_upgrade(args: Args) {
     }
 
     let total_instructions = ic_cdk::api::call_context_instruction_counter();
-    info!(version = %args.wasm_version, total_instructions, "Post-upgrade complete");
+    info!(version = %args.wasm_version, total_instructions, purged_pr2_history, "Post-upgrade complete");
 
     read_state(|state| {
         let now = state.env.now();

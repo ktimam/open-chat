@@ -1,0 +1,778 @@
+use crate::client;
+use crate::env::ENV;
+use crate::utils::tick_many;
+use crate::wasms;
+use crate::{TestEnv, User};
+use ai_app_verifier_canister::c2c_verify_ai_app_v2::{self, ManifestCommitmentV2, VerificationBindingV2};
+use candid::{CandidType, Principal};
+use ecies_payload::EciesEnvelope;
+use p256::SecretKey;
+use p256::pkcs8::{EncodePrivateKey, EncodePublicKey};
+use pocket_ic::PocketIc;
+use rand::SeedableRng;
+use rand::rngs::StdRng;
+use serde::Serialize;
+use serde_bytes::ByteBuf;
+use std::ops::Deref;
+use testing::rng::{random_from_u128, random_string};
+use types::{
+    ActionCardContentInitial, ActionCardResponse, ActionCardRow, AiActionCardRowTemplate, AiActionCardTemplate,
+    AiActionDefinition, AiAppManifest, AiAppRegistration, CanisterId, ChatId, Empty, MessageContentInitial,
+};
+
+const ACTION_ID: &str = "sample.confirm";
+
+#[derive(CandidType, Serialize)]
+struct NeutralVerifierInit {
+    name: String,
+    owner: Principal,
+    vouched: bool,
+    expected_v2: Option<VerificationBindingV2>,
+}
+
+pub(crate) struct Recipient {
+    pub(crate) pk_pem: String,
+    pub(crate) sk_pem: String,
+    pub(crate) fingerprint: [u8; 32],
+}
+
+pub(crate) fn new_recipient(rng: &mut StdRng) -> Recipient {
+    let sk = SecretKey::random(rng);
+    let pk_pem = sk.public_key().to_public_key_pem(Default::default()).unwrap();
+    let sk_pem = sk.to_pkcs8_pem(Default::default()).unwrap().to_string();
+    let fingerprint = ecies_payload::key_fingerprint(&pk_pem).unwrap();
+    Recipient {
+        pk_pem,
+        sk_pem,
+        fingerprint,
+    }
+}
+
+pub(crate) struct GroupSetup {
+    pub(crate) user_a: User,
+    pub(crate) user_b: User,
+    pub(crate) group_id: ChatId,
+    pub(crate) group_lui: CanisterId,
+    pub(crate) inbox: CanisterId,
+    pub(crate) app: AiAppRegistration,
+}
+
+pub(crate) fn setup(env: &mut PocketIc, canister_ids: &crate::CanisterIds, controller: Principal) -> GroupSetup {
+    activate_initial_action_signing_key_for_local_test(env, canister_ids.user_index, controller);
+    let user_a = client::register_diamond_user(env, canister_ids, controller);
+    let user_b = client::register_diamond_user(env, canister_ids, controller);
+    let group_id = client::user::happy_path::create_group(env, &user_a, &random_string(), true, true);
+    tick_many(env, 3);
+    let group_lui = client::group::happy_path::local_user_index(env, group_id);
+    client::local_user_index::happy_path::add_users_to_group(
+        env,
+        &user_a,
+        group_lui,
+        group_id,
+        vec![(user_b.user_id, user_b.principal)],
+    );
+    // Allocate the destination first, register the manifest to obtain its immutable app id, then
+    // install the inbox bound to exactly that id before publication verifies the binding.
+    let inbox = client::create_canister(env, controller);
+    let draft = register_per_user_app(env, canister_ids.user_index, controller, &user_a, Some(inbox));
+    install_inbox_at(env, controller, canister_ids, inbox, draft.id, canister_ids.user_index);
+    let app = publish_registered_app(env, canister_ids.user_index, &user_a, draft.id);
+    client::group::happy_path::set_ai_app_enabled(env, user_a.principal, group_id, app.id, true);
+    GroupSetup {
+        user_a,
+        user_b,
+        group_id,
+        group_lui,
+        inbox,
+        app,
+    }
+}
+
+/// PocketIC is the loopback-only exception to remote pin provisioning. Even here the fixture first
+/// derives and retains the staged key id, then performs the separate governance activation and
+/// verifies that the exact pinned id became active. Production consumers must provision the pin
+/// through an independently authenticated channel instead of trusting this discovery query.
+fn activate_initial_action_signing_key_for_local_test(env: &mut PocketIc, user_index: CanisterId, controller: Principal) {
+    let response: user_index_canister::action_signing_keys::Response =
+        client::execute_query(env, Principal::anonymous(), user_index, "action_signing_keys", &Empty {});
+    let user_index_canister::action_signing_keys::Response::Success(keys) = response else {
+        panic!("fresh UserIndex must expose one staged action-signing key")
+    };
+    assert_eq!(keys.signature_version, ecies_payload::ACTION_INBOX_SIGNATURE_VERSION_V4);
+    assert_eq!(keys.purpose, "action_inbox_deposit");
+    if keys.keys.iter().any(|key| {
+        matches!(
+            key.status,
+            user_index_canister::action_signing_keys::ActionSigningKeyStatus::Active
+        )
+    }) {
+        return;
+    }
+
+    let staged = keys
+        .keys
+        .into_iter()
+        .find(|key| {
+            matches!(
+                key.status,
+                user_index_canister::action_signing_keys::ActionSigningKeyStatus::Staged
+            )
+        })
+        .expect("fresh UserIndex action-signing key must remain staged before explicit activation");
+    let pinned_key_id = staged.key_id;
+    assert_eq!(
+        pinned_key_id.as_ref(),
+        ecies_payload::action_signing_key_id(&staged.public_key_pem).unwrap(),
+        "the local test pin must match the advertised public key"
+    );
+
+    let activation: user_index_canister::activate_action_signing_key::Response = client::execute_update(
+        env,
+        controller,
+        user_index,
+        "activate_action_signing_key",
+        &user_index_canister::activate_action_signing_key::Args {
+            key_id: pinned_key_id.clone(),
+        },
+    );
+    assert!(matches!(
+        activation,
+        user_index_canister::activate_action_signing_key::Response::Success
+    ));
+
+    let after: user_index_canister::action_signing_keys::Response =
+        client::execute_query(env, Principal::anonymous(), user_index, "action_signing_keys", &Empty {});
+    let user_index_canister::action_signing_keys::Response::Success(after) = after else {
+        panic!("activated local action-signing key must remain discoverable")
+    };
+    assert!(after.keys.into_iter().any(|key| {
+        key.key_id == pinned_key_id
+            && matches!(
+                key.status,
+                user_index_canister::action_signing_keys::ActionSigningKeyStatus::Active
+            )
+    }));
+}
+
+pub(crate) fn publish_per_user_app(
+    env: &mut PocketIc,
+    user_index: CanisterId,
+    controller: Principal,
+    owner: &User,
+    inbox: Option<CanisterId>,
+) -> AiAppRegistration {
+    let draft = register_per_user_app(env, user_index, controller, owner, inbox);
+    publish_registered_app(env, user_index, owner, draft.id)
+}
+
+pub(crate) fn register_per_user_app(
+    env: &mut PocketIc,
+    user_index: CanisterId,
+    controller: Principal,
+    owner: &User,
+    inbox: Option<CanisterId>,
+) -> AiAppRegistration {
+    let name = random_string();
+    let verifier = client::create_canister(env, controller);
+    let manifest = AiAppManifest {
+        name,
+        description: "authoritative fan-out fixture".to_string(),
+        icon_url: None,
+        app_canister_id: Some(verifier),
+        inbox_canister_id: inbox,
+        consumer_public_key: String::new(),
+        per_user_keys: true,
+        actions: vec![AiActionDefinition {
+            name: ACTION_ID.to_string(),
+            description: "Confirm a neutral operation".to_string(),
+            prompt_template: "Return a value".to_string(),
+            response_schema: r#"{"type":"object"}"#.to_string(),
+            card: AiActionCardTemplate {
+                title: "Review operation".to_string(),
+                confirm_label: "Confirm".to_string(),
+                cancel_label: "Cancel".to_string(),
+                rows: vec![AiActionCardRowTemplate {
+                    field: "amount".to_string(),
+                    label: "Amount".to_string(),
+                }],
+                disclosure: None,
+            },
+            endpoint: "https://app.example/confirm".to_string(),
+            consumer_public_key: None,
+            rules: vec![],
+            accepts_image: false,
+        }],
+        surfaces: vec![],
+    };
+    let app_id = client::user_index::happy_path::register_ai_app(env, owner.principal, user_index, manifest);
+    let draft = current_app(env, user_index, owner.principal, app_id);
+    client::install_canister(
+        env,
+        controller,
+        verifier,
+        wasms::AI_APP_VERIFIER_TEST.clone(),
+        NeutralVerifierInit {
+            name: draft.manifest.name.clone(),
+            owner: owner.user_id.into(),
+            vouched: true,
+            expected_v2: Some(verification_binding(user_index, &draft)),
+        },
+    );
+    draft
+}
+
+pub(crate) fn publish_registered_app(
+    env: &mut PocketIc,
+    user_index: CanisterId,
+    owner: &User,
+    app_id: types::AiAppId,
+) -> AiAppRegistration {
+    let published: user_index_canister::publish_ai_app::Response = client::execute_msgpack_update(
+        env,
+        owner.principal,
+        user_index,
+        "publish_ai_app_msgpack",
+        &user_index_canister::publish_ai_app::Args { app_id },
+    );
+    assert!(
+        matches!(published, user_index_canister::publish_ai_app::Response::Success),
+        "neutral verifier must publish the app: {published:?}"
+    );
+    current_app(env, user_index, owner.principal, app_id)
+}
+
+fn current_app(env: &PocketIc, user_index: CanisterId, owner: Principal, app_id: types::AiAppId) -> AiAppRegistration {
+    let response: user_index_canister::ai_apps::Response = client::execute_msgpack_query(
+        env,
+        owner,
+        user_index,
+        "ai_apps_msgpack",
+        &user_index_canister::ai_apps::Args {},
+    );
+    let user_index_canister::ai_apps::Response::Success(result) = response;
+    result
+        .apps
+        .into_iter()
+        .find(|app| app.id == app_id)
+        .expect("owner must see the app with its current revision")
+}
+
+fn verification_binding(user_index: CanisterId, app: &AiAppRegistration) -> VerificationBindingV2 {
+    let canonical_name = c2c_verify_ai_app_v2::canonical_app_name(&app.manifest.name).unwrap();
+    let commitment = ManifestCommitmentV2 {
+        user_index_canister_id: user_index,
+        app_id: app.id,
+        app_revision: app.updated,
+        owner: app.owner.into(),
+        canonical_name: canonical_name.clone(),
+        manifest: app.manifest.clone(),
+    };
+    VerificationBindingV2 {
+        user_index_canister_id: user_index,
+        app_id: app.id,
+        app_revision: app.updated,
+        owner: app.owner.into(),
+        canonical_name,
+        app_canister_id: app.manifest.app_canister_id.unwrap(),
+        inbox_canister_id: app.manifest.inbox_canister_id,
+        manifest_hash: c2c_verify_ai_app_v2::manifest_hash_v2(&commitment).unwrap(),
+    }
+}
+
+pub(crate) fn set_key(env: &mut PocketIc, user_index: CanisterId, user: &User, app_id: u32, public_key: String) {
+    let response: user_index_canister::set_my_ai_app_key::Response = client::execute_msgpack_update(
+        env,
+        user.principal,
+        user_index,
+        "set_my_ai_app_key_msgpack",
+        &user_index_canister::set_my_ai_app_key::Args { app_id, public_key },
+    );
+    assert!(
+        matches!(response, user_index_canister::set_my_ai_app_key::Response::Success),
+        "set_my_ai_app_key failed: {response:?}"
+    );
+}
+
+pub(crate) fn post_card(
+    env: &mut PocketIc,
+    user: &User,
+    group_id: ChatId,
+    app: &AiAppRegistration,
+    forged_recipient: Option<String>,
+    forged_recipients: Vec<String>,
+    forged_inbox: Option<CanisterId>,
+) -> types::MessageId {
+    let message_id = random_from_u128();
+    let content = MessageContentInitial::ActionCard(ActionCardContentInitial {
+        title: "Review operation".to_string(),
+        rows: vec![ActionCardRow {
+            label: "Amount".to_string(),
+            value: "$20".to_string(),
+        }],
+        confirm_label: "Confirm".to_string(),
+        cancel_label: "Cancel".to_string(),
+        action_id: ACTION_ID.to_string(),
+        app_id: Some(app.id),
+        app_revision: Some(app.updated),
+        app_provenance: None,
+        disclosure: None,
+        expires_at: None,
+        recipient_public_key: forged_recipient,
+        recipient_public_keys: forged_recipients,
+        confirm_payload: Some(ByteBuf::from(br#"{"amount":"$20"}"#.to_vec())),
+        inbox_canister_id: forged_inbox,
+    });
+    client::group::happy_path::send_message(env, user, group_id, None, content, None, Some(message_id));
+    message_id
+}
+
+pub(crate) fn confirm_raw(
+    env: &mut PocketIc,
+    user: &User,
+    group_id: ChatId,
+    message_id: types::MessageId,
+) -> group_canister::respond_to_action_card::Response {
+    client::execute_msgpack_update(
+        env,
+        user.principal,
+        group_id.into(),
+        "respond_to_action_card_msgpack",
+        &group_canister::respond_to_action_card::Args {
+            thread_root_message_index: None,
+            message_id,
+            response: ActionCardResponse::Confirm,
+            confirm_payload_override: None,
+            confirmation_grant: None,
+        },
+    )
+}
+
+pub(crate) fn confirm(env: &mut PocketIc, user: &User, group_id: ChatId, message_id: types::MessageId) {
+    let response = confirm_raw(env, user, group_id, message_id);
+    assert!(
+        matches!(response, group_canister::respond_to_action_card::Response::Success(_)),
+        "confirm failed: {response:?}"
+    );
+    tick_many(env, 10);
+}
+
+#[test]
+fn confirm_uses_manifest_inbox_and_authoritative_member_keys_not_card_routing() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+        ..
+    } = wrapper.env();
+    let setup = setup(env, canister_ids, *controller);
+    let mut rng = StdRng::seed_from_u64(4242);
+    let recipient_a = new_recipient(&mut rng);
+    let recipient_b = new_recipient(&mut rng);
+    let attacker = new_recipient(&mut rng);
+    set_key(
+        env,
+        canister_ids.user_index,
+        &setup.user_a,
+        setup.app.id,
+        recipient_a.pk_pem.clone(),
+    );
+    set_key(
+        env,
+        canister_ids.user_index,
+        &setup.user_b,
+        setup.app.id,
+        recipient_b.pk_pem.clone(),
+    );
+    let forged_inbox = client::create_canister(env, *controller);
+    let message_id = post_card(
+        env,
+        &setup.user_a,
+        setup.group_id,
+        &setup.app,
+        Some(attacker.pk_pem.clone()),
+        vec![attacker.pk_pem.clone()],
+        Some(forged_inbox),
+    );
+    confirm(env, &setup.user_b, setup.group_id, message_id);
+
+    let actions_a = fetch_actions(env, setup.user_a.principal, setup.inbox, &recipient_a.fingerprint);
+    let actions_b = fetch_actions(env, setup.user_b.principal, setup.inbox, &recipient_b.fingerprint);
+    assert_eq!(actions_a.len(), 1);
+    assert_eq!(actions_b.len(), 1);
+    assert_eq!(
+        fetch_actions(env, setup.user_a.principal, setup.inbox, &attacker.fingerprint).len(),
+        0
+    );
+    for (recipient, actions) in [(&recipient_a, &actions_a), (&recipient_b, &actions_b)] {
+        let plaintext = decrypt(&actions[0], &recipient.sk_pem).expect("member must decrypt its own envelope");
+        let json: serde_json::Value = serde_json::from_slice(&plaintext).unwrap();
+        assert_eq!(json["context"]["appId"], setup.app.id);
+        assert_eq!(json["context"]["appRevision"], setup.app.updated);
+        assert_eq!(json["context"]["actionId"], ACTION_ID);
+        assert_eq!(json["context"]["confirmedBy"], setup.user_b.user_id.to_string());
+    }
+}
+
+#[test]
+fn app_key_lookup_rejects_browser_callers_and_accepts_local_user_index() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+        ..
+    } = wrapper.env();
+    let setup = setup(env, canister_ids, *controller);
+    let mut rng = StdRng::seed_from_u64(4243);
+    let recipient_a = new_recipient(&mut rng);
+    set_key(
+        env,
+        canister_ids.user_index,
+        &setup.user_a,
+        setup.app.id,
+        recipient_a.pk_pem.clone(),
+    );
+    let args = user_index_canister::ai_app_user_keys::Args {
+        app_id: setup.app.id,
+        user_ids: vec![setup.user_a.user_id, setup.user_b.user_id],
+    };
+    let browser = env.query_call(
+        canister_ids.user_index,
+        setup.user_b.principal,
+        "ai_app_user_keys_msgpack",
+        msgpack::serialize_then_unwrap(&args),
+    );
+    assert!(
+        browser.is_err(),
+        "a browser identity must not enumerate another user's app key"
+    );
+
+    let response: user_index_canister::ai_app_user_keys::Response = client::execute_msgpack_query(
+        env,
+        setup.group_lui,
+        canister_ids.user_index,
+        "ai_app_user_keys_msgpack",
+        &args,
+    );
+    let user_index_canister::ai_app_user_keys::Response::Success(result) = response;
+    assert_eq!(result.keys.len(), 1);
+    assert_eq!(result.keys[0].user_id, setup.user_a.user_id);
+    assert_eq!(result.keys[0].public_key, recipient_a.pk_pem);
+}
+
+#[test]
+fn key_rotation_after_post_delivers_only_to_current_registered_key() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+        ..
+    } = wrapper.env();
+    let setup = setup(env, canister_ids, *controller);
+    let mut rng = StdRng::seed_from_u64(4244);
+    let old_key = new_recipient(&mut rng);
+    let current_key = new_recipient(&mut rng);
+    let confirmer_key = new_recipient(&mut rng);
+    set_key(
+        env,
+        canister_ids.user_index,
+        &setup.user_a,
+        setup.app.id,
+        old_key.pk_pem.clone(),
+    );
+    set_key(
+        env,
+        canister_ids.user_index,
+        &setup.user_b,
+        setup.app.id,
+        confirmer_key.pk_pem.clone(),
+    );
+    let message_id = post_card(
+        env,
+        &setup.user_a,
+        setup.group_id,
+        &setup.app,
+        Some(old_key.pk_pem.clone()),
+        vec![],
+        None,
+    );
+    set_key(
+        env,
+        canister_ids.user_index,
+        &setup.user_a,
+        setup.app.id,
+        current_key.pk_pem.clone(),
+    );
+    confirm(env, &setup.user_b, setup.group_id, message_id);
+    assert_eq!(
+        fetch_actions(env, setup.user_a.principal, setup.inbox, &old_key.fingerprint).len(),
+        0
+    );
+    assert_eq!(
+        fetch_actions(env, setup.user_a.principal, setup.inbox, &current_key.fingerprint).len(),
+        1
+    );
+    assert_eq!(
+        fetch_actions(env, setup.user_b.principal, setup.inbox, &confirmer_key.fingerprint).len(),
+        1
+    );
+}
+
+#[test]
+fn removed_member_is_not_in_confirm_time_recipient_set() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+        ..
+    } = wrapper.env();
+    let setup = setup(env, canister_ids, *controller);
+    let mut rng = StdRng::seed_from_u64(4245);
+    let recipient_a = new_recipient(&mut rng);
+    let recipient_b = new_recipient(&mut rng);
+    set_key(
+        env,
+        canister_ids.user_index,
+        &setup.user_a,
+        setup.app.id,
+        recipient_a.pk_pem.clone(),
+    );
+    set_key(
+        env,
+        canister_ids.user_index,
+        &setup.user_b,
+        setup.app.id,
+        recipient_b.pk_pem.clone(),
+    );
+    let message_id = post_card(
+        env,
+        &setup.user_a,
+        setup.group_id,
+        &setup.app,
+        None,
+        vec![recipient_b.pk_pem.clone()],
+        None,
+    );
+    let removed = client::group::remove_participant(
+        env,
+        setup.user_a.principal,
+        setup.group_id.into(),
+        &group_canister::remove_participant::Args {
+            user_id: setup.user_b.user_id,
+        },
+    );
+    assert!(matches!(removed, group_canister::remove_participant::Response::Success));
+    tick_many(env, 3);
+    confirm(env, &setup.user_a, setup.group_id, message_id);
+    assert_eq!(
+        fetch_actions(env, setup.user_a.principal, setup.inbox, &recipient_a.fingerprint).len(),
+        1
+    );
+    assert_eq!(
+        fetch_actions(env, setup.user_b.principal, setup.inbox, &recipient_b.fingerprint).len(),
+        0
+    );
+}
+
+#[test]
+fn malformed_member_key_is_rejected_at_ingress_and_missing_key_fails_atomically() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+        ..
+    } = wrapper.env();
+    let setup = setup(env, canister_ids, *controller);
+    let mut rng = StdRng::seed_from_u64(4246);
+    let recipient_a = new_recipient(&mut rng);
+    set_key(
+        env,
+        canister_ids.user_index,
+        &setup.user_a,
+        setup.app.id,
+        recipient_a.pk_pem.clone(),
+    );
+    let invalid: user_index_canister::set_my_ai_app_key::Response = client::execute_msgpack_update(
+        env,
+        setup.user_b.principal,
+        canister_ids.user_index,
+        "set_my_ai_app_key_msgpack",
+        &user_index_canister::set_my_ai_app_key::Args {
+            app_id: setup.app.id,
+            public_key: "-----BEGIN PUBLIC KEY-----\nnot-a-key\n-----END PUBLIC KEY-----\n".to_string(),
+        },
+    );
+    assert!(matches!(
+        invalid,
+        user_index_canister::set_my_ai_app_key::Response::InvalidRequest(_)
+    ));
+    let message_id = post_card(env, &setup.user_a, setup.group_id, &setup.app, None, vec![], None);
+    let response = confirm_raw(env, &setup.user_b, setup.group_id, message_id);
+    assert!(matches!(response, group_canister::respond_to_action_card::Response::Error(_)));
+    tick_many(env, 10);
+    assert_eq!(
+        fetch_actions(env, setup.user_a.principal, setup.inbox, &recipient_a.fingerprint).len(),
+        0
+    );
+    let cancel: group_canister::respond_to_action_card::Response = client::execute_msgpack_update(
+        env,
+        setup.user_b.principal,
+        setup.group_id.into(),
+        "respond_to_action_card_msgpack",
+        &group_canister::respond_to_action_card::Args {
+            thread_root_message_index: None,
+            message_id,
+            response: ActionCardResponse::Cancel,
+            confirm_payload_override: None,
+            confirmation_grant: None,
+        },
+    );
+    assert!(matches!(cancel, group_canister::respond_to_action_card::Response::Success(_)));
+}
+
+#[test]
+fn second_member_confirm_does_not_add_another_deposit() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+        ..
+    } = wrapper.env();
+    let setup = setup(env, canister_ids, *controller);
+    let mut rng = StdRng::seed_from_u64(4247);
+    let recipient_a = new_recipient(&mut rng);
+    let recipient_b = new_recipient(&mut rng);
+    set_key(
+        env,
+        canister_ids.user_index,
+        &setup.user_a,
+        setup.app.id,
+        recipient_a.pk_pem.clone(),
+    );
+    set_key(
+        env,
+        canister_ids.user_index,
+        &setup.user_b,
+        setup.app.id,
+        recipient_b.pk_pem.clone(),
+    );
+    let message_id = post_card(env, &setup.user_a, setup.group_id, &setup.app, None, vec![], None);
+    confirm(env, &setup.user_b, setup.group_id, message_id);
+    let second = confirm_raw(env, &setup.user_a, setup.group_id, message_id);
+    assert!(!matches!(
+        second,
+        group_canister::respond_to_action_card::Response::Success(_)
+    ));
+    tick_many(env, 10);
+    assert_eq!(
+        fetch_actions(env, setup.user_a.principal, setup.inbox, &recipient_a.fingerprint).len(),
+        1
+    );
+    assert_eq!(
+        fetch_actions(env, setup.user_b.principal, setup.inbox, &recipient_b.fingerprint).len(),
+        1
+    );
+}
+
+pub(crate) fn decrypt(
+    action: &action_inbox_canister::actions::StoredAction,
+    recipient_sk_pem: &str,
+) -> Result<Vec<u8>, String> {
+    let envelope = EciesEnvelope {
+        ephemeral_public_key: action.ephemeral_public_key.clone().into_vec(),
+        ciphertext: action.ciphertext.clone().into_vec(),
+    };
+    ecies_payload::decrypt(&envelope, recipient_sk_pem)
+}
+
+pub(crate) fn fetch_actions(
+    env: &mut PocketIc,
+    sender: Principal,
+    inbox: CanisterId,
+    fingerprint: &[u8; 32],
+) -> Vec<action_inbox_canister::actions::StoredAction> {
+    let response = client::action_inbox::actions(
+        env,
+        sender,
+        inbox,
+        &action_inbox_canister::actions::Args {
+            consumer_key_fingerprint: ByteBuf::from(fingerprint.to_vec()),
+            since_id: 0,
+            max_results: 100,
+        },
+    );
+    match response {
+        action_inbox_canister::actions::Response::Success(result) => result.actions,
+        action_inbox_canister::actions::Response::Error(error) => {
+            panic!("ActionInbox actions update failed: {error:?}")
+        }
+    }
+}
+
+pub(crate) fn inbox_deposit_fixture(
+    fingerprint: [u8; 32],
+    identity: [u8; 32],
+    payload_hash: [u8; 32],
+    created_at: u64,
+) -> action_inbox_canister::c2c_notify_actions::ActionDeposit {
+    action_inbox_canister::c2c_notify_actions::ActionDeposit {
+        idempotency_key: ByteBuf::from(identity.to_vec()),
+        payload_hash: ByteBuf::from(payload_hash.to_vec()),
+        card_context_hash: ByteBuf::from(vec![8; 32]),
+        app_revision: 1,
+        action_id: "sample.action".to_string(),
+        consumer_key_fingerprint: ByteBuf::from(fingerprint.to_vec()),
+        acknowledgement_secret_hash: ByteBuf::from(vec![5; 32]),
+        ephemeral_public_key: ByteBuf::from(vec![4; 65]),
+        ciphertext: ByteBuf::from(b"opaque-ciphertext".to_vec()),
+        signature_version: ecies_payload::ACTION_INBOX_SIGNATURE_VERSION_V4,
+        signing_key_id: ByteBuf::from(vec![
+            9;
+            action_inbox_canister::c2c_notify_actions::ACTION_SIGNING_KEY_ID_BYTES
+        ]),
+        oc_signature: ByteBuf::from(vec![0; 64]),
+        created_at,
+    }
+}
+
+pub(crate) fn install_inbox(
+    env: &mut PocketIc,
+    controller: Principal,
+    canister_ids: &crate::CanisterIds,
+    app_id: types::AiAppId,
+    authorized_depositor: CanisterId,
+) -> CanisterId {
+    let inbox = client::create_canister(env, controller);
+    install_inbox_at(env, controller, canister_ids, inbox, app_id, authorized_depositor);
+    inbox
+}
+
+pub(crate) fn install_inbox_at(
+    env: &mut PocketIc,
+    controller: Principal,
+    canister_ids: &crate::CanisterIds,
+    inbox: CanisterId,
+    app_id: types::AiAppId,
+    authorized_depositor: CanisterId,
+) {
+    client::install_canister(
+        env,
+        controller,
+        inbox,
+        wasms::ACTION_INBOX.clone(),
+        action_inbox_canister::init::Args {
+            app_id,
+            user_index_canister_id: canister_ids.user_index,
+            cycles_dispenser_canister_id: canister_ids.cycles_dispenser,
+            deployment_operators: vec![controller],
+            authorized_depositors: vec![authorized_depositor],
+            wasm_version: wasms::ACTION_INBOX.version,
+            test_mode: true,
+        },
+    );
+}

@@ -1,5 +1,11 @@
 <script lang="ts">
-    import type { MessageContent, MessageContext, OgPreview, RehydratedMessagePreview } from "@client";
+    import {
+        currentUserIdStore,
+        type MessageContent,
+        type MessageContext,
+        type OgPreview,
+        type RehydratedMessagePreview,
+    } from "@client";
     import { i18nKey } from "../../i18n/i18n";
     import AudioContent from "./AudioContent.svelte";
     import BlockedContent from "./BlockedContent.svelte";
@@ -16,6 +22,7 @@
     import P2PSwapContent from "./P2PSwapContent.svelte";
     import PlaceholderContent from "./PlaceholderContent.svelte";
     import RestrictedMessageContent from "./RestrictedMessageContent.svelte";
+    import ActionCardContent from "../../components/home/ActionCardContent.svelte";
     import PollContent from "./PollContent.svelte";
     import PrizeContent from "./PrizeContent.svelte";
     import PrizeWinnerContent from "./PrizeWinnerContent.svelte";
@@ -52,6 +59,11 @@
         onExpandMessage?: (() => void) | undefined;
         onRemovePreview?: (url: string) => void;
         onRegisterVote?: (vote: { type: "delete" | "register"; answerIndex: number }) => void;
+        onRespondToActionCard?: (
+            response: "confirm" | "cancel",
+            confirmPayloadOverride?: Uint8Array,
+            confirmationGrant?: Uint8Array,
+        ) => void | Promise<unknown>;
         ogPreviews?: OgPreview[];
         messagePreviews?: RehydratedMessagePreview[];
     }
@@ -81,6 +93,7 @@
         onExpandMessage = undefined,
         onRemovePreview,
         onRegisterVote,
+        onRespondToActionCard,
         ogPreviews = [],
         messagePreviews = [],
     }: Props = $props();
@@ -166,6 +179,15 @@
     <PrizeWinnerContent {content} />
 {:else if content.kind === "poll_content"}
     <PollContent {readonly} {me} {content} {senderId} {reply} {edited} {onRegisterVote} />
+{:else if content.kind === "action_card_content"}
+    <ActionCardContent
+        {content}
+        {readonly}
+        chatId={messageContext.chatId}
+        {messageId}
+        threadRootMessageIndex={messageContext.threadRootMessageIndex}
+        viewerId={$currentUserIdStore}
+        onRespond={onRespondToActionCard} />
 {:else if content.kind === "giphy_content"}
     <GiphyContent
         {me}

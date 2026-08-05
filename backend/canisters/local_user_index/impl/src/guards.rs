@@ -87,3 +87,14 @@ pub fn caller_is_platform_operator() -> Result<(), String> {
         Err("Caller is not a platform operator".to_string())
     }
 }
+
+// Like caller_is_platform_operator, but also allows any caller in test mode. Used for deploy-time config
+// (e.g. set_action_inbox_canister) so a local/test deployment — which has no registered platform operators
+// yet — can wire canister ids without first provisioning an operator user.
+pub fn caller_is_platform_operator_or_test_mode() -> Result<(), String> {
+    if read_state(|state| state.data.test_mode || state.is_caller_platform_operator()) {
+        Ok(())
+    } else {
+        Err("Caller is not a platform operator".to_string())
+    }
+}

@@ -1,19 +1,44 @@
 <script lang="ts">
     import { navigate } from "@utils/navigation";
-    import { confirmMessageDeletion } from "@src/stores/settings";
+    import {
+        manualExtractEnabled,
+        proposeAndPost,
+        proposeAndPostCandidate,
+        preflightAiActionForMessage,
+        runProposeFlow,
+        type AiActionCandidate,
+    } from "@utils/aiActionRunner";
+    import { canInferOnDevice } from "@utils/onDeviceInference";
+    import {
+        markSurfaceShownAfterConsent,
+        surfaceToOpenAfterConfirm,
+        type SurfaceOpening,
+    } from "@utils/aiAppSurfaces";
+    import {
+        autoProposeSuggestions,
+        dismissAutoProposeSuggestion,
+        muteAutoProposeInChat,
+    } from "@utils/autoPropose";
+    import {
+        autoProposeSuggestions as autoProposeEnabled,
+        confirmMessageDeletion,
+    } from "@src/stores/settings";
     import { trackedEffect } from "@src/utils/effects.svelte";
     import { keyboard } from "@stores/keyboard.svelte";
     import { popHistoryStateWithAction, pushDummyHistoryState } from "@utils/history";
     import type { ProfileLinkClickedEvent } from "@webcomponents/profileLink";
     import {
         Avatar,
+        Body,
         Column,
         Container,
+        ListAction,
         MenuTrigger,
         type PanDirection,
         Sheet,
     } from "component-lib";
     import {
+        type AiAppRegistration,
         type ChatIdentifier,
         chatListScopeStore,
         type ChatType,
@@ -38,6 +63,7 @@
     } from "@client";
     import { getContext, onDestroy, onMount, tick } from "svelte";
     import Reply from "svelte-material-icons/Reply.svelte";
+    import Robot from "svelte-material-icons/RobotOutline.svelte";
     import ShareOutline from "svelte-material-icons/ShareOutline.svelte";
     import SquareEditOutline from "svelte-material-icons/SquareEditOutline.svelte";
     import { i18nKey } from "../../i18n/i18n";
@@ -52,6 +78,9 @@
     import BotProfile, { type BotProfileProps } from "../bots/BotProfile.svelte";
     import Checkbox from "../Checkbox.svelte";
     import Translatable from "../Translatable.svelte";
+    import AiAppLinkSheet from "./AiAppLinkSheet.svelte";
+    import AiAppSurfaceSheet from "./AiAppSurfaceSheet.svelte";
+    import AutoProposeChip from "./AutoProposeChip.svelte";
     import ChatMessageContent from "./ChatMessageContent.svelte";
     import ChatMessageMenu from "./ChatMessageMenu.svelte";
     import ChatMessageOptions from "./ChatMessageOptions.svelte";
@@ -236,6 +265,95 @@
         publish("replyPrivatelyTo", createReplyContext());
     }
 
+    // The raw-JSON extraction prompt is a TEST SEAM only (Issue 1): real users with no on-device
+    // model must never see a raw JSON box — they're guided to set one up (runProposeFlow says so). It
+    // runs solely when `manualExtractEnabled()` is set (localStorage flag / ?manualExtract=1), which
+    // the automated journey harness uses to drive the confirm → deposit cycle without a model.
+    function promptForExtraction():
+        | Record<string, unknown>
+        | Record<string, unknown>[]
+        | undefined {
+        if (!manualExtractEnabled()) return undefined;
+        const raw = window.prompt(
+            'Enter the action\'s fields as JSON to propose it, e.g. {"amount":20,"currency":"USD"}',
+            "{}",
+        );
+        if (raw === null) return undefined;
+        try {
+            return JSON.parse(raw) as Record<string, unknown> | Record<string, unknown>[];
+        } catch {
+            toastStore.showFailureToast(i18nKey("That isn't valid JSON"));
+            return undefined;
+        }
+    }
+
+    // More than one enabled app action applies to this message — the user picks one from a sheet.
+    // The sheets below are bridged back to the awaiting flow through their `resolve`: the flow keeps
+    // the in-flight extraction, so neither sheet has to carry it, and — the part that matters — a
+    // DISMISSED sheet still answers, instead of stranding the propose half-finished.
+    let aiActionChooser = $state<{ candidates: AiActionCandidate[] } | undefined>(undefined);
+    let chooserResolve: ((candidate: AiActionCandidate | undefined) => void) | undefined;
+
+    function closeChooser(candidate: AiActionCandidate | undefined) {
+        aiActionChooser = undefined;
+        const resolve = chooserResolve;
+        chooserResolve = undefined;
+        resolve?.(candidate);
+    }
+
+    function chooseCandidate(
+        candidates: AiActionCandidate[],
+    ): Promise<AiActionCandidate | undefined> {
+        return new Promise<AiActionCandidate | undefined>((resolve) => {
+            chooserResolve = resolve;
+            aiActionChooser = { candidates };
+        });
+    }
+
+    // A per-user-keys app needs the one-time link-code pairing before its actions can run — the
+    // consent sheet is showing; the propose that triggered it resumes when the link completes.
+    let aiAppLink = $state<AiAppRegistration | undefined>(undefined);
+    let linkResolve: ((linked: boolean) => void) | undefined;
+
+    function closeAiAppLink(linked: boolean) {
+        aiAppLink = undefined;
+        const resolve = linkResolve;
+        linkResolve = undefined;
+        resolve?.(linked);
+    }
+
+    // The sheet only reports `true` once the key is registered, so the flow can re-propose on the
+    // strength of this answer alone.
+    function linkApp(app: AiAppRegistration): Promise<boolean> {
+        return new Promise<boolean>((resolve) => {
+            linkResolve = resolve;
+            aiAppLink = app;
+        });
+    }
+
+    // A "sheet"-display chat_link surface to host after a successful confirm (see
+    // openSurfaceAfterConfirm below).
+    let confirmSurface = $state<SurfaceOpening | undefined>(undefined);
+
+    // The decisions live in runProposeFlow (utils/aiActionRunner), shared with the classic tree; this
+    // component supplies only the surfaces this tree has — the chooser and consent sheets. Both trees
+    // used to keep their own copy of the flow, and this one was left with a chooser branch that
+    // returned without a word: two candidates and no model meant a button that did nothing.
+    async function runAiActionHandler() {
+        await runProposeFlow({
+            preflight: () => preflightAiActionForMessage(client, messageContext.chatId),
+            canInfer: canInferOnDevice,
+            promptForExtraction,
+            propose: (extraction) =>
+                proposeAndPost(client, messageContext, msg.content, extraction),
+            proposeCandidate: (candidate, extraction) =>
+                proposeAndPostCandidate(client, messageContext, msg.content, candidate, extraction),
+            chooseCandidate,
+            linkApp,
+            toast: (message) => toastStore.showFailureToast(i18nKey(message)),
+        });
+    }
+
     function cancelReminder(content: MessageReminderCreatedContent) {
         client
             .cancelMessageReminder(msg.messageId, { ...content, hidden: true })
@@ -347,6 +465,64 @@
             });
     }
 
+    function onRespondToActionCard(
+        response: "confirm" | "cancel",
+        confirmPayloadOverride?: Uint8Array,
+        confirmationGrant?: Uint8Array,
+    ): Promise<void> {
+        // Capture before the async round-trip: the card content is replaced when its state
+        // refreshes to "confirmed". The promise is returned so the card can show a spinner and lock
+        // its buttons until the confirm/cancel (and its downstream deposit) resolves.
+        const actionId =
+            msg.content.kind === "action_card_content" ? msg.content.actionId : undefined;
+        const appId = msg.content.kind === "action_card_content" ? msg.content.appId : undefined;
+        const appRevision =
+            msg.content.kind === "action_card_content" ? msg.content.appRevision : undefined;
+        return client
+            .respondToActionCard(
+                chatId,
+                threadRootMessageIndex,
+                msg.messageId,
+                response,
+                confirmPayloadOverride,
+                confirmationGrant,
+            )
+            .then((success) => {
+                if (!success) {
+                    // A failed confirm (usually a deposit error) now leaves the card Pending on the
+                    // canister rather than committing "confirmed" — surface it so the user can retry.
+                    if (response === "confirm") {
+                        toastStore.showFailureToast(i18nKey("aiActions.confirmFailed"));
+                    }
+                    return;
+                }
+                if (response === "confirm" && actionId !== undefined) {
+                    void openSurfaceAfterConfirm(actionId, appId, appRevision);
+                }
+            });
+    }
+
+    // After the first successfully confirmed action in a chat, the owning app's "chat_link"
+    // surface (when it declares one) opens so the user can finish configuring the chat inside the
+    // app — "sheet" surfaces embed in a bottom sheet, "external" ones open the system browser.
+    // surfaceToOpenAfterConfirm persists the once-per-(app, chat) marker.
+    async function openSurfaceAfterConfirm(
+        actionId: string,
+        appId: number | undefined,
+        appRevision: bigint | undefined,
+    ) {
+        const opening = await surfaceToOpenAfterConfirm(
+            client,
+            chatId,
+            actionId,
+            appId,
+            appRevision,
+            $currentUserIdStore,
+        );
+        if (opening === undefined) return;
+        confirmSurface = opening;
+    }
+
     function reportMessage() {
         showReport = true;
     }
@@ -419,6 +595,23 @@
 
     let longpressCooldown = $derived(scrollStatus.isCooldown);
 
+    // Auto-propose: the matcher (utils/autoPropose.ts) flagged this message as matching a
+    // registered action's trigger keywords — render the under-bubble chip. Tapping it re-uses the
+    // exact same propose path as the message menu.
+    let autoProposeSuggestion = $derived(
+        $autoProposeEnabled && !inert ? $autoProposeSuggestions.get(msg.messageId) : undefined,
+    );
+
+    function proposeSuggestedAiAction() {
+        dismissAutoProposeSuggestion(msg.messageId);
+        void runAiActionHandler();
+    }
+
+    function muteAutoProposeSuggestions() {
+        muteAutoProposeInChat(chatId);
+        toastStore.showSuccessToast(i18nKey("aiApps.autoPropose.muted"));
+    }
+
     async function deleteMessage(deletionConfirmed: boolean) {
         if (failed) {
             onDeleteFailedMessage?.();
@@ -476,8 +669,8 @@
                 id="dont_show"
                 label={i18nKey("install.dontShow")}
                 checked={!$confirmMessageDeletion}
-                onChange={confirmMessageDeletion.toggle}>
-            </Checkbox>
+                onChange={confirmMessageDeletion.toggle}
+            ></Checkbox>
         </Container>
     </AreYouSure>
 {/if}
@@ -487,16 +680,19 @@
         onDismiss={() => {
             showEmojiPicker = false;
             popHistoryStateWithAction("emoji_picker_action");
-        }}>
+        }}
+    >
         <div
             class="emoji_picker_wrapper"
-            style:padding-bottom={keyboard.visible ? `${keyboard.currentHeight - 64}px` : "0"}>
+            style:padding-bottom={keyboard.visible ? `${keyboard.currentHeight - 64}px` : "0"}
+        >
             <Column height="fill" overflow="auto" minHeight={keyboard.visible ? "35vh" : "50vh"}>
                 <EmojiPicker
                     onEmojiSelected={selectReaction}
                     onSkintoneChanged={(tone) => quickReactions.reload(tone)}
                     supportCustom={true}
-                    mode={"reaction"} />
+                    mode={"reaction"}
+                />
             </Column>
         </div>
     </Sheet>
@@ -543,10 +739,50 @@
                 onCancelReminder={cancelReminder}
                 onDeleteMessage={deleteMessage}
                 onRemindMe={remindMe}
+                onRunAiAction={runAiActionHandler}
                 {onDeleteFailedMessage}
-                onOptionSelected={() => (isSheetMenuOpen = false)} />
+                onOptionSelected={() => (isSheetMenuOpen = false)}
+            />
         </Column>
     </Sheet>
+{/if}
+
+{#if aiActionChooser !== undefined}
+    <Sheet onDismiss={() => closeChooser(undefined)}>
+        <Column gap="md" padding={["lg", "lg", "xxl", "lg"]} maxHeight="70vh">
+            <Body fontWeight={"bold"}>
+                <Translatable resourceKey={i18nKey("aiApps.chooseAction")} />
+            </Body>
+            {#each aiActionChooser.candidates as candidate (`${candidate.app.id}-${candidate.action.name}`)}
+                <ListAction onClick={() => closeChooser(candidate)}>
+                    {#snippet icon(color)}
+                        <Robot {color} />
+                    {/snippet}
+                    {candidate.app.manifest.name} — {candidate.action.name}
+                </ListAction>
+            {/each}
+        </Column>
+    </Sheet>
+{/if}
+
+{#if aiAppLink !== undefined}
+    <AiAppLinkSheet
+        app={aiAppLink}
+        onDismiss={() => closeAiAppLink(false)}
+        onLinked={() => closeAiAppLink(true)}
+    />
+{/if}
+
+{#if confirmSurface !== undefined}
+    <AiAppSurfaceSheet
+        title={confirmSurface.app.manifest.name}
+        url={confirmSurface.url}
+        display={confirmSurface.surface.display}
+        dataDisclosures={confirmSurface.dataDisclosures}
+        onConsent={() =>
+            markSurfaceShownAfterConsent(confirmSurface!, chatId, $currentUserIdStore)}
+        onDismiss={() => (confirmSurface = undefined)}
+    />
 {/if}
 
 {#if showRemindMe}
@@ -554,7 +790,8 @@
         {chatId}
         {eventIndex}
         {threadRootMessageIndex}
-        onClose={() => (showRemindMe = false)} />
+        onClose={() => (showRemindMe = false)}
+    />
 {/if}
 
 {#if showReport}
@@ -563,7 +800,8 @@
         messageId={msg.messageId}
         {chatId}
         {canDelete}
-        onClose={() => (showReport = false)} />
+        onClose={() => (showReport = false)}
+    />
 {/if}
 
 {#if debug}
@@ -607,13 +845,15 @@
                           oncommit: onPanCommit,
                           onmove: onPanMove,
                           isScrolling: scrollStatus.isScrolling || scrollStatus.isCooldown,
-                      }}>
+                      }}
+            >
                 {#if showAvatar}
                     <div class:first class="avatar">
                         <Avatar
                             onClick={openUserProfile}
                             url={client.userAvatarUrl(sender)}
-                            size={"sm"}></Avatar>
+                            size={"sm"}
+                        ></Avatar>
                     </div>
                 {/if}
                 {@const hasThread = threadSummary !== undefined && !inThread}
@@ -627,12 +867,14 @@
                     maxWidth={chatId.kind === "direct_chat" ? "78vw" : "75vw"}
                     gap={"xxs"}
                     minWidth={"6rem"}
-                    direction={"vertical"}>
+                    direction={"vertical"}
+                >
                     {#if panDirection}
                         <div
                             class={`pan-action ${panDirection}`}
                             class:active={panFactor >= 1}
-                            style:opacity={panFactor}>
+                            style:opacity={panFactor}
+                        >
                             {#if me && canEdit && panDirection === "left"}
                                 <SquareEditOutline size="1.5rem" />
                             {:else if !me && canShare && panDirection === "left"}
@@ -650,7 +892,8 @@
                         longpressAnimation="scale"
                         position="bottom"
                         customContent={true}
-                        {longpressCooldown}>
+                        {longpressCooldown}
+                    >
                         {#snippet menuItems()}
                             {#if showChatMenu && intersecting}
                                 <ChatMessageMenu
@@ -698,8 +941,10 @@
                                     onCancelReminder={cancelReminder}
                                     onDeleteMessage={deleteMessage}
                                     onRemindMe={remindMe}
+                                    onRunAiAction={runAiActionHandler}
                                     onOpenSheetMenu={openSheetMenu}
-                                    {onDeleteFailedMessage} />
+                                    {onDeleteFailedMessage}
+                                />
                             {/if}
                         {/snippet}
                         <MessageBubble
@@ -726,14 +971,16 @@
                             {readByThem}
                             {readByMe}
                             {onGoToMessageIndex}
-                            {chatType}>
+                            {chatType}
+                        >
                             {#snippet repliesTo(reply)}
                                 <RepliesTo
                                     {contentWidth}
                                     {readonly}
                                     {chatId}
                                     {intersecting}
-                                    repliesTo={reply} />
+                                    repliesTo={reply}
+                                />
                             {/snippet}
 
                             {#snippet messageContent(me)}
@@ -756,9 +1003,11 @@
                                     blockLevelMarkdown={msg.blockLevelMarkdown}
                                     {onRemovePreview}
                                     {onRegisterVote}
+                                    {onRespondToActionCard}
                                     {onExpandMessage}
                                     ogPreviews={msg.ogPreviews}
-                                    messagePreviews={msg.messagePreviews} />
+                                    messagePreviews={msg.messagePreviews}
+                                />
                             {/snippet}
                         </MessageBubble>
                     </MenuTrigger>
@@ -768,7 +1017,8 @@
                             {threadSummary}
                             {chatId}
                             threadRootMessageIndex={msg.messageIndex}
-                            {me} />
+                            {me}
+                        />
                     {/if}
                     {#if hasReactions}
                         <Reactions
@@ -776,7 +1026,8 @@
                             onClick={({ reaction }) => toggleReaction(false, reaction)}
                             {intersecting}
                             reactions={msg.reactions}
-                            offset={!hasThread}></Reactions>
+                            offset={!hasThread}
+                        ></Reactions>
                     {/if}
                     {#if hasTips && !inert}
                         <Tips
@@ -784,7 +1035,18 @@
                             tips={msg.tips}
                             onClick={tipMessage}
                             {canTip}
-                            offset={!hasThread} />
+                            offset={!hasThread}
+                        />
+                    {/if}
+                    {#if autoProposeSuggestion !== undefined}
+                        <AutoProposeChip
+                            {me}
+                            title={autoProposeSuggestion.title}
+                            offset={!hasThread && !hasReactions && !hasTips}
+                            onPropose={proposeSuggestedAiAction}
+                            onDismiss={() => dismissAutoProposeSuggestion(msg.messageId)}
+                            onMute={muteAutoProposeSuggestions}
+                        />
                     {/if}
                 </Container>
             </Container>
@@ -795,7 +1057,8 @@
             <BotMessageContext
                 botName={"cockpiss"}
                 botCommand={senderContext.command}
-                finalised={senderContext.finalised} />
+                finalised={senderContext.finalised}
+            />
         </div>
     {/if}
 {/if}

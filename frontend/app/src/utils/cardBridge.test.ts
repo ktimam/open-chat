@@ -1,0 +1,881 @@
+import { describe, expect, test, vi } from "vitest";
+import {
+    buildCardBusy,
+    buildCardBootstrap,
+    buildCardPrivateContextRequest,
+    buildCardInit,
+    beginCardConfirmationAttempt,
+    beginCardCapabilityAttempt,
+    cardAttemptKey,
+    cardConfirmationAttemptStillCurrent,
+    cardCapabilityAttemptStillCurrent,
+    canAcceptCardPrivateContextReady,
+    canApproveCardRequest,
+    canonicalCardApprovalSummary,
+    cardResponseForApproval,
+    cardApprovalRequestFromMessage,
+    cardResizeHeightFromMessage,
+    clampCardHeight,
+    decodeCardRecipientPublicKey,
+    decodeConfirmPayload,
+    deriveCardOrigin,
+    isCardConfirmPayload,
+    isRecord,
+    isEmbeddedSurfaceConsentCurrent,
+    isAppCardContentAttested,
+    isCardBridgeEventForFrame,
+    isCardPublicReadyMessage,
+    encodeCardConfirmPayload,
+    normalizeAiAppSurfaceUrl,
+    reverseMapRows,
+    snapshotCardConfirmPayload,
+    startCardHandshakeTimeout,
+    supportsCredentiallessIframe,
+    visibleRows,
+    type CardInitContext,
+} from "./cardBridge";
+
+describe("deriveCardOrigin", () => {
+    test("returns the origin for an https url", () => {
+        expect(deriveCardOrigin("https://app.example/openchat/card?x=1")).toBe(
+            "https://app.example",
+        );
+    });
+    test("keeps a non-default port in the origin", () => {
+        expect(
+            deriveCardOrigin("http://localhost:5341/openchat/card", {
+                allowLocalDevelopment: true,
+            }),
+        ).toBe(
+            "http://localhost:5341",
+        );
+    });
+    test("returns undefined for an unparseable url", () => {
+        expect(deriveCardOrigin("not a url")).toBeUndefined();
+    });
+    test("returns undefined for a non-http(s) scheme", () => {
+        expect(deriveCardOrigin("javascript:alert(1)")).toBeUndefined();
+        expect(deriveCardOrigin("data:text/html,<h1>x</h1>")).toBeUndefined();
+    });
+    test("rejects credential-bearing embed URLs", () => {
+        expect(deriveCardOrigin("https://user:password@app.example/openchat/card")).toBeUndefined();
+    });
+    test("rejects plaintext http on a non-loopback host (downgrade vector)", () => {
+        expect(deriveCardOrigin("http://app.example/openchat/card")).toBeUndefined();
+    });
+    test("keeps allowing loopback http for local dev", () => {
+        const local = { allowLocalDevelopment: true };
+        expect(deriveCardOrigin("http://localhost:5341/openchat/card", local)).toBe(
+            "http://localhost:5341",
+        );
+        expect(deriveCardOrigin("http://127.0.0.1:3000/openchat/card", local)).toBe(
+            "http://127.0.0.1:3000",
+        );
+    });
+    test("rejects non-public literal hosts unless explicit local development is enabled", () => {
+        for (const host of [
+            "localhost",
+            "127.0.0.1",
+            "2130706433", // encoded IPv4 normalized by WHATWG URL
+            "10.0.0.1",
+            "172.16.2.3",
+            "192.168.1.2",
+            "169.254.169.254",
+            "192.0.2.1",
+            "198.51.100.1",
+            "203.0.113.1",
+            "[::1]",
+            "[fc00::1]",
+            "[fe80::1]",
+            "[::ffff:127.0.0.1]",
+        ]) {
+            expect(deriveCardOrigin(`https://${host}/card`), host).toBeUndefined();
+        }
+        expect(
+            deriveCardOrigin("https://192.168.1.2/card", { allowLocalDevelopment: true }),
+        ).toBe("https://192.168.1.2");
+    });
+    test("rejects a card origin equal to the OpenChat host origin (must be third-party)", () => {
+        expect(
+            deriveCardOrigin("https://oc.example/openchat/card", "https://oc.example"),
+        ).toBeUndefined();
+        // A different origin under the same host detection still resolves.
+        expect(deriveCardOrigin("https://app.example/openchat/card", "https://oc.example")).toBe(
+            "https://app.example",
+        );
+    });
+});
+
+describe("isCardBridgeEventForFrame", () => {
+    const frame = {};
+    const current = {
+        source: frame,
+        origin: "null",
+        data: { type: "oc:card:ready", version: 2, frameNonce: "nonce-current" },
+    };
+
+    test("requires the exact frame source, opaque sandbox origin, and current nonce", () => {
+        expect(isCardBridgeEventForFrame(current, frame, "null", "nonce-current")).toBe(true);
+        expect(isCardBridgeEventForFrame(current, {}, "null", "nonce-current")).toBe(false);
+        expect(isCardBridgeEventForFrame(current, frame, "https://app.example", "nonce-current")).toBe(
+            false,
+        );
+        expect(isCardBridgeEventForFrame(current, frame, "null", "nonce-other")).toBe(false);
+    });
+
+    test("rejects replay after navigation and tampered non-record messages", () => {
+        expect(
+            isCardBridgeEventForFrame(
+                { ...current, data: { ...current.data, frameNonce: "nonce-before-navigation" } },
+                frame,
+                "null",
+                "nonce-after-navigation",
+            ),
+        ).toBe(false);
+        expect(
+            isCardBridgeEventForFrame(
+                { source: frame, origin: "null", data: "nonce-after-navigation" },
+                frame,
+                "null",
+                "nonce-after-navigation",
+            ),
+        ).toBe(false);
+    });
+});
+
+describe("private-context consent gate", () => {
+    const allowed = {
+        explicitlyRequested: true,
+        featureAvailable: true,
+        alreadyGranted: false,
+        pending: true,
+        readonly: false,
+    };
+
+    test("accepts a recipient key only after the separate user click", () => {
+        expect(canAcceptCardPrivateContextReady(allowed)).toBe(true);
+        expect(
+            canAcceptCardPrivateContextReady({ ...allowed, explicitlyRequested: false }),
+        ).toBe(false);
+    });
+
+    test("also rejects disabled, replayed, consumed, and read-only sessions", () => {
+        expect(canAcceptCardPrivateContextReady({ ...allowed, featureAvailable: false })).toBe(false);
+        expect(canAcceptCardPrivateContextReady({ ...allowed, alreadyGranted: true })).toBe(false);
+        expect(canAcceptCardPrivateContextReady({ ...allowed, pending: false })).toBe(false);
+        expect(canAcceptCardPrivateContextReady({ ...allowed, readonly: true })).toBe(false);
+    });
+});
+
+describe("full-card content attestation", () => {
+    test("directory-coordinate provenance does not attest forged display/payload content", () => {
+        const forged = {
+            appVerified: true,
+            title: "Trusted-looking title",
+            rows: [{ label: "Amount", value: "1" }],
+            confirmPayload: new TextEncoder().encode('{"amount":999}'),
+        };
+        expect(isAppCardContentAttested(forged)).toBe(false);
+        expect(isAppCardContentAttested({ ...forged, appContentVerified: false })).toBe(false);
+        expect(isAppCardContentAttested({ ...forged, appContentVerified: true })).toBe(true);
+    });
+});
+
+describe("embedded surface consent binding", () => {
+    test("a click for normalized URL A never auto-loads changed URL B", () => {
+        const a = "https://app.example/a";
+        const b = "https://app.example/b";
+        expect(isEmbeddedSurfaceConsentCurrent(a, a)).toBe(true);
+        expect(isEmbeddedSurfaceConsentCurrent(a, b)).toBe(false);
+        expect(isEmbeddedSurfaceConsentCurrent(a, undefined)).toBe(false);
+        expect(isEmbeddedSurfaceConsentCurrent(undefined, b)).toBe(false);
+    });
+
+    test("feature-detects credentialless and fails closed when unsupported", () => {
+        expect(supportsCredentiallessIframe({ credentialless: false })).toBe(true);
+        expect(supportsCredentiallessIframe({})).toBe(false);
+    });
+
+    test("normalizes browser and iframe destinations through the same fail-closed policy", () => {
+        expect(normalizeAiAppSurfaceUrl("https://app.example/a/../card?x=1")).toBe(
+            "https://app.example/card?x=1",
+        );
+        for (const url of [
+            "not a url",
+            "http://app.example/card",
+            "https://user:password@app.example/card",
+            "https://127.0.0.1/card",
+            "https://2130706433/card",
+            "https://[::1]/card",
+        ]) {
+            expect(normalizeAiAppSurfaceUrl(url)).toBeUndefined();
+        }
+        expect(
+            normalizeAiAppSurfaceUrl("http://127.0.0.1:5000/card", {
+                allowLocalDevelopment: true,
+            }),
+        ).toBe("http://127.0.0.1:5000/card");
+    });
+});
+
+describe("decodeConfirmPayload", () => {
+    const enc = (o: unknown) => new TextEncoder().encode(JSON.stringify(o));
+
+    test("decodes a JSON object", () => {
+        expect(decodeConfirmPayload(enc({ amount: 20, currency: "USD" }))).toEqual({
+            amount: 20,
+            currency: "USD",
+        });
+    });
+    test("empty / absent bytes -> {}", () => {
+        expect(decodeConfirmPayload(undefined)).toEqual({});
+        expect(decodeConfirmPayload(new Uint8Array())).toEqual({});
+    });
+    test("non-JSON bytes -> {}", () => {
+        expect(decodeConfirmPayload(new TextEncoder().encode("{not json"))).toEqual({});
+    });
+    test("a JSON array (non-object top level) -> {}", () => {
+        expect(decodeConfirmPayload(enc([1, 2, 3]))).toEqual({});
+    });
+});
+
+describe("isRecord", () => {
+    test("true only for plain objects", () => {
+        expect(isRecord({})).toBe(true);
+        expect(isRecord({ a: 1 })).toBe(true);
+        expect(isRecord([])).toBe(false);
+        expect(isRecord(null)).toBe(false);
+        expect(isRecord("x")).toBe(false);
+        expect(isRecord(3)).toBe(false);
+    });
+});
+
+describe("isCardConfirmPayload", () => {
+    test("accepts only object or array payloads", () => {
+        expect(isCardConfirmPayload({ amount: 1 })).toBe(true);
+        expect(isCardConfirmPayload([{ amount: 1 }])).toBe(true);
+        expect(isCardConfirmPayload(undefined)).toBe(false);
+        expect(isCardConfirmPayload('{"amount":1}')).toBe(false);
+        expect(isCardConfirmPayload(null)).toBe(false);
+    });
+});
+
+describe("buildCardInit", () => {
+    test("wraps data + context in the init envelope", () => {
+        const context: CardInitContext = {
+            appId: 7,
+            appRevision: 123n,
+            actionId: "sample.add",
+            theme: "dark",
+            readonly: false,
+            privateContext: {
+                capability: "opaque",
+                expiresAt: 456n,
+                context: {
+                    contextVersion: 1,
+                    appSubject: "subject",
+                    chatHandle: "chat",
+                    messageHandle: "message",
+                    appId: 7,
+                    appRevision: 123n,
+                    actionId: "sample.add",
+                },
+            },
+        };
+        expect(buildCardInit({ amount: 5 }, context, "nonce-1")).toEqual({
+            type: "oc:card:init",
+            version: 2,
+            frameNonce: "nonce-1",
+            data: { amount: 5 },
+            context,
+        });
+    });
+});
+
+describe("private card-context handshake", () => {
+    const nonce = "host-generated-nonce";
+    const bytes = Uint8Array.from({ length: 48 }, (_, i) => i);
+    const key = btoa(String.fromCharCode(...bytes))
+        .replaceAll("+", "-")
+        .replaceAll("/", "_")
+        .replaceAll("=", "");
+
+    test("public ready v2 needs no recipient key", () => {
+        expect(isCardPublicReadyMessage({ type: "oc:card:ready", version: 2, frameNonce: nonce }, nonce)).toBe(true);
+        expect(isCardPublicReadyMessage({ type: "oc:card:ready", version: 1, frameNonce: nonce }, nonce)).toBe(false);
+        expect(isCardPublicReadyMessage({ type: "oc:card:ready", version: 2, frameNonce: "wrong" }, nonce)).toBe(false);
+        expect(buildCardPrivateContextRequest(nonce)).toEqual({
+            type: "oc:card:private-context-request",
+            version: 2,
+            frameNonce: nonce,
+        });
+    });
+
+    test("keeps an app-defined Type out of public rows, init, URL, and the opaque private grant", () => {
+        const privateValue = "Confidential sample";
+        const publicData = reverseMapRows(
+            [
+                { label: "Amount", value: "350" },
+                { label: "Currency", value: "USD" },
+            ],
+            { Amount: "amount", Currency: "currency" },
+        );
+        const context: CardInitContext = {
+            appId: 7,
+            appRevision: 123n,
+            actionId: "sample.add",
+            theme: "dark",
+            readonly: true,
+            privateContext: {
+                capability: "opaque-capability",
+                expiresAt: 456n,
+                context: {
+                    contextVersion: 1,
+                    appSubject: "subject-handle",
+                    chatHandle: "chat-handle",
+                    messageHandle: "message-handle",
+                    appId: 7,
+                    appRevision: 123n,
+                    actionId: "sample.add",
+                },
+            },
+        };
+        const init = buildCardInit(publicData, context, nonce);
+        const destination = normalizeAiAppSurfaceUrl("https://app.example/card?app=7")!;
+        const publicChannels = JSON.stringify(
+            {
+                rows: Object.entries(publicData),
+                init: {
+                    ...init,
+                    context: {
+                        ...init.context,
+                        appRevision: init.context.appRevision.toString(),
+                        privateContext: init.context.privateContext && {
+                            ...init.context.privateContext,
+                            expiresAt: init.context.privateContext.expiresAt.toString(),
+                            context: {
+                                ...init.context.privateContext.context,
+                                appRevision: init.context.privateContext.context.appRevision.toString(),
+                            },
+                        },
+                    },
+                },
+                destination,
+                privateRequest: buildCardPrivateContextRequest(nonce),
+            },
+        );
+        expect(publicChannels).not.toContain('"Type"');
+        expect(publicChannels).not.toContain(privateValue);
+        expect(init.context).not.toHaveProperty("chat");
+        expect(init.context).not.toHaveProperty("messageId");
+        expect(init.context).not.toHaveProperty("threadRootMessageIndex");
+        // OpenChat delivers only opaque authority. The registered app redeems and decrypts its own
+        // private payload after authorization; OpenChat never hydrates the private value itself.
+        expect(init.context.privateContext).toEqual({
+            capability: "opaque-capability",
+            expiresAt: 456n,
+            context: {
+                contextVersion: 1,
+                appSubject: "subject-handle",
+                chatHandle: "chat-handle",
+                messageHandle: "message-handle",
+                appId: 7,
+                appRevision: 123n,
+                actionId: "sample.add",
+            },
+        });
+    });
+
+    test("accepts private-context-ready v2 with a bounded opaque scheme + unpadded base64url key", () => {
+        expect(
+            decodeCardRecipientPublicKey({
+                type: "oc:card:private-context-ready",
+                version: 2,
+                frameNonce: nonce,
+                privateContext: { recipientKeyScheme: "bls-g1-v1", recipientPublicKey: key },
+            }, nonce),
+        ).toEqual({ scheme: "bls-g1-v1", publicKey: bytes });
+        expect(
+            decodeCardRecipientPublicKey({ type: "oc:card:private-context-ready", version: 1 }, nonce),
+        ).toBeUndefined();
+        expect(
+            decodeCardRecipientPublicKey({
+                type: "oc:card:private-context-ready",
+                version: 2,
+                frameNonce: nonce,
+                privateContext: {
+                    recipientKeyScheme: "UPPERCASE NOT ALLOWED",
+                    recipientPublicKey: key,
+                },
+            }, nonce),
+        ).toBeUndefined();
+        expect(
+            decodeCardRecipientPublicKey({
+                type: "oc:card:private-context-ready",
+                version: 2,
+                frameNonce: nonce,
+                privateContext: {
+                    recipientKeyScheme: "bls-g1-v1",
+                    recipientPublicKey: `${key}=token`,
+                },
+            }, nonce),
+        ).toBeUndefined();
+        expect(
+            decodeCardRecipientPublicKey(
+                {
+                    type: "oc:card:private-context-ready",
+                    version: 2,
+                    frameNonce: "attacker",
+                    privateContext: {
+                        recipientKeyScheme: "bls-g1-v1",
+                        recipientPublicKey: key,
+                    },
+                },
+                nonce,
+            ),
+        ).toBeUndefined();
+    });
+
+    test("keeps OpenChat generic while rejecting tiny and oversized keys", () => {
+        const encode = (value: Uint8Array) =>
+            btoa(String.fromCharCode(...value))
+                .replaceAll("+", "-")
+                .replaceAll("/", "_")
+                .replaceAll("=", "");
+        const message = (value: Uint8Array) => ({
+            type: "oc:card:private-context-ready",
+            version: 2,
+            frameNonce: nonce,
+            privateContext: {
+                recipientKeyScheme: "x25519-v1",
+                recipientPublicKey: encode(value),
+            },
+        });
+        expect(decodeCardRecipientPublicKey(message(new Uint8Array(16)), nonce)?.publicKey).toHaveLength(16);
+        expect(decodeCardRecipientPublicKey(message(new Uint8Array(512)), nonce)?.publicKey).toHaveLength(512);
+        expect(decodeCardRecipientPublicKey(message(new Uint8Array(15)), nonce)).toBeUndefined();
+        expect(decodeCardRecipientPublicKey(message(new Uint8Array(513)), nonce)).toBeUndefined();
+    });
+
+    test("latches repeated ready and discards navigation, key/card changes, and teardown", () => {
+        const binding = {
+            frameNonce: "n1",
+            recipientKeyScheme: "x25519-v1",
+            recipientPublicKey: new Uint8Array(32),
+            cardKey: "group:g|thread:-|message:1|app:7@2|action:add",
+        };
+        const attempt = beginCardCapabilityAttempt(undefined, binding)!;
+        expect(beginCardCapabilityAttempt(attempt, binding)).toBeUndefined();
+        expect(cardCapabilityAttemptStillCurrent(attempt, binding, true)).toBe(true);
+        expect(
+            cardCapabilityAttemptStillCurrent(attempt, { ...binding, frameNonce: "n2" }, true),
+        ).toBe(false);
+        expect(
+            cardCapabilityAttemptStillCurrent(
+                attempt,
+                { ...binding, recipientPublicKey: new Uint8Array(32).fill(1) },
+                true,
+            ),
+        ).toBe(false);
+        expect(
+            cardCapabilityAttemptStillCurrent(
+                attempt,
+                { ...binding, cardKey: `${binding.cardKey}:changed` },
+                true,
+            ),
+        ).toBe(false);
+        expect(cardCapabilityAttemptStillCurrent(attempt, binding, false)).toBe(false);
+    });
+});
+
+describe("host-owned card approval", () => {
+    test("partitions attempt identity across viewer, chat, message, thread, app, revision, and action", () => {
+        const base = {
+            viewerId: "viewer-a",
+            chat: { kind: "channel", communityId: "community-a", channelId: 7 } as const,
+            messageId: 99n,
+            threadRootMessageIndex: 3,
+            appId: 5,
+            appRevision: 12n,
+            actionId: "sample.confirm",
+        };
+        const baseKey = cardAttemptKey(base);
+        const variants = [
+            { ...base, viewerId: "viewer-b" },
+            {
+                ...base,
+                chat: { kind: "channel", communityId: "community-b", channelId: 7 } as const,
+            },
+            { ...base, messageId: 100n },
+            { ...base, threadRootMessageIndex: 4 },
+            { ...base, appId: 6 },
+            { ...base, appRevision: 13n },
+            { ...base, actionId: "sample.other" },
+        ];
+        for (const variant of variants) expect(cardAttemptKey(variant)).not.toBe(baseKey);
+    });
+
+    test("copies and freezes a JSON-only confirm payload", () => {
+        const source = { amount: 5, rows: [{ note: "rent" }] };
+        const snapshot = snapshotCardConfirmPayload(source)!;
+        expect(snapshot).toEqual(source);
+        expect(Object.isFrozen(snapshot)).toBe(true);
+        expect(Object.isFrozen((snapshot as typeof source).rows[0])).toBe(true);
+        source.amount = 99;
+        source.rows[0].note = "mutated";
+        expect(snapshot).toEqual({ amount: 5, rows: [{ note: "rent" }] });
+    });
+
+    test("encodes the exact frozen payload bytes used for the final grant and response", () => {
+        const request = cardApprovalRequestFromMessage(
+            {
+                type: "oc:card:confirm",
+                version: 2,
+                frameNonce: "n",
+                payload: { amount: 5, nested: ["one", 2] },
+            },
+            "n",
+        )!;
+        expect(new TextDecoder().decode(encodeCardConfirmPayload(request))).toBe(
+            '{"amount":5,"nested":["one",2]}',
+        );
+    });
+
+    test("latches one final-grant attempt and rejects tamper, replay, navigation, and cross-viewer scope", () => {
+        const cardKey = cardAttemptKey({
+            viewerId: "viewer-a",
+            chat: { kind: "channel", communityId: "community", channelId: 7 },
+            messageId: 99n,
+            threadRootMessageIndex: 3,
+            appId: 5,
+            appRevision: 12n,
+            actionId: "sample.confirm",
+        });
+        const binding = {
+            frameNonce: "nonce-a",
+            cardKey,
+            confirmPayload: new TextEncoder().encode('{"amount":5}'),
+        };
+        const attempt = beginCardConfirmationAttempt(undefined, binding)!;
+        expect(beginCardConfirmationAttempt(attempt, binding)).toBeUndefined();
+        expect(cardConfirmationAttemptStillCurrent(attempt, binding, true)).toBe(true);
+        expect(
+            cardConfirmationAttemptStillCurrent(
+                attempt,
+                { ...binding, confirmPayload: new TextEncoder().encode('{"amount":6}') },
+                true,
+            ),
+        ).toBe(false);
+        expect(
+            cardConfirmationAttemptStillCurrent(
+                attempt,
+                { ...binding, frameNonce: "nonce-after-navigation" },
+                true,
+            ),
+        ).toBe(false);
+        expect(
+            cardConfirmationAttemptStillCurrent(
+                attempt,
+                {
+                    ...binding,
+                    cardKey: cardAttemptKey({
+                        viewerId: "viewer-b",
+                        chat: { kind: "channel", communityId: "community", channelId: 7 },
+                        messageId: 99n,
+                        threadRootMessageIndex: 3,
+                        appId: 5,
+                        appRevision: 12n,
+                        actionId: "sample.confirm",
+                    }),
+                },
+                true,
+            ),
+        ).toBe(false);
+        expect(cardConfirmationAttemptStillCurrent(attempt, binding, false)).toBe(false);
+    });
+
+    test("rejects non-JSON, prototype-polluting, deep, and oversized payloads", () => {
+        expect(snapshotCardConfirmPayload({ value: 1n })).toBeUndefined();
+        expect(snapshotCardConfirmPayload({ value: Number.NaN })).toBeUndefined();
+        const polluted = Object.create(null) as Record<string, unknown>;
+        polluted.__proto__ = { admin: true };
+        expect(snapshotCardConfirmPayload(polluted)).toBeUndefined();
+        let deep: Record<string, unknown> = {};
+        for (let i = 0; i < 20; i++) deep = { nested: deep };
+        expect(snapshotCardConfirmPayload(deep)).toBeUndefined();
+        // `{\"text\":\"\"}` is 11 UTF-8 bytes: cover the backend's exact 16,384-byte boundary.
+        expect(snapshotCardConfirmPayload({ text: "x".repeat(16_373) })).toBeDefined();
+        expect(snapshotCardConfirmPayload({ text: "x".repeat(16_374) })).toBeUndefined();
+    });
+
+    test("turns iframe messages into requests, never approval", () => {
+        const request = cardApprovalRequestFromMessage(
+            { type: "oc:card:confirm", version: 2, frameNonce: "n", payload: { amount: 5 } },
+            "n",
+        );
+        expect(request).toEqual({ kind: "confirm", payload: { amount: 5 } });
+        expect(cardApprovalRequestFromMessage({ type: "oc:card:cancel", version: 2, frameNonce: "n" }, "n")).toEqual({
+            kind: "cancel",
+        });
+        expect(
+            cardApprovalRequestFromMessage(
+                { type: "oc:card:confirm", version: 2, frameNonce: "n", payload: "5" },
+                "n",
+            ),
+        ).toBeUndefined();
+        expect(
+            cardApprovalRequestFromMessage(
+                { type: "oc:card:cancel", version: 2, frameNonce: "wrong" },
+                "n",
+            ),
+        ).toBeUndefined();
+        for (const version of [undefined, 1, 3]) {
+            expect(
+                cardApprovalRequestFromMessage(
+                    {
+                        type: "oc:card:confirm",
+                        version,
+                        frameNonce: "n",
+                        payload: { amount: 5 },
+                    },
+                    "n",
+                ),
+            ).toBeUndefined();
+            expect(
+                cardApprovalRequestFromMessage(
+                    { type: "oc:card:cancel", version, frameNonce: "n" },
+                    "n",
+                ),
+            ).toBeUndefined();
+        }
+    });
+
+    test("resize requires the exact v2 protocol and matching nonce", () => {
+        expect(
+            cardResizeHeightFromMessage(
+                { type: "oc:card:resize", version: 2, frameNonce: "n", height: 300 },
+                "n",
+            ),
+        ).toBe(300);
+        for (const version of [undefined, 1, 3]) {
+            expect(
+                cardResizeHeightFromMessage(
+                    { type: "oc:card:resize", version, frameNonce: "n", height: 300 },
+                    "n",
+                ),
+            ).toBeUndefined();
+        }
+        expect(
+            cardResizeHeightFromMessage(
+                { type: "oc:card:resize", version: 2, frameNonce: "wrong", height: 300 },
+                "n",
+            ),
+        ).toBeUndefined();
+    });
+
+    test("requires actionable state, idle host, and disclosure acknowledgement", () => {
+        const request = { kind: "confirm", payload: { amount: 5 } } as const;
+        expect(canApproveCardRequest(request, true, false, false, false)).toBe(true);
+        expect(canApproveCardRequest(request, false, false, false, false)).toBe(false);
+        expect(canApproveCardRequest(request, true, true, false, false)).toBe(false);
+        expect(canApproveCardRequest(request, true, false, true, false)).toBe(false);
+        expect(canApproveCardRequest(request, true, false, true, true)).toBe(true);
+        expect(canApproveCardRequest({ kind: "cancel" }, true, false, true, false)).toBe(true);
+    });
+
+    test("shows and submits the same frozen canonical payload snapshot", () => {
+        const request = cardApprovalRequestFromMessage(
+            {
+                type: "oc:card:confirm",
+                version: 2,
+                frameNonce: "n",
+                payload: { z: [2, { html: "<script>not markup</script>" }], a: 1 },
+            },
+            "n",
+        )!;
+        const summary = canonicalCardApprovalSummary(request);
+        expect(summary.indexOf('"a"')).toBeLessThan(summary.indexOf('"z"'));
+        const approved = cardResponseForApproval(request);
+        expect(approved.response).toBe("confirm");
+        expect(approved.payload).toBe(request.kind === "confirm" ? request.payload : undefined);
+        expect(JSON.parse(summary)).toEqual(approved.payload);
+    });
+
+    test("visibly escapes bidi and zero-width controls without changing the approved object", () => {
+        const request = cardApprovalRequestFromMessage(
+            {
+                type: "oc:card:confirm",
+                version: 2,
+                frameNonce: "n",
+                payload: { [`amount\u202e":"999`]: `12\u200b34`, note: "safe" },
+            },
+            "n",
+        )!;
+        if (request.kind !== "confirm") throw new Error("expected confirm request");
+        const summary = canonicalCardApprovalSummary(request);
+        expect(summary).toContain("\\u202e");
+        expect(summary).toContain("\\u200b");
+        expect(summary).not.toContain("\u202e");
+        expect(summary).not.toContain("\u200b");
+        const approved = cardResponseForApproval(request);
+        expect(approved.payload).toBe(request.payload);
+        expect(JSON.parse(summary)).toEqual(request.payload);
+    });
+});
+
+describe("buildCardBusy", () => {
+    test("wraps a bare boolean progress flag (no app/canister data)", () => {
+        expect(buildCardBootstrap("n")).toEqual({
+            type: "oc:card:bootstrap",
+            version: 2,
+            frameNonce: "n",
+        });
+        expect(buildCardBusy(true, "n")).toEqual({
+            type: "oc:card:busy",
+            version: 2,
+            frameNonce: "n",
+            busy: true,
+        });
+        expect(buildCardBusy(false, "n")).toEqual({
+            type: "oc:card:busy",
+            version: 2,
+            frameNonce: "n",
+            busy: false,
+        });
+    });
+});
+
+describe("card handshake timeout", () => {
+    test("fires once after the bounded deadline", () => {
+        vi.useFakeTimers();
+        try {
+            const timedOut = vi.fn();
+            startCardHandshakeTimeout(timedOut, 50);
+            vi.advanceTimersByTime(49);
+            expect(timedOut).not.toHaveBeenCalled();
+            vi.advanceTimersByTime(1);
+            expect(timedOut).toHaveBeenCalledTimes(1);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    test("cleanup prevents a stale frame deadline from failing a ready/retried session", () => {
+        vi.useFakeTimers();
+        try {
+            const timedOut = vi.fn();
+            const cleanup = startCardHandshakeTimeout(timedOut, 50);
+            cleanup();
+            vi.advanceTimersByTime(100);
+            expect(timedOut).not.toHaveBeenCalled();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+});
+
+describe("reverseMapRows", () => {
+    // The manifest card template's label -> field-key map (client-side card.rows use `valueKey`).
+    const fieldMap: Record<string, string> = {
+        Amount: "amount",
+        Currency: "currency",
+        Direction: "direction",
+        Note: "note",
+    };
+
+    test("joins hydrated {label,value} rows onto field keys", () => {
+        const rows = [
+            { label: "Amount", value: "350" },
+            { label: "Currency", value: "EGP" },
+            { label: "Direction", value: "credit" },
+            { label: "Note", value: "lunch" },
+        ];
+        expect(reverseMapRows(rows, fieldMap)).toEqual({
+            amount: "350",
+            currency: "EGP",
+            direction: "credit",
+            note: "lunch",
+        });
+    });
+
+    test("drops unmatched labels rather than inventing untrusted object keys", () => {
+        const rows = [
+            { label: "Amount", value: "10" },
+            { label: "Mystery Field", value: "x" },
+        ];
+        expect(reverseMapRows(rows, fieldMap)).toEqual({ amount: "10" });
+    });
+
+    test("empty rows -> {}", () => {
+        expect(reverseMapRows([], fieldMap)).toEqual({});
+        expect(reverseMapRows([], {})).toEqual({});
+    });
+
+    test("empty map -> no untrusted keys", () => {
+        expect(reverseMapRows([{ label: "Amount", value: "5" }], {})).toEqual({});
+    });
+
+    test("ignores reserved legacy rows without treating their values as app data", () => {
+        const rows = [
+            { label: "Amount", value: "10" },
+            { label: "__oc_reserved__", value: "untrusted legacy value" },
+        ];
+        expect(reverseMapRows(rows, fieldMap)).toEqual({ amount: "10" });
+    });
+
+    test("requires own safe mappings and returns a null-prototype result", () => {
+        const inheritedMap = Object.create({ Amount: "amount" }) as Record<string, string>;
+        inheritedMap.Note = "__proto__";
+        const result = reverseMapRows(
+            [
+                { label: "Amount", value: "10" },
+                { label: "Note", value: "pollute" },
+            ],
+            inheritedMap,
+        );
+        expect(Object.getPrototypeOf(result)).toBeNull();
+        expect(result).toEqual({});
+        expect(Object.hasOwn(result, "__proto__")).toBe(false);
+    });
+});
+
+describe("visibleRows (classic fallback fail-closed filter)", () => {
+    test("drops reserved legacy rows without parsing them, and keeps human rows in order", () => {
+        const rows = [
+            { label: "Amount", value: "350" },
+            { label: "__oc_reserved__", value: "untrusted legacy value" },
+            { label: "Currency", value: "EGP" },
+        ];
+        expect(visibleRows(rows)).toEqual([
+            { label: "Amount", value: "350" },
+            { label: "Currency", value: "EGP" },
+        ]);
+    });
+
+    test("drops any __oc_-prefixed label, not just the entries sentinel", () => {
+        expect(
+            visibleRows([
+                { label: "__oc_future_control__", value: "x" },
+                { label: "Note", value: "n" },
+            ]),
+        ).toEqual([{ label: "Note", value: "n" }]);
+    });
+
+    test("passes ordinary rows through unchanged, and [] -> []", () => {
+        const rows = [{ label: "Amount", value: "1" }];
+        expect(visibleRows(rows)).toEqual(rows);
+        expect(visibleRows([])).toEqual([]);
+    });
+});
+
+describe("clampCardHeight", () => {
+    test("clamps within range and rounds up", () => {
+        expect(clampCardHeight(300.2, 120, 1200)).toBe(301);
+        expect(clampCardHeight(50, 120, 1200)).toBe(120);
+        expect(clampCardHeight(5000, 120, 1200)).toBe(1200);
+    });
+    test("non-finite -> min", () => {
+        expect(clampCardHeight(Number.NaN, 120, 1200)).toBe(120);
+        expect(clampCardHeight(Number.POSITIVE_INFINITY, 120, 1200)).toBe(120);
+    });
+});

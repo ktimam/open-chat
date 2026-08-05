@@ -9,10 +9,36 @@ use types::{BuildVersion, CyclesTopUp, TimestampMillis, UserId};
 pub struct LocalUserMap {
     users: HashMap<UserId, LocalUser>,
     registration_in_progress: HashMap<Principal, TimestampMillis>,
+    /// Monotonic allocator for active registration epochs; deleted IDs leave no tombstones.
+    #[serde(default)]
+    registration_generation_counter: u64,
+    #[serde(default)]
+    registration_generations: HashMap<UserId, u64>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remove_and_readd_changes_the_exact_registration_generation() {
+        let mut users = LocalUserMap::default();
+        let principal = Principal::from_slice(&[65]);
+        let id = UserId::from(principal);
+        users.add(id, principal, BuildVersion::min(), 1);
+        let first = users.registration_generation(&id);
+        assert!(users.remove(&id));
+        assert_eq!(users.registration_generation(&id), 0);
+        assert!(users.registration_generations.is_empty());
+        users.add(id, principal, BuildVersion::min(), 2);
+        assert!(users.registration_generation(&id) > first);
+    }
 }
 
 impl LocalUserMap {
     pub fn add(&mut self, user_id: UserId, principal: Principal, wasm_version: BuildVersion, now: TimestampMillis) {
+        let next = self.issue_registration_generation();
+        self.registration_generations.insert(user_id, next);
         let user = LocalUser::new(now, wasm_version);
         self.users.insert(user_id, user);
         self.registration_in_progress.remove(&principal);
@@ -31,7 +57,27 @@ impl LocalUserMap {
     }
 
     pub fn remove(&mut self, user_id: &UserId) -> bool {
-        self.users.remove(user_id).is_some()
+        let removed = self.users.remove(user_id).is_some();
+        if removed {
+            self.registration_generations.remove(user_id);
+        }
+        removed
+    }
+
+    fn issue_registration_generation(&mut self) -> u64 {
+        if self.registration_generation_counter == 0 {
+            self.registration_generation_counter = self.registration_generations.values().copied().max().unwrap_or_default();
+        }
+        let next = self
+            .registration_generation_counter
+            .checked_add(1)
+            .expect("local user registration generation exhausted");
+        self.registration_generation_counter = next;
+        next
+    }
+
+    pub fn registration_generation(&self, user_id: &UserId) -> u64 {
+        self.registration_generations.get(user_id).copied().unwrap_or_default()
     }
 
     pub fn mark_cycles_top_up(&mut self, user_id: &UserId, top_up: CyclesTopUp) -> bool {

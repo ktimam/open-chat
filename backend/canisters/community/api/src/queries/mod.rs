@@ -14,6 +14,7 @@ pub mod channel_summary;
 pub mod channel_summary_updates;
 pub mod community_events;
 pub mod deleted_message;
+pub mod enabled_ai_apps;
 pub mod events;
 pub mod events_by_index;
 pub mod events_window;

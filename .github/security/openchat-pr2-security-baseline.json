@@ -1,0 +1,121 @@
+{
+  "schemaVersion": 1,
+  "scope": "PR2: generic external-app interfaces and in-chat cards",
+  "baseCommit": "f7825b347b5f8449053778450b934110e0ee3537",
+  "reviewedOn": "2026-08-06",
+  "expiresOn": "2026-08-31",
+  "reviewedDependencyFiles": {
+    "Cargo.lock": "da84b0bbae7a1cdcc5243b141d9f289e5eaec5257a1c1ff0dfe6cb5e02a22773",
+    "Cargo.toml": "11aac9da1dbe83da3148f501337297d96e4504897722b0e1977e484912b1a21d",
+    "backend/canisters/action_inbox/api/Cargo.toml": "a51655267d456b6bac827150732cd316234b9ecba797e5898ed0250272ea0173",
+    "backend/canisters/action_inbox/c2c_client/Cargo.toml": "ccf2229ca91047eecb27cfb10180963b883c81fab9d427cc1595260428d229ec",
+    "backend/canisters/action_inbox/impl/Cargo.toml": "cbf91db63b8dd41f394f918c3759ac9278527a57499ebcaf3e2119d04d2ca5bb",
+    "backend/canisters/group_index/api/Cargo.toml": "2f20c1be00a989d691a67a384ae12961bf447b888eac9ec662a854e5d80dd635",
+    "backend/canisters/group_index/impl/Cargo.toml": "5540da423d060f3aaee05e939f894f3ffed966d4115dad48eb1a25a0cdc386aa",
+    "backend/canisters/local_user_index/impl/Cargo.toml": "96e052d3cad2dfd7da3689c6924db94517b4ea8fa6b6432ef6fe9687c3fbd011",
+    "backend/canisters/user/api/Cargo.toml": "1e6f36963b489083c329d61ae41315d737bdc9503a914fe8bce2d8cf6a4aeaf2",
+    "backend/canisters/user_index/api/Cargo.toml": "ac92ea81e6df368bec4918bae2eb30a4ee966a1b283ab96beb0fb18ad99d647b",
+    "backend/canisters/user_index/impl/Cargo.toml": "61aea7c33a04aa8512447356a4dc8db3124d736bc3f13c1ddcbb1a736621f798",
+    "backend/external_canisters/ai_app_verifier/api/Cargo.toml": "d2d987a3285b690c8840690f183f407ac1bcb3ac40f45c91de0f6d21fedef221",
+    "backend/external_canisters/ai_app_verifier/c2c_client/Cargo.toml": "809b2218ca26d5996c1a578ea16b5bef921af492cee61fa67257fc634105d5dc",
+    "backend/external_canisters/ai_app_verifier/test_impl/Cargo.toml": "4d3417184d3841a52f02c21a40551c753e96fac70d7f7d8f0035dc861e43e81a",
+    "backend/integration_tests/Cargo.toml": "756c44db260a756c7cc45de68ac7b8ffd7153873b042fb74326b8719485a1092",
+    "backend/libraries/ecies_payload/Cargo.toml": "63609aa8f919c07d7c05d8b3d731c5b88bafe75ed65850d026bb78a95c64834b",
+    "backend/libraries/p256_key_pair/Cargo.toml": "24fa2dece08bf00c85a50b7f32711774b6787c10133989cbb56c5fb743203000",
+    "frontend/package.json": "9092d454ffad1d2e149c38446b220029ab937bcfe2e26e26f4cd74a5f01c4b13",
+    "frontend/package-lock.json": "dc659ffb7acd123fab440b9fefdf5f476994f2358ab880b4f5b02502501a02e7"
+  },
+  "ciRuntime": {
+    "nodeVersion": "24.18.1",
+    "cargoAuditVersion": "0.22.2"
+  },
+  "npm": {
+    "ownership": "PR2 changes no frontend package manifest or lockfile. Findings are inherited and any increase fails.",
+    "productionMaximum": { "info": 0, "low": 0, "moderate": 1, "high": 1, "critical": 0, "total": 2 },
+    "allMaximum": { "info": 0, "low": 0, "moderate": 1, "high": 24, "critical": 0, "total": 25 }
+  },
+  "rust": {
+    "ownership": "PR2 adds exactly hkdf@0.13.0. aes-gcm, subtle, and zeroize become direct dependencies while reusing tuples already present in PR1. These 5 vulnerabilities and 30 warnings are inherited; any other lock tuple delta requires review.",
+    "externalLockDelta": {
+      "introduced": [
+        "hkdf@0.13.0:registry+https://github.com/rust-lang/crates.io-index"
+      ],
+      "removed": []
+    },
+    "vulnerabilities": [
+      "RUSTSEC-2023-0071:rsa@0.10.0-rc.18",
+      "RUSTSEC-2023-0071:rsa@0.9.10",
+      "RUSTSEC-2026-0098:rustls-webpki@0.101.7",
+      "RUSTSEC-2026-0099:rustls-webpki@0.101.7",
+      "RUSTSEC-2026-0104:rustls-webpki@0.101.7"
+    ],
+    "warnings": [
+      "unmaintained:ansi_term@0.12.1:RUSTSEC-2021-0139",
+      "unmaintained:atk@0.18.2:RUSTSEC-2024-0413",
+      "unmaintained:atk-sys@0.18.2:RUSTSEC-2024-0416",
+      "unmaintained:atty@0.2.14:RUSTSEC-2024-0375",
+      "unmaintained:backoff@0.4.0:RUSTSEC-2025-0012",
+      "unmaintained:custom_derive@0.1.7:RUSTSEC-2025-0058",
+      "unmaintained:dotenv@0.15.0:RUSTSEC-2021-0141",
+      "unmaintained:gdk@0.18.2:RUSTSEC-2024-0412",
+      "unmaintained:gdk-sys@0.18.2:RUSTSEC-2024-0418",
+      "unmaintained:gdkwayland-sys@0.18.2:RUSTSEC-2024-0411",
+      "unmaintained:gdkx11@0.18.2:RUSTSEC-2024-0417",
+      "unmaintained:gdkx11-sys@0.18.2:RUSTSEC-2024-0414",
+      "unmaintained:gtk@0.18.2:RUSTSEC-2024-0415",
+      "unmaintained:gtk-sys@0.18.2:RUSTSEC-2024-0420",
+      "unmaintained:gtk3-macros@0.18.2:RUSTSEC-2024-0419",
+      "unmaintained:instant@0.1.13:RUSTSEC-2024-0384",
+      "unmaintained:paste@1.0.15:RUSTSEC-2024-0436",
+      "unmaintained:proc-macro-error@1.0.4:RUSTSEC-2024-0370",
+      "unmaintained:rusttype@0.9.3:RUSTSEC-2021-0140",
+      "unmaintained:serde_cbor@0.11.2:RUSTSEC-2021-0127",
+      "unmaintained:ttf-parser@0.15.2:RUSTSEC-2026-0192",
+      "unmaintained:unic-char-property@0.9.0:RUSTSEC-2025-0081",
+      "unmaintained:unic-char-range@0.9.0:RUSTSEC-2025-0075",
+      "unmaintained:unic-common@0.9.0:RUSTSEC-2025-0080",
+      "unmaintained:unic-ucd-ident@0.9.0:RUSTSEC-2025-0100",
+      "unmaintained:unic-ucd-version@0.9.0:RUSTSEC-2025-0098",
+      "unsound:atty@0.2.14:RUSTSEC-2021-0145",
+      "unsound:event-listener@5.4.1:RUSTSEC-2026-0221",
+      "unsound:glib@0.18.5:RUSTSEC-2024-0429",
+      "unsound:rand@0.7.3:RUSTSEC-2026-0097"
+    ]
+  },
+  "directRustPackages": [
+    {
+      "name": "aes-gcm",
+      "version": "0.10.3",
+      "license": "Apache-2.0 OR MIT",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "manifest": "backend/libraries/ecies_payload/Cargo.toml"
+    },
+    {
+      "name": "hkdf",
+      "version": "0.13.0",
+      "license": "MIT OR Apache-2.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "manifest": "backend/libraries/ecies_payload/Cargo.toml"
+    },
+    {
+      "name": "subtle",
+      "version": "2.6.1",
+      "license": "BSD-3-Clause",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "manifest": "backend/canisters/action_inbox/impl/Cargo.toml"
+    },
+    {
+      "name": "zeroize",
+      "version": "1.9.0",
+      "license": "Apache-2.0 OR MIT",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "manifest": "backend/canisters/user_index/impl/Cargo.toml"
+    }
+  ],
+  "workspaceOnlyPackages": [
+    {
+      "name": "ai_app_verifier_test_canister_impl",
+      "manifest": "backend/external_canisters/ai_app_verifier/test_impl/Cargo.toml"
+    }
+  ]
+}

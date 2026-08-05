@@ -8,6 +8,7 @@ import {
     Stream,
     toBigInt32,
     type AcceptP2PSwapResponse,
+    type AiAppCardCapability,
     type AddRemoveReactionResponse,
     type ApproveTransferResponse,
     type ArchiveChatResponse,
@@ -34,6 +35,7 @@ import {
     type DeleteMessageResponse,
     type DirectChatIdentifier,
     type EditMessageResponse,
+    type RespondToActionCardResponse,
     type EventsResponse,
     type EventWrapper,
     type EvmChain,
@@ -112,6 +114,10 @@ import {
     UserDeleteGroupArgs,
     UserDeleteMessagesArgs,
     UserEditMessageArgs,
+    UserRespondToActionCardArgs,
+    UserRespondToActionCardResponse,
+    UserCreateAiAppCardCapabilityArgs,
+    UserCreateAiAppCardCapabilityResponse,
     UserEventsArgs,
     UserEventsByIndexArgs,
     UserEventsResponse,
@@ -188,6 +194,7 @@ import {
 import type { UserDb } from "../../utils/userCache";
 import { SingleCanisterMsgpackAgent } from "../canisterAgent/msgpack";
 import type { IChatEventsReader } from "../common/chatEvents";
+import { createAiAppCardCapabilityResponse } from "../common/aiAppCardCapability";
 import {
     acceptP2PSwapSuccess,
     apiChatIdentifier,
@@ -525,6 +532,54 @@ export class UserClient
             }
             throw new Error("Unable to set profile background");
         });
+    }
+
+    // The direct-chat confirm path: the responder's OWN canister runs the transition + deposit
+    // and mirrors the outcome to the other participant (see the user canister endpoint).
+    respondToActionCard(
+        userId: string,
+        messageId: bigint,
+        threadRootMessageIndex: number | undefined,
+        response: "confirm" | "cancel",
+        confirmPayloadOverride?: Uint8Array,
+        confirmationGrant?: Uint8Array,
+    ): Promise<RespondToActionCardResponse> {
+        return this.update(
+            "respond_to_action_card",
+            {
+                user_id: principalStringToBytes(userId),
+                thread_root_message_index: threadRootMessageIndex,
+                message_id: messageId,
+                response: response === "confirm" ? "Confirm" : "Cancel",
+                confirm_payload_override: confirmPayloadOverride?.slice(),
+                confirmation_grant: confirmationGrant?.slice(),
+            },
+            unitResult,
+            UserRespondToActionCardArgs,
+            UserRespondToActionCardResponse,
+        );
+    }
+
+    createAiAppCardCapability(
+        userId: string,
+        messageId: bigint,
+        threadRootMessageIndex: number | undefined,
+        recipientKeyScheme: string,
+        recipientPublicKey: Uint8Array,
+    ): Promise<AiAppCardCapability | undefined> {
+        return this.update(
+            "create_ai_app_card_capability",
+            {
+                user_id: principalStringToBytes(userId),
+                thread_root_message_index: threadRootMessageIndex,
+                message_id: messageId,
+                recipient_key_scheme: recipientKeyScheme,
+                recipient_public_key: recipientPublicKey,
+            },
+            createAiAppCardCapabilityResponse,
+            UserCreateAiAppCardCapabilityArgs,
+            UserCreateAiAppCardCapabilityResponse,
+        );
     }
 
     editMessage(

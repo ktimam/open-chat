@@ -122,13 +122,19 @@ impl GroupRoleInternal {
                 .find(|cp| cp.subtype == c)
                 .map(|cp| cp.role)
                 .unwrap_or(ps.default),
+            // A registered app's AI-action posts a confirm-card from the user's OWN client (OpenChat's runner
+            // builds it from a registered AiActionDefinition). Allow the poster per the chat's default role, so
+            // clients — not just bots — can propose actions. The card's delivery routing (recipient_public_key)
+            // targets the registered consumer; binding that to the on-chain registry is a recommended hardening.
+            MessageContentType::ActionCard => ps.default,
             MessageContentType::Deleted
             | MessageContentType::GovernanceProposal
             | MessageContentType::MessageReminderCreated
             | MessageContentType::MessageReminder
             | MessageContentType::PrizeWinner
             | MessageContentType::ReportedMessage
-            | MessageContentType::ModerationReport => GroupPermissionRole::None,
+            | MessageContentType::ModerationReport
+            | MessageContentType::ActionCard => GroupPermissionRole::None,
         };
 
         self.is_permitted(sender_role)

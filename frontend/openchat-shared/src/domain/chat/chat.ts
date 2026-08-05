@@ -104,6 +104,7 @@ export type MessageContent =
     | PrizeContentInitial
     | P2PSwapContent
     | P2PSwapContentInitial
+    | ActionCardContent
     | PrizeWinnerContent
     | MessageReminderCreatedContent
     | MessageReminderContent
@@ -245,6 +246,10 @@ export function isTransfer(content: MessageContent): boolean {
 
 export function canRetryMessage(content: MessageContent): boolean {
     return (
+        // appProvenance is a short-lived bearer proof bound to one exact message id. Persisting it in
+        // the failed-message IndexedDB both leaks authority at rest and guarantees an expired restart
+        // retry. The user must explicitly run the action again so a fresh proof is minted.
+        !(content.kind === "action_card_content" && content.appProvenance !== undefined) &&
         content.kind !== "poll_content" &&
         content.kind !== "crypto_content" &&
         content.kind !== "prize_content_initial" &&
@@ -446,6 +451,56 @@ export interface P2PSwapContent {
     status: P2PSwapStatus;
     swapId: number;
     token0TxnIn: TransactionId;
+}
+
+export interface ActionCardRow {
+    label: string;
+    value: string;
+}
+
+export type ActionCardState = "pending" | "confirmed" | "cancelled" | "expired";
+
+// A generic interactive confirm card. `rows` are the exact values forwarded on confirm; `payload`
+// is the opaque verbatim encoding the registered app receives. OpenChat does not interpret either.
+export interface ActionCardContent {
+    kind: "action_card_content";
+    title: string;
+    rows: ActionCardRow[];
+    confirmLabel: string;
+    cancelLabel: string;
+    actionId: string;
+    // The id of the directory app that OWNS (posted) this card. Set at propose/post time — the same
+    // point `recipientPublicKey` is baked — AND hydrated on receive (unlike the send-only routing
+    // fields below), so a recipient binds card-surface resolution to the exact producing app instead
+    // of guessing by the non-namespaced `actionId`. Absent on legacy cards posted before this field.
+    appId?: number;
+    // Exact published manifest revision used to build the card. A later app update invalidates the
+    // card for both rendering and delivery rather than silently changing its destination/meaning.
+    appRevision?: bigint;
+    // Hydrated only from the chat canister's private provenance validation result. This proves the
+    // directory coordinates (app id/revision/action), not authorship or integrity of title/rows/payload.
+    appVerified?: boolean;
+    // Reserved for a future backend attestation over the complete canonical card content. Until the
+    // server hydrates this independently as true, clients must treat display/payload as sender-authored,
+    // must not load the app renderer, and must fail confirmation closed.
+    appContentVerified?: boolean;
+    // Send-only, short-lived proof that user_index validated this exact published app revision,
+    // action, chat, and message id before the card was posted. Chat canisters store it privately and
+    // never hydrate it back to message readers.
+    appProvenance?: Uint8Array;
+    disclosure?: string;
+    state: ActionCardState;
+    respondedBy?: string;
+    respondedAt?: bigint;
+    expiresAt?: bigint;
+    // Legacy send-only routing fields retained for compatibility. Current canisters ignore them and
+    // resolve recipient keys/inbox from exact app provenance and authoritative chat membership.
+    recipientPublicKey?: string;
+    // Legacy sender-carried fan-out data; ignored by current confirmation code.
+    recipientPublicKeys?: string[];
+    confirmPayload?: Uint8Array;
+    // Legacy sender-carried inbox data; ignored by current confirmation code.
+    inboxCanisterId?: string;
 }
 
 export type TransactionId = bigint;
@@ -2253,6 +2308,7 @@ export type DeletedDirectMessageResponse =
     | Offline;
 
 export type RegisterPollVoteResponse = Success | OCError | Offline;
+export type RespondToActionCardResponse = Success | OCError | Offline;
 export type InviteCodeResponse = InviteCodeSuccess | OCError | Offline | Failure;
 
 export type InviteCodeSuccess = {
@@ -2578,6 +2634,7 @@ export type ChatEventType =
     | "MessageP2pSwapCompleted"
     | "MessageP2pSwapCancelled"
     | "MessageVideoCall"
+    | "MessageActionCardResponse"
     | "MessageOther"
     | "Created"
     | "NameChanged"

@@ -52,6 +52,7 @@ use utils::fcm_token_store::FcmTokenStore;
 use utils::idempotency_checker::IdempotencyChecker;
 use utils::iterator_extensions::IteratorExtensions;
 
+mod action_deposit_envelope;
 mod bots;
 mod guards;
 mod jobs;
@@ -59,6 +60,7 @@ mod lifecycle;
 mod memory;
 mod model;
 mod no_inline_anchor;
+mod pr2_entropy;
 mod queries;
 mod updates;
 
@@ -603,6 +605,10 @@ struct Data {
     pub moderation_referral_config: Option<ModerationReferralConfig>,
     #[serde(default)]
     pub message_moderation_queue: ModerationQueue,
+    #[serde(default)]
+    pub action_inbox_canister_id: Option<CanisterId>,
+    #[serde(default)]
+    pub pr2_entropy: types::Pr2EntropyGate,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -698,6 +704,8 @@ impl Data {
             openai_api_key,
             moderation_referral_config,
             message_moderation_queue: ModerationQueue::default(),
+            action_inbox_canister_id: None,
+            pr2_entropy: types::Pr2EntropyGate::default(),
         }
     }
 }

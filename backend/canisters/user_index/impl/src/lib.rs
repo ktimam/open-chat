@@ -43,12 +43,14 @@ use utils::env::Environment;
 use utils::idempotency_checker::IdempotencyChecker;
 use utils::time::MonthKey;
 
+mod ai_app_card_authority;
 mod guards;
 mod jobs;
 mod lifecycle;
 mod memory;
 mod model;
 mod no_inline_anchor;
+mod pr2_entropy;
 mod queries;
 mod timer_job_types;
 mod updates;
@@ -281,6 +283,9 @@ impl RuntimeState {
                 .moderation_referral_config
                 .as_ref()
                 .map_or(0, |c| c.categories.len() as u32),
+            ai_app_user_key_metrics: self.data.ai_app_user_keys.metrics(),
+            ai_app_card_attestation_metrics: self.data.ai_app_call_throttle.card_attestation_metrics(now),
+            action_delivery_outbox_metrics: self.data.action_delivery_outbox.metrics(),
             oc_public_key: self.data.oc_key_pair.public_key_pem().to_string(),
             empty_users: self.data.empty_users.len(),
             deleted_users: self.data.deleted_users.len(),
@@ -419,6 +424,30 @@ struct Data {
     pub moderation_referral_config: Option<ModerationReferralConfig>,
     #[serde(default)]
     pub internal_moderation_channel: Option<(CommunityId, ChannelId)>,
+    // Retained for stable-state compatibility while AI actions move into the app directory.
+    #[serde(default)]
+    pub ai_actions: crate::model::ai_action_registry::AiActionRegistry,
+    #[serde(default)]
+    pub ai_apps: crate::model::ai_app_registry::AiAppRegistry,
+    #[serde(default)]
+    pub ai_app_user_keys: crate::model::ai_app_user_keys::AiAppUserKeys,
+    #[serde(default)]
+    pub ai_app_link_codes: crate::model::ai_app_link_codes::AiAppLinkCodes,
+    // Failure throttle for the bearer AI-app endpoints (claim/revoke) — see the model docs.
+    #[serde(default)]
+    pub ai_app_call_throttle: crate::model::ai_app_call_throttle::AiAppCallThrottle,
+    #[serde(default)]
+    pub ai_app_card_tokens: crate::model::ai_app_card_tokens::AiAppCardTokens,
+    #[serde(default)]
+    pub action_signing_keyring: crate::model::action_signing_keyring::ActionSigningKeyring,
+    #[serde(default)]
+    pub ai_app_scoped_identity_key: crate::model::ai_app_scoped_identity::AiAppScopedIdentityKey,
+    #[serde(default)]
+    pub action_delivery_outbox: crate::model::action_delivery_outbox::ActionDeliveryOutbox,
+    #[serde(default)]
+    pub pr2_entropy: types::Pr2EntropyGate,
+    #[serde(default)]
+    pub pr2_bearer_canister_version: Option<u64>,
 }
 
 impl Data {
@@ -507,6 +536,17 @@ impl Data {
             openai_api_key: None,
             moderation_referral_config: None,
             internal_moderation_channel: None,
+            ai_actions: crate::model::ai_action_registry::AiActionRegistry::default(),
+            ai_apps: crate::model::ai_app_registry::AiAppRegistry::default(),
+            ai_app_user_keys: crate::model::ai_app_user_keys::AiAppUserKeys::default(),
+            ai_app_link_codes: crate::model::ai_app_link_codes::AiAppLinkCodes::default(),
+            ai_app_call_throttle: crate::model::ai_app_call_throttle::AiAppCallThrottle::default(),
+            ai_app_card_tokens: crate::model::ai_app_card_tokens::AiAppCardTokens::default(),
+            action_signing_keyring: crate::model::action_signing_keyring::ActionSigningKeyring::default(),
+            ai_app_scoped_identity_key: crate::model::ai_app_scoped_identity::AiAppScopedIdentityKey::default(),
+            action_delivery_outbox: crate::model::action_delivery_outbox::ActionDeliveryOutbox::default(),
+            pr2_entropy: types::Pr2EntropyGate::default(),
+            pr2_bearer_canister_version: None,
         };
 
         // Register the ProposalsBot
@@ -565,6 +605,19 @@ impl Data {
 #[cfg(test)]
 impl Default for Data {
     fn default() -> Data {
+        let mut pr2_entropy = types::Pr2EntropyGate::default();
+        let types::Pr2EntropyReseedAdmission::Started(ticket) =
+            pr2_entropy.begin_reseed(crate::pr2_entropy::TEST_CANISTER_VERSION, 0)
+        else {
+            unreachable!()
+        };
+        assert!(pr2_entropy.finish_reseed(
+            ticket,
+            crate::pr2_entropy::TEST_CANISTER_VERSION,
+            Principal::from_slice(&[1, 2, 3]),
+            &[0x51; 32],
+            0,
+        ));
         Data {
             users: UserMap::default(),
             governance_principals: HashSet::new(),
@@ -625,6 +678,17 @@ impl Default for Data {
             openai_api_key: None,
             moderation_referral_config: None,
             internal_moderation_channel: None,
+            ai_actions: crate::model::ai_action_registry::AiActionRegistry::default(),
+            ai_apps: crate::model::ai_app_registry::AiAppRegistry::default(),
+            ai_app_user_keys: crate::model::ai_app_user_keys::AiAppUserKeys::default(),
+            ai_app_link_codes: crate::model::ai_app_link_codes::AiAppLinkCodes::default(),
+            ai_app_call_throttle: crate::model::ai_app_call_throttle::AiAppCallThrottle::default(),
+            ai_app_card_tokens: crate::model::ai_app_card_tokens::AiAppCardTokens::default(),
+            action_signing_keyring: crate::model::action_signing_keyring::ActionSigningKeyring::default(),
+            ai_app_scoped_identity_key: crate::model::ai_app_scoped_identity::AiAppScopedIdentityKey::default(),
+            action_delivery_outbox: crate::model::action_delivery_outbox::ActionDeliveryOutbox::default(),
+            pr2_entropy,
+            pr2_bearer_canister_version: Some(crate::pr2_entropy::TEST_CANISTER_VERSION),
         }
     }
 }
@@ -665,6 +729,9 @@ pub struct Metrics {
     pub internal_moderation_channel_set: bool,
     pub moderation_referral_config_set: bool,
     pub moderation_referral_categories: u32,
+    pub ai_app_user_key_metrics: crate::model::ai_app_user_keys::AiAppUserKeyMetrics,
+    pub ai_app_card_attestation_metrics: crate::model::ai_app_call_throttle::AiAppCardAttestationMetrics,
+    pub action_delivery_outbox_metrics: crate::model::action_delivery_outbox::ActionDeliveryOutboxMetrics,
     pub oc_public_key: String,
     pub empty_users: usize,
     pub deleted_users: usize,

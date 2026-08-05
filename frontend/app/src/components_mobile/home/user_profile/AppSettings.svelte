@@ -4,6 +4,7 @@
     import { publish } from "@client";
     import { navigate } from "@utils/navigation";
     import AccountMultiple from "svelte-material-icons/AccountMultiple.svelte";
+    import AutoFix from "svelte-material-icons/AutoFix.svelte";
     import Cog from "svelte-material-icons/Cog.svelte";
     import Delete from "svelte-material-icons/DeleteForeverOutline.svelte";
     import Eye from "svelte-material-icons/EyeOutline.svelte";
@@ -96,6 +97,14 @@
                     "In some circumstances, clearing the app's cached data can resolve issues. You should not normally need to use this.",
                 )}
             />
+
+            <LinkedCard
+                onClick={() => publish("userProfileMyApps")}
+                Icon={AutoFix}
+                title={i18nKey("aiApps.myApps")}
+                info={i18nKey(
+                    "View the AI apps you have registered and publish them to the app directory.",
+                )} />
 
             <LinkedCard
                 onClick={() => publish("userProfileBotConfig")}

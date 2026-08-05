@@ -23,6 +23,7 @@
     import { getContext } from "svelte";
     import { _, locale } from "svelte-i18n";
     import CollapseIcon from "svelte-material-icons/ArrowCollapseUp.svelte";
+    import AutoFix from "svelte-material-icons/AutoFix.svelte";
     import Cancel from "svelte-material-icons/Cancel.svelte";
     import ChatPlusOutline from "svelte-material-icons/ChatPlusOutline.svelte";
     import ClockPlusOutline from "svelte-material-icons/ClockPlusOutline.svelte";
@@ -102,6 +103,7 @@
         // TODO figure out how and where this is used ???
         onDeleteFailedMessage?: () => void;
         onOptionSelected?: () => void;
+        onRunAiAction?: () => void;
     }
 
     let {
@@ -144,6 +146,7 @@
         onTipMessage,
         onDeleteMessage,
         onOptionSelected,
+        onRunAiAction,
     }: Props = $props();
 
     let mediaUrl = $derived(urlForMediaContent(msg.content));
@@ -442,7 +445,8 @@
         | "reportMenu"
         | "revealDeletedMessage"
         | "undeleteMessage"
-        | "retryMessage";
+        | "retryMessage"
+        | "proposeAiAction";
 
     function menuItemTitleToKey(menuItemTitle: MenuItemTitle): string {
         switch (menuItemTitle) {
@@ -498,6 +502,8 @@
                 return "undeleteMessage";
             case "retryMessage":
                 return "retryMessage";
+            case "proposeAiAction":
+                return "aiActions.propose";
         }
     }
 
@@ -581,6 +587,9 @@
             case "retryMessage":
                 onRetrySend?.();
                 break;
+            case "proposeAiAction":
+                onRunAiAction?.();
+                break;
         }
     }
 </script>
@@ -638,6 +647,8 @@
         <DeleteOffOutline {color} {size} />
     {:else if title === "retryMessage"}
         <Refresh {color} {size} />
+    {:else if title === "proposeAiAction"}
+        <AutoFix {color} {size} />
     {/if}
 {/snippet}
 
@@ -748,6 +759,11 @@
 <!-- Tip sender -->
 {#if canTip && !disableTipsFeature}
     {@render renderMenuItem("tipMenu")}
+{/if}
+
+<!-- Propose an AI action from this message -->
+{#if onRunAiAction !== undefined && confirmed && !inert && !failed}
+    {@render renderMenuItem("proposeAiAction")}
 {/if}
 
 <!-- Block sender -->

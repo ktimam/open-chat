@@ -29,13 +29,13 @@ use serde_bytes::ByteBuf;
 use stable_memory_map::{BaseKeyPrefix, ChatEventKeyPrefix, StableMemoryMap};
 use std::cell::RefCell;
 use std::collections::hash_map::Entry::{Occupied, Vacant};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::ops::Deref;
 use timer_job_queues::{BatchedTimerJobQueue, GroupedTimerJobQueue};
 use types::{
-    AccessGateConfigInternal, Achievement, BotAdded, BotDefinitionUpdate, BotEventsCaller, BotInitiator, BotNotification,
-    BotPermissions, BotRemoved, BotSubscriptions, BotUpdated, BuildVersion, Caller, CanisterId, ChatId, ChatMetrics,
-    CommunityId, Cycles, Document, EventIndex, EventsCaller, FrozenGroupInfo, GroupCanisterGroupChatSummary,
+    AccessGateConfigInternal, Achievement, AiAppId, BotAdded, BotDefinitionUpdate, BotEventsCaller, BotInitiator,
+    BotNotification, BotPermissions, BotRemoved, BotSubscriptions, BotUpdated, BuildVersion, Caller, CanisterId, ChatId,
+    ChatMetrics, CommunityId, Cycles, Document, EventIndex, EventsCaller, FrozenGroupInfo, GroupCanisterGroupChatSummary,
     GroupChatUserNotificationPayload, GroupMembership, GroupPermissions, GroupSubtype, IdempotentEnvelope,
     MAX_THREADS_IN_SUMMARY, MessageId, MessageIndex, Milliseconds, MultiUserChat, Notification, OCResult, Rules,
     TimestampMillis, Timestamped, UserId, UserNotification, UserType,
@@ -46,6 +46,7 @@ use utils::idempotency_checker::IdempotencyChecker;
 use utils::regular_jobs::RegularJobs;
 
 mod activity_notifications;
+mod ai_app_card_authority;
 mod guards;
 mod jobs;
 mod lifecycle;
@@ -585,6 +586,12 @@ struct Data {
     moderation_flags: Timestamped<u32>,
     pub bots: InstalledBots,
     idempotency_checker: IdempotencyChecker,
+    // AI apps (from the user_index AI-app directory) enabled in this group. Ids only — the group
+    // deliberately does NOT validate that an id refers to a registered app: the client only offers
+    // real apps when toggling, and a dangling id is harmless (it never matches an app when the
+    // client intersects this set with the directory).
+    #[serde(default)]
+    pub enabled_ai_apps: BTreeSet<AiAppId>,
 }
 
 fn init_instruction_counts_log() -> InstructionCountsLog {
@@ -679,6 +686,7 @@ impl Data {
             moderation_flags: Timestamped::default(),
             bots: InstalledBots::default(),
             idempotency_checker: IdempotencyChecker::default(),
+            enabled_ai_apps: BTreeSet::new(),
         }
     }
 

@@ -1,10 +1,57 @@
-
 <script lang="ts">
     import { navigate } from "@utils/navigation";
+    import {
+        manualExtractEnabled,
+        proposeAndPost,
+        proposeAndPostCandidate,
+        preflightAiActionForMessage,
+        runProposeFlow,
+        type AiActionCandidate,
+    } from "@utils/aiActionRunner";
+    import { canInferOnDevice } from "@utils/onDeviceInference";
+    import {
+        markSurfaceShownAfterConsent,
+        surfaceToOpenAfterConfirm,
+        type SurfaceOpening,
+    } from "@utils/aiAppSurfaces";
+    import {
+        autoProposeSuggestions,
+        dismissAutoProposeSuggestion,
+        muteAutoProposeInChat,
+    } from "@utils/autoPropose";
     import Typing from "@shared_components/Typing.svelte";
     import { trackedEffect } from "@src/utils/effects.svelte";
     import type { ProfileLinkClickedEvent } from "@webcomponents/profileLink";
-    import { AvatarSize, type ChatIdentifier, chatListScopeStore, type ChatType, currentUserIdStore, currentUserStore, type EnhancedReplyContext, iconSize, localUpdates, type Message, type MessageReminderCreatedContent, mobileWidth, OpenChat, publish, routeForMessage, routeStore, screenWidth, ScreenWidth, selectedChatBlockedUsersStore, selectedChatWebhooksStore, selectedCommunityMembersStore, type SelectedEmoji, type SenderContext, translationsStore, unconfirmedReadByThem, undeletingMessagesStore, type UserSummary } from "@client";
+    import {
+        type AiAppRegistration,
+        AvatarSize,
+        type ChatIdentifier,
+        chatListScopeStore,
+        type ChatType,
+        currentUserIdStore,
+        currentUserStore,
+        type EnhancedReplyContext,
+        iconSize,
+        localUpdates,
+        type Message,
+        type MessageReminderCreatedContent,
+        mobileWidth,
+        OpenChat,
+        publish,
+        routeForMessage,
+        routeStore,
+        screenWidth,
+        ScreenWidth,
+        selectedChatBlockedUsersStore,
+        selectedChatWebhooksStore,
+        selectedCommunityMembersStore,
+        type SelectedEmoji,
+        type SenderContext,
+        translationsStore,
+        unconfirmedReadByThem,
+        undeletingMessagesStore,
+        type UserSummary,
+    } from "@client";
     import { getContext, onDestroy, onMount, tick } from "svelte";
     import { _ } from "svelte-i18n";
     import Close from "svelte-material-icons/Close.svelte";
@@ -15,7 +62,10 @@
     import { i18nKey } from "../../i18n/i18n";
     import { quickReactions } from "../../stores/quickReactions";
     import { rtlStore } from "../../stores/rtl";
-    import { dclickReply } from "../../stores/settings";
+    import {
+        autoProposeSuggestions as autoProposeEnabled,
+        dclickReply,
+    } from "../../stores/settings";
     import { now } from "../../stores/time";
     import { toastStore } from "../../stores/toast";
     import { isTouchOnlyDevice } from "../../utils/devices";
@@ -28,8 +78,12 @@
     import HoverIcon from "../HoverIcon.svelte";
     import Link from "../Link.svelte";
     import ModalContent from "../ModalContent.svelte";
+    import AiAppLinkModal from "./AiAppLinkModal.svelte";
+    import AiAppSurfaceModal from "./AiAppSurfaceModal.svelte";
     import Overlay from "../Overlay.svelte";
     import Translatable from "../Translatable.svelte";
+    import AutoProposeChip from "./AutoProposeChip.svelte";
+    import Spinner from "../icons/Spinner.svelte";
     import ChatMessageContent from "./ChatMessageContent.svelte";
     import ChatMessageMenu from "./ChatMessageMenu.svelte";
     import EmojiPicker from "./EmojiPickerWrapper.svelte";
@@ -258,6 +312,110 @@
         tipping = ledger;
     }
 
+    // The raw-JSON extraction prompt is a TEST SEAM only (Issue 1): real users with no on-device
+    // model must never see a raw JSON box — they're guided to set one up (runProposeFlow says so). It
+    // runs solely when `manualExtractEnabled()` is set (localStorage flag / ?manualExtract=1), which
+    // the automated journey harness uses to drive the confirm → deposit cycle without a model.
+    function promptForExtraction():
+        | Record<string, unknown>
+        | Record<string, unknown>[]
+        | undefined {
+        if (!manualExtractEnabled()) return undefined;
+        const raw = window.prompt(
+            'Enter the action\'s fields as JSON to propose it, e.g. {"amount":20,"currency":"USD"}',
+            "{}",
+        );
+        if (raw === null) return undefined;
+        try {
+            return JSON.parse(raw) as Record<string, unknown> | Record<string, unknown>[];
+        } catch {
+            toastStore.showFailureToast(i18nKey("That isn't valid JSON"));
+            return undefined;
+        }
+    }
+
+    // This (classic) UI has no chooser sheet — a numbered prompt picks between multiple enabled app
+    // actions, behind the same manual-extract test seam as the JSON prompt above.
+    function promptForCandidate(candidates: AiActionCandidate[]): AiActionCandidate | undefined {
+        if (!manualExtractEnabled()) return undefined;
+        const list = candidates
+            .map((c, i) => `${i + 1}: ${c.app.manifest.name} — ${c.action.name}`)
+            .join("\n");
+        const raw = window.prompt(`Choose an action to run:\n${list}`, "1");
+        if (raw === null) return undefined;
+        return candidates[parseInt(raw, 10) - 1];
+    }
+
+    // A per-user-keys app the user hasn't linked opens the proper pairing modal (AiAppLinkModal: a
+    // high-entropy claim token, countdown, and "Check connection" that only reports success once my_ai_app_keys
+    // actually shows the key). `linkModalApp` renders it; `linkModalResolve` bridges its async result
+    // back to this imperative flow so the propose that triggered it resumes on success.
+    let linkModalApp = $state<AiAppRegistration | undefined>(undefined);
+    let linkModalResolve: ((linked: boolean) => void) | undefined;
+    let confirmSurface = $state<SurfaceOpening | undefined>(undefined);
+
+    function closeLinkModal(linked: boolean) {
+        linkModalApp = undefined;
+        const resolve = linkModalResolve;
+        linkModalResolve = undefined;
+        resolve?.(linked);
+    }
+
+    // The modal only resolves `true` once the key is registered, so the flow can re-propose on the
+    // strength of this answer alone.
+    function linkApp(app: AiAppRegistration): Promise<boolean> {
+        return new Promise<boolean>((resolve) => {
+            linkModalResolve = resolve;
+            linkModalApp = app;
+        });
+    }
+
+    // Busy flag for an in-flight propose, so the trigger (the auto-propose chip) can show progress:
+    // the on-device model's first call cold-loads the multi-GB GGUF and, with no token streaming,
+    // otherwise reads as a frozen UI. Also guards against a double-run.
+    let proposing = $state(false);
+
+    // The decisions live in runProposeFlow (utils/aiActionRunner), shared with the mobile tree; this
+    // component supplies only the surfaces this tree has — window prompts and the link modal. The two
+    // trees each kept their own copy of the flow until one was fixed and the other was not, and the
+    // propose button on the forgotten tree quietly did nothing.
+    async function runAiActionHandler() {
+        if (proposing) return;
+        proposing = true;
+        try {
+            await runProposeFlow({
+                preflight: () => preflightAiActionForMessage(client, messageContext.chatId),
+                canInfer: canInferOnDevice,
+                promptForExtraction,
+                propose: (extraction) =>
+                    proposeAndPost(client, messageContext, msg.content, extraction),
+                proposeCandidate: (candidate, extraction) =>
+                    proposeAndPostCandidate(
+                        client,
+                        messageContext,
+                        msg.content,
+                        candidate,
+                        extraction,
+                    ),
+                chooseCandidate: promptForCandidate,
+                linkApp,
+                toast: (message) => toastStore.showFailureToast(i18nKey(message)),
+            });
+        } finally {
+            proposing = false;
+        }
+    }
+
+    function proposeSuggestedAiAction() {
+        dismissAutoProposeSuggestion(msg.messageId);
+        void runAiActionHandler();
+    }
+
+    function muteAutoProposeSuggestions() {
+        muteAutoProposeInChat(chatId);
+        toastStore.showSuccessToast(i18nKey("aiApps.autoPropose.muted"));
+    }
+
     function selectReaction(selected: SelectedEmoji) {
         if (selected.kind === "native") {
             toggleReaction(false, selected.unicode);
@@ -345,6 +503,59 @@
             });
     }
 
+    function onRespondToActionCard(
+        response: "confirm" | "cancel",
+        confirmPayloadOverride?: Uint8Array,
+        confirmationGrant?: Uint8Array,
+    ): Promise<void> {
+        // Capture before the async round-trip: the card content is replaced when its state
+        // refreshes to "confirmed". The promise is returned so the card can show a spinner and lock
+        // its buttons until the confirm/cancel (and its downstream deposit) resolves.
+        const actionId =
+            msg.content.kind === "action_card_content" ? msg.content.actionId : undefined;
+        const appId = msg.content.kind === "action_card_content" ? msg.content.appId : undefined;
+        const appRevision =
+            msg.content.kind === "action_card_content" ? msg.content.appRevision : undefined;
+        return client
+            .respondToActionCard(
+                chatId,
+                threadRootMessageIndex,
+                msg.messageId,
+                response,
+                confirmPayloadOverride,
+                confirmationGrant,
+            )
+            .then(async (success) => {
+                if (!success) {
+                    // The round-trip failed — most often a confirm whose deposit to the app's inbox
+                    // errored. The canister now leaves the card Pending (it does NOT commit "confirmed"
+                    // on a failed deposit), so surface the failure and let the still-live buttons retry.
+                    if (response === "confirm") {
+                        toastStore.showFailureToast(i18nKey("aiActions.confirmFailed"));
+                    }
+                    return;
+                }
+                if (response !== "confirm" || actionId === undefined) return;
+                // After the first successfully confirmed action in a chat, open the owning app's
+                // "chat_link" surface (when it declares one) so the user can finish configuring
+                // the chat inside the app. The classic layout keeps this minimal: whatever the
+                // surface's display, the substituted URL opens in a new tab (the mobile layout
+                // hosts "sheet" surfaces in-app). surfaceToOpenAfterConfirm persists the
+                // once-per-(app, chat) marker.
+                const opening = await surfaceToOpenAfterConfirm(
+                    client,
+                    chatId,
+                    actionId,
+                    appId,
+                    appRevision,
+                    $currentUserIdStore,
+                );
+                if (opening !== undefined) {
+                    confirmSurface = opening;
+                }
+            });
+    }
+
     function reportMessage() {
         showReport = true;
     }
@@ -364,6 +575,12 @@
             msg.content.kind === "blocked_content" ||
             msg.content.kind === "restricted_content" ||
             collapsed,
+    );
+    // Auto-propose: the matcher (utils/autoPropose.ts) flagged this message as matching a
+    // registered action's trigger keywords — render the under-bubble chip. Tapping it re-uses the
+    // exact same propose path as the message menu.
+    let autoProposeSuggestion = $derived(
+        $autoProposeEnabled && !inert ? $autoProposeSuggestions.get(msg.messageId) : undefined,
     );
     let canTip = $derived(!me && confirmed && !inert && !failed);
     let inThread = $derived(threadRootMessage !== undefined);
@@ -429,6 +646,26 @@
     <TipBuilder ledger={tipping} onClose={() => (tipping = undefined)} {msg} {messageContext} />
 {/if}
 
+{#if linkModalApp !== undefined}
+    <AiAppLinkModal
+        app={linkModalApp}
+        onLinked={() => closeLinkModal(true)}
+        onDismiss={() => closeLinkModal(false)}
+    />
+{/if}
+
+{#if confirmSurface !== undefined}
+    <AiAppSurfaceModal
+        title={confirmSurface.app.manifest.name}
+        url={confirmSurface.url}
+        display={confirmSurface.surface.display}
+        dataDisclosures={confirmSurface.dataDisclosures}
+        onConsent={() =>
+            markSurfaceShownAfterConsent(confirmSurface!, chatId, $currentUserIdStore)}
+        onDismiss={() => (confirmSurface = undefined)}
+    />
+{/if}
+
 {#if showEmojiPicker && canReact}
     <Overlay onClose={() => (showEmojiPicker = false)} dismissible>
         <ModalContent hideFooter hideHeader fill>
@@ -438,7 +675,8 @@
                     <span
                         title={$_("close")}
                         class="close-emoji"
-                        onclick={() => (showEmojiPicker = false)}>
+                        onclick={() => (showEmojiPicker = false)}
+                    >
                         <HoverIcon>
                             <Close size={$iconSize} color={"var(--icon-txt)"} />
                         </HoverIcon>
@@ -448,7 +686,8 @@
                     onEmojiSelected={selectReaction}
                     onSkintoneChanged={(tone) => quickReactions.reload(tone)}
                     supportCustom={true}
-                    mode={"reaction"} />
+                    mode={"reaction"}
+                />
             {/snippet}
         </ModalContent>
     </Overlay>
@@ -459,7 +698,8 @@
         {chatId}
         {eventIndex}
         {threadRootMessageIndex}
-        onClose={() => (showRemindMe = false)} />
+        onClose={() => (showRemindMe = false)}
+    />
 {/if}
 
 {#if showReport}
@@ -468,7 +708,8 @@
         messageId={msg.messageId}
         {chatId}
         {canDelete}
-        onClose={() => (showReport = false)} />
+        onClose={() => (showReport = false)}
+    />
 {/if}
 
 {#if expiresAt === undefined || percentageExpired < 100}
@@ -478,7 +719,8 @@
                 <BotMessageContext
                     botName={senderDisplayName}
                     botCommand={senderContext.command}
-                    finalised={senderContext.finalised} />
+                    finalised={senderContext.finalised}
+                />
             </div>
         {/if}
         <IntersectionObserverComponent>
@@ -489,7 +731,8 @@
                     class:me
                     data-index={failed ? "" : msg.messageIndex}
                     data-id={failed ? "" : msg.messageId}
-                    id={failed ? "" : `event-${eventIndex}`}>
+                    id={failed ? "" : `event-${eventIndex}`}
+                >
                     {#if showAvatar}
                         <div class="avatar-col">
                             {#if first}
@@ -500,9 +743,8 @@
                                         maxStreak={hasAchievedMaxStreak}
                                         url={client.userAvatarUrl(sender)}
                                         userId={msg.sender}
-                                        size={$mobileWidth
-                                            ? AvatarSize.Small
-                                            : AvatarSize.Default} />
+                                        size={$mobileWidth ? AvatarSize.Small : AvatarSize.Default}
+                                    />
                                 </div>
                             {/if}
                         </div>
@@ -514,7 +756,8 @@
                             (mediaWidth !== undefined ? ` --media-width: ${mediaWidth};` : "")}
                         class:clamped={mediaWidth !== undefined}
                         class:p2pSwap={isP2PSwap}
-                        class:proposal={isProposal && !inert}>
+                        class:proposal={isProposal && !inert}
+                    >
                         <!-- svelte-ignore a11y_no_static_element_interactions -->
                         <div
                             ondblclick={doubleClickMessage}
@@ -533,7 +776,8 @@
                             class:failed
                             class:bot={senderContext?.kind === "bot"}
                             class:thread={inThread}
-                            class:rtl={$rtlStore}>
+                            class:rtl={$rtlStore}
+                        >
                             {#if first && !isProposal && !isPrize}
                                 <div class="sender" class:fill class:rtl={$rtlStore}>
                                     <Link underline={"never"} onClick={openUserProfile}>
@@ -545,26 +789,31 @@
                                             uniquePerson={sender?.isUniquePerson}
                                             diamondStatus={sender?.diamondStatus}
                                             {streak}
-                                            {chitEarned} />
+                                            {chitEarned}
+                                        />
                                         <BotBadge
                                             bot={senderContext?.kind === "bot"}
-                                            webhook={senderContext?.kind === "webhook"} />
+                                            webhook={senderContext?.kind === "webhook"}
+                                        />
                                         {#if sender !== undefined && multiUserChat}
                                             <WithRole
                                                 userId={sender.userId}
                                                 chatMembers={$selectedCommunityMembersStore}
-                                                communityMembers={$selectedCommunityMembersStore}>
+                                                communityMembers={$selectedCommunityMembersStore}
+                                            >
                                                 {#snippet children(communityRole, chatRole)}
                                                     <RoleIcon
                                                         level="community"
                                                         popup
-                                                        role={communityRole} />
+                                                        role={communityRole}
+                                                    />
                                                     <RoleIcon
                                                         level={chatType === "channel"
                                                             ? "channel"
                                                             : "group"}
                                                         popup
-                                                        role={chatRole} />
+                                                        role={chatRole}
+                                                    />
                                                 {/snippet}
                                             </WithRole>
                                         {/if}
@@ -583,7 +832,8 @@
                                             size={$iconSize}
                                             color={me
                                                 ? "var(--currentChat-msg-me-muted)"
-                                                : "var(--currentChat-msg-muted)"} />
+                                                : "var(--currentChat-msg-muted)"}
+                                        />
                                     </div>
                                     <div class="text">{"Forwarded"}</div>
                                 </div>
@@ -596,7 +846,8 @@
                                         {intersecting}
                                         {onRemovePreview}
                                         {onGoToMessageIndex}
-                                        repliesTo={msg.repliesTo} />
+                                        repliesTo={msg.repliesTo}
+                                    />
                                 {:else}
                                     <UnresolvedReply />
                                 {/if}
@@ -620,9 +871,11 @@
                                 blockLevelMarkdown={msg.blockLevelMarkdown}
                                 {onRemovePreview}
                                 {onRegisterVote}
+                                {onRespondToActionCard}
                                 {onExpandMessage}
                                 ogPreviews={msg.ogPreviews}
-                                messagePreviews={msg.messagePreviews} />
+                                messagePreviews={msg.messagePreviews}
+                            />
 
                             {#if !inert}
                                 <TimeAndTicks
@@ -641,7 +894,8 @@
                                     {readByThem}
                                     {crypto}
                                     {chatType}
-                                    {dateFormatter} />
+                                    {dateFormatter}
+                                />
                             {/if}
 
                             {#if debug}
@@ -712,7 +966,9 @@
                                 onTipMessage={tipMessage}
                                 onReportMessage={reportMessage}
                                 onCancelReminder={cancelReminder}
-                                onRemindMe={remindMe} />
+                                onRunAiAction={runAiActionHandler}
+                                onRemindMe={remindMe}
+                            />
                         {/if}
 
                         {#if ephemeral}
@@ -742,7 +998,8 @@
                         {threadSummary}
                         indent={showAvatar}
                         {me}
-                        url={msgUrl} />
+                        url={msgUrl}
+                    />
                 {/if}
 
                 {#if msg.reactions.length > 0 && !inert}
@@ -752,7 +1009,8 @@
                                 onClick={() => toggleReaction(false, reaction)}
                                 {reaction}
                                 {intersecting}
-                                {userIds} />
+                                {userIds}
+                            />
                         {/each}
                     </div>
                 {/if}
@@ -762,6 +1020,31 @@
                         {#each tips as [ledger, userTips]}
                             <TipThumbnail onClick={tipMessage} {canTip} {ledger} {userTips} />
                         {/each}
+                    </div>
+                {/if}
+
+                {#if autoProposeSuggestion !== undefined}
+                    <div class:indent={showAvatar}>
+                        <AutoProposeChip
+                            {me}
+                            title={autoProposeSuggestion.title}
+                            busy={proposing}
+                            onPropose={proposeSuggestedAiAction}
+                            onDismiss={() => dismissAutoProposeSuggestion(msg.messageId)}
+                            onMute={muteAutoProposeSuggestions}
+                        />
+                    </div>
+                {/if}
+
+                {#if proposing && autoProposeSuggestion === undefined}
+                    <!-- Menu-triggered propose (no auto-propose chip is shown for this message):
+                         surface the in-flight on-device inference so a cold multi-GB model load
+                         reads as progress instead of a frozen UI. -->
+                    <div class="propose-working" class:me class:indent={showAvatar}>
+                        <span class="pill">
+                            <Spinner size={"1rem"} foregroundColour={"var(--primary)"} />
+                            <Translatable resourceKey={i18nKey("aiApps.autoPropose.working")} />
+                        </span>
                     </div>
                 {/if}
             {/snippet}
@@ -891,6 +1174,35 @@
             @include mobile() {
                 margin-left: $avatar-width-mob;
             }
+        }
+    }
+
+    .propose-working {
+        display: flex;
+        justify-content: flex-start;
+        margin-top: 2px;
+
+        &.me {
+            justify-content: flex-end;
+        }
+
+        &.indent {
+            margin-left: $avatar-width;
+            @include mobile() {
+                margin-left: $avatar-width-mob;
+            }
+        }
+
+        .pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 2px 10px;
+            border-radius: 999px;
+            background-color: var(--input-bg);
+            border: var(--bw) solid var(--bd);
+            color: var(--txt-light);
+            font-size: 0.75rem;
         }
     }
 

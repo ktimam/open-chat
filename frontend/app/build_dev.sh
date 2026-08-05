@@ -17,7 +17,7 @@ export OC_ACCOUNT_LINKING_CODES_ENABLED=true
 export OC_BLOB_URL_PATTERN=http://{canisterId}.raw.localhost:8080/{blobType}
 export OC_BUILD_ENV=$NODE_ENV
 export OC_WEBAUTHN_ORIGIN=localhost
-export OC_DEV_PORT=5001
+export OC_DEV_PORT=5003
 export OC_DFX_NETWORK=local
 export OC_INTERNET_IDENTITY_CANISTER_ID=qhbym-qaaaa-aaaaa-aaafq-cai
 export OC_INTERNET_IDENTITY_URL=http://qhbym-qaaaa-aaaaa-aaafq-cai.localhost:8080
@@ -30,7 +30,11 @@ export OC_VAPID_PUBLIC_KEY=BOzPIB0gN10bFIjMs10jrxzWNlZrVnZmrpK2SLEDd3uAQi0YHQ_n8
 export OC_VIDEO_BRIDGE_URL=http://localhost:5050
 export OC_WALLET_CONNECT_PROJECT_ID=b9aafebed2abfaf8341afd9428c947d5
 export OC_WEBSITE_VERSION=
-export OC_BASE_ORIGIN=http://localhost:5001
+export OC_BASE_ORIGIN=http://localhost:5003
+# The desktop/Tauri shell targets the v2 mobile layout: the bottom bar, on-device model
+# manager and register-AI-action screens live only in components_mobile (mounted when
+# OC_MOBILE_LAYOUT=v2 and width < 768). Local dev only — not for the upstream PR.
+export OC_MOBILE_LAYOUT=v2
 
 # override klipy api key from local environment (app only)
 export OC_KLIPY_APIKEY="$OC_APP_KLIPY_APIKEY"

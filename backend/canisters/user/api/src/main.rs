@@ -44,6 +44,8 @@ fn main() {
     generate_ts_method!(user, delete_messages);
     generate_ts_method!(user, delete_saved_crypto_account);
     generate_ts_method!(user, edit_message_v2);
+    generate_ts_method!(user, respond_to_action_card);
+    generate_ts_method!(user, create_ai_app_card_capability);
     generate_ts_method!(user, generate_btc_address);
     generate_ts_method!(user, generate_one_sec_address);
     generate_ts_method!(user, join_video_call);

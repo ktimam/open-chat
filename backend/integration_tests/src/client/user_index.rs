@@ -32,6 +32,7 @@ generate_msgpack_update_call!(accept_terms);
 generate_msgpack_update_call!(set_moderation_referral_config);
 generate_msgpack_update_call!(set_vault_reviewers);
 generate_msgpack_update_call!(set_openai_api_key);
+generate_update_call!(remove_ai_app);
 generate_update_call!(remove_platform_moderator);
 generate_msgpack_update_call!(set_display_name);
 generate_msgpack_update_call!(set_premium_item_cost);
@@ -45,6 +46,7 @@ generate_update_call!(upload_wasm_chunk);
 generate_msgpack_update_call!(register_bot);
 generate_msgpack_update_call!(publish_bot);
 generate_msgpack_update_call!(update_bot);
+generate_msgpack_update_call!(register_ai_app);
 
 pub mod happy_path {
     use crate::utils::tick_many;
@@ -60,6 +62,24 @@ pub mod happy_path {
     };
     use user_index_canister::ChildCanisterType;
     use user_index_canister::users::UserGroup;
+
+    pub fn register_ai_app(
+        env: &mut PocketIc,
+        sender: Principal,
+        user_index_canister_id: CanisterId,
+        manifest: types::AiAppManifest,
+    ) -> types::AiAppId {
+        let response = super::register_ai_app(
+            env,
+            sender,
+            user_index_canister_id,
+            &user_index_canister::register_ai_app::Args { manifest },
+        );
+        match response {
+            user_index_canister::register_ai_app::Response::Success(registration) => registration.id,
+            response => panic!("'register_ai_app' error: {response:?}"),
+        }
+    }
 
     pub fn current_user(
         env: &PocketIc,
