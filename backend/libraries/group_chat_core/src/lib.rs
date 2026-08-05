@@ -3,8 +3,7 @@ use chat_events::{
     DeleteUndeleteMessagesArgs, EditMessageArgs, EventPusher, ExpiredThread, GroupGateUpdatedInternal, MessageContentInternal,
     MessageInternal, NullEventPusher, PushEventResultInternal, PushMessageArgs, Reader, RegisterPollVoteArgs,
     RegisterPollVoteSuccess, RemoveEventsResult, ReservePrizeSuccess, RespondToActionCardArgs, RespondToActionCardResult,
-    TipMessageArgs, UndeleteMessageSuccess,
-    UpdateMessageSuccess,
+    TipMessageArgs, UndeleteMessageSuccess, UpdateMessageSuccess,
 };
 use group_community_common::MemberUpdate;
 use itertools::Itertools;
@@ -16,9 +15,8 @@ use serde::{Deserialize, Serialize};
 use std::cmp::{Reverse, max, min};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use types::{
-    AccessGateConfig, AccessGateConfigInternal, ActionCardResponse, AvatarChanged, BotMessageContext,
-    BotNotification, Caller, Chat,
-    CustomPermission, DiamondMembershipStatus, Document, EventIndex, EventOrExpiredRange, EventWrapper, EventsCaller,
+    AccessGateConfig, AccessGateConfigInternal, ActionCardResponse, AvatarChanged, BotMessageContext, BotNotification, Caller,
+    Chat, CustomPermission, DiamondMembershipStatus, Document, EventIndex, EventOrExpiredRange, EventWrapper, EventsCaller,
     EventsResponse, ExternalUrlUpdated, GroupDescriptionChanged, GroupMember, GroupNameChanged, GroupPermissions,
     GroupReplyContext, GroupRole, GroupRulesChanged, GroupSubtype, GroupVisibilityChanged, HydratedMention,
     MAX_RETURNED_MENTIONS, MemberLeft, MembersRemoved, Message, MessageContent, MessageId, MessageIndex, MessageMatch,
@@ -1784,21 +1782,112 @@ impl GroupChatCore {
         })
     }
 
-    // Two-phase confirm, READ side (mirrors `respond_to_action_card`'s member/visibility resolution):
-    // the deposit instruction for confirming a Pending, un-expired, routing-bearing card, WITHOUT
-    // committing. None => there is nothing to deposit up-front (unverified member, or the card is not
-    // a confirmable routing-bearing card); the caller then commits via `respond_to_action_card`.
-    pub fn action_card_confirm_deposit(
+    pub fn ai_app_card_capability_source(
         &self,
         user_id: UserId,
         thread_root_message_index: Option<MessageIndex>,
         message_id: MessageId,
         now: TimestampMillis,
-    ) -> Option<ActionCardDeposit> {
-        let member = self.members.get_verified_member(user_id).ok()?;
+    ) -> OCResult<chat_events::AiAppCardCapabilitySource> {
+        let member = self.members.get_verified_member(user_id)?;
+        self.events
+            .ai_app_card_capability_source(thread_root_message_index, message_id, member.min_visible_event_index(), now)
+    }
+
+    pub fn ai_app_card_confirmation_source(
+        &self,
+        user_id: UserId,
+        thread_root_message_index: Option<MessageIndex>,
+        message_id: MessageId,
+        now: TimestampMillis,
+    ) -> OCResult<chat_events::AiAppCardCapabilitySource> {
+        let member = self.members.get_verified_member(user_id)?;
+        self.events.ai_app_card_confirmation_source(
+            thread_root_message_index,
+            message_id,
+            member.min_visible_event_index(),
+            now,
+        )
+    }
+
+    pub fn ai_app_card_confirmation_reservation_source(
+        &self,
+        user_id: UserId,
+        thread_root_message_index: Option<MessageIndex>,
+        message_id: MessageId,
+        confirmation_lease_generation: u64,
+        confirm_payload_hash: [u8; 32],
+        now: TimestampMillis,
+    ) -> OCResult<chat_events::AiAppCardCapabilitySource> {
+        let member = self.members.get_verified_member(user_id)?;
+        self.events.ai_app_card_confirmation_reservation_source(
+            thread_root_message_index,
+            message_id,
+            member.min_visible_event_index(),
+            user_id,
+            confirmation_lease_generation,
+            confirm_payload_hash,
+            now,
+        )
+    }
+
+    // Two-phase confirm, READ side (mirrors `respond_to_action_card`'s member/visibility resolution):
+    // the deposit instruction for confirming a Pending, un-expired, routing-bearing card, WITHOUT
+    // committing. None => there is nothing to deposit up-front (unverified member, or the card is not
+    // a confirmable routing-bearing card); the caller then commits via `respond_to_action_card`.
+    pub fn reserve_action_card_confirm(
+        &mut self,
+        user_id: UserId,
+        thread_root_message_index: Option<MessageIndex>,
+        message_id: MessageId,
+        requested_confirm_payload_hash: Option<[u8; 32]>,
+        now: TimestampMillis,
+    ) -> OCResult<Option<ActionCardDeposit>> {
+        let member = self.members.get_verified_member(user_id)?;
+        let min_visible_event_index = member.min_visible_event_index();
+        self.events.reserve_action_card_confirm(
+            thread_root_message_index,
+            message_id,
+            min_visible_event_index,
+            user_id,
+            requested_confirm_payload_hash,
+            now,
+        )
+    }
+
+    pub fn complete_action_card_confirm(
+        &mut self,
+        user_id: UserId,
+        thread_root_message_index: Option<MessageIndex>,
+        message_id: MessageId,
+        confirmation_lease_generation: u64,
+        confirm_payload_hash: [u8; 32],
+        now: TimestampMillis,
+    ) -> OCResult<UpdateMessageSuccess<RespondToActionCardResult>> {
+        // Authorization happened immediately before delivery. After a definite downstream Success,
+        // complete only the exact persisted lease and do not strand it because membership changed.
+        self.events.complete_action_card_confirm(
+            thread_root_message_index,
+            message_id,
+            EventIndex::default(),
+            user_id,
+            confirmation_lease_generation,
+            confirm_payload_hash,
+            now,
+        )
+    }
+
+    pub fn abort_action_card_confirm(
+        &mut self,
+        user_id: UserId,
+        thread_root_message_index: Option<MessageIndex>,
+        message_id: MessageId,
+        now: TimestampMillis,
+    ) -> OCResult {
+        let member = self.members.get_verified_member(user_id)?;
         let min_visible_event_index = member.min_visible_event_index();
         self.events
-            .action_card_confirm_deposit(thread_root_message_index, message_id, min_visible_event_index, user_id, now)
+            .abort_action_card_confirm(thread_root_message_index, message_id, min_visible_event_index, user_id, now)
     }
 
     pub fn reserve_prize(

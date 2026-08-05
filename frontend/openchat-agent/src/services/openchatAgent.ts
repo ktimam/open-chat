@@ -61,6 +61,10 @@ import type {
     DiamondMembershipDuration,
     DiamondMembershipFees,
     AiAppLinkCode,
+    AiAppCardCapability,
+    AiAppCardConfirmationGrant,
+    AiAppCardContentV1,
+    AiAppCardProvenance,
     ExploreAiAppsResponse,
     AiAppManifest,
     AiAppRegistration,
@@ -1090,7 +1094,10 @@ export class OpenChatAgent extends EventTarget {
             if (ev.event.kind === "message" && ev.event.content.kind === "text_content") {
                 for (const preview of extractMessagePreviews(ev.event.content.text)) {
                     result.insert(
-                        { chatId: preview.chatId, threadRootMessageIndex: preview.threadRootMessageIndex },
+                        {
+                            chatId: preview.chatId,
+                            threadRootMessageIndex: preview.threadRootMessageIndex,
+                        },
                         preview.messageIndex,
                     );
                 }
@@ -1109,7 +1116,12 @@ export class OpenChatAgent extends EventTarget {
         const mapped = await contextMap.asyncMap((ctx, idxs) => {
             const uniqueIdxs = [...new Set(idxs)];
             return this._chatEventsReader
-                .messagesByMessageIndex(ctx.chatId, ctx.threadRootMessageIndex, uniqueIdxs, undefined)
+                .messagesByMessageIndex(
+                    ctx.chatId,
+                    ctx.threadRootMessageIndex,
+                    uniqueIdxs,
+                    undefined,
+                )
                 .aggregate(mergeEventStreamResponses, emptyEventsResponse())
                 .toPromise()
                 .then((resp) => this.messagesFromEventsResponse(ctx, resp));
@@ -1175,7 +1187,7 @@ export class OpenChatAgent extends EventTarget {
                     const msg = messages.find(
                         (me) => me.event.messageIndex === preview.messageIndex,
                     )?.event;
-                    if(msg) {
+                    if (msg) {
                         messagePreviews.push({
                             url: preview.url,
                             chatId: preview.chatId,
@@ -1314,7 +1326,13 @@ export class OpenChatAgent extends EventTarget {
             ),
             this.resolveMissingMessagePreviews([message]),
         ]);
-        return this.rehydrateEvent(message, chatId, missing, missingPreviews, threadRootMessageIndex);
+        return this.rehydrateEvent(
+            message,
+            chatId,
+            missing,
+            missingPreviews,
+            threadRootMessageIndex,
+        );
     }
 
     searchUsers(searchTerm: string, maxResults = 20): Promise<UserSummary[]> {
@@ -2856,7 +2874,8 @@ export class OpenChatAgent extends EventTarget {
         threadRootMessageIndex: number | undefined,
         messageId: bigint,
         response: "confirm" | "cancel",
-        confirmPayloadOverride?: Record<string, unknown> | unknown[],
+        confirmPayloadOverride?: Uint8Array,
+        confirmationGrant?: Uint8Array,
     ): Promise<RespondToActionCardResponse> {
         if (offline()) return Promise.resolve(CommonResponses.offline());
 
@@ -2868,6 +2887,7 @@ export class OpenChatAgent extends EventTarget {
                     threadRootMessageIndex,
                     response,
                     confirmPayloadOverride,
+                    confirmationGrant,
                 );
             case "channel":
                 return this._communityClient.respondToActionCard(
@@ -2876,6 +2896,7 @@ export class OpenChatAgent extends EventTarget {
                     threadRootMessageIndex,
                     response,
                     confirmPayloadOverride,
+                    confirmationGrant,
                 );
             case "direct_chat":
                 return this.userClient.respondToActionCard(
@@ -2884,6 +2905,7 @@ export class OpenChatAgent extends EventTarget {
                     threadRootMessageIndex,
                     response,
                     confirmPayloadOverride,
+                    confirmationGrant,
                 );
         }
     }
@@ -3691,8 +3713,15 @@ export class OpenChatAgent extends EventTarget {
         return this._userIndexClient.diamondMembershipFees();
     }
 
-    aiApps(): Promise<AiAppRegistration[]> {
-        return this._userIndexClient.aiApps();
+    aiApps(lookups: { appId: number; revision?: bigint }[]): Promise<AiAppRegistration[]> {
+        return this._userIndexClient.aiApps(lookups);
+    }
+
+    myAiAppsPage(
+        pageIndex: number,
+        pageSize: number,
+    ): Promise<{ apps: AiAppRegistration[]; total: number }> {
+        return this._userIndexClient.myAiAppsPage(pageIndex, pageSize);
     }
 
     registerAiApp(manifest: AiAppManifest): Promise<boolean> {
@@ -3717,6 +3746,86 @@ export class OpenChatAgent extends EventTarget {
 
     createAiAppLinkCode(appId: number): Promise<AiAppLinkCode | undefined> {
         return this._userIndexClient.createAiAppLinkCode(appId);
+    }
+
+    createAiAppCardProvenance(
+        appId: number,
+        appRevision: bigint,
+        actionId: string,
+        content: AiAppCardContentV1,
+        chatId: ChatIdentifier,
+        messageId: bigint,
+        threadRootMessageIndex: number | undefined,
+    ): Promise<AiAppCardProvenance | undefined> {
+        if (offline()) return Promise.resolve(undefined);
+        return this._userIndexClient.createAiAppCardProvenance(
+            appId,
+            appRevision,
+            actionId,
+            content,
+            chatId,
+            messageId,
+            threadRootMessageIndex,
+        );
+    }
+
+    createAiAppCardCapability(
+        chatId: ChatIdentifier,
+        threadRootMessageIndex: number | undefined,
+        messageId: bigint,
+        recipientKeyScheme: string,
+        recipientPublicKey: Uint8Array,
+    ): Promise<AiAppCardCapability | undefined> {
+        if (offline()) return Promise.resolve(undefined);
+        switch (chatId.kind) {
+            case "group_chat":
+                return this._groupClient.createAiAppCardCapability(
+                    chatId.groupId,
+                    messageId,
+                    threadRootMessageIndex,
+                    recipientKeyScheme,
+                    recipientPublicKey,
+                );
+            case "channel":
+                return this._communityClient.createAiAppCardCapability(
+                    chatId,
+                    messageId,
+                    threadRootMessageIndex,
+                    recipientKeyScheme,
+                    recipientPublicKey,
+                );
+            case "direct_chat":
+                // Direct chats have no app enablement yet; fail closed without touching the user
+                // canister even if a raw client forges an app-bound card.
+                return Promise.resolve(undefined);
+        }
+    }
+
+    createAiAppCardConfirmationGrant(
+        chatId: ChatIdentifier,
+        threadRootMessageIndex: number | undefined,
+        messageId: bigint,
+        confirmPayload: Uint8Array,
+    ): Promise<AiAppCardConfirmationGrant | undefined> {
+        if (offline()) return Promise.resolve(undefined);
+        switch (chatId.kind) {
+            case "group_chat":
+                return this._groupClient.createAiAppCardConfirmationGrant(
+                    chatId.groupId,
+                    messageId,
+                    threadRootMessageIndex,
+                    confirmPayload,
+                );
+            case "channel":
+                return this._communityClient.createAiAppCardConfirmationGrant(
+                    chatId,
+                    messageId,
+                    threadRootMessageIndex,
+                    confirmPayload,
+                );
+            case "direct_chat":
+                return Promise.resolve(undefined);
+        }
     }
 
     removeMyAiAppKey(appId: number): Promise<boolean> {

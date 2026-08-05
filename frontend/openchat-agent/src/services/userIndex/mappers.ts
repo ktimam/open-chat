@@ -36,6 +36,8 @@ import type {
     AiActionDefinition,
     AiActionRule,
     AiAppLinkCode,
+    AiAppCardContentV1,
+    AiAppCardProvenance,
     AiAppManifest,
     AiAppManifestWire,
     AiAppRegistration,
@@ -88,10 +90,13 @@ import type {
     AiActionRule as TAiActionRule,
     AiAppManifest as TAiAppManifest,
     UserIndexAiAppsResponse,
+    UserIndexAiAppsByIdsResponse,
+    UserIndexMyAiAppsResponse,
     UserIndexRegisterAiAppResponse,
     UserIndexAiAppUserKeysResponse,
     UserIndexMyAiAppKeysResponse,
     UserIndexCreateAiAppLinkCodeResponse,
+    UserIndexCreateAiAppCardProvenanceResponse,
     UserIndexExploreAiAppsResponse,
     UserIndexRemoveMyAiAppKeyResponse,
     UserIndexPublishAiAppResponse,
@@ -674,7 +679,9 @@ function aiAppManifestWithDecodedPrincipals(m: TAiAppManifest): AiAppManifestWir
     return {
         ...m,
         inbox_canister_id:
-            m.inbox_canister_id !== undefined ? principalBytesToString(m.inbox_canister_id) : undefined,
+            m.inbox_canister_id !== undefined
+                ? principalBytesToString(m.inbox_canister_id)
+                : undefined,
     };
 }
 
@@ -744,7 +751,9 @@ export function aiAppUserKeysResponse(value: UserIndexAiAppUserKeysResponse): Ai
 // AppNotFound / Error both resolve to undefined — the caller has no code to display either way.
 // One explorer page. Term-length failures / errors degrade to an empty page — the explorer UI
 // treats that the same as "no matches".
-export function exploreAiAppsResponse(value: UserIndexExploreAiAppsResponse): ExploreAiAppsResponse {
+export function exploreAiAppsResponse(
+    value: UserIndexExploreAiAppsResponse,
+): ExploreAiAppsResponse {
     if (typeof value === "object" && "Success" in value) {
         return {
             matches: value.Success.matches.map((a) =>
@@ -773,6 +782,97 @@ export function createAiAppLinkCodeResponse(
         };
     }
     return undefined;
+}
+
+export function aiAppsByIdsResponse(value: UserIndexAiAppsByIdsResponse): AiAppRegistration[] {
+    if ("Success" in value) {
+        return value.Success.apps.map((a) =>
+            aiAppFromRegistration({
+                id: a.id,
+                owner: principalBytesToString(a.owner),
+                manifest: aiAppManifestWithDecodedPrincipals(a.manifest),
+                created: a.created,
+                updated: a.updated,
+                published: a.published,
+            }),
+        );
+    }
+    if ("TooManyApps" in value) {
+        throw new Error(`Bounded AI-app lookup accepts at most ${value.TooManyApps} ids`);
+    }
+    if ("ResponseTooLarge" in value) {
+        throw new Error(`Bounded AI-app lookup exceeded ${value.ResponseTooLarge} encoded bytes`);
+    }
+    const unsupported: never = value;
+    throw new UnsupportedValueError("Bounded AI-app lookup was rejected", unsupported);
+}
+
+export function myAiAppsResponse(value: UserIndexMyAiAppsResponse): {
+    apps: AiAppRegistration[];
+    total: number;
+} {
+    if (typeof value === "object" && "Success" in value) {
+        return {
+            apps: value.Success.apps.map((a) =>
+                aiAppFromRegistration({
+                    id: a.id,
+                    owner: principalBytesToString(a.owner),
+                    manifest: aiAppManifestWithDecodedPrincipals(a.manifest),
+                    created: a.created,
+                    updated: a.updated,
+                    published: a.published,
+                }),
+            ),
+            total: value.Success.total,
+        };
+    }
+    if (value === "UserNotFound") {
+        throw new Error("Caller-owned AI-app page requires a registered user");
+    }
+    if ("InvalidPageSize" in value) {
+        throw new Error(`Caller-owned AI-app pages accept at most ${value.InvalidPageSize} items`);
+    }
+    if ("ResponseTooLarge" in value) {
+        throw new Error(
+            `Caller-owned AI-app page exceeded ${value.ResponseTooLarge} encoded bytes`,
+        );
+    }
+    const unsupported: never = value;
+    throw new UnsupportedValueError("Caller-owned AI-app page was rejected", unsupported);
+}
+
+// Candid uses snake_case while the domain object mirrors the public action-card model. Keep this
+// conversion explicit so provenance is always requested over exactly the fields the destination
+// chat canister later hashes, with no routing, viewer-private context, or bearer data appended.
+export function apiAiAppCardContentV1(content: AiAppCardContentV1): {
+    title: string;
+    rows: { label: string; value: string }[];
+    confirm_label: string;
+    cancel_label: string;
+    action_id: string;
+    disclosure?: string;
+    expires_at?: bigint;
+    confirm_payload?: Uint8Array;
+} {
+    return {
+        title: content.title,
+        rows: content.rows.map((row) => ({ label: row.label, value: row.value })),
+        confirm_label: content.confirmLabel,
+        cancel_label: content.cancelLabel,
+        action_id: content.actionId,
+        disclosure: content.disclosure,
+        expires_at: content.expiresAt,
+        confirm_payload: content.confirmPayload?.slice(),
+    };
+}
+
+export function createAiAppCardProvenanceResponse(
+    value: UserIndexCreateAiAppCardProvenanceResponse,
+): AiAppCardProvenance | undefined {
+    if (typeof value !== "object" || !("Success" in value)) return undefined;
+    const provenance = Uint8Array.from(value.Success.provenance);
+    if (provenance.byteLength !== 32) return undefined;
+    return { provenance, expiresAt: value.Success.expires_at };
 }
 
 // True only on Success — publishing the app succeeded. NotFound/NotAuthorised/Error -> false.

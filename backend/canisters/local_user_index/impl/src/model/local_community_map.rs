@@ -6,16 +6,62 @@ use types::{BuildVersion, CommunityId, CyclesTopUp, TimestampMillis, UserId};
 #[derive(Serialize, Deserialize, Default)]
 pub struct LocalCommunityMap {
     communities: HashMap<CommunityId, LocalCommunity>,
+    /// Monotonic allocator for active registration epochs; deleted IDs leave no tombstones.
+    #[serde(default)]
+    registration_generation_counter: u64,
+    #[serde(default)]
+    registration_generations: HashMap<CommunityId, u64>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candid::Principal;
+
+    #[test]
+    fn remove_and_readd_changes_the_exact_registration_generation() {
+        let mut communities = LocalCommunityMap::default();
+        let id = CommunityId::from(Principal::from_slice(&[64]));
+        communities.add(id, BuildVersion::min());
+        let first = communities.registration_generation(&id);
+        assert!(communities.delete(&id));
+        assert_eq!(communities.registration_generation(&id), 0);
+        assert!(communities.registration_generations.is_empty());
+        communities.add(id, BuildVersion::min());
+        assert!(communities.registration_generation(&id) > first);
+    }
 }
 
 impl LocalCommunityMap {
     pub fn add(&mut self, community_id: CommunityId, wasm_version: BuildVersion) {
+        let next = self.issue_registration_generation();
+        self.registration_generations.insert(community_id, next);
         let community = LocalCommunity::new(wasm_version);
         self.communities.insert(community_id, community);
     }
 
     pub fn delete(&mut self, community_id: &CommunityId) -> bool {
-        self.communities.remove(community_id).is_some()
+        let removed = self.communities.remove(community_id).is_some();
+        if removed {
+            self.registration_generations.remove(community_id);
+        }
+        removed
+    }
+
+    fn issue_registration_generation(&mut self) -> u64 {
+        if self.registration_generation_counter == 0 {
+            self.registration_generation_counter = self.registration_generations.values().copied().max().unwrap_or_default();
+        }
+        let next = self
+            .registration_generation_counter
+            .checked_add(1)
+            .expect("local community registration generation exhausted");
+        self.registration_generation_counter = next;
+        next
+    }
+
+    pub fn registration_generation(&self, community_id: &CommunityId) -> u64 {
+        self.registration_generations.get(community_id).copied().unwrap_or_default()
     }
 
     pub fn get(&self, community_id: &CommunityId) -> Option<&LocalCommunity> {

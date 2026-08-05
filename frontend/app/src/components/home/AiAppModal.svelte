@@ -8,7 +8,6 @@
     import { toastStore } from "@src/stores/toast";
     import {
         homeSurfaceOpening,
-        openSurfaceExternally,
         type SurfaceOpening,
     } from "@utils/aiAppSurfaces";
     import { mobileWidth, type AiAppRegistration, type OpenChat } from "openchat-client";
@@ -42,11 +41,7 @@
 
     function openHome() {
         if (homeSurface === undefined) return;
-        if (homeSurface.surface.display === "sheet") {
-            onOpenSurface(homeSurface);
-        } else {
-            openSurfaceExternally(client, homeSurface.url);
-        }
+        onOpenSurface(homeSurface);
     }
 
     let disconnecting = $state(false);

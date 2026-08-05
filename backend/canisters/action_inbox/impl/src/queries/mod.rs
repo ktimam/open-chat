@@ -1,3 +1,3 @@
 mod actions;
+mod configuration;
 mod http_request;
-mod openchat_public_key;

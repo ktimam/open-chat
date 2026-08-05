@@ -8,6 +8,7 @@ import {
     Stream,
     toBigInt32,
     type AcceptP2PSwapResponse,
+    type AiAppCardCapability,
     type AddRemoveReactionResponse,
     type ApproveTransferResponse,
     type ArchiveChatResponse,
@@ -115,6 +116,8 @@ import {
     UserEditMessageArgs,
     UserRespondToActionCardArgs,
     UserRespondToActionCardResponse,
+    UserCreateAiAppCardCapabilityArgs,
+    UserCreateAiAppCardCapabilityResponse,
     UserEventsArgs,
     UserEventsByIndexArgs,
     UserEventsResponse,
@@ -191,6 +194,7 @@ import {
 import type { UserDb } from "../../utils/userCache";
 import { SingleCanisterMsgpackAgent } from "../canisterAgent/msgpack";
 import type { IChatEventsReader } from "../common/chatEvents";
+import { createAiAppCardCapabilityResponse } from "../common/aiAppCardCapability";
 import {
     acceptP2PSwapSuccess,
     apiChatIdentifier,
@@ -537,7 +541,8 @@ export class UserClient
         messageId: bigint,
         threadRootMessageIndex: number | undefined,
         response: "confirm" | "cancel",
-        confirmPayloadOverride?: Record<string, unknown> | unknown[],
+        confirmPayloadOverride?: Uint8Array,
+        confirmationGrant?: Uint8Array,
     ): Promise<RespondToActionCardResponse> {
         return this.update(
             "respond_to_action_card",
@@ -546,14 +551,34 @@ export class UserClient
                 thread_root_message_index: threadRootMessageIndex,
                 message_id: messageId,
                 response: response === "confirm" ? "Confirm" : "Cancel",
-                confirm_payload_override:
-                    confirmPayloadOverride !== undefined
-                        ? new TextEncoder().encode(JSON.stringify(confirmPayloadOverride))
-                        : undefined,
+                confirm_payload_override: confirmPayloadOverride?.slice(),
+                confirmation_grant: confirmationGrant?.slice(),
             },
             unitResult,
             UserRespondToActionCardArgs,
             UserRespondToActionCardResponse,
+        );
+    }
+
+    createAiAppCardCapability(
+        userId: string,
+        messageId: bigint,
+        threadRootMessageIndex: number | undefined,
+        recipientKeyScheme: string,
+        recipientPublicKey: Uint8Array,
+    ): Promise<AiAppCardCapability | undefined> {
+        return this.update(
+            "create_ai_app_card_capability",
+            {
+                user_id: principalStringToBytes(userId),
+                thread_root_message_index: threadRootMessageIndex,
+                message_id: messageId,
+                recipient_key_scheme: recipientKeyScheme,
+                recipient_public_key: recipientPublicKey,
+            },
+            createAiAppCardCapabilityResponse,
+            UserCreateAiAppCardCapabilityArgs,
+            UserCreateAiAppCardCapabilityResponse,
         );
     }
 

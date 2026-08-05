@@ -10,7 +10,6 @@
     import { toastStore } from "@src/stores/toast";
     import {
         chatLinkSurfaceOpening,
-        openSurfaceExternally,
         type SurfaceOpening,
     } from "@utils/aiAppSurfaces";
     import {
@@ -55,13 +54,21 @@
     let disconnecting = $state(new Set<number>());
 
     async function load() {
-        // All facades resolve to [] on failure, so a load error just presents as "no apps".
-        const [allApps, enabledIds, myKeys] = await Promise.all([
-            client.aiApps(),
+        const [enabledIds, myKeys, directory] = await Promise.all([
             client.enabledAiApps(chat.id),
             client.myAiAppKeys(),
+            client.exploreAiApps(undefined, 0, 8),
         ]);
-        apps = allApps;
+        const relevantIds = [
+            ...new Set([
+                ...enabledIds,
+                ...myKeys.filter((key) => key.publicKey.length > 0).map((key) => key.appId),
+            ]),
+        ];
+        const exact = await client.aiApps(relevantIds.map((appId) => ({ appId })));
+        const byId = new Map(directory.matches.map((app) => [app.id, app]));
+        for (const app of exact) byId.set(app.id, app);
+        apps = [...byId.values()].sort((left, right) => left.id - right.id);
         enabled = new Set(enabledIds);
         connected = new Set(myKeys.filter((k) => k.publicKey.length > 0).map((k) => k.appId));
     }
@@ -92,7 +99,7 @@
     // Per-USER disconnect: removes THIS user's own delivery key for the app (across all chats), so
     // OpenChat stops delivering their confirmed actions to it. One-sided — needs nothing from the
     // app; its registration and every other user are unaffected. Re-connecting is the normal pairing
-    // flow (a fresh 6-digit code).
+    // flow (a fresh high-entropy claim token).
     async function disconnectApp(app: AiAppRegistration) {
         if (disconnecting.has(app.id)) return;
         disconnecting = new Set(disconnecting).add(app.id);
@@ -116,14 +123,10 @@
     let setupSurface = $state<SurfaceOpening | undefined>(undefined);
 
     function openSetup(opening: SurfaceOpening) {
-        if (opening.surface.display === "sheet") {
-            setupSurface = opening;
-        } else {
-            openSurfaceExternally(client, opening.url);
-        }
+        setupSurface = opening;
     }
 
-    // `linkingApp` drives the AiAppLinkModal (a 6-digit pairing code). `pendingSetup` is the per-chat
+    // `linkingApp` drives the AiAppLinkModal (a high-entropy claim token). `pendingSetup` is the per-chat
     // setup surface to open ONCE the pairing completes — together they implement the MERGED action:
     // one "Connect" pairs the delivery key (if the user has none) and then hands them straight to the
     // chat setup surface, instead of two separate "Connect" + "Open setup" steps. Reconnect (an
@@ -230,6 +233,8 @@
     <AiAppSurfaceModal
         title={setupSurface.app.manifest.name}
         url={setupSurface.url}
+        display={setupSurface.surface.display}
+        dataDisclosures={setupSurface.dataDisclosures}
         onDismiss={() => (setupSurface = undefined)} />
 {/if}
 

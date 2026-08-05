@@ -1,22 +1,36 @@
+use crate::TestEnv;
 use crate::client;
 use crate::env::ENV;
 use crate::utils::tick_many;
 use crate::wasms;
-use crate::TestEnv;
-use candid::Principal;
+use ai_app_verifier_canister::{
+    c2c_verify_ai_app,
+    c2c_verify_ai_app_v2::{self, ManifestCommitmentV2, VerificationBindingV2},
+};
+use candid::{CandidType, Principal};
 use pocket_ic::PocketIc;
+use serde::Serialize;
 use std::ops::Deref;
+use std::time::Duration;
 use testing::rng::random_string;
 use types::{
     AiActionCardTemplate, AiActionDefinition, AiActionRule, AiAppManifest, AiAppRegistration, CanisterId, KeywordMapRule,
     KeywordMapping, RuleMode,
 };
 
-// A real P-256 SPKI PEM (register only checks it CONTAINS "BEGIN PUBLIC KEY"; it is not parsed here).
+// A real P-256 SPKI PEM accepted and canonicalized by registry ingress.
 const TEST_SPKI_PEM: &str = "-----BEGIN PUBLIC KEY-----\n\
-MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEqEJ3Fh3nq0pXwq3B0m1yq0m8m0z1\n\
-4Yb0d3fZq7Xk5c1m0e6qg8sB9r2n0aQ7l5Yy8dW1s0N6vF3wR4p9xK5rQ==\n\
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEL4Rj13upzgERFkEaivsNjEA/HvCr\n\
+m+J36bnO257UvRzwEW+OpmmEQt6fZ5lO3So6wXPtuziuv/FXrA6S7sni8g==\n\
 -----END PUBLIC KEY-----\n";
+
+#[derive(CandidType, Serialize)]
+struct NeutralVerifierInit {
+    name: String,
+    owner: Principal,
+    vouched: bool,
+    expected_v2: Option<VerificationBindingV2>,
+}
 
 fn manifest(name: String, description: &str) -> AiAppManifest {
     AiAppManifest {
@@ -29,6 +43,28 @@ fn manifest(name: String, description: &str) -> AiAppManifest {
         per_user_keys: false,
         actions: vec![],
         surfaces: vec![],
+    }
+}
+
+fn verification_binding(user_index: CanisterId, app: &AiAppRegistration) -> VerificationBindingV2 {
+    let canonical_name = c2c_verify_ai_app_v2::canonical_app_name(&app.manifest.name).unwrap();
+    let commitment = ManifestCommitmentV2 {
+        user_index_canister_id: user_index,
+        app_id: app.id,
+        app_revision: app.updated,
+        owner: app.owner.into(),
+        canonical_name: canonical_name.clone(),
+        manifest: app.manifest.clone(),
+    };
+    VerificationBindingV2 {
+        user_index_canister_id: user_index,
+        app_id: app.id,
+        app_revision: app.updated,
+        owner: app.owner.into(),
+        canonical_name,
+        app_canister_id: app.manifest.app_canister_id.unwrap(),
+        inbox_canister_id: app.manifest.inbox_canister_id,
+        manifest_hash: c2c_verify_ai_app_v2::manifest_hash_v2(&commitment).unwrap(),
     }
 }
 
@@ -50,8 +86,13 @@ fn register(
 }
 
 fn ai_apps(env: &PocketIc, sender: Principal, user_index: CanisterId) -> Vec<AiAppRegistration> {
-    let response: user_index_canister::ai_apps::Response =
-        client::execute_msgpack_query(env, sender, user_index, "ai_apps_msgpack", &user_index_canister::ai_apps::Args {});
+    let response: user_index_canister::ai_apps::Response = client::execute_msgpack_query(
+        env,
+        sender,
+        user_index,
+        "ai_apps_msgpack",
+        &user_index_canister::ai_apps::Args {},
+    );
     match response {
         user_index_canister::ai_apps::Response::Success(result) => result.apps,
     }
@@ -64,7 +105,10 @@ fn ai_apps(env: &PocketIc, sender: Principal, user_index: CanisterId) -> Vec<AiA
 fn re_register_same_name_upserts_in_place() {
     let mut wrapper = ENV.deref().get();
     let TestEnv {
-        env, canister_ids, controller, ..
+        env,
+        canister_ids,
+        controller,
+        ..
     } = wrapper.env();
 
     let owner = client::register_diamond_user(env, canister_ids, *controller);
@@ -89,38 +133,49 @@ fn re_register_same_name_upserts_in_place() {
 
     // Read-back over ai_apps (the owner sees its own unpublished app) reflects the upsert.
     let apps = ai_apps(env, owner.principal, canister_ids.user_index);
-    let found = apps.iter().find(|a| a.id == first_id).expect("re-registered app must be listed");
+    let found = apps
+        .iter()
+        .find(|a| a.id == first_id)
+        .expect("re-registered app must be listed");
     assert_eq!(found.manifest.name, name);
     assert_eq!(found.manifest.description, "v2");
 }
 
-// In test_mode a name currently owned by ANOTHER owner is RE-OWNED by a fresh registration (a dev
-// convenience for local re-deploys under a new identity): the id is preserved, owner replaced.
+// The four local-development accounts remain isolated even when they register the same draft name.
+// Test mode must never transfer a stable app id, because enabled chats are keyed by that id.
 #[test]
-fn re_register_by_different_user_reowns_in_test_mode() {
+fn same_name_drafts_do_not_transfer_ownership_between_local_accounts() {
     let mut wrapper = ENV.deref().get();
     let TestEnv {
-        env, canister_ids, controller, ..
+        env,
+        canister_ids,
+        controller,
+        ..
     } = wrapper.env();
 
-    let owner_a = client::register_diamond_user(env, canister_ids, *controller);
-    let owner_b = client::register_diamond_user(env, canister_ids, *controller);
+    let accounts = [
+        client::register_diamond_user(env, canister_ids, *controller), // account A
+        client::register_diamond_user(env, canister_ids, *controller), // account B
+        client::register_diamond_user(env, canister_ids, *controller), // account C
+        client::register_diamond_user(env, canister_ids, *controller), // account D
+    ];
     let name = random_string();
 
-    let id = match register(env, owner_a.principal, canister_ids.user_index, manifest(name.clone(), "by-a")) {
-        user_index_canister::register_ai_app::Response::Success(reg) => {
-            assert_eq!(reg.owner, owner_a.user_id);
-            reg.id
+    let mut ids = Vec::new();
+    for (index, account) in accounts.iter().enumerate() {
+        match register(
+            env,
+            account.principal,
+            canister_ids.user_index,
+            manifest(name.clone(), &format!("account-{index}")),
+        ) {
+            user_index_canister::register_ai_app::Response::Success(reg) => {
+                assert_eq!(reg.owner, account.user_id);
+                assert!(!ids.contains(&reg.id), "an account inherited another owner's app id");
+                ids.push(reg.id);
+            }
+            other => panic!("expected isolated draft registration, got {other:?}"),
         }
-        other => panic!("expected Success, got {other:?}"),
-    };
-
-    match register(env, owner_b.principal, canister_ids.user_index, manifest(name.clone(), "by-b")) {
-        user_index_canister::register_ai_app::Response::Success(reg) => {
-            assert_eq!(reg.id, id, "re-own keeps the id");
-            assert_eq!(reg.owner, owner_b.user_id, "re-own transfers ownership in test_mode");
-        }
-        other => panic!("expected Success (re-own) got {other:?}"),
     }
 }
 
@@ -130,7 +185,10 @@ fn re_register_by_different_user_reowns_in_test_mode() {
 fn register_rejects_invalid_manifests() {
     let mut wrapper = ENV.deref().get();
     let TestEnv {
-        env, canister_ids, controller, ..
+        env,
+        canister_ids,
+        controller,
+        ..
     } = wrapper.env();
 
     let owner = client::register_diamond_user(env, canister_ids, *controller);
@@ -146,6 +204,18 @@ fn register_rejects_invalid_manifests() {
         ),
         "empty consumer_public_key with per_user_keys=false must be InvalidRequest"
     );
+
+    for invalid in [
+        "-----BEGIN PUBLIC KEY-----\nnot-a-key\n-----END PUBLIC KEY-----\n",
+        "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n-----END PUBLIC KEY-----\n",
+    ] {
+        let mut invalid_key = manifest(random_string(), "invalid key");
+        invalid_key.consumer_public_key = invalid.to_string();
+        assert!(matches!(
+            register(env, owner.principal, canister_ids.user_index, invalid_key),
+            user_index_canister::register_ai_app::Response::InvalidRequest(_)
+        ));
+    }
 
     // 21 actions (cap is 20) -> InvalidRequest. The length check runs before per-action validation,
     // but each action is still built valid for robustness.
@@ -167,7 +237,7 @@ fn register_rejects_invalid_manifests() {
         accepts_image: false,
     };
     let mut too_many = manifest(random_string(), "too many actions");
-    too_many.actions = vec![action; 21];
+    too_many.actions = vec![action.clone(); 21];
     assert!(
         matches!(
             register(env, owner.principal, canister_ids.user_index, too_many),
@@ -175,6 +245,19 @@ fn register_rejects_invalid_manifests() {
         ),
         ">20 actions must be InvalidRequest"
     );
+
+    let mut invalid_action = action;
+    invalid_action.card.rows.push(types::AiActionCardRowTemplate {
+        field: "value".to_string(),
+        label: "Value".to_string(),
+    });
+    invalid_action.consumer_public_key = Some("-----BEGIN PUBLIC KEY-----\nnot-a-key\n-----END PUBLIC KEY-----\n".to_string());
+    let mut invalid_action_key = manifest(random_string(), "invalid action key");
+    invalid_action_key.actions = vec![invalid_action];
+    assert!(matches!(
+        register(env, owner.principal, canister_ids.user_index, invalid_action_key),
+        user_index_canister::register_ai_app::Response::InvalidRequest(_)
+    ));
 }
 
 // explore_ai_apps enforces a 2-char minimum search term.
@@ -182,7 +265,10 @@ fn register_rejects_invalid_manifests() {
 fn explore_rejects_short_term_and_accepts_normal() {
     let mut wrapper = ENV.deref().get();
     let TestEnv {
-        env, canister_ids, controller, ..
+        env,
+        canister_ids,
+        controller,
+        ..
     } = wrapper.env();
 
     let owner = client::register_diamond_user(env, canister_ids, *controller);
@@ -225,12 +311,20 @@ fn explore_rejects_short_term_and_accepts_normal() {
 fn delete_then_not_found() {
     let mut wrapper = ENV.deref().get();
     let TestEnv {
-        env, canister_ids, controller, ..
+        env,
+        canister_ids,
+        controller,
+        ..
     } = wrapper.env();
 
     let owner = client::register_diamond_user(env, canister_ids, *controller);
     let name = random_string();
-    let _ = register(env, owner.principal, canister_ids.user_index, manifest(name.clone(), "to delete"));
+    let _ = register(
+        env,
+        owner.principal,
+        canister_ids.user_index,
+        manifest(name.clone(), "to delete"),
+    );
     tick_many(env, 1);
 
     let first: user_index_canister::delete_ai_app::Response = client::execute_msgpack_update(
@@ -256,6 +350,136 @@ fn delete_then_not_found() {
         matches!(second, user_index_canister::delete_ai_app::Response::NotFound),
         "second delete must be NotFound, got {second:?}"
     );
+}
+
+#[test]
+fn registration_rejects_unicode_confusables_and_caps_unpublished_drafts() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+        ..
+    } = wrapper.env();
+
+    let owner = client::register_diamond_user(env, canister_ids, *controller);
+    let confusable = register(
+        env,
+        owner.principal,
+        canister_ids.user_index,
+        manifest("Αcme".to_string(), "Greek alpha is not ASCII A"),
+    );
+    assert!(
+        matches!(confusable, user_index_canister::register_ai_app::Response::InvalidRequest(_)),
+        "Unicode-confusable names must fail at the public endpoint: {confusable:?}"
+    );
+
+    for index in 0..5 {
+        let response = register(
+            env,
+            owner.principal,
+            canister_ids.user_index,
+            manifest(format!("draft-{index}"), "bounded draft"),
+        );
+        assert!(matches!(response, user_index_canister::register_ai_app::Response::Success(_)));
+    }
+    let overflow = register(
+        env,
+        owner.principal,
+        canister_ids.user_index,
+        manifest("draft-overflow".to_string(), "must be rejected"),
+    );
+    assert!(
+        matches!(overflow, user_index_canister::register_ai_app::Response::InvalidRequest(_)),
+        "a sixth unpublished draft must be rejected: {overflow:?}"
+    );
+}
+
+#[test]
+fn expired_drafts_are_reclaimed_through_the_public_registration_path() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+        ..
+    } = wrapper.env();
+
+    let owner = client::register_diamond_user(env, canister_ids, *controller);
+    for index in 0..5 {
+        let response = register(
+            env,
+            owner.principal,
+            canister_ids.user_index,
+            manifest(format!("expiring-{index}"), "short-lived draft"),
+        );
+        assert!(matches!(response, user_index_canister::register_ai_app::Response::Success(_)));
+    }
+
+    env.advance_time(Duration::from_millis(30 * constants::DAY_IN_MS + 1));
+    let replacement = register(
+        env,
+        owner.principal,
+        canister_ids.user_index,
+        manifest("after-expiry".to_string(), "reclaimed slot"),
+    );
+    let replacement_id = match replacement {
+        user_index_canister::register_ai_app::Response::Success(registration) => registration.id,
+        other => panic!("expired drafts must release owner/global capacity: {other:?}"),
+    };
+    let visible = ai_apps(env, owner.principal, canister_ids.user_index);
+    assert_eq!(visible.len(), 1, "lazy expiry must physically reclaim all five drafts");
+    assert_eq!(visible[0].id, replacement_id);
+}
+
+#[test]
+fn governance_can_recover_an_app_after_owner_loss() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+        ..
+    } = wrapper.env();
+
+    let owner = client::register_diamond_user(env, canister_ids, *controller);
+    let app_id = match register(
+        env,
+        owner.principal,
+        canister_ids.user_index,
+        manifest("abandoned-app".to_string(), "owner unavailable"),
+    ) {
+        user_index_canister::register_ai_app::Response::Success(registration) => registration.id,
+        other => panic!("registration failed: {other:?}"),
+    };
+
+    let unauthorised = env.update_call(
+        canister_ids.user_index,
+        owner.principal,
+        "remove_ai_app",
+        candid::encode_one(&user_index_canister::remove_ai_app::Args { app_id }).unwrap(),
+    );
+    assert!(
+        unauthorised.is_err(),
+        "an app owner cannot invoke the governance recovery path"
+    );
+
+    let response = client::user_index::remove_ai_app(
+        env,
+        *controller,
+        canister_ids.user_index,
+        &user_index_canister::remove_ai_app::Args { app_id },
+    );
+    assert!(matches!(response, user_index_canister::remove_ai_app::Response::Success));
+    assert!(ai_apps(env, owner.principal, canister_ids.user_index).is_empty());
+
+    let second = client::user_index::remove_ai_app(
+        env,
+        *controller,
+        canister_ids.user_index,
+        &user_index_canister::remove_ai_app::Args { app_id },
+    );
+    assert!(matches!(second, user_index_canister::remove_ai_app::Response::NotFound));
 }
 
 fn keyword_map_action() -> AiActionDefinition {
@@ -292,13 +516,16 @@ fn keyword_map_action() -> AiActionDefinition {
 fn re_register_with_base_manifest_drops_keyword_map_rules() {
     let mut wrapper = ENV.deref().get();
     let TestEnv {
-        env, canister_ids, controller, ..
+        env,
+        canister_ids,
+        controller,
+        ..
     } = wrapper.env();
 
     let owner = client::register_diamond_user(env, canister_ids, *controller);
     let name = random_string();
 
-    // v1: one action carrying a keyword_map rule (the IOU saved-types fold).
+    // v1: one action carrying a keyword_map rule (a generic saved-type fold).
     let mut with_rules = manifest(name.clone(), "with rules");
     with_rules.actions = vec![keyword_map_action()];
     let id = match register(env, owner.principal, canister_ids.user_index, with_rules) {
@@ -310,7 +537,12 @@ fn re_register_with_base_manifest_drops_keyword_map_rules() {
     assert_eq!(app.manifest.actions.len(), 1, "rules must be present before the re-register");
 
     // v2: fresh-deploy re-registration of the SAME name with the BASE manifest (no actions).
-    match register(env, owner.principal, canister_ids.user_index, manifest(name.clone(), "base redeploy")) {
+    match register(
+        env,
+        owner.principal,
+        canister_ids.user_index,
+        manifest(name.clone(), "base redeploy"),
+    ) {
         user_index_canister::register_ai_app::Response::Success(reg) => {
             assert_eq!(reg.id, id, "upsert keeps the id");
         }
@@ -328,12 +560,15 @@ fn re_register_with_base_manifest_drops_keyword_map_rules() {
 
 // A manifest whose action carries an AiActionRule::KeywordMap registers within caps and the rule
 // payload round-trips UNMANGLED through register + ai_apps read-back (per-variant serde renames on
-// the wire). Directly covers IOU's saved-types -> manifest fold.
+// the wire). Directly covers a consumer app's saved-types -> manifest fold.
 #[test]
 fn keyword_map_rules_survive_register_and_read_back() {
     let mut wrapper = ENV.deref().get();
     let TestEnv {
-        env, canister_ids, controller, ..
+        env,
+        canister_ids,
+        controller,
+        ..
     } = wrapper.env();
 
     let owner = client::register_diamond_user(env, canister_ids, *controller);
@@ -368,14 +603,22 @@ fn keyword_map_rules_survive_register_and_read_back() {
 fn publish_without_app_canister_is_not_verified() {
     let mut wrapper = ENV.deref().get();
     let TestEnv {
-        env, canister_ids, controller, ..
+        env,
+        canister_ids,
+        controller,
+        ..
     } = wrapper.env();
 
     let owner = client::register_diamond_user(env, canister_ids, *controller);
     let name = random_string();
 
     // manifest() sets app_canister_id: None.
-    let id = match register(env, owner.principal, canister_ids.user_index, manifest(name.clone(), "unverifiable")) {
+    let id = match register(
+        env,
+        owner.principal,
+        canister_ids.user_index,
+        manifest(name.clone(), "unverifiable"),
+    ) {
         user_index_canister::register_ai_app::Response::Success(reg) => reg.id,
         other => panic!("expected Success, got {other:?}"),
     };
@@ -419,7 +662,10 @@ fn publish_without_app_canister_is_not_verified() {
 fn publish_fails_closed_when_verifier_cannot_vouch() {
     let mut wrapper = ENV.deref().get();
     let TestEnv {
-        env, canister_ids, controller, ..
+        env,
+        canister_ids,
+        controller,
+        ..
     } = wrapper.env();
     let user_index = canister_ids.user_index;
 
@@ -476,6 +722,66 @@ fn publish_fails_closed_when_verifier_cannot_vouch() {
     );
 }
 
+// MIGRATION (fail closed): a canister that positively implements only the legacy, name/owner V1
+// contract is still not trusted for publication. Existing apps must configure V2 and republish.
+#[test]
+fn publish_rejects_a_legacy_v1_only_vouch() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+        ..
+    } = wrapper.env();
+    let user_index = canister_ids.user_index;
+    let owner = client::register_diamond_user(env, canister_ids, *controller);
+    let verifier_canister = client::create_canister(env, *controller);
+    let name = "legacy-v1-app".to_string();
+
+    client::install_canister(
+        env,
+        *controller,
+        verifier_canister,
+        wasms::AI_APP_VERIFIER_TEST.clone(),
+        NeutralVerifierInit {
+            name: name.clone(),
+            owner: owner.user_id.into(),
+            vouched: true,
+            expected_v2: None,
+        },
+    );
+
+    let legacy: c2c_verify_ai_app::Response = client::execute_update(
+        env,
+        owner.principal,
+        verifier_canister,
+        "c2c_verify_ai_app",
+        &c2c_verify_ai_app::Args {
+            name: name.clone(),
+            owner: owner.user_id.into(),
+        },
+    );
+    assert!(legacy.vouched, "fixture must genuinely vouch over V1");
+
+    let mut draft_manifest = manifest(name, "legacy verifier");
+    draft_manifest.app_canister_id = Some(verifier_canister);
+    let draft = match register(env, owner.principal, user_index, draft_manifest) {
+        user_index_canister::register_ai_app::Response::Success(registration) => registration,
+        other => panic!("expected registration Success, got {other:?}"),
+    };
+    let publish: user_index_canister::publish_ai_app::Response = client::execute_msgpack_update(
+        env,
+        owner.principal,
+        user_index,
+        "publish_ai_app_msgpack",
+        &user_index_canister::publish_ai_app::Args { app_id: draft.id },
+    );
+    assert!(
+        matches!(publish, user_index_canister::publish_ai_app::Response::NotVerified),
+        "V1 must never satisfy the V2 publication gate: {publish:?}"
+    );
+}
+
 // Upsert preserves the id, but delete + re-register does NOT: the fresh registration mints a
 // NEW id, so any per-chat enablement that stored the old id is left dangling. Documents the
 // id-stability difference between the two "redeploy" flows (a deploy script that
@@ -484,7 +790,10 @@ fn publish_fails_closed_when_verifier_cannot_vouch() {
 fn delete_then_re_register_mints_a_new_id() {
     let mut wrapper = ENV.deref().get();
     let TestEnv {
-        env, canister_ids, controller, ..
+        env,
+        canister_ids,
+        controller,
+        ..
     } = wrapper.env();
 
     let owner = client::register_diamond_user(env, canister_ids, *controller);
@@ -506,40 +815,55 @@ fn delete_then_re_register_mints_a_new_id() {
 
     match register(env, owner.principal, canister_ids.user_index, manifest(name, "v2")) {
         user_index_canister::register_ai_app::Response::Success(reg) => {
-            assert_ne!(reg.id, id1, "delete + re-register mints a FRESH id (unlike the in-place upsert)");
+            assert_ne!(
+                reg.id, id1,
+                "delete + re-register mints a FRESH id (unlike the in-place upsert)"
+            );
         }
         other => panic!("expected Success on re-register, got {other:?}"),
     }
 }
 
 // HAPPY path of the anti-squat gate with a REAL verifier: publish succeeds when the canister the
-// manifest points at vouches over the generic `c2c_verify_ai_app` contract. The verifier here is
-// the actual IOU app canister wasm (it implements the candid query and vouches ONLY for the name
-// "iou"), so this exercises the full candid c2c round-trip rather than a stub — and the app then
+// manifest points at vouches over the generic `c2c_verify_ai_app_v2` contract. The verifier here is
+// a neutral verifier fixture canister configured with the exact registry row and manifest hash, so
+// this exercises the full candid c2c round-trip rather than an application fixture.
 // becomes visible to non-owners and in the public explorer.
 #[test]
 fn publish_succeeds_when_app_canister_vouches() {
     let mut wrapper = ENV.deref().get();
     let TestEnv {
-        env, canister_ids, controller, ..
+        env,
+        canister_ids,
+        controller,
+        ..
     } = wrapper.env();
     let user_index = canister_ids.user_index;
 
-    // Install the real IOU app wasm on a fresh canister. IOU's init takes no args: `()` encodes as
-    // a single candid `null`, which a no-arg init accepts (extra trailing args are ignored).
-    let iou_canister = client::create_canister(env, *controller);
-    client::install_canister(env, *controller, iou_canister, wasms::IOU_BACKEND.clone(), ());
-
+    // Reserve the canister id first, then register the manifest that points to it. V2 intentionally
+    // binds the resulting immutable app id and revision, so the verifier is configured afterwards.
     let owner = client::register_diamond_user(env, canister_ids, *controller);
-
-    // The IOU verifier vouches ONLY for the name "iou".
-    let mut m = manifest("iou".to_string(), "the real IOU app");
-    m.app_canister_id = Some(iou_canister);
+    let verifier_canister = client::create_canister(env, *controller);
+    let mut m = manifest("sample-app".to_string(), "neutral verifier fixture");
+    m.app_canister_id = Some(verifier_canister);
     m.per_user_keys = true;
-    let id = match register(env, owner.principal, user_index, m) {
-        user_index_canister::register_ai_app::Response::Success(reg) => reg.id,
+    let draft = match register(env, owner.principal, user_index, m) {
+        user_index_canister::register_ai_app::Response::Success(reg) => reg,
         other => panic!("expected Success, got {other:?}"),
     };
+    let id = draft.id;
+    client::install_canister(
+        env,
+        *controller,
+        verifier_canister,
+        wasms::AI_APP_VERIFIER_TEST.clone(),
+        NeutralVerifierInit {
+            name: draft.manifest.name.clone(),
+            owner: owner.user_id.into(),
+            vouched: true,
+            expected_v2: Some(verification_binding(user_index, &draft)),
+        },
+    );
 
     let publish: user_index_canister::publish_ai_app::Response = client::execute_msgpack_update(
         env,
@@ -570,7 +894,7 @@ fn publish_succeeds_when_app_canister_vouches() {
         user_index,
         "explore_ai_apps_msgpack",
         &user_index_canister::explore_ai_apps::Args {
-            search_term: Some("iou".to_string()),
+            search_term: Some("sample-app".to_string()),
             page_index: 0,
             page_size: 10,
         },

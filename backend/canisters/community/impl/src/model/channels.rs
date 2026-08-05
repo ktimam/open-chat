@@ -35,6 +35,12 @@ pub struct Channel {
 }
 
 impl Channels {
+    pub(crate) fn bound_enabled_ai_apps(&mut self) {
+        for channel in self.channels.values_mut() {
+            group_community_common::bound_enabled_ai_apps(&mut channel.enabled_ai_apps);
+        }
+    }
+
     #[expect(clippy::too_many_arguments)]
     pub fn new(
         community_id: CommunityId,

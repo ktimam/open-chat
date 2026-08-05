@@ -1,10 +1,10 @@
 use crate::activity_notifications::handle_activity_notification;
 use crate::guards::caller_is_local_user_index;
 use crate::timer_job_types::{DeleteFileReferencesJob, EndPollJob, FinalPrizePaymentsJob, MarkP2PSwapExpiredJob};
-use crate::{Data, GroupEventPusher, RuntimeState, TimerJob, execute_update};
+use crate::{Data, GroupEventPusher, RuntimeState, TimerJob, execute_update, read_state};
 use canister_api_macros::update;
 use canister_tracing_macros::trace;
-use chat_events::{MessageContentInternal, ValidateNewMessageContentResult};
+use chat_events::{MessageContentInternal, ValidateNewMessageContentResult, ai_app_card_content_hash_from_initial};
 use group_canister::c2c_bot_send_message;
 use group_canister::c2c_send_message::{Args as C2CArgs, Response as C2CResponse};
 use group_canister::send_message_v2::{Response::*, *};
@@ -12,17 +12,201 @@ use group_chat_core::SendMessageSuccess;
 use oc_error_codes::OCErrorCode;
 use types::{
     Achievement, BotCaller, BotPermissions, Caller, Chat, ChatId, EventIndex, EventWrapper, GroupChatUserNotificationPayload,
-    GroupMessageNotification, Message, MessageContent, MessageIndex, OCResult, TimestampMillis, User,
+    GroupMessageNotification, Message, MessageContent, MessageContentInitial, MessageIndex, OCResult, TimestampMillis, User,
+    UserType,
 };
 use user_canister::{GroupCanisterEvent, MessageActivity, MessageActivityEvent};
 
 #[update(msgpack = true)]
-#[trace]
-fn send_message_v2(args: Args) -> Response {
-    match execute_update(|state| send_message_impl(args, None, true, state)) {
+async fn send_message_v2(args: Args) -> Response {
+    // Do not trace: an app ActionCard carries a live one-time provenance proof in its ingress args.
+    let mut prepared = match read_state(|state| prepare_app_card_post(&args, state)) {
+        Ok(value) => value,
+        Err(error) => return Error(error),
+    };
+    if let Some(relay) = prepared.provenance.as_ref() {
+        let chat_key = match relay.chat {
+            Chat::Group(chat_id) => format!("group:{chat_id}"),
+            _ => return Error(OCErrorCode::InvalidRequest.with_message("invalid group card authority route")),
+        };
+        let binding = group_index_canister::ai_app_card_authority::AiAppCardAuthorityBindingV1 {
+            local_user_index_canister_id: prepared.local_user_index_canister_id,
+            context: types::AiAppCardContext {
+                user_id: relay.user_id,
+                chat: relay.chat,
+                chat_key,
+                thread_root_message_index: relay.thread_root_message_index,
+                message_id: relay.message_id,
+                app_id: relay.app_id,
+                app_revision: relay.app_revision,
+                action_id: relay.action_id.clone(),
+            },
+            content_hash: relay.content_hash,
+            operation: group_index_canister::ai_app_card_authority::AiAppCardAuthorityOperationV1::ValidateProvenance {
+                provenance_hash: group_index_canister::ai_app_card_authority::opaque_hash_v1(
+                    group_index_canister::ai_app_card_authority::OpaqueHashPurposeV1::Provenance,
+                    &relay.provenance,
+                ),
+            },
+        };
+        let authority = match crate::ai_app_card_authority::issue(prepared.group_index_canister_id, binding).await {
+            Ok(token) => token,
+            Err(error) => return Error(error),
+        };
+        if let Err(error) = read_state(|state| revalidate_app_card_post(&prepared, state)) {
+            return Error(error);
+        }
+        prepared.provenance.as_mut().unwrap().authority = authority;
+    }
+    let app_verified = if let Some(relay) = prepared.provenance.as_ref() {
+        match local_user_index_canister_c2c_client::c2c_validate_ai_app_card_provenance(
+            prepared.local_user_index_canister_id,
+            relay,
+        )
+        .await
+        {
+            Ok(local_user_index_canister::c2c_validate_ai_app_card_provenance::Response::Success) => true,
+            Ok(local_user_index_canister::c2c_validate_ai_app_card_provenance::Response::InvalidProvenance) => {
+                return Error(OCErrorCode::InvalidRequest.with_message("invalid AI-app card provenance"));
+            }
+            Ok(local_user_index_canister::c2c_validate_ai_app_card_provenance::Response::AppUnavailable) => {
+                return Error(OCErrorCode::InvalidRequest.with_message("AI app is unavailable"));
+            }
+            Ok(
+                local_user_index_canister::c2c_validate_ai_app_card_provenance::Response::InvalidRequest(error)
+                | local_user_index_canister::c2c_validate_ai_app_card_provenance::Response::Error(error),
+            ) => {
+                return Error(OCErrorCode::InvalidRequest.with_message(error));
+            }
+            Err(error) => return Error(OCErrorCode::C2CError.with_message(format!("{error:?}"))),
+        }
+    } else {
+        false
+    };
+    // The provenance relay yielded through LocalUserIndex and UserIndex after the earlier
+    // GroupIndex issuance check. Recheck the exact ingress caller, membership, local routes and app
+    // enablement once more before committing the message.
+    if app_verified && let Err(error) = read_state(|state| revalidate_app_card_post(&prepared, state)) {
+        return Error(error);
+    }
+    let verified_app_card = app_verified.then_some(prepared.app_card).flatten();
+    match execute_update(|state| send_message_impl_for_caller(args, prepared.caller, true, verified_app_card, state)) {
         Ok(result) => Success(result),
         Err(error) => Error(error),
     }
+}
+
+struct AppCardPostPreparation {
+    caller: Caller,
+    local_user_index_canister_id: types::CanisterId,
+    group_index_canister_id: types::CanisterId,
+    provenance: Option<local_user_index_canister::c2c_validate_ai_app_card_provenance::Args>,
+    app_card: Option<VerifiedAppCardPost>,
+}
+
+#[derive(Clone)]
+struct VerifiedAppCardPost {
+    ingress_caller: candid::Principal,
+    principal_mapping_generation: u64,
+    user_id: types::UserId,
+    app_id: types::AiAppId,
+    app_revision: TimestampMillis,
+    action_id: String,
+    content_hash: [u8; 32],
+    thread_root_message_index: Option<MessageIndex>,
+    message_id: types::MessageId,
+}
+
+fn prepare_app_card_post(args: &Args, state: &RuntimeState) -> OCResult<AppCardPostPreparation> {
+    state.data.verify_not_frozen()?;
+    let ingress_caller = state.env.caller();
+    let caller = state.verified_caller(None)?;
+    let (provenance, app_card) = match &args.content {
+        MessageContentInitial::ActionCard(card)
+            if card.app_id.is_some() || card.app_revision.is_some() || card.app_provenance.is_some() =>
+        {
+            let (Some(app_id), Some(app_revision), Some(provenance)) =
+                (card.app_id, card.app_revision, card.app_provenance.clone())
+            else {
+                return Err(OCErrorCode::InvalidRequest.with_message("incomplete AI-app card provenance"));
+            };
+            if provenance.len() != 32 {
+                return Err(OCErrorCode::InvalidRequest.with_message("invalid AI-app card provenance"));
+            }
+            if !matches!(caller, Caller::User(_)) || !state.data.enabled_ai_apps.contains(&app_id) {
+                return Err(OCErrorCode::InitiatorNotAuthorized.into());
+            }
+            let user_id = caller.agent();
+            let chat = Chat::Group(state.env.canister_id().into());
+            let content_hash = ai_app_card_content_hash_from_initial(
+                user_id,
+                chat,
+                args.thread_root_message_index,
+                args.message_id,
+                app_id,
+                app_revision,
+                card,
+            )
+            .map_err(|error| OCErrorCode::InvalidRequest.with_message(error))?;
+            let verified = VerifiedAppCardPost {
+                ingress_caller,
+                principal_mapping_generation: state.data.principal_to_user_id_map.generation(),
+                user_id,
+                app_id,
+                app_revision,
+                action_id: card.action_id.clone(),
+                content_hash,
+                thread_root_message_index: args.thread_root_message_index,
+                message_id: args.message_id,
+            };
+            (
+                Some(local_user_index_canister::c2c_validate_ai_app_card_provenance::Args {
+                    user_id,
+                    chat,
+                    thread_root_message_index: args.thread_root_message_index,
+                    message_id: args.message_id,
+                    app_id,
+                    app_revision,
+                    action_id: card.action_id.clone(),
+                    content_hash,
+                    member_user_ids: vec![user_id],
+                    provenance,
+                    authority: serde_bytes::ByteBuf::new(),
+                }),
+                Some(verified),
+            )
+        }
+        _ => (None, None),
+    };
+    Ok(AppCardPostPreparation {
+        caller,
+        local_user_index_canister_id: state.data.local_user_index_canister_id,
+        group_index_canister_id: state.data.group_index_canister_id,
+        provenance,
+        app_card,
+    })
+}
+
+fn revalidate_app_card_post(prepared: &AppCardPostPreparation, state: &RuntimeState) -> OCResult {
+    state.data.verify_not_frozen()?;
+    if state.data.local_user_index_canister_id != prepared.local_user_index_canister_id
+        || state.data.group_index_canister_id != prepared.group_index_canister_id
+    {
+        return Err(OCErrorCode::C2CError.with_message("card authority route changed"));
+    }
+    if let Some(card) = &prepared.app_card {
+        if state.data.principal_to_user_id_map.generation() != card.principal_mapping_generation
+            || state.data.lookup_user_id(card.ingress_caller) != Some(card.user_id)
+            || !state.data.enabled_ai_apps.contains(&card.app_id)
+        {
+            return Err(OCErrorCode::InitiatorNotAuthorized.into());
+        }
+        let member = state.data.chat.members.get_verified_member(card.user_id)?;
+        if member.user_type() != UserType::User {
+            return Err(OCErrorCode::InitiatorNotAuthorized.into());
+        }
+    }
+    Ok(())
 }
 
 #[update(msgpack = true)]
@@ -76,15 +260,71 @@ pub(crate) fn send_message_impl(
 
     let caller = state.verified_caller(ext_caller)?;
 
+    send_message_impl_for_caller(args, caller, finalised, None, state)
+}
+
+fn send_message_impl_for_caller(
+    args: Args,
+    caller: Caller,
+    finalised: bool,
+    verified_app_card: Option<VerifiedAppCardPost>,
+    state: &mut RuntimeState,
+) -> OCResult<SuccessResult> {
+    // This function is entered after an inter-canister await for app cards. Every mutable gate that
+    // authorized the proposal must be checked again immediately before storage.
+    state.data.verify_not_frozen()?;
+    if state.data.chat.external_url.is_some() {
+        return Err(OCErrorCode::InitiatorNotAuthorized.into());
+    }
+    if let Some(expected) = &verified_app_card {
+        if !matches!(&caller, Caller::User(user_id) if *user_id == expected.user_id)
+            || state.data.principal_to_user_id_map.generation() != expected.principal_mapping_generation
+            || state.data.lookup_user_id(expected.ingress_caller) != Some(expected.user_id)
+        {
+            return Err(OCErrorCode::InitiatorNotAuthorized.into());
+        }
+        let member = state.data.chat.members.get_verified_member(expected.user_id)?;
+        if member.user_type() != UserType::User {
+            return Err(OCErrorCode::InitiatorNotAuthorized.into());
+        }
+        if !state.data.enabled_ai_apps.contains(&expected.app_id) {
+            return Err(OCErrorCode::InitiatorNotAuthorized.with_message("AI app was disabled while validating"));
+        }
+        match &args.content {
+            MessageContentInitial::ActionCard(card)
+                if card.app_id == Some(expected.app_id)
+                    && card.app_revision == Some(expected.app_revision)
+                    && card.action_id == expected.action_id
+                    && args.thread_root_message_index == expected.thread_root_message_index
+                    && args.message_id == expected.message_id
+                    && ai_app_card_content_hash_from_initial(
+                        expected.user_id,
+                        Chat::Group(state.env.canister_id().into()),
+                        args.thread_root_message_index,
+                        args.message_id,
+                        expected.app_id,
+                        expected.app_revision,
+                        card,
+                    )
+                    .is_ok_and(|hash| hash == expected.content_hash) => {}
+            _ => return Err(OCErrorCode::InvalidRequest.with_message("AI-app card changed while validating")),
+        }
+    }
+
     let now = state.env.now();
     let mentioned: Vec<_> = args.mentioned.iter().map(|u| u.user_id).collect();
 
-    let content =
+    let mut content =
         match MessageContentInternal::validate_new_message(args.content, false, (&caller).into(), args.forwarding, now) {
             ValidateNewMessageContentResult::Success(content) => content,
             ValidateNewMessageContentResult::Error(error) => return Err(error.into()),
             _ => return Err(OCErrorCode::InvalidRequest.with_message("Message type not supported")),
         };
+    if let Some(verified) = &verified_app_card
+        && !content.mark_ai_app_card_verified(verified.content_hash)
+    {
+        return Err(OCErrorCode::InvalidRequest.with_message("provenance was supplied for a non-card message"));
+    }
 
     let result = state.data.chat.send_message(
         &caller,

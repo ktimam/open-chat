@@ -144,6 +144,10 @@ impl CommunityMembers {
         self.principal_to_user_id_map.insert(principal, user_id);
     }
 
+    pub fn principal_mapping_generation(&self) -> u64 {
+        self.principal_to_user_id_map.generation()
+    }
+
     pub fn remove_by_principal(&mut self, principal: Principal, now: TimestampMillis) -> Option<CommunityMemberInternal> {
         let user_id = self.principal_to_user_id_map.remove(&principal)?.into_value();
         self.remove(user_id, Some(principal), now)

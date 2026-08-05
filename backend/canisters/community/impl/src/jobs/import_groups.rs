@@ -222,7 +222,7 @@ pub(crate) fn finalize_group_import(group_id: ChatId) {
                 // Carry over the AI apps that were enabled on the source group so
                 // the imported channel keeps them (empty for the convert-to-new-
                 // community path, which doesn't snapshot the set).
-                enabled_ai_apps: group.enabled_ai_apps().clone(),
+                enabled_ai_apps: group_community_common::bounded_enabled_ai_apps(group.enabled_ai_apps().iter().copied()),
             });
 
             state.data.timer_jobs.enqueue_job(

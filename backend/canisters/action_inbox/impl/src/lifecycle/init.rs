@@ -14,11 +14,11 @@ fn init(args: Args) {
 
     let env = init_env([0; 32]);
     let data = Data::new(
+        args.app_id,
         args.user_index_canister_id,
         args.cycles_dispenser_canister_id,
         args.deployment_operators,
         args.authorized_depositors,
-        args.oc_signing_public_key_pem,
         args.test_mode,
     );
 

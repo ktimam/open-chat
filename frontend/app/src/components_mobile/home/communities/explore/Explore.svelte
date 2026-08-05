@@ -123,7 +123,7 @@
             .exploreCommunities(
                 communitySearchState.term === "" ? undefined : communitySearchState.term,
                 communitySearchState.index,
-                32,
+                8,
                 disableRestrictedContent ? 0 : filters.flags ?? 0,
                 filters.languages,
             )
@@ -169,7 +169,7 @@
             .exploreAiApps(
                 aiAppSearchState.term === "" ? undefined : aiAppSearchState.term,
                 aiAppSearchState.index,
-                32,
+                8,
             )
             .then((results) => {
                 if (reset) {
@@ -573,6 +573,8 @@
     <AiAppSurfaceSheet
         title={appSurface.app.manifest.name}
         url={appSurface.url}
+        display={appSurface.surface.display}
+        dataDisclosures={appSurface.dataDisclosures}
         onDismiss={() => (appSurface = undefined)} />
 {/if}
 

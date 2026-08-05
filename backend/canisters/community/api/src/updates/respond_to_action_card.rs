@@ -18,6 +18,9 @@ pub struct Args {
     #[serde(default)]
     #[ts(as = "Option::<ts_export::TSBytes>")]
     pub confirm_payload_override: Option<ByteBuf>,
+    #[serde(default)]
+    #[ts(as = "Option::<ts_export::TSBytes>")]
+    pub confirmation_grant: Option<ByteBuf>,
 }
 
 #[ts_export(community, respond_to_action_card)]

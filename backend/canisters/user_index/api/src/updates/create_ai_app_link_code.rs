@@ -20,7 +20,7 @@ pub enum Response {
 #[ts_export(user_index, create_ai_app_link_code)]
 #[derive(Serialize, Deserialize, Debug)]
 pub struct SuccessResult {
-    /// 6-digit code the user enters in the external app; single-use and short-lived.
+    /// 256-bit lowercase-hex token the user copies into the external app; single-use and short-lived.
     pub code: String,
     pub expires_at: TimestampMillis,
 }

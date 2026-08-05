@@ -5,13 +5,19 @@
     // (X-Frame-Options / frame-ancestors) just renders an empty iframe — a cross-origin host
     // cannot detect that — so the user must always have a way out to the real page.
     import { i18nKey } from "@src/i18n/i18n";
-    import { openSurfaceExternally } from "@utils/aiAppSurfaces";
-    import { CommonButton, Container, Sheet, Title } from "component-lib";
+    import {
+        openSurfaceExternally,
+        type AiAppSurfaceDataDisclosure,
+    } from "@utils/aiAppSurfaces";
+    import { normalizeAiAppSurfaceUrl } from "@utils/cardBridge";
+    import { BodySmall, CommonButton, Container, Sheet, Title } from "component-lib";
     import type { OpenChat } from "openchat-client";
     import { getContext } from "svelte";
     import Close from "svelte-material-icons/Close.svelte";
     import OpenInNew from "svelte-material-icons/OpenInNew.svelte";
     import Translatable from "../Translatable.svelte";
+    import AiAppSurfaceDestination from "../../components/home/AiAppSurfaceDestination.svelte";
+    import HardenedAiAppSurface from "../../components/home/HardenedAiAppSurface.svelte";
 
     const client = getContext<OpenChat>("client");
 
@@ -20,10 +26,29 @@
         title: string;
         // The surface URL with its placeholders already substituted (see utils/aiAppSurfaces.ts).
         url: string;
+        display?: "sheet" | "external";
+        dataDisclosures?: AiAppSurfaceDataDisclosure[];
         onDismiss: () => void;
+        onConsent?: () => void;
     }
 
-    let { title, url, onDismiss }: Props = $props();
+    let {
+        title,
+        url,
+        display = "sheet",
+        dataDisclosures = [],
+        onDismiss,
+        onConsent,
+    }: Props = $props();
+    let normalizedUrl = $derived(
+        normalizeAiAppSurfaceUrl(url, { allowLocalDevelopment: import.meta.env.DEV }),
+    );
+
+    function openBrowser() {
+        if (normalizedUrl === undefined) return;
+        onConsent?.();
+        if (openSurfaceExternally(client, normalizedUrl) && display === "external") onDismiss();
+    }
 </script>
 
 <Sheet {onDismiss}>
@@ -38,10 +63,31 @@
             </CommonButton>
         </Container>
 
-        <iframe {title} src={url}></iframe>
+        {#if display === "sheet"}
+            <HardenedAiAppSurface {title} {url} {dataDisclosures} {onConsent} />
+        {:else if normalizedUrl !== undefined}
+            <div class="external-prompt">
+                <AiAppSurfaceDestination {title} {normalizedUrl} {dataDisclosures} />
+                <BodySmall>
+                    Opening hands this exact URL to your browser. No navigation occurs until you
+                    choose Open.
+                </BodySmall>
+            </div>
+        {:else}
+            <BodySmall colour={"textSecondary"}>This external app URL is not allowed.</BodySmall>
+        {/if}
 
-        <Container mainAxisAlignment={"center"} crossAxisAlignment={"center"}>
-            <CommonButton onClick={() => openSurfaceExternally(client, url)} size={"small_text"}>
+        {#if display === "sheet" && normalizedUrl !== undefined}
+            <BodySmall>Browser destination: <code>{normalizedUrl}</code></BodySmall>
+        {/if}
+        <Container mainAxisAlignment={"center"} crossAxisAlignment={"center"} gap={"md"}>
+            {#if display === "external"}
+                <CommonButton onClick={onDismiss} size={"small_text"}>Not now</CommonButton>
+            {/if}
+            <CommonButton
+                onClick={openBrowser}
+                disabled={normalizedUrl === undefined}
+                size={"small_text"}>
                 {#snippet icon(color, size)}
                     <OpenInNew {color} {size} />
                 {/snippet}
@@ -52,13 +98,16 @@
 </Sheet>
 
 <style>
-    /* An iframe has no intrinsic size, so the content-sized sheet needs an explicit tall height;
-       SheetBehavior caps the sheet as a whole at 80% of the visual viewport. */
-    iframe {
-        width: 100%;
-        height: 60vh;
-        border: none;
-        border-radius: var(--rad-md);
-        background: var(--background-1);
+    .external-prompt {
+        display: flex;
+        flex-direction: column;
+        gap: var(--pad-sm);
+        padding: var(--pad-md);
+        border: var(--bw) solid var(--bd);
+        border-radius: var(--rd);
+    }
+
+    code {
+        overflow-wrap: anywhere;
     }
 </style>

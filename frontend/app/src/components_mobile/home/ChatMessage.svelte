@@ -4,12 +4,13 @@
         manualExtractEnabled,
         proposeAndPost,
         proposeAndPostCandidate,
+        preflightAiActionForMessage,
         runProposeFlow,
         type AiActionCandidate,
     } from "@utils/aiActionRunner";
     import { canInferOnDevice } from "@utils/onDeviceInference";
     import {
-        openSurfaceExternally,
+        markSurfaceShownAfterConsent,
         surfaceToOpenAfterConfirm,
         type SurfaceOpening,
     } from "@utils/aiAppSurfaces";
@@ -271,7 +272,10 @@
     // model must never see a raw JSON box — they're guided to set one up (runProposeFlow says so). It
     // runs solely when `manualExtractEnabled()` is set (localStorage flag / ?manualExtract=1), which
     // the automated journey harness uses to drive the confirm → deposit cycle without a model.
-    function promptForExtraction(): Record<string, unknown> | Record<string, unknown>[] | undefined {
+    function promptForExtraction():
+        | Record<string, unknown>
+        | Record<string, unknown>[]
+        | undefined {
         if (!manualExtractEnabled()) return undefined;
         const raw = window.prompt(
             'Enter the action\'s fields as JSON to propose it, e.g. {"amount":20,"currency":"USD"}',
@@ -340,9 +344,11 @@
     // returned without a word: two candidates and no model meant a button that did nothing.
     async function runAiActionHandler() {
         await runProposeFlow({
+            preflight: () => preflightAiActionForMessage(client, messageContext.chatId),
             canInfer: canInferOnDevice,
             promptForExtraction,
-            propose: (extraction) => proposeAndPost(client, messageContext, msg.content, extraction),
+            propose: (extraction) =>
+                proposeAndPost(client, messageContext, msg.content, extraction),
             proposeCandidate: (candidate, extraction) =>
                 proposeAndPostCandidate(client, messageContext, msg.content, candidate, extraction),
             chooseCandidate,
@@ -490,17 +496,26 @@
 
     function onRespondToActionCard(
         response: "confirm" | "cancel",
-        // App-rendered cards pass the user's edited object here (from the iframe bridge); classic
-        // OC-rendered cards omit it.
-        payload?: Record<string, unknown> | unknown[],
+        confirmPayloadOverride?: Uint8Array,
+        confirmationGrant?: Uint8Array,
     ): Promise<void> {
         // Capture before the async round-trip: the card content is replaced when its state
         // refreshes to "confirmed". The promise is returned so the card can show a spinner and lock
         // its buttons until the confirm/cancel (and its downstream deposit) resolves.
         const actionId =
             msg.content.kind === "action_card_content" ? msg.content.actionId : undefined;
+        const appId = msg.content.kind === "action_card_content" ? msg.content.appId : undefined;
+        const appRevision =
+            msg.content.kind === "action_card_content" ? msg.content.appRevision : undefined;
         return client
-            .respondToActionCard(chatId, threadRootMessageIndex, msg.messageId, response, payload)
+            .respondToActionCard(
+                chatId,
+                threadRootMessageIndex,
+                msg.messageId,
+                response,
+                confirmPayloadOverride,
+                confirmationGrant,
+            )
             .then((success) => {
                 if (!success) {
                     // A failed confirm (usually a deposit error) now leaves the card Pending on the
@@ -511,7 +526,7 @@
                     return;
                 }
                 if (response === "confirm" && actionId !== undefined) {
-                    void openSurfaceAfterConfirm(actionId);
+                    void openSurfaceAfterConfirm(actionId, appId, appRevision);
                 }
             });
     }
@@ -520,14 +535,21 @@
     // surface (when it declares one) opens so the user can finish configuring the chat inside the
     // app — "sheet" surfaces embed in a bottom sheet, "external" ones open the system browser.
     // surfaceToOpenAfterConfirm persists the once-per-(app, chat) marker.
-    async function openSurfaceAfterConfirm(actionId: string) {
-        const opening = await surfaceToOpenAfterConfirm(client, chatId, actionId);
+    async function openSurfaceAfterConfirm(
+        actionId: string,
+        appId: number | undefined,
+        appRevision: bigint | undefined,
+    ) {
+        const opening = await surfaceToOpenAfterConfirm(
+            client,
+            chatId,
+            actionId,
+            appId,
+            appRevision,
+            $currentUserIdStore,
+        );
         if (opening === undefined) return;
-        if (opening.surface.display === "sheet") {
-            confirmSurface = opening;
-        } else {
-            openSurfaceExternally(client, opening.url);
-        }
+        confirmSurface = opening;
     }
 
     function reportMessage() {
@@ -679,8 +701,8 @@
                 id="dont_show"
                 label={i18nKey("install.dontShow")}
                 checked={!$confirmMessageDeletion}
-                onChange={confirmMessageDeletion.toggle}>
-            </Checkbox>
+                onChange={confirmMessageDeletion.toggle}
+            ></Checkbox>
         </Container>
     </AreYouSure>
 {/if}
@@ -690,16 +712,19 @@
         onDismiss={() => {
             showEmojiPicker = false;
             popHistoryStateWithAction("emoji_picker_action");
-        }}>
+        }}
+    >
         <div
             class="emoji_picker_wrapper"
-            style:padding-bottom={keyboard.visible ? `${keyboard.currentHeight - 64}px` : "0"}>
+            style:padding-bottom={keyboard.visible ? `${keyboard.currentHeight - 64}px` : "0"}
+        >
             <Column height="fill" overflow="auto" minHeight={keyboard.visible ? "35vh" : "50vh"}>
                 <EmojiPicker
                     onEmojiSelected={selectReaction}
                     onSkintoneChanged={(tone) => quickReactions.reload(tone)}
                     supportCustom={true}
-                    mode={"reaction"} />
+                    mode={"reaction"}
+                />
             </Column>
         </div>
     </Sheet>
@@ -748,7 +773,8 @@
                 onRemindMe={remindMe}
                 onRunAiAction={runAiActionHandler}
                 {onDeleteFailedMessage}
-                onOptionSelected={() => (isSheetMenuOpen = false)} />
+                onOptionSelected={() => (isSheetMenuOpen = false)}
+            />
         </Column>
     </Sheet>
 {/if}
@@ -775,14 +801,20 @@
     <AiAppLinkSheet
         app={aiAppLink}
         onDismiss={() => closeAiAppLink(false)}
-        onLinked={() => closeAiAppLink(true)} />
+        onLinked={() => closeAiAppLink(true)}
+    />
 {/if}
 
 {#if confirmSurface !== undefined}
     <AiAppSurfaceSheet
         title={confirmSurface.app.manifest.name}
         url={confirmSurface.url}
-        onDismiss={() => (confirmSurface = undefined)} />
+        display={confirmSurface.surface.display}
+        dataDisclosures={confirmSurface.dataDisclosures}
+        onConsent={() =>
+            markSurfaceShownAfterConsent(confirmSurface!, chatId, $currentUserIdStore)}
+        onDismiss={() => (confirmSurface = undefined)}
+    />
 {/if}
 
 {#if showRemindMe}
@@ -790,7 +822,8 @@
         {chatId}
         {eventIndex}
         {threadRootMessageIndex}
-        onClose={() => (showRemindMe = false)} />
+        onClose={() => (showRemindMe = false)}
+    />
 {/if}
 
 {#if showReport}
@@ -799,7 +832,8 @@
         messageId={msg.messageId}
         {chatId}
         {canDelete}
-        onClose={() => (showReport = false)} />
+        onClose={() => (showReport = false)}
+    />
 {/if}
 
 {#if debug}
@@ -843,13 +877,15 @@
                           oncommit: onPanCommit,
                           onmove: onPanMove,
                           isScrolling: scrollStatus.isScrolling || scrollStatus.isCooldown,
-                      }}>
+                      }}
+            >
                 {#if showAvatar}
                     <div class:first class="avatar">
                         <Avatar
                             onClick={openUserProfile}
                             url={client.userAvatarUrl(sender)}
-                            size={"sm"}></Avatar>
+                            size={"sm"}
+                        ></Avatar>
                     </div>
                 {/if}
                 {@const hasThread = threadSummary !== undefined && !inThread}
@@ -863,12 +899,14 @@
                     maxWidth={chatId.kind === "direct_chat" ? "78vw" : "75vw"}
                     gap={"xxs"}
                     minWidth={"6rem"}
-                    direction={"vertical"}>
+                    direction={"vertical"}
+                >
                     {#if panDirection}
                         <div
                             class={`pan-action ${panDirection}`}
                             class:active={panFactor >= 1}
-                            style:opacity={panFactor}>
+                            style:opacity={panFactor}
+                        >
                             {#if me && canEdit && panDirection === "left"}
                                 <SquareEditOutline size="1.5rem" />
                             {:else if !me && canShare && panDirection === "left"}
@@ -886,7 +924,8 @@
                         longpressAnimation="scale"
                         position="bottom"
                         customContent={true}
-                        {longpressCooldown}>
+                        {longpressCooldown}
+                    >
                         {#snippet menuItems()}
                             {#if showChatMenu && intersecting}
                                 <ChatMessageMenu
@@ -936,7 +975,8 @@
                                     onRemindMe={remindMe}
                                     onRunAiAction={runAiActionHandler}
                                     onOpenSheetMenu={openSheetMenu}
-                                    {onDeleteFailedMessage} />
+                                    {onDeleteFailedMessage}
+                                />
                             {/if}
                         {/snippet}
                         <MessageBubble
@@ -963,14 +1003,16 @@
                             {readByThem}
                             {readByMe}
                             {onGoToMessageIndex}
-                            {chatType}>
+                            {chatType}
+                        >
                             {#snippet repliesTo(reply)}
                                 <RepliesTo
                                     {contentWidth}
                                     {readonly}
                                     {chatId}
                                     {intersecting}
-                                    repliesTo={reply} />
+                                    repliesTo={reply}
+                                />
                             {/snippet}
 
                             {#snippet messageContent(me)}
@@ -997,7 +1039,8 @@
                                     {onRespondToActionCard}
                                     {onExpandMessage}
                                     ogPreviews={msg.ogPreviews}
-                                    messagePreviews={msg.messagePreviews} />
+                                    messagePreviews={msg.messagePreviews}
+                                />
                             {/snippet}
                         </MessageBubble>
                     </MenuTrigger>
@@ -1007,7 +1050,8 @@
                             {threadSummary}
                             {chatId}
                             threadRootMessageIndex={msg.messageIndex}
-                            {me} />
+                            {me}
+                        />
                     {/if}
                     {#if hasReactions}
                         <Reactions
@@ -1015,7 +1059,8 @@
                             onClick={({ reaction }) => toggleReaction(false, reaction)}
                             {intersecting}
                             reactions={msg.reactions}
-                            offset={!hasThread}></Reactions>
+                            offset={!hasThread}
+                        ></Reactions>
                     {/if}
                     {#if hasTips && !inert}
                         <Tips
@@ -1023,7 +1068,8 @@
                             tips={msg.tips}
                             onClick={tipMessage}
                             {canTip}
-                            offset={!hasThread} />
+                            offset={!hasThread}
+                        />
                     {/if}
                     {#if autoProposeSuggestion !== undefined}
                         <AutoProposeChip
@@ -1032,7 +1078,8 @@
                             offset={!hasThread && !hasReactions && !hasTips}
                             onPropose={proposeSuggestedAiAction}
                             onDismiss={() => dismissAutoProposeSuggestion(msg.messageId)}
-                            onMute={muteAutoProposeSuggestions} />
+                            onMute={muteAutoProposeSuggestions}
+                        />
                     {/if}
                 </Container>
             </Container>
@@ -1043,7 +1090,8 @@
             <BotMessageContext
                 botName={"cockpiss"}
                 botCommand={senderContext.command}
-                finalised={senderContext.finalised} />
+                finalised={senderContext.finalised}
+            />
         </div>
     {/if}
 {/if}

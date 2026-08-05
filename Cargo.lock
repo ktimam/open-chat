@@ -26,6 +26,7 @@ dependencies = [
  "oc_error_codes",
  "serde",
  "serde_bytes",
+ "sha256",
  "types",
 ]
 
@@ -52,15 +53,20 @@ dependencies = [
  "canister_logger",
  "canister_state_macros",
  "canister_tracing_macros",
+ "ecies_payload",
  "http_request",
  "ic-cdk",
  "ic-cdk-timers",
  "ic-stable-structures 0.7.0",
  "msgpack",
+ "oc_error_codes",
+ "p256",
  "rand 0.8.5",
  "serde",
  "serde_bytes",
+ "serde_json",
  "stable_memory",
+ "subtle",
  "tracing",
  "types",
  "utils",
@@ -152,6 +158,8 @@ version = "0.1.0"
 dependencies = [
  "candid",
  "serde",
+ "serde_bytes",
+ "sha256",
  "types",
 ]
 
@@ -164,6 +172,16 @@ dependencies = [
  "canister_client",
  "ic-cdk",
  "types",
+]
+
+[[package]]
+name = "ai_app_verifier_test_canister_impl"
+version = "0.1.0"
+dependencies = [
+ "ai_app_verifier_canister",
+ "candid",
+ "ic-cdk",
+ "serde",
 ]
 
 [[package]]
@@ -4363,6 +4381,7 @@ dependencies = [
  "oc_error_codes",
  "serde",
  "serde_bytes",
+ "sha256",
  "ts-rs",
  "ts_export",
  "types",
@@ -4425,6 +4444,7 @@ dependencies = [
  "rand 0.8.5",
  "search",
  "serde",
+ "serde_bytes",
  "stable_memory",
  "timer_job_queues",
  "tracing",
@@ -5929,11 +5949,13 @@ name = "integration_tests"
 version = "0.1.0"
 dependencies = [
  "action_inbox_canister",
+ "ai_app_verifier_canister",
  "airdrop_bot_canister",
  "candid",
  "chat_events",
  "community_canister",
  "constants",
+ "ct-codecs",
  "cycles_dispenser_canister",
  "cycles_minting_canister",
  "ecies_payload",
@@ -6588,6 +6610,7 @@ dependencies = [
  "futures",
  "group_canister",
  "group_canister_c2c_client",
+ "hex",
  "http_request",
  "ic-cdk",
  "ic-cdk-timers",
@@ -12691,9 +12714,11 @@ dependencies = [
 name = "user_index_canister"
 version = "0.1.0"
 dependencies = [
+ "action_inbox_canister",
  "candid",
  "candid_gen",
  "constants",
+ "hex",
  "human_readable",
  "ic-ledger-types",
  "modclub_canister",
@@ -12734,6 +12759,8 @@ dependencies = [
 name = "user_index_canister_impl"
 version = "0.1.0"
 dependencies = [
+ "action_inbox_canister",
+ "action_inbox_canister_c2c_client",
  "ai_app_verifier_canister",
  "ai_app_verifier_canister_c2c_client",
  "candid",
@@ -12749,6 +12776,7 @@ dependencies = [
  "constants",
  "cycles_dispenser_canister",
  "dataurl",
+ "ecies_payload",
  "event_store_producer",
  "event_store_producer_cdk_runtime",
  "fire_and_forget_handler",
@@ -12758,6 +12786,7 @@ dependencies = [
  "group_index_canister",
  "group_index_canister_c2c_client",
  "hex",
+ "hmac-sha256",
  "http_request",
  "human_readable",
  "ic-cdk",
@@ -12788,6 +12817,7 @@ dependencies = [
  "serde",
  "serde_bytes",
  "serde_json",
+ "sha256",
  "stable_memory",
  "stable_memory_map",
  "storage_index_canister",
@@ -12803,6 +12833,7 @@ dependencies = [
  "user_ids_set",
  "user_index_canister",
  "utils",
+ "zeroize",
 ]
 
 [[package]]

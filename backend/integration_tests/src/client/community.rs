@@ -43,6 +43,7 @@ generate_msgpack_update_call!(remove_member);
 generate_msgpack_update_call!(remove_member_from_channel);
 generate_msgpack_update_call!(remove_reaction);
 generate_msgpack_update_call!(send_message);
+generate_msgpack_update_call!(set_ai_app_enabled);
 generate_msgpack_update_call!(unblock_user);
 generate_msgpack_update_call!(undelete_messages);
 generate_msgpack_update_call!(update_bot);

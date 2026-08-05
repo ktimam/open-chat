@@ -1,29 +1,36 @@
 // App-level orchestrator for the in-OpenChat AI-action runner.
 //
-// Ties together the three verified pieces: the AI-app directory (client.aiApps()), the on-device model
+// Ties together the three verified pieces: bounded AI-app lookup, the on-device model
 // (inferOnDevice), and the generic runner (runAiAction, in openchat-shared). Given a chat message's content,
 // it runs the offered action on-device and returns a proposable confirm-card. The caller posts the card
-// with client.sendMessageWithContent — on confirm, OpenChat encrypts confirmPayload to the action's
-// recipient_public_key and deposits it into the action_inbox. Nothing here is app-specific.
+// with client.sendMessageWithContent. On confirm, OpenChat resolves the card's exact published app
+// revision, action, inbox and authoritative chat-member keys before depositing. Nothing here is
+// app-specific.
 //
 // Scoping (Phase A): in a group chat the actions on offer come from the AI-app directory — the apps the
-// group's owner/admins enabled in that chat (client.enabledAiApps X client.aiApps), flattened to
-// (app, action) pairs. A chat with no enabled app — including every non-group chat, where there is no app
-// enablement yet (Phase A.1) — offers no actions.
+// group's owner/admins enabled in that chat (enabled ids crossed with a bounded exact lookup), flattened to
+// (app, action) pairs. Direct chats offer no actions while their provenance/send path is unsupported;
+// the UI must not offer an operation the backend will reject.
 
 import {
     applyRulesPostPass,
     buildActionCardContent,
-    buildMultiActionCardContent,
+    MAX_AI_ACTION_CANDIDATES,
     missingRequired,
+    random64,
     runAiAction,
     type AiActionDefinition,
+    type AiAppCardContentV1,
     type AiAppRegistration,
     type ModelModality,
     type RunAiActionResult,
 } from "openchat-shared";
 import type { ChatIdentifier, MessageContent, MessageContext, OpenChat } from "openchat-client";
+import { appContentAttestationAvailable } from "./aiActionAvailability";
+import { cardSurfaceOpening } from "./aiAppSurfaces";
 import { inferOnDevice, onDeviceInferenceCapability } from "./onDeviceInference";
+
+const MAX_AI_ACTION_ENABLED_APPS = 32;
 
 // A directory app's action offered in a chat, with the delivery key already resolved. For a
 // per-user-keys app this is the proposing user's own registered key (from my_ai_app_keys);
@@ -33,12 +40,20 @@ export interface AiActionCandidate {
     app: AiAppRegistration;
     action: AiActionDefinition;
     recipientKey: string;
-    // Fan-out delivery: the OTHER chat members' registered keys for this app (resolved at propose
-    // time via ai_app_user_keys). On confirm the deposit is encrypted to recipientKey AND each of
-    // these, so every listed member's app inbox receives the action — not just the proposer's.
+    // Legacy sender-routing fields retained for wire compatibility. Current canisters ignore these
+    // and resolve recipients/inbox from the vouched manifest and authoritative membership at confirm.
     additionalRecipientKeys?: string[];
-    // Per-app inbox override from the app's manifest (undefined => global action_inbox).
     inboxCanisterId?: string;
+}
+
+export type AiActionUnavailableReason =
+    | "missing_card_surface"
+    | "missing_inbox_route"
+    | "content_attestation_unavailable";
+
+export interface AiActionUnavailable {
+    app: AiAppRegistration;
+    reason: AiActionUnavailableReason;
 }
 
 export type ProposeResult =
@@ -56,7 +71,10 @@ export type ProposeResult =
     // Every enabled candidate comes from a per-user-keys app the user has not linked yet — the UI
     // must run the one-time consent flow (create a link code, wait for the app to claim it) and
     // then re-propose.
-    | { kind: "link_required"; app: AiAppRegistration };
+    | { kind: "link_required"; app: AiAppRegistration }
+    // Enabled apps exist, but starting a proposal would create a card that cannot safely complete.
+    // This is decided before local inference, provenance minting, or posting.
+    | { kind: "actions_unavailable"; unavailable: AiActionUnavailable[] };
 
 export interface ResolvedCandidates {
     candidates: AiActionCandidate[];
@@ -64,65 +82,64 @@ export interface ResolvedCandidates {
     // back to the manifest/action key (it belongs to someone else) — they need the one-time
     // link-code pairing first.
     linkRequired: AiAppRegistration[];
+    unavailable: AiActionUnavailable[];
+}
+
+function unavailableReasonForApp(
+    app: AiAppRegistration,
+    chatId: ChatIdentifier,
+): AiActionUnavailableReason | undefined {
+    // UserIndex provenance resolution requires an actual registered card surface. Classic cards are
+    // not a supported fallback for new app-bound proposals because they cannot display private app
+    // context or prove the sender's title/rows/payload came from the app.
+    if (cardSurfaceOpening(app, chatId) === undefined) return "missing_card_surface";
+    // A card with no app inbox can be proposed but can never deliver a confirmed action. Reject it
+    // before spending model work or asking the user to confirm a doomed operation.
+    if ((app.manifest.inboxCanisterId?.trim().length ?? 0) === 0) return "missing_inbox_route";
+    // Temporary global kill-switch: app_verified currently attests coordinates only. Until the
+    // backend can mint app_content_verified for the full canonical card, no new proposal is usable.
+    if (!appContentAttestationAvailable()) return "content_attestation_unavailable";
+    return undefined;
 }
 
 // Resolve the (app, action) candidates on offer in a chat: the apps enabled in the chat crossed with the
 // global app directory, flattened. Groups and channels carry an admin-curated enabled set on their
-// canister; direct chats have no admin, so the user's CONNECTED apps (published per-user-keys apps
-// they hold a delivery key for) participate automatically. Exported so the auto-propose matcher
+// canister; direct chats fail closed until their provenance path exists. Exported so the auto-propose matcher
 // (utils/autoPropose.ts) derives its trigger vocabulary from this same resolution.
 export async function resolveCandidates(
     client: OpenChat,
     chatId: ChatIdentifier,
 ): Promise<ResolvedCandidates> {
     if (chatId.kind === "direct_chat") {
-        // v0 direct-chat enablement: your connected apps ARE the enabled set. An app you haven't
-        // connected surfaces as `link_required` (so you can onboard IOU straight from a 1:1 chat —
-        // previously it was silently skipped, and pairing was only reachable from a group).
-        const apps = await client.aiApps();
-        const perUserApps = apps.filter((app) => app.manifest.perUserKeys === true);
-        if (perUserApps.length === 0) return { candidates: [], linkRequired: [] };
-        const myKeys = new Map<number, string>();
-        for (const key of await client.myAiAppKeys()) {
-            myKeys.set(key.appId, key.publicKey);
-        }
-        const candidates: AiActionCandidate[] = [];
-        const linkRequired: AiAppRegistration[] = [];
-        for (const app of perUserApps) {
-            const myKey = myKeys.get(app.id);
-            if (myKey === undefined || myKey.length === 0) {
-                linkRequired.push(app);
-                continue;
-            }
-            // Fan-out: the OTHER participant's registered key for this app (if they connected it).
-            // Best-effort — a failed lookup degrades to proposer-only delivery, exactly the old
-            // behaviour. With it, a confirm lands in BOTH members' app inboxes immediately.
-            const otherKeys = (await client.aiAppUserKeys(app.id, [chatId.userId]))
-                .map((k) => k.publicKey)
-                .filter((k) => k.length > 0);
-            for (const action of app.manifest.actions) {
-                candidates.push({
-                    app,
-                    action,
-                    recipientKey: myKey,
-                    additionalRecipientKeys: otherKeys.length > 0 ? otherKeys : undefined,
-                    inboxCanisterId: app.manifest.inboxCanisterId,
-                });
-            }
-        }
-        return { candidates, linkRequired };
+        // Direct provenance/send is explicitly unsupported by the backend. Do not offer a candidate
+        // or link flow that can only fail after model work and user interaction.
+        return { candidates: [], linkRequired: [], unavailable: [] };
     }
     if (chatId.kind !== "group_chat" && chatId.kind !== "channel") {
-        return { candidates: [], linkRequired: [] };
+        return { candidates: [], linkRequired: [], unavailable: [] };
     }
-    const [enabledIds, apps] = await Promise.all([client.enabledAiApps(chatId), client.aiApps()]);
-    const enabled = new Set(enabledIds);
-    const enabledApps = apps.filter((app) => enabled.has(app.id));
+    const enabledIds = await client.enabledAiApps(chatId);
+    const boundedIds = enabledIds.slice(0, MAX_AI_ACTION_ENABLED_APPS);
+    const apps = await client.aiApps(boundedIds.map((appId) => ({ appId })));
+    const enabled = new Set(boundedIds);
+    const enabledApps = apps
+        .filter((app) => enabled.has(app.id))
+        .slice(0, MAX_AI_ACTION_ENABLED_APPS);
+    const unavailable: AiActionUnavailable[] = [];
+    const runnableApps: AiAppRegistration[] = [];
+    for (const app of enabledApps) {
+        const reason = unavailableReasonForApp(app, chatId);
+        if (reason === undefined) {
+            runnableApps.push(app);
+        } else {
+            unavailable.push({ app, reason });
+        }
+    }
 
     // The user's own registered delivery keys, fetched only when an enabled app declares per-user
     // keys — apps without per_user_keys resolve exactly as before.
     const myKeys = new Map<number, string>();
-    if (enabledApps.some((app) => app.manifest.perUserKeys === true)) {
+    if (runnableApps.some((app) => app.manifest.perUserKeys === true)) {
         for (const key of await client.myAiAppKeys()) {
             myKeys.set(key.appId, key.publicKey);
         }
@@ -130,30 +147,60 @@ export async function resolveCandidates(
 
     const candidates: AiActionCandidate[] = [];
     const linkRequired: AiAppRegistration[] = [];
-    for (const app of enabledApps) {
+    candidateApps: for (const app of runnableApps) {
         if (app.manifest.perUserKeys === true) {
             // Per-user delivery: the ONLY acceptable recipient is the proposing user's own key.
             const myKey = myKeys.get(app.id);
             if (myKey === undefined || myKey.length === 0) {
-                linkRequired.push(app);
+                if (linkRequired.length < MAX_AI_ACTION_ENABLED_APPS) linkRequired.push(app);
                 continue;
             }
             for (const action of app.manifest.actions) {
-                candidates.push({ app, action, recipientKey: myKey, inboxCanisterId: app.manifest.inboxCanisterId });
+                if (candidates.length >= MAX_AI_ACTION_CANDIDATES) break candidateApps;
+                candidates.push({
+                    app,
+                    action,
+                    recipientKey: myKey,
+                    inboxCanisterId: app.manifest.inboxCanisterId,
+                });
             }
             continue;
         }
         // Legacy single-key delivery, unchanged: the action's own key else the manifest key.
         for (const action of app.manifest.actions) {
+            if (candidates.length >= MAX_AI_ACTION_CANDIDATES) break candidateApps;
             const recipientKey =
                 (action.consumerPublicKey?.length ?? 0) > 0
                     ? (action.consumerPublicKey as string)
                     : app.manifest.consumerPublicKey;
             if (recipientKey.length === 0) continue;
-            candidates.push({ app, action, recipientKey, inboxCanisterId: app.manifest.inboxCanisterId });
+            candidates.push({
+                app,
+                action,
+                recipientKey,
+                inboxCanisterId: app.manifest.inboxCanisterId,
+            });
         }
     }
-    return { candidates, linkRequired };
+    return { candidates, linkRequired, unavailable };
+}
+
+export type AiActionPreflightBlocker = Extract<
+    ProposeResult,
+    { kind: "actions_unavailable" | "no_actions" }
+>;
+
+// Cheap directory-only check used before the UI asks for a model/manual extraction. It returns only
+// terminal blockers; runnable or linkable candidates continue through the normal proposal flow.
+export async function preflightAiActionForMessage(
+    client: OpenChat,
+    chatId: ChatIdentifier,
+): Promise<AiActionPreflightBlocker | undefined> {
+    const { candidates, linkRequired, unavailable } = await resolveCandidates(client, chatId);
+    if (candidates.length > 0 || linkRequired.length > 0) return undefined;
+    return unavailable.length > 0
+        ? { kind: "actions_unavailable", unavailable }
+        : { kind: "no_actions" };
 }
 
 // Turn a message's content into runner input. Text is used directly; an image's bytes are fetched from the
@@ -194,8 +241,8 @@ export type ManualExtraction = Record<string, unknown> | Record<string, unknown>
 // path can never post a card the model path would have refused (e.g. a degenerate amount 0 against a
 // schema requiring amount > 0, which the consumer then rejects as an invalid draft). Degenerate
 // elements are dropped; 0 valid → the existing "model found no action" UX (`raw` carries the ORIGINAL
-// manual extraction for surfacing), 1 valid → the single-entry OBJECT card, ≥2 valid → ONE multi
-// card whose confirmPayload is the JSON ARRAY.
+// manual extraction for surfacing), 1 valid → the single-entry OBJECT card, and multiple valid entries
+// fail closed until an access-controlled exact-payload hydration endpoint exists.
 export function buildManualCard(
     def: AiActionDefinition,
     manualExtraction: ManualExtraction,
@@ -204,6 +251,7 @@ export function buildManualCard(
     additionalRecipientKeys?: string[],
     // The owning app id, baked onto the built card so the recipient binds the surface to this app.
     appId?: number,
+    appRevision?: bigint,
 ): ProposeResult {
     const candidates = Array.isArray(manualExtraction) ? manualExtraction : [manualExtraction];
     // No message text: message-driven rules (from_message / keyword_map override) don't apply to a
@@ -231,18 +279,14 @@ export function buildManualCard(
             inboxCanisterId,
             additionalRecipientKeys,
             appId,
+            appRevision,
         );
         return { kind: "ready", card, extracted: valid[0] };
     }
-    const card = buildMultiActionCardContent(
-        def,
-        valid,
-        recipientKey,
-        inboxCanisterId,
-        additionalRecipientKeys,
-        appId,
-    );
-    return { kind: "ready_multi", card, extracted: valid };
+    return {
+        kind: "error",
+        error: "Multiple action entries require an access-controlled exact-payload endpoint before a card can be posted.",
+    };
 }
 
 // Test seam for the manual-JSON extraction prompt (Issue 1): the raw `window.prompt` fallback for
@@ -278,9 +322,18 @@ async function runDefinition(
     additionalRecipientKeys?: string[],
     // The id of the app that owns this action, baked onto the built card (see ActionCardContent.appId).
     appId?: number,
+    appRevision?: bigint,
 ): Promise<ProposeResult> {
     if (manualExtraction !== undefined) {
-        return buildManualCard(def, manualExtraction, recipientKey, inboxCanisterId, additionalRecipientKeys, appId);
+        return buildManualCard(
+            def,
+            manualExtraction,
+            recipientKey,
+            inboxCanisterId,
+            additionalRecipientKeys,
+            appId,
+            appRevision,
+        );
     }
 
     const input = await contentToInput(content);
@@ -295,7 +348,16 @@ async function runDefinition(
         if (blocked !== undefined) return blocked;
     }
 
-    return runAiAction(def, input, recipientKey, inferOnDevice, inboxCanisterId, additionalRecipientKeys, appId);
+    return runAiAction(
+        def,
+        input,
+        recipientKey,
+        inferOnDevice,
+        inboxCanisterId,
+        additionalRecipientKeys,
+        appId,
+        appRevision,
+    );
 }
 
 /**
@@ -330,7 +392,7 @@ export async function proposeAiActionForMessage(
     content: MessageContent,
     manualExtraction?: ManualExtraction,
 ): Promise<ProposeResult> {
-    const { candidates, linkRequired } = await resolveCandidates(client, chatId);
+    const { candidates, linkRequired, unavailable } = await resolveCandidates(client, chatId);
     if (candidates.length === 1) {
         const c = candidates[0];
         return runDefinition(
@@ -341,6 +403,7 @@ export async function proposeAiActionForMessage(
             c.inboxCanisterId,
             c.additionalRecipientKeys,
             c.app.id,
+            c.app.updated,
         );
     }
     if (candidates.length > 1) {
@@ -348,6 +411,9 @@ export async function proposeAiActionForMessage(
     }
     if (linkRequired.length > 0) {
         return { kind: "link_required", app: linkRequired[0] };
+    }
+    if (unavailable.length > 0) {
+        return { kind: "actions_unavailable", unavailable };
     }
     return { kind: "no_actions" };
 }
@@ -361,11 +427,56 @@ async function postCard(
     messageContext: MessageContext,
     result: ProposeResult & { kind: "ready" | "ready_multi" },
 ): Promise<ProposeResult> {
+    if (result.kind === "ready_multi") {
+        return {
+            kind: "error",
+            error: "Multiple action entries require an access-controlled exact-payload endpoint before a card can be posted.",
+        };
+    }
     try {
+        const appId = result.card.appId;
+        const appRevision = result.card.appRevision;
+        if (appId === undefined || appRevision === undefined) {
+            return { kind: "error", error: "could not prove the card's app provenance" };
+        }
+        const messageId = random64();
+        const exactContent: AiAppCardContentV1 = {
+            title: result.card.title,
+            rows: result.card.rows.map((row) => ({ label: row.label, value: row.value })),
+            confirmLabel: result.card.confirmLabel,
+            cancelLabel: result.card.cancelLabel,
+            actionId: result.card.actionId,
+            disclosure: result.card.disclosure,
+            expiresAt: result.card.expiresAt,
+            confirmPayload: result.card.confirmPayload?.slice(),
+        };
+        const provenance = await client.createAiAppCardProvenance(
+            appId,
+            appRevision,
+            result.card.actionId,
+            exactContent,
+            messageContext.chatId,
+            messageId,
+            messageContext.threadRootMessageIndex,
+        );
+        if (provenance === undefined || provenance.expiresAt <= BigInt(Date.now())) {
+            return {
+                kind: "error",
+                error: "the app is unavailable or the card could not be verified",
+            };
+        }
+        const vouchedCard = { ...result.card, appProvenance: provenance.provenance };
         // NB: this does NOT throw on failure — it RESOLVES with a failure response (e.g. the chat is
         // missing from the store, or the send is throttled), which is the other half of why a failed
         // propose was completely silent. Inspect the response, don't just await it.
-        const res = await client.sendMessageWithContent(messageContext, result.card, false, [], false);
+        const res = await client.sendMessageWithContent(
+            messageContext,
+            vouchedCard,
+            false,
+            [],
+            false,
+            messageId,
+        );
         if (res?.kind !== undefined && res.kind !== "success") {
             console.error("[aiAction] posting the proposed card was rejected", res);
             return { kind: "error", error: `could not post the card (${res.kind})` };
@@ -405,6 +516,13 @@ export async function proposeAndPostCandidate(
     candidate: AiActionCandidate,
     manualExtraction?: ManualExtraction,
 ): Promise<ProposeResult> {
+    const unavailableReason = unavailableReasonForApp(candidate.app, messageContext.chatId);
+    if (unavailableReason !== undefined) {
+        return {
+            kind: "actions_unavailable",
+            unavailable: [{ app: candidate.app, reason: unavailableReason }],
+        };
+    }
     const result = await runDefinition(
         candidate.action,
         candidate.recipientKey,
@@ -413,6 +531,7 @@ export async function proposeAndPostCandidate(
         candidate.inboxCanisterId,
         candidate.additionalRecipientKeys,
         candidate.app.id,
+        candidate.app.updated,
     );
     if (result.kind === "ready" || result.kind === "ready_multi") {
         return postCard(client, messageContext, result);
@@ -445,6 +564,16 @@ export function proposeFailureMessage(result: ProposeResult): string | undefined
         case "link_required":
             // Not an outcome: runProposeFlow is mid-flight and a surface is up.
             return undefined;
+        case "actions_unavailable": {
+            const reasons = new Set(result.unavailable.map((entry) => entry.reason));
+            if (reasons.has("content_attestation_unavailable")) {
+                return "New app actions are temporarily unavailable until OpenChat can verify the complete app-authored card content.";
+            }
+            if (reasons.has("missing_card_surface")) {
+                return "This app action is unavailable because the app has no valid secure in-chat card surface.";
+            }
+            return "This app action is unavailable because the app has no confirmed-action inbox route.";
+        }
         case "no_actions":
             // The one message here that IS a translation key — it predates the rest and exists in the
             // locale files. Callers wrap the return in i18nKey, which passes the plain-English
@@ -473,6 +602,9 @@ export function proposeFailureMessage(result: ProposeResult): string | undefined
 // testable with no model, no Tauri bridge and no mounted component — that this logic was reachable
 // only by clicking is precisely how the same silent-exit bug shipped twice.
 export interface ProposeFlowDeps {
+    // Resolve terminal availability before touching model/manual-extraction UX. In particular, the
+    // temporary content-attestation kill-switch must speak before any local inference work starts.
+    preflight: () => Promise<AiActionPreflightBlocker | undefined>;
     // Is an on-device model loaded and usable right now?
     canInfer: () => boolean;
     // The manual-JSON seam (a prompt behind `manualExtractEnabled`). Real users are never offered it,
@@ -507,6 +639,13 @@ export interface ProposeFlowDeps {
  * returned from in silence, leaving a user with two candidates and no model a dead button).
  */
 export async function runProposeFlow(deps: ProposeFlowDeps): Promise<void> {
+    const blocker = await deps.preflight();
+    if (blocker !== undefined) {
+        const message = proposeFailureMessage(blocker);
+        if (message !== undefined) deps.toast(message);
+        return;
+    }
+
     let extraction: ManualExtraction | undefined;
     if (!deps.canInfer()) {
         extraction = deps.promptForExtraction();

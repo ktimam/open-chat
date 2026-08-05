@@ -387,6 +387,8 @@ impl From<MessageContent> for MessageContentInitial {
                 action_id: c.action_id,
                 // app_id IS present on the hydrated content (unlike the routing fields below).
                 app_id: c.app_id,
+                app_revision: c.app_revision,
+                app_provenance: None,
                 disclosure: c.disclosure,
                 expires_at: c.expires_at,
                 // Server-only routing fields are not present on the hydrated content.
@@ -443,6 +445,9 @@ impl From<MessageContentInitial> for MessageContent {
                 cancel_label: c.cancel_label,
                 action_id: c.action_id,
                 app_id: c.app_id,
+                app_revision: c.app_revision,
+                app_verified: false,
+                app_content_verified: false,
                 disclosure: c.disclosure,
                 state: ActionCardState::Pending,
                 responded_by: None,
@@ -773,11 +778,12 @@ pub struct P2PSwapContent {
 
 // A generic, interactive "confirm card": caller-provided plain-language rows + Confirm/Cancel.
 // On Confirm, `payload` (an opaque, verbatim encoding of the displayed rows) is forwarded to the
-// registered action's endpoint. OpenChat never interprets `payload` or `action_id`; the consumer app
-// supplies them. The `rows` ARE the exact values that will be forwarded, so a human reviewing the card
-// sees precisely what is sent. This type carries no app-specific concepts.
+// registered action's endpoint. OpenChat never interprets `confirm_payload` or `action_id`; the
+// consumer app supplies them. Rows are the human-visible review surface, while an optional opaque
+// confirmation payload is separately bound by the exact full-card commitment before delivery. This
+// type carries no app-specific concepts.
 #[ts_export]
-#[derive(CandidType, Serialize, Deserialize, Clone, Debug)]
+#[derive(CandidType, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct ActionCardRow {
     pub label: String,
     pub value: String,
@@ -791,30 +797,36 @@ pub struct ActionCardContentInitial {
     pub confirm_label: String,
     pub cancel_label: String,
     pub action_id: String,
-    // The directory app that OWNS (posts) this card. Set at propose/post time — the same point
-    // `recipient_public_key` is baked — and UNLIKE the routing fields below it is HYDRATED back to
+    // The directory app that OWNS (posts) this card. Set at propose/post time and hydrated back to
     // clients (see ActionCardContent), so a recipient can bind card-surface resolution to the exact
     // producing app instead of guessing by the non-namespaced `action_id`. Absent on legacy cards.
     #[serde(default)]
     pub app_id: Option<AiAppId>,
+    // Immutable directory revision the user reviewed. Confirmation and app-rendered surfaces must
+    // resolve this exact published revision; a re-published manifest makes old cards stale.
+    #[serde(default)]
+    pub app_revision: Option<TimestampMillis>,
+    /// One-time UserIndex-issued proof that the app/revision/action and complete canonical card
+    /// commitment were current when the card was proposed. The chat ingress consumes it while
+    /// storing the exact card and never hydrates it back to participants. Later capability/grant
+    /// issuance relies on that stored attested context; arbitrary raw-posted cards cannot obtain app
+    /// private context merely by copying public manifest identifiers.
+    #[serde(default)]
+    #[ts(as = "Option::<ts_export::TSBytes>")]
+    pub app_provenance: Option<ByteBuf>,
     pub disclosure: Option<String>,
     pub expires_at: Option<TimestampMillis>,
-    // If both are set, confirming the card deposits `confirm_payload` (opaque bytes, never interpreted by
-    // OpenChat) encrypted to `recipient_public_key` (a P-256 SPKI PEM) into the action_inbox canister.
+    // Legacy sender-carried routing fields retained for wire/storage compatibility. Current confirm
+    // paths ignore these values and resolve keys/inbox from exact app provenance plus membership.
     #[serde(default)]
     pub recipient_public_key: Option<String>,
-    // Fan-out delivery (per-user-keys apps): ADDITIONAL recipient public keys — one per chat member
-    // with a registered delivery key for the app, resolved at propose time. On confirm the deposit
-    // is encrypted separately to `recipient_public_key` AND each key here (deduped), so EVERY listed
-    // member's app inbox receives the confirmed action — not just the proposer's. Empty for legacy
-    // cards and non-per-user-keys apps.
+    // Legacy fan-out routing data; ignored by current confirmation code.
     #[serde(default)]
     pub recipient_public_keys: Vec<String>,
     #[serde(default)]
     #[ts(as = "Option::<ts_export::TSBytes>")]
     pub confirm_payload: Option<ByteBuf>,
-    // If set, confirming this card deposits to this per-app inbox canister instead of the globally
-    // configured action_inbox. App-declared routing (from the manifest); OpenChat never interprets it.
+    // Legacy inbox routing data; ignored by current confirmation code.
     #[serde(default)]
     #[ts(as = "Option::<ts_export::TSPrincipal>", optional)]
     pub inbox_canister_id: Option<CanisterId>,
@@ -832,6 +844,19 @@ pub struct ActionCardContent {
     // producing app (see ActionCardContentInitial). Absent on legacy cards posted before this field.
     #[serde(default)]
     pub app_id: Option<AiAppId>,
+    #[serde(default)]
+    pub app_revision: Option<TimestampMillis>,
+    /// True only when the chat canister validated a one-time proposal provenance that binds these
+    /// app coordinates to the directory entry before storing the message. This does not attest that
+    /// the app canister authored the card rows or payload. Clients may use it to resolve the exact
+    /// sandboxed app surface, but must not label the card content itself as app-authored/verified.
+    #[serde(default)]
+    pub app_verified: bool,
+    /// True only after a trusted server path attests the complete canonical app-card content
+    /// (including rows and confirmation payload). No current sender/provenance path sets this.
+    /// App-bound confirmation must fail closed while this remains false.
+    #[serde(default)]
+    pub app_content_verified: bool,
     pub disclosure: Option<String>,
     pub state: ActionCardState,
     pub responded_by: Option<UserId>,

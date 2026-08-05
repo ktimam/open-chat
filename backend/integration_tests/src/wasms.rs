@@ -6,6 +6,7 @@ use types::{BuildVersion, CanisterWasm};
 
 lazy_static! {
     pub static ref ACTION_INBOX: CanisterWasm = get_canister_wasm("action_inbox");
+    pub static ref AI_APP_VERIFIER_TEST: CanisterWasm = get_canister_wasm("ai_app_verifier_test");
     pub static ref AIRDROP_BOT: CanisterWasm = get_canister_wasm("airdrop_bot");
     pub static ref COMMUNITY: CanisterWasm = get_canister_wasm("community");
     pub static ref CYCLES_DISPENSER: CanisterWasm = get_canister_wasm("cycles_dispenser");
@@ -17,7 +18,6 @@ lazy_static! {
     pub static ref ICP_LEDGER: CanisterWasm = get_canister_wasm("icp_ledger");
     pub static ref ICRC_LEDGER: CanisterWasm = get_canister_wasm("icrc_ledger");
     pub static ref IDENTITY: CanisterWasm = get_canister_wasm("identity");
-    pub static ref IOU_BACKEND: CanisterWasm = get_canister_wasm("iou_backend");
     pub static ref LOCAL_USER_INDEX: CanisterWasm = get_canister_wasm("local_user_index");
     pub static ref NOTIFICATIONS_INDEX: CanisterWasm = get_canister_wasm("notifications_index");
     pub static ref ONLINE_USERS: CanisterWasm = get_canister_wasm("online_users");

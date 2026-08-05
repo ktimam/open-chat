@@ -6,6 +6,8 @@ mod lifecycle;
 mod queries;
 mod updates;
 
+pub mod ai_app_card_authority;
+
 pub use lifecycle::*;
 pub use queries::*;
 pub use updates::*;

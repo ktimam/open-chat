@@ -30,6 +30,7 @@ event_store_producer_cdk_runtime = { workspace = true }
 event_store_utils = { workspace = true }
 fire_and_forget_handler = { path = "../../../libraries/fire_and_forget_handler" }
 futures = { workspace = true }
+hex = { workspace = true }
 group_canister = { path = "../../group/api" }
 group_canister_c2c_client = { path = "../../group/c2c_client" }
 http_request = { path = "../../../libraries/http_request" }

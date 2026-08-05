@@ -182,7 +182,17 @@ import type {
     MemberRole,
     OptionalChatPermissions,
 } from "./permission";
-import type { AiAppLinkCode, AiAppMemberKey, AiAppRegistration, AiAppUserKey, ExploreAiAppsResponse } from "./aiAction";
+import type {
+    AiAppCardCapability,
+    AiAppCardConfirmationGrant,
+    AiAppCardContentV1,
+    AiAppCardProvenance,
+    AiAppLinkCode,
+    AiAppMemberKey,
+    AiAppRegistration,
+    AiAppUserKey,
+    ExploreAiAppsResponse,
+} from "./aiAction";
 import type { CandidateProposal } from "./proposals";
 import type {
     StakeNeuronForSubmittingProposalsResponse,
@@ -404,11 +414,15 @@ export type WorkerRequest =
     | DeleteDirectChat
     | GetDiamondMembershipFees
     | AiApps
+    | MyAiApps
     | SetAiAppEnabled
     | EnabledAiApps
     | MyAiAppKeys
     | AiAppUserKeysLookup
     | CreateAiAppLinkCode
+    | CreateAiAppCardProvenance
+    | CreateAiAppCardConfirmationGrant
+    | CreateAiAppCardCapability
     | RemoveMyAiAppKey
     | PublishAiApp
     | ExploreAiApps
@@ -1215,12 +1229,10 @@ type RespondToActionCard = {
     threadRootMessageIndex: number | undefined;
     messageId: bigint;
     response: "confirm" | "cancel";
-    // App-rendered cards (surface kind "card") let the user edit the card's values in the app's iframe;
-    // the edited object rides across the postMessage bridge to here. Phase 1 only carries it to the
-    // client/worker boundary — the worker/agent/canister do NOT consume it yet (Phase 2 wires the
-    // on-chain deposit override). Optional + JSON-encodable so structured clone across the worker is clean.
-    // Object for a single-entry app card; top-level ARRAY for a multi-entry one.
-    confirmPayloadOverride?: Record<string, unknown> | unknown[];
+    // App-rendered cards carry the exact final encoded bytes and their matching one-time server grant.
+    // Both are absent for classic OC-rendered cards, which use the stored attested payload.
+    confirmPayloadOverride?: Uint8Array;
+    confirmationGrant?: Uint8Array;
     kind: "respondToActionCard";
 };
 
@@ -1883,10 +1895,14 @@ export type WorkerResponseInner =
     | TokenSwapStatusResponse
     | DiamondMembershipFees[]
     | AiAppRegistration[]
+    | { apps: AiAppRegistration[]; total: number }
     | AiAppUserKey[]
     | AiAppMemberKey[]
     | ExploreAiAppsResponse
     | AiAppLinkCode
+    | AiAppCardProvenance
+    | AiAppCardConfirmationGrant
+    | AiAppCardCapability
     | number[]
     | TranslationCorrections
     | AcceptP2PSwapResponse
@@ -2141,6 +2157,13 @@ type GetDiamondMembershipFees = {
 
 type AiApps = {
     kind: "aiApps";
+    lookups: { appId: number; revision?: bigint }[];
+};
+
+type MyAiApps = {
+    kind: "myAiApps";
+    pageIndex: number;
+    pageSize: number;
 };
 
 type SetAiAppEnabled = {
@@ -2168,6 +2191,34 @@ type AiAppUserKeysLookup = {
 type CreateAiAppLinkCode = {
     kind: "createAiAppLinkCode";
     appId: number;
+};
+
+type CreateAiAppCardProvenance = {
+    kind: "createAiAppCardProvenance";
+    appId: number;
+    appRevision: bigint;
+    actionId: string;
+    content: AiAppCardContentV1;
+    chatId: ChatIdentifier;
+    messageId: bigint;
+    threadRootMessageIndex: number | undefined;
+};
+
+type CreateAiAppCardCapability = {
+    kind: "createAiAppCardCapability";
+    chatId: ChatIdentifier;
+    threadRootMessageIndex: number | undefined;
+    messageId: bigint;
+    recipientKeyScheme: string;
+    recipientPublicKey: Uint8Array;
+};
+
+type CreateAiAppCardConfirmationGrant = {
+    kind: "createAiAppCardConfirmationGrant";
+    chatId: ChatIdentifier;
+    threadRootMessageIndex: number | undefined;
+    messageId: bigint;
+    confirmPayload: Uint8Array;
 };
 
 type RemoveMyAiAppKey = {
@@ -2570,6 +2621,8 @@ export type WorkerResult<T> = T extends Init
     ? DiamondMembershipFees[]
     : T extends AiApps
     ? AiAppRegistration[]
+    : T extends MyAiApps
+    ? { apps: AiAppRegistration[]; total: number }
     : T extends SetAiAppEnabled
     ? boolean
     : T extends EnabledAiApps
@@ -2580,6 +2633,12 @@ export type WorkerResult<T> = T extends Init
     ? AiAppMemberKey[]
     : T extends CreateAiAppLinkCode
     ? AiAppLinkCode | undefined
+    : T extends CreateAiAppCardProvenance
+    ? AiAppCardProvenance | undefined
+    : T extends CreateAiAppCardConfirmationGrant
+    ? AiAppCardConfirmationGrant | undefined
+    : T extends CreateAiAppCardCapability
+    ? AiAppCardCapability | undefined
     : T extends RemoveMyAiAppKey
     ? boolean
     : T extends PublishAiApp

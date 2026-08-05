@@ -27,10 +27,11 @@ impl GroupsBeingImported {
         channel_id: ChannelId,
         imported_by: UserId,
         total_bytes: u64,
-        enabled_ai_apps: BTreeSet<AiAppId>,
+        mut enabled_ai_apps: BTreeSet<AiAppId>,
         now: TimestampMillis,
         is_default: bool,
     ) -> bool {
+        group_community_common::bound_enabled_ai_apps(&mut enabled_ai_apps);
         match self.groups.entry(group_id) {
             Vacant(e) => {
                 e.insert(GroupBeingImported::new(
@@ -137,6 +138,12 @@ impl GroupsBeingImported {
 
     pub fn completed_imports(&self) -> Vec<ChatId> {
         self.groups.iter().filter(|(_, g)| g.is_complete()).map(|(g, _)| *g).collect()
+    }
+
+    pub(crate) fn bound_enabled_ai_apps(&mut self) {
+        for group in self.groups.values_mut() {
+            group_community_common::bound_enabled_ai_apps(&mut group.enabled_ai_apps);
+        }
     }
 }
 

@@ -1,5 +1,11 @@
 <script lang="ts">
-    import type { MessageContent, MessageContext, OgPreview, RehydratedMessagePreview } from "openchat-client";
+    import {
+        currentUserIdStore,
+        type MessageContent,
+        type MessageContext,
+        type OgPreview,
+        type RehydratedMessagePreview,
+    } from "openchat-client";
     import { i18nKey } from "../../i18n/i18n";
     import ActionCardContent from "./ActionCardContent.svelte";
     import AudioContent from "./AudioContent.svelte";
@@ -50,7 +56,8 @@
         onRegisterVote?: (vote: { type: "delete" | "register"; answerIndex: number }) => void;
         onRespondToActionCard?: (
             response: "confirm" | "cancel",
-            payload?: Record<string, unknown> | unknown[],
+            confirmPayloadOverride?: Uint8Array,
+            confirmationGrant?: Uint8Array,
         ) => void | Promise<unknown>;
         ogPreviews?: OgPreview[];
         messagePreviews?: RehydratedMessagePreview[];
@@ -144,6 +151,9 @@
         {content}
         {readonly}
         chatId={messageContext.chatId}
+        {messageId}
+        threadRootMessageIndex={messageContext.threadRootMessageIndex}
+        viewerId={$currentUserIdStore}
         onRespond={onRespondToActionCard} />
 {:else if content.kind === "giphy_content"}
     <GiphyContent {edited} {intersecting} {fill} {content} {reply} {height} {blockLevelMarkdown} />

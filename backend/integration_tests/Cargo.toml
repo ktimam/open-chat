@@ -7,8 +7,10 @@ edition.workspace = true
 
 [dev-dependencies]
 action_inbox_canister = { path = "../canisters/action_inbox/api" }
+ai_app_verifier_canister = { path = "../external_canisters/ai_app_verifier/api" }
 airdrop_bot_canister = { path = "../canisters/airdrop_bot/api" }
 candid = { workspace = true }
+ct-codecs = { workspace = true }
 chat_events = { path = "../libraries/chat_events" }
 community_canister = { path = "../canisters/community/api" }
 constants = { path = "../libraries/constants" }

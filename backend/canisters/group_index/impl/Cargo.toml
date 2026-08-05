@@ -39,6 +39,7 @@ oc_error_codes = { path = "../../../libraries/error_codes" }
 rand = { workspace = true }
 search = { path = "../../../libraries/search" }
 serde = { workspace = true }
+serde_bytes = { workspace = true }
 stable_memory = { path = "../../../libraries/stable_memory" }
 timer_job_queues = { path = "../../../libraries/timer_job_queues" }
 tracing = { workspace = true }

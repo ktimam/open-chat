@@ -85,9 +85,8 @@ impl<R: Runtime> ModelManager<R> {
                         });
                         continue;
                     }
-                    None
-                        if file.bytes > 0
-                            && fs::metadata(&dest).map(|m| m.len()).unwrap_or(0) == file.bytes =>
+                    None if file.bytes > 0
+                        && fs::metadata(&dest).map(|m| m.len()).unwrap_or(0) == file.bytes =>
                     {
                         received = received.saturating_add(file.bytes);
                         if let Ok(digest) = sha256_hex(&dest) {
@@ -342,7 +341,12 @@ impl<R: Runtime> ModelManager<R> {
                     .map_err(|e| e.to_string())??
                 }
                 _ => tokio::task::spawn_blocking(move || {
-                    crate::inference::run_text_inference(&gguf, &prompt, max_tokens, schema.as_deref())
+                    crate::inference::run_text_inference(
+                        &gguf,
+                        &prompt,
+                        max_tokens,
+                        schema.as_deref(),
+                    )
                 })
                 .await
                 .map_err(|e| e.to_string())??,
@@ -473,8 +477,7 @@ mod cycle_tests {
     use crate::models::LocalModel;
 
     const MODEL_ID: &str = "gemma-4-e2b-it-q4";
-    const LM_URL: &str =
-        "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf";
+    const LM_URL: &str = "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf";
     const LM_SHA: &str = "9378bc471710229ef165709b62e34bfb62231420ddaf6d729e727305b5b8672d";
     const MMPROJ_URL: &str =
         "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/mmproj-F16.gguf";
@@ -501,11 +504,15 @@ mod cycle_tests {
             std::env::var("OC_TEST_MODEL_GGUF"),
             std::env::var("OC_TEST_MMPROJ_GGUF"),
         ) else {
-            eprintln!("OC_TEST_MODEL_GGUF / OC_TEST_MMPROJ_GGUF not set — skipping full cycle test");
+            eprintln!(
+                "OC_TEST_MODEL_GGUF / OC_TEST_MMPROJ_GGUF not set — skipping full cycle test"
+            );
             return;
         };
 
-        let dir = std::env::temp_dir().join("oc_cycle_test").join(sanitize(MODEL_ID));
+        let dir = std::env::temp_dir()
+            .join("oc_cycle_test")
+            .join(sanitize(MODEL_ID));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("create model dir");
         let lm_path = dir.join(file_name_from_url(LM_URL));
@@ -515,7 +522,10 @@ mod cycle_tests {
 
         // 1. Verify the seeded files against the CATALOG's SHA-256s (proves the catalog hashes are correct
         //    and is exactly download_model's verify step).
-        assert!(verify_sha256(&lm_path, LM_SHA).expect("hash lm"), "LM sha256 must match catalog");
+        assert!(
+            verify_sha256(&lm_path, LM_SHA).expect("hash lm"),
+            "LM sha256 must match catalog"
+        );
         assert!(
             verify_sha256(&mmproj_path, MMPROJ_SHA).expect("hash mmproj"),
             "mmproj sha256 must match catalog"
@@ -529,7 +539,11 @@ mod cycle_tests {
             size_bytes: total,
             path: dir.to_string_lossy().to_string(),
         };
-        fs::write(dir.join("model.json"), serde_json::to_vec(&manifest).unwrap()).unwrap();
+        fs::write(
+            dir.join("model.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
         let listed: LocalModel =
             serde_json::from_slice(&fs::read(dir.join("model.json")).unwrap()).unwrap();
         assert_eq!(listed.model_id, MODEL_ID);
@@ -546,14 +560,22 @@ mod cycle_tests {
         )
         .expect("text infer");
         eprintln!("[cycle] text => {text}");
-        assert!(!text.trim().is_empty(), "text inference should produce output");
+        assert!(
+            !text.trim().is_empty(),
+            "text inference should produce output"
+        );
 
         // 4. infer — structured (JSON schema).
-        let schema = r#"{"type":"object","properties":{"animal":{"type":"string"}},"required":["animal"]}"#;
-        let structured = crate::inference::run_text_inference(&gguf, "Name one animal.", 64, Some(schema))
-            .expect("structured infer");
+        let schema =
+            r#"{"type":"object","properties":{"animal":{"type":"string"}},"required":["animal"]}"#;
+        let structured =
+            crate::inference::run_text_inference(&gguf, "Name one animal.", 64, Some(schema))
+                .expect("structured infer");
         eprintln!("[cycle] structured => {structured}");
-        assert!(structured.contains('{'), "structured output should contain JSON");
+        assert!(
+            structured.contains('{'),
+            "structured output should contain JSON"
+        );
 
         // 5. delete — and confirm it's gone.
         fs::remove_dir_all(&dir).expect("delete model dir");
@@ -652,7 +674,10 @@ mod preflight_tests {
             reqwest::header::CONTENT_DISPOSITION,
             "attachment; filename=weights.bin",
         )]);
-        assert_eq!(filename_from_disposition(&bare).as_deref(), Some("weights.bin"));
+        assert_eq!(
+            filename_from_disposition(&bare).as_deref(),
+            Some("weights.bin")
+        );
 
         assert_eq!(filename_from_disposition(&HeaderMap::new()), None);
     }

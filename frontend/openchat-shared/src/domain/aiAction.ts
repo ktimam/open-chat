@@ -1,15 +1,67 @@
 // Generic in-OpenChat AI-action runner.
 //
-// A registered app declares an AiAction (prompt + output schema + a card template + the recipient public key
-// it wants confirmed actions encrypted to). The runner takes a message's content (image/text), runs the
+// A registered app declares an AiAction (prompt + output schema + a card template + delivery metadata).
+// The runner takes a message's content (image/text), runs the
 // user's selected ON-DEVICE model against the declared prompt, parses the structured result, and builds a
-// confirmable ActionCard whose rows come from the template and whose delivery routing (recipientPublicKey +
-// an opaque confirmPayload) targets the registered consumer. Nothing here is app-specific — every app-specific
-// value comes from the registration. The card is then posted by the caller; on confirm OpenChat encrypts the
-// payload to the recipient and deposits it into the on-chain action_inbox.
+// confirmable ActionCard whose rows come from the template. Nothing here is app-specific — every
+// app-specific value comes from the registration. At confirmation the canisters use immutable app
+// provenance plus authoritative membership to resolve the inbox and recipient keys; card-carried
+// routing fields remain compatibility data, never authority.
 
+import { Principal } from "@icp-sdk/core/principal";
 import type { ActionCardContent, ActionCardRow, ChatIdentifier } from "./chat/chat";
 import type { InferenceRequest, InferenceResult } from "./onDeviceModel";
+
+// These are defense-in-depth limits at the untrusted manifest/model boundary. The registry enforces
+// compatible per-field bounds, but clients must remain safe when reading legacy, cached, or malformed
+// data and when a model emits an unexpectedly large candidate list.
+export const MAX_AI_ACTION_CANDIDATES = 32;
+const MAX_AI_ACTION_MODEL_OUTPUT_CHARS = 131_072;
+const MAX_AI_ACTION_RULES = 20;
+const MAX_AI_ACTION_KEYWORD_MAPPINGS = 50;
+const MAX_AI_ACTION_KEYWORDS_PER_MAPPING = 50;
+const MAX_AI_ACTION_KEYWORD_CHECKS = 500;
+const MAX_AI_ACTION_RULE_STRING_LENGTH = 64;
+const MAX_AI_ACTION_INSTRUCTION_LENGTH = 1_000;
+const MAX_AI_ACTION_MESSAGE_SCAN_CHARS = 10_000;
+const MAX_AI_ACTION_FROM_MESSAGE_LENGTH = 2_000;
+const MAX_AI_ACTION_CARD_ROWS = 32;
+const MAX_AI_ACTION_CARD_LABEL_LENGTH = 128;
+const SAFE_AI_ACTION_FIELD = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+const AI_ACTION_WORD_CHAR = /[\p{L}\p{N}]/u;
+const DISPLAY_CONTROL = /[\p{Cc}\p{Cf}]/u;
+const FORBIDDEN_AI_ACTION_FIELDS = new Set(["__proto__", "prototype", "constructor"]);
+
+export function isSafeAiActionFieldName(field: string): boolean {
+    return SAFE_AI_ACTION_FIELD.test(field) && !FORBIDDEN_AI_ACTION_FIELDS.has(field);
+}
+
+function normalizedCardRows(
+    rows: readonly AiActionCardRowTemplate[],
+): AiActionCardRowTemplate[] | undefined {
+    if (rows.length === 0 || rows.length > MAX_AI_ACTION_CARD_ROWS) return undefined;
+    const labels = new Set<string>();
+    const fields = new Set<string>();
+    const normalized: AiActionCardRowTemplate[] = [];
+    for (const row of rows) {
+        const label = row.label.trim();
+        if (
+            !isSafeAiActionFieldName(row.valueKey) ||
+            label.length === 0 ||
+            label.length > MAX_AI_ACTION_CARD_LABEL_LENGTH ||
+            DISPLAY_CONTROL.test(label) ||
+            label.startsWith("__oc_") ||
+            labels.has(label) ||
+            fields.has(row.valueKey)
+        ) {
+            return undefined;
+        }
+        labels.add(label);
+        fields.add(row.valueKey);
+        normalized.push({ label, valueKey: row.valueKey });
+    }
+    return normalized;
+}
 
 // A row of the card, declaratively bound to a key in the model's structured output.
 export interface AiActionCardRowTemplate {
@@ -31,7 +83,12 @@ export interface AiActionCardTemplate {
 // post-pass over the model's extraction (applyRulesPostPass). All rules are generic — field names,
 // values and keywords come from the registration.
 export type AiActionRuleMode = "hint" | "override";
-export type AiActionNormalizeOp = "k_m_suffix" | "strip_symbols" | "uppercase" | "lowercase" | "trim";
+export type AiActionNormalizeOp =
+    | "k_m_suffix"
+    | "strip_symbols"
+    | "uppercase"
+    | "lowercase"
+    | "trim";
 export type AiActionRule =
     | {
           kind: "keyword_map";
@@ -79,8 +136,8 @@ export type AiAppSurfaceDisplay = "sheet" | "external";
 // The frontend mirror of the on-chain AiAppSurface (types/src/ai_actions.rs): a URL OpenChat can open
 // on the app's behalf. `kind` says what the surface is for — "chat_link" = configure/link a chat inside
 // the app (OpenChat opens it after the first confirmed action in a chat); other kinds are app-defined
-// and OpenChat ignores kinds it does not know. The URL may contain the placeholders {chatKey} and
-// {appId}, which OpenChat substitutes before opening (see chatKeyFor for the {chatKey} format).
+// and OpenChat ignores kinds it does not know. The URL may contain only the public {appId}
+// placeholder. Raw chat/message/user coordinates are never substituted into external URLs.
 export interface AiAppSurface {
     kind: string;
     url: string;
@@ -92,19 +149,68 @@ export interface AiAppSurface {
 // apps correlate this value with the delivery provenance (`context.chat`) of confirmed actions:
 //   "group:<group canister principal text>"
 //   "channel:<community canister principal text>:<channel id decimal>"
-// Direct chats return undefined — no confirm path exists for them, so no chat key is ever rendered.
-export function chatKeyFor(chatId: ChatIdentifier): string | undefined {
+// Direct chats bind the sorted pair of viewer + counterpart. This makes the same logical chat
+// byte-identical from both participants' perspectives without exposing a session credential.
+export type AiAppCardChatContext =
+    | { kind: "group"; groupId: string }
+    | { kind: "channel"; communityId: string; channelId: number }
+    | { kind: "direct"; userIds: [string, string] };
+
+function comparePrincipalBytes(left: string, right: string): number {
+    const a = Principal.fromText(left).toUint8Array();
+    const b = Principal.fromText(right).toUint8Array();
+    const length = Math.min(a.length, b.length);
+    for (let i = 0; i < length; i++) {
+        if (a[i] !== b[i]) return a[i] - b[i];
+    }
+    return a.length - b.length;
+}
+
+export function aiAppCardChatContext(
+    chatId: ChatIdentifier,
+    currentUserId: string,
+): AiAppCardChatContext | undefined {
+    switch (chatId.kind) {
+        case "group_chat":
+            return { kind: "group", groupId: chatId.groupId };
+        case "channel":
+            return {
+                kind: "channel",
+                communityId: chatId.communityId,
+                channelId: chatId.channelId,
+            };
+        case "direct_chat": {
+            if (currentUserId === chatId.userId) return undefined;
+            try {
+                const userIds = [currentUserId, chatId.userId].sort(comparePrincipalBytes) as [
+                    string,
+                    string,
+                ];
+                return { kind: "direct", userIds };
+            } catch {
+                return undefined;
+            }
+        }
+    }
+}
+
+export function chatKeyFor(
+    chatId: ChatIdentifier,
+    currentUserId?: string,
+): string | undefined {
     switch (chatId.kind) {
         case "group_chat":
             return `group:${chatId.groupId}`;
         case "channel":
             return `channel:${chatId.communityId}:${chatId.channelId}`;
         case "direct_chat":
-            // Rendered per participant — each side keys the chat by the OTHER user, byte-matching
-            // the deposit its OWN canister emits (the responder's canister is the confirm path for
-            // direct chats). The two participants therefore see different keys for the same chat;
-            // per-user-keys apps attribute via confirmedBy, so this is sufficient.
-            return `direct:${chatId.userId}`;
+            // Both participants derive the same sorted two-principal identity. Missing viewer
+            // context fails closed rather than falling back to the old ambiguous counterpart key.
+            if (currentUserId === undefined) return undefined;
+            const context = aiAppCardChatContext(chatId, currentUserId);
+            return context?.kind === "direct"
+                ? `direct:${context.userIds[0]}:${context.userIds[1]}`
+                : undefined;
     }
 }
 
@@ -128,7 +234,7 @@ export interface AiAppManifest {
     inboxCanisterId?: string;
 }
 
-// The frontend mirror of the on-chain AiAppRegistration as the user_index `ai_apps` query returns it.
+// The frontend mirror of the on-chain AiAppRegistration returned by bounded UserIndex app queries.
 export interface AiAppRegistration {
     id: number;
     owner: string;
@@ -147,26 +253,77 @@ export interface AiAppUserKey {
     publicKey: string;
 }
 
-// One row of the user_index `ai_app_user_keys` fan-out lookup: a chat MEMBER's registered delivery
-// key for one app (public key material only). Used at propose time to address the eventual confirm
-// to every chat member with a key, not just the proposer.
+// One row of the guarded user_index `ai_app_user_keys` C2C lookup: a chat MEMBER's registered
+// delivery key for one app. The local_user_index requests these at confirmation using member ids
+// supplied by the authoritative chat canister; browser callers cannot enumerate another user's keys.
 export interface AiAppMemberKey {
     userId: string;
     publicKey: string;
 }
 
-// A one-time pairing code (user_index `create_ai_app_link_code`): the user enters it in the app,
-// which then pushes their public key to OpenChat via `claim_ai_app_link_code`. Single-use, expires
-// at `expiresAt` (epoch millis).
+// A one-time high-entropy claim token (user_index `create_ai_app_link_code`): the user enters it in
+// the app, whose exact registered app canister calls `c2c_claim_ai_app_link_code` with the code and
+// public key. Success returns `{ app_subject, subject_version, app_id, app_revision, app_canister_id,
+// key_version }`; the app must retain that exact app-scoped binding tuple. Revocation sends the same
+// app-subject/app/key_version/public-key tuple,
+// a fresh timestamp, and its 64-byte P-256 proof to `revoke_ai_app_user_key`. The deprecated public
+// `claim_ai_app_link_code` method is never an integration path. The code is single-use and expires at
+// `expiresAt` (epoch millis).
 export interface AiAppLinkCode {
     code: string;
     expiresAt: bigint;
 }
 
+// Short-lived, viewer/card/recipient-key-bound authority for a private app-card context. The UI
+// represents the opaque token as unpadded base64url solely for delivery to the exact sandboxed
+// WindowProxy after source + opaque-origin + per-load nonce checks.
+export interface AppScopedCardContext {
+    contextVersion: 1;
+    appSubject: string;
+    chatHandle: string;
+    messageHandle: string;
+    appId: number;
+    appRevision: bigint;
+    actionId: string;
+}
+
+export interface AiAppCardCapability {
+    capability: string;
+    expiresAt: bigint;
+    context: AppScopedCardContext;
+}
+
+// Opaque one-time server/app attestation over one exact final confirmation payload. Kept as raw
+// bytes because the client returns it only to the authoritative chat canister alongside the exact
+// payload bytes; it is never exposed to the iframe, URL, storage, or logs.
+export interface AiAppCardConfirmationGrant {
+    grant: Uint8Array;
+    expiresAt: bigint;
+}
+
+export interface AiAppCardProvenance {
+    provenance: Uint8Array;
+    expiresAt: bigint;
+}
+
+// Exact sender-visible and confirmable V1 content vouched for by the registered app canister before
+// UserIndex mints card provenance. Authenticated viewer/chat/message/app coordinates are supplied by
+// UserIndex; routing, recipient keys, provenance, and private context are deliberately excluded.
+export interface AiAppCardContentV1 {
+    title: string;
+    rows: ActionCardRow[];
+    confirmLabel: string;
+    cancelLabel: string;
+    actionId: string;
+    disclosure?: string;
+    expiresAt?: bigint;
+    confirmPayload?: Uint8Array;
+}
+
 export type RunAiActionResult =
     | { kind: "ready"; card: ActionCardContent; extracted: Record<string, unknown> }
-    // Several valid entries extracted from one message: ONE card carrying the whole array (its
-    // confirmPayload is the JSON array). The caller posts + confirms it exactly like a `ready` card.
+    // Retained as a source-compatible result shape for callers handling older runners. New proposals
+    // fail closed before producing this until authorized exact-payload hydration exists.
     | { kind: "ready_multi"; card: ActionCardContent; extracted: Record<string, unknown>[] }
     // No native runtime / no model selected — the caller must degrade gracefully (no autonomous fallback).
     | { kind: "unavailable"; reason: string }
@@ -190,7 +347,9 @@ export function parseExtraction(text: string): Record<string, unknown> | undefin
     if (start < 0 || end <= start) return undefined;
     try {
         const obj: unknown = JSON.parse(candidate.slice(start, end + 1));
-        return obj !== null && typeof obj === "object" ? (obj as Record<string, unknown>) : undefined;
+        return obj !== null && typeof obj === "object"
+            ? (obj as Record<string, unknown>)
+            : undefined;
     } catch {
         return undefined;
     }
@@ -203,6 +362,7 @@ export function parseExtraction(text: string): Record<string, unknown> | undefin
 // list), so the single-entry path is byte-identical to `parseExtraction`. Returns undefined when
 // nothing object-shaped is found.
 export function parseExtractionList(text: string): Record<string, unknown>[] | undefined {
+    if (text.length > MAX_AI_ACTION_MODEL_OUTPUT_CHARS) return undefined;
     // Scan the WHOLE reply. Every earlier version stopped at the first promising REGION and kept only
     // what it found there, which is how three transactions arrived as two:
     //
@@ -219,7 +379,16 @@ export function parseExtractionList(text: string): Record<string, unknown>[] | u
     //
     // Degrades exactly as before on a truncated generation (the unterminated tail object is dropped,
     // the completed ones survive) and on trailing commas between elements.
-    const scanned = scanJsonObjects(text).flatMap(unwrapEntryList);
+    // Keep one overflow sentinel (33) so the runner can distinguish "too many" from the valid
+    // 32-candidate boundary, then stop before rules/schema/card work is performed for attacker-sized
+    // output. Wrapper objects are bounded too; `flatMap` here previously expanded each nested list.
+    const scanned: Record<string, unknown>[] = [];
+    for (const object of scanJsonObjects(text)) {
+        for (const entry of unwrapEntryList(object)) {
+            scanned.push(entry);
+            if (scanned.length > MAX_AI_ACTION_CANDIDATES) return scanned;
+        }
+    }
     if (scanned.length > 0) return scanned;
     // Last resort: parseExtraction slices from the first "{" to the last "}". It cannot handle a
     // multi-object emission, but it does salvage a lone object the scanner could not balance.
@@ -239,9 +408,13 @@ export function parseExtractionList(text: string): Record<string, unknown>[] | u
 function unwrapEntryList(obj: Record<string, unknown>): Record<string, unknown>[] {
     const values = Object.values(obj);
     if (values.length !== 1 || !Array.isArray(values[0])) return [obj];
-    const objs = values[0].filter(
-        (e): e is Record<string, unknown> => e !== null && typeof e === "object" && !Array.isArray(e),
-    );
+    const objs: Record<string, unknown>[] = [];
+    for (const entry of values[0]) {
+        if (entry !== null && typeof entry === "object" && !Array.isArray(entry)) {
+            objs.push(entry as Record<string, unknown>);
+            if (objs.length > MAX_AI_ACTION_CANDIDATES) break;
+        }
+    }
     return objs.length > 0 ? objs : [obj];
 }
 
@@ -275,8 +448,13 @@ function scanJsonObjects(text: string): Record<string, unknown>[] {
                 if (depth === 0 && start >= 0) {
                     try {
                         const parsed: unknown = JSON.parse(text.slice(start, i + 1));
-                        if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+                        if (
+                            parsed !== null &&
+                            typeof parsed === "object" &&
+                            !Array.isArray(parsed)
+                        ) {
                             out.push(parsed as Record<string, unknown>);
+                            if (out.length > MAX_AI_ACTION_CANDIDATES) return out;
                         }
                     } catch {
                         // a malformed object is skipped; the others still count
@@ -291,12 +469,82 @@ function scanJsonObjects(text: string): Record<string, unknown>[] {
 
 // --- Rules ---------------------------------------------------------------------------------------------------
 
+function isBoundedRuleString(value: string): boolean {
+    return (
+        value.length > 0 &&
+        value.length <= MAX_AI_ACTION_RULE_STRING_LENGTH &&
+        !DISPLAY_CONTROL.test(value)
+    );
+}
+
+// Sanitize even domain-typed rules: values may originate in legacy/cached registry entries or a
+// programmatic caller that bypassed the wire mapper. The aggregate keyword budget bounds both prompt
+// construction and deterministic message scans across all rules.
+function boundedRules(rules: readonly AiActionRule[]): AiActionRule[] {
+    const bounded: AiActionRule[] = [];
+    let remainingKeywords = MAX_AI_ACTION_KEYWORD_CHECKS;
+    for (const rule of rules.slice(0, MAX_AI_ACTION_RULES)) {
+        switch (rule.kind) {
+            case "instruction":
+                if (rule.text.length <= MAX_AI_ACTION_INSTRUCTION_LENGTH) bounded.push(rule);
+                break;
+            case "context":
+                bounded.push({ kind: "context", provide: rule.provide.filter((p) => p === "today") });
+                break;
+            case "from_message":
+                if (isSafeAiActionFieldName(rule.field)) {
+                    const maxLength =
+                        rule.maxLength === undefined || !Number.isFinite(rule.maxLength)
+                            ? undefined
+                            : Math.min(
+                                  MAX_AI_ACTION_FROM_MESSAGE_LENGTH,
+                                  Math.max(0, Math.trunc(rule.maxLength)),
+                              );
+                    bounded.push({ kind: "from_message", field: rule.field, maxLength });
+                }
+                break;
+            case "normalize":
+                if (isSafeAiActionFieldName(rule.field)) {
+                    bounded.push({
+                        kind: "normalize",
+                        field: rule.field,
+                        ops: rule.ops.filter((op) => NORMALIZE_OPS.includes(op)).slice(0, NORMALIZE_OPS.length),
+                    });
+                }
+                break;
+            case "keyword_map": {
+                if (!isSafeAiActionFieldName(rule.field) || remainingKeywords === 0) break;
+                const map: { value: string; keywords: string[] }[] = [];
+                for (const mapping of rule.map.slice(0, MAX_AI_ACTION_KEYWORD_MAPPINGS)) {
+                    if (!isBoundedRuleString(mapping.value) || remainingKeywords === 0) continue;
+                    const keywords: string[] = [];
+                    for (const keyword of mapping.keywords.slice(
+                        0,
+                        MAX_AI_ACTION_KEYWORDS_PER_MAPPING,
+                    )) {
+                        if (remainingKeywords === 0) break;
+                        if (!isBoundedRuleString(keyword)) continue;
+                        keywords.push(keyword);
+                        remainingKeywords--;
+                    }
+                    if (keywords.length > 0) map.push({ value: mapping.value, keywords });
+                }
+                if (map.length > 0) {
+                    bounded.push({ kind: "keyword_map", field: rule.field, mode: rule.mode, map });
+                }
+                break;
+            }
+        }
+    }
+    return bounded;
+}
+
 // Compile the declared rules into prompt guidance lines. Only rules that need the model's cooperation
 // produce a line — normalize is deterministic (post-pass only) and context/today is already covered by
 // the dateline runAiAction always appends.
 export function compileRules(rules: AiActionRule[]): string[] {
     const lines: string[] = [];
-    for (const rule of rules) {
+    for (const rule of boundedRules(rules)) {
         switch (rule.kind) {
             case "instruction":
                 lines.push(rule.text);
@@ -360,7 +608,7 @@ function applyNormalizeOp(op: AiActionNormalizeOp, v: unknown): unknown {
     }
 }
 
-// Tiny local schema conformance pass (type/enum/pattern/minimum/exclusiveMinimum only — deliberately
+// Tiny local schema conformance pass (type/enum/minimum/exclusiveMinimum only — deliberately
 // not a full JSON-schema validator and no added dependency). Drops keys the schema doesn't declare and
 // DELETES fields that violate their declared constraint: visible omission beats silent wrongness.
 function conformToSchema(
@@ -371,8 +619,9 @@ function conformToSchema(
     const props: unknown = (schema as { properties?: unknown }).properties;
     if (props === null || typeof props !== "object" || Array.isArray(props)) return extracted;
     const properties = props as Record<string, unknown>;
-    const out: Record<string, unknown> = {};
+    const out: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
     for (const [key, value] of Object.entries(extracted)) {
+        if (!isSafeAiActionFieldName(key) || !Object.hasOwn(properties, key)) continue;
         const propSchema: unknown = properties[key];
         // Drop keys the schema doesn't declare.
         if (propSchema === undefined) continue;
@@ -404,13 +653,10 @@ function conformToSchema(
         ) {
             continue;
         }
-        if (typeof p.pattern === "string" && typeof value === "string") {
-            try {
-                if (!new RegExp(p.pattern).test(value)) continue;
-            } catch {
-                // an invalid pattern is treated as no constraint
-            }
-        }
+        // Manifest patterns are untrusted and JavaScript's backtracking RegExp engine has no timeout.
+        // Fail closed for any patterned field rather than execute a potential ReDoS expression such
+        // as `(a+)+$`. A future implementation may re-enable patterns through a bounded RE2 engine.
+        if (typeof p.pattern === "string") continue;
         out[key] = value;
     }
     return out;
@@ -419,9 +665,9 @@ function conformToSchema(
 // Does the message mention this keyword as a WHOLE WORD? Case-insensitive.
 //
 // Raw `text.includes(keyword)` fired INSIDE other words, which made short keywords unusable: an app
-// listing "owe" (IOU does, and its manifest even carried a comment claiming OpenChat matched on word
+// listing "owe" (as a ledger app might do) could still be told that OpenChat matched on word
 // boundaries — true of the auto-propose chip, false of this deterministic override) force-classified
-// "I lost power yesterday" as an IOU. A keyword_map override cannot be argued with by the model or the
+// "I lost power yesterday" as a debt entry. A keyword_map override cannot be argued with by the model or the
 // user, so a stray substring hit silently mislabels the entry.
 //
 // \b is not usable: keywords may legitimately begin or end with punctuation or spaces (multi-word
@@ -432,9 +678,37 @@ function conformToSchema(
 // import openchat-shared without dragging in the client graph). The two MUST agree: a chip that
 // appears on a message this pass then refuses to classify is the confusing half-state.
 export function matchesKeyword(text: string, keyword: string): boolean {
-    if (keyword.length === 0) return false;
-    const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return new RegExp(`(?:^|[^\\p{L}\\p{N}])${escaped}(?:[^\\p{L}\\p{N}]|$)`, "iu").test(text);
+    if (!isBoundedRuleString(keyword)) return false;
+    const haystack = text.slice(0, MAX_AI_ACTION_MESSAGE_SCAN_CHARS).toLowerCase();
+    const needle = keyword.toLowerCase();
+    let from = 0;
+    while (from <= haystack.length - needle.length) {
+        const index = haystack.indexOf(needle, from);
+        if (index < 0) return false;
+        let before = "";
+        if (index > 0) {
+            let beforeStart = index - 1;
+            const last = haystack.charCodeAt(beforeStart);
+            if (
+                last >= 0xdc00 &&
+                last <= 0xdfff &&
+                beforeStart > 0 &&
+                haystack.charCodeAt(beforeStart - 1) >= 0xd800 &&
+                haystack.charCodeAt(beforeStart - 1) <= 0xdbff
+            ) {
+                beforeStart--;
+            }
+            before = haystack.slice(beforeStart, index);
+        }
+        const afterIndex = index + needle.length;
+        const after =
+            afterIndex >= haystack.length
+                ? ""
+                : String.fromCodePoint(haystack.codePointAt(afterIndex) ?? 0);
+        if (!AI_ACTION_WORD_CHAR.test(before) && !AI_ACTION_WORD_CHAR.test(after)) return true;
+        from = index + Math.max(needle.length, 1);
+    }
+    return false;
 }
 
 // Deterministic post-pass over the model's extraction, applied in a fixed order:
@@ -442,24 +716,32 @@ export function matchesKeyword(text: string, keyword: string): boolean {
 //   2. keyword_map rules with mode "override" scan the message (case-insensitive WHOLE-WORD match per
 //      keyword); the first mapping with any match wins. Mode "hint" is prompt-guidance only.
 //   3. normalize ops run in order on the field when it is present.
-//   4. schema conformance (type/enum/pattern) deletes violating fields and drops undeclared keys.
+//   4. schema conformance (type/enum/numeric bounds) deletes violating fields and drops undeclared
+//      keys. Untrusted regex patterns fail closed and are never executed.
 export function applyRulesPostPass(
     rules: AiActionRule[],
     extracted: Record<string, unknown>,
     messageText: string | undefined,
     responseSchema?: object,
 ): Record<string, unknown> {
-    let out: Record<string, unknown> = { ...extracted };
+    const safeRules = boundedRules(rules);
+    let out: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+    for (const [key, value] of Object.entries(extracted)) {
+        if (isSafeAiActionFieldName(key)) out[key] = value;
+    }
 
     if (messageText !== undefined) {
-        for (const rule of rules) {
+        for (const rule of safeRules) {
             if (rule.kind === "from_message") {
-                out[rule.field] = messageText.trim().slice(0, rule.maxLength ?? 200);
+                out[rule.field] = messageText
+                    .slice(0, MAX_AI_ACTION_MESSAGE_SCAN_CHARS)
+                    .trim()
+                    .slice(0, rule.maxLength ?? 200);
             }
         }
 
-        const msg = messageText;
-        for (const rule of rules) {
+        const msg = messageText.slice(0, MAX_AI_ACTION_MESSAGE_SCAN_CHARS);
+        for (const rule of safeRules) {
             if (rule.kind === "keyword_map" && rule.mode === "override") {
                 const hit = rule.map.find((m) => m.keywords.some((k) => matchesKeyword(msg, k)));
                 if (hit !== undefined) {
@@ -469,8 +751,8 @@ export function applyRulesPostPass(
         }
     }
 
-    for (const rule of rules) {
-        if (rule.kind === "normalize" && rule.field in out) {
+    for (const rule of safeRules) {
+        if (rule.kind === "normalize" && Object.hasOwn(out, rule.field)) {
             let v = out[rule.field];
             for (const op of rule.ops) {
                 v = applyNormalizeOp(op, v);
@@ -495,7 +777,11 @@ export function missingRequired(
     const required: unknown = (schema as { required?: unknown }).required;
     if (!Array.isArray(required)) return [];
     return required.filter(
-        (name): name is string => typeof name === "string" && extraction[name] === undefined,
+        (name): name is string =>
+            typeof name === "string" &&
+            (!isSafeAiActionFieldName(name) ||
+                !Object.hasOwn(extraction, name) ||
+                extraction[name] === undefined),
     );
 }
 
@@ -513,8 +799,10 @@ export function buildActionCardContent(
     // The id of the app that owns this action, baked onto the card so a recipient binds card-surface
     // resolution to the exact producing app (not the non-namespaced actionId). See ActionCardContent.
     appId?: number,
+    appRevision?: bigint,
 ): ActionCardContent {
-    const rows: ActionCardRow[] = def.card.rows
+    const templateRows = normalizedCardRows(def.card.rows) ?? [];
+    const rows: ActionCardRow[] = templateRows
         .map((r) => ({ label: r.label, value: formatValue(extracted[r.valueKey]) }))
         .filter((r) => r.value.length > 0);
 
@@ -526,29 +814,21 @@ export function buildActionCardContent(
         cancelLabel: def.card.cancelLabel,
         actionId: def.name,
         appId,
+        appRevision,
         disclosure: def.card.disclosure,
         state: "pending",
         recipientPublicKey: recipientPublicKeyPem,
-        recipientPublicKeys: additionalRecipientKeys?.filter((k) => k.length > 0 && k !== recipientPublicKeyPem),
+        recipientPublicKeys: additionalRecipientKeys?.filter(
+            (k) => k.length > 0 && k !== recipientPublicKeyPem,
+        ),
         confirmPayload: new TextEncoder().encode(JSON.stringify(extracted)),
         inboxCanisterId,
     };
 }
 
-// Rows whose label starts with this prefix are HIDDEN control rows: they ride through the hydrated
-// rows to the client (the read path strips confirm_payload but keeps rows) so the app-rendered card
-// can read them, but the classic OC renderer never displays them and reverseMapRows never maps them.
-export const OC_HIDDEN_ROW_PREFIX = "__oc_";
-
-// The hidden control row a multi-entry card carries: its value is the JSON of the EXACT validated
-// entry array (byte-identical to the array that becomes the confirmPayload). Because confirm_payload
-// is stripped on read, this row is the only place the exact array survives to the app card, which
-// reverse-maps it into { entries: [...] } instead of flattening the per-entry summary rows.
-export const OC_ENTRIES_ROW_LABEL = `${OC_HIDDEN_ROW_PREFIX}entries__`;
-
-// Pure: turn a registered action + SEVERAL structured extractions into ONE postable ActionCard. The
-// confirmPayload is the verbatim JSON ARRAY of the entries (the multi form of the wire contract); the
-// consumer parses an array and adds every element on a single confirm. Each card row summarises one
+// Legacy pure builder retained for bounded domain callers and tests; the current proposal path rejects
+// multi-entry cards until an access-controlled exact-payload endpoint exists. Exact entries live only
+// in confirmPayload and are never encoded into public rows. Each card row summarises one
 // entry — its value composed from the SAME template row valueKeys the single-entry card uses (so a
 // direction/kind field renders through its declared value exactly as today), joined into one readable
 // line. The title reflects the entry count while deriving from the definition's own card title (no
@@ -562,21 +842,16 @@ export function buildMultiActionCardContent(
     additionalRecipientKeys?: string[],
     // The owning app id, baked onto the card (see buildActionCardContent).
     appId?: number,
+    appRevision?: bigint,
 ): ActionCardContent {
+    const templateRows = normalizedCardRows(def.card.rows) ?? [];
     const rows: ActionCardRow[] = extractedList.map((entry, i) => ({
         label: `Entry ${i + 1}`,
-        value: def.card.rows
+        value: templateRows
             .map((r) => formatValue(entry[r.valueKey]))
             .filter((v) => v.length > 0)
             .join(" "),
     }));
-
-    // Append the hidden sentinel carrying the EXACT validated entry array. On read the canister strips
-    // confirm_payload but hydrates rows, so this row is the only channel by which the app-rendered card
-    // recovers every entry (2..N) instead of reverse-mapping the flattened per-entry summaries into one
-    // object. The classic OC renderer + reverseMapRows skip any "__oc_" row, so this is invisible to the
-    // non-app render and never pollutes the single-entry reverse-map.
-    rows.push({ label: OC_ENTRIES_ROW_LABEL, value: JSON.stringify(extractedList) });
 
     return {
         kind: "action_card_content",
@@ -586,6 +861,7 @@ export function buildMultiActionCardContent(
         cancelLabel: def.card.cancelLabel,
         actionId: def.name,
         appId,
+        appRevision,
         disclosure: def.card.disclosure,
         state: "pending",
         recipientPublicKey: recipientPublicKeyPem,
@@ -608,7 +884,11 @@ export async function runAiAction(
     additionalRecipientKeys?: string[],
     // The owning app id, baked onto the built card (see buildActionCardContent).
     appId?: number,
+    appRevision?: bigint,
 ): Promise<RunAiActionResult> {
+    if (normalizedCardRows(def.card.rows) === undefined) {
+        return { kind: "error", error: "The action card template is invalid." };
+    }
     // The native runtime reads only `prompt` (its separate `text` field is not consumed), so the
     // message MUST be interpolated into the prompt for the model to see it. A dateline anchors
     // relative or year-less dates in the message ("1st june") to the user's current date. Declared
@@ -651,6 +931,12 @@ export async function runAiAction(
     // one message). Normalize to a list of candidate objects.
     const candidates = parseExtractionList(result.text);
     if (candidates === undefined) return { kind: "no_extraction", raw: result.text };
+    if (candidates.length > MAX_AI_ACTION_CANDIDATES) {
+        return {
+            kind: "error",
+            error: `The model returned more than ${MAX_AI_ACTION_CANDIDATES} action candidates.`,
+        };
+    }
 
     // Deterministic post-pass over EACH candidate — the card AND the confirmPayload are built from
     // the post-passed objects, never the raw extraction. A degenerate element (a required field the
@@ -658,15 +944,20 @@ export async function runAiAction(
     // against exclusiveMinimum 0) is DROPPED here, exactly as the single-entry gate refused it.
     const valid: Record<string, unknown>[] = [];
     for (const candidate of candidates) {
-        const finalExtraction = applyRulesPostPass(rules, candidate, input.text, def.responseSchema);
+        const finalExtraction = applyRulesPostPass(
+            rules,
+            candidate,
+            input.text,
+            def.responseSchema,
+        );
         if (missingRequired(finalExtraction, def.responseSchema).length === 0) {
             valid.push(finalExtraction);
         }
     }
 
-    // 0 valid → no card (same UX as "model found no action"). 1 valid → the single-entry card, its
-    // confirmPayload a JSON OBJECT (byte-identical to before). ≥2 valid → ONE multi-entry card whose
-    // confirmPayload is the JSON ARRAY of the valid entries.
+    // 0 valid → no card. 1 valid → a single-entry card. Multiple exact entries cannot be safely
+    // reconstructed by a receiving iframe because confirmPayload is intentionally not hydrated; do
+    // not post a misleading summary or restore a hidden public-row transport.
     if (valid.length === 0) return { kind: "no_extraction", raw: result.text };
     if (valid.length === 1) {
         return {
@@ -678,26 +969,20 @@ export async function runAiAction(
                 inboxCanisterId,
                 additionalRecipientKeys,
                 appId,
+                appRevision,
             ),
             extracted: valid[0],
         };
     }
     return {
-        kind: "ready_multi",
-        card: buildMultiActionCardContent(
-            def,
-            valid,
-            recipientPublicKeyPem,
-            inboxCanisterId,
-            additionalRecipientKeys,
-            appId,
-        ),
-        extracted: valid,
+        kind: "error",
+        error:
+            "Multiple action entries require an access-controlled exact-payload endpoint before a card can be posted.",
     };
 }
 
 // --- Directory read ------------------------------------------------------------------------------------------
-// The on-chain action definition as the user_index `ai_apps` query returns it, nested in each app's manifest
+// The on-chain action definition returned by bounded UserIndex app queries, nested in each app manifest.
 // (snake_case; response_schema is a JSON string; card rows are keyed by `field`). Defined here as the read
 // contract — the agent validates the query result into this shape, then maps it to the AiActionDefinition the
 // runner consumes.
@@ -739,7 +1024,7 @@ export interface AiAppSurfaceWire {
     display: AiAppSurfaceDisplay;
 }
 
-// The on-chain AiAppManifest / AiAppRegistration as the user_index `ai_apps` query returns them
+// The on-chain AiAppManifest / AiAppRegistration returned by bounded UserIndex app queries.
 // (snake_case; nested actions use the AiActionDefinitionWire shape above). The registration's
 // `owner` principal is expected to have already been stringified by the agent layer.
 export interface AiAppManifestWire {
@@ -784,8 +1069,10 @@ function ruleFromWire(entry: unknown): AiActionRule | undefined {
         const r = entry.keyword_map;
         if (
             typeof r.field !== "string" ||
+            !isSafeAiActionFieldName(r.field) ||
             (r.mode !== "hint" && r.mode !== "override") ||
-            !Array.isArray(r.map)
+            !Array.isArray(r.map) ||
+            r.map.length > MAX_AI_ACTION_KEYWORD_MAPPINGS
         ) {
             return undefined;
         }
@@ -794,8 +1081,10 @@ function ruleFromWire(entry: unknown): AiActionRule | undefined {
             if (
                 isRecord(m) &&
                 typeof m.value === "string" &&
+                isBoundedRuleString(m.value) &&
                 Array.isArray(m.keywords) &&
-                m.keywords.every((k) => typeof k === "string")
+                m.keywords.length <= MAX_AI_ACTION_KEYWORDS_PER_MAPPING &&
+                m.keywords.every((k) => typeof k === "string" && isBoundedRuleString(k))
             ) {
                 map.push({ value: m.value, keywords: m.keywords as string[] });
             }
@@ -804,7 +1093,17 @@ function ruleFromWire(entry: unknown): AiActionRule | undefined {
     }
     if (isRecord(entry.from_message)) {
         const r = entry.from_message;
-        if (typeof r.field !== "string") return undefined;
+        if (typeof r.field !== "string" || !isSafeAiActionFieldName(r.field)) return undefined;
+        if (
+            r.max_length !== undefined &&
+            r.max_length !== null &&
+            (typeof r.max_length !== "number" ||
+                !Number.isInteger(r.max_length) ||
+                r.max_length < 0 ||
+                r.max_length > MAX_AI_ACTION_FROM_MESSAGE_LENGTH)
+        ) {
+            return undefined;
+        }
         return {
             kind: "from_message",
             field: r.field,
@@ -813,7 +1112,12 @@ function ruleFromWire(entry: unknown): AiActionRule | undefined {
     }
     if (isRecord(entry.normalize)) {
         const r = entry.normalize;
-        if (typeof r.field !== "string" || !Array.isArray(r.ops)) return undefined;
+        if (
+            typeof r.field !== "string" ||
+            !isSafeAiActionFieldName(r.field) ||
+            !Array.isArray(r.ops) ||
+            r.ops.length > NORMALIZE_OPS.length
+        ) return undefined;
         // Unrecognised ops (forward compatibility) are skipped rather than failing the rule.
         const ops = r.ops.filter((o): o is AiActionNormalizeOp =>
             NORMALIZE_OPS.includes(o as AiActionNormalizeOp),
@@ -822,7 +1126,9 @@ function ruleFromWire(entry: unknown): AiActionRule | undefined {
     }
     if (isRecord(entry.instruction)) {
         const r = entry.instruction;
-        if (typeof r.text !== "string") return undefined;
+        if (typeof r.text !== "string" || r.text.length > MAX_AI_ACTION_INSTRUCTION_LENGTH) {
+            return undefined;
+        }
         return { kind: "instruction", text: r.text };
     }
     if (isRecord(entry.context)) {
@@ -838,11 +1144,11 @@ function ruleFromWire(entry: unknown): AiActionRule | undefined {
 export function rulesFromWire(raw: unknown): AiActionRule[] {
     if (!Array.isArray(raw)) return [];
     const rules: AiActionRule[] = [];
-    for (const entry of raw) {
+    for (const entry of raw.slice(0, MAX_AI_ACTION_RULES)) {
         const rule = ruleFromWire(entry);
         if (rule !== undefined) rules.push(rule);
     }
-    return rules;
+    return boundedRules(rules);
 }
 
 export function aiActionDefinitionFromWire(d: AiActionDefinitionWire): AiActionDefinition {
@@ -867,7 +1173,12 @@ export function aiActionDefinitionFromWire(d: AiActionDefinitionWire): AiActionD
             confirmLabel: d.card.confirm_label,
             cancelLabel: d.card.cancel_label,
             disclosure: d.card.disclosure,
-            rows: d.card.rows.map((r) => ({ label: r.label, valueKey: r.field })),
+            // Fail the whole template closed on an unsafe/ambiguous row. `runAiAction` refuses an empty
+            // template, and the card-surface resolver likewise gets no attacker-controlled key map.
+            rows:
+                normalizedCardRows(
+                    d.card.rows.map((r) => ({ label: r.label, valueKey: r.field })),
+                ) ?? [],
         },
         rules: rulesFromWire(d.rules),
         acceptsImage: d.accepts_image ?? false,

@@ -9,6 +9,9 @@ import type {
     DiamondMembershipDuration,
     DiamondMembershipFees,
     AiAppLinkCode,
+    AiAppCardContentV1,
+    AiAppCardProvenance,
+    ChatIdentifier,
     ExploreAiAppsResponse,
     AiAppManifest,
     AiAppRegistration,
@@ -48,7 +51,10 @@ import {
     UserIndexChitLeaderboardResponse,
     UserIndexCurrentUserResponse,
     UserIndexDiamondMembershipFeesResponse,
-    UserIndexAiAppsResponse,
+    UserIndexAiAppsByIdsArgs,
+    UserIndexAiAppsByIdsResponse,
+    UserIndexMyAiAppsArgs,
+    UserIndexMyAiAppsResponse,
     UserIndexRegisterAiAppArgs,
     UserIndexRegisterAiAppResponse,
     UserIndexAiAppUserKeysArgs,
@@ -56,6 +62,8 @@ import {
     UserIndexMyAiAppKeysResponse,
     UserIndexCreateAiAppLinkCodeArgs,
     UserIndexCreateAiAppLinkCodeResponse,
+    UserIndexCreateAiAppCardProvenanceArgs,
+    UserIndexCreateAiAppCardProvenanceResponse,
     UserIndexRemoveMyAiAppKeyArgs,
     UserIndexRemoveMyAiAppKeyResponse,
     UserIndexExploreAiAppsArgs,
@@ -120,12 +128,15 @@ import {
     chitLeaderboardResponse,
     currentUserResponse,
     diamondMembershipFeesResponse,
-    aiAppsResponse,
+    aiAppsByIdsResponse,
+    myAiAppsResponse,
     apiAiAppManifest,
     registerAiAppResponse,
     aiAppUserKeysResponse,
     myAiAppKeysResponse,
     createAiAppLinkCodeResponse,
+    apiAiAppCardContentV1,
+    createAiAppCardProvenanceResponse,
     removeMyAiAppKeyResponse,
     exploreAiAppsResponse,
     publishAiAppResponse,
@@ -141,6 +152,7 @@ import {
     usersApiResponse,
     userSearchResponse,
 } from "./mappers";
+import { apiChatIdentifier } from "../common/chatMappersV2";
 
 export class UserIndexClient extends SingleCanisterMsgpackAgent {
     constructor(
@@ -578,8 +590,38 @@ export class UserIndexClient extends SingleCanisterMsgpackAgent {
         );
     }
 
-    aiApps(): Promise<AiAppRegistration[]> {
-        return this.query("ai_apps", {}, aiAppsResponse, Empty, UserIndexAiAppsResponse);
+    async aiApps(lookups: { appId: number; revision?: bigint }[]): Promise<AiAppRegistration[]> {
+        const chunks = boundedAiAppLookupBatches(lookups);
+        const pages = await Promise.all(
+            chunks.map((chunk) =>
+                this.query(
+                    "ai_apps_by_ids",
+                    {
+                        lookups: chunk.map((lookup) => ({
+                            app_id: lookup.appId,
+                            revision: lookup.revision,
+                        })),
+                    },
+                    aiAppsByIdsResponse,
+                    UserIndexAiAppsByIdsArgs,
+                    UserIndexAiAppsByIdsResponse,
+                ),
+            ),
+        );
+        return pages.flat();
+    }
+
+    myAiAppsPage(
+        pageIndex: number,
+        pageSize: number,
+    ): Promise<{ apps: AiAppRegistration[]; total: number }> {
+        return this.query(
+            "my_ai_apps",
+            { page_index: pageIndex, page_size: pageSize },
+            myAiAppsResponse,
+            UserIndexMyAiAppsArgs,
+            UserIndexMyAiAppsResponse,
+        );
     }
 
     registerAiApp(manifest: AiAppManifest): Promise<boolean> {
@@ -623,6 +665,32 @@ export class UserIndexClient extends SingleCanisterMsgpackAgent {
             createAiAppLinkCodeResponse,
             UserIndexCreateAiAppLinkCodeArgs,
             UserIndexCreateAiAppLinkCodeResponse,
+        );
+    }
+
+    createAiAppCardProvenance(
+        appId: number,
+        appRevision: bigint,
+        actionId: string,
+        content: AiAppCardContentV1,
+        chatId: ChatIdentifier,
+        messageId: bigint,
+        threadRootMessageIndex: number | undefined,
+    ): Promise<AiAppCardProvenance | undefined> {
+        return this.update(
+            "create_ai_app_card_provenance",
+            {
+                app_id: appId,
+                app_revision: appRevision,
+                action_id: actionId,
+                content: apiAiAppCardContentV1(content),
+                chat: apiChatIdentifier(chatId),
+                message_id: messageId,
+                thread_root_message_index: threadRootMessageIndex,
+            },
+            createAiAppCardProvenanceResponse,
+            UserIndexCreateAiAppCardProvenanceArgs,
+            UserIndexCreateAiAppCardProvenanceResponse,
         );
     }
 
@@ -874,4 +942,28 @@ export class UserIndexClient extends SingleCanisterMsgpackAgent {
             UnitResult,
         );
     }
+}
+
+const AI_APP_LOOKUP_BATCH_SIZE = 8;
+export const MAX_AI_APP_LOOKUPS_PER_CLIENT_CALL = 32;
+
+export function boundedAiAppLookupBatches(
+    lookups: { appId: number; revision?: bigint }[],
+): { appId: number; revision?: bigint }[][] {
+    if (lookups.length > MAX_AI_APP_LOOKUPS_PER_CLIENT_CALL) {
+        throw new Error(
+            `AI-app lookup is limited to ${MAX_AI_APP_LOOKUPS_PER_CLIENT_CALL} ids per client call`,
+        );
+    }
+    const seen = new Set<number>();
+    const unique = lookups.filter((lookup) => {
+        if (seen.has(lookup.appId)) return false;
+        seen.add(lookup.appId);
+        return true;
+    });
+    const chunks: { appId: number; revision?: bigint }[][] = [];
+    for (let index = 0; index < unique.length; index += AI_APP_LOOKUP_BATCH_SIZE) {
+        chunks.push(unique.slice(index, index + AI_APP_LOOKUP_BATCH_SIZE));
+    }
+    return chunks;
 }

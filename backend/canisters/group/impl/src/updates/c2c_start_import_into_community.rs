@@ -25,7 +25,7 @@ fn c2c_start_import_into_community_impl(args: Args, state: &mut RuntimeState) ->
 
     // Snapshot the enabled AI apps before the import freezes the group, so the
     // imported channel can inherit them (freeze doesn't clear the set).
-    let enabled_ai_apps = state.data.enabled_ai_apps.clone();
+    let enabled_ai_apps = group_community_common::bounded_enabled_ai_apps(state.data.enabled_ai_apps.iter().copied());
     state
         .start_importing_into_community(CommunityBeingImportedInto::Existing(args.community_id))
         .map(|result| SuccessResult {

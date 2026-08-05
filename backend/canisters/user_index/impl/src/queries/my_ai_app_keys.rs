@@ -21,7 +21,13 @@ fn my_ai_app_keys_impl(state: &RuntimeState) -> Response {
     let user_id: Option<UserId> = state.data.users.get_by_principal(&caller).map(|u| u.user_id);
 
     let keys = user_id
-        .map(|u| state.data.ai_app_user_keys.keys_for_user(u))
+        .map(|u| {
+            state
+                .data
+                .ai_app_user_keys
+                .keys_for_user(u)
+                .unwrap_or_else(|error| ic_cdk::trap(&error.message()))
+        })
         .unwrap_or_default();
 
     // The resolved id travels with the keys: a caller that IS an OpenChat user can learn which

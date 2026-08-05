@@ -2,6 +2,8 @@ import type { HttpAgent, Identity } from "@icp-sdk/core/agent";
 import type {
     AcceptP2PSwapResponse,
     AccessGateConfig,
+    AiAppCardCapability,
+    AiAppCardConfirmationGrant,
     AddRemoveReactionResponse,
     BlockUserResponse,
     CancelP2PSwapResponse,
@@ -92,6 +94,10 @@ import {
     GroupRegisterPollVoteResponse,
     GroupRespondToActionCardArgs,
     GroupRespondToActionCardResponse,
+    GroupCreateAiAppCardCapabilityArgs,
+    GroupCreateAiAppCardCapabilityResponse,
+    GroupCreateAiAppCardConfirmationGrantArgs,
+    GroupCreateAiAppCardConfirmationGrantResponse,
     GroupRegisterProposalVoteArgs,
     GroupRegisterProposalVoteV2Args,
     GroupRegisterWebhookArgs,
@@ -140,6 +146,8 @@ import {
 } from "../../utils/mapping";
 import { MultiCanisterMsgpackAgent } from "../canisterAgent/msgpack";
 import type { IChatEventsReader } from "../common/chatEvents";
+import { createAiAppCardCapabilityResponse } from "../common/aiAppCardCapability";
+import { createAiAppCardConfirmationGrantResponse } from "../common/aiAppCardConfirmationGrant";
 import {
     acceptP2PSwapSuccess,
     apiAccessGateConfig,
@@ -784,7 +792,8 @@ export class GroupClient
         messageId: bigint,
         threadRootMessageIndex: number | undefined,
         response: "confirm" | "cancel",
-        confirmPayloadOverride?: Record<string, unknown> | unknown[],
+        confirmPayloadOverride?: Uint8Array,
+        confirmationGrant?: Uint8Array,
     ): Promise<RespondToActionCardResponse> {
         return this.update(
             groupId,
@@ -793,14 +802,54 @@ export class GroupClient
                 thread_root_message_index: threadRootMessageIndex,
                 message_id: messageId,
                 response: response === "confirm" ? "Confirm" : "Cancel",
-                confirm_payload_override:
-                    confirmPayloadOverride !== undefined
-                        ? new TextEncoder().encode(JSON.stringify(confirmPayloadOverride))
-                        : undefined,
+                confirm_payload_override: confirmPayloadOverride?.slice(),
+                confirmation_grant: confirmationGrant?.slice(),
             },
             unitResult,
             GroupRespondToActionCardArgs,
             GroupRespondToActionCardResponse,
+        );
+    }
+
+    createAiAppCardCapability(
+        groupId: string,
+        messageId: bigint,
+        threadRootMessageIndex: number | undefined,
+        recipientKeyScheme: string,
+        recipientPublicKey: Uint8Array,
+    ): Promise<AiAppCardCapability | undefined> {
+        return this.update(
+            groupId,
+            "create_ai_app_card_capability",
+            {
+                thread_root_message_index: threadRootMessageIndex,
+                message_id: messageId,
+                recipient_key_scheme: recipientKeyScheme,
+                recipient_public_key: recipientPublicKey,
+            },
+            createAiAppCardCapabilityResponse,
+            GroupCreateAiAppCardCapabilityArgs,
+            GroupCreateAiAppCardCapabilityResponse,
+        );
+    }
+
+    createAiAppCardConfirmationGrant(
+        groupId: string,
+        messageId: bigint,
+        threadRootMessageIndex: number | undefined,
+        confirmPayload: Uint8Array,
+    ): Promise<AiAppCardConfirmationGrant | undefined> {
+        return this.update(
+            groupId,
+            "create_ai_app_card_confirmation_grant",
+            {
+                thread_root_message_index: threadRootMessageIndex,
+                message_id: messageId,
+                confirm_payload: confirmPayload.slice(),
+            },
+            createAiAppCardConfirmationGrantResponse,
+            GroupCreateAiAppCardConfirmationGrantArgs,
+            GroupCreateAiAppCardConfirmationGrantResponse,
         );
     }
 

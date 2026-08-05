@@ -1,13 +1,13 @@
 <script lang="ts">
-    // "My apps": the signed-in user's OWN registered AI apps (client.aiApps() returns the caller's
-    // unpublished apps alongside the published directory). Each shows its published status; an
+    // "My apps": the signed-in user's OWN registered AI apps, fetched through a bounded owner-only
+    // page. Each shows its published status; an
     // unpublished one gets a Publish button (owner + governance/test_mode gated in the canister).
     // Self-gating: owns its CollapsibleCard and renders nothing unless the user owns ≥1 app, so the
     // vast majority of users (who register none) see no empty section. v1 port of
     // components_mobile/home/user_profile/MyApps.svelte.
     import { i18nKey } from "@src/i18n/i18n";
     import { toastStore } from "@src/stores/toast";
-    import { currentUserIdStore, type AiAppRegistration, type OpenChat } from "openchat-client";
+    import { type AiAppRegistration, type OpenChat } from "openchat-client";
     import { getContext, onMount } from "svelte";
     import CheckDecagram from "svelte-material-icons/CheckDecagram.svelte";
     import Upload from "svelte-material-icons/Upload.svelte";
@@ -19,12 +19,22 @@
     const client = getContext<OpenChat>("client");
 
     let apps = $state<AiAppRegistration[]>([]);
+    let total = $state(0);
+    let loadingMore = $state(false);
     let publishing = $state(new Set<number>());
 
-    async function load() {
-        const all = await client.aiApps();
-        // owner is a stringified principal, same form as currentUserIdStore.value.
-        apps = all.filter((a) => a.owner === currentUserIdStore.value);
+    async function load(reset = true) {
+        const pageIndex = reset ? 0 : Math.floor(apps.length / 8);
+        const page = await client.myAiAppsPage(pageIndex, 8);
+        apps = reset ? page.apps : [...apps, ...page.apps];
+        total = page.total;
+    }
+
+    async function loadMore() {
+        if (loadingMore || apps.length >= total) return;
+        loadingMore = true;
+        await load(false);
+        loadingMore = false;
     }
 
     onMount(load);
@@ -80,6 +90,11 @@
                     {/if}
                 </div>
             {/each}
+            {#if apps.length < total}
+                <Button small loading={loadingMore} onClick={loadMore}>
+                    <Translatable resourceKey={i18nKey("communities.loadMore")} />
+                </Button>
+            {/if}
             <p class="hint">
                 <Translatable resourceKey={i18nKey("aiApps.myAppsHint")} />
             </p>

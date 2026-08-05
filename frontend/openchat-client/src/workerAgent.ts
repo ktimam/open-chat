@@ -57,13 +57,17 @@ export class WorkerAgent {
                     userStore.addMany(data.event.users);
                 }
             } else if (data.kind === "worker_response") {
-                console.debug("WORKER_CLIENT: response: ", ev);
+                // Responses can contain short-lived app-card grants/capabilities. Log only routing
+                // metadata; never serialize the event or response body into developer/remote logs.
+                console.debug("WORKER_CLIENT: response", data.requestKind, data.correlationId);
                 this.#resolveResponse(data);
             } else if (data.kind === "worker_error") {
-                console.debug("WORKER_CLIENT: error: ", ev);
+                console.debug("WORKER_CLIENT: error", data.requestKind, data.correlationId);
                 this.#resolveError(data);
             } else {
-                console.debug("WORKER_CLIENT: unknown message: ", ev);
+                // Never serialize an unexpected worker event: a malformed response could still carry
+                // an app-card capability/grant in its data. The category is sufficient diagnostics.
+                console.debug("WORKER_CLIENT: unknown message");
             }
         };
 

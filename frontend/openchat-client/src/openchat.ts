@@ -165,6 +165,10 @@ import {
     type DiamondMembershipDuration,
     type DiamondMembershipFees,
     type AiAppLinkCode,
+    type AiAppCardCapability,
+    type AiAppCardConfirmationGrant,
+    type AiAppCardContentV1,
+    type AiAppCardProvenance,
     type ExploreAiAppsResponse,
     type AiAppRegistration,
     type AiAppMemberKey,
@@ -2345,10 +2349,10 @@ export class OpenChat {
         threadRootMessageIndex: number | undefined,
         messageId: bigint,
         response: "confirm" | "cancel",
-        // App-rendered cards (surface kind "card") let the user edit the card's values inside the app's
-        // iframe; the edited object arrives here via the postMessage bridge in ActionCardContent. Absent
-        // for classic OC-rendered cards, which behave exactly as before.
-        payload?: Record<string, unknown> | unknown[],
+        // App-rendered cards carry the exact final encoded bytes and their matching one-time grant.
+        // Both are absent for classic OC-rendered cards, which use the stored attested payload.
+        confirmPayloadOverride?: Uint8Array,
+        confirmationGrant?: Uint8Array,
     ): Promise<boolean> {
         return this.#worker
             .send({
@@ -2362,7 +2366,8 @@ export class OpenChat {
                 // bounded `confirm_payload_override`, JSON-encoded at the client layer), so the
                 // on-chain deposit uses these edited values in place of the frozen confirm_payload.
                 // Classic OC-rendered cards pass nothing here — behaviour is unchanged for them.
-                confirmPayloadOverride: payload,
+                confirmPayloadOverride: confirmPayloadOverride?.slice(),
+                confirmationGrant: confirmationGrant?.slice(),
             })
             .then((resp) => resp.kind === "success")
             .catch(() => false);
@@ -7070,12 +7075,26 @@ export class OpenChat {
             .catch(() => []);
     }
 
-    aiApps(): Promise<AiAppRegistration[]> {
+    aiApps(lookups: { appId: number; revision?: bigint }[]): Promise<AiAppRegistration[]> {
         return this.#worker
             .send({
                 kind: "aiApps",
+                lookups,
             })
             .catch(() => []);
+    }
+
+    myAiAppsPage(
+        pageIndex: number,
+        pageSize = 8,
+    ): Promise<{ apps: AiAppRegistration[]; total: number }> {
+        return this.#worker
+            .send({
+                kind: "myAiApps",
+                pageIndex,
+                pageSize,
+            })
+            .catch(() => ({ apps: [], total: 0 }));
     }
 
     // Paginated, scored search over the PUBLISHED app directory (the explorer surface).
@@ -7117,13 +7136,72 @@ export class OpenChat {
             .catch(() => []);
     }
 
-    // A one-time 6-digit pairing code the user enters in the app to push their public key to
+    // A one-time 256-bit claim token the user enters in the app to push their public key to
     // OpenChat. Undefined when the app is unknown or the call fails.
     createAiAppLinkCode(appId: number): Promise<AiAppLinkCode | undefined> {
         return this.#worker
             .send({
                 kind: "createAiAppLinkCode",
                 appId,
+            })
+            .catch(() => undefined);
+    }
+
+    createAiAppCardProvenance(
+        appId: number,
+        appRevision: bigint,
+        actionId: string,
+        content: AiAppCardContentV1,
+        chatId: ChatIdentifier,
+        messageId: bigint,
+        threadRootMessageIndex: number | undefined,
+    ): Promise<AiAppCardProvenance | undefined> {
+        return this.#worker
+            .send({
+                kind: "createAiAppCardProvenance",
+                appId,
+                appRevision,
+                actionId,
+                content,
+                chatId,
+                messageId,
+                threadRootMessageIndex,
+            })
+            .catch(() => undefined);
+    }
+
+    createAiAppCardCapability(
+        chatId: ChatIdentifier,
+        threadRootMessageIndex: number | undefined,
+        messageId: bigint,
+        recipientKeyScheme: string,
+        recipientPublicKey: Uint8Array,
+    ): Promise<AiAppCardCapability | undefined> {
+        return this.#worker
+            .send({
+                kind: "createAiAppCardCapability",
+                chatId,
+                threadRootMessageIndex,
+                messageId,
+                recipientKeyScheme,
+                recipientPublicKey,
+            })
+            .catch(() => undefined);
+    }
+
+    createAiAppCardConfirmationGrant(
+        chatId: ChatIdentifier,
+        threadRootMessageIndex: number | undefined,
+        messageId: bigint,
+        confirmPayload: Uint8Array,
+    ): Promise<AiAppCardConfirmationGrant | undefined> {
+        return this.#worker
+            .send({
+                kind: "createAiAppCardConfirmationGrant",
+                chatId,
+                threadRootMessageIndex,
+                messageId,
+                confirmPayload: confirmPayload.slice(),
             })
             .catch(() => undefined);
     }

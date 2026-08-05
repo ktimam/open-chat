@@ -13,6 +13,7 @@ use constants::MINUTE_IN_MS;
 use fire_and_forget_handler::FireAndForgetHandler;
 use group_index_canister::ChildCanisterType;
 use local_user_index_canister::{GroupIndexEvent as LocalIndexEvent, NameChanged, VerifiedChanged};
+use model::ai_app_card_authority::AiAppCardAuthorityStore;
 use model::local_index_event_batch::LocalIndexEventBatch;
 use model::local_index_map::LocalIndexMap;
 use rand::RngCore;
@@ -33,6 +34,7 @@ mod jobs;
 mod lifecycle;
 mod memory;
 mod model;
+mod pr2_entropy;
 mod queries;
 mod updates;
 
@@ -283,6 +285,10 @@ struct Data {
     pub cached_hot_groups: CachedHotGroups,
     pub cached_metrics: CachedMetrics,
     pub local_index_map: LocalIndexMap,
+    #[serde(default)]
+    pub ai_app_card_authority: AiAppCardAuthorityStore,
+    #[serde(default)]
+    pub pr2_entropy: types::Pr2EntropyGate,
     pub fire_and_forget_handler: FireAndForgetHandler,
     pub video_call_operators: Vec<Principal>,
     pub upload_wasm_chunks_whitelist: HashSet<Principal>,
@@ -328,6 +334,8 @@ impl Data {
             cached_hot_groups: CachedHotGroups::default(),
             cached_metrics: CachedMetrics::default(),
             local_index_map: LocalIndexMap::default(),
+            ai_app_card_authority: AiAppCardAuthorityStore::default(),
+            pr2_entropy: types::Pr2EntropyGate::default(),
             fire_and_forget_handler: FireAndForgetHandler::default(),
             video_call_operators,
             upload_wasm_chunks_whitelist: HashSet::default(),
@@ -436,6 +444,8 @@ impl Default for Data {
             cached_hot_groups: CachedHotGroups::default(),
             cached_metrics: CachedMetrics::default(),
             local_index_map: LocalIndexMap::default(),
+            ai_app_card_authority: AiAppCardAuthorityStore::default(),
+            pr2_entropy: types::Pr2EntropyGate::default(),
             fire_and_forget_handler: FireAndForgetHandler::default(),
             video_call_operators: Vec::default(),
             upload_wasm_chunks_whitelist: HashSet::default(),

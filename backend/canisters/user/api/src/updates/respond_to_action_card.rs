@@ -19,6 +19,11 @@ pub struct Args {
     #[serde(default)]
     #[ts(as = "Option::<ts_export::TSBytes>")]
     pub confirm_payload_override: Option<ByteBuf>,
+    /// One-time server grant bound to the exact override. Both optional fields must be absent or
+    /// present together; direct-chat edited confirmations remain fail-closed.
+    #[serde(default)]
+    #[ts(as = "Option::<ts_export::TSBytes>")]
+    pub confirmation_grant: Option<ByteBuf>,
 }
 
 #[ts_export(user, respond_to_action_card)]

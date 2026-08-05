@@ -89,7 +89,7 @@
             .exploreAiApps(
                 aiAppSearchState.term === "" ? undefined : aiAppSearchState.term,
                 aiAppSearchState.index,
-                pageSize,
+                8,
             )
             .then((results) => {
                 if (reset) {
@@ -110,14 +110,9 @@
     }
 
     function calculatePageSize(width: ScreenWidth): number {
-        // make sure we get even rows of results
-        switch (width) {
-            case ScreenWidth.Large:
-            case ScreenWidth.ExtraLarge:
-                return 30;
-            default:
-                return 32;
-        }
+        // Registry manifests are large untrusted records; the backend accepts at most eight per page.
+        void width;
+        return 8;
     }
 
     function createCommunity() {
@@ -415,6 +410,8 @@
         <AiAppSurfaceModal
             title={appSurface.app.manifest.name}
             url={appSurface.url}
+            display={appSurface.surface.display}
+            dataDisclosures={appSurface.dataDisclosures}
             onDismiss={() => (appSurface = undefined)} />
     {/if}
 </div>

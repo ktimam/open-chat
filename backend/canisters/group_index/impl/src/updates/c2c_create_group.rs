@@ -145,4 +145,8 @@ fn commit(args: CommitArgs, state: &mut RuntimeState) {
         .data
         .local_index_map
         .add_group(args.local_user_index_canister, args.chat_id);
+    state.data.ai_app_card_authority.observe_route(
+        crate::model::ai_app_card_authority::CardRouteKey::Group(args.chat_id),
+        Some(args.local_user_index_canister),
+    );
 }

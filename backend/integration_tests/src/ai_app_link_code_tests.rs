@@ -1,6 +1,8 @@
+use crate::TestEnv;
 use crate::client;
 use crate::env::ENV;
-use crate::TestEnv;
+use crate::fan_out_delivery_tests;
+use crate::wasms;
 use candid::Principal;
 use p256_key_pair::P256KeyPair;
 use pocket_ic::PocketIc;
@@ -8,58 +10,60 @@ use rand::SeedableRng;
 use rand::rngs::StdRng;
 use std::ops::Deref;
 use std::time::Duration;
-use testing::rng::random_string;
-use types::{AiAppId, AiAppManifest, CanisterId};
-
-const TEST_SPKI_PEM: &str = "-----BEGIN PUBLIC KEY-----\n\
-MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEqEJ3Fh3nq0pXwq3B0m1yq0m8m0z1\n\
-4Yb0d3fZq7Xk5c1m0e6qg8sB9r2n0aQ7l5Yy8dW1s0N6vF3wR4p9xK5rQ==\n\
------END PUBLIC KEY-----\n";
+use types::{AiAppId, AiAppRegistration, CanisterId};
 
 fn register_per_user_app(
     env: &mut PocketIc,
-    sender: Principal,
-    user_index: CanisterId,
-) -> AiAppId {
-    client::user_index::happy_path::register_ai_app(
-        env,
-        sender,
-        user_index,
-        AiAppManifest {
-            name: random_string(),
-            description: "link-code test app".to_string(),
-            icon_url: None,
-            app_canister_id: None,
-            inbox_canister_id: None,
-            // per_user_keys apps may leave the app-level key empty.
-            consumer_public_key: String::new(),
-            per_user_keys: true,
-            actions: vec![],
-            surfaces: vec![],
-        },
-    )
+    canister_ids: &crate::CanisterIds,
+    controller: Principal,
+    owner: &crate::User,
+) -> AiAppRegistration {
+    let inbox = client::create_canister(env, controller);
+    let draft = fan_out_delivery_tests::register_per_user_app(env, canister_ids.user_index, controller, owner, Some(inbox));
+    fan_out_delivery_tests::install_inbox_at(env, controller, canister_ids, inbox, draft.id, canister_ids.user_index);
+    fan_out_delivery_tests::publish_registered_app(env, canister_ids.user_index, owner, draft.id)
 }
 
-fn create_link_code(
-    env: &mut PocketIc,
-    sender: Principal,
-    user_index: CanisterId,
-    app_id: AiAppId,
-) -> String {
-    let response: user_index_canister::create_ai_app_link_code::Response = client::execute_msgpack_update(
-        env,
-        sender,
-        user_index,
-        "create_ai_app_link_code_msgpack",
-        &user_index_canister::create_ai_app_link_code::Args { app_id },
-    );
+fn app_canister(app: &AiAppRegistration) -> CanisterId {
+    app.manifest.app_canister_id.expect("test app must pin its verifier canister")
+}
+
+fn create_link_code(env: &mut PocketIc, sender: Principal, user_index: CanisterId, app_id: AiAppId) -> String {
+    let response = try_create_link_code(env, sender, user_index, app_id);
     match response {
         user_index_canister::create_ai_app_link_code::Response::Success(result) => result.code,
         other => panic!("expected a link code, got {other:?}"),
     }
 }
 
-fn claim(
+fn try_create_link_code(
+    env: &mut PocketIc,
+    sender: Principal,
+    user_index: CanisterId,
+    app_id: AiAppId,
+) -> user_index_canister::create_ai_app_link_code::Response {
+    client::execute_msgpack_update(
+        env,
+        sender,
+        user_index,
+        "create_ai_app_link_code_msgpack",
+        &user_index_canister::create_ai_app_link_code::Args { app_id },
+    )
+}
+
+fn wait_for_link_code_after_entropy(env: &mut PocketIc, sender: Principal, user_index: CanisterId, app_id: AiAppId) -> String {
+    for _ in 0..20 {
+        env.tick();
+        match try_create_link_code(env, sender, user_index, app_id) {
+            user_index_canister::create_ai_app_link_code::Response::Success(result) => return result.code,
+            user_index_canister::create_ai_app_link_code::Response::Error(_) => {}
+            other => panic!("unexpected link-code response during entropy reseed: {other:?}"),
+        }
+    }
+    panic!("fresh raw_rand reseed did not complete after snapshot restoration")
+}
+
+fn public_claim(
     env: &mut PocketIc,
     caller: Principal,
     user_index: CanisterId,
@@ -75,43 +79,172 @@ fn claim(
     )
 }
 
-fn my_keys(
-    env: &PocketIc,
-    caller: Principal,
+fn c2c_claim(
+    env: &mut PocketIc,
+    app_canister: CanisterId,
     user_index: CanisterId,
-) -> Vec<types::AiAppUserKey> {
-    let response: user_index_canister::my_ai_app_keys::Response =
-        client::execute_msgpack_query(env, caller, user_index, "my_ai_app_keys_msgpack", &user_index_canister::my_ai_app_keys::Args {});
+    code: String,
+    public_key: String,
+) -> user_index_canister::c2c_claim_ai_app_link_code::Response {
+    client::execute_msgpack_update(
+        env,
+        app_canister,
+        user_index,
+        "c2c_claim_ai_app_link_code_msgpack",
+        &user_index_canister::c2c_claim_ai_app_link_code::Args { code, public_key },
+    )
+}
+
+fn my_keys(env: &PocketIc, caller: Principal, user_index: CanisterId) -> Vec<types::AiAppUserKey> {
+    let response: user_index_canister::my_ai_app_keys::Response = client::execute_msgpack_query(
+        env,
+        caller,
+        user_index,
+        "my_ai_app_keys_msgpack",
+        &user_index_canister::my_ai_app_keys::Args {},
+    );
     match response {
         user_index_canister::my_ai_app_keys::Response::Success(result) => result.keys,
     }
 }
 
-// Happy path: owner creates a code, the external app claims it with a delivery key, and that key
-// then shows up in the owner's key list. A second claim of the same code is CodeNotFound (single-use).
+// Release gate for https://github.com/ktimam/open-chat/issues/51. Snapshot loading does not run a
+// lifecycle hook, so the first issuance must fail closed, schedule an on-demand raw_rand reseed for
+// the new canister version, and only then issue a token distinct from the pre-restore bearer.
+#[test]
+fn restored_user_index_snapshot_never_reissues_a_link_bearer() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+        ..
+    } = wrapper.env();
+
+    let owner = client::register_diamond_user(env, canister_ids, *controller);
+    let app_id = register_per_user_app(env, canister_ids, *controller, &owner).id;
+
+    env.stop_canister(canister_ids.user_index, Some(*controller)).unwrap();
+    let snapshot = env
+        .take_canister_snapshot(canister_ids.user_index, Some(*controller), None)
+        .unwrap();
+    env.start_canister(canister_ids.user_index, Some(*controller)).unwrap();
+
+    let first = create_link_code(env, owner.principal, canister_ids.user_index, app_id);
+
+    env.stop_canister(canister_ids.user_index, Some(*controller)).unwrap();
+    env.load_canister_snapshot(canister_ids.user_index, Some(*controller), snapshot.id)
+        .unwrap();
+    env.start_canister(canister_ids.user_index, Some(*controller)).unwrap();
+
+    assert!(matches!(
+        try_create_link_code(env, owner.principal, canister_ids.user_index, app_id),
+        user_index_canister::create_ai_app_link_code::Response::Error(_)
+    ));
+    let after_restore = wait_for_link_code_after_entropy(env, owner.principal, canister_ids.user_index, app_id);
+    assert_ne!(
+        first, after_restore,
+        "a snapshot restore must not replay an already exposed link bearer"
+    );
+}
+
+#[test]
+fn restored_pending_entropy_timer_is_replaced_for_the_new_canister_version() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+        ..
+    } = wrapper.env();
+
+    let owner = client::register_diamond_user(env, canister_ids, *controller);
+    let app_id = register_per_user_app(env, canister_ids, *controller, &owner).id;
+
+    // post_upgrade schedules a zero-delay reseed. Snapshot it before another round can consume the
+    // timer, then restore into a newer canister version. The restored heap contains the old timer
+    // sentinel even though that exact system timer is not guaranteed to survive snapshot loading.
+    env.upgrade_canister(
+        canister_ids.user_index,
+        wasms::USER_INDEX.module.clone().into(),
+        candid::encode_one(user_index_canister::post_upgrade::Args {
+            wasm_version: wasms::USER_INDEX.version,
+        })
+        .unwrap(),
+        Some(*controller),
+    )
+    .unwrap();
+    env.stop_canister(canister_ids.user_index, Some(*controller)).unwrap();
+    let snapshot = env
+        .take_canister_snapshot(canister_ids.user_index, Some(*controller), None)
+        .unwrap();
+    env.load_canister_snapshot(canister_ids.user_index, Some(*controller), snapshot.id)
+        .unwrap();
+    env.start_canister(canister_ids.user_index, Some(*controller)).unwrap();
+
+    assert!(matches!(
+        try_create_link_code(env, owner.principal, canister_ids.user_index, app_id),
+        user_index_canister::create_ai_app_link_code::Response::Error(_)
+    ));
+    let code = wait_for_link_code_after_entropy(env, owner.principal, canister_ids.user_index, app_id);
+    assert_eq!(code.len(), 64);
+}
+
+// Happy path: owner creates a code, the exact registered app canister claims it with a delivery key,
+// and that key shows up in the owner's list. Browser claims stay fail-closed and cannot burn the
+// code; a second authenticated claim is CodeNotFound (single-use).
 #[test]
 fn link_code_happy_path_is_single_use() {
     let mut wrapper = ENV.deref().get();
     let TestEnv {
-        env, canister_ids, controller, ..
+        env,
+        canister_ids,
+        controller,
+        ..
     } = wrapper.env();
 
     let owner = client::register_diamond_user(env, canister_ids, *controller);
-    let app_id = register_per_user_app(env, owner.principal, canister_ids.user_index);
+    let app = register_per_user_app(env, canister_ids, *controller, &owner);
+    let app_id = app.id;
+    let app_canister = app_canister(&app);
 
     let mut rng = StdRng::seed_from_u64(101);
     let delivery_pem = P256KeyPair::new(&mut rng).public_key_pem().to_string();
 
     let code = create_link_code(env, owner.principal, canister_ids.user_index, app_id);
+    assert_eq!(code.len(), 64, "claim token must carry 256 bits as lowercase hex");
+    assert!(
+        code.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+        "claim token must use a copy-safe lowercase hex alphabet"
+    );
 
-    // The external app claims with an arbitrary principal (bearer authorization is the code itself).
-    let claimer = testing::rng::random_principal();
+    // A browser/other principal cannot turn a copied bearer into a binding, and the rejected call
+    // does not consume the legitimate app's code.
     assert!(
         matches!(
-            claim(env, claimer, canister_ids.user_index, code.clone(), delivery_pem.clone()),
-            user_index_canister::claim_ai_app_link_code::Response::Success
+            public_claim(
+                env,
+                testing::rng::random_principal(),
+                canister_ids.user_index,
+                code.clone(),
+                delivery_pem.clone(),
+            ),
+            user_index_canister::claim_ai_app_link_code::Response::InvalidRequest(_)
         ),
-        "first claim must Succeed"
+        "the deprecated public claim must fail closed"
+    );
+    let claimed = c2c_claim(env, app_canister, canister_ids.user_index, code.clone(), delivery_pem.clone());
+    assert!(
+        matches!(
+            &claimed,
+            user_index_canister::c2c_claim_ai_app_link_code::Response::Success(result)
+                if result.app_id == app_id
+                    && result.app_canister_id == app_canister
+                    && result.app_subject.len() == 32
+                    && result.consumer_queue_selector.len() == 32
+                    && result.key_version == 1
+        ),
+        "first app-authenticated claim must return the complete scoped binding: {claimed:?}"
     );
 
     // The key is registered for the CODE's (user, app) pair == the owner who created it.
@@ -124,8 +257,8 @@ fn link_code_happy_path_is_single_use() {
     // Single-use: the code is consumed, so re-claiming is CodeNotFound.
     assert!(
         matches!(
-            claim(env, claimer, canister_ids.user_index, code, delivery_pem),
-            user_index_canister::claim_ai_app_link_code::Response::CodeNotFound
+            c2c_claim(env, app_canister, canister_ids.user_index, code, delivery_pem),
+            user_index_canister::c2c_claim_ai_app_link_code::Response::CodeNotFound
         ),
         "second claim of a consumed code must be CodeNotFound"
     );
@@ -136,11 +269,15 @@ fn link_code_happy_path_is_single_use() {
 fn link_code_expires_after_ttl() {
     let mut wrapper = ENV.deref().get();
     let TestEnv {
-        env, canister_ids, controller, ..
+        env,
+        canister_ids,
+        controller,
+        ..
     } = wrapper.env();
 
     let owner = client::register_diamond_user(env, canister_ids, *controller);
-    let app_id = register_per_user_app(env, owner.principal, canister_ids.user_index);
+    let app = register_per_user_app(env, canister_ids, *controller, &owner);
+    let app_id = app.id;
 
     let mut rng = StdRng::seed_from_u64(202);
     let delivery_pem = P256KeyPair::new(&mut rng).public_key_pem().to_string();
@@ -151,11 +288,10 @@ fn link_code_expires_after_ttl() {
     env.advance_time(Duration::from_secs(11 * 60));
     env.tick();
 
-    let claimer = testing::rng::random_principal();
     assert!(
         matches!(
-            claim(env, claimer, canister_ids.user_index, code, delivery_pem),
-            user_index_canister::claim_ai_app_link_code::Response::CodeExpired
+            c2c_claim(env, app_canister(&app), canister_ids.user_index, code, delivery_pem),
+            user_index_canister::c2c_claim_ai_app_link_code::Response::CodeExpired
         ),
         "claim after TTL must be CodeExpired"
     );
@@ -167,27 +303,14 @@ fn link_code_expires_after_ttl() {
 fn set_and_remove_my_key_is_idempotent() {
     let mut wrapper = ENV.deref().get();
     let TestEnv {
-        env, canister_ids, controller, ..
+        env,
+        canister_ids,
+        controller,
+        ..
     } = wrapper.env();
 
     let owner = client::register_diamond_user(env, canister_ids, *controller);
-    // per_user_keys not required for set_my_ai_app_key; a plain app with a valid app-level key is fine.
-    let app_id = client::user_index::happy_path::register_ai_app(
-        env,
-        owner.principal,
-        canister_ids.user_index,
-        AiAppManifest {
-            name: random_string(),
-            description: "set/remove key app".to_string(),
-            icon_url: None,
-            app_canister_id: None,
-            inbox_canister_id: None,
-            consumer_public_key: TEST_SPKI_PEM.to_string(),
-            per_user_keys: true,
-            actions: vec![],
-            surfaces: vec![],
-        },
-    );
+    let app_id = register_per_user_app(env, canister_ids, *controller, &owner).id;
 
     let mut rng = StdRng::seed_from_u64(303);
     let pem = P256KeyPair::new(&mut rng).public_key_pem().to_string();
@@ -202,7 +325,10 @@ fn set_and_remove_my_key_is_idempotent() {
             public_key: pem.clone(),
         },
     );
-    assert!(matches!(set, user_index_canister::set_my_ai_app_key::Response::Success), "set must Succeed: {set:?}");
+    assert!(
+        matches!(set, user_index_canister::set_my_ai_app_key::Response::Success),
+        "set must Succeed: {set:?}"
+    );
 
     assert!(
         my_keys(env, owner.principal, canister_ids.user_index)
@@ -235,7 +361,10 @@ fn set_and_remove_my_key_is_idempotent() {
         "remove_my_ai_app_key_msgpack",
         &user_index_canister::remove_my_ai_app_key::Args { app_id },
     );
-    assert!(matches!(remove, user_index_canister::remove_my_ai_app_key::Response::Success), "remove must Succeed");
+    assert!(
+        matches!(remove, user_index_canister::remove_my_ai_app_key::Response::Success),
+        "remove must Succeed"
+    );
     assert!(
         !my_keys(env, owner.principal, canister_ids.user_index)
             .iter()
@@ -264,31 +393,38 @@ fn set_and_remove_my_key_is_idempotent() {
 fn claim_with_invalid_key_does_not_burn_the_code() {
     let mut wrapper = ENV.deref().get();
     let TestEnv {
-        env, canister_ids, controller, ..
+        env,
+        canister_ids,
+        controller,
+        ..
     } = wrapper.env();
 
     let owner = client::register_diamond_user(env, canister_ids, *controller);
-    let app_id = register_per_user_app(env, owner.principal, canister_ids.user_index);
+    let app = register_per_user_app(env, canister_ids, *controller, &owner);
+    let app_id = app.id;
     let code = create_link_code(env, owner.principal, canister_ids.user_index, app_id);
+    let app_canister = app_canister(&app);
 
-    let claimer = testing::rng::random_principal();
-
-    // Malformed key (no "BEGIN PUBLIC KEY") -> InvalidRequest, and the code must survive.
-    assert!(
-        matches!(
-            claim(env, claimer, canister_ids.user_index, code.clone(), "not-a-pem".to_string()),
-            user_index_canister::claim_ai_app_link_code::Response::InvalidRequest(_)
-        ),
-        "malformed key must be InvalidRequest"
-    );
+    for invalid in [
+        "-----BEGIN PUBLIC KEY-----\nnot-a-key\n-----END PUBLIC KEY-----\n",
+        "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n-----END PUBLIC KEY-----\n",
+    ] {
+        assert!(
+            matches!(
+                c2c_claim(env, app_canister, canister_ids.user_index, code.clone(), invalid.to_string()),
+                user_index_canister::c2c_claim_ai_app_link_code::Response::InvalidRequest(_)
+            ),
+            "malformed or non-P256 SPKI must be InvalidRequest"
+        );
+    }
 
     // The SAME code still claims with a valid key — the invalid attempt did not consume it.
     let mut rng = StdRng::seed_from_u64(404);
     let delivery_pem = P256KeyPair::new(&mut rng).public_key_pem().to_string();
     assert!(
         matches!(
-            claim(env, claimer, canister_ids.user_index, code, delivery_pem.clone()),
-            user_index_canister::claim_ai_app_link_code::Response::Success
+            c2c_claim(env, app_canister, canister_ids.user_index, code, delivery_pem.clone()),
+            user_index_canister::c2c_claim_ai_app_link_code::Response::Success(_)
         ),
         "claim with a valid key after a rejected invalid claim must Succeed (code not burned)"
     );
@@ -307,11 +443,15 @@ fn claim_with_invalid_key_does_not_burn_the_code() {
 fn new_link_code_retires_prior_code_for_same_pair() {
     let mut wrapper = ENV.deref().get();
     let TestEnv {
-        env, canister_ids, controller, ..
+        env,
+        canister_ids,
+        controller,
+        ..
     } = wrapper.env();
 
     let owner = client::register_diamond_user(env, canister_ids, *controller);
-    let app_id = register_per_user_app(env, owner.principal, canister_ids.user_index);
+    let app = register_per_user_app(env, canister_ids, *controller, &owner);
+    let app_id = app.id;
 
     let mut rng = StdRng::seed_from_u64(405);
     let delivery_pem = P256KeyPair::new(&mut rng).public_key_pem().to_string();
@@ -319,20 +459,19 @@ fn new_link_code_retires_prior_code_for_same_pair() {
     let code1 = create_link_code(env, owner.principal, canister_ids.user_index, app_id);
     let code2 = create_link_code(env, owner.principal, canister_ids.user_index, app_id);
 
-    let claimer = testing::rng::random_principal();
     // The retired first code is dead — reported exactly like a code that never existed.
     assert!(
         matches!(
-            claim(env, claimer, canister_ids.user_index, code1, delivery_pem.clone()),
-            user_index_canister::claim_ai_app_link_code::Response::CodeNotFound
+            c2c_claim(env, app_canister(&app), canister_ids.user_index, code1, delivery_pem.clone()),
+            user_index_canister::c2c_claim_ai_app_link_code::Response::CodeNotFound
         ),
         "a retired (superseded) code must be CodeNotFound"
     );
     // Only the LATEST code claims.
     assert!(
         matches!(
-            claim(env, claimer, canister_ids.user_index, code2, delivery_pem.clone()),
-            user_index_canister::claim_ai_app_link_code::Response::Success
+            c2c_claim(env, app_canister(&app), canister_ids.user_index, code2, delivery_pem.clone()),
+            user_index_canister::c2c_claim_ai_app_link_code::Response::Success(_)
         ),
         "the replacement code must claim successfully"
     );
@@ -350,11 +489,14 @@ fn new_link_code_retires_prior_code_for_same_pair() {
 fn set_my_ai_app_key_rotation_replaces_previous_key() {
     let mut wrapper = ENV.deref().get();
     let TestEnv {
-        env, canister_ids, controller, ..
+        env,
+        canister_ids,
+        controller,
+        ..
     } = wrapper.env();
 
     let owner = client::register_diamond_user(env, canister_ids, *controller);
-    let app_id = register_per_user_app(env, owner.principal, canister_ids.user_index);
+    let app_id = register_per_user_app(env, canister_ids, *controller, &owner).id;
 
     let mut rng = StdRng::seed_from_u64(505);
     let key1 = P256KeyPair::new(&mut rng).public_key_pem().to_string();
@@ -371,7 +513,10 @@ fn set_my_ai_app_key_rotation_replaces_previous_key() {
                 public_key: key.clone(),
             },
         );
-        assert!(matches!(set, user_index_canister::set_my_ai_app_key::Response::Success), "set failed: {set:?}");
+        assert!(
+            matches!(set, user_index_canister::set_my_ai_app_key::Response::Success),
+            "set failed: {set:?}"
+        );
     }
 
     // my_ai_app_keys: exactly ONE row for the app, and it is key2 (replaced, not appended).
@@ -396,46 +541,37 @@ fn set_my_ai_app_key_rotation_replaces_previous_key() {
     );
     let user_index_canister::ai_app_user_keys::Response::Success(result) = response;
     assert_eq!(result.keys.len(), 1);
-    assert_eq!(result.keys[0].public_key, key2, "fan-out lookup must resolve to the rotated key only");
+    assert_eq!(
+        result.keys[0].public_key, key2,
+        "fan-out lookup must resolve to the rotated key only"
+    );
 }
 
-// delete_ai_app removes ONLY the registry entry: the user's paired delivery key and any
-// outstanding link code survive (orphan cleanup is not implemented — despite the
-// AiAppUserKeys::remove doc comment claiming it backs 'app-deletion cleanup').
-// Pinned here so the leak is either fixed deliberately or accepted explicitly.
+// App deletion immediately hides its keys and consumes outstanding link capabilities, while the
+// bounded durable cleanup job removes the now-unreachable key rows.
 #[test]
-fn delete_ai_app_leaves_per_user_keys_and_outstanding_codes_behind() {
+fn delete_ai_app_cleans_per_user_keys_and_outstanding_codes() {
     let mut wrapper = ENV.deref().get();
     let TestEnv {
-        env, canister_ids, controller, ..
+        env,
+        canister_ids,
+        controller,
+        ..
     } = wrapper.env();
 
     let owner = client::register_diamond_user(env, canister_ids, *controller);
-    let name = random_string();
-    let app_id = client::user_index::happy_path::register_ai_app(
-        env,
-        owner.principal,
-        canister_ids.user_index,
-        AiAppManifest {
-            name: name.clone(),
-            description: "orphan cleanup pin".to_string(),
-            icon_url: None,
-            app_canister_id: None,
-            inbox_canister_id: None,
-            consumer_public_key: String::new(),
-            per_user_keys: true,
-            actions: vec![],
-            surfaces: vec![],
-        },
-    );
+    let app = register_per_user_app(env, canister_ids, *controller, &owner);
+    let app_id = app.id;
+    let app_canister = app_canister(&app);
+    let name = app.manifest.name.clone();
 
     // Pair a delivery key via the claim path, and mint a SECOND, still-outstanding code.
     let mut rng = StdRng::seed_from_u64(406);
     let pem1 = P256KeyPair::new(&mut rng).public_key_pem().to_string();
     let code1 = create_link_code(env, owner.principal, canister_ids.user_index, app_id);
     assert!(matches!(
-        claim(env, testing::rng::random_principal(), canister_ids.user_index, code1, pem1.clone()),
-        user_index_canister::claim_ai_app_link_code::Response::Success
+        c2c_claim(env, app_canister, canister_ids.user_index, code1, pem1.clone()),
+        user_index_canister::c2c_claim_ai_app_link_code::Response::Success(_)
     ));
     let code2 = create_link_code(env, owner.principal, canister_ids.user_index, app_id);
 
@@ -448,14 +584,13 @@ fn delete_ai_app_leaves_per_user_keys_and_outstanding_codes_behind() {
     );
     assert!(matches!(deleted, user_index_canister::delete_ai_app::Response::Success));
 
-    // PINNED LEAK 1: the per-user delivery key is still listed for the dead app id...
+    // The key is hidden from both the user's list and fan-out as soon as deletion succeeds.
     assert!(
-        my_keys(env, owner.principal, canister_ids.user_index)
+        !my_keys(env, owner.principal, canister_ids.user_index)
             .iter()
             .any(|k| k.app_id == app_id && k.public_key == pem1),
-        "delete_ai_app currently leaves the paired key behind"
+        "delete_ai_app must hide the paired key immediately"
     );
-    // ...and still served to fan-out lookups.
     let user_index_canister::ai_app_user_keys::Response::Success(result) = client::execute_msgpack_query(
         env,
         owner.principal,
@@ -466,13 +601,12 @@ fn delete_ai_app_leaves_per_user_keys_and_outstanding_codes_behind() {
             user_ids: vec![owner.user_id],
         },
     );
-    assert_eq!(result.keys.len(), 1, "fan-out lookup still returns the orphaned key");
+    assert!(result.keys.is_empty(), "fan-out must not return a key queued for deletion");
 
-    // PINNED LEAK 2: an outstanding code minted before deletion still claims successfully,
-    // registering a key for an app that no longer exists (claim never checks app existence).
+    // A pending capability for the deleted app is consumed during the same update.
     let pem2 = P256KeyPair::new(&mut rng).public_key_pem().to_string();
     assert!(matches!(
-        claim(env, testing::rng::random_principal(), canister_ids.user_index, code2, pem2),
-        user_index_canister::claim_ai_app_link_code::Response::Success
+        c2c_claim(env, app_canister, canister_ids.user_index, code2, pem2),
+        user_index_canister::c2c_claim_ai_app_link_code::Response::CodeNotFound
     ));
 }

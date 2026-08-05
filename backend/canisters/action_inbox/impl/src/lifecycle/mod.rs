@@ -9,6 +9,7 @@ use utils::env::canister::CanisterEnv;
 mod init;
 mod post_upgrade;
 mod pre_upgrade;
+mod stable_state;
 
 fn init_env(rng_seed: [u8; 32]) -> Box<CanisterEnv> {
     let canister_env = if rng_seed == [0; 32] {

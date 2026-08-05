@@ -851,9 +851,15 @@ function actionCardContent(value: TActionCardContent): ActionCardContent {
         cancelLabel: value.cancel_label,
         actionId: value.action_id,
         appId: value.app_id,
+        appRevision: value.app_revision,
+        appVerified: value.app_verified,
+        appContentVerified: value.app_content_verified,
         disclosure: value.disclosure,
         state: actionCardState(value.state),
-        respondedBy: value.responded_by !== undefined ? principalBytesToString(value.responded_by) : undefined,
+        respondedBy:
+            value.responded_by !== undefined
+                ? principalBytesToString(value.responded_by)
+                : undefined,
         respondedAt: value.responded_at,
         expiresAt: value.expires_at,
     };
@@ -1620,6 +1626,8 @@ export function apiMessageContent(domain: MessageContent): TMessageContentInitia
                     cancel_label: domain.cancelLabel,
                     action_id: domain.actionId,
                     app_id: domain.appId,
+                    app_revision: domain.appRevision,
+                    app_provenance: domain.appProvenance,
                     disclosure: domain.disclosure,
                     expires_at: domain.expiresAt,
                     recipient_public_key: domain.recipientPublicKey,

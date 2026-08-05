@@ -1,11 +1,16 @@
 <script lang="ts">
     // The one-time consent sheet for a per-user-keys AI app the user hasn't linked yet: shows a
-    // 6-digit pairing code (user_index create_ai_app_link_code) which the user enters in the app;
-    // the app claims it (claim_ai_app_link_code) pushing the user's public key to OpenChat. "Check
+    // high-entropy claim token (user_index create_ai_app_link_code) which the user pastes in the app;
+    // the exact registered app canister calls c2c_claim_ai_app_link_code. Success returns and the app
+    // retains {app_subject, subject_version, app_id, app_revision, app_canister_id, key_version};
+    // revocation binds that exact app-subject/app/key_version/public-key tuple plus timestamp and
+    // signature. The deprecated public
+    // claim_ai_app_link_code method is never an integration path. "Check
     // connection" re-queries my_ai_app_keys and, once the key appears, hands control back to the
     // caller so the propose flow that triggered the sheet resumes automatically.
     import { i18nKey } from "@src/i18n/i18n";
     import { connectSurfaceOpening, openSurfaceExternally } from "@utils/aiAppSurfaces";
+    import { cancelAiAppLinkConsent } from "@utils/aiAppLinkConsent";
     import { Body, BodySmall, CommonButton, Container, Sheet, Title } from "component-lib";
     import type { AiAppLinkCode, AiAppRegistration, OpenChat } from "openchat-client";
     import { getContext } from "svelte";
@@ -16,6 +21,7 @@
     import { now500 } from "../../stores/time";
     import { toastStore } from "../../stores/toast";
     import Translatable from "../Translatable.svelte";
+    import AiAppSurfaceDestination from "../../components/home/AiAppSurfaceDestination.svelte";
 
     const client = getContext<OpenChat>("client");
 
@@ -37,8 +43,11 @@
     let loadingCode = $state(false);
     let codeFailed = $state(false);
     let checking = $state(false);
+    let cancelling = $state(false);
+    let completed = $state(false);
     let notLinkedYet = $state(false);
     let linkCode = $state<AiAppLinkCode | undefined>(undefined);
+    let pendingCodeRequest: Promise<void> | undefined;
 
     let expired = $derived(linkCode !== undefined && $now500 >= Number(linkCode.expiresAt));
     let remaining = $derived(
@@ -53,18 +62,45 @@
         return `${pad(remaining.minutes)}:${pad(remaining.seconds)}`;
     }
 
-    async function fetchCode() {
-        loadingCode = true;
-        codeFailed = false;
-        notLinkedYet = false;
-        // Creating a new code for the same (user, app) replaces the old one, so this doubles as
-        // the "get a new code" action once the current one expires.
-        linkCode = await client.createAiAppLinkCode(app.id);
-        codeFailed = linkCode === undefined;
-        loadingCode = false;
+    function fetchCode(): Promise<void> {
+        if (pendingCodeRequest !== undefined) return pendingCodeRequest;
+        const request = (async () => {
+            loadingCode = true;
+            codeFailed = false;
+            notLinkedYet = false;
+            try {
+                // Creating a new code for the same (user, app) replaces the old one, so this doubles
+                // as the "get a new code" action once the current one expires.
+                linkCode = await client.createAiAppLinkCode(app.id);
+                codeFailed = linkCode === undefined;
+            } catch {
+                linkCode = undefined;
+                codeFailed = true;
+            } finally {
+                loadingCode = false;
+            }
+        })();
+        pendingCodeRequest = request;
+        void request.finally(() => {
+            if (pendingCodeRequest === request) pendingCodeRequest = undefined;
+        });
+        return request;
     }
 
-    fetchCode();
+    void fetchCode();
+
+    async function cancelLink() {
+        if (completed || cancelling) return;
+        cancelling = true;
+        const cancelled = await cancelAiAppLinkConsent(client, app.id, pendingCodeRequest);
+        if (cancelled) {
+            completed = true;
+            onDismiss();
+            return;
+        }
+        cancelling = false;
+        toastStore.showFailureToast(i18nKey("aiApps.disconnectFailed"));
+    }
 
     async function copyCode() {
         if (linkCode === undefined) return;
@@ -81,7 +117,9 @@
         notLinkedYet = false;
         const keys = await client.myAiAppKeys();
         checking = false;
+        if (cancelling || completed) return;
         if (keys.some((k) => k.appId === app.id && k.publicKey.length > 0)) {
+            completed = true;
             onLinked();
         } else {
             notLinkedYet = true;
@@ -89,7 +127,7 @@
     }
 </script>
 
-<Sheet {onDismiss}>
+<Sheet onDismiss={cancelLink}>
     <Container height={"hug"} padding={"xl"} gap={"lg"} direction={"vertical"}>
         <Title fontWeight={"bold"}>
             <Translatable resourceKey={i18nKey("aiApps.linkTitle", { name: app.manifest.name })} />
@@ -103,13 +141,13 @@
             <Translatable
                 resourceKey={i18nKey("aiApps.linkExplain", { name: app.manifest.name })} />
         </Body>
+        <BodySmall colour={"textSecondary"}>
+            Only the exact registered app canister can redeem this code. Replacement keys are versioned
+            so an old disconnect proof cannot revoke the new connection.
+        </BodySmall>
 
         {#if linkCode !== undefined}
-            <div class="code" class:expired>
-                {#each linkCode.code as digit, i (i)}
-                    <div class="digit">{digit}</div>
-                {/each}
-            </div>
+            <code class="code" class:expired>{linkCode.code}</code>
 
             <div class="remaining" class:expired>
                 {#if expired}
@@ -138,6 +176,13 @@
                                     name: app.manifest.name,
                                 })} />
                         </BodySmall>
+                        <div class="connect-destination">
+                            <AiAppSurfaceDestination
+                                title={app.manifest.name}
+                                normalizedUrl={connectSurface.url}
+                                dataDisclosures={connectSurface.dataDisclosures}
+                            />
+                        </div>
                         <CommonButton
                             onClick={() => openSurfaceExternally(client, connectSurface.url)}
                             size={"small_text"}>
@@ -202,7 +247,7 @@
             <CommonButton
                 mode={"active"}
                 loading={checking}
-                disabled={loadingCode || linkCode === undefined}
+                disabled={loadingCode || cancelling || linkCode === undefined}
                 onClick={checkConnection}
                 size={"medium"}>
                 {#snippet icon(color, size)}
@@ -229,24 +274,33 @@
     }
 
     .code {
-        display: flex;
-        gap: 0.5rem;
-        justify-content: center;
+        display: block;
         width: 100%;
-    }
-
-    .digit {
-        font-size: 2rem;
+        box-sizing: border-box;
+        font-family: monospace;
+        font-size: 1rem;
         font-weight: 700;
-        line-height: 1;
-        padding: 0.75rem 0.5rem;
-        min-width: 2.5rem;
+        line-height: 1.5;
+        letter-spacing: 0.08em;
+        overflow-wrap: anywhere;
+        padding: 0.75rem;
         text-align: center;
-        border-bottom: 0.25rem solid var(--primary);
+        border: 0.125rem solid var(--primary);
         border-radius: 0.25rem;
+        user-select: all;
     }
 
-    .code.expired .digit {
+    .connect-destination {
+        display: flex;
+        flex-direction: column;
+        gap: var(--pad-xs);
+        margin: var(--pad-xs) 0;
+        padding: var(--pad-sm);
+        border: var(--bw) solid var(--bd);
+        border-radius: var(--rd);
+    }
+
+    .code.expired {
         opacity: 0.4;
     }
 

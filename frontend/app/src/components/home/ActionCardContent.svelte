@@ -1,52 +1,101 @@
 <script lang="ts">
     import {
         type ActionCardContent,
+        type AiAppCardCapability,
+        aiAppCardChatContext,
         type ChatIdentifier,
-        chatKeyFor,
         OpenChat,
     } from "openchat-client";
     import { getContext, onMount } from "svelte";
     import { currentTheme } from "../../theme/themes";
-    import { cardSurfaceForAction } from "../../utils/aiAppSurfaces";
+    import {
+        appCardFinalConfirmationAvailable,
+        appCardPrivateContextAvailable,
+    } from "../../utils/aiActionAvailability";
+    import {
+        type AuthoritativeAppIdentity,
+        resolveActionAppForCard,
+    } from "../../utils/aiAppSurfaces";
     import {
         buildCardBusy,
+        buildCardBootstrap,
         buildCardInit,
+        buildCardPrivateContextRequest,
+        beginCardCapabilityAttempt,
+        beginCardConfirmationAttempt,
+        canAcceptCardPrivateContextReady,
+        canApproveCardRequest,
+        canonicalCardApprovalSummary,
+        cardAttemptKey,
+        cardCapabilityAttemptStillCurrent,
+        cardConfirmationAttemptStillCurrent,
+        cardApprovalRequestFromMessage,
+        cardResizeHeightFromMessage,
         clampCardHeight,
         decodeConfirmPayload,
+        decodeCardRecipientPublicKey,
         deriveCardOrigin,
-        extractEntriesRow,
-        isCardConfirmPayload,
+        encodeCardConfirmPayload,
+        isCardBridgeEventForFrame,
+        isCardPublicReadyMessage,
+        isAppCardContentAttested,
         isRecord,
+        newCardFrameNonce,
+        supportsCredentiallessIframe,
         reverseMapRows,
+        startCardHandshakeTimeout,
         visibleRows,
+        type CardApprovalRequest,
+        type CardCapabilityAttemptBinding,
+        type CardConfirmationAttemptBinding,
     } from "../../utils/cardBridge";
     import Spinner from "../icons/Spinner.svelte";
+    import AiAppIcon from "./communities/explore/AiAppIcon.svelte";
 
     // Generic interactive confirm card. Two render modes:
     //   1. The card's owning app declares a "card" surface (fork-notes/08-app-rendered-cards.md) → the
     //      app OWNS the pixels: OpenChat embeds the app's page in an iframe and relays confirm/cancel over
-    //      the postMessage bridge. The user can edit values inside the frame; the edited object is passed
-    //      back to `onRespond` as the payload.
-    //   2. No "card" surface → today's behaviour, unchanged: the `rows` shown ARE the exact frozen values
-    //      forwarded to the app on confirm — what the human sees is what gets sent.
+    //      the postMessage bridge. The user can edit values inside the frame; the host snapshots the
+    //      exact encoded bytes, obtains a one-time server grant for those bytes, then passes both on.
+    //   2. No usable "card" surface → a read-only public-row summary. Confirmation fails closed because
+    //      received rows are not the app's authorized exact payload.
     interface Props {
         content: ActionCardContent;
         readonly: boolean;
         // The chat this card lives in — used to locate the owning app's card surface and to build the
         // bridge `context.chatKey`.
         chatId: ChatIdentifier;
-        // On confirm from an app card, `payload` carries the app's final edited object; classic
-        // OC-rendered cards call this with no payload.
-        // `payload` is an object for a single-entry card and a top-level ARRAY for a multi-entry one.
+        messageId: bigint;
+        threadRootMessageIndex?: number;
+        viewerId: string;
+        // App-rendered confirms carry exact encoded bytes plus the matching one-time server grant.
+        // Classic OC-rendered cards call this with neither value and use the stored attested payload.
         onRespond?: (
             response: "confirm" | "cancel",
-            payload?: Record<string, unknown> | unknown[],
+            confirmPayloadOverride?: Uint8Array,
+            confirmationGrant?: Uint8Array,
         ) => void | Promise<unknown>;
     }
 
-    let { content, readonly, chatId, onRespond }: Props = $props();
+    let {
+        content,
+        readonly,
+        chatId,
+        messageId,
+        threadRootMessageIndex,
+        viewerId,
+        onRespond,
+    }: Props = $props();
 
     const client = getContext<OpenChat>("client");
+    let resolvedAppIdentity = $state<AuthoritativeAppIdentity | undefined>(undefined);
+    let candidateAppIdentity = $state<AuthoritativeAppIdentity | undefined>(undefined);
+    let appResolutionComplete = $state(false);
+    let credentiallessSupported = $state(false);
+    let cardContentAttestationBlocked = $state(false);
+    let cardContentAttested = $derived(isAppCardContentAttested(content));
+    const finalConfirmationAvailable = appCardFinalConfirmationAvailable();
+    const privateContextAvailable = appCardPrivateContextAvailable();
 
     // While a confirm/cancel round-trips to the canister (and, on confirm, encrypts + deposits the
     // action), show a spinner and lock both buttons so the press is acknowledged and can't be
@@ -55,29 +104,55 @@
     let busy = $state(false);
     async function doRespond(
         response: "confirm" | "cancel",
-        payload?: Record<string, unknown> | unknown[],
+        confirmPayloadOverride?: Uint8Array,
+        confirmationGrant?: Uint8Array,
     ) {
+        if (
+            response === "confirm" &&
+            (!cardContentAttested ||
+                resolvedAppIdentity === undefined ||
+                !finalConfirmationAvailable)
+        ) return;
+        if (
+            (confirmPayloadOverride === undefined) !== (confirmationGrant === undefined) ||
+            (response === "cancel" &&
+                (confirmPayloadOverride !== undefined || confirmationGrant !== undefined))
+        ) return;
         if (busy) return;
         busy = true;
         try {
-            await onRespond?.(response, payload);
+            await onRespond?.(
+                response,
+                confirmPayloadOverride?.slice(),
+                confirmationGrant?.slice(),
+            );
         } finally {
             busy = false;
         }
     }
     async function respond(response: "confirm" | "cancel", e: Event) {
         e.stopPropagation();
+        if (response === "confirm" && (!cardContentAttested || !finalConfirmationAvailable)) return;
         await doRespond(response);
     }
 
     // A card past its expiry is treated as no longer actionable, matching the canister (which rejects
     // a confirm/cancel on an expired card). Guards against showing live buttons on a stale card.
-    let expired = $derived(content.expiresAt !== undefined && content.expiresAt <= BigInt(Date.now()));
+    let expired = $derived(
+        content.expiresAt !== undefined && content.expiresAt <= BigInt(Date.now()),
+    );
     let pending = $derived(content.state === "pending" && !expired);
     let displayState = $derived(expired && content.state === "pending" ? "expired" : content.state);
     // If the consumer required a disclosure, confirm is gated on the human acknowledging it.
     let acknowledged = $state(false);
-    let canConfirm = $derived(pending && !readonly && (content.disclosure === undefined || acknowledged));
+    let canConfirm = $derived(
+        pending &&
+            !readonly &&
+            resolvedAppIdentity !== undefined &&
+            cardContentAttested &&
+            finalConfirmationAvailable &&
+            (content.disclosure === undefined || acknowledged),
+    );
 
     // Once the card leaves "pending" (confirmed / cancelled / expired) it is "consumed": there is
     // nothing left to act on, so collapse it to just a title + status header. Clicking the header
@@ -96,18 +171,33 @@
     }
 
     // ---- App-rendered card (iframe) -------------------------------------------------------------
-    // The card is actionable exactly when today's buttons would be: pending, not readonly. This is the
-    // ONE gate for the bridge — it feeds `context.readonly` and screens inbound confirm/cancel. (App
-    // cards own their own field validation, so disclosure ack — an OC-rows affordance — is not applied
-    // here; the app renders whatever consent UI it needs inside the frame.)
-    let cardActionable = $derived(pending && !readonly);
-    let cardReadonly = $derived(!cardActionable);
+    // Initial full-card attestation is enough to render the app and to cancel a pending card. It is not
+    // authority for iframe-edited bytes: confirmation remains read-only until a separate server grant
+    // binds the exact final payload to this viewer/card/app revision.
+    let cardCancelable = $derived(
+        pending && !readonly && cardContentAttested && resolvedAppIdentity !== undefined,
+    );
+    let cardConfirmable = $derived(cardCancelable && finalConfirmationAvailable);
+    let cardReadonly = $derived(!cardConfirmable);
 
     // Resolved lazily from the owning app's manifest. While undefined we render today's rows, so an app
     // with no "card" surface (or any lookup failure) is fully backward compatible.
     let cardUrl = $state<string | undefined>(undefined);
     let cardOrigin = $state<string | undefined>(undefined);
     let cardAppId = $state<number | undefined>(undefined);
+    let loadRequested = $state(false);
+    let capabilityPending = $state(false);
+    let privateContextRequested = $state(false);
+    let confirmationGrantFailed = $state(false);
+    let cardLoadFailed = $state(false);
+    let useClassicFallback = $state(false);
+    let cardCapability = $state<AiAppCardCapability | undefined>(undefined);
+    let capabilityAttempt: CardCapabilityAttemptBinding | undefined;
+    let confirmationAttempt: CardConfirmationAttemptBinding | undefined;
+    let cancelPrivateContextTimeout: (() => void) | undefined;
+    let componentMounted = false;
+    let frameNonce = $state(newCardFrameNonce());
+    let approvalRequest = $state<CardApprovalRequest | undefined>(undefined);
     // The owning action's label -> field-key map, used to reverse-map the message's hydrated rows into
     // structured prefill data (the frozen confirmPayload is not hydrated on a received card today).
     let cardLabelToField = $state<Record<string, string>>({});
@@ -119,17 +209,82 @@
     // The iframe has completed its ready→init handshake at least once; gates re-sending init when the
     // context (theme / readonly) changes while the card is open.
     let readySeen = $state(false);
+    // Public card rendering and the optional private-context grant are separate decisions. A verified
+    // ready handshake can render the message's existing card values; only a later host-owned grant may
+    // mint/deliver private viewer context.
+    let cardActivated = $derived(readySeen);
+    let pendingApprovalAllowed = $derived(
+        approvalRequest?.kind === "cancel" ? cardCancelable : cardConfirmable,
+    );
+    let canApprovePendingRequest = $derived(
+        canApproveCardRequest(
+            approvalRequest,
+            pendingApprovalAllowed && cardActivated,
+            busy,
+            content.disclosure !== undefined,
+            acknowledged,
+        ),
+    );
+
+    function currentCardAttemptKey(): string | undefined {
+        const chat = aiAppCardChatContext(chatId, viewerId);
+        if (
+            chat === undefined ||
+            cardAppId === undefined ||
+            content.appRevision === undefined ||
+            resolvedAppIdentity?.id !== cardAppId
+        ) return undefined;
+        return cardAttemptKey({
+            viewerId,
+            chat,
+            messageId,
+            threadRootMessageIndex,
+            appId: cardAppId,
+            appRevision: content.appRevision,
+            actionId: content.actionId,
+        });
+    }
 
     // Detect the owning app's card surface once. actionId + appId + chatId are stable for a given card
     // message (state transitions replace `content` but not its identity), so a single lookup on mount
     // suffices; a cancel token guards the async resolve against a teardown mid-flight. Passing
     // `content.appId` binds resolution to the EXACT producing app (see cardSurfaceForAction) — a legacy
-    // card with no appId falls back to name-based resolution.
+    // card without both appId and appRevision never embeds third-party content.
     onMount(() => {
         let cancelled = false;
-        void cardSurfaceForAction(client, chatId, content.actionId, content.appId).then((opening) => {
-            if (cancelled || opening === undefined) return;
-            const origin = deriveCardOrigin(opening.url);
+        componentMounted = true;
+        credentiallessSupported = supportsCredentiallessIframe();
+        if (content.appVerified !== true) {
+            appResolutionComplete = true;
+            return;
+        }
+        void resolveActionAppForCard(
+            client,
+            chatId,
+            content.actionId,
+            content.appId,
+            content.appRevision,
+        ).then((resolution) => {
+            if (cancelled) return;
+            appResolutionComplete = true;
+            if (resolution === undefined) return;
+            candidateAppIdentity = resolution.identity;
+            const opening = resolution.cardSurface;
+            if (opening === undefined) {
+                resolvedAppIdentity = resolution.identity;
+                return;
+            }
+            if (!cardContentAttested) {
+                // appVerified currently proves only registry coordinates. The sender still controls
+                // title/rows/payload, so do not load trusted app pixels until the backend attests the
+                // complete canonical card content.
+                resolvedAppIdentity = resolution.identity;
+                cardContentAttestationBlocked = true;
+                return;
+            }
+            const origin = deriveCardOrigin(opening.url, {
+                allowLocalDevelopment: import.meta.env.DEV,
+            });
             // No parseable origin → decline to embed; stay on the OC-rendered rows rather than talk to
             // an unknown origin.
             if (origin === undefined) return;
@@ -140,74 +295,300 @@
         });
         return () => {
             cancelled = true;
+            componentMounted = false;
+            cancelPrivateContextTimeout?.();
+            capabilityAttempt = undefined;
+            confirmationAttempt = undefined;
         };
     });
 
     function postInit() {
         const target = iframeEl?.contentWindow;
-        if (target === null || target === undefined || cardOrigin === undefined) return;
-        // Prefill precedence:
-        //   1. A MULTI-entry card carries its exact validated entry array through a hidden sentinel row
-        //      (confirm_payload is stripped on read, but rows are hydrated). When present we deliver
-        //      `{ entries: [...] }` so the app card renders every entry (2..N) instead of the flattened
-        //      per-entry summaries reverse-mapped into one object.
-        //   2. Else the decoded confirmPayload wins WHEN present (future-proof — the moment the canister
-        //      hydrates confirm_payload on receive, the exact frozen object flows straight through).
-        //   3. Else (today's single-entry received card) reverse-map the hydrated {label, value} rows onto
-        //      the manifest's field keys — recovering the real extracted values instead of an empty form.
-        const entries = extractEntriesRow(content.rows);
+        if (
+            target === null ||
+            target === undefined ||
+            cardOrigin === undefined ||
+            cardAppId === undefined ||
+            content.appRevision === undefined
+        ) return;
+        // The locally available exact confirmPayload wins. Received cards intentionally do not hydrate
+        // it, so their public init is reconstructed only from safe manifest-mapped public rows. Private
+        // app data is never recovered from a hidden row; it requires the separately authorized encrypted
+        // private-context path.
         const decoded = decodeConfirmPayload(content.confirmPayload);
         const data: Record<string, unknown> =
-            entries !== undefined
-                ? { entries }
-                : Object.keys(decoded).length > 0
-                  ? decoded
-                  : reverseMapRows(content.rows, cardLabelToField);
+            Object.keys(decoded).length > 0
+                ? decoded
+                : reverseMapRows(content.rows, cardLabelToField);
         const init = buildCardInit(data, {
-            chatKey: chatKeyFor(chatId),
-            appId: cardAppId ?? 0,
+            appId: cardAppId,
+            appRevision: content.appRevision,
             actionId: content.actionId,
             theme: $currentTheme.mode,
             readonly: cardReadonly,
-        });
-        target.postMessage(init, cardOrigin);
+            privateContext: cardCapability,
+        }, frameNonce);
+        // `sandbox="allow-scripts"` gives the frame an opaque origin, so targetOrigin must be `*`.
+        // The target is the exact frame WindowProxy and every protocol message is bound to frameNonce.
+        target.postMessage(init, "*");
     }
 
-    // The single window listener for the bridge. Origin-checked BOTH ways: we ignore any message whose
-    // origin is not the card's registered surface origin, and (belt-and-braces) any not sourced from our
-    // own iframe. confirm/cancel are additionally screened by `cardActionable`, mirroring today's gating.
+    // The single window listener for the bridge. `allow-scripts` without `allow-same-origin` makes the
+    // sender origin opaque (`null`), so every message must also come from this exact iframe WindowProxy
+    // and carry its fresh per-load nonce. Confirm/cancel then pass separate host authority gates.
+    function resetFrameSession() {
+        cancelPrivateContextTimeout?.();
+        cancelPrivateContextTimeout = undefined;
+        frameNonce = newCardFrameNonce();
+        readySeen = false;
+        capabilityPending = false;
+        privateContextRequested = false;
+        cardCapability = undefined;
+        capabilityAttempt = undefined;
+        confirmationAttempt = undefined;
+        confirmationGrantFailed = false;
+        approvalRequest = undefined;
+        acknowledged = false;
+        resolvedAppIdentity = undefined;
+    }
+
+    function requestCardLoad(e: Event) {
+        e.stopPropagation();
+        cardLoadFailed = false;
+        useClassicFallback = false;
+        loadRequested = true;
+        resetFrameSession();
+    }
+
+    function chooseClassicFallback(e: Event) {
+        e.stopPropagation();
+        loadRequested = false;
+        useClassicFallback = true;
+        resetFrameSession();
+    }
+
+    function requestPrivateContext(e: Event) {
+        e.stopPropagation();
+        const target = iframeEl?.contentWindow;
+        if (
+            !privateContextAvailable ||
+            !cardActivated ||
+            !pending ||
+            readonly ||
+            cardCapability !== undefined ||
+            capabilityPending ||
+            target === null ||
+            target === undefined ||
+            currentCardAttemptKey() === undefined
+        ) return;
+        privateContextRequested = true;
+        capabilityPending = true;
+        const requestedNonce = frameNonce;
+        cancelPrivateContextTimeout?.();
+        cancelPrivateContextTimeout = startCardHandshakeTimeout(() => {
+            if (frameNonce !== requestedNonce || !privateContextRequested) return;
+            privateContextRequested = false;
+            capabilityPending = false;
+        });
+        target.postMessage(buildCardPrivateContextRequest(frameNonce), "*");
+    }
+
+    async function mintPrivateContextCapability(
+        recipientKeyScheme: string,
+        recipientPublicKey: Uint8Array,
+    ) {
+        const cardKey = currentCardAttemptKey();
+        if (cardKey === undefined || !privateContextRequested) return;
+        const binding: CardCapabilityAttemptBinding = {
+            frameNonce,
+            recipientKeyScheme,
+            recipientPublicKey,
+            cardKey,
+        };
+        const attempt = beginCardCapabilityAttempt(capabilityAttempt, binding);
+        if (attempt === undefined) return;
+        capabilityAttempt = attempt;
+        privateContextRequested = false;
+        cancelPrivateContextTimeout?.();
+        cancelPrivateContextTimeout = undefined;
+        try {
+            const capability = await client.createAiAppCardCapability(
+                chatId,
+                threadRootMessageIndex,
+                messageId,
+                attempt.recipientKeyScheme,
+                attempt.recipientPublicKey.slice(),
+            );
+            const currentKey = currentCardAttemptKey();
+            if (currentKey === undefined) return;
+            const current: CardCapabilityAttemptBinding = {
+                frameNonce,
+                recipientKeyScheme: attempt.recipientKeyScheme,
+                recipientPublicKey: attempt.recipientPublicKey,
+                cardKey: currentKey,
+            };
+            if (
+                capability === undefined ||
+                capability.expiresAt <= BigInt(Date.now()) ||
+                !cardCapabilityAttemptStillCurrent(attempt, current, componentMounted)
+            ) return;
+            cardCapability = capability;
+            postInit();
+        } finally {
+            if (capabilityAttempt === attempt) capabilityAttempt = undefined;
+            capabilityPending = false;
+        }
+    }
+
+    function onIframeLoad() {
+        resetFrameSession();
+        const target = iframeEl?.contentWindow;
+        if (target != null) target.postMessage(buildCardBootstrap(frameNonce), "*");
+    }
+
     function onBridgeMessage(event: MessageEvent) {
-        if (cardOrigin === undefined || event.origin !== cardOrigin) return;
-        if (iframeEl !== undefined && event.source !== iframeEl.contentWindow) return;
+        if (
+            iframeEl === undefined ||
+            !isCardBridgeEventForFrame(event, iframeEl.contentWindow, "null", frameNonce)
+        ) return;
         const msg = event.data;
         if (!isRecord(msg)) return;
         switch (msg.type) {
             case "oc:card:ready":
+                if (readySeen) return;
+                // Public rendering requires no recipient key. Key generation/disclosure starts only
+                // after the separate host-owned private-context grant.
+                if (!isCardPublicReadyMessage(msg, frameNonce) || candidateAppIdentity === undefined)
+                    return;
+                resolvedAppIdentity = candidateAppIdentity;
                 readySeen = true;
-                postInit();
+                cardLoadFailed = false;
                 break;
             case "oc:card:resize":
-                if (typeof msg.height === "number") {
-                    cardHeight = clampCardHeight(msg.height, MIN_CARD_HEIGHT, MAX_CARD_HEIGHT);
+                if (cardActivated) {
+                    const height = cardResizeHeightFromMessage(msg, frameNonce);
+                    if (height !== undefined) {
+                        cardHeight = clampCardHeight(height, MIN_CARD_HEIGHT, MAX_CARD_HEIGHT);
+                    }
                 }
                 break;
+            case "oc:card:private-context-ready": {
+                if (
+                    !canAcceptCardPrivateContextReady({
+                        explicitlyRequested: privateContextRequested,
+                        featureAvailable: privateContextAvailable,
+                        alreadyGranted: cardCapability !== undefined,
+                        pending,
+                        readonly,
+                    })
+                ) return;
+                const recipientKey = decodeCardRecipientPublicKey(msg, frameNonce);
+                if (recipientKey === undefined) return;
+                void mintPrivateContextCapability(
+                    recipientKey.scheme,
+                    recipientKey.publicKey,
+                );
+                break;
+            }
             case "oc:card:confirm":
-                if (!cardActionable || busy) return;
-                void doRespond("confirm", isCardConfirmPayload(msg.payload) ? msg.payload : undefined);
+                if (!cardConfirmable || busy || !cardActivated) return;
+                approvalRequest = cardApprovalRequestFromMessage(msg, frameNonce);
                 break;
             case "oc:card:cancel":
-                if (!cardActionable || busy) return;
-                void doRespond("cancel");
+                if (!cardCancelable || busy || !cardActivated) return;
+                approvalRequest = cardApprovalRequestFromMessage(msg, frameNonce);
                 break;
+        }
+    }
+
+    function dismissApproval(e: Event) {
+        e.stopPropagation();
+        approvalRequest = undefined;
+        acknowledged = false;
+    }
+
+    async function approveRequest(e: Event) {
+        e.stopPropagation();
+        const request = approvalRequest;
+        if (
+            !canApproveCardRequest(
+                request,
+                (request?.kind === "cancel" ? cardCancelable : cardConfirmable) && cardActivated,
+                busy,
+                content.disclosure !== undefined,
+                acknowledged,
+            ) ||
+            request === undefined
+        ) return;
+        approvalRequest = undefined;
+        confirmationGrantFailed = false;
+        if (request.kind === "cancel") {
+            await doRespond("cancel");
+            return;
+        }
+
+        const confirmPayload = encodeCardConfirmPayload(request);
+        const cardKey = currentCardAttemptKey();
+        if (confirmPayload === undefined || cardKey === undefined) return;
+        const binding: CardConfirmationAttemptBinding = {
+            frameNonce,
+            cardKey,
+            confirmPayload,
+        };
+        const attempt = beginCardConfirmationAttempt(confirmationAttempt, binding);
+        if (attempt === undefined) return;
+        confirmationAttempt = attempt;
+        busy = true;
+        try {
+            const grant = await client.createAiAppCardConfirmationGrant(
+                chatId,
+                threadRootMessageIndex,
+                messageId,
+                attempt.confirmPayload.slice(),
+            );
+            const currentKey = currentCardAttemptKey();
+            if (currentKey === undefined) return;
+            const current: CardConfirmationAttemptBinding = {
+                frameNonce,
+                cardKey: currentKey,
+                confirmPayload: attempt.confirmPayload,
+            };
+            if (!cardConfirmationAttemptStillCurrent(attempt, current, componentMounted)) return;
+            if (grant === undefined || grant.expiresAt <= BigInt(Date.now())) {
+                confirmationGrantFailed = true;
+                return;
+            }
+            // The opaque grant never enters the iframe, URL, storage, or logs. The exact byte copy
+            // attested above is passed with it to the authoritative chat canister exactly once.
+            await onRespond?.(
+                "confirm",
+                attempt.confirmPayload.slice(),
+                grant.grant.slice(),
+            );
+        } finally {
+            if (confirmationAttempt === attempt) confirmationAttempt = undefined;
+            busy = false;
+            acknowledged = false;
         }
     }
 
     $effect(() => {
         // Only listen once we actually have an embedded card; teardown removes it (Svelte runs the
         // returned cleanup on destroy and before each re-run).
-        if (cardUrl === undefined) return;
+        if (cardUrl === undefined || !loadRequested) return;
         window.addEventListener("message", onBridgeMessage);
         return () => window.removeEventListener("message", onBridgeMessage);
+    });
+
+    $effect(() => {
+        if (cardUrl === undefined || !loadRequested || readySeen) return;
+        const expectedNonce = frameNonce;
+        return startCardHandshakeTimeout(() => {
+            if (!loadRequested || readySeen || frameNonce !== expectedNonce) return;
+            loadRequested = false;
+            cardLoadFailed = true;
+            resetFrameSession();
+        });
     });
 
     $effect(() => {
@@ -224,17 +605,51 @@
     $effect(() => {
         // Relay the confirm/cancel round-trip state (`busy`) into the app card so it can lock its own
         // in-frame buttons and show progress. Reading `busy` registers it as the dependency. Posted only
-        // to the card's own origin, only after the handshake; a bare boolean carries no data. The confirm
-        // handler already screens re-entrancy (`!cardActionable || busy`), so this is presentation-only.
+        // to the exact frame WindowProxy after the handshake; a bare boolean carries no data. The confirm
+        // handler already screens re-entrancy and per-action authority, so this is presentation-only.
         const _busy = busy;
         const target = iframeEl?.contentWindow;
         if (readySeen && cardUrl !== undefined && cardOrigin !== undefined && target != null) {
-            target.postMessage(buildCardBusy(_busy), cardOrigin);
+            target.postMessage(buildCardBusy(_busy, frameNonce), "*");
+        }
+    });
+
+    $effect(() => {
+        // Any state/context transition invalidates a pending iframe request. The user must approve a
+        // fresh snapshot from the currently active frame/card, never a stale request.
+        const valid = cardCancelable && cardActivated && loadRequested && content.state === "pending";
+        void messageId;
+        void cardOrigin;
+        if (!valid) {
+            approvalRequest = undefined;
+            acknowledged = false;
         }
     });
 </script>
 
 <div class="action-card" class:collapsed class:has-frame={cardUrl !== undefined}>
+    <div
+        class="app-identity"
+        class:unverified={!cardContentAttested || (appResolutionComplete && resolvedAppIdentity === undefined)}
+        aria-live="polite"
+    >
+        {#if resolvedAppIdentity !== undefined}
+            <AiAppIcon iconUrl={resolvedAppIdentity.iconUrl} size={"1.5rem"} />
+            <div class="app-identity-text">
+                <span class="app-name">Directory entry: {resolvedAppIdentity.name}</span>
+                <span class="app-id">App ID <code>{resolvedAppIdentity.id}</code></span>
+            </div>
+        {:else if appResolutionComplete}
+            <span class="app-verification">Unverified card binding</span>
+            <span class="app-id">Directory coordinates unavailable</span>
+        {:else}
+            <span class="app-verification">Verifying app identity…</span>
+        {/if}
+        {#if resolvedAppIdentity !== undefined}
+            <span class="app-verification">Directory binding only; card content is untrusted</span>
+        {/if}
+    </div>
+
     <!-- Header: the title, plus (once consumed) the status and a chevron. Clicking a CONSUMED
          card's header toggles the collapse; while pending it is inert. stopPropagation (in
          toggleCollapsed) matters because the mobile bubble is wrapped in a MenuTrigger — an
@@ -251,8 +666,12 @@
                 e.preventDefault();
                 toggleCollapsed(e);
             }
-        }}>
-        <div class="title">{content.title}</div>
+        }}
+    >
+        <div class="sender-title">
+            <span class="sender-title-label">Untrusted card text</span>
+            <span class="title">{content.title}</span>
+        </div>
         {#if consumed}
             <div class="state state-{displayState}">{displayState}</div>
             <span class="chevron" class:collapsed>▾</span>
@@ -260,10 +679,47 @@
     </div>
 
     {#if !collapsed}
-        {#if cardUrl !== undefined}
-            <!-- App-rendered card: the owning app owns the pixels AND the confirm/cancel controls, which
-                 arrive over the bridge. sandbox="allow-scripts allow-same-origin" lets the app's page run
-                 and hold its own (storage-partitioned) session; the height is driven by oc:card:resize. -->
+        {#if cardUrl !== undefined && !useClassicFallback}
+            {#if !loadRequested}
+                <div class="card-load-gate">
+                    <strong>{candidateAppIdentity?.name ?? "Registered app"}</strong>
+                    <span>
+                        App ID <code>{candidateAppIdentity?.id ?? cardAppId}</code>
+                    </span>
+                    <span>Destination: <code>{cardOrigin}</code></span>
+                    <span>Exact card URL: <code>{cardUrl}</code></span>
+                    <span>
+                        Loading contacts this external origin and shares the existing card fields plus
+                        app/revision/action, message, optional thread, and stable chat identifiers. In
+                        a direct chat, the chat identity contains both participant identifiers.
+                    </span>
+                    <span>
+                        If you separately grant private context later, redemption also reveals your
+                        stable OpenChat user ID and this tab's recipient-key scheme/public key, then
+                        returns encrypted app-defined private data. Capabilities never enter this URL.
+                    </span>
+                    <button
+                        disabled={readonly || !pending || !credentiallessSupported}
+                        onclick={requestCardLoad}
+                    >
+                        {cardLoadFailed ? "Retry app card" : "Load app card"}
+                    </button>
+                    {#if !credentiallessSupported}
+                        <span class="card-load-error">
+                            Secure embedded loading is unavailable in this browser.
+                        </span>
+                    {/if}
+                    {#if cardLoadFailed}
+                        <span class="card-load-error">
+                            The app card did not complete its isolated handshake in time.
+                        </span>
+                        <button onclick={chooseClassicFallback}>Use read-only OpenChat summary</button>
+                    {/if}
+                </div>
+            {:else}
+            <div class="untrusted-frame-label">Untrusted app content</div>
+            <!-- App-rendered card pixels remain untrusted. The opaque sandbox prevents redirects from
+                 inheriting any destination origin; the height is driven by the nonce-bound bridge. -->
             <!-- credentialless: OpenChat is cross-origin-isolated (COEP: credentialless) for its wasm
                  inference, which otherwise ERR_BLOCKED_BY_RESPONSE a cross-origin iframe. The
                  credentialless attribute loads the app card in an anonymous context (no cookies /
@@ -272,16 +728,125 @@
             <iframe
                 bind:this={iframeEl}
                 class="card-frame"
-                title={content.title}
+                class:inactive={!cardActivated}
+                title="Isolated action app card"
                 src={cardUrl}
                 credentialless
-                sandbox="allow-scripts allow-same-origin"
-                style={`height: ${cardHeight}px;`}></iframe>
+                sandbox="allow-scripts"
+                referrerpolicy="no-referrer"
+                onload={onIframeLoad}
+                style={`height: ${cardActivated ? cardHeight : 1}px;`}
+            ></iframe>
+            {#if !cardActivated}
+                <div class="card-loading" aria-live="polite">
+                    {capabilityPending ? "Verifying app card…" : "Waiting for the isolated app…"}
+                </div>
+            {/if}
+
+            {#if approvalRequest !== undefined && cardActivated}
+                <div class="host-approval" role="group" aria-label="Approve app card request">
+                    <strong>
+                        {approvalRequest.kind === "confirm"
+                            ? "The app requests confirmation"
+                            : "The app requests cancellation"}
+                    </strong>
+                    <pre class="approval-summary">{canonicalCardApprovalSummary(approvalRequest)}</pre>
+                    {#if approvalRequest.kind === "confirm" && content.disclosure !== undefined}
+                        <label class="disclosure" onclick={(e) => e.stopPropagation()}>
+                            <input type="checkbox" bind:checked={acknowledged} disabled={busy} />
+                            <span>{content.disclosure}</span>
+                        </label>
+                    {/if}
+                    <div class="actions">
+                        <button class="cancel" disabled={busy} onclick={dismissApproval}>Dismiss</button>
+                        <button
+                            class="confirm"
+                            disabled={!canApprovePendingRequest}
+                            onclick={approveRequest}
+                        >
+                            {#if busy}
+                                <Spinner size="1.1em" foregroundColour="transparent" />
+                            {:else if approvalRequest.kind === "confirm"}
+                                Confirm request
+                            {:else}
+                                Cancel card
+                            {/if}
+                        </button>
+                    </div>
+                </div>
+            {/if}
+
+            {#if cardActivated && cardCancelable && !finalConfirmationAvailable}
+                <div class="host-approval" role="group" aria-label="Card actions">
+                    <span class="card-load-error">
+                        Confirmation is disabled until the server binds the exact final payload to
+                        this viewer, card, and app revision.
+                    </span>
+                    <div class="actions">
+                        <button
+                            class="cancel"
+                            disabled={busy}
+                            onclick={(e) => respond("cancel", e)}>Cancel card</button>
+                    </div>
+                </div>
+            {/if}
+
+            {#if confirmationGrantFailed}
+                <div class="card-load-error" role="alert">
+                    The exact confirmation payload could not be authorized. Review the request and try
+                    again; no payload was submitted.
+                </div>
+            {/if}
+
+            {#if cardActivated && cardCapability === undefined}
+                <div class="private-context-consent">
+                    <strong>Private app context is not shared</strong>
+                    <span>
+                        A separate grant can let the registered app show viewer-owned details, such as
+                        an account-defined type. Redemption is bound to this viewer, chat, thread,
+                        message, app revision, action, frame nonce, and recipient key. OpenChat treats
+                        the returned app payload as opaque.
+                    </span>
+                    <button
+                        disabled={!privateContextAvailable || capabilityPending || !pending || readonly}
+                        onclick={requestPrivateContext}
+                    >
+                        {capabilityPending ? "Preparing private context…" : "Share private context"}
+                    </button>
+                    {#if !privateContextAvailable}
+                        <span>
+                            Private-context grant remains disabled until the backend and registered app
+                            redemption/decryption contracts align.
+                        </span>
+                    {:else}
+                        <span>
+                            The short-lived capability is delivered only to this isolated frame and is
+                            never stored or shown in the URL. Other chat members receive no
+                            viewer-private fields.
+                        </span>
+                    {/if}
+                </div>
+            {/if}
+            {/if}
         {:else}
+            {#if cardContentAttestationBlocked}
+                <div class="card-load-error" role="alert">
+                    This card's app/revision/action coordinates match the directory, but its title,
+                    rows, and payload are not attested as app-authored. App rendering and confirmation
+                    are disabled.
+                </div>
+            {/if}
+            {#if cardUrl !== undefined && useClassicFallback}
+                <div class="card-load-error" role="status">
+                    Showing the OpenChat summary only. Exact app payload is not available to this
+                    authorized view, so confirmation is disabled.
+                    <button onclick={requestCardLoad}>Retry isolated app card</button>
+                </div>
+            {/if}
             <table class="rows">
                 <tbody>
-                    <!-- Hidden control rows (a multi-entry card's __oc_ sentinel) carry data to the app
-                         card only; the classic renderer never displays them. -->
+                    <!-- Reserved legacy rows are discarded fail-closed; they are never parsed or
+                         forwarded as app data. -->
                     {#each visibleRows(content.rows) as row}
                         <tr>
                             <td class="label">{row.label}</td>
@@ -297,25 +862,34 @@
                     <input
                         type="checkbox"
                         bind:checked={acknowledged}
-                        disabled={!pending || readonly} />
+                        disabled={!pending || readonly || !cardContentAttested}
+                    />
                     <span>{content.disclosure}</span>
                 </label>
             {/if}
 
             {#if pending}
+                {#if !cardContentAttested}
+                    <span class="card-load-error">
+                        Confirmation requires a verified app-rendered card or an authorized
+                        exact-payload endpoint.
+                    </span>
+                {/if}
                 <!-- stopPropagation: in the mobile layout the whole bubble is wrapped in a MenuTrigger, so an
                      unstopped click on these controls would also open the message context menu. -->
                 <div class="actions">
                     <button
                         class="cancel"
                         disabled={readonly || busy}
-                        onclick={(e) => respond("cancel", e)}>
+                        onclick={(e) => respond("cancel", e)}
+                    >
                         {content.cancelLabel}
                     </button>
                     <button
                         class="confirm"
                         disabled={!canConfirm || busy}
-                        onclick={(e) => respond("confirm", e)}>
+                        onclick={(e) => respond("confirm", e)}
+                    >
                         {#if busy}
                             <Spinner size="1.1em" foregroundColour="transparent" />
                         {:else}
@@ -367,6 +941,48 @@
         }
     }
 
+    .app-identity {
+        display: flex;
+        align-items: center;
+        gap: $sp2;
+        min-width: 0;
+        padding-bottom: $sp2;
+        border-bottom: var(--bw) solid var(--bd);
+        font-size: var(--font-size-small, 0.85em);
+
+        &.unverified {
+            color: var(--warning);
+        }
+    }
+
+    .app-identity-text {
+        display: flex;
+        align-items: baseline;
+        gap: $sp2;
+        min-width: 0;
+        flex-wrap: wrap;
+    }
+
+    .app-name,
+    .app-verification {
+        font-weight: 700;
+    }
+
+    .app-name {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .app-id {
+        color: var(--currentChat-msg-muted);
+        white-space: nowrap;
+
+        code {
+            font-family: monospace;
+        }
+    }
+
     .header {
         display: flex;
         align-items: center;
@@ -376,6 +992,23 @@
         &.clickable {
             cursor: pointer;
         }
+    }
+
+    .sender-title {
+        display: flex;
+        align-items: baseline;
+        gap: $sp2;
+        flex: 1;
+        min-width: 0;
+    }
+
+    .sender-title-label {
+        color: var(--currentChat-msg-muted);
+        font-size: 0.72em;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        white-space: nowrap;
     }
 
     .title {
@@ -411,6 +1044,56 @@
         background-color: transparent;
         // Height is authoritative from the resize bridge; this is only the pre-handshake floor.
         min-height: 140px;
+
+        &.inactive {
+            position: absolute;
+            width: 1px;
+            min-height: 0;
+            visibility: hidden;
+            pointer-events: none;
+        }
+    }
+
+    .card-load-gate,
+    .card-loading,
+    .host-approval,
+    .private-context-consent {
+        display: flex;
+        flex-direction: column;
+        gap: $sp2;
+        padding: $sp3;
+        border: var(--bw) solid var(--bd);
+        border-radius: var(--rd);
+    }
+
+    .card-load-gate button,
+    .private-context-consent button {
+        align-self: flex-start;
+    }
+
+    .card-load-error {
+        color: var(--warning);
+    }
+
+    .untrusted-frame-label {
+        color: var(--warning);
+        font-size: 0.8em;
+        font-weight: 700;
+    }
+
+    .approval-summary {
+        max-height: 14rem;
+        margin: 0;
+        padding: $sp2;
+        overflow: auto;
+        border: var(--bw) solid var(--bd);
+        border-radius: var(--rd);
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        direction: ltr;
+        unicode-bidi: plaintext;
+        isolation: isolate;
+        font: inherit;
     }
 
     .rows {

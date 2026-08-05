@@ -1,11 +1,11 @@
 use candid::CandidType;
 use serde::{Deserialize, Serialize};
-use types::Empty;
+use types::CanisterId;
 
-pub type Args = Empty;
+#[derive(CandidType, Serialize, Deserialize, Debug)]
+pub struct Args {}
 
 #[derive(CandidType, Serialize, Deserialize, Debug)]
 pub enum Response {
-    // PEM of the platform key that signs deposits.
-    Success(String),
+    Success(Option<CanisterId>),
 }

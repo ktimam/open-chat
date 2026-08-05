@@ -1,0 +1,49 @@
+name: OpenChat PR2 security policy
+
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - ".github/dependabot.yml"
+      - ".github/security/openchat-pr2-security-baseline.json"
+      - ".github/workflows/openchat_pr2_security.yaml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "backend/**/Cargo.toml"
+      - "frontend/**/package.json"
+      - "frontend/package-lock.json"
+      - "scripts/check_openchat_pr2_security.mjs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dependency-security:
+    name: Dependency delta, advisories and licenses
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Set up exact supported Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24.18.1"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install exact frontend lockfile
+        working-directory: frontend
+        run: npm ci
+      - name: Enforce CI, Dependabot and npm policy
+        run: node scripts/check_openchat_pr2_security.mjs ci npm
+      - name: Install pinned RustSec scanner
+        run: cargo install cargo-audit --locked --version 0.22.2
+      - name: Enforce RustSec, lock delta and direct dependency licenses
+        run: node scripts/check_openchat_pr2_security.mjs rust licenses

@@ -12,8 +12,8 @@ pub struct Args {
 #[ts_export(user_index, remove_my_ai_app_key)]
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Response {
-    /// The (user, app) key was removed, or there was none to begin with (idempotent — a disconnect
-    /// should always report success).
+    /// The exact (user, app) consent was cancelled. This removes a present key and also invalidates
+    /// pending link codes/private-card capabilities before a key has been claimed.
     Success,
     InvalidRequest(String),
     Error(OCError),

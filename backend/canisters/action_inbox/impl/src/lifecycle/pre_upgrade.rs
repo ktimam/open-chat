@@ -1,3 +1,4 @@
+use crate::lifecycle::stable_state;
 use crate::memory::get_upgrades_memory;
 use crate::take_state;
 use canister_tracing_macros::trace;
@@ -16,12 +17,8 @@ fn pre_upgrade() {
 
     let errors = canister_logger::export_errors();
     let logs = canister_logger::export_logs();
-    let traces = canister_logger::export_traces();
-
-    let stable_state = (&state.data, errors, logs, traces);
-
     let mut memory = get_upgrades_memory();
     let writer = get_writer(&mut memory);
 
-    msgpack::serialize(stable_state, writer).unwrap();
+    stable_state::write(writer, &state.data, errors, logs);
 }

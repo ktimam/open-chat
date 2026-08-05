@@ -1,15 +1,19 @@
-
 <script lang="ts">
     import { navigate } from "@utils/navigation";
     import {
         manualExtractEnabled,
         proposeAndPost,
         proposeAndPostCandidate,
+        preflightAiActionForMessage,
         runProposeFlow,
         type AiActionCandidate,
     } from "@utils/aiActionRunner";
     import { canInferOnDevice } from "@utils/onDeviceInference";
-    import { openSurfaceExternally, surfaceToOpenAfterConfirm } from "@utils/aiAppSurfaces";
+    import {
+        markSurfaceShownAfterConsent,
+        surfaceToOpenAfterConfirm,
+        type SurfaceOpening,
+    } from "@utils/aiAppSurfaces";
     import {
         autoProposeSuggestions,
         dismissAutoProposeSuggestion,
@@ -18,7 +22,36 @@
     import Typing from "@shared_components/Typing.svelte";
     import { trackedEffect } from "@src/utils/effects.svelte";
     import type { ProfileLinkClickedEvent } from "@webcomponents/profileLink";
-    import { type AiAppRegistration, AvatarSize, type ChatIdentifier, chatListScopeStore, type ChatType, currentUserIdStore, currentUserStore, type EnhancedReplyContext, iconSize, localUpdates, type Message, type MessageReminderCreatedContent, mobileWidth, OpenChat, publish, routeForMessage, routeStore, screenWidth, ScreenWidth, selectedChatBlockedUsersStore, selectedChatWebhooksStore, selectedCommunityMembersStore, type SelectedEmoji, type SenderContext, translationsStore, unconfirmedReadByThem, undeletingMessagesStore, type UserSummary } from "openchat-client";
+    import {
+        type AiAppRegistration,
+        AvatarSize,
+        type ChatIdentifier,
+        chatListScopeStore,
+        type ChatType,
+        currentUserIdStore,
+        currentUserStore,
+        type EnhancedReplyContext,
+        iconSize,
+        localUpdates,
+        type Message,
+        type MessageReminderCreatedContent,
+        mobileWidth,
+        OpenChat,
+        publish,
+        routeForMessage,
+        routeStore,
+        screenWidth,
+        ScreenWidth,
+        selectedChatBlockedUsersStore,
+        selectedChatWebhooksStore,
+        selectedCommunityMembersStore,
+        type SelectedEmoji,
+        type SenderContext,
+        translationsStore,
+        unconfirmedReadByThem,
+        undeletingMessagesStore,
+        type UserSummary,
+    } from "openchat-client";
     import { getContext, onDestroy, onMount, tick } from "svelte";
     import { _ } from "svelte-i18n";
     import Close from "svelte-material-icons/Close.svelte";
@@ -29,7 +62,10 @@
     import { i18nKey } from "../../i18n/i18n";
     import { quickReactions } from "../../stores/quickReactions";
     import { rtlStore } from "../../stores/rtl";
-    import { autoProposeSuggestions as autoProposeEnabled, dclickReply } from "../../stores/settings";
+    import {
+        autoProposeSuggestions as autoProposeEnabled,
+        dclickReply,
+    } from "../../stores/settings";
     import { now } from "../../stores/time";
     import { toastStore } from "../../stores/toast";
     import { isTouchOnlyDevice } from "../../utils/devices";
@@ -42,6 +78,7 @@
     import Link from "../Link.svelte";
     import ModalContent from "../ModalContent.svelte";
     import AiAppLinkModal from "./AiAppLinkModal.svelte";
+    import AiAppSurfaceModal from "./AiAppSurfaceModal.svelte";
     import Overlay from "../Overlay.svelte";
     import Translatable from "../Translatable.svelte";
     import AutoProposeChip from "./AutoProposeChip.svelte";
@@ -284,7 +321,10 @@
     // model must never see a raw JSON box — they're guided to set one up (runProposeFlow says so). It
     // runs solely when `manualExtractEnabled()` is set (localStorage flag / ?manualExtract=1), which
     // the automated journey harness uses to drive the confirm → deposit cycle without a model.
-    function promptForExtraction(): Record<string, unknown> | Record<string, unknown>[] | undefined {
+    function promptForExtraction():
+        | Record<string, unknown>
+        | Record<string, unknown>[]
+        | undefined {
         if (!manualExtractEnabled()) return undefined;
         const raw = window.prompt(
             'Enter the action\'s fields as JSON to propose it, e.g. {"amount":20,"currency":"USD"}',
@@ -312,11 +352,12 @@
     }
 
     // A per-user-keys app the user hasn't linked opens the proper pairing modal (AiAppLinkModal: a
-    // 6-digit code, countdown, and "Check connection" that only reports success once my_ai_app_keys
+    // high-entropy claim token, countdown, and "Check connection" that only reports success once my_ai_app_keys
     // actually shows the key). `linkModalApp` renders it; `linkModalResolve` bridges its async result
     // back to this imperative flow so the propose that triggered it resumes on success.
     let linkModalApp = $state<AiAppRegistration | undefined>(undefined);
     let linkModalResolve: ((linked: boolean) => void) | undefined;
+    let confirmSurface = $state<SurfaceOpening | undefined>(undefined);
 
     function closeLinkModal(linked: boolean) {
         linkModalApp = undefined;
@@ -348,6 +389,7 @@
         proposing = true;
         try {
             await runProposeFlow({
+                preflight: () => preflightAiActionForMessage(client, messageContext.chatId),
                 canInfer: canInferOnDevice,
                 promptForExtraction,
                 propose: (extraction) =>
@@ -496,17 +538,26 @@
 
     function onRespondToActionCard(
         response: "confirm" | "cancel",
-        // App-rendered cards pass the user's edited object here (from the iframe bridge); classic
-        // OC-rendered cards omit it.
-        payload?: Record<string, unknown> | unknown[],
+        confirmPayloadOverride?: Uint8Array,
+        confirmationGrant?: Uint8Array,
     ): Promise<void> {
         // Capture before the async round-trip: the card content is replaced when its state
         // refreshes to "confirmed". The promise is returned so the card can show a spinner and lock
         // its buttons until the confirm/cancel (and its downstream deposit) resolves.
         const actionId =
             msg.content.kind === "action_card_content" ? msg.content.actionId : undefined;
+        const appId = msg.content.kind === "action_card_content" ? msg.content.appId : undefined;
+        const appRevision =
+            msg.content.kind === "action_card_content" ? msg.content.appRevision : undefined;
         return client
-            .respondToActionCard(chatId, threadRootMessageIndex, msg.messageId, response, payload)
+            .respondToActionCard(
+                chatId,
+                threadRootMessageIndex,
+                msg.messageId,
+                response,
+                confirmPayloadOverride,
+                confirmationGrant,
+            )
             .then(async (success) => {
                 if (!success) {
                     // The round-trip failed — most often a confirm whose deposit to the app's inbox
@@ -524,9 +575,16 @@
                 // surface's display, the substituted URL opens in a new tab (the mobile layout
                 // hosts "sheet" surfaces in-app). surfaceToOpenAfterConfirm persists the
                 // once-per-(app, chat) marker.
-                const opening = await surfaceToOpenAfterConfirm(client, chatId, actionId);
+                const opening = await surfaceToOpenAfterConfirm(
+                    client,
+                    chatId,
+                    actionId,
+                    appId,
+                    appRevision,
+                    $currentUserIdStore,
+                );
                 if (opening !== undefined) {
-                    openSurfaceExternally(client, opening.url);
+                    confirmSurface = opening;
                 }
             });
     }
@@ -620,7 +678,20 @@
     <AiAppLinkModal
         app={linkModalApp}
         onLinked={() => closeLinkModal(true)}
-        onDismiss={() => closeLinkModal(false)} />
+        onDismiss={() => closeLinkModal(false)}
+    />
+{/if}
+
+{#if confirmSurface !== undefined}
+    <AiAppSurfaceModal
+        title={confirmSurface.app.manifest.name}
+        url={confirmSurface.url}
+        display={confirmSurface.surface.display}
+        dataDisclosures={confirmSurface.dataDisclosures}
+        onConsent={() =>
+            markSurfaceShownAfterConsent(confirmSurface!, chatId, $currentUserIdStore)}
+        onDismiss={() => (confirmSurface = undefined)}
+    />
 {/if}
 
 {#if showEmojiPicker && canReact}
@@ -632,7 +703,8 @@
                     <span
                         title={$_("close")}
                         class="close-emoji"
-                        onclick={() => (showEmojiPicker = false)}>
+                        onclick={() => (showEmojiPicker = false)}
+                    >
                         <HoverIcon>
                             <Close size={$iconSize} color={"var(--icon-txt)"} />
                         </HoverIcon>
@@ -642,7 +714,8 @@
                     onEmojiSelected={selectReaction}
                     onSkintoneChanged={(tone) => quickReactions.reload(tone)}
                     supportCustom={true}
-                    mode={"reaction"} />
+                    mode={"reaction"}
+                />
             {/snippet}
         </ModalContent>
     </Overlay>
@@ -653,7 +726,8 @@
         {chatId}
         {eventIndex}
         {threadRootMessageIndex}
-        onClose={() => (showRemindMe = false)} />
+        onClose={() => (showRemindMe = false)}
+    />
 {/if}
 
 {#if showReport}
@@ -662,7 +736,8 @@
         messageId={msg.messageId}
         {chatId}
         {canDelete}
-        onClose={() => (showReport = false)} />
+        onClose={() => (showReport = false)}
+    />
 {/if}
 
 {#if expiresAt === undefined || percentageExpired < 100}
@@ -672,7 +747,8 @@
                 <BotMessageContext
                     botName={senderDisplayName}
                     botCommand={senderContext.command}
-                    finalised={senderContext.finalised} />
+                    finalised={senderContext.finalised}
+                />
             </div>
         {/if}
         <IntersectionObserverComponent>
@@ -683,7 +759,8 @@
                     class:me
                     data-index={failed ? "" : msg.messageIndex}
                     data-id={failed ? "" : msg.messageId}
-                    id={failed ? "" : `event-${eventIndex}`}>
+                    id={failed ? "" : `event-${eventIndex}`}
+                >
                     {#if showAvatar}
                         <div class="avatar-col">
                             {#if first}
@@ -694,9 +771,8 @@
                                         maxStreak={hasAchievedMaxStreak}
                                         url={client.userAvatarUrl(sender)}
                                         userId={msg.sender}
-                                        size={$mobileWidth
-                                            ? AvatarSize.Small
-                                            : AvatarSize.Default} />
+                                        size={$mobileWidth ? AvatarSize.Small : AvatarSize.Default}
+                                    />
                                 </div>
                             {/if}
                         </div>
@@ -711,7 +787,8 @@
                                 : undefined
                         }`}
                         class:p2pSwap={isP2PSwap}
-                        class:proposal={isProposal && !inert}>
+                        class:proposal={isProposal && !inert}
+                    >
                         <!-- svelte-ignore a11y_no_static_element_interactions -->
                         <div
                             bind:this={msgBubbleElement}
@@ -731,7 +808,8 @@
                             class:failed
                             class:bot={senderContext?.kind === "bot"}
                             class:thread={inThread}
-                            class:rtl={$rtlStore}>
+                            class:rtl={$rtlStore}
+                        >
                             {#if first && !isProposal && !isPrize}
                                 <div class="sender" class:fill class:rtl={$rtlStore}>
                                     <Link underline={"never"} onClick={openUserProfile}>
@@ -743,26 +821,31 @@
                                             uniquePerson={sender?.isUniquePerson}
                                             diamondStatus={sender?.diamondStatus}
                                             {streak}
-                                            {chitEarned} />
+                                            {chitEarned}
+                                        />
                                         <BotBadge
                                             bot={senderContext?.kind === "bot"}
-                                            webhook={senderContext?.kind === "webhook"} />
+                                            webhook={senderContext?.kind === "webhook"}
+                                        />
                                         {#if sender !== undefined && multiUserChat}
                                             <WithRole
                                                 userId={sender.userId}
                                                 chatMembers={$selectedCommunityMembersStore}
-                                                communityMembers={$selectedCommunityMembersStore}>
+                                                communityMembers={$selectedCommunityMembersStore}
+                                            >
                                                 {#snippet children(communityRole, chatRole)}
                                                     <RoleIcon
                                                         level="community"
                                                         popup
-                                                        role={communityRole} />
+                                                        role={communityRole}
+                                                    />
                                                     <RoleIcon
                                                         level={chatType === "channel"
                                                             ? "channel"
                                                             : "group"}
                                                         popup
-                                                        role={chatRole} />
+                                                        role={chatRole}
+                                                    />
                                                 {/snippet}
                                             </WithRole>
                                         {/if}
@@ -781,7 +864,8 @@
                                             size={$iconSize}
                                             color={me
                                                 ? "var(--currentChat-msg-me-muted)"
-                                                : "var(--currentChat-msg-muted)"} />
+                                                : "var(--currentChat-msg-muted)"}
+                                        />
                                     </div>
                                     <div class="text">{"Forwarded"}</div>
                                 </div>
@@ -794,7 +878,8 @@
                                         {intersecting}
                                         {onRemovePreview}
                                         {onGoToMessageIndex}
-                                        repliesTo={msg.repliesTo} />
+                                        repliesTo={msg.repliesTo}
+                                    />
                                 {:else}
                                     <UnresolvedReply />
                                 {/if}
@@ -822,7 +907,8 @@
                                 {onRespondToActionCard}
                                 {onExpandMessage}
                                 ogPreviews={msg.ogPreviews}
-                                messagePreviews={msg.messagePreviews} />
+                                messagePreviews={msg.messagePreviews}
+                            />
 
                             {#if !inert}
                                 <TimeAndTicks
@@ -841,7 +927,8 @@
                                     {readByThem}
                                     {crypto}
                                     {chatType}
-                                    {dateFormatter} />
+                                    {dateFormatter}
+                                />
                             {/if}
 
                             {#if debug}
@@ -913,7 +1000,8 @@
                                 onReportMessage={reportMessage}
                                 onCancelReminder={cancelReminder}
                                 onRunAiAction={runAiActionHandler}
-                                onRemindMe={remindMe} />
+                                onRemindMe={remindMe}
+                            />
                         {/if}
 
                         {#if ephemeral}
@@ -943,7 +1031,8 @@
                         {threadSummary}
                         indent={showAvatar}
                         {me}
-                        url={msgUrl} />
+                        url={msgUrl}
+                    />
                 {/if}
 
                 {#if msg.reactions.length > 0 && !inert}
@@ -953,7 +1042,8 @@
                                 onClick={() => toggleReaction(false, reaction)}
                                 {reaction}
                                 {intersecting}
-                                {userIds} />
+                                {userIds}
+                            />
                         {/each}
                     </div>
                 {/if}
@@ -974,7 +1064,8 @@
                             busy={proposing}
                             onPropose={proposeSuggestedAiAction}
                             onDismiss={() => dismissAutoProposeSuggestion(msg.messageId)}
-                            onMute={muteAutoProposeSuggestions} />
+                            onMute={muteAutoProposeSuggestions}
+                        />
                     </div>
                 {/if}
 

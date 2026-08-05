@@ -10,10 +10,14 @@
     import { toastStore } from "@src/stores/toast";
     import {
         chatLinkSurfaceOpening,
-        openSurfaceExternally,
         type SurfaceOpening,
     } from "@utils/aiAppSurfaces";
-    import { type AiAppRegistration, type ChatIdentifier, type OpenChat } from "openchat-client";
+    import {
+        type AiAppRegistration,
+        type ChatIdentifier,
+        currentUserIdStore,
+        type OpenChat,
+    } from "openchat-client";
     import { getContext } from "svelte";
     import LinkOff from "svelte-material-icons/LinkOff.svelte";
     import LinkVariant from "svelte-material-icons/LinkVariant.svelte";
@@ -45,14 +49,21 @@
             (app) =>
                 app.manifest.perUserKeys ||
                 connected.has(app.id) ||
-                chatLinkSurfaceOpening(app, chatId) !== undefined,
+                chatLinkSurfaceOpening(app, chatId, $currentUserIdStore) !== undefined,
         ),
     );
 
     async function load() {
-        // Both facades resolve to [] on failure, so a load error just presents as "no apps".
-        const [allApps, myKeys] = await Promise.all([client.aiApps(), client.myAiAppKeys()]);
-        apps = allApps;
+        const [myKeys, directory] = await Promise.all([
+            client.myAiAppKeys(),
+            client.exploreAiApps(undefined, 0, 8),
+        ]);
+        const exact = await client.aiApps(
+            myKeys.map((key) => ({ appId: key.appId })),
+        );
+        const byId = new Map(directory.matches.map((app) => [app.id, app]));
+        for (const app of exact) byId.set(app.id, app);
+        apps = [...byId.values()].sort((left, right) => left.id - right.id);
         connected = new Set(myKeys.filter((k) => k.publicKey.length > 0).map((k) => k.appId));
     }
 
@@ -78,11 +89,7 @@
 
     let setupSurface = $state<SurfaceOpening | undefined>(undefined);
     function openSetup(opening: SurfaceOpening) {
-        if (opening.surface.display === "sheet") {
-            setupSurface = opening;
-        } else {
-            openSurfaceExternally(client, opening.url);
-        }
+        setupSurface = opening;
     }
 
     // Merged Connect + Open setup, identical to AiAppsSummary: pair first if the user has no key
@@ -91,7 +98,7 @@
     let pendingSetup = $state<SurfaceOpening | undefined>(undefined);
 
     function startConnect(app: AiAppRegistration) {
-        const setup = chatLinkSurfaceOpening(app, chatId);
+        const setup = chatLinkSurfaceOpening(app, chatId, $currentUserIdStore);
         const needsPairing = app.manifest.perUserKeys && !connected.has(app.id);
         if (needsPairing) {
             pendingSetup = setup;
@@ -120,7 +127,7 @@
         headerText={i18nKey("aiApps.title")}>
         <div class="apps">
             {#each relevant as app (app.id)}
-                {@const setup = chatLinkSurfaceOpening(app, chatId)}
+                {@const setup = chatLinkSurfaceOpening(app, chatId, $currentUserIdStore)}
                 {@const needsPairing = app.manifest.perUserKeys && !connected.has(app.id)}
                 {@const showPrimary = needsPairing || setup !== undefined}
                 <div class="app">
@@ -174,6 +181,8 @@
     <AiAppSurfaceModal
         title={setupSurface.app.manifest.name}
         url={setupSurface.url}
+        display={setupSurface.surface.display}
+        dataDisclosures={setupSurface.dataDisclosures}
         onDismiss={() => (setupSurface = undefined)} />
 {/if}
 

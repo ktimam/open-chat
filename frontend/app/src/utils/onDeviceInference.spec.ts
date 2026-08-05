@@ -1,3 +1,4 @@
+import { webcrypto } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { onDeviceInferenceCapability } from "./onDeviceInference";
 import { clearWebModel, useWebModelFromUrl, webInfer } from "./webInference";
@@ -22,9 +23,20 @@ vi.mock("@wllama/wllama", () => {
     }
     class ModelManager {
         async getModelOrDownload(source: { url: string; mmprojUrl?: string }) {
+            const urls = [
+                source.url,
+                ...(source.mmprojUrl === undefined ? [] : [source.mmprojUrl]),
+            ];
+            const bytes = [
+                new Uint8Array([1, 2, 3, 4]),
+                ...(source.mmprojUrl === undefined ? [] : [new Uint8Array([5, 6, 7])]),
+            ];
             return {
-                files: [],
-                open: async () => [],
+                files: urls.map((url) => ({ metadata: { originalURL: url } })),
+                open: async () =>
+                    bytes.map((value) => ({
+                        arrayBuffer: async () => value.slice().buffer as ArrayBuffer,
+                    })),
                 remove: async () => {},
                 source,
             };
@@ -41,14 +53,28 @@ vi.mock("tauri-plugin-oc-api", () => ({
 
 const WEIGHTS_URL = "https://host/models/smolvlm.gguf";
 const PROJ_URL = "https://host/models/mmproj-smolvlm.gguf";
+const WEIGHTS_SHA = "9f64a747e1b97f131fabb6b447296c9b6f0201e79fb3c5356e6c77e89b6a806a";
+const PROJ_SHA = "3774fed6f81e6d77fb664109f8ac3e35088e89722c6c8747166afe631cfcf43a";
+
+vi.stubGlobal("crypto", webcrypto);
+if (Blob.prototype.arrayBuffer === undefined) {
+    Blob.prototype.arrayBuffer = function (this: Blob): Promise<ArrayBuffer> {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result as ArrayBuffer);
+            reader.onerror = () => reject(reader.error);
+            reader.readAsArrayBuffer(this);
+        });
+    };
+}
 
 function attachVision(modalities: ("text" | "image")[]) {
     return useWebModelFromUrl({
         id: "smolvlm-256m-instruct-q8",
         name: "SmolVLM 256M (vision)",
         files: [
-            { url: WEIGHTS_URL, sha256: "", bytes: 4 },
-            { url: PROJ_URL, sha256: "", bytes: 3 },
+            { url: WEIGHTS_URL, sha256: WEIGHTS_SHA, bytes: 4 },
+            { url: PROJ_URL, sha256: PROJ_SHA, bytes: 3 },
         ],
         sizeBytes: 7,
         modalities,
@@ -80,7 +106,7 @@ describe("onDeviceInferenceCapability in a BROWSER", () => {
         await useWebModelFromUrl({
             id: "qwen2.5-0.5b-instruct-q4",
             name: "Qwen2.5 0.5B (instruct)",
-            files: [{ url: "https://host/models/qwen.gguf", sha256: "", bytes: 4 }],
+            files: [{ url: "https://host/models/qwen.gguf", sha256: WEIGHTS_SHA, bytes: 4 }],
             sizeBytes: 4,
             modalities: ["text"],
         });

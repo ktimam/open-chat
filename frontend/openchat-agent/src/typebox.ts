@@ -6141,6 +6141,49 @@ export const UserIndexAiAppsResponse = Type.Object({
     Success: UserIndexAiAppsSuccessResult,
 });
 
+export type UserIndexAiAppsByIdsAiAppLookup = Static<typeof UserIndexAiAppsByIdsAiAppLookup>;
+export const UserIndexAiAppsByIdsAiAppLookup = Type.Object({
+    app_id: Type.Number(),
+    revision: Type.Optional(Type.BigInt()),
+});
+
+export type UserIndexAiAppsByIdsArgs = Static<typeof UserIndexAiAppsByIdsArgs>;
+export const UserIndexAiAppsByIdsArgs = Type.Object({
+    lookups: Type.Array(UserIndexAiAppsByIdsAiAppLookup),
+});
+
+export type UserIndexAiAppsByIdsSuccessResult = Static<typeof UserIndexAiAppsByIdsSuccessResult>;
+export const UserIndexAiAppsByIdsSuccessResult = Type.Object({
+    apps: Type.Array(AiAppRegistration),
+});
+
+export type UserIndexAiAppsByIdsResponse = Static<typeof UserIndexAiAppsByIdsResponse>;
+export const UserIndexAiAppsByIdsResponse = Type.Union([
+    Type.Object({ Success: UserIndexAiAppsByIdsSuccessResult }),
+    Type.Object({ TooManyApps: Type.Number() }),
+    Type.Object({ ResponseTooLarge: Type.Number() }),
+]);
+
+export type UserIndexMyAiAppsArgs = Static<typeof UserIndexMyAiAppsArgs>;
+export const UserIndexMyAiAppsArgs = Type.Object({
+    page_index: Type.Number(),
+    page_size: Type.Number(),
+});
+
+export type UserIndexMyAiAppsSuccessResult = Static<typeof UserIndexMyAiAppsSuccessResult>;
+export const UserIndexMyAiAppsSuccessResult = Type.Object({
+    apps: Type.Array(AiAppRegistration),
+    total: Type.Number(),
+});
+
+export type UserIndexMyAiAppsResponse = Static<typeof UserIndexMyAiAppsResponse>;
+export const UserIndexMyAiAppsResponse = Type.Union([
+    Type.Object({ Success: UserIndexMyAiAppsSuccessResult }),
+    Type.Object({ InvalidPageSize: Type.Number() }),
+    Type.Object({ ResponseTooLarge: Type.Number() }),
+    Type.Literal("UserNotFound"),
+]);
+
 export type UserIndexRegisterAiAppArgs = Static<typeof UserIndexRegisterAiAppArgs>;
 export const UserIndexRegisterAiAppArgs = Type.Object({
     manifest: AiAppManifest,
@@ -6219,6 +6262,39 @@ export const UserIndexAiAppUserKeysResponse = Type.Object({
     Success: UserIndexAiAppUserKeysSuccessResult,
 });
 
+export type UserIndexClaimAiAppLinkCodeArgs = Static<
+    typeof UserIndexClaimAiAppLinkCodeArgs
+>;
+export const UserIndexClaimAiAppLinkCodeArgs = Type.Object({
+    /** Single-use, app-bound 256-bit token encoded as 64 lowercase hexadecimal characters. */
+    code: Type.String(),
+    public_key: Type.String(),
+});
+
+export type UserIndexClaimAiAppLinkCodeSuccessResult = Static<
+    typeof UserIndexClaimAiAppLinkCodeSuccessResult
+>;
+export const UserIndexClaimAiAppLinkCodeSuccessResult = Type.Object({
+    user_id: UserId,
+});
+
+export type UserIndexClaimAiAppLinkCodeResponse = Static<
+    typeof UserIndexClaimAiAppLinkCodeResponse
+>;
+export const UserIndexClaimAiAppLinkCodeResponse = Type.Union([
+    Type.Object({
+        Success: UserIndexClaimAiAppLinkCodeSuccessResult,
+    }),
+    Type.Literal("CodeNotFound"),
+    Type.Literal("CodeExpired"),
+    Type.Object({
+        InvalidRequest: Type.String(),
+    }),
+    Type.Object({
+        Error: OCError,
+    }),
+]);
+
 export type UserIndexCreateAiAppLinkCodeArgs = Static<typeof UserIndexCreateAiAppLinkCodeArgs>;
 export const UserIndexCreateAiAppLinkCodeArgs = Type.Object({
     app_id: Type.Number(),
@@ -6228,6 +6304,7 @@ export type UserIndexCreateAiAppLinkCodeSuccessResult = Static<
     typeof UserIndexCreateAiAppLinkCodeSuccessResult
 >;
 export const UserIndexCreateAiAppLinkCodeSuccessResult = Type.Object({
+    /** Single-use, app-bound 256-bit token encoded as 64 lowercase hexadecimal characters. */
     code: Type.String(),
     expires_at: Type.BigInt(),
 });
@@ -6243,6 +6320,48 @@ export const UserIndexCreateAiAppLinkCodeResponse = Type.Union([
     Type.Object({
         Error: OCError,
     }),
+]);
+
+export type UserIndexCreateAiAppCardProvenanceArgs = Static<
+    typeof UserIndexCreateAiAppCardProvenanceArgs
+>;
+export const UserIndexCreateAiAppCardProvenanceArgs = Type.Object({
+    app_id: Type.Number(),
+    app_revision: Type.BigInt(),
+    action_id: Type.String(),
+    content: Type.Object({
+        title: Type.String(),
+        rows: Type.Array(
+            Type.Object({
+                label: Type.String(),
+                value: Type.String(),
+            }),
+        ),
+        confirm_label: Type.String(),
+        cancel_label: Type.String(),
+        action_id: Type.String(),
+        disclosure: Type.Optional(Type.String()),
+        expires_at: Type.Optional(Type.BigInt()),
+        confirm_payload: Type.Optional(TSBytes),
+    }),
+    chat: Chat,
+    message_id: MessageId,
+    thread_root_message_index: Type.Optional(MessageIndex),
+});
+
+export type UserIndexCreateAiAppCardProvenanceResponse = Static<
+    typeof UserIndexCreateAiAppCardProvenanceResponse
+>;
+export const UserIndexCreateAiAppCardProvenanceResponse = Type.Union([
+    Type.Object({
+        Success: Type.Object({
+            provenance: TSBytes,
+            expires_at: Type.BigInt(),
+        }),
+    }),
+    Type.Literal("AppUnavailable"),
+    Type.Object({ InvalidRequest: Type.String() }),
+    Type.Object({ Error: OCError }),
 ]);
 
 export type UserIndexRemoveMyAiAppKeyArgs = Static<typeof UserIndexRemoveMyAiAppKeyArgs>;
@@ -6302,6 +6421,12 @@ export const UserIndexExploreAiAppsResponse = Type.Union([
     }),
     Type.Object({
         TermTooLong: Type.Number(),
+    }),
+    Type.Object({
+        InvalidPageSize: Type.Number(),
+    }),
+    Type.Object({
+        ResponseTooLarge: Type.Number(),
     }),
     Type.Object({
         Error: OCError,
@@ -8191,6 +8316,8 @@ export const ActionCardContentInitial = Type.Object({
     cancel_label: Type.String(),
     action_id: Type.String(),
     app_id: Type.Optional(Type.Number()),
+    app_revision: Type.Optional(Type.BigInt()),
+    app_provenance: Type.Optional(TSBytes),
     disclosure: Type.Optional(Type.String()),
     expires_at: Type.Optional(Type.BigInt()),
     recipient_public_key: Type.Optional(Type.String()),
@@ -8207,6 +8334,11 @@ export const ActionCardContent = Type.Object({
     cancel_label: Type.String(),
     action_id: Type.String(),
     app_id: Type.Optional(Type.Number()),
+    app_revision: Type.Optional(Type.BigInt()),
+    app_verified: Type.Optional(Type.Boolean()),
+    // Full canonical card-content attestation. This is independent from app_verified, which proves
+    // only app/action directory coordinates. Missing is deliberately fail-closed on older canisters.
+    app_content_verified: Type.Optional(Type.Boolean()),
     disclosure: Type.Optional(Type.String()),
     state: ActionCardState,
     responded_by: Type.Optional(UserId),
@@ -8223,6 +8355,7 @@ export const GroupRespondToActionCardArgs = Type.Object({
     message_id: MessageId,
     response: ActionCardResponse,
     confirm_payload_override: Type.Optional(TSBytes),
+    confirmation_grant: Type.Optional(TSBytes),
 });
 
 export type GroupRespondToActionCardResponse = Static<typeof GroupRespondToActionCardResponse>;
@@ -8235,6 +8368,68 @@ export const GroupRespondToActionCardResponse = Type.Union([
     }),
 ]);
 
+const CreateAiAppCardCapabilitySuccess = Type.Object({
+    token: TSBytes,
+    expires_at: Type.BigInt(),
+    context: Type.Object({
+        context_version: Type.Number(),
+        app_subject: TSBytes,
+        chat_handle: TSBytes,
+        message_handle: TSBytes,
+        app_id: Type.Number(),
+        app_revision: Type.BigInt(),
+        action_id: Type.String(),
+    }),
+});
+const CreateAiAppCardCapabilityResponse = Type.Union([
+    Type.Object({ Success: CreateAiAppCardCapabilitySuccess }),
+    Type.Literal("InvalidProvenance"),
+    Type.Literal("AppUnavailable"),
+    Type.Object({ InvalidRequest: Type.String() }),
+    Type.Object({ Error: OCError }),
+]);
+
+const CreateAiAppCardConfirmationGrantResponse = Type.Union([
+    Type.Object({
+        Success: Type.Object({
+            grant: TSBytes,
+            expires_at: Type.BigInt(),
+        }),
+    }),
+    Type.Literal("InvalidProvenance"),
+    Type.Literal("AppUnavailable"),
+    Type.Object({ InvalidRequest: Type.String() }),
+    Type.Object({ Error: OCError }),
+]);
+
+export type GroupCreateAiAppCardConfirmationGrantArgs = Static<
+    typeof GroupCreateAiAppCardConfirmationGrantArgs
+>;
+export const GroupCreateAiAppCardConfirmationGrantArgs = Type.Object({
+    thread_root_message_index: Type.Optional(MessageIndex),
+    message_id: MessageId,
+    confirm_payload: TSBytes,
+});
+export type GroupCreateAiAppCardConfirmationGrantResponse = Static<
+    typeof GroupCreateAiAppCardConfirmationGrantResponse
+>;
+export const GroupCreateAiAppCardConfirmationGrantResponse =
+    CreateAiAppCardConfirmationGrantResponse;
+
+export type GroupCreateAiAppCardCapabilityArgs = Static<
+    typeof GroupCreateAiAppCardCapabilityArgs
+>;
+export const GroupCreateAiAppCardCapabilityArgs = Type.Object({
+    thread_root_message_index: Type.Optional(MessageIndex),
+    message_id: MessageId,
+    recipient_key_scheme: Type.String(),
+    recipient_public_key: TSBytes,
+});
+export type GroupCreateAiAppCardCapabilityResponse = Static<
+    typeof GroupCreateAiAppCardCapabilityResponse
+>;
+export const GroupCreateAiAppCardCapabilityResponse = CreateAiAppCardCapabilityResponse;
+
 export type UserRespondToActionCardArgs = Static<typeof UserRespondToActionCardArgs>;
 export const UserRespondToActionCardArgs = Type.Object({
     user_id: UserId,
@@ -8242,6 +8437,7 @@ export const UserRespondToActionCardArgs = Type.Object({
     message_id: MessageId,
     response: ActionCardResponse,
     confirm_payload_override: Type.Optional(TSBytes),
+    confirmation_grant: Type.Optional(TSBytes),
 });
 
 export type UserRespondToActionCardResponse = Static<typeof UserRespondToActionCardResponse>;
@@ -8254,6 +8450,21 @@ export const UserRespondToActionCardResponse = Type.Union([
     }),
 ]);
 
+export type UserCreateAiAppCardCapabilityArgs = Static<
+    typeof UserCreateAiAppCardCapabilityArgs
+>;
+export const UserCreateAiAppCardCapabilityArgs = Type.Object({
+    user_id: UserId,
+    thread_root_message_index: Type.Optional(MessageIndex),
+    message_id: MessageId,
+    recipient_key_scheme: Type.String(),
+    recipient_public_key: TSBytes,
+});
+export type UserCreateAiAppCardCapabilityResponse = Static<
+    typeof UserCreateAiAppCardCapabilityResponse
+>;
+export const UserCreateAiAppCardCapabilityResponse = CreateAiAppCardCapabilityResponse;
+
 export type CommunityRespondToActionCardArgs = Static<typeof CommunityRespondToActionCardArgs>;
 export const CommunityRespondToActionCardArgs = Type.Object({
     channel_id: ChannelId,
@@ -8261,9 +8472,12 @@ export const CommunityRespondToActionCardArgs = Type.Object({
     message_id: MessageId,
     response: ActionCardResponse,
     confirm_payload_override: Type.Optional(TSBytes),
+    confirmation_grant: Type.Optional(TSBytes),
 });
 
-export type CommunityRespondToActionCardResponse = Static<typeof CommunityRespondToActionCardResponse>;
+export type CommunityRespondToActionCardResponse = Static<
+    typeof CommunityRespondToActionCardResponse
+>;
 export const CommunityRespondToActionCardResponse = Type.Union([
     Type.Object({
         Success: ActionCardState,
@@ -8272,6 +8486,36 @@ export const CommunityRespondToActionCardResponse = Type.Union([
         Error: OCError,
     }),
 ]);
+
+export type CommunityCreateAiAppCardCapabilityArgs = Static<
+    typeof CommunityCreateAiAppCardCapabilityArgs
+>;
+export const CommunityCreateAiAppCardCapabilityArgs = Type.Object({
+    channel_id: ChannelId,
+    thread_root_message_index: Type.Optional(MessageIndex),
+    message_id: MessageId,
+    recipient_key_scheme: Type.String(),
+    recipient_public_key: TSBytes,
+});
+export type CommunityCreateAiAppCardCapabilityResponse = Static<
+    typeof CommunityCreateAiAppCardCapabilityResponse
+>;
+export const CommunityCreateAiAppCardCapabilityResponse = CreateAiAppCardCapabilityResponse;
+
+export type CommunityCreateAiAppCardConfirmationGrantArgs = Static<
+    typeof CommunityCreateAiAppCardConfirmationGrantArgs
+>;
+export const CommunityCreateAiAppCardConfirmationGrantArgs = Type.Object({
+    channel_id: ChannelId,
+    thread_root_message_index: Type.Optional(MessageIndex),
+    message_id: MessageId,
+    confirm_payload: TSBytes,
+});
+export type CommunityCreateAiAppCardConfirmationGrantResponse = Static<
+    typeof CommunityCreateAiAppCardConfirmationGrantResponse
+>;
+export const CommunityCreateAiAppCardConfirmationGrantResponse =
+    CreateAiAppCardConfirmationGrantResponse;
 
 export const BotMessageContent = Type.Union([
     Type.Object({

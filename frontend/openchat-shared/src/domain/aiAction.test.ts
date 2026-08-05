@@ -5,16 +5,18 @@ import {
     type AiActionRule,
     type AiAppManifestWire,
     aiActionDefinitionFromWire,
+    aiAppCardChatContext,
     aiAppManifestFromWire,
     applyRulesPostPass,
     buildActionCardContent,
     buildMultiActionCardContent,
     chatKeyFor,
-    OC_ENTRIES_ROW_LABEL,
+    MAX_AI_ACTION_CANDIDATES,
     compileRules,
     missingRequired,
     parseExtraction,
     parseExtractionList,
+    rulesFromWire,
     runAiAction,
 } from "./aiAction";
 import type { InferenceRequest, InferenceResult } from "./onDeviceModel";
@@ -119,11 +121,47 @@ describe("parseExtractionList", () => {
     it("returns undefined when there is no JSON at all", () => {
         expect(parseExtractionList("no json here")).toBeUndefined();
     });
+
+    it.each([31, 32])("retains the valid %i-candidate boundary but the runner blocks multi posting", async (count) => {
+        const raw = JSON.stringify(
+            Array.from({ length: count }, (_, i) => ({ amount: i + 1, note: `entry-${i}` })),
+        );
+        expect(parseExtractionList(raw)).toHaveLength(count);
+        const result = await runAiAction(MULTI_DEF, { text: "many" }, RECIPIENT, async () => ({
+            kind: "ok",
+            text: raw,
+        }));
+        expect(result.kind).toBe("error");
+        if (result.kind === "error") expect(result.error).toContain("exact-payload endpoint");
+    });
+
+    it("stops at a 33rd overflow sentinel and rejects before per-candidate work", async () => {
+        const entries = Array.from({ length: MAX_AI_ACTION_CANDIDATES + 1 }, (_, i) => ({
+            amount: i + 1,
+        }));
+        const raw = JSON.stringify({ transactions: entries });
+        expect(parseExtractionList(raw)).toHaveLength(MAX_AI_ACTION_CANDIDATES + 1);
+        const result = await runAiAction(MULTI_DEF, { text: "many" }, RECIPIENT, async () => ({
+            kind: "ok",
+            text: raw,
+        }));
+        expect(result).toEqual({
+            kind: "error",
+            error: `The model returned more than ${MAX_AI_ACTION_CANDIDATES} action candidates.`,
+        });
+    });
+
+    it("rejects oversized model output without scanning it", () => {
+        expect(parseExtractionList(`{"amount":1}${" ".repeat(131_072)}`)).toBeUndefined();
+    });
 });
 
 describe("parseExtraction", () => {
     it("parses a bare JSON object", () => {
-        expect(parseExtraction('{"amount":20,"currency":"USD"}')).toEqual({ amount: 20, currency: "USD" });
+        expect(parseExtraction('{"amount":20,"currency":"USD"}')).toEqual({
+            amount: 20,
+            currency: "USD",
+        });
     });
     it("parses JSON wrapped in prose + ```json fences", () => {
         const text = 'Sure!\n```json\n{"amount": 20, "currency": "USD"}\n```\nHope that helps.';
@@ -154,18 +192,29 @@ describe("buildActionCardContent", () => {
         expect(card.rows.map((r) => r.label)).toEqual(["Amount", "Currency"]);
     });
     it("threads the optional per-app inbox onto the card, undefined when omitted", () => {
-        const withInbox = buildActionCardContent(DEF, { amount: 1, currency: "USD" }, RECIPIENT, "aaaaa-aa");
+        const withInbox = buildActionCardContent(
+            DEF,
+            { amount: 1, currency: "USD" },
+            RECIPIENT,
+            "aaaaa-aa",
+        );
         expect(withInbox.inboxCanisterId).toBe("aaaaa-aa");
         const withoutInbox = buildActionCardContent(DEF, { amount: 1, currency: "USD" }, RECIPIENT);
         expect(withoutInbox.inboxCanisterId).toBeUndefined();
     });
     it("fan-out: carries additional recipient keys, dropping empties and the primary key", () => {
-        const card = buildActionCardContent(DEF, { amount: 1, currency: "USD" }, RECIPIENT, undefined, [
-            "OTHER_KEY_PEM",
-            "", // empty entries are dropped
-            RECIPIENT, // the primary key never repeats in the fan-out list
-            "SECOND_OTHER_KEY_PEM",
-        ]);
+        const card = buildActionCardContent(
+            DEF,
+            { amount: 1, currency: "USD" },
+            RECIPIENT,
+            undefined,
+            [
+                "OTHER_KEY_PEM",
+                "", // empty entries are dropped
+                RECIPIENT, // the primary key never repeats in the fan-out list
+                "SECOND_OTHER_KEY_PEM",
+            ],
+        );
         expect(card.recipientPublicKey).toBe(RECIPIENT);
         expect(card.recipientPublicKeys).toEqual(["OTHER_KEY_PEM", "SECOND_OTHER_KEY_PEM"]);
     });
@@ -173,12 +222,23 @@ describe("buildActionCardContent", () => {
         const card = buildActionCardContent(DEF, { amount: 1, currency: "USD" }, RECIPIENT);
         expect(card.recipientPublicKeys).toBeUndefined();
     });
-    it("single-entry card carries NO hidden __oc_ sentinel row", () => {
-        const card = buildActionCardContent(DEF, { amount: 20, currency: "USD", note: "lunch" }, RECIPIENT);
+    it("single-entry card carries no reserved transport row", () => {
+        const card = buildActionCardContent(
+            DEF,
+            { amount: 20, currency: "USD", note: "lunch" },
+            RECIPIENT,
+        );
         expect(card.rows.some((r) => r.label.startsWith("__oc_"))).toBe(false);
     });
     it("bakes the owning appId onto the card (undefined when omitted)", () => {
-        const withApp = buildActionCardContent(DEF, { amount: 1, currency: "USD" }, RECIPIENT, undefined, undefined, 42);
+        const withApp = buildActionCardContent(
+            DEF,
+            { amount: 1, currency: "USD" },
+            RECIPIENT,
+            undefined,
+            undefined,
+            42,
+        );
         expect(withApp.appId).toBe(42);
         const withoutApp = buildActionCardContent(DEF, { amount: 1, currency: "USD" }, RECIPIENT);
         expect(withoutApp.appId).toBeUndefined();
@@ -186,7 +246,9 @@ describe("buildActionCardContent", () => {
 });
 
 describe("runAiAction", () => {
-    const okInfer = (text: string) => async (_req: InferenceRequest): Promise<InferenceResult> => ({ kind: "ok", text });
+    const okInfer =
+        (text: string) =>
+        async (_req: InferenceRequest): Promise<InferenceResult> => ({ kind: "ok", text });
 
     it("runs the model, parses, and builds a ready card", async () => {
         const r = await runAiAction(
@@ -223,7 +285,10 @@ describe("runAiAction", () => {
     });
 
     it("propagates unavailable (no autonomous fallback)", async () => {
-        const r = await runAiAction(DEF, {}, RECIPIENT, async () => ({ kind: "unavailable", reason: "no native runtime" }));
+        const r = await runAiAction(DEF, {}, RECIPIENT, async () => ({
+            kind: "unavailable",
+            reason: "no native runtime",
+        }));
         expect(r.kind).toBe("unavailable");
     });
     it("reports no_extraction when the model returns no JSON", async () => {
@@ -306,7 +371,10 @@ describe("runAiAction", () => {
         if (r.kind === "ready") {
             expect(r.extracted.category).toBe("travel");
             // confirmPayload carries the POST-PASSED object.
-            const payload = JSON.parse(new TextDecoder().decode(r.card.confirmPayload!)) as Record<string, unknown>;
+            const payload = JSON.parse(new TextDecoder().decode(r.card.confirmPayload!)) as Record<
+                string,
+                unknown
+            >;
             expect(payload.category).toBe("travel");
         }
     });
@@ -316,12 +384,20 @@ describe("runAiAction", () => {
             ...DEF,
             rules: [{ kind: "from_message", field: "note", maxLength: 10 }],
         };
-        const r = await runAiAction(def, { text: "  team lunch at noon  " }, RECIPIENT, okInfer('{"amount":20}'));
+        const r = await runAiAction(
+            def,
+            { text: "  team lunch at noon  " },
+            RECIPIENT,
+            okInfer('{"amount":20}'),
+        );
         expect(r.kind).toBe("ready");
         if (r.kind === "ready") {
             // trimmed, then truncated to maxLength
             expect(r.extracted.note).toBe("team lunch");
-            const payload = JSON.parse(new TextDecoder().decode(r.card.confirmPayload!)) as Record<string, unknown>;
+            const payload = JSON.parse(new TextDecoder().decode(r.card.confirmPayload!)) as Record<
+                string,
+                unknown
+            >;
             expect(payload.note).toBe("team lunch");
         }
     });
@@ -331,7 +407,12 @@ describe("runAiAction", () => {
             ...DEF,
             rules: [{ kind: "normalize", field: "amount", ops: ["k_m_suffix"] }],
         };
-        const r = await runAiAction(def, { text: "spent 26k" }, RECIPIENT, okInfer('{"amount":"26k"}'));
+        const r = await runAiAction(
+            def,
+            { text: "spent 26k" },
+            RECIPIENT,
+            okInfer('{"amount":"26k"}'),
+        );
         expect(r.kind).toBe("ready");
         if (r.kind === "ready") {
             expect(r.extracted.amount).toBe(26000);
@@ -400,7 +481,12 @@ describe("runAiAction", () => {
             },
             rules: [{ kind: "instruction", text: "Report the currency as an ISO code." }],
         };
-        const r = await runAiAction(def, { text: "paid 20" }, RECIPIENT, okInfer('{"amount":20,"currency":"???"}'));
+        const r = await runAiAction(
+            def,
+            { text: "paid 20" },
+            RECIPIENT,
+            okInfer('{"amount":20,"currency":"???"}'),
+        );
         expect(r.kind).toBe("ready");
         if (r.kind === "ready") {
             // Visible omission beats silent wrongness: the enum-violating field is deleted.
@@ -449,47 +535,29 @@ describe("runAiAction", () => {
         }
     });
 
-    it("an ARRAY of [valid, invalid(amount 0), valid] drops the degenerate element and builds ONE multi card", async () => {
+    it("fails closed when more than one valid entry remains after dropping a degenerate element", async () => {
         const raw =
             '[{"amount":20,"currency":"USD","note":"lunch"},' +
             '{"amount":0,"currency":"USD"},' +
             '{"amount":30,"currency":"EUR","note":"dinner"}]';
-        const r = await runAiAction(MULTI_DEF, { text: "two expenses and a bad one" }, RECIPIENT, okInfer(raw));
-        expect(r.kind).toBe("ready_multi");
-        if (r.kind === "ready_multi") {
-            // The confirmPayload round-trips to EXACTLY the two valid entries, in order.
-            const payload = JSON.parse(new TextDecoder().decode(r.card.confirmPayload!)) as unknown;
-            expect(payload).toEqual([
-                { amount: 20, currency: "USD", note: "lunch" },
-                { amount: 30, currency: "EUR", note: "dinner" },
-            ]);
-            // Title reflects the count (2) and derives from the definition's card title.
-            expect(r.card.title).toContain("2");
-            expect(r.card.title).toContain(DEF.card.title);
-            // One readable row per entry, composed from the def's row valueKeys, plus the hidden
-            // sentinel carrying the exact validated array to the app-rendered card.
-            expect(r.card.rows).toEqual([
-                { label: "Entry 1", value: "20 USD lunch" },
-                { label: "Entry 2", value: "30 EUR dinner" },
-                {
-                    label: OC_ENTRIES_ROW_LABEL,
-                    value: JSON.stringify([
-                        { amount: 20, currency: "USD", note: "lunch" },
-                        { amount: 30, currency: "EUR", note: "dinner" },
-                    ]),
-                },
-            ]);
-            // extracted mirrors the valid array.
-            expect(r.extracted).toEqual([
-                { amount: 20, currency: "USD", note: "lunch" },
-                { amount: 30, currency: "EUR", note: "dinner" },
-            ]);
-        }
+        const r = await runAiAction(
+            MULTI_DEF,
+            { text: "two expenses and a bad one" },
+            RECIPIENT,
+            okInfer(raw),
+        );
+        expect(r.kind).toBe("error");
+        if (r.kind === "error") expect(r.error).toContain("exact-payload endpoint");
     });
 
     it("an ARRAY with a SINGLE valid entry collapses to the single-entry OBJECT card", async () => {
         const raw = '[{"amount":0,"currency":"USD"},{"amount":42,"currency":"USD","note":"taxi"}]';
-        const r = await runAiAction(MULTI_DEF, { text: "one good one bad" }, RECIPIENT, okInfer(raw));
+        const r = await runAiAction(
+            MULTI_DEF,
+            { text: "one good one bad" },
+            RECIPIENT,
+            okInfer(raw),
+        );
         expect(r.kind).toBe("ready");
         if (r.kind === "ready") {
             const payload = JSON.parse(new TextDecoder().decode(r.card.confirmPayload!)) as unknown;
@@ -513,7 +581,7 @@ describe("buildMultiActionCardContent", () => {
         { amount: 20, currency: "USD", note: "lunch" },
         { amount: 30, currency: "EUR", note: "dinner" },
     ];
-    it("builds one summary row per entry, plus the hidden sentinel row, with the array as confirmPayload", () => {
+    it("builds public summary rows without placing the exact array in a hidden row", () => {
         const card = buildMultiActionCardContent(DEF, entries, RECIPIENT);
         expect(card.kind).toBe("action_card_content");
         expect(card.actionId).toBe(DEF.name);
@@ -521,18 +589,15 @@ describe("buildMultiActionCardContent", () => {
         expect(card.rows).toEqual([
             { label: "Entry 1", value: "20 USD lunch" },
             { label: "Entry 2", value: "30 EUR dinner" },
-            { label: OC_ENTRIES_ROW_LABEL, value: JSON.stringify(entries) },
         ]);
         expect(JSON.parse(new TextDecoder().decode(card.confirmPayload!))).toEqual(entries);
     });
-    it("the hidden sentinel row round-trips the EXACT validated entry array (== the confirmPayload)", () => {
+    it("never copies the send-only exact payload into public rows", () => {
         const card = buildMultiActionCardContent(DEF, entries, RECIPIENT);
-        const sentinel = card.rows.find((r) => r.label === OC_ENTRIES_ROW_LABEL);
-        expect(sentinel).toBeDefined();
-        // JSON.parse recovers every entry (nothing flattened / lost).
-        expect(JSON.parse(sentinel!.value)).toEqual(entries);
-        // The sentinel value is byte-identical to the array serialized as the confirmPayload.
-        expect(sentinel!.value).toBe(new TextDecoder().decode(card.confirmPayload!));
+        expect(card.rows.some((r) => r.label.startsWith("__oc_"))).toBe(false);
+        expect(card.rows.some((r) => r.value === new TextDecoder().decode(card.confirmPayload!))).toBe(
+            false,
+        );
     });
     it("threads the inbox + fan-out keys exactly like the single-entry builder", () => {
         const card = buildMultiActionCardContent(DEF, entries, RECIPIENT, "aaaaa-aa", [
@@ -579,9 +644,16 @@ describe("compileRules", () => {
 describe("applyRulesPostPass", () => {
     it("keyword_map hint mode never touches the extraction", () => {
         const rules: AiActionRule[] = [
-            { kind: "keyword_map", field: "category", mode: "hint", map: [{ value: "travel", keywords: ["hotel"] }] },
+            {
+                kind: "keyword_map",
+                field: "category",
+                mode: "hint",
+                map: [{ value: "travel", keywords: ["hotel"] }],
+            },
         ];
-        expect(applyRulesPostPass(rules, { category: "food" }, "a hotel stay")).toEqual({ category: "food" });
+        expect(applyRulesPostPass(rules, { category: "food" }, "a hotel stay")).toEqual({
+            category: "food",
+        });
     });
     it("keyword_map override matches case-insensitively and the first matching mapping wins", () => {
         const rules: AiActionRule[] = [
@@ -599,17 +671,17 @@ describe("applyRulesPostPass", () => {
     });
 
     // The override is deterministic and unarguable — neither the model nor the user gets a say — so a
-    // keyword that fires INSIDE another word silently mislabels the entry. IOU registers the bare
-    // keyword "owe" (its manifest comment even claims OpenChat matches on word boundaries, which was
+    // keyword that fires INSIDE another word silently mislabels the entry. A ledger app can register
+    // the bare keyword "owe" while expecting OpenChat to match on word boundaries, which was
     // only ever true of the auto-propose chip), so under substring matching every message containing
-    // "power", "shower" or "flower" came out force-classified as kind "iou".
+    // "power", "shower" or "flower" came out force-classified as kind "debt".
     describe("keyword_map override matches WHOLE WORDS", () => {
         const rules: AiActionRule[] = [
             {
                 kind: "keyword_map",
                 field: "kind",
                 mode: "override",
-                map: [{ value: "iou", keywords: ["owe", "owed", "owes"] }],
+                map: [{ value: "debt", keywords: ["owe", "owed", "owes"] }],
             },
         ];
         const kindFor = (message: string) => applyRulesPostPass(rules, {}, message).kind;
@@ -621,20 +693,25 @@ describe("applyRulesPostPass", () => {
         });
 
         it("still fires on the real word, wherever it sits and however it is cased", () => {
-            expect(kindFor("Owe me 300 uber")).toBe("iou");
-            expect(kindFor("you owe me")).toBe("iou");
-            expect(kindFor("owes")).toBe("iou");
+            expect(kindFor("Owe me 300 uber")).toBe("debt");
+            expect(kindFor("you owe me")).toBe("debt");
+            expect(kindFor("owes")).toBe("debt");
             // Punctuation is a boundary, not a mismatch — otherwise the fix just trades one silent
             // misclassification for a silent miss.
-            expect(kindFor("he owed, then paid")).toBe("iou");
-            expect(kindFor("(owe) 300")).toBe("iou");
+            expect(kindFor("he owed, then paid")).toBe("debt");
+            expect(kindFor("(owe) 300")).toBe("debt");
         });
     });
 
     it("skips message-driven rules when there is no message text", () => {
         const rules: AiActionRule[] = [
             { kind: "from_message", field: "note" },
-            { kind: "keyword_map", field: "category", mode: "override", map: [{ value: "a", keywords: ["b"] }] },
+            {
+                kind: "keyword_map",
+                field: "category",
+                mode: "override",
+                map: [{ value: "a", keywords: ["b"] }],
+            },
         ];
         expect(applyRulesPostPass(rules, { amount: 1 }, undefined)).toEqual({ amount: 1 });
     });
@@ -646,35 +723,53 @@ describe("applyRulesPostPass", () => {
     it("normalize handles k/m suffixes, plain numeric strings and leaves real numbers alone", () => {
         const rules: AiActionRule[] = [{ kind: "normalize", field: "amount", ops: ["k_m_suffix"] }];
         expect(applyRulesPostPass(rules, { amount: "26k" }, undefined)).toEqual({ amount: 26000 });
-        expect(applyRulesPostPass(rules, { amount: "1.5m" }, undefined)).toEqual({ amount: 1500000 });
-        expect(applyRulesPostPass(rules, { amount: "1,500 k" }, undefined)).toEqual({ amount: 1500000 });
+        expect(applyRulesPostPass(rules, { amount: "1.5m" }, undefined)).toEqual({
+            amount: 1500000,
+        });
+        expect(applyRulesPostPass(rules, { amount: "1,500 k" }, undefined)).toEqual({
+            amount: 1500000,
+        });
         expect(applyRulesPostPass(rules, { amount: "42" }, undefined)).toEqual({ amount: 42 });
         expect(applyRulesPostPass(rules, { amount: 42 }, undefined)).toEqual({ amount: 42 });
-        expect(applyRulesPostPass(rules, { amount: "not a number" }, undefined)).toEqual({ amount: "not a number" });
+        expect(applyRulesPostPass(rules, { amount: "not a number" }, undefined)).toEqual({
+            amount: "not a number",
+        });
         // A currency code the model folded into the amount is tolerated — the LEADING number is
         // recovered so it survives the number-typed schema field instead of being dropped as a string.
-        expect(applyRulesPostPass(rules, { amount: "2000 usd" }, undefined)).toEqual({ amount: 2000 });
-        expect(applyRulesPostPass(rules, { amount: "2000usd" }, undefined)).toEqual({ amount: 2000 });
-        expect(applyRulesPostPass(rules, { amount: "2.5m dollars" }, undefined)).toEqual({ amount: 2500000 });
+        expect(applyRulesPostPass(rules, { amount: "2000 usd" }, undefined)).toEqual({
+            amount: 2000,
+        });
+        expect(applyRulesPostPass(rules, { amount: "2000usd" }, undefined)).toEqual({
+            amount: 2000,
+        });
+        expect(applyRulesPostPass(rules, { amount: "2.5m dollars" }, undefined)).toEqual({
+            amount: 2500000,
+        });
     });
     it("recovers a model-folded currency amount ('2000 usd') through normalize + schema conformance", () => {
         // Repro of the "invalid draft / amount set to 0" report: the model emitted amount as the string
         // "2000 usd". Without the leading-number normalize it stays a string, the number-typed schema
-        // field drops it, and the consumer (IOU) gets no amount -> "invalid draft" + amount 0. With the
+        // field drops it, and the consumer app gets no amount -> "invalid draft" + amount 0. With the
         // k_m_suffix normalize the leading number is recovered and kept.
         const schema = {
             type: "object",
             properties: { amount: { type: "number" }, currency: { type: "string" } },
         };
         const rules: AiActionRule[] = [{ kind: "normalize", field: "amount", ops: ["k_m_suffix"] }];
-        expect(applyRulesPostPass(rules, { amount: "2000 usd", currency: "USD" }, undefined, schema)).toEqual({
+        expect(
+            applyRulesPostPass(rules, { amount: "2000 usd", currency: "USD" }, undefined, schema),
+        ).toEqual({
             amount: 2000,
             currency: "USD",
         });
     });
     it("normalize strip_symbols removes currency symbols/commas/spaces and parses numerics", () => {
-        const rules: AiActionRule[] = [{ kind: "normalize", field: "amount", ops: ["strip_symbols"] }];
-        expect(applyRulesPostPass(rules, { amount: "$1,299.50" }, undefined)).toEqual({ amount: 1299.5 });
+        const rules: AiActionRule[] = [
+            { kind: "normalize", field: "amount", ops: ["strip_symbols"] },
+        ];
+        expect(applyRulesPostPass(rules, { amount: "$1,299.50" }, undefined)).toEqual({
+            amount: 1299.5,
+        });
         expect(applyRulesPostPass(rules, { amount: "€ 20" }, undefined)).toEqual({ amount: 20 });
     });
     it("normalize applies string ops in order and skips absent fields", () => {
@@ -684,7 +779,7 @@ describe("applyRulesPostPass", () => {
         ];
         expect(applyRulesPostPass(rules, { code: "  usd " }, undefined)).toEqual({ code: "USD" });
     });
-    it("schema conformance drops undeclared keys and type-violating fields", () => {
+    it("schema conformance drops undeclared, type-violating, and patterned fields", () => {
         const schema = {
             type: "object",
             properties: {
@@ -692,12 +787,31 @@ describe("applyRulesPostPass", () => {
                 code: { type: "string", pattern: "^[A-Z]{3}$" },
             },
         };
-        expect(applyRulesPostPass([], { amount: "20", code: "USD", extra: 1 }, undefined, schema)).toEqual({
-            code: "USD",
-        });
+        expect(
+            applyRulesPostPass([], { amount: "20", code: "USD", extra: 1 }, undefined, schema),
+        ).toEqual({});
         expect(applyRulesPostPass([], { amount: 20, code: "usd" }, undefined, schema)).toEqual({
             amount: 20,
         });
+    });
+    it("never executes a catastrophic manifest regex", () => {
+        const schema = {
+            type: "object",
+            properties: {
+                unsafe: { type: "string", pattern: "(a+)+$" },
+                amount: { type: "number" },
+            },
+        };
+        const started = performance.now();
+        expect(
+            applyRulesPostPass(
+                [],
+                { unsafe: `${"a".repeat(50_000)}!`, amount: 5 },
+                undefined,
+                schema,
+            ),
+        ).toEqual({ amount: 5 });
+        expect(performance.now() - started).toBeLessThan(250);
     });
     it("schema conformance keeps a number meeting its minimum and deletes one below it", () => {
         const schema = {
@@ -713,7 +827,9 @@ describe("applyRulesPostPass", () => {
             properties: { amount: { type: "number", exclusiveMinimum: 0 } },
         };
         expect(applyRulesPostPass([], { amount: 0 }, undefined, schema)).toEqual({});
-        expect(applyRulesPostPass([], { amount: 0.01 }, undefined, schema)).toEqual({ amount: 0.01 });
+        expect(applyRulesPostPass([], { amount: 0.01 }, undefined, schema)).toEqual({
+            amount: 0.01,
+        });
     });
     it("minimum never applies to non-number values", () => {
         // An untyped field carrying a (nonsensical) numeric bound: a string value is untouched —
@@ -728,7 +844,9 @@ describe("applyRulesPostPass", () => {
         });
     });
     it("no schema passes a violating-looking value straight through", () => {
-        expect(applyRulesPostPass([], { amount: -5 }, undefined, undefined)).toEqual({ amount: -5 });
+        expect(applyRulesPostPass([], { amount: -5 }, undefined, undefined)).toEqual({
+            amount: -5,
+        });
     });
 });
 
@@ -754,6 +872,55 @@ describe("missingRequired", () => {
     it("returns [] when the schema declares no required fields, or there is no schema", () => {
         expect(missingRequired({}, { type: "object" })).toEqual([]);
         expect(missingRequired({}, undefined)).toEqual([]);
+    });
+
+    it("does not satisfy a required field through the prototype chain", () => {
+        const inherited = Object.create({ amount: 10 }) as Record<string, unknown>;
+        inherited.currency = "USD";
+        expect(missingRequired(inherited, schema)).toEqual(["amount"]);
+    });
+
+    it("treats forbidden required names as unsatisfied", () => {
+        expect(
+            missingRequired({ amount: 1 }, { required: ["amount", "__proto__", "constructor"] }),
+        ).toEqual(["__proto__", "constructor"]);
+    });
+});
+
+describe("untrusted extraction field integrity", () => {
+    it("drops prototype keys and returns a null-prototype own-property map", () => {
+        const extraction = JSON.parse(
+            '{"amount":10,"note":"rent","__proto__":{"admin":true},"constructor":"evil"}',
+        ) as Record<string, unknown>;
+        const conformed = applyRulesPostPass([], extraction, undefined);
+        expect(Object.getPrototypeOf(conformed)).toBeNull();
+        expect(conformed).toEqual({ amount: 10, note: "rent" });
+        expect(Object.hasOwn(conformed, "__proto__")).toBe(false);
+        expect(Object.hasOwn(conformed, "constructor")).toBe(false);
+    });
+
+    it("serializes and displays only safe declared fields", () => {
+        const def: AiActionDefinition = {
+            ...DEF,
+            responseSchema: {
+                type: "object",
+                properties: { amount: { type: "number" }, note: { type: "string" } },
+                required: ["amount"],
+            },
+        };
+        const raw = JSON.parse(
+            '{"amount":10,"note":"rent","prototype":"evil","__proto__":{"admin":true}}',
+        ) as Record<string, unknown>;
+        const safe = applyRulesPostPass([], raw, undefined, def.responseSchema);
+        const card = buildActionCardContent(def, safe, RECIPIENT);
+        expect(card.rows).toEqual([
+            { label: "Amount", value: "10" },
+            { label: "Note", value: "rent" },
+        ]);
+        expect(JSON.parse(new TextDecoder().decode(card.confirmPayload!))).toEqual({
+            amount: 10,
+            note: "rent",
+        });
     });
 });
 
@@ -836,7 +1003,7 @@ describe("aiActionDefinitionFromWire", () => {
             surfaces: [
                 {
                     kind: "chat_link",
-                    url: "https://app.example/openchat/link-chat?chat={chatKey}",
+                    url: "https://app.example/openchat/link-chat?app={appId}",
                     display: "sheet",
                 },
                 { kind: "docs", url: "https://app.example/docs", display: "external" },
@@ -846,7 +1013,7 @@ describe("aiActionDefinitionFromWire", () => {
         expect(manifest.surfaces).toEqual([
             {
                 kind: "chat_link",
-                url: "https://app.example/openchat/link-chat?chat={chatKey}",
+                url: "https://app.example/openchat/link-chat?app={appId}",
                 display: "sheet",
             },
             { kind: "docs", url: "https://app.example/docs", display: "external" },
@@ -865,7 +1032,9 @@ describe("aiActionDefinitionFromWire", () => {
             inbox_canister_id: "aaaaa-aa",
         };
         expect(aiAppManifestFromWire(base).inboxCanisterId).toBe("aaaaa-aa");
-        expect(aiAppManifestFromWire({ ...base, inbox_canister_id: undefined }).inboxCanisterId).toBeUndefined();
+        expect(
+            aiAppManifestFromWire({ ...base, inbox_canister_id: undefined }).inboxCanisterId,
+        ).toBeUndefined();
     });
 
     it("skips malformed wire rules instead of failing", () => {
@@ -886,6 +1055,61 @@ describe("aiActionDefinitionFromWire", () => {
             { kind: "normalize", field: "amount", ops: ["trim"] },
         ]);
     });
+
+    it("fails the whole card template closed for forbidden, duplicate, or control-bearing rows", () => {
+        for (const rows of [
+            [
+                { field: "amount", label: "Amount" },
+                { field: "__proto__", label: "Admin" },
+            ],
+            [
+                { field: "amount", label: "Amount" },
+                { field: "currency", label: "Amount" },
+            ],
+            [
+                { field: "amount", label: "Amount" },
+                { field: "amount", label: "Again" },
+            ],
+            [{ field: "amount", label: "Amount\u202e" }],
+        ]) {
+            expect(
+                aiActionDefinitionFromWire({ ...WIRE, card: { ...WIRE.card, rows } }).card.rows,
+            ).toEqual([]);
+        }
+    });
+
+    it("rejects forbidden rule targets and enforces aggregate rule/keyword budgets", () => {
+        expect(
+            rulesFromWire([
+                { from_message: { field: "__proto__" } },
+                { normalize: { field: "constructor", ops: ["trim"] } },
+            ]),
+        ).toEqual([]);
+
+        const instructions = Array.from({ length: 21 }, (_, i) => ({
+            instruction: { text: `instruction-${i}` },
+        }));
+        expect(rulesFromWire(instructions)).toHaveLength(20);
+
+        const keywordRule = rulesFromWire([
+            {
+                keyword_map: {
+                    field: "category",
+                    mode: "override",
+                    map: Array.from({ length: 11 }, (_, mapping) => ({
+                        value: `value-${mapping}`,
+                        keywords: Array.from(
+                            { length: 50 },
+                            (_, keyword) => `k${mapping}_${keyword}`,
+                        ),
+                    })),
+                },
+            },
+        ]);
+        expect(keywordRule).toHaveLength(1);
+        if (keywordRule[0]?.kind !== "keyword_map") throw new Error("expected keyword map");
+        expect(keywordRule[0].map.flatMap((mapping) => mapping.keywords)).toHaveLength(500);
+    });
 });
 
 describe("chatKeyFor", () => {
@@ -905,10 +1129,23 @@ describe("chatKeyFor", () => {
             }),
         ).toBe("channel:dgegb-daaaa-aaaar-arlhq-cai:42");
     });
-    it("keys direct chats by the other participant", () => {
-        expect(chatKeyFor({ kind: "direct_chat", userId: "27eue-hyaaa-aaaaf-aaa4a-cai" })).toBe(
-            "direct:27eue-hyaaa-aaaaf-aaa4a-cai",
-        );
+    it("uses the same byte-ordered direct identity from both participant perspectives", () => {
+        const alice = "scp3f-4qbae-aq"; // principal bytes [1,1,1]
+        const bob = "ed6q5-uqcai-ba"; // principal bytes [2,2,2]
+        const expected = `direct:${alice}:${bob}`;
+        expect(chatKeyFor({ kind: "direct_chat", userId: bob }, alice)).toBe(expected);
+        expect(chatKeyFor({ kind: "direct_chat", userId: alice }, bob)).toBe(expected);
+        expect(aiAppCardChatContext({ kind: "direct_chat", userId: bob }, alice)).toEqual({
+            kind: "direct",
+            userIds: [alice, bob],
+        });
+    });
+
+    it("fails closed without the current direct-chat viewer or with an invalid pair", () => {
+        const other = "ed6q5-uqcai-ba";
+        expect(chatKeyFor({ kind: "direct_chat", userId: other })).toBeUndefined();
+        expect(chatKeyFor({ kind: "direct_chat", userId: other }, other)).toBeUndefined();
+        expect(chatKeyFor({ kind: "direct_chat", userId: other }, "not-a-principal")).toBeUndefined();
     });
 });
 
@@ -920,7 +1157,7 @@ describe("chatKeyFor", () => {
 // produced, asserting the thing the user cares about — every amount in the message reaches a card.
 //
 // The first fixture is captured verbatim from Qwen3-VL 2B (the current browser default) for the
-// reported message, via scripts/live in the IOU repo. Re-running that extraction four times gave this
+// reported message, via an external live harness. Re-running that extraction four times gave this
 // same 3-entry shape every time, which is how the drop was traced past the model and the parser.
 describe("real captured model replies keep every transaction", () => {
     const REPORTED_MESSAGE = "Owe me 300 uber 150 food\n\n500 movies";
@@ -928,8 +1165,8 @@ describe("real captured model replies keep every transaction", () => {
     // The exact bytes Qwen3-VL 2B returned. Kept verbatim (whitespace included) — reformatting it
     // would quietly weaken the test into one about our own pretty-printing.
     const QWEN_3_ENTRIES = `[
-  { "kind": "iou", "amount": 300, "currency": "USD", "direction": "debt", "note": "Uber ride" },
-  { "kind": "iou", "amount": 150, "currency": "USD", "direction": "debt", "note": "Food" },
+  { "kind": "debt", "amount": 300, "currency": "USD", "direction": "debt", "note": "Uber ride" },
+  { "kind": "debt", "amount": 150, "currency": "USD", "direction": "debt", "note": "Food" },
   { "kind": "settlement", "amount": 500, "currency": "USD", "direction": "credit", "note": "Movies" }
 ]`;
 
@@ -937,48 +1174,49 @@ describe("real captured model replies keep every transaction", () => {
 
     it("three transactions in, three entries out — including two on the SAME line", async () => {
         // "300 uber 150 food" share a line; "500 movies" is a paragraph away. Both splits must survive.
-        const r = await runAiAction(
-            MULTI_DEF,
-            { text: REPORTED_MESSAGE },
-            RECIPIENT,
-            async () => ({ kind: "ok", text: QWEN_3_ENTRIES }),
-        );
-        expect(r.kind).toBe("ready_multi");
-        if (r.kind !== "ready_multi") return;
-        expect(amountsOf(r.extracted)).toEqual([300, 150, 500]);
+        expect(amountsOf(parseExtractionList(QWEN_3_ENTRIES)!)).toEqual([300, 150, 500]);
+        const r = await runAiAction(MULTI_DEF, { text: REPORTED_MESSAGE }, RECIPIENT, async () => ({
+            kind: "ok",
+            text: QWEN_3_ENTRIES,
+        }));
+        expect(r.kind).toBe("error");
+        if (r.kind === "error") expect(r.error).toContain("exact-payload endpoint");
     });
 
-    it("carries all three through the sentinel row the app card reads", async () => {
-        // The card is what the user confirms, so entries surviving the post-pass is not enough: they
-        // have to reach the hidden __oc_entries__ row, which is the app card's only multi-entry input.
-        const r = await runAiAction(
+    it("never encodes the exact entry array into public rows", async () => {
+        // Multi-entry proposal remains fail-closed. Even the bounded legacy builder may place exact
+        // entries only in confirmPayload, never in a public display row.
+        const r = await runAiAction(MULTI_DEF, { text: REPORTED_MESSAGE }, RECIPIENT, async () => ({
+            kind: "ok",
+            text: QWEN_3_ENTRIES,
+        }));
+        expect(r.kind).toBe("error");
+        const legacyBuilder = buildMultiActionCardContent(
             MULTI_DEF,
-            { text: REPORTED_MESSAGE },
+            parseExtractionList(QWEN_3_ENTRIES)!,
             RECIPIENT,
-            async () => ({ kind: "ok", text: QWEN_3_ENTRIES }),
         );
-        if (r.kind !== "ready_multi") throw new Error(`expected ready_multi, got ${r.kind}`);
-        const sentinel = r.card.rows.find((row) => row.label === OC_ENTRIES_ROW_LABEL);
-        expect(sentinel).toBeDefined();
-        expect(amountsOf(JSON.parse(sentinel!.value))).toEqual([300, 150, 500]);
-        expect(amountsOf(JSON.parse(new TextDecoder().decode(r.card.confirmPayload!)))).toEqual([
-            300, 150, 500,
-        ]);
+        const exactArray = QWEN_3_ENTRIES.replace(/\s+/g, "");
+        expect(
+            legacyBuilder.rows.some((row) =>
+                row.value.replace(/\s+/g, "").includes(exactArray),
+            ),
+        ).toBe(false);
+        expect(legacyBuilder.rows.some((row) => row.label.startsWith("__oc_"))).toBe(false);
     });
 
     it("gives each entry its OWN note, never the whole message", async () => {
         // The first form of this bug: every row got the entire message as its description, so three
         // entries read "Owe me 300 uber 150 food 500 movies". The note is the model's per-entry text;
         // the raw message travels separately, on `message`.
-        const r = await runAiAction(
-            MULTI_DEF,
-            { text: REPORTED_MESSAGE },
-            RECIPIENT,
-            async () => ({ kind: "ok", text: QWEN_3_ENTRIES }),
-        );
-        if (r.kind !== "ready_multi") throw new Error(`expected ready_multi, got ${r.kind}`);
-        expect(r.extracted.map((e) => e.note)).toEqual(["Uber ride", "Food", "Movies"]);
-        for (const e of r.extracted) {
+        const r = await runAiAction(MULTI_DEF, { text: REPORTED_MESSAGE }, RECIPIENT, async () => ({
+            kind: "ok",
+            text: QWEN_3_ENTRIES,
+        }));
+        expect(r.kind).toBe("error");
+        const parsed = parseExtractionList(QWEN_3_ENTRIES)!;
+        expect(parsed.map((e) => e.note)).toEqual(["Uber ride", "Food", "Movies"]);
+        for (const e of parsed) {
             expect(e.note).not.toContain("500 movies");
         }
     });
@@ -988,19 +1226,19 @@ describe("real captured model replies keep every transaction", () => {
         // 300 twice. The duplicate send is fixed and tested above; this pins the SYMPTOM, so a
         // reintroduction anywhere in the chain fails here too.
         const duplicated = `[
-  { "kind": "iou", "amount": 300, "note": "Uber ride" },
-  { "kind": "iou", "amount": 150, "note": "Food" },
-  { "kind": "iou", "amount": 300, "note": "Uber ride" },
-  { "kind": "iou", "amount": 150, "note": "Food" }
+  { "kind": "debt", "amount": 300, "note": "Uber ride" },
+  { "kind": "debt", "amount": 150, "note": "Food" },
+  { "kind": "debt", "amount": 300, "note": "Uber ride" },
+  { "kind": "debt", "amount": 150, "note": "Food" }
 ]`;
         const r = await runAiAction(MULTI_DEF, { text: REPORTED_MESSAGE }, RECIPIENT, async () => ({
             kind: "ok",
             text: duplicated,
         }));
-        if (r.kind !== "ready_multi") throw new Error(`expected ready_multi, got ${r.kind}`);
+        expect(r.kind).toBe("error");
         // We do NOT dedupe (two identical real transactions are legal), so this documents today's
         // behaviour deliberately: the guard against duplicates is the single-send test, not a filter.
-        expect(amountsOf(r.extracted)).toEqual([300, 150, 300, 150]);
+        expect(amountsOf(parseExtractionList(duplicated)!)).toEqual([300, 150, 300, 150]);
     });
 
     it("salvages the completed transactions when the model's reply is cut off mid-object", async () => {
@@ -1008,33 +1246,31 @@ describe("real captured model replies keep every transaction", () => {
         // EVERYTHING (which is what happened before scanJsonObjects) is not — that is the long wait
         // ending in "nothing to process".
         const truncated = `[
-  { "kind": "iou", "amount": 300, "note": "Uber ride" },
-  { "kind": "iou", "amount": 150, "note": "Food" },
-  { "kind": "iou", "amount": 500, "note": "Mov`;
+  { "kind": "debt", "amount": 300, "note": "Uber ride" },
+  { "kind": "debt", "amount": 150, "note": "Food" },
+  { "kind": "debt", "amount": 500, "note": "Mov`;
         const r = await runAiAction(MULTI_DEF, { text: REPORTED_MESSAGE }, RECIPIENT, async () => ({
             kind: "ok",
             text: truncated,
         }));
-        expect(r.kind).toBe("ready_multi");
-        if (r.kind !== "ready_multi") return;
-        expect(amountsOf(r.extracted)).toEqual([300, 150]);
+        expect(r.kind).toBe("error");
+        expect(amountsOf(parseExtractionList(truncated)!)).toEqual([300, 150]);
     });
 
     it("keeps the other transactions when ONE element is degenerate", async () => {
         // amount 0 violates exclusiveMinimum, so that element is dropped by the viability gate — but
         // dropping the whole card would lose two good transactions with it.
         const withZero = `[
-  { "kind": "iou", "amount": 300, "note": "Uber ride" },
-  { "kind": "iou", "amount": 0, "note": "Food" },
-  { "kind": "iou", "amount": 500, "note": "Movies" }
+  { "kind": "debt", "amount": 300, "note": "Uber ride" },
+  { "kind": "debt", "amount": 0, "note": "Food" },
+  { "kind": "debt", "amount": 500, "note": "Movies" }
 ]`;
         const r = await runAiAction(MULTI_DEF, { text: REPORTED_MESSAGE }, RECIPIENT, async () => ({
             kind: "ok",
             text: withZero,
         }));
-        expect(r.kind).toBe("ready_multi");
-        if (r.kind !== "ready_multi") return;
-        expect(amountsOf(r.extracted)).toEqual([300, 500]);
+        expect(r.kind).toBe("error");
+        if (r.kind === "error") expect(r.error).toContain("exact-payload endpoint");
     });
 });
 
@@ -1060,13 +1296,25 @@ describe("parseExtractionList — the reply shapes a small model actually emits"
             '{"transactions":[{"amount":300,"note":"uber"},{"amount":150,"note":"food"},{"amount":500,"note":"movies"}]}',
         ],
         // Used to yield 2: the fence match was non-greedy, so only the FIRST block was read.
-        ["two separate fenced blocks", '```json\n[{"amount":300},{"amount":150}]\n```\n```json\n[{"amount":500}]\n```'],
+        [
+            "two separate fenced blocks",
+            '```json\n[{"amount":300},{"amount":150}]\n```\n```json\n[{"amount":500}]\n```',
+        ],
         // Used to yield 2: the array fast path returned as soon as the array parsed, ignoring the rest.
-        ["an array plus an afterthought object", '[{"amount":300},{"amount":150}] and also {"amount":500}'],
-        ["a fenced array plus an afterthought object", 'Sure:\n```json\n[{"amount":300},{"amount":150}]\n```\nplus {"amount":500}'],
+        [
+            "an array plus an afterthought object",
+            '[{"amount":300},{"amount":150}] and also {"amount":500}',
+        ],
+        [
+            "a fenced array plus an afterthought object",
+            'Sure:\n```json\n[{"amount":300},{"amount":150}]\n```\nplus {"amount":500}',
+        ],
         // These already worked. Kept so a future "simplification" cannot quietly break them.
         ["bare objects, one per line", '{"amount":300}\n{"amount":150}\n{"amount":500}'],
-        ["objects scattered through prose", '1. {"amount":300}\nThen: {"amount":150}\nFinally {"amount":500}\nThat is all.'],
+        [
+            "objects scattered through prose",
+            '1. {"amount":300}\nThen: {"amount":150}\nFinally {"amount":500}\nThat is all.',
+        ],
         ["a clean array", '[{"amount":300},{"amount":150},{"amount":500}]'],
     ];
 
@@ -1079,7 +1327,9 @@ describe("parseExtractionList — the reply shapes a small model actually emits"
     it("still finds nothing in a reply that contains no JSON at all", () => {
         // The negative control: scanning the whole text more aggressively must not start inventing
         // entries out of prose.
-        expect(parseExtractionList("I could not find a transaction in that message.")).toBeUndefined();
+        expect(
+            parseExtractionList("I could not find a transaction in that message."),
+        ).toBeUndefined();
     });
 
     it("does not unwrap a real extraction that happens to hold one array", () => {

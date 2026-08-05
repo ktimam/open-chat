@@ -19,11 +19,12 @@
 import type {
     InferenceRequest,
     InferenceResult,
+    ModelCatalogEntry,
     ModelFile,
     ModelModality,
 } from "openchat-shared";
 import { writable } from "svelte/store";
-import { splitModelFiles, WEB_MODEL_MAX_BYTES } from "./modelCatalog";
+import { defaultModelCatalog, splitModelFiles, WEB_MODEL_MAX_BYTES } from "./modelCatalog";
 
 // Vite turns this into a served asset URL. wllama 3.x ships ONE unified wasm (esm/wasm/) and picks
 // thread count itself from crossOriginIsolated + hardware concurrency.
@@ -77,6 +78,8 @@ type WebModelState = {
     /** What the CATALOG claims this model can read. A claim, not a measurement — superseded by
      *  `imageSupported` the moment the model is actually loaded. Absent for disk-picked files. */
     declaredModalities?: ModelModality[];
+    catalogFiles?: ModelFile[];
+    catalogRevision?: string;
     /** What the LOADED model actually reports (wllama's supportInputModality). undefined until the
      *  weights are in wasm memory. */
     imageSupported?: boolean;
@@ -164,6 +167,8 @@ export async function setWebModelFile(file: File): Promise<string | undefined> {
     state.url = undefined;
     state.mmprojUrl = undefined;
     state.id = undefined; // disk files have no catalog id
+    state.catalogFiles = undefined;
+    state.catalogRevision = undefined;
     state.declaredModalities = undefined; // no catalog row to claim anything
     state.imageSupported = undefined;
     state.name = file.name;
@@ -182,11 +187,14 @@ export async function setWebModelFile(file: File): Promise<string | undefined> {
 export async function pickWebModelFromDisk(): Promise<string | undefined> {
     type Picker = (opts?: unknown) => Promise<FileSystemFileHandle[]>;
     const picker = (window as { showOpenFilePicker?: Picker }).showOpenFilePicker;
-    if (picker === undefined) return "this browser has no file picker API — use the file input instead";
+    if (picker === undefined)
+        return "this browser has no file picker API — use the file input instead";
     let handle: FileSystemFileHandle;
     try {
         [handle] = await picker.call(window, {
-            types: [{ description: "GGUF model", accept: { "application/octet-stream": [".gguf"] } }],
+            types: [
+                { description: "GGUF model", accept: { "application/octet-stream": [".gguf"] } },
+            ],
         });
     } catch {
         return undefined; // user cancelled — not an error
@@ -200,6 +208,8 @@ export async function pickWebModelFromDisk(): Promise<string | undefined> {
     state.url = undefined;
     state.mmprojUrl = undefined;
     state.id = undefined; // disk files have no catalog id
+    state.catalogFiles = undefined;
+    state.catalogRevision = undefined;
     state.declaredModalities = undefined;
     state.imageSupported = undefined;
     state.name = file.name;
@@ -233,6 +243,26 @@ async function sha256Hex(blob: Blob): Promise<string | undefined> {
     }
 }
 
+/** Content-addressed revision for a trusted catalog entry. Persistence stores only `{id, revision}`;
+ * every executable URL/hash is re-resolved from the current trusted catalog. */
+export async function modelCatalogEntryRevision(
+    entry: Pick<ModelCatalogEntry, "id" | "files" | "sizeBytes"> &
+        Partial<Pick<ModelCatalogEntry, "modalities" | "runtime">>,
+): Promise<string | undefined> {
+    const canonical = JSON.stringify({
+        id: entry.id,
+        runtime: entry.runtime ?? "llama-cpp",
+        files: entry.files.map((file) => ({
+            url: file.url,
+            sha256: file.sha256,
+            bytes: file.bytes,
+        })),
+        sizeBytes: entry.sizeBytes,
+        modalities: entry.modalities ?? ["text"],
+    });
+    return sha256Hex(new Blob([canonical]));
+}
+
 /** Check every downloaded file against the catalog's SHA-256. Returns an error message on a real
  *  mismatch, undefined when everything that could be checked matched.
  *
@@ -244,24 +274,38 @@ async function verifyCachedFiles(
     model: any,
     files: ModelFile[],
 ): Promise<string | undefined> {
-    const expected = new Map(files.filter((f) => f.sha256 !== "").map((f) => [f.url, f.sha256]));
-    if (expected.size === 0) return undefined;
-    // `files[i]` and `open()[i]` are the same cache entries in the same order (both walk Model.files).
+    if (files.length === 0 || files.some((file) => !/^[0-9a-f]{64}$/i.test(file.sha256))) {
+        return "the catalog does not provide a valid SHA-256 for every model artifact";
+    }
+    const expected = new Map(files.map((file) => [file.url, file.sha256.toLowerCase()]));
+    if (expected.size !== files.length) return "the catalog lists a model artifact more than once";
     const blobs: Blob[] = await model.open();
     const entries: { metadata?: { originalURL?: string } }[] = model.files ?? [];
+    if (blobs.length !== files.length || entries.length !== files.length) {
+        return "the cached model artifact set does not match the catalog";
+    }
+    const seen = new Set<string>();
     for (let i = 0; i < blobs.length; i++) {
         const url = entries[i]?.metadata?.originalURL;
-        const want = url !== undefined ? expected.get(url) : undefined;
-        if (want === undefined) continue;
+        if (url === undefined || !expected.has(url)) {
+            return "a cached model artifact has missing or unexpected source metadata";
+        }
+        if (seen.has(url)) return `the cached model artifact ${url} appears more than once`;
+        seen.add(url);
+        const want = expected.get(url)!;
         const got = await sha256Hex(blobs[i]);
         if (got === undefined) {
-            console.warn(`[webInference] could not hash ${url} in this browser — skipping its SHA-256 check`);
-            continue;
+            console.warn(
+                `[webInference] could not hash ${url} in this browser — verification failed`,
+            );
+            return `${url.split("/").pop() ?? "a model file"} could not be SHA-256 verified in this browser`;
         }
-        if (got !== want) {
+        if (got.toLowerCase() !== want) {
             return `${url?.split("/").pop() ?? "a model file"} failed its SHA-256 check — the download is corrupt or the file changed upstream. It has been discarded; try again.`;
         }
     }
+    if (seen.size !== expected.size)
+        return "one or more catalog model artifacts are missing from the cache";
     return undefined;
 }
 
@@ -275,6 +319,7 @@ export async function useWebModelFromUrl(entry: {
     files: ModelFile[];
     sizeBytes: number;
     modalities?: ModelModality[];
+    runtime?: ModelCatalogEntry["runtime"];
 }): Promise<string | undefined> {
     // The budget is the TOTAL: weights and projector share one wasm heap (see WEB_MODEL_MAX_BYTES).
     if (entry.sizeBytes > WEB_MODEL_MAX_BYTES) {
@@ -284,6 +329,13 @@ export async function useWebModelFromUrl(entry: {
     if (weights.length !== 1 || mmproj.length > 1) {
         return "this model's file layout isn't supported in the browser — use the desktop app for it";
     }
+    if (entry.files.some((file) => !/^[0-9a-f]{64}$/i.test(file.sha256))) {
+        return "this catalog entry has no valid SHA-256 for every model artifact";
+    }
+    const catalogRevision = await modelCatalogEntryRevision(entry);
+    if (catalogRevision === undefined) {
+        return "this browser could not establish a trusted revision for the catalog entry";
+    }
     await unloadWebModel();
     state.file = undefined;
     state.handle = undefined;
@@ -292,6 +344,8 @@ export async function useWebModelFromUrl(entry: {
     state.id = entry.id;
     state.name = entry.name;
     state.declaredModalities = entry.modalities;
+    state.catalogFiles = entry.files.map((file) => ({ ...file }));
+    state.catalogRevision = catalogRevision;
     state.imageSupported = undefined; // measured at load, not claimed here
     state.status = "downloading";
     state.error = undefined;
@@ -327,10 +381,7 @@ export async function useWebModelFromUrl(entry: {
                 LS_URL_MODEL,
                 JSON.stringify({
                     id: entry.id,
-                    name: entry.name,
-                    url: state.url,
-                    mmprojUrl: state.mmprojUrl,
-                    modalities: entry.modalities,
+                    revision: catalogRevision,
                 }),
             );
         } catch {
@@ -347,30 +398,77 @@ export async function useWebModelFromUrl(entry: {
 }
 
 /** Re-attach a previously picked model from the persisted handle (call once at startup). */
-export async function restoreWebModel(): Promise<void> {
+export async function restoreWebModel(
+    trustedCatalog: ModelCatalogEntry[] = defaultModelCatalog.models,
+    discardUnmatchedCatalogSelection = false,
+): Promise<void> {
     // 1. A chosen catalog model (browser-cached download) restores instantly from localStorage.
     try {
         const raw = localStorage.getItem(LS_URL_MODEL);
         if (raw !== null) {
-            const saved = JSON.parse(raw) as {
-                id: string;
-                name: string;
-                url: string;
-                mmprojUrl?: string;
-                modalities?: ModelModality[];
-            };
-            state.url = saved.url;
-            state.mmprojUrl = saved.mmprojUrl;
-            state.id = saved.id;
-            state.name = saved.name;
-            state.declaredModalities = saved.modalities;
-            state.imageSupported = undefined;
-            state.status = "attached"; // wllama's cache serves the bytes on first load
-            publish();
-            return;
+            const saved = JSON.parse(raw) as { id?: unknown; revision?: unknown };
+            if (typeof saved.id === "string" && typeof saved.revision === "string") {
+                const entry = trustedCatalog.find((candidate) => candidate.id === saved.id);
+                const currentRevision =
+                    entry === undefined ? undefined : await modelCatalogEntryRevision(entry);
+                if (
+                    entry !== undefined &&
+                    currentRevision !== undefined &&
+                    currentRevision === saved.revision &&
+                    entry.files.every((file) => /^[0-9a-f]{64}$/i.test(file.sha256))
+                ) {
+                    const { weights, mmproj } = splitModelFiles(entry.files);
+                    if (
+                        weights.length === 1 &&
+                        mmproj.length <= 1 &&
+                        entry.sizeBytes <= WEB_MODEL_MAX_BYTES
+                    ) {
+                        state.url = weights[0].url;
+                        state.mmprojUrl = mmproj[0]?.url;
+                        state.id = entry.id;
+                        state.name = entry.name;
+                        state.declaredModalities = entry.modalities;
+                        state.catalogFiles = entry.files.map((file) => ({ ...file }));
+                        state.catalogRevision = currentRevision;
+                        state.imageSupported = undefined;
+                        state.status = "attached";
+                        publish();
+                        return;
+                    }
+                }
+            }
+            // Legacy/malformed descriptors can never identify a trusted entry. A syntactically valid
+            // but unmatched revision may belong to a remotely supplied catalog that is not available
+            // during early/offline startup, so leave it inert until the complete catalog is loaded.
+            if (
+                typeof saved.id !== "string" ||
+                typeof saved.revision !== "string" ||
+                discardUnmatchedCatalogSelection
+            ) {
+                localStorage.removeItem(LS_URL_MODEL);
+            }
+            if (discardUnmatchedCatalogSelection && state.file === undefined) {
+                await unloadWebModel();
+                state.url = undefined;
+                state.mmprojUrl = undefined;
+                state.id = undefined;
+                state.name = undefined;
+                state.declaredModalities = undefined;
+                state.catalogFiles = undefined;
+                state.catalogRevision = undefined;
+                state.imageSupported = undefined;
+                state.status = "none";
+                state.error = undefined;
+                publish();
+            }
         }
     } catch {
-        /* fall through to the disk-handle path */
+        // Malformed/unreadable persisted data is never a source of executable metadata.
+        try {
+            localStorage.removeItem(LS_URL_MODEL);
+        } catch {
+            /* storage itself may be unavailable */
+        }
     }
     // 2. A picked disk file restores from its persisted FileSystemFileHandle.
     try {
@@ -382,6 +480,8 @@ export async function restoreWebModel(): Promise<void> {
             // Permission needs a user gesture to re-request — surface as attachable, not silent.
             state.handle = handle;
             state.id = undefined;
+            state.catalogFiles = undefined;
+            state.catalogRevision = undefined;
             state.name = handle.name;
             state.status = "none";
             publish();
@@ -392,6 +492,8 @@ export async function restoreWebModel(): Promise<void> {
         state.file = file;
         state.handle = handle;
         state.id = undefined; // disk files have no catalog id
+        state.catalogFiles = undefined;
+        state.catalogRevision = undefined;
         state.declaredModalities = undefined;
         state.imageSupported = undefined;
         state.name = file.name;
@@ -410,6 +512,8 @@ export async function clearWebModel(): Promise<void> {
     state.url = undefined;
     state.mmprojUrl = undefined;
     state.id = undefined;
+    state.catalogFiles = undefined;
+    state.catalogRevision = undefined;
     state.name = undefined;
     state.declaredModalities = undefined;
     state.imageSupported = undefined;
@@ -481,7 +585,8 @@ async function unloadWebModel(): Promise<void> {
 
 async function ensureLoaded(): Promise<void> {
     if (runtime !== undefined && state.status === "loaded") return;
-    if (state.file === undefined && state.url === undefined) throw new Error("no browser model attached");
+    if (state.file === undefined && state.url === undefined)
+        throw new Error("no browser model attached");
     state.status = "loading";
     publish();
     try {
@@ -490,13 +595,29 @@ async function ensureLoaded(): Promise<void> {
         // Source: a disk File (read in place), or a catalog model served from wllama's browser cache
         // — for a vision entry that Model carries BOTH blobs. wllama sorts weights from projector by
         // reading each GGUF's header (general.architecture == "clip"), so order here is irrelevant.
-        const source =
-            state.file !== undefined
-                ? [state.file]
-                : await new ModelManager().getModelOrDownload(
-                      { url: state.url!, mmprojUrl: state.mmprojUrl },
-                      {},
-                  );
+        let source: unknown;
+        if (state.file !== undefined) {
+            source = [state.file];
+        } else {
+            const files = state.catalogFiles;
+            const revision = state.catalogRevision;
+            if (files === undefined || revision === undefined) {
+                throw new Error("the selected catalog model no longer has trusted source metadata");
+            }
+            const model = await new ModelManager().getModelOrDownload(
+                { url: state.url!, mmprojUrl: state.mmprojUrl },
+                {},
+            );
+            // Downloads are verified when attached and again at the last possible point before the
+            // parser/runtime consumes them. Cache replacement or corruption between those moments
+            // therefore fails closed without executing an unverified artifact.
+            const verificationError = await verifyCachedFiles(model, files);
+            if (verificationError !== undefined) {
+                await model.remove().catch(() => undefined);
+                throw new Error(verificationError);
+            }
+            source = model;
+        }
         await runtime.loadModel(source, {
             n_ctx: 4096,
             // wllama picks threads from crossOriginIsolated + hardwareConcurrency on its own.
@@ -538,7 +659,8 @@ export async function webInfer(request: InferenceRequest): Promise<InferenceResu
                 reason: `${state.name ?? "the attached browser model"} cannot read images — choose a vision model (one with an mmproj projector) in the model manager`,
             };
         }
-        const prompt = request.text !== undefined ? `${request.prompt}\n\n${request.text}` : request.prompt;
+        const prompt =
+            request.text !== undefined ? `${request.prompt}\n\n${request.text}` : request.prompt;
         // Text stays a plain string (byte-identical to before). An image becomes OAI-style structured
         // content: wllama swaps each media part for the model's own media marker and ships the raw
         // FILE bytes (PNG/JPEG as sent — llama.cpp decodes them) beside the prompt. Image first is
@@ -564,7 +686,9 @@ export async function webInfer(request: InferenceRequest): Promise<InferenceResu
             // prompt (plus up to WEB_IMAGE_MAX_TOKENS of image) leaves ample room for this.
             max_tokens: request.maxTokens ?? 1024,
             temperature: 0, // deterministic-leaning extraction, same spirit as the native path
-            ...(request.responseSchema !== undefined ? { response_format: { type: "json_object" } } : {}),
+            ...(request.responseSchema !== undefined
+                ? { response_format: { type: "json_object" } }
+                : {}),
         });
         const text = res?.choices?.[0]?.message?.content;
         if (typeof text !== "string") {

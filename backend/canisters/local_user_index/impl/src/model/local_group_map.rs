@@ -6,16 +6,65 @@ use types::{BuildVersion, ChatId, CyclesTopUp, TimestampMillis, UserId};
 #[derive(Serialize, Deserialize, Default)]
 pub struct LocalGroupMap {
     groups: HashMap<ChatId, LocalGroup>,
+    /// Monotonic allocator for active registration epochs. Keeping only active per-child entries
+    /// avoids an unbounded tombstone map when groups are repeatedly created and deleted.
+    #[serde(default)]
+    registration_generation_counter: u64,
+    #[serde(default)]
+    registration_generations: HashMap<ChatId, u64>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candid::Principal;
+
+    #[test]
+    fn remove_and_readd_changes_the_exact_registration_generation() {
+        let mut groups = LocalGroupMap::default();
+        let id = ChatId::from(Principal::from_slice(&[63]));
+        groups.add(id, BuildVersion::min());
+        let first = groups.registration_generation(&id);
+        assert!(groups.delete(&id));
+        assert_eq!(groups.registration_generation(&id), 0);
+        assert!(groups.registration_generations.is_empty());
+        groups.add(id, BuildVersion::min());
+        assert!(groups.registration_generation(&id) > first);
+    }
 }
 
 impl LocalGroupMap {
     pub fn add(&mut self, chat_id: ChatId, wasm_version: BuildVersion) {
+        let next = self.issue_registration_generation();
+        self.registration_generations.insert(chat_id, next);
         let group = LocalGroup::new(wasm_version);
         self.groups.insert(chat_id, group);
     }
 
     pub fn delete(&mut self, chat_id: &ChatId) -> bool {
-        self.groups.remove(chat_id).is_some()
+        let removed = self.groups.remove(chat_id).is_some();
+        if removed {
+            self.registration_generations.remove(chat_id);
+        }
+        removed
+    }
+
+    fn issue_registration_generation(&mut self) -> u64 {
+        // Compatibility with any unshipped intermediate snapshot that had per-child generations
+        // but no allocator counter.
+        if self.registration_generation_counter == 0 {
+            self.registration_generation_counter = self.registration_generations.values().copied().max().unwrap_or_default();
+        }
+        let next = self
+            .registration_generation_counter
+            .checked_add(1)
+            .expect("local group registration generation exhausted");
+        self.registration_generation_counter = next;
+        next
+    }
+
+    pub fn registration_generation(&self, chat_id: &ChatId) -> u64 {
+        self.registration_generations.get(chat_id).copied().unwrap_or_default()
     }
 
     pub fn get(&self, chat_id: &ChatId) -> Option<&LocalGroup> {

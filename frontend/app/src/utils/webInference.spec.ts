@@ -1,9 +1,10 @@
-import type { ModelFile } from "openchat-shared";
+import type { ModelCatalogEntry, ModelFile } from "openchat-shared";
 import { webcrypto } from "node:crypto";
 import { get } from "svelte/store";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
     clearWebModel,
+    modelCatalogEntryRevision,
     restoreWebModel,
     setWebModelFile,
     useWebModelFromUrl,
@@ -38,6 +39,7 @@ const wl = vi.hoisted(() => ({
     removed: false,
     // the cached files getModelOrDownload resolves to
     cached: [] as { url: string; bytes: Uint8Array }[],
+    metadataUrls: undefined as (string | undefined)[] | undefined,
 }));
 
 vi.mock("@wllama/wllama", () => {
@@ -68,8 +70,16 @@ vi.mock("@wllama/wllama", () => {
             opts?.progressCallback?.({ loaded: total, total });
             wl.progressSeen.push({ loaded: total, total });
             return {
-                files: wl.cached.map((f) => ({ metadata: { originalURL: f.url } })),
-                open: async () => wl.cached.map((f) => new Blob([f.bytes.slice().buffer as ArrayBuffer])),
+                files: wl.cached.map((f, index) => {
+                    const url =
+                        wl.metadataUrls?.[index] ??
+                        (wl.metadataUrls === undefined ? f.url : undefined);
+                    return url === undefined
+                        ? { metadata: {} }
+                        : { metadata: { originalURL: url } };
+                }),
+                open: async () =>
+                    wl.cached.map((f) => new Blob([f.bytes.slice().buffer as ArrayBuffer])),
                 remove: async () => {
                     wl.removed = true;
                 },
@@ -117,40 +127,50 @@ function resetWllama() {
     wl.progressSeen = [];
     wl.removed = false;
     wl.cached = [];
+    wl.metadataUrls = undefined;
 }
 
-describe("webModelStatus id tracking", () => {
+const RESTORE_BYTES = new Uint8Array([7, 8, 9]);
+const RESTORE_URL = "https://trusted.example/model.gguf";
+
+async function trustedRestoreEntry(name = "Trusted model"): Promise<ModelCatalogEntry> {
+    return {
+        id: "trusted-model",
+        name,
+        modalities: ["text"],
+        runtime: "llama-cpp",
+        files: [file(RESTORE_URL, await hashOf(RESTORE_BYTES), RESTORE_BYTES.length)],
+        license: "Test license",
+        sizeBytes: RESTORE_BYTES.length,
+    };
+}
+
+async function persistCatalogSelection(entry: ModelCatalogEntry): Promise<void> {
+    const revision = await modelCatalogEntryRevision(entry);
+    expect(revision).toMatch(/^[0-9a-f]{64}$/);
+    localStorage.setItem(LS_URL_MODEL, JSON.stringify({ id: entry.id, revision }));
+}
+
+describe("trusted web-model restoration", () => {
     beforeEach(async () => {
         await clearWebModel();
         localStorage.clear();
     });
 
-    it("restoreWebModel publishes the saved catalog id so the chooser can mark the current model", async () => {
-        localStorage.setItem(
-            LS_URL_MODEL,
-            JSON.stringify({
-                id: "qwen2.5-0.5b-instruct-q4",
-                name: "Qwen2.5 0.5B (instruct)",
-                url: "https://host/models/qwen2.5-0.5b.gguf",
-            }),
-        );
-        await restoreWebModel();
+    it("restores an exact catalog id/revision offline without trusting persisted executable fields", async () => {
+        const entry = await trustedRestoreEntry();
+        await persistCatalogSelection(entry);
+        await restoreWebModel([entry], true);
         const status = get(webModelStatus);
         expect(status.status).toBe("attached");
-        expect(status.name).toBe("Qwen2.5 0.5B (instruct)");
-        expect(status.id).toBe("qwen2.5-0.5b-instruct-q4");
+        expect(status.name).toBe(entry.name);
+        expect(status.id).toBe(entry.id);
     });
 
     it("attaching a session disk file clears the catalog id (disk files have no catalog row)", async () => {
-        localStorage.setItem(
-            LS_URL_MODEL,
-            JSON.stringify({
-                id: "qwen2.5-0.5b-instruct-q4",
-                name: "Qwen2.5 0.5B (instruct)",
-                url: "https://host/models/qwen2.5-0.5b.gguf",
-            }),
-        );
-        await restoreWebModel();
+        const entry = await trustedRestoreEntry();
+        await persistCatalogSelection(entry);
+        await restoreWebModel([entry], true);
         const err = await setWebModelFile(new File([new Uint8Array(8)], "local-model.gguf"));
         expect(err).toBeUndefined();
         const status = get(webModelStatus);
@@ -160,17 +180,67 @@ describe("webModelStatus id tracking", () => {
     });
 
     it("clearWebModel clears the id along with the rest of the state", async () => {
-        localStorage.setItem(
-            LS_URL_MODEL,
-            JSON.stringify({ id: "gemma-3-1b-it-q4", name: "Gemma 3 1B", url: "https://host/g.gguf" }),
-        );
-        await restoreWebModel();
-        expect(get(webModelStatus).id).toBe("gemma-3-1b-it-q4");
+        const entry = await trustedRestoreEntry();
+        await persistCatalogSelection(entry);
+        await restoreWebModel([entry], true);
+        expect(get(webModelStatus).id).toBe(entry.id);
         await clearWebModel();
         const status = get(webModelStatus);
         expect(status.status).toBe("none");
         expect(status.id).toBeUndefined();
         expect(status.name).toBeUndefined();
+    });
+
+    it("rejects a legacy/tampered descriptor even if it injects an executable URL", async () => {
+        localStorage.setItem(
+            LS_URL_MODEL,
+            JSON.stringify({
+                id: "trusted-model",
+                revision: "not-a-revision",
+                url: "https://evil/model.gguf",
+            }),
+        );
+        await restoreWebModel([await trustedRestoreEntry()], true);
+        expect(get(webModelStatus).status).toBe("none");
+        expect(localStorage.getItem(LS_URL_MODEL)).toBeNull();
+        expect(wl.modelSource).toBeUndefined();
+    });
+
+    it("rejects a persisted revision after trusted catalog metadata changes", async () => {
+        const oldEntry = await trustedRestoreEntry("Old name");
+        await persistCatalogSelection(oldEntry);
+        await restoreWebModel([oldEntry]);
+        expect(get(webModelStatus).status).toBe("attached");
+        const revisedEntry = {
+            ...oldEntry,
+            name: "New name",
+            files: [{ ...oldEntry.files[0], url: `${RESTORE_URL}?v=2` }],
+        };
+        await restoreWebModel([revisedEntry], true);
+        expect(get(webModelStatus).status).toBe("none");
+        expect(localStorage.getItem(LS_URL_MODEL)).toBeNull();
+    });
+
+    it("removes malformed persisted JSON without attempting to attach it", async () => {
+        localStorage.setItem(LS_URL_MODEL, "{not-json");
+        await restoreWebModel([await trustedRestoreEntry()], true);
+        expect(get(webModelStatus).status).toBe("none");
+        expect(localStorage.getItem(LS_URL_MODEL)).toBeNull();
+    });
+
+    it("keeps an unmatched remote revision inert during offline startup, then resolves it from the full catalog", async () => {
+        const entry = await trustedRestoreEntry();
+        await persistCatalogSelection(entry);
+        await restoreWebModel([], false);
+        expect(get(webModelStatus).status).toBe("none");
+        expect(localStorage.getItem(LS_URL_MODEL)).not.toBeNull();
+
+        await restoreWebModel([entry], true);
+        expect(get(webModelStatus)).toMatchObject({
+            status: "attached",
+            id: entry.id,
+            name: entry.name,
+        });
     });
 });
 
@@ -182,19 +252,32 @@ const WEIGHTS_URL = "https://host/models/smolvlm.gguf";
 const PROJ_URL = "https://host/models/mmproj-smolvlm.gguf";
 const PIXELS = new Uint8Array([0x89, 0x50, 0x4e, 0x47]); // a PNG magic number, as bytes
 
-/** Attach a catalog vision entry (weights + projector), skipping the hash check unless asked for. */
-async function attachVisionModel(sha: { weights: string; proj: string } = { weights: "", proj: "" }) {
+async function trustedVisionEntry(sha?: {
+    weights: string;
+    proj: string;
+}): Promise<ModelCatalogEntry> {
+    const hashes = sha ?? { weights: await hashOf(WEIGHTS), proj: await hashOf(PROJ) };
+    return {
+        id: "smolvlm-256m-instruct-q8",
+        name: "SmolVLM 256M (vision)",
+        files: [
+            file(WEIGHTS_URL, hashes.weights, WEIGHTS.length),
+            file(PROJ_URL, hashes.proj, PROJ.length),
+        ],
+        sizeBytes: WEIGHTS.length + PROJ.length,
+        modalities: ["text", "image"],
+        runtime: "llama-cpp",
+        license: "Test license",
+    };
+}
+
+/** Attach a catalog vision entry (weights + projector), verifying every artifact. */
+async function attachVisionModel(sha?: { weights: string; proj: string }) {
     wl.cached = [
         { url: WEIGHTS_URL, bytes: WEIGHTS },
         { url: PROJ_URL, bytes: PROJ },
     ];
-    return useWebModelFromUrl({
-        id: "smolvlm-256m-instruct-q8",
-        name: "SmolVLM 256M (vision)",
-        files: [file(WEIGHTS_URL, sha.weights, WEIGHTS.length), file(PROJ_URL, sha.proj, PROJ.length)],
-        sizeBytes: WEIGHTS.length + PROJ.length,
-        modalities: ["text", "image"],
-    });
+    return useWebModelFromUrl(await trustedVisionEntry(sha));
 }
 
 describe("webInfer", () => {
@@ -217,7 +300,11 @@ describe("webInfer", () => {
         const res = await webInfer({ prompt: "read this receipt", image: PIXELS });
         expect(res).toEqual({ kind: "ok", text: "extracted" });
 
-        const content = wl.lastMessages?.[0].content as { type: string; data?: ArrayBuffer; text?: string }[];
+        const content = wl.lastMessages?.[0].content as {
+            type: string;
+            data?: ArrayBuffer;
+            text?: string;
+        }[];
         expect(content.map((c) => c.type)).toEqual(["image", "text"]); // VLMs are trained image-first
         expect(new Uint8Array(content[0].data!)).toEqual(PIXELS);
         expect(content[1].text).toBe("read this receipt");
@@ -259,7 +346,10 @@ describe("webInfer", () => {
     // test instead of silently costing the user an entry.
     it("defaults to a token budget a chatty multi-entry reply can finish inside", async () => {
         await setWebModelFile(new File([new Uint8Array(8)], "local-model.gguf"));
-        await webInfer({ prompt: "extract the transactions", text: "Owe me 300 uber 150 food\n\n500 movies" });
+        await webInfer({
+            prompt: "extract the transactions",
+            text: "Owe me 300 uber 150 food\n\n500 movies",
+        });
         expect(wl.lastCompletionOpts?.max_tokens as number).toBeGreaterThanOrEqual(1024);
     });
 
@@ -346,16 +436,21 @@ describe("useWebModelFromUrl with a projector", () => {
         });
     });
 
-    it("persists the projector URL so the model re-attaches whole on the next visit", async () => {
-        await attachVisionModel();
+    it("persists only catalog identity/revision and re-resolves both files from trusted metadata", async () => {
+        const entry = await trustedVisionEntry();
+        wl.cached = [
+            { url: WEIGHTS_URL, bytes: WEIGHTS },
+            { url: PROJ_URL, bytes: PROJ },
+        ];
+        await useWebModelFromUrl(entry);
         const saved = JSON.parse(localStorage.getItem(LS_URL_MODEL)!);
-        expect(saved.url).toBe(WEIGHTS_URL);
-        expect(saved.mmprojUrl).toBe(PROJ_URL);
-        expect(saved.modalities).toEqual(["text", "image"]);
+        expect(Object.keys(saved).sort()).toEqual(["id", "revision"]);
+        expect(saved.id).toBe(entry.id);
+        expect(saved.revision).toBe(await modelCatalogEntryRevision(entry));
 
         await clearWebModel();
         localStorage.setItem(LS_URL_MODEL, JSON.stringify(saved));
-        await restoreWebModel();
+        await restoreWebModel([entry], true);
         resetWllama();
         wl.cached = [
             { url: WEIGHTS_URL, bytes: WEIGHTS },
@@ -384,6 +479,90 @@ describe("useWebModelFromUrl with a projector", () => {
         expect(err).toMatch(/SHA-256/);
         expect(wl.removed).toBe(true); // corrupt bytes don't stay in the cache
         expect(get(webModelStatus).status).toBe("error");
+    });
+
+    it("rejects a cache missing one expected artifact", async () => {
+        wl.cached = [{ url: WEIGHTS_URL, bytes: WEIGHTS }];
+        const err = await useWebModelFromUrl(await trustedVisionEntry());
+        expect(err).toMatch(/artifact set|missing/i);
+        expect(wl.removed).toBe(true);
+        expect(wl.loadCount).toBe(0);
+    });
+
+    it("rejects a cached artifact with missing or unexpected source metadata", async () => {
+        wl.cached = [
+            { url: WEIGHTS_URL, bytes: WEIGHTS },
+            { url: PROJ_URL, bytes: PROJ },
+        ];
+        wl.metadataUrls = [WEIGHTS_URL, "https://evil.example/projector.gguf"];
+        const err = await useWebModelFromUrl(await trustedVisionEntry());
+        expect(err).toMatch(/missing or unexpected source metadata/i);
+        expect(wl.removed).toBe(true);
+    });
+
+    it("rejects duplicate cached source metadata instead of treating it as both files", async () => {
+        wl.cached = [
+            { url: WEIGHTS_URL, bytes: WEIGHTS },
+            { url: PROJ_URL, bytes: PROJ },
+        ];
+        wl.metadataUrls = [WEIGHTS_URL, WEIGHTS_URL];
+        const err = await useWebModelFromUrl(await trustedVisionEntry());
+        expect(err).toMatch(/appears more than once/i);
+        expect(wl.removed).toBe(true);
+    });
+
+    it("rejects duplicate artifact URLs in trusted catalog metadata before download", async () => {
+        const entry = await trustedVisionEntry();
+        entry.files[1] = { ...entry.files[1], url: WEIGHTS_URL };
+        wl.cached = [
+            { url: WEIGHTS_URL, bytes: WEIGHTS },
+            { url: WEIGHTS_URL, bytes: PROJ },
+        ];
+        const err = await useWebModelFromUrl(entry);
+        expect(err).toMatch(/file layout/i);
+        expect(wl.modelSource).toBeUndefined();
+    });
+
+    it("rejects missing source metadata instead of matching blobs by cache order", async () => {
+        wl.cached = [
+            { url: WEIGHTS_URL, bytes: WEIGHTS },
+            { url: PROJ_URL, bytes: PROJ },
+        ];
+        wl.metadataUrls = [WEIGHTS_URL, undefined];
+        const err = await useWebModelFromUrl(await trustedVisionEntry());
+        expect(err).toMatch(/missing or unexpected source metadata/i);
+        expect(wl.removed).toBe(true);
+    });
+
+    it("fails closed when SHA-256 allocation/digest is unavailable", async () => {
+        const digest = vi.fn(async () => {
+            throw new Error("allocation failed");
+        });
+        vi.stubGlobal("crypto", { subtle: { digest } });
+        try {
+            wl.cached = [
+                { url: WEIGHTS_URL, bytes: WEIGHTS },
+                { url: PROJ_URL, bytes: PROJ },
+            ];
+            const err = await useWebModelFromUrl(await trustedVisionEntry());
+            expect(err).toMatch(/trusted revision|SHA-256 verified/i);
+            expect(wl.loadCount).toBe(0);
+        } finally {
+            vi.stubGlobal("crypto", webcrypto);
+        }
+    });
+
+    it("re-verifies the cache immediately before runtime load", async () => {
+        expect(await attachVisionModel()).toBeUndefined();
+        wl.cached = [
+            { url: WEIGHTS_URL, bytes: WEIGHTS },
+            { url: PROJ_URL, bytes: new Uint8Array([0, 0, 0]) },
+        ];
+        const result = await webInfer({ prompt: "do not execute this cache" });
+        expect(result.kind).toBe("error");
+        expect(result.kind === "error" && result.error).toMatch(/SHA-256/);
+        expect(wl.removed).toBe(true);
+        expect(wl.loadCount).toBe(0);
     });
 
     it("refuses a layout the browser can't load, before spending a byte of bandwidth", async () => {

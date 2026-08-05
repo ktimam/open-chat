@@ -1,593 +1,848 @@
-import "../../../libraries/types/can.did";
-
+﻿type ActionSigningKeyStatus = variant { VerifyOnly; Staged; Active };
+type ActionSigningPublicKey = record {
+  status : ActionSigningKeyStatus;
+  key_id : blob;
+  verify_until : opt nat64;
+  created_at : nat64;
+  public_key_pem : text;
+};
 type AiActionCardRowTemplate = record {
-    field : text;
-    label : text;
+  // Key in the model's JSON output to read this row's value from.
+  field : text;
+  // Human-readable label shown on the card row.
+  label : text;
 };
-
+// Generic, app-agnostic template describing the confirmable card produced from the model's output.
 type AiActionCardTemplate = record {
-    title : text;
-    confirm_label : text;
-    cancel_label : text;
-    rows : vec AiActionCardRowTemplate;
-    disclosure : opt text;
+  title : text;
+  rows : vec AiActionCardRowTemplate;
+  confirm_label : text;
+  disclosure : opt text;
+  cancel_label : text;
 };
-
-type AiActionRule = variant {
-    keyword_map : KeywordMapRule;
-    from_message : FromMessageRule;
-    normalize : NormalizeRule;
-    instruction : InstructionRule;
-    context : ContextRule;
-};
-
-type KeywordMapRule = record {
-    field : text;
-    mode : RuleMode;
-    map : vec KeywordMapping;
-};
-
-type KeywordMapping = record {
-    value : text;
-    keywords : vec text;
-};
-
-type RuleMode = variant {
-    hint;
-    "override";
-};
-
-type FromMessageRule = record {
-    field : text;
-    max_length : opt nat32;
-};
-
-type NormalizeRule = record {
-    field : text;
-    ops : vec NormalizeOp;
-};
-
-type NormalizeOp = variant {
-    k_m_suffix;
-    strip_symbols;
-    uppercase;
-    lowercase;
-    trim;
-};
-
-type InstructionRule = record {
-    "text" : text;
-};
-
-type ContextRule = record {
-    provide : vec ContextItem;
-};
-
-type ContextItem = variant {
-    today;
-};
-
+// A single, generic "AI action": an app-supplied configuration that lets a client-side model propose a
+// *confirmable, authenticated* in-chat action. Nothing here is specific to any one app — the prompt,
+// output schema, card layout and delivery endpoint are all supplied by the app that declares the action,
+// so the same mechanism serves any consumer.
 type AiActionDefinition = record {
-    name : text;
-    description : text;
-    prompt_template : text;
-    response_schema : text;
-    card : AiActionCardTemplate;
-    endpoint : text;
-    consumer_public_key : opt text;
-    rules : vec AiActionRule;
-    accepts_image : bool;
+  // When true, this action can extract from an IMAGE message, so OpenChat's auto-propose chip
+  // offers it on images. Absent (manifests predating the flag) === false — an app opts in.
+  accepts_image : bool;
+  // Where a confirmed action is delivered — the consumer's signed webhook endpoint.
+  endpoint : text;
+  // How to turn the model's output into a confirmable card shown to the user.
+  card : AiActionCardTemplate;
+  // Stable, human-readable identifier (e.g. "expense.import"), unique per owner.
+  name : text;
+  description : text;
+  // Optional public key (PEM) the consumer advertises so the payload can be verified end-to-end.
+  consumer_public_key : opt text;
+  // Prompt the on-device model is run with; the client substitutes the user's input before inference.
+  prompt_template : text;
+  // JSON Schema the model's structured output must conform to.
+  response_schema : text;
+  // Optional extraction rules that steer the model's prompt and deterministically post-process its
+  // output on the client. Absent means no rules.
+  rules : vec AiActionRule;
 };
-
-type AiAppSurface = record {
-    kind : text;
-    url : text;
-    display : SurfaceDisplay;
+// A single, generic extraction rule. Rules are declared by whoever registers the action and are
+// interpreted entirely on the client: some contribute guidance lines to the prompt, others run as a
+// deterministic post-pass over the model's structured output.
+type AiActionRule = variant {
+  context : ContextRule;
+  keyword_map : KeywordMapRule;
+  from_message : FromMessageRule;
+  normalize : NormalizeRule;
+  instruction : InstructionRule;
 };
-
-type SurfaceDisplay = variant {
-    sheet;
-    external;
+type AiAppCardCapabilityScope = variant { private_context };
+// Minimum external context needed to associate one redemption with an app user, chat, and source
+// message. Every handle is a dedicated-key HMAC scoped to the exact UserIndex/app/app-canister;
+// raw OpenChat principals and chat/message coordinates are never returned by this endpoint.
+type AppScopedCardContext = record {
+  context_version : nat16;
+  action_id : text;
+  message_handle : blob;
+  app_revision : nat64;
+  app_id : nat32;
+  app_subject : blob;
+  chat_handle : blob;
 };
-
+// The caller-supplied part of an AI app registration: one manifest covering the app's identity, its
+// app-level delivery key and every action it offers. Registering the same `name` again (by the same
+// owner) upserts the whole manifest, so an external app can keep itself up to date with a single call
+// from a deploy script.
 type AiAppManifest = record {
-    name : text;
-    description : text;
-    icon_url : opt text;
-    app_canister_id : opt principal;
-    inbox_canister_id : opt principal;
-    consumer_public_key : text;
-    per_user_keys : bool;
-    actions : vec AiActionDefinition;
-    surfaces : vec AiAppSurface;
+  // Optional per-app inbox canister: confirmed actions from this app are deposited here instead of
+  // OpenChat's globally configured action_inbox (per-app isolation + cycles). App-declared routing,
+  // carried onto each confirmed action card; OpenChat never interprets the deposited payload.
+  inbox_canister_id : opt principal;
+  // App-declared UI surfaces OpenChat can open on the app's behalf (e.g. a chat-linking page).
+  // Absent on the wire means none.
+  surfaces : vec AiAppSurface;
+  // When set, each user's confirmed actions are delivered encrypted to that user's own registered
+  // key (see `AiAppUserKey`) instead of the app-level `consumer_public_key`. A user with no key
+  // registered yet must link the app first (via a one-time link code) before actions can run.
+  per_user_keys : bool;
+  // Stable, human-readable ASCII identifier. Case and visual separators share a canonical key.
+  // Re-registering the caller's key upserts its stable id. Unpublished reservations are bounded
+  // and expiring; only a canister-vouched, governance-published app owns the key exclusively.
+  name : text;
+  description : text;
+  // The actions this app offers. A per-action `consumer_public_key`, when set, overrides the app key.
+  actions : vec AiActionDefinition;
+  // P-256 SPKI PEM: the app-level delivery key confirmed actions are encrypted/verified against.
+  // May be empty when `per_user_keys` is set — delivery then always targets the acting user's own
+  // registered key and this app-level key is never read.
+  consumer_public_key : text;
+  icon_url : opt text;
+  // The app's own IC canister. When set, `publish_ai_app` calls its generic
+  // `c2c_verify_ai_app_v2` method and publishes only when it vouches for the exact registry,
+  // owner, canonical name, app id/revision and full manifest commitment. This is app-agnostic:
+  // OpenChat knows only the well-known verifier contract. `serde(default)` preserves
+  // upgrade/wire compatibility like the other optional fields.
+  app_canister_id : opt principal;
 };
-
+// A registered AI app. The on-chain `id`, `owner` and timestamps are assigned by the canister.
 type AiAppRegistration = record {
-    id : nat32;
-    owner : UserId;
-    manifest : AiAppManifest;
-    created : TimestampMillis;
-    updated : TimestampMillis;
-    published : bool;
+  id : nat32;
+  created : nat64;
+  owner : principal;
+  // Directory visibility: a new registration starts UNPUBLISHED (visible only to its owner, so
+  // it can be developed/tested privately); `publish_ai_app` flips it. `serde(default)` makes
+  // pre-upgrade entries deserialize as unpublished. A sibling of `manifest` deliberately; a
+  // changed manifest resets it and requires a fresh exact-revision verifier decision.
+  published : bool;
+  updated : nat64;
+  manifest : AiAppManifest;
 };
-
-type AiAppsResponse = variant {
-    Success : record {
-        apps : vec AiAppRegistration;
-    };
+type AiAppLookup = record { app_id : nat32; revision : opt nat64 };
+type AiAppsByIdsArgs = record { lookups : vec AiAppLookup };
+type AiAppsByIdsResponse = variant {
+  ResponseTooLarge : nat32;
+  Success : AiAppsByIdsSuccess;
+  TooManyApps : nat8;
 };
-
-type ExploreAiAppsArgs = record {
-    search_term : opt text;
-    page_index : nat32;
-    page_size : nat8;
+type AiAppsByIdsSuccess = record { apps : vec AiAppRegistration };
+type MyAiAppsArgs = record { page_size : nat8; page_index : nat32 };
+type MyAiAppsResponse = variant {
+  InvalidPageSize : nat8;
+  ResponseTooLarge : nat32;
+  Success : MyAiAppsSuccess;
+  UserNotFound;
 };
-
-type ExploreAiAppsResponse = variant {
-    Success : record {
-        matches : vec AiAppRegistration;
-        total : nat32;
-    };
-    TermTooShort : nat8;
-    TermTooLong : nat8;
-    Error : OCError;
+type MyAiAppsSuccess = record { total : nat32; apps : vec AiAppRegistration };
+// A UI surface an app declares in its manifest: a URL OpenChat opens at well-known moments so the
+// user can configure the app without leaving the chat client.
+type AiAppSurface = record {
+  // URL template. The only substituted placeholder is the public {appId}; app-scoped context is
+  // delivered over authenticated contracts and never in a navigation URL.
+  url : text;
+  // What the surface is for. "chat_link" = configure/link a chat inside the app (opened by
+  // OpenChat after the first confirmed action in a chat). Other kinds are app-defined; OpenChat
+  // ignores kinds it does not know.
+  kind : text;
+  display : SurfaceDisplay;
 };
-
-type PublishAiAppArgs = record {
-    app_id : nat32;
+type Args = record { key_id : blob };
+type Args_1 = record { user_id : principal; achievement_id : nat32 };
+type Args_10 = record { updates_since : nat64 };
+type Args_11 = record { app_id : nat32 };
+type Args_12 = record { bot_id : principal };
+type Args_13 = record { manifest : AiAppManifest };
+type Args_14 = record {
+  id : nat32;
+  url : text;
+  expires : nat64;
+  logo : text;
+  name : text;
+  canister_id : principal;
+  max_awards : nat32;
+  chit_reward : nat32;
+  submitted_by : principal;
 };
-
-type PublishAiAppResponse = variant {
-    Success;
-    NotFound;
-    NotAuthorised;
-    NotVerified;
-    Error : OCError;
+type Args_15 = record { app_id : nat32 };
+type Args_16 = record { bot_id : principal };
+type Args_17 = record {
+  // Raw 64-byte P-256 ECDSA signature (r||s, as WebCrypto emits) over the canonical revoke
+  // challenge — proof the caller holds the private key for `public_key`. See the endpoint comment.
+  signature : blob;
+  key_version : nat64;
+  // The exact P-256 SPKI PEM currently registered for this tuple.
+  public_key : text;
+  app_id : nat32;
+  // Exact tuple returned by the app-authenticated link claim.
+  app_subject : blob;
+  // Client clock (ms) at signing time; bound into the challenge to give a replay window.
+  timestamp : nat64;
 };
-
-type RegisterAiAppArgs = record {
-    manifest : AiAppManifest;
+type Args_18 = record { max_results : nat8; search_term : text };
+type Args_19 = record {
+  "principal" : opt principal;
+  endpoint : opt text;
+  owner : opt principal;
+  bot_id : principal;
+  definition : opt BotDefinition;
+  avatar : OptionUpdate;
 };
-
-type RegisterAiAppResponse = variant {
-    Success : AiAppRegistration;
-    InvalidRequest : text;
-    Error : OCError;
+type Args_2 = record { updated_since : nat64 };
+type Args_20 = record { username : opt text; user_id : opt principal };
+type Args_21 = record {
+  user_groups : vec UserGroup;
+  users_suspended_since : opt nat64;
 };
-
-type DeleteAiAppArgs = record {
-    name : text;
+type Args_22 = record { month : nat8; year : nat16; users : vec principal };
+type Args_3 = record {
+  // P-256 SPKI PEM key the exact registered app canister binds for this user.
+  public_key : text;
+  // The 256-bit lowercase-hex code shown to the OpenChat user.
+  code : text;
 };
-
-type DeleteAiAppResponse = variant {
-    Success;
-    NotFound;
-    Error : OCError;
+type Args_4 = record {
+  token : blob;
+  recipient_public_key : blob;
+  recipient_key_scheme : text;
 };
-
-type ClaimAiAppLinkCodeArgs = record {
-    code : text;
-    public_key : text;
+type AiAppActionInboxSelectorArgs = record {
+  app_id : nat32;
+  app_revision : nat64;
+  action_id : text;
 };
-
-type ClaimAiAppLinkCodeResponse = variant {
-    Success;
-    CodeNotFound;
-    CodeExpired;
-    InvalidRequest : text;
-    Error : OCError;
+type AiAppActionInboxSelectorSuccess = record {
+  inbox_canister_id : principal;
+  consumer_queue_selector : blob;
+  consumer_queue_selector_version : nat16;
 };
-
-type RevokeAiAppUserKeyArgs = record {
-    public_key : text;
-    signature : blob;
-    timestamp : nat64;
+type AiAppActionInboxSelectorResponse = variant {
+  Success : AiAppActionInboxSelectorSuccess;
+  NotAuthorized;
+  AppUnavailable;
+  InvalidRequest : text;
 };
-
-type RevokeAiAppUserKeyResponse = variant {
-    Success;
-    KeyNotFound;
-    Error : OCError;
+type Args_5 = record { username : text; is_bot : bool };
+type Args_6 = record {
+  // P-256 SPKI PEM public key to register for the code's (user, app) pair.
+  public_key : text;
+  // The 256-bit lowercase-hex claim token the user copied from OpenChat.
+  code : text;
 };
-
-type UserRegistrationCanisterResponse = variant {
-    Success : CanisterId;
-    NewRegistrationsClosed;
-    Error : OCError;
+type Args_7 = record { name : text };
+type Args_8 = record {
+  page_size : nat8;
+  page_index : nat32;
+  search_term : opt text;
 };
-
-type PublicKeyResponse = variant {
-    Success : text;
-    NotInitialised;
-    Error : OCError;
+type Args_9 = record {
+  page_size : nat8;
+  page_index : nat32;
+  installation_location : opt BotInstallationLocation;
+  search_term : opt text;
+  exclude_installed : bool;
 };
-
-type BotUpdatesArgs = record {
-    updated_since : TimestampMillis;
+type AutonomousConfig = record { permissions : BotPermissions };
+type BotCommandDefinition = record {
+  permissions : BotPermissions;
+  default_role : opt GroupRole;
+  name : text;
+  description : opt text;
+  direct_messages : opt bool;
+  placeholder : opt text;
+  params : vec BotCommandParam;
 };
-
-type BotUpdatesResponse = variant {
-    Success : record {
-        added_or_updated: vec record {
-            id : UserId;
-            owner : UserId;
-            name : text;
-            avatar_id : opt nat;
-            endpoint : text;
-            description : text;
-            commands : vec BotCommandDefinition;
-            autonomous_config : opt AutonomousConfig;
-            last_updated : TimestampMillis;
-            registration_status : BotRegistrationStatus;
-            restricted_locations : opt vec BotInstallationLocationType;
-        };
-        removed : vec UserId;
-        timestamp : TimestampMillis;
-    };
-    SuccessNoUpdates;
+type BotCommandOptionChoice = record { value : text; name : text };
+type BotCommandOptionChoice_1 = record { value : int; name : text };
+type BotCommandOptionChoice_2 = record { value : float64; name : text };
+type BotCommandParam = record {
+  name : text;
+  description : opt text;
+  required : bool;
+  placeholder : opt text;
+  param_type : BotCommandParamType;
 };
-
-type BotRegistrationStatus = variant {
-    Private : opt BotInstallationLocation;
-    Public;
+type BotCommandParamType = variant {
+  UserParam;
+  StringParam : StringParam;
+  DateTimeParam : DateTimeParam;
+  IntegerParam : IntegerParam;
+  DecimalParam : DecimalParam;
+  BooleanParam;
 };
-
-type CheckUsernameArgs = record {
-    username : text;
-    is_bot : bool;
-};
-
-type CheckUsernameResponse = variant {
-    Success;
-    UsernameTaken;
-    UsernameInvalid;
-    UsernameTooShort : nat16;
-    UsernameTooLong : nat16;
-    Error : OCError;
-};
-
-type CurrentUserResponse = variant {
-    Success : record {
-        user_id : UserId;
-        username : text;
-        date_created : TimestampMillis;
-        display_name : opt text;
-        avatar_id : opt nat;
-        icp_account : AccountIdentifier;
-        referrals : vec UserId;
-        is_platform_moderator : bool;
-        is_platform_operator : bool;
-        suspension_details : opt SuspensionDetails;
-        is_suspected_bot : bool;
-        diamond_membership_details : opt DiamondMembershipDetails;
-        diamond_membership_status : DiamondMembershipStatusFull;
-        moderation_flags_enabled : nat32;
-        is_unique_person : bool;
-        total_chit_earned : int32;
-        chit_balance : int32;
-        streak : nat16;
-        max_streak : nat16;
-        hide_online_status : bool;
-    };
-    UserNotFound;
-    Error : OCError;
-};
-
-type UserArgs = record {
-    user_id : opt UserId;
-    username : opt text;
-};
-
-type UserResponse = variant {
-    Success : UserSummary;
-    UserNotFound;
-    Error : OCError;
-};
-
-type UsersArgs = record {
-    user_groups : vec record {
-        users : vec UserId;
-        updated_since : TimestampMillis;
-    };
-    users_suspended_since : opt TimestampMillis;
-};
-
-type UsersResponse = variant {
-    Success : record {
-        users : vec UserSummaryV2;
-        current_user : opt CurrentUserSummary;
-        deleted : vec UserId;
-        timestamp : TimestampMillis;
-    };
-};
-
-type ExploreBotsArgs = record {
-    installation_location : opt BotInstallationLocation;
-    search_term : opt text;
-    page_index : nat32;
-    page_size : nat8;
-    exclude_installed : bool;
-};
-
-type ExploreBotsResponse = variant {
-    Success : record {
-        matches : vec BotMatch;
-        total : nat32;
-    };
-    TermTooShort : nat8;
-    TermTooLong : nat8;
-    InvalidTerm;
-    Error : OCError;
-};
-
-type BotMatch = record {
-    id : UserId;
-    score : nat32;
-    owner : UserId;
-    name : text;
-    description : text;
-    endpoint : text;
-    avatar_id : opt nat;
-    commands : vec BotCommandDefinition;
-    autonomous_config : opt AutonomousConfig;
-};
-
-type SearchArgs = record {
-    search_term : text;
-    max_results : nat8;
-};
-
-type SearchResponse = variant {
-    Success : record {
-        users : vec UserSummary;
-        timestamp : TimestampMillis;
-    };
-};
-
-type UsersChitArgs = record {
-    users : vec UserId;
-    year : nat16;
-    month : nat8;
-};
-
-type UsersChitResponse = variant {
-    Success : record {
-        chit : vec Chit;
-    };
-};
-
-type DiamondMembershipFeesResponse = variant {
-    Success : vec record {
-        token_symbol : text;
-        one_month : nat64;
-        three_months : nat64;
-        one_year : nat64;
-        lifetime : nat64;
-    };
-};
-
-type PublishBotArgs = record {
-    bot_id : UserId;
-};
-
-type PublishBotResponse = variant {
-    Success;
-    NotFound;
-    NotAuthorised;
-    Error : OCError;
-};
-
-type UpdateBotArgs = record {
-    bot_id : UserId;
-    owner : opt UserId;
-    "principal" : opt principal;
-    avatar : TextUpdate; // Image as a data URL
-    endpoint : opt text;
-    definition : opt BotDefinition;
-};
-
-type UpdateBotResponse = variant {
-    Success;
-    PrincipalInvalid;
-    PrincipalAlreadyUsed;
-    AvatarInvalid;
-    EndpointInvalid;
-    BotNotFound;
-    BotSuspended;
-    NotAuthorised;
-    OwnerNotFound;
-    OwnerSuspended;
-    NewOwnerNotFound;
-    NewOwnerSuspended;
-    DescriptionTooLong;
-    TooManyCommands;
-    Error : OCError;
-};
-
-type RemoveBotArgs = record {
-    bot_id : UserId;
-};
-
-type RemoveBotResponse = variant {
-    Success;
-    BotNotFound;
-    NotAuthorised;
-    Error : OCError;
-};
-
+type BotDataEncoding = variant { MsgPack; Json; Candid };
 type BotDefinition = record {
-    description : text;
-    commands : vec BotCommandDefinition;
-    autonomous_config : opt AutonomousConfig;
-    default_subscriptions : opt BotSubscriptions;
-    data_encoding : opt BotDataEncoding;
-    restricted_locations : opt vec BotInstallationLocationType;
+  restricted_locations : opt vec BotInstallationLocationType;
+  description : text;
+  default_subscriptions : opt BotSubscriptions;
+  autonomous_config : opt AutonomousConfig;
+  commands : vec BotCommandDefinition;
+  data_encoding : opt BotDataEncoding;
 };
-
-type AutonomousConfig = record {
-    permissions : BotPermissions;
+type BotDetails = record {
+  id : principal;
+  endpoint : text;
+  owner : principal;
+  restricted_locations : opt vec BotInstallationLocationType;
+  name : text;
+  description : text;
+  last_updated : nat64;
+  avatar_id : opt nat;
+  autonomous_config : opt AutonomousConfig;
+  commands : vec BotCommandDefinition;
+  registration_status : BotRegistrationStatus;
 };
-
+type BotInstallationLocation = variant {
+  Group : principal;
+  User : principal;
+  Community : principal;
+};
+type BotInstallationLocationType = variant { Group; User; Community };
+type BotMatch = record {
+  id : principal;
+  endpoint : text;
+  owner : principal;
+  name : text;
+  description : text;
+  score : nat32;
+  avatar_id : opt nat;
+  autonomous_config : opt AutonomousConfig;
+  commands : vec BotCommandDefinition;
+};
+type BotPermissions = record {
+  chat : nat32;
+  community : nat32;
+  message : nat32;
+};
+type BotRegistrationStatus = variant {
+  Private : opt BotInstallationLocation;
+  Public;
+};
 type BotSubscriptions = record {
-    community : vec CommunityEventType;
-    chat : vec ChatEventType;
+  chat : vec ChatEventType;
+  community : vec CommunityEventType;
 };
-
-type RegisterExternalAchievementArgs = record {
-    id : nat32;
-    submitted_by : UserId;
-    name : text;
-    logo : text;
-    url : text;
-    canister_id : CanisterId;
-    chit_reward : nat32;
-    expires : TimestampMillis;
-    max_awards : nat32;
+type Chat = variant {
+  Group : principal;
+  Channel : record { principal; nat32 };
+  Direct : principal;
 };
-
-type RegisterExternalAchievementResponse = variant {
-    Success;
+type ChatEventType = variant {
+  NameChanged;
+  MessageVideoCall;
+  DisappearingMessagesUpdated;
+  GateUpdated;
+  MessageP2pSwapCancelled;
+  MessagePinned;
+  UsersInvited;
+  UsersBlocked;
+  MessageUnpinned;
+  MessageOther;
+  BotUpdated;
+  MessageP2pSwapCompleted;
+  MessagePollVote;
+  Message;
+  PermissionsChanged;
+  HistoryDeleted;
+  MembersJoined;
+  MessageActionCardResponse;
+  MessagePollEnded;
+  UsersUnblocked;
+  Unfrozen;
+  VisibilityChanged;
+  RulesChanged;
+  DescriptionChanged;
+  MessagePrizeClaim;
+  ExternalUrlUpdated;
+  InviteCodeChanged;
+  MessageDeleted;
+  BotRemoved;
+  MessageReaction;
+  MembersLeft;
+  MessageUndeleted;
+  RoleChanged;
+  BotAdded;
+  Created;
+  MessageTipped;
+  Frozen;
+  MessageEdited;
+  AvatarChanged;
 };
-
-type PlatformModeratorsResponse = variant {
-    Success : record {
-        users : vec UserId;
-    };
-};
-
-type PlatformModeratorsGroupResponse = variant {
-    Success : ChatId;
-};
-
-type PlatformOperatorsArgs = record {};
-
-type PlatformOperatorsResponse = variant {
-    Success : record {
-        users : vec UserId;
-    };
-};
-
-type ExternalAchievementsArgs = record {
-    updates_since : TimestampMillis;
-};
-
-type ExternalAchievementsResponse = variant {
-    Success : record {
-        last_updated: TimestampMillis;
-        added_or_updated : vec ExternalAchievement;
-    };
-    SuccessNoUpdates;
-};
-
-type ExternalAchievement = record {
-    id : nat32;
-    name : text;
-    url : text;
-    chit_reward : nat32;
-    expires : TimestampMillis;
-    budget_exhausted : bool;
-};
-
-type ReferralMetricsResponse = variant {
-    Success : record {
-        users_who_referred : nat32;
-        users_who_referred_paid_diamond : nat32;
-        users_who_referred_unpaid_diamond : nat32;
-        users_who_referred_90_percent_unpaid_diamond : nat32;
-        referrals_of_paid_diamond : nat32;
-        referrals_of_unpaid_diamond : nat32;
-        referrals_other : nat32;
-        icp_raised_by_referrals_to_paid_diamond : nat32;
-    };
-};
-
-type ReferralStats = record {
-    user_id : UserId;
-    username : text;
-    total_rewards_e8s : nat64;
-    diamond_members : nat32;
-    total_users : nat32;
-};
-
-type ChitLeaderboardResponse = variant {
-    SuccessV2 : record {
-        all_time : vec ChitUserBalance;
-        this_month : vec ChitUserBalance;
-        last_month : vec ChitUserBalance;
-    };
-};
-
+type Chit = record { streak : nat16; balance : int32 };
 type ChitUserBalance = record {
-    user_id : UserId;
-    username : text;
-    balance : nat32;
+  username : text;
+  balance : nat32;
+  user_id : principal;
 };
-
-type AwardExternalAchievementArgs = record {
-    achievement_id : nat32;
-    user_id : UserId;
+type CommunityEventType = variant {
+  MemberJoined;
+  NameChanged;
+  GateUpdated;
+  BannerChanged;
+  PrimaryLanguageChanged;
+  MessagePinned;
+  UsersInvited;
+  UsersBlocked;
+  MessageUnpinned;
+  BotUpdated;
+  ChannelCreated;
+  ChannelDeleted;
+  PermissionsChanged;
+  EventsTTLUpdated;
+  MemberLeft;
+  UsersUnblocked;
+  Unfrozen;
+  VisibilityChanged;
+  RulesChanged;
+  DescriptionChanged;
+  MembersRemoved;
+  InviteCodeChanged;
+  GroupImported;
+  BotRemoved;
+  RoleChanged;
+  BotAdded;
+  Created;
+  Frozen;
+  AvatarChanged;
 };
-
-type AwardExternalAchievementResponse = variant {
-    Success : record {
-        remaining_chit_budget : nat32;
-    };
-    InvalidCaller;
-    NotFound;
-    AlreadyAwarded;
-    InsufficientBudget;
-    Expired;
-    Error : OCError;
+// A contextual value the client can provide to the model.
+type ContextItem = variant {
+  // Today's date, injected as "Today is <YYYY-MM-DD>."
+  today;
 };
-
+// Declares contextual values the client injects into the prompt.
+type ContextRule = record { provide : vec ContextItem };
+type CurrentUserSummary = record {
+  streak : nat16;
+  max_streak : nat16;
+  username : text;
+  total_chit_earned : int32;
+  profile_background_id : opt nat;
+  is_platform_operator : bool;
+  diamond_membership_status : DiamondMembershipStatusFull;
+  is_unique_person : bool;
+  hide_online_status : bool;
+  user_id : principal;
+  is_bot : bool;
+  display_name : opt text;
+  avatar_id : opt nat;
+  moderation_flags_enabled : nat32;
+  chit_balance : int32;
+  is_suspected_bot : bool;
+  suspension_details : opt SuspensionDetails;
+  is_platform_moderator : bool;
+  diamond_membership_details : opt DiamondMembershipDetails;
+};
+type DateTimeParam = record { future_only : bool };
+type DecimalParam = record {
+  max_value : float64;
+  min_value : float64;
+  choices : vec BotCommandOptionChoice_2;
+};
+type DiamondMembershipDetails = record {
+  pay_in_chat : bool;
+  subscription : DiamondMembershipSubscription;
+  expires_at : nat64;
+};
+type DiamondMembershipFees = record {
+  one_year : nat64;
+  token_symbol : text;
+  lifetime : nat64;
+  one_month : nat64;
+  three_months : nat64;
+};
+type DiamondMembershipStatus = variant { Inactive; Lifetime; Active };
+type DiamondMembershipStatusFull = variant {
+  Inactive;
+  Lifetime;
+  Active : DiamondMembershipDetails;
+};
+type DiamondMembershipSubscription = variant {
+  OneYear;
+  ThreeMonths;
+  Disabled;
+  OneMonth;
+};
+type ExternalAchievement = record {
+  id : nat32;
+  url : text;
+  expires : nat64;
+  name : text;
+  budget_exhausted : bool;
+  chit_reward : nat32;
+};
+// Fills one output field directly from the user's message text, bypassing the model.
+type FromMessageRule = record {
+  // Key in the model's JSON output this rule targets.
+  field : text;
+  // Maximum length the copied text is truncated to (defaults to 200 on the client).
+  max_length : opt nat32;
+};
+type GroupRole = variant { Participant; Admin; Moderator; Owner };
+// Free-form guidance appended verbatim to the prompt.
+type InstructionRule = record { "text" : text };
+type IntegerParam = record {
+  max_value : int;
+  min_value : int;
+  choices : vec BotCommandOptionChoice_1;
+};
+// Maps keywords found in the user's message to a fixed value for one output field.
+type KeywordMapRule = record {
+  map : vec KeywordMapping;
+  // Key in the model's JSON output this rule targets.
+  field : text;
+  mode : RuleMode;
+};
+// One value and the keywords whose presence in the message selects it.
+type KeywordMapping = record { value : text; keywords : vec text };
+// A single normalization operation applied to a field's value.
+type NormalizeOp = variant {
+  // Converts strings like "26k" / "1.5m" into numbers (x1e3 / x1e6).
+  k_m_suffix;
+  trim;
+  lowercase;
+  uppercase;
+  // Strips currency symbols, commas and spaces, then parses a number when possible.
+  strip_symbols;
+};
+// Applies deterministic normalization operations, in order, to one output field.
+type NormalizeRule = record {
+  ops : vec NormalizeOp;
+  // Key in the model's JSON output this rule targets.
+  field : text;
+};
+type OptionUpdate = variant { NoChange; SetToNone; SetToSome : text };
+type ReferralMetrics = record {
+  users_who_referred : nat32;
+  users_who_referred_unpaid_diamond : nat32;
+  referrals_of_unpaid_diamond : nat32;
+  icp_raised_by_referrals_to_paid_diamond : nat32;
+  referrals_of_paid_diamond : nat32;
+  users_who_referred_paid_diamond : nat32;
+  referrals_other : nat32;
+  users_who_referred_90_percent_unpaid_diamond : nat32;
+};
+type Response = variant { NotInitialised; Success : SuccessResult };
+type Response_1 = variant { NotStaged; InvalidKeyId; Success };
+type Response_10 = variant {
+  Error : record { nat16; opt text };
+  Success : SuccessResult_8;
+  UserNotFound;
+};
+type Response_11 = variant {
+  Error : record { nat16; opt text };
+  NotFound;
+  Success;
+};
+type Response_12 = variant { Success : vec DiamondMembershipFees };
+type Response_13 = variant {
+  Error : record { nat16; opt text };
+  InvalidPageSize : nat8;
+  ResponseTooLarge : nat32;
+  TermTooShort : nat8;
+  Success : SuccessResult_9;
+  TermTooLong : nat8;
+};
+type Response_14 = variant {
+  Error : record { nat16; opt text };
+  TermTooShort : nat8;
+  Success : SuccessResult_10;
+  TermTooLong : nat8;
+  InvalidTerm;
+};
+type Response_15 = variant { Success : SuccessResult_11; SuccessNoUpdates };
+type Response_16 = variant { Success : SuccessResult_12 };
+type Response_17 = variant { Success : principal };
+type Response_18 = variant { Success : SuccessResult_13 };
+type Response_19 = variant {
+  Error : record { nat16; opt text };
+  NotInitialised;
+  Success : text;
+};
+type Response_2 = variant { Success : SuccessResult_1 };
+type Response_20 = variant {
+  Error : record { nat16; opt text };
+  // The manifest declared no `app_canister_id`, or that canister did not vouch for the app's
+  // name (returned false, trapped, or was unreachable). Publishing is blocked until an app
+  // canister vouches — the anti-squatting gate.
+  NotVerified;
+  NotFound;
+  NotAuthorised;
+  Success;
+};
+type Response_21 = variant {
+  Error : record { nat16; opt text };
+  NotFound;
+  NotAuthorised;
+  Success;
+};
+type Response_22 = variant { Success : ReferralMetrics };
+type Response_23 = variant {
+  Error : record { nat16; opt text };
+  Success : AiAppRegistration;
+  InvalidRequest : text;
+};
+type Response_24 = variant {
+  Error : record { nat16; opt text };
+  NotAuthorised;
+  Success;
+  BotNotFound;
+};
+type Response_25 = variant {
+  Error : record { nat16; opt text };
+  Success;
+  KeyNotFound;
+};
+type Response_26 = variant { Success : Result };
+type Response_27 = variant { Error : text; Success : Args };
+type Response_28 = variant {
+  Error : record { nat16; opt text };
+  TooManyCommands;
+  DescriptionTooLong;
+  EndpointInvalid;
+  BotSuspended;
+  NewOwnerSuspended;
+  AvatarInvalid;
+  NotAuthorised;
+  PrincipalAlreadyUsed;
+  Success;
+  BotNotFound;
+  NewOwnerNotFound;
+  OwnerSuspended;
+  OwnerNotFound;
+  PrincipalInvalid;
+};
+type Response_29 = variant {
+  Error : record { nat16; opt text };
+  Success : UserSummary;
+  UserNotFound;
+};
+type Response_3 = variant {
+  InvalidCaller;
+  Error : record { nat16; opt text };
+  NotFound;
+  Success : SuccessResult_2;
+  AlreadyAwarded;
+  InsufficientBudget;
+  Expired;
+};
+type Response_30 = variant {
+  Error : record { nat16; opt text };
+  Success : principal;
+  NewRegistrationsClosed;
+};
+type Response_31 = variant { Success : Result_1 };
+type Response_32 = variant { Success : SuccessResult_14 };
+type Response_4 = variant { Success : SuccessResult_3; SuccessNoUpdates };
+type Response_5 = variant {
+  CodeExpired;
+  Error : record { nat16; opt text };
+  NotAuthorized;
+  Success : SuccessResult_4;
+  InvalidRequest : text;
+  CodeNotFound;
+};
+type Response_6 = variant {
+  NotFound;
+  NotAuthorized;
+  Success : SuccessResult_5;
+  AppUnavailable;
+  InvalidRequest : text;
+  Expired;
+};
+type Response_7 = variant {
+  Error : record { nat16; opt text };
+  UsernameTaken;
+  UsernameTooShort : nat16;
+  UsernameInvalid;
+  UsernameTooLong : nat16;
+  Success;
+};
+type Response_8 = variant { SuccessV2 : SuccessResult_6 };
+type Response_9 = variant {
+  CodeExpired;
+  Error : record { nat16; opt text };
+  InvalidRequest : text;
+  CodeNotFound;
+};
+type Result = record { timestamp : nat64; users : vec UserSummary };
+type Result_1 = record {
+  deleted : vec principal;
+  timestamp : nat64;
+  users : vec UserSummaryV2;
+  current_user : opt CurrentUserSummary;
+};
+// Whether a rule merely guides the model (`Hint`) or deterministically overrides its output (`Override`).
+type RuleMode = variant { hint; override };
+type StringParam = record {
+  min_length : nat16;
+  multi_line : bool;
+  max_length : nat16;
+  choices : vec BotCommandOptionChoice;
+};
+type SuccessOnly = variant { Success };
+type SuccessResult = record {
+  keys : vec ActionSigningPublicKey;
+  signature_version : nat16;
+  purpose : text;
+};
+type SuccessResult_1 = record { apps : vec AiAppRegistration };
+type SuccessResult_10 = record { total : nat32; matches : vec BotMatch };
+type SuccessResult_11 = record {
+  last_updated : nat64;
+  added_or_updated : vec ExternalAchievement;
+};
+type SuccessResult_12 = record { users : vec principal };
+type SuccessResult_13 = record { users : vec principal };
+type SuccessResult_14 = record { chit : vec Chit };
+type SuccessResult_2 = record { remaining_chit_budget : nat32 };
+type SuccessResult_3 = record {
+  timestamp : nat64;
+  added_or_updated : vec BotDetails;
+  removed : vec principal;
+};
+type SuccessResult_4 = record {
+  // Monotonic epoch for this exact (user, app) key binding. Revoke proofs must bind it.
+  key_version : nat64;
+  subject_version : nat16;
+  app_revision : nat64;
+  app_id : nat32;
+  // Stable only within this exact UserIndex/app/app-canister scope. The registered app receives
+  // no global OpenChat user id and cannot join this value with another app's subject.
+  app_subject : blob;
+  app_canister_id : principal;
+  // Opaque selector disclosed only to the exact authenticated app canister.
+  consumer_queue_selector : blob;
+  consumer_queue_selector_version : nat16;
+};
+type SuccessResult_5 = record {
+  context : AppScopedCardContext;
+  recipient_public_key : blob;
+  content_hash : blob;
+  recipient_key_scheme : text;
+  scope : AiAppCardCapabilityScope;
+  app_canister_id : principal;
+  expires_at : nat64;
+};
+type SuccessResult_6 = record {
+  all_time : vec ChitUserBalance;
+  last_month : vec ChitUserBalance;
+  this_month : vec ChitUserBalance;
+};
+type SuccessResult_8 = record {
+  streak : nat16;
+  max_streak : nat16;
+  username : text;
+  total_chit_earned : int32;
+  date_created : nat64;
+  is_platform_operator : bool;
+  diamond_membership_status : DiamondMembershipStatusFull;
+  icp_account : blob;
+  is_unique_person : bool;
+  referrals : vec principal;
+  hide_online_status : bool;
+  user_id : principal;
+  display_name : opt text;
+  avatar_id : opt nat;
+  moderation_flags_enabled : nat32;
+  chit_balance : int32;
+  is_suspected_bot : bool;
+  suspension_details : opt SuspensionDetails;
+  is_platform_moderator : bool;
+  diamond_membership_details : opt DiamondMembershipDetails;
+};
+type SuccessResult_9 = record {
+  total : nat32;
+  matches : vec AiAppRegistration;
+};
+// How OpenChat presents a surface when it opens it.
+type SurfaceDisplay = variant {
+  // Embedded in-app (an iframe hosted in a bottom sheet).
+  sheet;
+  // Opened in the system browser / a new tab.
+  external;
+};
+type SuspensionAction = variant { Unsuspend : nat64; Delete : nat64 };
+type SuspensionDetails = record {
+  action : SuspensionAction;
+  suspended_by : principal;
+  reason : text;
+};
+type UserGroup = record { users : vec principal; updated_since : nat64 };
+type UserSummary = record {
+  streak : nat16;
+  max_streak : nat16;
+  username : text;
+  total_chit_earned : int32;
+  diamond_member : bool;
+  diamond_membership_status : DiamondMembershipStatus;
+  is_unique_person : bool;
+  hide_online_status : bool;
+  user_id : principal;
+  is_bot : bool;
+  display_name : opt text;
+  avatar_id : opt nat;
+  chit_balance : int32;
+  suspended : bool;
+};
+type UserSummaryStable = record {
+  username : text;
+  profile_background_id : opt nat;
+  diamond_membership_status : DiamondMembershipStatus;
+  is_unique_person : bool;
+  hide_online_status : bool;
+  is_bot : bool;
+  display_name : opt text;
+  avatar_id : opt nat;
+  suspended : bool;
+};
+type UserSummaryV2 = record {
+  stable : opt UserSummaryStable;
+  user_id : principal;
+  volatile : opt UserSummaryVolatile;
+};
+type UserSummaryVolatile = record {
+  streak : nat16;
+  max_streak : nat16;
+  total_chit_earned : int32;
+  chit_balance : int32;
+};
 service : {
-    // Queries
-    ai_apps : (EmptyArgs) -> (AiAppsResponse) query;
-    explore_ai_apps : (ExploreAiAppsArgs) -> (ExploreAiAppsResponse) query;
-    bot_updates : (BotUpdatesArgs) -> (BotUpdatesResponse) query;
-    check_username : (CheckUsernameArgs) -> (CheckUsernameResponse) query;
-    chit_leaderboard : (EmptyArgs) -> (ChitLeaderboardResponse) query;
-    current_user : (EmptyArgs) -> (CurrentUserResponse) query;
-    diamond_membership_fees : (EmptyArgs) -> (DiamondMembershipFeesResponse) query;
-    explore_bots : (ExploreBotsArgs) -> (ExploreBotsResponse) query;
-    external_achievements : (ExternalAchievementsArgs) -> (ExternalAchievementsResponse) query;
-    platform_moderators : (EmptyArgs) -> (PlatformModeratorsResponse) query;
-    platform_moderators_group : (EmptyArgs) -> (PlatformModeratorsGroupResponse) query;
-    platform_operators : (PlatformOperatorsArgs) -> (PlatformOperatorsResponse) query;
-    public_key : (EmptyArgs) -> (PublicKeyResponse) query;
-    referral_metrics : (EmptyArgs) -> (ReferralMetricsResponse) query;
-    search : (SearchArgs) -> (SearchResponse) query;
-    user_registration_canister : (EmptyArgs) -> (UserRegistrationCanisterResponse) query;
-    user : (UserArgs) -> (UserResponse) query;
-    users_chit : (UsersChitArgs) -> (UsersChitResponse) query;
-    users : (UsersArgs) -> (UsersResponse) query;
-
-    // Only callable by SNS governance canister
-    publish_bot: (PublishBotArgs) -> (PublishBotResponse);
-    register_external_achievement : (RegisterExternalAchievementArgs) -> (RegisterExternalAchievementResponse);
-
-    // Only callable by whitelisted canisters
-    award_external_achievement : (AwardExternalAchievementArgs) -> (AwardExternalAchievementResponse);
-
-    // Only callable by bot owner
-    update_bot : (UpdateBotArgs) -> (UpdateBotResponse);
-
-    // Only callable by SNS governance canister or by bot owner
-    remove_bot : (RemoveBotArgs) -> (RemoveBotResponse);
-
-    // Callable by any OpenChat user (or, in test_mode, any principal — so an external app's deploy
-    // script can manage its own manifest)
-    register_ai_app : (RegisterAiAppArgs) -> (RegisterAiAppResponse);
-    delete_ai_app : (DeleteAiAppArgs) -> (DeleteAiAppResponse);
-    // Gated to SNS governance in production; open in test_mode (local deploy scripts self-publish)
-    publish_ai_app : (PublishAiAppArgs) -> (PublishAiAppResponse);
-
-    // Callable by any principal: the single-use, short-lived link code carried in the args IS the
-    // authorization (an external app claims it on the user's behalf to register their delivery key)
-    claim_ai_app_link_code : (ClaimAiAppLinkCodeArgs) -> (ClaimAiAppLinkCodeResponse);
-
-    // Callable by any principal: knowledge of the exact registered per-user PEM IS the
-    // authorization (the app calls it when the user disconnects inside the app, so OpenChat drops
-    // the now-useless key and the in-chat flow re-offers pairing)
-    revoke_ai_app_user_key : (RevokeAiAppUserKeyArgs) -> (RevokeAiAppUserKeyResponse);
-};
+  action_signing_keys : (record {}) -> (Response) query;
+  activate_action_signing_key : (Args) -> (Response_1);
+  // Deprecated bounded first-page compatibility method. New callers use ai_apps_by_ids,
+  // explore_ai_apps, or my_ai_apps and never request the full registry.
+  ai_apps : (record {}) -> (Response_2) query;
+  ai_apps_by_ids : (AiAppsByIdsArgs) -> (AiAppsByIdsResponse) query;
+  award_external_achievement : (Args_1) -> (Response_3);
+  bot_updates : (Args_2) -> (Response_4) query;
+  c2c_claim_ai_app_link_code : (Args_3) -> (Response_5);
+  c2c_get_ai_app_action_inbox_selector : (AiAppActionInboxSelectorArgs) -> (AiAppActionInboxSelectorResponse);
+  c2c_redeem_ai_app_card_capability : (Args_4) -> (Response_6);
+  check_username : (Args_5) -> (Response_7) query;
+  chit_leaderboard : (record {}) -> (Response_8) query;
+  claim_ai_app_link_code : (Args_6) -> (Response_9);
+  current_user : (record {}) -> (Response_10) query;
+  delete_ai_app : (Args_7) -> (Response_11);
+  diamond_membership_fees : (record {}) -> (Response_12) query;
+  explore_ai_apps : (Args_8) -> (Response_13) query;
+  explore_bots : (Args_9) -> (Response_14) query;
+  external_achievements : (Args_10) -> (Response_15) query;
+  my_ai_apps : (MyAiAppsArgs) -> (MyAiAppsResponse) query;
+  platform_moderators : (record {}) -> (Response_16) query;
+  platform_moderators_group : (record {}) -> (Response_17) query;
+  platform_operators : (record {}) -> (Response_18) query;
+  public_key : (record {}) -> (Response_19) query;
+  publish_ai_app : (Args_11) -> (Response_20);
+  publish_bot : (Args_12) -> (Response_21);
+  referral_metrics : (record {}) -> (Response_22) query;
+  register_ai_app : (Args_13) -> (Response_23);
+  register_external_achievement : (Args_14) -> (SuccessOnly);
+  remove_ai_app : (Args_15) -> (Response_11);
+  remove_bot : (Args_16) -> (Response_24);
+  revoke_ai_app_user_key : (Args_17) -> (Response_25);
+  search : (Args_18) -> (Response_26) query;
+  stage_action_signing_key : (record {}) -> (Response_27);
+  update_bot : (Args_19) -> (Response_28);
+  user : (Args_20) -> (Response_29) query;
+  user_registration_canister : (record {}) -> (Response_30) query;
+  users : (Args_21) -> (Response_31) query;
+  users_chit : (Args_22) -> (Response_32) query;
+}

@@ -12,14 +12,14 @@ use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::context::LlamaContext;
+use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::{AddBos, LlamaModel, Special};
 use llama_cpp_2::mtmd::{
-    mtmd_default_marker, MtmdBitmap, MtmdContext, MtmdContextParams, MtmdInputText,
+    MtmdBitmap, MtmdContext, MtmdContextParams, MtmdInputText, mtmd_default_marker,
 };
 use llama_cpp_2::sampling::LlamaSampler;
 use llama_cpp_2::token::LlamaToken;
@@ -41,7 +41,9 @@ fn shared_backend() -> Result<&'static LlamaBackend, String> {
     // Guard the one-time init so two threads can't both call LlamaBackend::init() (the loser would
     // get BackendAlreadyInitialized). Double-check inside the lock.
     static INIT_LOCK: Mutex<()> = Mutex::new(());
-    let _guard = INIT_LOCK.lock().map_err(|_| "backend init lock poisoned".to_string())?;
+    let _guard = INIT_LOCK
+        .lock()
+        .map_err(|_| "backend init lock poisoned".to_string())?;
     if let Some(backend) = BACKEND.get() {
         return Ok(backend);
     }
@@ -64,7 +66,9 @@ struct CachedModel {
 fn cached_model(gguf: &Path) -> Result<Arc<CachedModel>, String> {
     static CACHE: OnceLock<Mutex<HashMap<PathBuf, Arc<CachedModel>>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut guard = cache.lock().map_err(|_| "model cache lock poisoned".to_string())?;
+    let mut guard = cache
+        .lock()
+        .map_err(|_| "model cache lock poisoned".to_string())?;
     if let Some(entry) = guard.get(gguf) {
         return Ok(entry.clone());
     }
@@ -82,7 +86,10 @@ fn cached_model(gguf: &Path) -> Result<Arc<CachedModel>, String> {
 /// Return the cached vision projector for this model, loading it on first use. Errors if the model's
 /// mmproj does not support image input.
 fn cached_mtmd(entry: &CachedModel, mmproj: &Path) -> Result<Arc<MtmdContext>, String> {
-    let mut guard = entry.mtmd.lock().map_err(|_| "mtmd cache lock poisoned".to_string())?;
+    let mut guard = entry
+        .mtmd
+        .lock()
+        .map_err(|_| "mtmd cache lock poisoned".to_string())?;
     if let Some(ctx) = guard.as_ref() {
         return Ok(ctx.clone());
     }
@@ -113,7 +120,9 @@ fn render_chat_prompt(model: &LlamaModel, user_text: &str) -> Result<String, Str
     let template = model
         .chat_template(None)
         .map_err(|e| format!("no built-in chat template: {e}"))?;
-    let template_src = template.to_str().map_err(|e| format!("template not utf-8: {e}"))?;
+    let template_src = template
+        .to_str()
+        .map_err(|e| format!("template not utf-8: {e}"))?;
 
     let mut env = minijinja::Environment::new();
     // Make HF templates' Python-isms (.get/.split/.items/slicing) resolve instead of erroring.
@@ -122,7 +131,10 @@ fn render_chat_prompt(model: &LlamaModel, user_text: &str) -> Result<String, Str
     env.add_function(
         "raise_exception",
         |msg: String| -> Result<minijinja::Value, minijinja::Error> {
-            Err(minijinja::Error::new(minijinja::ErrorKind::InvalidOperation, msg))
+            Err(minijinja::Error::new(
+                minijinja::ErrorKind::InvalidOperation,
+                msg,
+            ))
         },
     );
     env.add_template("chat", template_src)
@@ -202,7 +214,9 @@ fn generate(
         output.push_str(&piece);
 
         batch.clear();
-        batch.add(token, n_cur, &[0], true).map_err(|e| e.to_string())?;
+        batch
+            .add(token, n_cur, &[0], true)
+            .map_err(|e| e.to_string())?;
         n_cur += 1;
         ctx.decode(&mut batch).map_err(|e| format!("decode: {e}"))?;
     }
@@ -239,7 +253,8 @@ pub fn run_text_inference(
             .add(*token, i as i32, &[0], i as i32 == last)
             .map_err(|e| e.to_string())?;
     }
-    ctx.decode(&mut batch).map_err(|e| format!("decode prompt: {e}"))?;
+    ctx.decode(&mut batch)
+        .map_err(|e| format!("decode prompt: {e}"))?;
 
     generate(model, &mut ctx, tokens.len() as i32, max_tokens)
 }
@@ -321,7 +336,10 @@ mod tests {
         // Also write to a file — stderr gets mangled under PowerShell's native-command capture.
         std::fs::write(std::env::temp_dir().join("oc_inference_smoke.txt"), &output).ok();
         eprintln!("=== text output ===\n{output}\n===================");
-        assert!(!output.trim().is_empty(), "expected non-empty generated text");
+        assert!(
+            !output.trim().is_empty(),
+            "expected non-empty generated text"
+        );
     }
 
     // Extract the first balanced-ish JSON object from possibly prose/fence-wrapped text.
@@ -354,7 +372,11 @@ mod tests {
             Some(schema),
         )
         .expect("structured inference failed");
-        std::fs::write(std::env::temp_dir().join("oc_structured_smoke.txt"), &output).ok();
+        std::fs::write(
+            std::env::temp_dir().join("oc_structured_smoke.txt"),
+            &output,
+        )
+        .ok();
         eprintln!("=== structured output ===\n{output}\n=========================");
         // Best-effort: pull the JSON object out of the (possibly prose-wrapped) output and parse it.
         let json = extract_json_object(&output).expect("expected a JSON object in the output");
@@ -389,6 +411,9 @@ mod tests {
         .expect("multimodal inference failed");
         std::fs::write(std::env::temp_dir().join("oc_vision_smoke.txt"), &output).ok();
         eprintln!("=== vision output ===\n{output}\n=====================");
-        assert!(!output.trim().is_empty(), "expected non-empty generated text");
+        assert!(
+            !output.trim().is_empty(),
+            "expected non-empty generated text"
+        );
     }
 }

@@ -1,24 +1,35 @@
+use crate::TestEnv;
 use crate::client;
 use crate::env::ENV;
-use crate::utils::tick_many;
-use crate::wasms;
-use crate::{TestEnv, User};
-use candid::Principal;
-use p256_key_pair::P256KeyPair;
-use pocket_ic::PocketIc;
+use crate::fan_out_delivery_tests::{
+    confirm_raw, fetch_actions, inbox_deposit_fixture, new_recipient, post_card, publish_per_user_app, register_per_user_app,
+    set_key, setup,
+};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use serde_bytes::ByteBuf;
 use std::ops::Deref;
-use testing::rng::{random_from_u128, random_string};
-use types::{ActionCardContentInitial, ActionCardResponse, ActionCardRow, CanisterId, ChatId, MessageContentInitial};
+use types::{ActionCardResponse, AiAppCardContext, AiAppRegistration, Chat, MessageId};
 
-// #1: a confirmed ActionCard that declares a per-app `inbox_canister_id` must have its deposit routed
-// to THAT inbox, while a card with no override falls back to the LUI's globally configured inbox.
-// The deposit is opaque ciphertext keyed by the sha256 fingerprint of the recipient public key, so we
-// assert by counting deposits per fingerprint in each inbox (no decryption needed).
+fn card_identity(chat_key: &str, thread_root_message_index: Option<u32>, message_id: u64) -> [u8; 32] {
+    const DOMAIN: &[u8] = b"openchat/action-inbox/card-identity/v3\0";
+    let mut canonical = Vec::with_capacity(DOMAIN.len() + chat_key.len() + 1 + 5 + 8);
+    canonical.extend_from_slice(DOMAIN);
+    canonical.extend_from_slice(chat_key.as_bytes());
+    canonical.push(0);
+    match thread_root_message_index {
+        None => canonical.push(0),
+        Some(index) => {
+            canonical.push(1);
+            canonical.extend_from_slice(&index.to_be_bytes());
+        }
+    }
+    canonical.extend_from_slice(&message_id.to_be_bytes());
+    sha256::sha256(&canonical)
+}
+
 #[test]
-fn action_card_deposit_routes_to_per_app_inbox() {
+fn publication_and_inbox_both_reject_a_cross_app_namespace() {
     let mut wrapper = ENV.deref().get();
     let TestEnv {
         env,
@@ -26,152 +37,195 @@ fn action_card_deposit_routes_to_per_app_inbox() {
         controller,
         ..
     } = wrapper.env();
+    let fixture = setup(env, canister_ids, *controller);
 
-    let sender = client::register_diamond_user(env, canister_ids, *controller);
-    let group_id = client::user::happy_path::create_group(env, &sender, &random_string(), true, true);
-    tick_many(env, 3);
-
-    // The LUI that forwards + deposits (the group's local_user_index) and its platform signing key.
-    let group_lui = client::group::happy_path::local_user_index(env, group_id);
-    let local_user_index_canister::oc_signing_public_key::Response::Success(oc_pem) = client::execute_msgpack_query(
+    let other = register_per_user_app(
         env,
-        Principal::anonymous(),
-        group_lui,
-        "oc_signing_public_key_msgpack",
-        &local_user_index_canister::oc_signing_public_key::Args {},
+        canister_ids.user_index,
+        *controller,
+        &fixture.user_b,
+        Some(fixture.inbox),
     );
-
-    // Two inboxes, both authorizing the group's LUI as a depositor.
-    let per_app_inbox = install_inbox(env, *controller, canister_ids, group_lui, oc_pem.clone());
-    let global_inbox = install_inbox(env, *controller, canister_ids, group_lui, oc_pem);
-
-    // Point the group's LUI at the GLOBAL inbox (test_mode lets any caller set it).
-    let _: local_user_index_canister::set_action_inbox_canister::Response = client::execute_msgpack_update(
+    let publication: user_index_canister::publish_ai_app::Response = client::execute_msgpack_update(
         env,
-        sender.principal,
-        group_lui,
-        "set_action_inbox_canister_msgpack",
-        &local_user_index_canister::set_action_inbox_canister::Args { canister_id: global_inbox },
+        fixture.user_b.principal,
+        canister_ids.user_index,
+        "publish_ai_app_msgpack",
+        &user_index_canister::publish_ai_app::Args { app_id: other.id },
+    );
+    assert!(
+        matches!(publication, user_index_canister::publish_ai_app::Response::NotVerified),
+        "an inbox bound to app A must not vouch for app B: {publication:?}"
     );
 
-    // Two distinct recipient keys so the two deposits have distinct fingerprints.
-    let mut rng = StdRng::seed_from_u64(1);
-    let pem_override = P256KeyPair::new(&mut rng).public_key_pem().to_string();
-    let fp_override = ecies_payload::key_fingerprint(&pem_override).unwrap();
-    let pem_global = P256KeyPair::new(&mut rng).public_key_pem().to_string();
-    let fp_global = ecies_payload::key_fingerprint(&pem_global).unwrap();
-
-    // 1. Card WITH a per-app inbox override -> lands in the per-app inbox, NOT the global one.
-    post_and_confirm_card(env, &sender, group_id, pem_override, Some(per_app_inbox));
-    assert_eq!(
-        count_actions(env, sender.principal, per_app_inbox, &fp_override),
-        1,
-        "override card must land in the per-app inbox"
-    );
-    assert_eq!(
-        count_actions(env, sender.principal, global_inbox, &fp_override),
-        0,
-        "override card must NOT land in the global inbox"
-    );
-
-    // 2. Card WITHOUT an override -> falls back to the globally configured inbox.
-    post_and_confirm_card(env, &sender, group_id, pem_global, None);
-    assert_eq!(
-        count_actions(env, sender.principal, global_inbox, &fp_global),
-        1,
-        "no-override card must fall back to the global inbox"
-    );
-    assert_eq!(
-        count_actions(env, sender.principal, per_app_inbox, &fp_global),
-        0,
-        "no-override card must NOT land in the per-app inbox"
-    );
-}
-
-fn install_inbox(
-    env: &mut PocketIc,
-    controller: Principal,
-    canister_ids: &crate::CanisterIds,
-    depositor_lui: CanisterId,
-    oc_pem: String,
-) -> CanisterId {
-    let inbox = client::create_canister(env, controller);
-    client::install_canister(
+    let fingerprint = [91u8; 32];
+    let response: action_inbox_canister::c2c_notify_actions::Response = client::execute_msgpack_update(
         env,
-        controller,
-        inbox,
-        wasms::ACTION_INBOX.clone(),
-        action_inbox_canister::init::Args {
-            user_index_canister_id: canister_ids.user_index,
-            cycles_dispenser_canister_id: canister_ids.cycles_dispenser,
-            deployment_operators: vec![controller],
-            authorized_depositors: vec![depositor_lui],
-            oc_signing_public_key_pem: oc_pem,
-            wasm_version: wasms::ACTION_INBOX.version,
-            test_mode: true,
+        canister_ids.user_index,
+        fixture.inbox,
+        "c2c_notify_actions_msgpack",
+        &action_inbox_canister::c2c_notify_actions::Args {
+            app_id: other.id,
+            deposits: vec![inbox_deposit_fixture(fingerprint, [6; 32], [7; 32], 1)],
         },
     );
-    inbox
+    assert!(
+        matches!(response, action_inbox_canister::c2c_notify_actions::Response::Error(_)),
+        "even the authorized relay cannot cross the configured app namespace: {response:?}"
+    );
+    assert!(fetch_actions(env, fixture.user_a.principal, fixture.inbox, &fingerprint).is_empty());
 }
 
-fn post_and_confirm_card(
-    env: &mut PocketIc,
-    sender: &User,
-    group_id: ChatId,
-    recipient_pem: String,
-    inbox_override: Option<CanisterId>,
-) {
-    let message_id = random_from_u128();
-    let content = MessageContentInitial::ActionCard(ActionCardContentInitial {
-        title: "Pay".to_string(),
-        rows: vec![ActionCardRow {
-            label: "Amount".to_string(),
-            value: "$20".to_string(),
-        }],
-        confirm_label: "Confirm".to_string(),
-        cancel_label: "Cancel".to_string(),
-        action_id: "act-1".to_string(),
-        app_id: None,
-        disclosure: None,
-        expires_at: None,
-        recipient_public_key: Some(recipient_pem),
-        recipient_public_keys: vec![],
-        confirm_payload: Some(ByteBuf::from(b"opaque".to_vec())),
-        inbox_canister_id: inbox_override,
-    });
-    client::group::happy_path::send_message(env, sender, group_id, None, content, None, Some(message_id));
-
-    let response: group_canister::respond_to_action_card::Response = client::execute_msgpack_update(
+#[test]
+fn user_index_rejects_a_stale_revision_before_using_relay_authority() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
         env,
-        sender.principal,
-        group_id.into(),
+        canister_ids,
+        controller,
+        ..
+    } = wrapper.env();
+    let fixture = setup(env, canister_ids, *controller);
+    let fingerprint = [92u8; 32];
+    let stale_revision = fixture.app.updated.saturating_sub(1);
+    let group_chat = Chat::Group(fixture.group_id.into());
+    let chat_key = format!("group:{}", fixture.group_id);
+    let message_id = MessageId::from(1u64);
+    let response: user_index_canister::c2c_deposit_actions::Response = client::execute_msgpack_update(
+        env,
+        fixture.group_lui,
+        canister_ids.user_index,
+        "c2c_deposit_actions_msgpack",
+        &user_index_canister::c2c_deposit_actions::Args {
+            authority_context: AiAppCardContext {
+                user_id: fixture.user_a.user_id,
+                chat: group_chat,
+                chat_key: chat_key.clone(),
+                thread_root_message_index: None,
+                message_id,
+                app_id: fixture.app.id,
+                app_revision: stale_revision,
+                action_id: fixture.app.manifest.actions[0].name.clone(),
+            },
+            content_hash: [3; 32],
+            confirmation_lease_generation: 1,
+            authority: ByteBuf::from(vec![
+                4;
+                group_index_canister::ai_app_card_authority::AI_APP_CARD_AUTHORITY_TOKEN_BYTES
+            ]),
+            confirmed_by: fixture.user_a.user_id,
+            app_id: fixture.app.id,
+            app_revision: stale_revision,
+            action_id: fixture.app.manifest.actions[0].name.clone(),
+            recipient_key_bindings: vec![user_index_canister::c2c_deposit_actions::RecipientKeyBinding {
+                user_ids: vec![fixture.user_a.user_id],
+                key_fingerprint: ByteBuf::from(fingerprint.to_vec()),
+            }],
+            deposits: vec![user_index_canister::c2c_deposit_actions::UnsignedActionDeposit {
+                idempotency_key: ByteBuf::from(card_identity(&chat_key, None, message_id.as_u64()).to_vec()),
+                payload_hash: ByteBuf::from(vec![7; 32]),
+                consumer_key_fingerprint: ByteBuf::from(fingerprint.to_vec()),
+                acknowledgement_secret_hash: ByteBuf::from(vec![5; 32]),
+                ephemeral_public_key: ByteBuf::from(vec![2; 65]),
+                ciphertext: ByteBuf::from(vec![3]),
+                created_at: 1,
+            }],
+        },
+    );
+    assert!(
+        matches!(response, user_index_canister::c2c_deposit_actions::Response::Error(_)),
+        "a stale revision must fail at UserIndex before dispatch: {response:?}"
+    );
+    assert!(fetch_actions(env, fixture.user_a.principal, fixture.inbox, &fingerprint).is_empty());
+}
+
+// Routing is part of the published app contract. Neither a card-carried canister id nor the LUI's
+// legacy global setting may supply a missing manifest inbox, otherwise an untrusted card author can
+// redirect encrypted confirmations to a canister of their choosing.
+#[test]
+fn missing_manifest_inbox_does_not_fall_back_to_card_or_global_routing() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+        ..
+    } = wrapper.env();
+    let fixture = setup(env, canister_ids, *controller);
+
+    let app: AiAppRegistration = publish_per_user_app(env, canister_ids.user_index, *controller, &fixture.user_a, None);
+    client::group::happy_path::set_ai_app_enabled(env, fixture.user_a.principal, fixture.group_id, app.id, true);
+
+    let configured: local_user_index_canister::set_action_inbox_canister::Response = client::execute_msgpack_update(
+        env,
+        fixture.user_a.principal,
+        fixture.group_lui,
+        "set_action_inbox_canister_msgpack",
+        &local_user_index_canister::set_action_inbox_canister::Args {
+            canister_id: fixture.inbox,
+        },
+    );
+    assert!(matches!(
+        configured,
+        local_user_index_canister::set_action_inbox_canister::Response::Success
+    ));
+
+    let mut rng = StdRng::seed_from_u64(8_001);
+    let recipient_a = new_recipient(&mut rng);
+    let recipient_b = new_recipient(&mut rng);
+    set_key(
+        env,
+        canister_ids.user_index,
+        &fixture.user_a,
+        app.id,
+        recipient_a.pk_pem.clone(),
+    );
+    set_key(
+        env,
+        canister_ids.user_index,
+        &fixture.user_b,
+        app.id,
+        recipient_b.pk_pem.clone(),
+    );
+
+    let message_id = post_card(
+        env,
+        &fixture.user_a,
+        fixture.group_id,
+        &app,
+        Some(recipient_a.pk_pem.clone()),
+        vec![recipient_b.pk_pem.clone()],
+        Some(fixture.inbox),
+    );
+    let response = confirm_raw(env, &fixture.user_b, fixture.group_id, message_id);
+    assert!(
+        matches!(response, group_canister::respond_to_action_card::Response::Error(_)),
+        "an app without a manifest inbox must fail closed: {response:?}"
+    );
+    assert!(
+        fetch_actions(env, fixture.user_a.principal, fixture.inbox, &recipient_a.fingerprint).is_empty(),
+        "the card-carried/global fallback must not receive a deposit"
+    );
+    assert!(
+        fetch_actions(env, fixture.user_b.principal, fixture.inbox, &recipient_b.fingerprint).is_empty(),
+        "the card-carried/global fallback must not receive a fan-out deposit"
+    );
+
+    let cancel = client::execute_msgpack_update::<_, group_canister::respond_to_action_card::Response>(
+        env,
+        fixture.user_b.principal,
+        fixture.group_id.into(),
         "respond_to_action_card_msgpack",
         &group_canister::respond_to_action_card::Args {
             thread_root_message_index: None,
             message_id,
-            response: ActionCardResponse::Confirm,
+            response: ActionCardResponse::Cancel,
             confirm_payload_override: None,
+            confirmation_grant: None,
         },
     );
     assert!(
-        matches!(response, group_canister::respond_to_action_card::Response::Success(_)),
-        "confirm failed: {response:?}"
+        matches!(cancel, group_canister::respond_to_action_card::Response::Success(_)),
+        "a failed confirm must release its reservation and leave the card cancellable: {cancel:?}"
     );
-    tick_many(env, 10);
-}
-
-fn count_actions(env: &PocketIc, sender: Principal, inbox: CanisterId, fingerprint: &[u8; 32]) -> usize {
-    let response = client::action_inbox::actions(
-        env,
-        sender,
-        inbox,
-        &action_inbox_canister::actions::Args {
-            consumer_key_fingerprint: ByteBuf::from(fingerprint.to_vec()),
-            since_id: 0,
-            max_results: 100,
-        },
-    );
-    match response {
-        action_inbox_canister::actions::Response::Success(result) => result.actions.len(),
-    }
 }

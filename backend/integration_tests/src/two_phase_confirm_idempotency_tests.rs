@@ -1,467 +1,207 @@
+use crate::TestEnv;
 use crate::client;
 use crate::env::ENV;
-use crate::utils::{generate_seed, now_millis, tick_many};
-use crate::wasms;
-use crate::{TestEnv, User};
+use crate::fan_out_delivery_tests::{
+    confirm_raw, fetch_actions, inbox_deposit_fixture, install_inbox, new_recipient, post_card, set_key, setup,
+};
+use crate::utils::{now_millis, tick_many};
 use candid::Principal;
-use oc_error_codes::OCErrorCode;
-use p256_key_pair::P256KeyPair;
 use pocket_ic::PocketIc;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
-use serde_bytes::ByteBuf;
 use std::ops::Deref;
-use testing::rng::{random_from_u128, random_string};
-use types::{ActionCardContentInitial, ActionCardResponse, ActionCardRow, CanisterId, ChatId, MessageContentInitial, MessageId};
+use types::ActionCardResponse;
 
-// When NEITHER a per-card inbox override NOR the LUI's global inbox is configured, a routing-bearing
-// confirm must FAIL (the deposit has nowhere to go) and leave the card Pending — so once an inbox is
-// configured a retry of the SAME card succeeds. A fresh env guarantees the LUI starts unconfigured
-// (the global inbox setting is canister-wide and would otherwise leak in from a pooled env).
+// A prepare/deposit failure must release the card reservation. Retrying the same card after repairing
+// the authoritative key then deposits exactly once per member.
 #[test]
-fn misconfigured_confirm_leaves_card_pending_then_succeeds() {
-    let seed = generate_seed();
-    let mut wrapper = ENV.deref().get_with_seed(seed);
+fn failed_confirm_releases_reservation_for_retry() {
+    let mut wrapper = ENV.deref().get();
     let TestEnv {
-        env, canister_ids, controller, ..
+        env,
+        canister_ids,
+        controller,
+        ..
     } = wrapper.env();
-
-    let user = client::register_diamond_user(env, canister_ids, *controller);
-    let group_id = client::user::happy_path::create_group(env, &user, &random_string(), true, true);
-    tick_many(env, 3);
-    let group_lui = client::group::happy_path::local_user_index(env, group_id);
-
+    let fixture = setup(env, canister_ids, *controller);
     let mut rng = StdRng::seed_from_u64(9_001);
-    let recipient_pem = P256KeyPair::new(&mut rng).public_key_pem().to_string();
-    let fingerprint = ecies_payload::key_fingerprint(&recipient_pem).unwrap();
-
-    // Post a routing-bearing card with NO per-card override; the global inbox is also unset.
-    let message_id = post_card(env, &user, group_id, recipient_pem.clone(), None);
-
-    // First confirm: nowhere to deposit -> C2C error mentioning NotConfigured; card stays Pending.
-    let misconfigured = confirm(env, &user, group_id, message_id);
-    match misconfigured {
-        group_canister::respond_to_action_card::Response::Error(e) => {
-            assert!(e.matches_code(OCErrorCode::C2CError), "expected C2CError, got {e:?}");
-            assert!(
-                format!("{e:?}").contains("NotConfigured"),
-                "error should mention NotConfigured, got {e:?}"
-            );
-        }
-        other => panic!("expected Error(C2CError/NotConfigured), got {other:?}"),
-    }
-
-    // Configure a global inbox on the LUI, then retry the SAME card.
-    let local_user_index_canister::oc_signing_public_key::Response::Success(oc_pem) = client::execute_msgpack_query(
+    let recipient_a = new_recipient(&mut rng);
+    let recipient_b = new_recipient(&mut rng);
+    set_key(
         env,
-        Principal::anonymous(),
-        group_lui,
-        "oc_signing_public_key_msgpack",
-        &local_user_index_canister::oc_signing_public_key::Args {},
+        canister_ids.user_index,
+        &fixture.user_a,
+        fixture.app.id,
+        recipient_a.pk_pem.clone(),
     );
-    let inbox = install_inbox(env, *controller, canister_ids, group_lui, oc_pem);
-    let _: local_user_index_canister::set_action_inbox_canister::Response = client::execute_msgpack_update(
-        env,
-        user.principal,
-        group_lui,
-        "set_action_inbox_canister_msgpack",
-        &local_user_index_canister::set_action_inbox_canister::Args { canister_id: inbox },
-    );
+    let message_id = post_card(env, &fixture.user_a, fixture.group_id, &fixture.app, None, vec![], None);
 
-    // The retry succeeds — which is only possible because the first (failed) confirm left the card
-    // Pending rather than committing it Confirmed.
-    let retried = confirm(env, &user, group_id, message_id);
-    assert!(
-        matches!(retried, group_canister::respond_to_action_card::Response::Success(_)),
-        "retry after configuring the inbox must Succeed, got {retried:?}"
-    );
-    tick_many(env, 10);
-
-    assert_eq!(
-        count_actions(env, user.principal, inbox, &fingerprint),
-        1,
-        "the retried confirm must deposit exactly one action"
-    );
-}
-
-// The action_inbox dedupes on (fingerprint, idempotency_id): the depositor queue may retry, and the
-// two-phase confirm re-encrypts (fresh ephemeral key) on a user retry, so identity is the LOGICAL
-// (chat, message_id) card key, not the ciphertext. Depositing the same idempotency_id twice stores once.
-#[test]
-fn duplicate_deposit_id_dedupes_to_single_action() {
-    let mut wrapper = ENV.deref().get();
-    let TestEnv {
-        env, canister_ids, controller, ..
-    } = wrapper.env();
-
-    let user = client::register_diamond_user(env, canister_ids, *controller);
-    let group_id = client::user::happy_path::create_group(env, &user, &random_string(), true, true);
-    tick_many(env, 3);
-    let group_lui = client::group::happy_path::local_user_index(env, group_id);
-
-    let local_user_index_canister::oc_signing_public_key::Response::Success(oc_pem) = client::execute_msgpack_query(
-        env,
-        Principal::anonymous(),
-        group_lui,
-        "oc_signing_public_key_msgpack",
-        &local_user_index_canister::oc_signing_public_key::Args {},
-    );
-    let inbox = install_inbox(env, *controller, canister_ids, group_lui, oc_pem);
-
-    let mut rng = StdRng::seed_from_u64(9_002);
-    let pem = P256KeyPair::new(&mut rng).public_key_pem().to_string();
-    let fingerprint = ecies_payload::key_fingerprint(&pem).unwrap();
-    let created_at = now_millis(env);
-
-    // Deposit directly as the authorized depositor (the group's LUI) so we control the idempotency_id.
-    let deposit = |idempotency_id: u64| action_inbox_canister::c2c_notify_actions::ActionDeposit {
-        idempotency_id,
-        consumer_key_fingerprint: ByteBuf::from(fingerprint.to_vec()),
-        ephemeral_public_key: ByteBuf::from(vec![4u8; 65]),
-        ciphertext: ByteBuf::from(b"opaque-ciphertext".to_vec()),
-        oc_signature: ByteBuf::from(vec![0u8; 64]),
-        created_at,
-    };
-    let notify = |env: &mut PocketIc, deposits: Vec<action_inbox_canister::c2c_notify_actions::ActionDeposit>| {
-        let response: action_inbox_canister::c2c_notify_actions::Response = client::execute_msgpack_update(
-            env,
-            group_lui,
-            inbox,
-            "c2c_notify_actions_msgpack",
-            &action_inbox_canister::c2c_notify_actions::Args { deposits },
-        );
-        assert!(
-            matches!(response, action_inbox_canister::c2c_notify_actions::Response::Success),
-            "c2c_notify_actions must Succeed, got {response:?}"
-        );
-    };
-
-    // Same idempotency_id twice -> one stored action.
-    notify(env, vec![deposit(1)]);
-    notify(env, vec![deposit(1)]);
-    assert_eq!(
-        count_actions(env, user.principal, inbox, &fingerprint),
-        1,
-        "a repeated idempotency_id must be deduped to a single stored action"
-    );
-
-    // A DIFFERENT idempotency_id in the same bucket is a distinct action (dedupe is keyed, not blanket).
-    notify(env, vec![deposit(2)]);
-    assert_eq!(
-        count_actions(env, user.principal, inbox, &fingerprint),
-        2,
-        "a distinct idempotency_id must add a new action"
-    );
-}
-
-// Real path: confirming a routing-bearing card deposits exactly once; a redundant confirm of the
-// now-Confirmed card neither deposits again nor errors into a second inbox entry.
-#[test]
-fn confirm_twice_via_card_deposits_once() {
-    let mut wrapper = ENV.deref().get();
-    let TestEnv {
-        env, canister_ids, controller, ..
-    } = wrapper.env();
-
-    let user = client::register_diamond_user(env, canister_ids, *controller);
-    let group_id = client::user::happy_path::create_group(env, &user, &random_string(), true, true);
-    tick_many(env, 3);
-    let group_lui = client::group::happy_path::local_user_index(env, group_id);
-
-    let local_user_index_canister::oc_signing_public_key::Response::Success(oc_pem) = client::execute_msgpack_query(
-        env,
-        Principal::anonymous(),
-        group_lui,
-        "oc_signing_public_key_msgpack",
-        &local_user_index_canister::oc_signing_public_key::Args {},
-    );
-    let inbox = install_inbox(env, *controller, canister_ids, group_lui, oc_pem);
-
-    let mut rng = StdRng::seed_from_u64(9_003);
-    let pem = P256KeyPair::new(&mut rng).public_key_pem().to_string();
-    let fingerprint = ecies_payload::key_fingerprint(&pem).unwrap();
-
-    // Per-card override routes deterministically to `inbox` regardless of the LUI global setting.
-    let message_id = post_card(env, &user, group_id, pem, Some(inbox));
-
-    let first = confirm(env, &user, group_id, message_id);
-    assert!(
-        matches!(first, group_canister::respond_to_action_card::Response::Success(_)),
-        "first confirm must Succeed, got {first:?}"
-    );
-    tick_many(env, 10);
-    assert_eq!(count_actions(env, user.principal, inbox, &fingerprint), 1, "one confirm -> one deposit");
-
-    // The card is Confirmed now; a redundant confirm makes no state change and deposits nothing.
-    let second = confirm(env, &user, group_id, message_id);
-    assert!(
-        !matches!(second, group_canister::respond_to_action_card::Response::Success(_)),
-        "a redundant confirm must not Succeed again, got {second:?}"
-    );
-    tick_many(env, 10);
-    assert_eq!(
-        count_actions(env, user.principal, inbox, &fingerprint),
-        1,
-        "a redundant confirm must not add a second deposit"
-    );
-}
-
-// A FAILED routing-bearing confirm carrying a FAN-OUT list, retried after the failure is fixed,
-// delivers exactly ONE action per recipient — no duplicates in any bucket. (True partial delivery
-// cannot occur: the LUI builds every envelope then deposits the whole batch in ONE atomic
-// c2c_notify_actions call, and a malformed key fails prepare before anything is sent. What CAN
-// regress is the cross-recipient retry: one shared idempotency_id, deduped per fingerprint.)
-#[test]
-fn failed_fanout_confirm_retry_deposits_once_per_recipient() {
-    let seed = generate_seed();
-    let mut wrapper = ENV.deref().get_with_seed(seed); // fresh env: the LUI global inbox starts unset
-    let TestEnv {
-        env, canister_ids, controller, ..
-    } = wrapper.env();
-
-    let user = client::register_diamond_user(env, canister_ids, *controller);
-    let group_id = client::user::happy_path::create_group(env, &user, &random_string(), true, true);
-    tick_many(env, 3);
-    let group_lui = client::group::happy_path::local_user_index(env, group_id);
-
-    let mut rng = StdRng::seed_from_u64(9_004);
-    let pem_a = P256KeyPair::new(&mut rng).public_key_pem().to_string();
-    let pem_b = P256KeyPair::new(&mut rng).public_key_pem().to_string();
-    let fp_a = ecies_payload::key_fingerprint(&pem_a).unwrap();
-    let fp_b = ecies_payload::key_fingerprint(&pem_b).unwrap();
-
-    // Card carrying BOTH keys (legacy + fan-out list), NO per-card inbox; global inbox unset.
-    let message_id = random_from_u128();
-    let content = MessageContentInitial::ActionCard(ActionCardContentInitial {
-        title: "Pay".to_string(),
-        rows: vec![ActionCardRow {
-            label: "Amount".to_string(),
-            value: "$20".to_string(),
-        }],
-        confirm_label: "Confirm".to_string(),
-        cancel_label: "Cancel".to_string(),
-        action_id: "act-2pc-fanout".to_string(),
-        app_id: None,
-        disclosure: None,
-        expires_at: None,
-        recipient_public_key: Some(pem_a),
-        recipient_public_keys: vec![pem_b],
-        confirm_payload: Some(ByteBuf::from(br#"{"amount":"$20"}"#.to_vec())),
-        inbox_canister_id: None,
-    });
-    client::group::happy_path::send_message(env, &user, group_id, None, content, None, Some(message_id));
-
-    // First confirm: nowhere to deposit -> fails; two-phase leaves the card Pending; NOBODY got anything.
-    let failed = confirm(env, &user, group_id, message_id);
+    let failed = confirm_raw(env, &fixture.user_b, fixture.group_id, message_id);
     assert!(
         matches!(failed, group_canister::respond_to_action_card::Response::Error(_)),
-        "unconfigured confirm must fail, got {failed:?}"
+        "a missing authoritative key must fail before deposit: {failed:?}"
+    );
+    assert!(
+        fetch_actions(env, fixture.user_a.principal, fixture.inbox, &recipient_a.fingerprint).is_empty(),
+        "failed preparation must be atomic"
     );
 
-    // Configure a global inbox on the LUI, then retry the SAME card.
-    let local_user_index_canister::oc_signing_public_key::Response::Success(oc_pem) = client::execute_msgpack_query(
+    set_key(
         env,
-        Principal::anonymous(),
-        group_lui,
-        "oc_signing_public_key_msgpack",
-        &local_user_index_canister::oc_signing_public_key::Args {},
+        canister_ids.user_index,
+        &fixture.user_b,
+        fixture.app.id,
+        recipient_b.pk_pem.clone(),
     );
-    let inbox = install_inbox(env, *controller, canister_ids, group_lui, oc_pem);
-    let _: local_user_index_canister::set_action_inbox_canister::Response = client::execute_msgpack_update(
-        env,
-        user.principal,
-        group_lui,
-        "set_action_inbox_canister_msgpack",
-        &local_user_index_canister::set_action_inbox_canister::Args { canister_id: inbox },
-    );
-    let retried = confirm(env, &user, group_id, message_id);
+    let retried = confirm_raw(env, &fixture.user_b, fixture.group_id, message_id);
     assert!(
         matches!(retried, group_canister::respond_to_action_card::Response::Success(_)),
-        "retry after configuring the inbox must Succeed, got {retried:?}"
+        "the repaired retry must acquire the released reservation: {retried:?}"
     );
     tick_many(env, 10);
-
-    // Exactly one action per recipient bucket — the failed attempt + retry duplicated nothing.
-    assert_eq!(count_actions(env, user.principal, inbox, &fp_a), 1, "recipient A: exactly one deposit");
-    assert_eq!(count_actions(env, user.principal, inbox, &fp_b), 1, "recipient B: exactly one deposit");
+    assert_eq!(
+        fetch_actions(env, fixture.user_a.principal, fixture.inbox, &recipient_a.fingerprint).len(),
+        1
+    );
+    assert_eq!(
+        fetch_actions(env, fixture.user_b.principal, fixture.inbox, &recipient_b.fingerprint).len(),
+        1
+    );
 }
 
-// The deposit-before-commit TOCTOU, exercised end-to-end through the REAL confirm path. Two confirms
-// of the SAME card are SUBMITTED before either is driven to completion, so both run `prepare` (the
-// `&self` Pending peek) before either flips the card Confirmed after its deposit `.await` — and each
-// carries a DISTINCT in-bounds `confirm_payload_override`, so both deposit validly-signed but
-// different-payload envelopes. Because the inbox idempotency key is derived from the card's STABLE
-// identity (chat + message_id), NOT the mutable payload, the two deposits collapse to a SINGLE stored
-// action. Keying on the payload (the pre-fix behaviour) would have stored two. Exactly one confirm wins
-// the Pending->Confirmed transition; the loser deposited first, then found the card already Confirmed at
-// commit time and returned Error — the asymmetry proves both raced against the same Pending card.
+// The inbox remains idempotent for delivery-queue retries, independently of the card-level
+// single-flight guarantee.
 #[test]
-fn concurrent_distinct_payload_confirms_deposit_once() {
+fn duplicate_full_identity_dedupes_to_single_action() {
     let mut wrapper = ENV.deref().get();
     let TestEnv {
-        env, canister_ids, controller, ..
-    } = wrapper.env();
-
-    let user = client::register_diamond_user(env, canister_ids, *controller);
-    let group_id = client::user::happy_path::create_group(env, &user, &random_string(), true, true);
-    tick_many(env, 3);
-    let group_lui = client::group::happy_path::local_user_index(env, group_id);
-
-    let local_user_index_canister::oc_signing_public_key::Response::Success(oc_pem) = client::execute_msgpack_query(
         env,
-        Principal::anonymous(),
-        group_lui,
-        "oc_signing_public_key_msgpack",
-        &local_user_index_canister::oc_signing_public_key::Args {},
-    );
-    let inbox = install_inbox(env, *controller, canister_ids, group_lui, oc_pem);
-
-    let mut rng = StdRng::seed_from_u64(9_005);
-    let pem = P256KeyPair::new(&mut rng).public_key_pem().to_string();
-    let fingerprint = ecies_payload::key_fingerprint(&pem).unwrap();
-
-    // Per-card override routes both deposits to `inbox` regardless of the LUI global setting.
-    let message_id = post_card(env, &user, group_id, pem, Some(inbox));
-
-    // Fire two confirms of the SAME card with DIFFERENT edited payloads, submitting BOTH before awaiting
-    // either — so both execute `prepare` against the still-Pending card (the c2c deposit round trip that
-    // precedes each commit guarantees the second's peek runs before the first commits).
-    let confirm_bytes = |payload: &[u8]| {
-        msgpack::serialize_then_unwrap(&group_canister::respond_to_action_card::Args {
-            thread_root_message_index: None,
-            message_id,
-            response: ActionCardResponse::Confirm,
-            confirm_payload_override: Some(ByteBuf::from(payload.to_vec())),
-        })
+        canister_ids,
+        controller,
+        ..
+    } = wrapper.env();
+    let fixture = setup(env, canister_ids, *controller);
+    let inbox = install_inbox(env, *controller, canister_ids, fixture.app.id, canister_ids.user_index);
+    let mut rng = StdRng::seed_from_u64(9_002);
+    let recipient = new_recipient(&mut rng);
+    let created_at = now_millis(env);
+    let deposit = |identity_suffix: u8| {
+        let mut identity = [6; 32];
+        identity[31] = identity_suffix;
+        inbox_deposit_fixture(recipient.fingerprint, identity, [7; 32], created_at)
     };
-    let m1 = env
-        .submit_call(
-            group_id.into(),
-            user.principal,
-            "respond_to_action_card_msgpack",
-            confirm_bytes(br#"{"amount":"$20","currency":"USD"}"#),
-        )
-        .expect("submit confirm 1");
-    let m2 = env
-        .submit_call(
-            group_id.into(),
-            user.principal,
-            "respond_to_action_card_msgpack",
-            confirm_bytes(br#"{"amount":"$999","currency":"EGP"}"#),
-        )
-        .expect("submit confirm 2");
+    notify(env, canister_ids.user_index, inbox, fixture.app.id, vec![deposit(1)]);
+    notify(env, canister_ids.user_index, inbox, fixture.app.id, vec![deposit(1)]);
+    assert_eq!(
+        fetch_actions(env, fixture.user_a.principal, inbox, &recipient.fingerprint).len(),
+        1,
+        "the same full delivery identity must be stored once"
+    );
+    notify(env, canister_ids.user_index, inbox, fixture.app.id, vec![deposit(2)]);
+    assert_eq!(
+        fetch_actions(env, fixture.user_a.principal, inbox, &recipient.fingerprint).len(),
+        2,
+        "a distinct full delivery identity remains a distinct action"
+    );
+}
 
-    let r1: group_canister::respond_to_action_card::Response =
-        msgpack::deserialize_then_unwrap(&env.await_call(m1).expect("await confirm 1"));
-    let r2: group_canister::respond_to_action_card::Response =
-        msgpack::deserialize_then_unwrap(&env.await_call(m2).expect("await confirm 2"));
+// Both calls are submitted before either result is awaited. The first call reserves the Pending card
+// before its cross-canister deposit; a different actor cannot replace that durable attempt or issue a
+// second outbound deposit. Payload-takeover and post-timeout retry boundaries are covered directly by
+// the serialized card-state tests while edited confirmation remains feature-gated.
+#[test]
+fn concurrent_distinct_actor_confirms_issue_one_outbound_delivery() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+        ..
+    } = wrapper.env();
+    let fixture = setup(env, canister_ids, *controller);
+    let mut rng = StdRng::seed_from_u64(9_003);
+    let recipient_a = new_recipient(&mut rng);
+    let recipient_b = new_recipient(&mut rng);
+    set_key(
+        env,
+        canister_ids.user_index,
+        &fixture.user_a,
+        fixture.app.id,
+        recipient_a.pk_pem.clone(),
+    );
+    set_key(
+        env,
+        canister_ids.user_index,
+        &fixture.user_b,
+        fixture.app.id,
+        recipient_b.pk_pem.clone(),
+    );
+    let message_id = post_card(env, &fixture.user_a, fixture.group_id, &fixture.app, None, vec![], None);
+    let confirm_bytes = msgpack::serialize_then_unwrap(&group_canister::respond_to_action_card::Args {
+        thread_root_message_index: None,
+        message_id,
+        response: ActionCardResponse::Confirm,
+        confirm_payload_override: None,
+        confirmation_grant: None,
+    });
+    let call_a = env
+        .submit_call(
+            fixture.group_id.into(),
+            fixture.user_a.principal,
+            "respond_to_action_card_msgpack",
+            confirm_bytes.clone(),
+        )
+        .expect("submit confirm A");
+    let call_b = env
+        .submit_call(
+            fixture.group_id.into(),
+            fixture.user_b.principal,
+            "respond_to_action_card_msgpack",
+            confirm_bytes,
+        )
+        .expect("submit confirm B");
+    let result_a: group_canister::respond_to_action_card::Response =
+        msgpack::deserialize_then_unwrap(&env.await_call(call_a).expect("await confirm A"));
+    let result_b: group_canister::respond_to_action_card::Response =
+        msgpack::deserialize_then_unwrap(&env.await_call(call_b).expect("await confirm B"));
     tick_many(env, 10);
 
-    // Exactly one racing confirm commits Confirmed; the other deposited during the race, then found the
-    // card already Confirmed at commit time -> Error. This asymmetry is the proof both confirms deposited
-    // against the SAME Pending card (a purely sequential run would also land here, but then the loser
-    // never deposited — the deposit count below is what distinguishes the fix from the pre-fix bug).
-    let successes = [&r1, &r2]
+    let successes = [&result_a, &result_b]
         .into_iter()
-        .filter(|r| matches!(r, group_canister::respond_to_action_card::Response::Success(_)))
+        .filter(|result| matches!(result, group_canister::respond_to_action_card::Response::Success(_)))
         .count();
-    assert_eq!(successes, 1, "exactly one racing confirm must commit; got r1={r1:?} r2={r2:?}");
-
     assert_eq!(
-        count_actions(env, user.principal, inbox, &fingerprint),
+        successes, 1,
+        "exactly one competing confirmer may reserve and commit the card: A={result_a:?}, B={result_b:?}"
+    );
+    assert_eq!(
+        fetch_actions(env, fixture.user_a.principal, fixture.inbox, &recipient_a.fingerprint).len(),
         1,
-        "two concurrent confirms of the SAME card with DISTINCT payloads must dedupe to a single stored \
-         action; keying inbox idempotency on the mutable payload would have stored two"
+        "only one outbound fan-out may reach member A"
+    );
+    assert_eq!(
+        fetch_actions(env, fixture.user_b.principal, fixture.inbox, &recipient_b.fingerprint).len(),
+        1,
+        "only one outbound fan-out may reach member B"
     );
 }
 
-fn post_card(
+fn notify(
     env: &mut PocketIc,
-    user: &User,
-    group_id: ChatId,
-    recipient_pem: String,
-    inbox_override: Option<CanisterId>,
-) -> MessageId {
-    let message_id = random_from_u128();
-    let content = MessageContentInitial::ActionCard(ActionCardContentInitial {
-        title: "Pay".to_string(),
-        rows: vec![ActionCardRow {
-            label: "Amount".to_string(),
-            value: "$20".to_string(),
-        }],
-        confirm_label: "Confirm".to_string(),
-        cancel_label: "Cancel".to_string(),
-        action_id: "act-2pc".to_string(),
-        app_id: None,
-        disclosure: None,
-        expires_at: None,
-        recipient_public_key: Some(recipient_pem),
-        recipient_public_keys: vec![],
-        confirm_payload: Some(ByteBuf::from(br#"{"amount":"$20"}"#.to_vec())),
-        inbox_canister_id: inbox_override,
-    });
-    client::group::happy_path::send_message(env, user, group_id, None, content, None, Some(message_id));
-    message_id
-}
-
-fn confirm(
-    env: &mut PocketIc,
-    user: &User,
-    group_id: ChatId,
-    message_id: MessageId,
-) -> group_canister::respond_to_action_card::Response {
-    client::execute_msgpack_update(
+    depositor: Principal,
+    inbox: Principal,
+    app_id: types::AiAppId,
+    deposits: Vec<action_inbox_canister::c2c_notify_actions::ActionDeposit>,
+) {
+    let response: action_inbox_canister::c2c_notify_actions::Response = client::execute_msgpack_update(
         env,
-        user.principal,
-        group_id.into(),
-        "respond_to_action_card_msgpack",
-        &group_canister::respond_to_action_card::Args {
-            thread_root_message_index: None,
-            message_id,
-            response: ActionCardResponse::Confirm,
-            confirm_payload_override: None,
-        },
-    )
-}
-
-fn count_actions(env: &PocketIc, sender: Principal, inbox: CanisterId, fingerprint: &[u8; 32]) -> usize {
-    let response = client::action_inbox::actions(
-        env,
-        sender,
+        depositor,
         inbox,
-        &action_inbox_canister::actions::Args {
-            consumer_key_fingerprint: ByteBuf::from(fingerprint.to_vec()),
-            since_id: 0,
-            max_results: 100,
-        },
+        "c2c_notify_actions_msgpack",
+        &action_inbox_canister::c2c_notify_actions::Args { app_id, deposits },
     );
-    match response {
-        action_inbox_canister::actions::Response::Success(result) => result.actions.len(),
-    }
-}
-
-fn install_inbox(
-    env: &mut PocketIc,
-    controller: Principal,
-    canister_ids: &crate::CanisterIds,
-    depositor_lui: CanisterId,
-    oc_pem: String,
-) -> CanisterId {
-    let inbox = client::create_canister(env, controller);
-    client::install_canister(
-        env,
-        controller,
-        inbox,
-        wasms::ACTION_INBOX.clone(),
-        action_inbox_canister::init::Args {
-            user_index_canister_id: canister_ids.user_index,
-            cycles_dispenser_canister_id: canister_ids.cycles_dispenser,
-            deployment_operators: vec![controller],
-            authorized_depositors: vec![depositor_lui],
-            oc_signing_public_key_pem: oc_pem,
-            wasm_version: wasms::ACTION_INBOX.version,
-            test_mode: true,
-        },
+    assert!(
+        matches!(response, action_inbox_canister::c2c_notify_actions::Response::Success),
+        "c2c_notify_actions must succeed: {response:?}"
     );
-    inbox
 }

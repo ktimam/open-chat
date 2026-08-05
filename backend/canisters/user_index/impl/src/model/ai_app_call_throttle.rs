@@ -1,37 +1,289 @@
 use candid::Principal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use types::{Milliseconds, TimestampMillis};
+use std::hash::Hash;
+use types::{AiAppId, Milliseconds, TimestampMillis};
 
-const WINDOW: Milliseconds = 60 * 60 * 1000; // failures are counted over a sliding 1-hour window
-
-// Per-caller cap: generous for a human retyping a code, useless for brute force. An attacker can
-// mint fresh self-authenticating principals, which is what the GLOBAL cap is for — it bounds the
-// total probe rate of the whole 6-digit code space / registered-PEM space regardless of principal
-// churn, at the cost that a sustained attack also locks out legitimate retries for the window
-// (retry-after is returned so clients can back off).
+const WINDOW: Milliseconds = 60 * 60 * 1000;
 const MAX_FAILURES_PER_CALLER: usize = 10;
-const MAX_FAILURES_GLOBAL: usize = 1_000;
+const CARD_ATTESTATION_WINDOW: Milliseconds = 60 * 1000;
+const MAX_CARD_ATTESTATION_ATTEMPTS_PER_CALLER: usize = 20;
+const MAX_CARD_ATTESTATION_ATTEMPTS_PER_CALLER_APP: usize = 10;
+const MAX_CARD_ATTESTATION_ATTEMPTS_PER_APP: usize = 200;
+const MAX_CARD_ATTESTATION_ATTEMPTS_GLOBAL: usize = 1_000;
+const MAX_CARD_ATTESTATION_IN_FLIGHT_PER_CALLER: usize = 4;
+const MAX_CARD_ATTESTATION_IN_FLIGHT_PER_APP: usize = 32;
+const MAX_CARD_ATTESTATION_IN_FLIGHT_GLOBAL: usize = 128;
+const CARD_ATTESTATION_IN_FLIGHT_LEASE: Milliseconds = 30 * 1000;
+const ACTION_DEPOSIT_WINDOW: Milliseconds = 60 * 1000;
+const MAX_ACTION_DEPOSIT_ATTEMPTS_PER_CALLER: usize = 200;
+const MAX_ACTION_DEPOSIT_ATTEMPTS_PER_CALLER_APP: usize = 100;
+const MAX_ACTION_DEPOSIT_ATTEMPTS_PER_APP: usize = 500;
+const MAX_ACTION_DEPOSIT_ATTEMPTS_GLOBAL: usize = 2_000;
+const MAX_ACTION_DEPOSIT_IN_FLIGHT_PER_CALLER: usize = 16;
+const MAX_ACTION_DEPOSIT_IN_FLIGHT_PER_APP: usize = 64;
+const MAX_ACTION_DEPOSIT_IN_FLIGHT_GLOBAL: usize = 256;
+const ACTION_DEPOSIT_IN_FLIGHT_LEASE: Milliseconds = 30 * 1000;
+const MAX_TRACKED_CALLERS_PER_ENDPOINT: usize = 4_096;
 
-/// Failure throttle for the two bearer-authorized AI-app endpoints (`claim_ai_app_link_code`,
-/// `revoke_ai_app_user_key`). Only FAILED attempts count — successful claims/revokes are never
-/// throttled — so the caps only bite on guessing. Heap state, serialized across upgrades like the
-/// other models; pruning happens inline on every touch so memory stays bounded by recent activity.
+/// Aggregate-only operational visibility for app-controlled card attestations. These metrics
+/// deliberately contain no principals, app ids, card content, payload hashes, or remote errors.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AiAppCardAttestationMetrics {
+    pub attempts_in_window: usize,
+    pub callers_in_window: usize,
+    pub apps_in_window: usize,
+    pub in_flight: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AiAppCallKind {
+    Claim,
+    CardRedeem,
+    Revoke,
+}
+
+/// Failure throttle for the two external AI-app endpoints. Only failures count.
+/// Claim and revoke have independent per-principal buckets, so distributed callers
+/// cannot create a global lockout and one endpoint cannot deny the other. Each map
+/// has a hard cap with deterministic oldest-bucket eviction.
 #[derive(Serialize, Deserialize, Default)]
 pub struct AiAppCallThrottle {
+    #[serde(default)]
+    claim_failures: HashMap<Principal, Vec<TimestampMillis>>,
+    #[serde(default)]
+    card_redeem_failures: HashMap<Principal, Vec<TimestampMillis>>,
+    /// All full-card attestation attempts, recorded before the inter-canister await. Unlike the
+    /// failure buckets, this also bounds concurrent calls and calls whose target rejects or traps.
+    #[serde(default)]
+    card_attestation_attempts: HashMap<Principal, Vec<TimestampMillis>>,
+    #[serde(default)]
+    card_attestation_attempts_by_caller_app: HashMap<(Principal, AiAppId), Vec<TimestampMillis>>,
+    #[serde(default)]
+    card_attestation_attempts_by_app: HashMap<AiAppId, Vec<TimestampMillis>>,
+    #[serde(default)]
+    card_attestation_attempts_global: Vec<TimestampMillis>,
+    /// Leased reservations are recorded before the third-party await. Completion removes one exact
+    /// reservation; a callback lost to upgrade is pruned after a period longer than the 10s call
+    /// timeout, so it cannot permanently consume capacity.
+    #[serde(default)]
+    card_attestation_in_flight: Vec<(Principal, AiAppId, TimestampMillis)>,
+    #[serde(default)]
+    action_deposit_attempts: HashMap<Principal, Vec<TimestampMillis>>,
+    #[serde(default)]
+    action_deposit_attempts_by_caller_app: HashMap<(Principal, AiAppId), Vec<TimestampMillis>>,
+    #[serde(default)]
+    action_deposit_attempts_by_app: HashMap<AiAppId, Vec<TimestampMillis>>,
+    #[serde(default)]
+    action_deposit_attempts_global: Vec<TimestampMillis>,
+    #[serde(default)]
+    action_deposit_in_flight: Vec<(Principal, AiAppId, TimestampMillis)>,
+    #[serde(default)]
+    revoke_failures: HashMap<Principal, Vec<TimestampMillis>>,
+    // Upgrade compatibility with the pre-v2 shared/global throttle. Endpoint
+    // provenance cannot be reconstructed, so legacy buckets are dropped on first
+    // touch. The 256-bit claim token makes this one-time reset safe.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     failures: HashMap<Principal, Vec<TimestampMillis>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     global: Vec<TimestampMillis>,
 }
 
 impl AiAppCallThrottle {
-    /// Returns Err(retry_after_ms) when the caller (or the canister globally) has too many recent
-    /// failures. Does NOT record anything — call `record_failure` when the attempt actually fails.
-    pub fn check(&mut self, caller: Principal, now: TimestampMillis) -> Result<(), Milliseconds> {
-        self.prune(now);
-        if self.global.len() >= MAX_FAILURES_GLOBAL {
-            return Err(Self::retry_after(&self.global, now));
+    pub fn card_attestation_metrics(&self, now: TimestampMillis) -> AiAppCardAttestationMetrics {
+        let attempt_cutoff = now.saturating_sub(CARD_ATTESTATION_WINDOW);
+        let in_flight_cutoff = now.saturating_sub(CARD_ATTESTATION_IN_FLIGHT_LEASE);
+        AiAppCardAttestationMetrics {
+            attempts_in_window: self
+                .card_attestation_attempts_global
+                .iter()
+                .filter(|timestamp| **timestamp > attempt_cutoff)
+                .count(),
+            callers_in_window: self
+                .card_attestation_attempts
+                .values()
+                .filter(|timestamps| timestamps.iter().any(|timestamp| *timestamp > attempt_cutoff))
+                .count(),
+            apps_in_window: self
+                .card_attestation_attempts_by_app
+                .values()
+                .filter(|timestamps| timestamps.iter().any(|timestamp| *timestamp > attempt_cutoff))
+                .count(),
+            in_flight: self
+                .card_attestation_in_flight
+                .iter()
+                .filter(|(_, _, started_at)| *started_at > in_flight_cutoff)
+                .count(),
         }
-        if let Some(failures) = self.failures.get(&caller) {
+    }
+
+    pub fn admit_action_deposit(
+        &mut self,
+        caller: Principal,
+        app_id: AiAppId,
+        now: TimestampMillis,
+    ) -> Result<(), Milliseconds> {
+        self.clear_legacy();
+        Self::prune_with_window(&mut self.action_deposit_attempts, now, ACTION_DEPOSIT_WINDOW);
+        Self::prune_with_window(&mut self.action_deposit_attempts_by_caller_app, now, ACTION_DEPOSIT_WINDOW);
+        Self::prune_with_window(&mut self.action_deposit_attempts_by_app, now, ACTION_DEPOSIT_WINDOW);
+        let cutoff = now.saturating_sub(ACTION_DEPOSIT_WINDOW);
+        self.action_deposit_attempts_global.retain(|timestamp| *timestamp > cutoff);
+        let in_flight_cutoff = now.saturating_sub(ACTION_DEPOSIT_IN_FLIGHT_LEASE);
+        self.action_deposit_in_flight
+            .retain(|(_, _, started_at)| *started_at > in_flight_cutoff);
+
+        if self
+            .action_deposit_attempts
+            .get(&caller)
+            .is_some_and(|attempts| attempts.len() >= MAX_ACTION_DEPOSIT_ATTEMPTS_PER_CALLER)
+            || self
+                .action_deposit_attempts_by_caller_app
+                .get(&(caller, app_id))
+                .is_some_and(|attempts| attempts.len() >= MAX_ACTION_DEPOSIT_ATTEMPTS_PER_CALLER_APP)
+            || self
+                .action_deposit_attempts_by_app
+                .get(&app_id)
+                .is_some_and(|attempts| attempts.len() >= MAX_ACTION_DEPOSIT_ATTEMPTS_PER_APP)
+            || self.action_deposit_attempts_global.len() >= MAX_ACTION_DEPOSIT_ATTEMPTS_GLOBAL
+        {
+            return Err(ACTION_DEPOSIT_WINDOW);
+        }
+        let in_flight_for_caller = self
+            .action_deposit_in_flight
+            .iter()
+            .filter(|(candidate, _, _)| *candidate == caller)
+            .count();
+        let in_flight_for_app = self
+            .action_deposit_in_flight
+            .iter()
+            .filter(|(_, candidate, _)| *candidate == app_id)
+            .count();
+        if in_flight_for_caller >= MAX_ACTION_DEPOSIT_IN_FLIGHT_PER_CALLER
+            || in_flight_for_app >= MAX_ACTION_DEPOSIT_IN_FLIGHT_PER_APP
+            || self.action_deposit_in_flight.len() >= MAX_ACTION_DEPOSIT_IN_FLIGHT_GLOBAL
+        {
+            return Err(ACTION_DEPOSIT_IN_FLIGHT_LEASE);
+        }
+        if !self.action_deposit_attempts.contains_key(&caller)
+            && self.action_deposit_attempts.len() >= MAX_TRACKED_CALLERS_PER_ENDPOINT
+        {
+            return Err(ACTION_DEPOSIT_WINDOW);
+        }
+        self.action_deposit_attempts.entry(caller).or_default().push(now);
+        self.action_deposit_attempts_by_caller_app
+            .entry((caller, app_id))
+            .or_default()
+            .push(now);
+        self.action_deposit_attempts_by_app.entry(app_id).or_default().push(now);
+        self.action_deposit_attempts_global.push(now);
+        self.action_deposit_in_flight.push((caller, app_id, now));
+        Ok(())
+    }
+
+    pub fn finish_action_deposit(&mut self, caller: Principal, app_id: AiAppId, started_at: TimestampMillis) {
+        if let Some(position) = self
+            .action_deposit_in_flight
+            .iter()
+            .position(|entry| *entry == (caller, app_id, started_at))
+        {
+            self.action_deposit_in_flight.swap_remove(position);
+        }
+    }
+
+    pub fn admit_card_attestation(
+        &mut self,
+        caller: Principal,
+        app_id: AiAppId,
+        now: TimestampMillis,
+    ) -> Result<(), Milliseconds> {
+        self.clear_legacy();
+        Self::prune_with_window(&mut self.card_attestation_attempts, now, CARD_ATTESTATION_WINDOW);
+        Self::prune_with_window(
+            &mut self.card_attestation_attempts_by_caller_app,
+            now,
+            CARD_ATTESTATION_WINDOW,
+        );
+        Self::prune_with_window(&mut self.card_attestation_attempts_by_app, now, CARD_ATTESTATION_WINDOW);
+        let cutoff = now.saturating_sub(CARD_ATTESTATION_WINDOW);
+        self.card_attestation_attempts_global.retain(|timestamp| *timestamp > cutoff);
+        let in_flight_cutoff = now.saturating_sub(CARD_ATTESTATION_IN_FLIGHT_LEASE);
+        self.card_attestation_in_flight
+            .retain(|(_, _, started_at)| *started_at > in_flight_cutoff);
+
+        if let Some(attempts) = self.card_attestation_attempts.get(&caller)
+            && attempts.len() >= MAX_CARD_ATTESTATION_ATTEMPTS_PER_CALLER
+        {
+            return Err(Self::retry_after_with_window(attempts, now, CARD_ATTESTATION_WINDOW));
+        }
+        let caller_app = (caller, app_id);
+        if let Some(attempts) = self.card_attestation_attempts_by_caller_app.get(&caller_app)
+            && attempts.len() >= MAX_CARD_ATTESTATION_ATTEMPTS_PER_CALLER_APP
+        {
+            return Err(Self::retry_after_with_window(attempts, now, CARD_ATTESTATION_WINDOW));
+        }
+        if let Some(attempts) = self.card_attestation_attempts_by_app.get(&app_id)
+            && attempts.len() >= MAX_CARD_ATTESTATION_ATTEMPTS_PER_APP
+        {
+            return Err(Self::retry_after_with_window(attempts, now, CARD_ATTESTATION_WINDOW));
+        }
+        if self.card_attestation_attempts_global.len() >= MAX_CARD_ATTESTATION_ATTEMPTS_GLOBAL {
+            return Err(Self::retry_after_with_window(
+                &self.card_attestation_attempts_global,
+                now,
+                CARD_ATTESTATION_WINDOW,
+            ));
+        }
+        let in_flight_for_caller = self
+            .card_attestation_in_flight
+            .iter()
+            .filter(|(candidate, _, _)| *candidate == caller)
+            .count();
+        let in_flight_for_app = self
+            .card_attestation_in_flight
+            .iter()
+            .filter(|(_, candidate, _)| *candidate == app_id)
+            .count();
+        if in_flight_for_caller >= MAX_CARD_ATTESTATION_IN_FLIGHT_PER_CALLER
+            || in_flight_for_app >= MAX_CARD_ATTESTATION_IN_FLIGHT_PER_APP
+            || self.card_attestation_in_flight.len() >= MAX_CARD_ATTESTATION_IN_FLIGHT_GLOBAL
+        {
+            return Err(CARD_ATTESTATION_IN_FLIGHT_LEASE);
+        }
+
+        // Never evict a live caller bucket: eviction would let a distributed caller immediately
+        // reset its own quota. The global cap guarantees this map naturally drains after one window.
+        if !self.card_attestation_attempts.contains_key(&caller)
+            && self.card_attestation_attempts.len() >= MAX_TRACKED_CALLERS_PER_ENDPOINT
+        {
+            return Err(CARD_ATTESTATION_WINDOW);
+        }
+        self.card_attestation_attempts.entry(caller).or_default().push(now);
+        self.card_attestation_attempts_by_caller_app
+            .entry(caller_app)
+            .or_default()
+            .push(now);
+        self.card_attestation_attempts_by_app.entry(app_id).or_default().push(now);
+        self.card_attestation_attempts_global.push(now);
+        self.card_attestation_in_flight.push((caller, app_id, now));
+        Ok(())
+    }
+
+    pub fn finish_card_attestation(&mut self, caller: Principal, app_id: AiAppId, started_at: TimestampMillis) {
+        if let Some(position) = self
+            .card_attestation_in_flight
+            .iter()
+            .position(|entry| *entry == (caller, app_id, started_at))
+        {
+            self.card_attestation_in_flight.swap_remove(position);
+        }
+    }
+
+    pub fn check(&mut self, kind: AiAppCallKind, caller: Principal, now: TimestampMillis) -> Result<(), Milliseconds> {
+        self.clear_legacy();
+        let failures = self.failures_mut(kind);
+        Self::prune(failures, now);
+        if let Some(failures) = failures.get(&caller) {
             if failures.len() >= MAX_FAILURES_PER_CALLER {
                 return Err(Self::retry_after(failures, now));
             }
@@ -39,23 +291,384 @@ impl AiAppCallThrottle {
         Ok(())
     }
 
-    pub fn record_failure(&mut self, caller: Principal, now: TimestampMillis) {
-        self.failures.entry(caller).or_default().push(now);
-        self.global.push(now);
+    pub fn record_failure(&mut self, kind: AiAppCallKind, caller: Principal, now: TimestampMillis) {
+        self.clear_legacy();
+        let failures = self.failures_mut(kind);
+        Self::prune(failures, now);
+        Self::make_room_for_caller(failures, caller);
+        failures.entry(caller).or_default().push(now);
     }
 
-    fn prune(&mut self, now: TimestampMillis) {
-        let cutoff = now.saturating_sub(WINDOW);
-        self.global.retain(|t| *t > cutoff);
-        self.failures.retain(|_, timestamps| {
-            timestamps.retain(|t| *t > cutoff);
+    fn failures_mut(&mut self, kind: AiAppCallKind) -> &mut HashMap<Principal, Vec<TimestampMillis>> {
+        match kind {
+            AiAppCallKind::Claim => &mut self.claim_failures,
+            AiAppCallKind::CardRedeem => &mut self.card_redeem_failures,
+            AiAppCallKind::Revoke => &mut self.revoke_failures,
+        }
+    }
+
+    fn prune(failures: &mut HashMap<Principal, Vec<TimestampMillis>>, now: TimestampMillis) {
+        Self::prune_with_window(failures, now, WINDOW);
+    }
+
+    fn prune_with_window<K: Eq + Hash>(
+        timestamps_by_caller: &mut HashMap<K, Vec<TimestampMillis>>,
+        now: TimestampMillis,
+        window: Milliseconds,
+    ) {
+        let cutoff = now.saturating_sub(window);
+        timestamps_by_caller.retain(|_, timestamps| {
+            timestamps.retain(|timestamp| *timestamp > cutoff);
             !timestamps.is_empty()
         });
     }
 
-    // Ms until the OLDEST counted failure ages out of the window — the earliest moment a retry
-    // can succeed.
+    fn make_room_for_caller(timestamps_by_caller: &mut HashMap<Principal, Vec<TimestampMillis>>, caller: Principal) {
+        if !timestamps_by_caller.contains_key(&caller) && timestamps_by_caller.len() >= MAX_TRACKED_CALLERS_PER_ENDPOINT {
+            if let Some(oldest) = timestamps_by_caller
+                .iter()
+                .min_by(|(principal_a, times_a), (principal_b, times_b)| {
+                    times_a
+                        .last()
+                        .unwrap_or(&0)
+                        .cmp(times_b.last().unwrap_or(&0))
+                        .then_with(|| principal_a.as_slice().cmp(principal_b.as_slice()))
+                })
+                .map(|(principal, _)| *principal)
+            {
+                timestamps_by_caller.remove(&oldest);
+            }
+        }
+    }
+
+    fn clear_legacy(&mut self) {
+        self.failures.clear();
+        self.global.clear();
+    }
+
     fn retry_after(timestamps: &[TimestampMillis], now: TimestampMillis) -> Milliseconds {
-        timestamps.iter().min().map_or(WINDOW, |oldest| (oldest + WINDOW).saturating_sub(now))
+        Self::retry_after_with_window(timestamps, now, WINDOW)
+    }
+
+    fn retry_after_with_window(timestamps: &[TimestampMillis], now: TimestampMillis, window: Milliseconds) -> Milliseconds {
+        timestamps
+            .iter()
+            .min()
+            .map_or(window, |oldest| (oldest + window).saturating_sub(now))
+    }
+
+    #[cfg(test)]
+    fn tracked_callers(&self, kind: AiAppCallKind) -> usize {
+        match kind {
+            AiAppCallKind::Claim => self.claim_failures.len(),
+            AiAppCallKind::CardRedeem => self.card_redeem_failures.len(),
+            AiAppCallKind::Revoke => self.revoke_failures.len(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn principal(seed: u32) -> Principal {
+        Principal::self_authenticating(&seed.to_le_bytes())
+    }
+
+    #[test]
+    fn claim_and_revoke_buckets_are_independent() {
+        let mut throttle = AiAppCallThrottle::default();
+        let caller = principal(1);
+        for _ in 0..MAX_FAILURES_PER_CALLER {
+            throttle.record_failure(AiAppCallKind::Claim, caller, 1);
+        }
+        assert!(throttle.check(AiAppCallKind::Claim, caller, 1).is_err());
+        assert!(throttle.check(AiAppCallKind::Revoke, caller, 1).is_ok());
+        assert!(throttle.check(AiAppCallKind::CardRedeem, caller, 1).is_ok());
+    }
+
+    #[test]
+    fn repeated_card_redeem_misses_are_bounded_and_recover_after_window() {
+        let mut throttle = AiAppCallThrottle::default();
+        let caller = principal(11);
+        for _ in 0..MAX_FAILURES_PER_CALLER {
+            throttle.record_failure(AiAppCallKind::CardRedeem, caller, 1);
+        }
+        assert!(throttle.check(AiAppCallKind::CardRedeem, caller, 1).is_err());
+        assert!(throttle.check(AiAppCallKind::Claim, caller, 1).is_ok());
+        assert!(throttle.check(AiAppCallKind::CardRedeem, caller, WINDOW + 2).is_ok());
+    }
+
+    #[test]
+    fn rejected_or_trapped_card_attestation_spam_is_bounded_before_await() {
+        let mut throttle = AiAppCallThrottle::default();
+        let caller = principal(12);
+
+        // Admission is permanently recorded for the short window even after the separate
+        // in-flight reservation is released on success, reject, or timeout.
+        for _ in 0..MAX_CARD_ATTESTATION_ATTEMPTS_PER_CALLER_APP {
+            assert!(throttle.admit_card_attestation(caller, 1, 1).is_ok());
+            throttle.finish_card_attestation(caller, 1, 1);
+        }
+        assert!(throttle.admit_card_attestation(caller, 1, 1).is_err());
+        assert!(
+            throttle
+                .admit_card_attestation(caller, 1, CARD_ATTESTATION_WINDOW + 2)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn attestation_metrics_are_aggregate_and_honor_windows() {
+        let mut throttle = AiAppCallThrottle::default();
+        let caller = principal(101);
+        assert!(throttle.admit_card_attestation(caller, 55, 10).is_ok());
+
+        assert_eq!(
+            throttle.card_attestation_metrics(10),
+            AiAppCardAttestationMetrics {
+                attempts_in_window: 1,
+                callers_in_window: 1,
+                apps_in_window: 1,
+                in_flight: 1,
+            }
+        );
+        throttle.finish_card_attestation(caller, 55, 10);
+        assert_eq!(throttle.card_attestation_metrics(10).in_flight, 0);
+        assert_eq!(
+            throttle
+                .card_attestation_metrics(CARD_ATTESTATION_WINDOW + 11)
+                .attempts_in_window,
+            0
+        );
+    }
+
+    #[test]
+    fn current_state_round_trip_preserves_attempts_and_in_flight_leases() {
+        let caller = principal(91);
+        let mut attempts = AiAppCallThrottle::default();
+        for _ in 0..MAX_CARD_ATTESTATION_ATTEMPTS_PER_CALLER_APP {
+            assert!(attempts.admit_card_attestation(caller, 1, 1).is_ok());
+            attempts.finish_card_attestation(caller, 1, 1);
+        }
+        let encoded = msgpack::serialize_to_vec(&attempts).unwrap();
+        let mut restored: AiAppCallThrottle = msgpack::deserialize_then_unwrap(&encoded);
+        assert!(restored.admit_card_attestation(caller, 1, 1).is_err());
+        assert!(
+            restored
+                .admit_card_attestation(caller, 1, CARD_ATTESTATION_WINDOW + 2)
+                .is_ok()
+        );
+
+        let mut in_flight = AiAppCallThrottle::default();
+        for _ in 0..MAX_CARD_ATTESTATION_IN_FLIGHT_PER_CALLER {
+            assert!(in_flight.admit_card_attestation(caller, 2, 1).is_ok());
+        }
+        let encoded = msgpack::serialize_to_vec(&in_flight).unwrap();
+        let mut restored: AiAppCallThrottle = msgpack::deserialize_then_unwrap(&encoded);
+        assert!(restored.admit_card_attestation(caller, 3, 1).is_err());
+        assert!(
+            restored
+                .admit_card_attestation(caller, 3, CARD_ATTESTATION_IN_FLIGHT_LEASE + 2)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn card_attestation_limit_is_per_caller() {
+        let mut throttle = AiAppCallThrottle::default();
+        let abusive = principal(13);
+        let other = principal(14);
+        for _ in 0..MAX_CARD_ATTESTATION_ATTEMPTS_PER_CALLER_APP {
+            assert!(throttle.admit_card_attestation(abusive, 1, 1).is_ok());
+            throttle.finish_card_attestation(abusive, 1, 1);
+        }
+        assert!(throttle.admit_card_attestation(abusive, 1, 1).is_err());
+        assert!(throttle.admit_card_attestation(other, 1, 1).is_ok());
+    }
+
+    #[test]
+    fn card_attestation_completed_attempt_limits_are_independent_at_every_scope() {
+        let mut per_caller = AiAppCallThrottle::default();
+        let caller = principal(20_001);
+        for app_id in [1, 2] {
+            for _ in 0..MAX_CARD_ATTESTATION_ATTEMPTS_PER_CALLER_APP {
+                assert!(per_caller.admit_card_attestation(caller, app_id, 1).is_ok());
+                per_caller.finish_card_attestation(caller, app_id, 1);
+            }
+        }
+        assert_eq!(
+            MAX_CARD_ATTESTATION_ATTEMPTS_PER_CALLER,
+            2 * MAX_CARD_ATTESTATION_ATTEMPTS_PER_CALLER_APP
+        );
+        assert!(per_caller.admit_card_attestation(caller, 3, 1).is_err());
+
+        let mut per_app = AiAppCallThrottle::default();
+        let app_id = 44;
+        for seed in 0..MAX_CARD_ATTESTATION_ATTEMPTS_PER_APP {
+            let distributed_caller = principal(30_000 + seed as u32);
+            assert!(per_app.admit_card_attestation(distributed_caller, app_id, 1).is_ok());
+            per_app.finish_card_attestation(distributed_caller, app_id, 1);
+        }
+        assert!(per_app.admit_card_attestation(principal(39_999), app_id, 1).is_err());
+        assert!(per_app.admit_card_attestation(principal(39_999), app_id + 1, 1).is_ok());
+
+        let mut global = AiAppCallThrottle::default();
+        for seed in 0..MAX_CARD_ATTESTATION_ATTEMPTS_GLOBAL {
+            let distributed_caller = principal(40_000 + seed as u32);
+            let distributed_app = 100 + (seed / MAX_CARD_ATTESTATION_ATTEMPTS_PER_APP) as AiAppId;
+            assert!(global.admit_card_attestation(distributed_caller, distributed_app, 1).is_ok());
+            global.finish_card_attestation(distributed_caller, distributed_app, 1);
+        }
+        assert!(global.admit_card_attestation(principal(49_999), 999, 1).is_err());
+        assert!(
+            global
+                .admit_card_attestation(principal(49_999), 999, CARD_ATTESTATION_WINDOW + 2)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn app_and_in_flight_limits_prevent_distributed_amplification() {
+        let mut throttle = AiAppCallThrottle::default();
+        let app_id = 77;
+        for seed in 0..MAX_CARD_ATTESTATION_IN_FLIGHT_PER_APP {
+            assert!(throttle.admit_card_attestation(principal(seed as u32), app_id, 1).is_ok());
+        }
+        assert!(
+            throttle.admit_card_attestation(principal(9_999), app_id, 1).is_err(),
+            "a distributed caller set must not exceed one app's concurrent budget"
+        );
+
+        assert!(
+            throttle
+                .admit_card_attestation(principal(9_999), app_id, CARD_ATTESTATION_IN_FLIGHT_LEASE + 2)
+                .is_ok(),
+            "a callback lost to upgrade must not strand its reservation forever"
+        );
+    }
+
+    #[test]
+    fn action_deposit_admission_bounds_in_flight_work_per_caller_app_and_globally() {
+        let mut throttle = AiAppCallThrottle::default();
+        let caller = principal(77);
+        for _ in 0..MAX_ACTION_DEPOSIT_IN_FLIGHT_PER_CALLER {
+            assert!(throttle.admit_action_deposit(caller, 1, 1).is_ok());
+        }
+        assert!(throttle.admit_action_deposit(caller, 2, 1).is_err());
+
+        throttle.finish_action_deposit(caller, 1, 1);
+        assert!(throttle.admit_action_deposit(caller, 2, 1).is_ok());
+
+        let mut per_app = AiAppCallThrottle::default();
+        for seed in 0..MAX_ACTION_DEPOSIT_IN_FLIGHT_PER_APP {
+            assert!(per_app.admit_action_deposit(principal(seed as u32), 9, 1).is_ok());
+        }
+        assert!(per_app.admit_action_deposit(principal(9_999), 9, 1).is_err());
+        assert!(
+            per_app
+                .admit_action_deposit(principal(9_999), 9, ACTION_DEPOSIT_IN_FLIGHT_LEASE + 2)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn rejected_action_deposit_attempts_remain_rate_limited_after_in_flight_release() {
+        let mut throttle = AiAppCallThrottle::default();
+        let caller = principal(78);
+        for _ in 0..MAX_ACTION_DEPOSIT_ATTEMPTS_PER_CALLER_APP {
+            assert!(throttle.admit_action_deposit(caller, 3, 1).is_ok());
+            throttle.finish_action_deposit(caller, 3, 1);
+        }
+        assert!(throttle.admit_action_deposit(caller, 3, 1).is_err());
+        assert!(throttle.admit_action_deposit(caller, 3, ACTION_DEPOSIT_WINDOW + 2).is_ok());
+    }
+
+    #[test]
+    fn caller_app_limit_does_not_block_an_unrelated_app() {
+        let mut throttle = AiAppCallThrottle::default();
+        let caller = principal(88);
+        for _ in 0..MAX_CARD_ATTESTATION_ATTEMPTS_PER_CALLER_APP {
+            assert!(throttle.admit_card_attestation(caller, 1, 1).is_ok());
+            throttle.finish_card_attestation(caller, 1, 1);
+        }
+        assert!(throttle.admit_card_attestation(caller, 1, 1).is_err());
+        assert!(throttle.admit_card_attestation(caller, 2, 1).is_ok());
+    }
+
+    #[test]
+    fn distributed_callers_do_not_create_a_global_lockout() {
+        let mut throttle = AiAppCallThrottle::default();
+        for seed in 0..2_000 {
+            throttle.record_failure(AiAppCallKind::Claim, principal(seed), 1);
+        }
+        assert!(throttle.check(AiAppCallKind::Claim, principal(9_999), 1).is_ok());
+    }
+
+    #[test]
+    fn anonymous_claim_and_revoke_misses_are_bounded_because_apps_must_be_canisters() {
+        let mut throttle = AiAppCallThrottle::default();
+        for _ in 0..MAX_FAILURES_PER_CALLER {
+            throttle.record_failure(AiAppCallKind::Claim, Principal::anonymous(), 1);
+        }
+        assert!(throttle.check(AiAppCallKind::Claim, Principal::anonymous(), 1).is_err());
+        assert_eq!(throttle.tracked_callers(AiAppCallKind::Claim), 1);
+
+        for _ in 0..MAX_FAILURES_PER_CALLER {
+            throttle.record_failure(AiAppCallKind::Revoke, Principal::anonymous(), 1);
+        }
+        assert!(throttle.check(AiAppCallKind::Revoke, Principal::anonymous(), 1).is_err());
+    }
+
+    #[test]
+    fn anonymous_card_redemption_misses_have_a_bounded_admission_bucket() {
+        let mut throttle = AiAppCallThrottle::default();
+        for _ in 0..MAX_FAILURES_PER_CALLER {
+            throttle.record_failure(AiAppCallKind::CardRedeem, Principal::anonymous(), 1);
+        }
+        assert!(throttle.check(AiAppCallKind::CardRedeem, Principal::anonymous(), 1).is_err());
+        assert_eq!(throttle.tracked_callers(AiAppCallKind::CardRedeem), 1);
+        assert!(
+            throttle
+                .check(AiAppCallKind::CardRedeem, Principal::anonymous(), WINDOW + 2)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn tracked_caller_memory_is_bounded_and_recovers_after_the_window() {
+        let mut throttle = AiAppCallThrottle::default();
+        for seed in 0..(MAX_TRACKED_CALLERS_PER_ENDPOINT as u32 + 50) {
+            throttle.record_failure(AiAppCallKind::Claim, principal(seed), 1);
+        }
+        assert!(throttle.tracked_callers(AiAppCallKind::Claim) <= MAX_TRACKED_CALLERS_PER_ENDPOINT);
+
+        let caller = principal(42_424);
+        for _ in 0..MAX_FAILURES_PER_CALLER {
+            throttle.record_failure(AiAppCallKind::Revoke, caller, 1);
+        }
+        assert!(throttle.check(AiAppCallKind::Revoke, caller, 1).is_err());
+        assert!(throttle.check(AiAppCallKind::Revoke, caller, WINDOW + 2).is_ok());
+    }
+
+    #[test]
+    fn legacy_shared_throttle_state_deserializes_and_is_discarded_on_first_touch() {
+        #[derive(Serialize)]
+        struct Legacy {
+            failures: HashMap<Principal, Vec<TimestampMillis>>,
+            global: Vec<TimestampMillis>,
+        }
+
+        let caller = principal(7);
+        let bytes = msgpack::serialize_to_vec(&Legacy {
+            failures: HashMap::from([(caller, vec![1; MAX_FAILURES_PER_CALLER])]),
+            global: vec![1; MAX_FAILURES_PER_CALLER],
+        })
+        .unwrap();
+        let mut restored: AiAppCallThrottle = msgpack::deserialize_then_unwrap(&bytes);
+        assert!(restored.check(AiAppCallKind::Claim, caller, 1).is_ok());
+        assert!(restored.check(AiAppCallKind::Revoke, caller, 1).is_ok());
+        assert!(restored.failures.is_empty());
+        assert!(restored.global.is_empty());
     }
 }

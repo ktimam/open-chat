@@ -19,6 +19,10 @@ import { writable } from "svelte/store";
 import { autoProposeSuggestions as autoProposeEnabled } from "../stores/settings";
 import { configKeys } from "./config";
 import { resolveCandidates } from "./aiActionRunner";
+import {
+    buildBoundedAutoProposeVocabulary,
+    type AutoProposeVocabulary,
+} from "./autoProposeVocabulary";
 
 // ---------------------------------------------------------------------------------------------
 // Suggestion store — keyed by messageId, read by ChatMessage to render the chip.
@@ -94,29 +98,16 @@ export function muteAutoProposeInChat(chatId: ChatIdentifier): void {
 // Vocabulary cache: chat key -> the keyword-bearing enabled actions, refreshed at most once a
 // minute. The value is the in-flight/settled promise so concurrent messages share one lookup.
 
-interface VocabularyEntry {
-    // The action's card title, shown in the chip.
-    title: string;
-    // Lower-cased union of every keyword of the action's keyword_map rules (never empty).
-    keywords: string[];
-}
-
-// A chat's auto-propose vocabulary: keyword-bearing actions drive the TEXT path; `imageTitle` drives
-// the IMAGE path (see buildVocabulary).
-interface Vocabulary {
-    keywordEntries: VocabularyEntry[];
-    // The card title for the IMAGE chip: the first candidate action that declares image support
-    // (manifest `acceptsImage`). Undefined when no candidate action opts into images.
-    imageTitle?: string;
-}
-
 const VOCABULARY_TTL_MS = 60_000;
-const vocabularyCache = new Map<string, { expiresAt: number; entries: Promise<Vocabulary> }>();
+const vocabularyCache = new Map<
+    string,
+    { expiresAt: number; entries: Promise<AutoProposeVocabulary> }
+>();
 
 async function buildVocabulary(
     client: OpenChat,
     chatId: ChatIdentifier,
-): Promise<Vocabulary> {
+): Promise<AutoProposeVocabulary> {
     const { candidates, linkRequired } = await resolveCandidates(client, chatId);
     // Link-required apps (per-user keys, not yet paired) MUST contribute too: tapping the chip runs
     // the propose flow, which is exactly where the pairing consent sheet lives — excluding them would
@@ -125,30 +116,10 @@ async function buildVocabulary(
         ...candidates.map((c) => c.action),
         ...linkRequired.flatMap((app) => app.manifest.actions),
     ];
-    const keywordEntries: VocabularyEntry[] = [];
-    for (const action of actions) {
-        const keywords = new Set<string>();
-        for (const rule of action.rules ?? []) {
-            if (rule.kind !== "keyword_map") continue;
-            for (const mapping of rule.map) {
-                for (const keyword of mapping.keywords) {
-                    const k = keyword.trim().toLowerCase();
-                    if (k.length > 0) keywords.add(k);
-                }
-            }
-        }
-        // No keywords -> the action never auto-proposes on TEXT (it can still be offered on an image).
-        if (keywords.size > 0) {
-            keywordEntries.push({ title: action.card.title, keywords: [...keywords] });
-        }
-    }
-    // The image chip fires only for actions that DECLARE image support (manifest `acceptsImage`), so a
-    // text-only app doesn't offer to extract from every photo. First image-capable action wins.
-    const imageAction = actions.find((a) => a.acceptsImage);
-    return { keywordEntries, imageTitle: imageAction?.card.title };
+    return buildBoundedAutoProposeVocabulary(actions);
 }
 
-function vocabularyFor(client: OpenChat, chatId: ChatIdentifier): Promise<Vocabulary> {
+function vocabularyFor(client: OpenChat, chatId: ChatIdentifier): Promise<AutoProposeVocabulary> {
     const chatKey = chatIdentifierToString(chatId);
     const now = Date.now();
     const cached = vocabularyCache.get(chatKey);
@@ -157,7 +128,9 @@ function vocabularyFor(client: OpenChat, chatId: ChatIdentifier): Promise<Vocabu
     }
     // A failed lookup caches as empty for the TTL so a flaky connection never turns the message
     // path into a canister-call loop.
-    const entries = buildVocabulary(client, chatId).catch(() => ({ keywordEntries: [] }) as Vocabulary);
+    const entries = buildVocabulary(client, chatId).catch(
+        () => ({ keywordEntries: [] }) as AutoProposeVocabulary,
+    );
     vocabularyCache.set(chatKey, { expiresAt: now + VOCABULARY_TTL_MS, entries });
     return entries;
 }
@@ -175,14 +148,16 @@ export function evaluateForAutoPropose(
     if (!autoProposeEnabled.value) return;
     // Phase-A app enablement is group-scoped, so only group chats can have a vocabulary —
     // bailing out here keeps every other chat kind entirely off the lookup path.
-    if (chatId.kind !== "group_chat" && chatId.kind !== "channel" && chatId.kind !== "direct_chat") return;
+    if (chatId.kind !== "group_chat" && chatId.kind !== "channel" && chatId.kind !== "direct_chat")
+        return;
     if (autoProposeMutedInChat(chatId)) return;
 
     const fresh = messages.filter(
         (ev) =>
             // Text keyword-matches; an image offers extraction directly. Every other content kind
             // (action cards, video, files, …) never auto-proposes.
-            (ev.event.content.kind === "text_content" || ev.event.content.kind === "image_content") &&
+            (ev.event.content.kind === "text_content" ||
+                ev.event.content.kind === "image_content") &&
             Number(ev.timestamp) >= sessionStart &&
             !evaluated.has(ev.event.messageId),
     );

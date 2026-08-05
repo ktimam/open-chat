@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const { attestationAvailableMock, inferOnDeviceMock } = vi.hoisted(() => ({
+    attestationAvailableMock: vi.fn(() => false),
+    inferOnDeviceMock: vi.fn(async () => ({ kind: "unavailable", reason: "not in tests" })),
+}));
+
 // These specs pin the MANUAL-extraction gate: the manual path (no on-device runtime — the caller
 // supplies the extraction) must run the SAME deterministic pass as the model path (rules post-pass +
 // schema conformance + required-fields check) before a card is built. Previously it built the card
@@ -8,11 +13,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // aiActionRunner imports the on-device inference facade at module level; stub it so importing the
 // module never touches the Tauri bridge (the manual path performs no inference at all).
+vi.mock("./aiActionAvailability", () => ({
+    appContentAttestationAvailable: attestationAvailableMock,
+}));
 vi.mock("./onDeviceInference", () => ({
-    inferOnDevice: vi.fn(async () => ({ kind: "unavailable", reason: "not in tests" })),
+    inferOnDevice: inferOnDeviceMock,
+    onDeviceInferenceCapability: vi.fn(() => ({ selectedModalities: ["text"] })),
 }));
 
 import type { ActionCardContent, AiActionDefinition, AiAppRegistration } from "openchat-shared";
+import { MAX_AI_ACTION_CANDIDATES } from "openchat-shared";
+import type { MessageContext, OpenChat } from "openchat-client";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
@@ -20,6 +31,10 @@ import {
     manualExtractEnabled,
     imageUnsupportedReason,
     proposeFailureMessage,
+    proposeAndPost,
+    proposeAndPostCandidate,
+    preflightAiActionForMessage,
+    resolveCandidates,
     runProposeFlow,
     NO_MODEL_MESSAGE,
     type AiActionCandidate,
@@ -28,6 +43,27 @@ import {
 } from "./aiActionRunner";
 
 const RECIPIENT = "-----BEGIN PUBLIC KEY-----\nABC\n-----END PUBLIC KEY-----\n";
+
+beforeEach(() => {
+    attestationAvailableMock.mockReturnValue(false);
+    inferOnDeviceMock.mockClear();
+});
+
+describe("direct-chat candidate gate", () => {
+    it("returns no candidates or link prompt without querying apps while direct provenance is unsupported", async () => {
+        const aiApps = vi.fn();
+        const enabledAiApps = vi.fn();
+        const myAiAppKeys = vi.fn();
+        const result = await resolveCandidates(
+            { aiApps, enabledAiApps, myAiAppKeys } as unknown as OpenChat,
+            { kind: "direct_chat", userId: "2vxsx-fae" },
+        );
+        expect(result).toEqual({ candidates: [], linkRequired: [], unavailable: [] });
+        expect(aiApps).not.toHaveBeenCalled();
+        expect(enabledAiApps).not.toHaveBeenCalled();
+        expect(myAiAppKeys).not.toHaveBeenCalled();
+    });
+});
 
 const DEF: AiActionDefinition = {
     name: "demo.expense.add",
@@ -109,7 +145,7 @@ describe("buildManualCard (manual-extraction gate)", () => {
         }
     });
 
-    it("an ARRAY of two valid entries builds ONE multi card with an array confirmPayload", () => {
+    it("an ARRAY of two valid entries fails closed until exact-payload hydration exists", () => {
         const r = buildManualCard(
             DEF,
             [
@@ -118,17 +154,8 @@ describe("buildManualCard (manual-extraction gate)", () => {
             ],
             RECIPIENT,
         );
-        expect(r.kind).toBe("ready_multi");
-        if (r.kind === "ready_multi") {
-            expect(JSON.parse(new TextDecoder().decode(r.card.confirmPayload!))).toEqual([
-                { kind: "expense", amount: 20, currency: "USD" },
-                { kind: "expense", amount: 30, currency: "EUR" },
-            ]);
-            // One visible summary row per entry; the multi card also appends a hidden "__oc_" sentinel
-            // row carrying the exact entry array to the app-rendered card, so filter it out here.
-            expect(r.card.rows.filter((row) => !row.label.startsWith("__oc_")).length).toBe(2);
-            expect(r.card.title).toContain("2");
-        }
+        expect(r.kind).toBe("error");
+        if (r.kind === "error") expect(r.error).toContain("exact-payload endpoint");
     });
 
     it("an ARRAY with one valid + one degenerate element drops the bad one → single OBJECT card", () => {
@@ -183,7 +210,6 @@ describe("manualExtractEnabled", () => {
     });
 });
 
-
 // Proposing on an IMAGE used to do NOTHING: the bytes were shipped into a text-only runtime and the
 // failure never surfaced. This policy is what turns that into an explanation. It is deliberately about
 // the MODEL only — no native-vs-browser branch — because the remedy ("pick an image-capable model") is
@@ -200,7 +226,12 @@ describe("imageUnsupportedReason", () => {
     });
 
     it("blocks a text-only model and NAMES it, so the toast can say which one refused", () => {
-        expect(imageUnsupportedReason({ selectedModalities: ["text"], selectedModelId: "gemma-3-1b-it-q4" })).toEqual({
+        expect(
+            imageUnsupportedReason({
+                selectedModalities: ["text"],
+                selectedModelId: "gemma-3-1b-it-q4",
+            }),
+        ).toEqual({
             kind: "image_unsupported",
             modelId: "gemma-3-1b-it-q4",
         });
@@ -219,7 +250,10 @@ describe("imageUnsupportedReason", () => {
         // weights+mmproj pair, webInfer has a vision path, the probe reports what the model says) —
         // and this assertion carried it through with no edit, which was the point.
         expect(
-            imageUnsupportedReason({ selectedModalities: ["text", "image"], selectedModelId: "future-vlm.gguf" }),
+            imageUnsupportedReason({
+                selectedModalities: ["text", "image"],
+                selectedModelId: "future-vlm.gguf",
+            }),
         ).toBeUndefined();
     });
 });
@@ -238,11 +272,13 @@ const APP: AiAppRegistration = {
     id: 1,
     owner: "owner-principal",
     manifest: {
-        name: "IOU",
+        name: "Sample App",
         description: "Shared ledger",
         consumerPublicKey: RECIPIENT,
         perUserKeys: true,
         actions: [DEF],
+        surfaces: [{ kind: "card", url: "https://app.example/card", display: "sheet" }],
+        inboxCanisterId: "aaaaa-aa",
     },
     created: 0n,
     updated: 0n,
@@ -250,6 +286,239 @@ const APP: AiAppRegistration = {
 };
 
 const CANDIDATE: AiActionCandidate = { app: APP, action: DEF, recipientKey: RECIPIENT };
+
+describe("candidate aggregate bounds", () => {
+    it("accepts 31 and 32 actions, and caps a legacy 33-action manifest at 32", async () => {
+        attestationAvailableMock.mockReturnValue(true);
+        for (const count of [31, 32, 33]) {
+            const app: AiAppRegistration = {
+                ...APP,
+                manifest: {
+                    ...APP.manifest,
+                    perUserKeys: false,
+                    actions: Array.from({ length: count }, (_, index) => ({
+                        ...DEF,
+                        name: `sample.action.${index}`,
+                    })),
+                },
+            };
+            const client = {
+                enabledAiApps: vi.fn(async () => [app.id]),
+                aiApps: vi.fn(async () => [app]),
+                myAiAppKeys: vi.fn(),
+            } as unknown as OpenChat;
+            const result = await resolveCandidates(client, {
+                kind: "group_chat",
+                groupId: "aaaaa-aa",
+            });
+            expect(result.candidates).toHaveLength(Math.min(count, MAX_AI_ACTION_CANDIDATES));
+            expect(client.aiApps).toHaveBeenCalledWith([{ appId: app.id }]);
+        }
+    });
+});
+
+function proposalClient(app: AiAppRegistration) {
+    const calls = {
+        enabledAiApps: vi.fn(async () => [app.id]),
+        aiApps: vi.fn(async () => [app]),
+        myAiAppKeys: vi.fn(async () => [{ appId: app.id, publicKey: RECIPIENT }]),
+        createAiAppCardProvenance: vi.fn(),
+        sendMessageWithContent: vi.fn(),
+    };
+    return { calls, client: calls as unknown as OpenChat };
+}
+
+describe("new action-card availability preflight", () => {
+    const messageContext: MessageContext = {
+        chatId: { kind: "group_chat", groupId: "aaaaa-aa" },
+    };
+    const content = { kind: "text_content", text: "paid 20" } as const;
+
+    it("the real UI preflight returns the attestation blocker before user-key/model work", async () => {
+        const { client, calls } = proposalClient(APP);
+        await expect(
+            preflightAiActionForMessage(client, messageContext.chatId),
+        ).resolves.toMatchObject({
+            kind: "actions_unavailable",
+            unavailable: [{ reason: "content_attestation_unavailable" }],
+        });
+        expect(calls.myAiAppKeys).not.toHaveBeenCalled();
+        expect(inferOnDeviceMock).not.toHaveBeenCalled();
+    });
+
+    it("normal proposal path stops before key lookup, inference, provenance, or posting without full-content attestation", async () => {
+        const { client, calls } = proposalClient(APP);
+        const result = await proposeAndPost(client, messageContext, content);
+
+        expect(result).toMatchObject({
+            kind: "actions_unavailable",
+            unavailable: [{ reason: "content_attestation_unavailable" }],
+        });
+        expect(calls.myAiAppKeys).not.toHaveBeenCalled();
+        expect(inferOnDeviceMock).not.toHaveBeenCalled();
+        expect(calls.createAiAppCardProvenance).not.toHaveBeenCalled();
+        expect(calls.sendMessageWithContent).not.toHaveBeenCalled();
+    });
+
+    it("a custom candidate path cannot bypass the content-attestation kill-switch", async () => {
+        const { client, calls } = proposalClient(APP);
+        const result = await proposeAndPostCandidate(client, messageContext, content, CANDIDATE);
+
+        expect(result).toMatchObject({
+            kind: "actions_unavailable",
+            unavailable: [{ reason: "content_attestation_unavailable" }],
+        });
+        expect(inferOnDeviceMock).not.toHaveBeenCalled();
+        expect(calls.createAiAppCardProvenance).not.toHaveBeenCalled();
+        expect(calls.sendMessageWithContent).not.toHaveBeenCalled();
+    });
+
+    it("fails before inference/post with an explicit reason when no valid card surface exists", async () => {
+        const app: AiAppRegistration = {
+            ...APP,
+            manifest: { ...APP.manifest, surfaces: [] },
+        };
+        const { client, calls } = proposalClient(app);
+        const result = await proposeAndPost(client, messageContext, content);
+
+        expect(result).toMatchObject({
+            kind: "actions_unavailable",
+            unavailable: [{ reason: "missing_card_surface" }],
+        });
+        expect(inferOnDeviceMock).not.toHaveBeenCalled();
+        expect(calls.createAiAppCardProvenance).not.toHaveBeenCalled();
+        expect(calls.sendMessageWithContent).not.toHaveBeenCalled();
+    });
+
+    it("fails before inference/post with an explicit reason when no inbox route exists", async () => {
+        const app: AiAppRegistration = {
+            ...APP,
+            manifest: { ...APP.manifest, inboxCanisterId: undefined },
+        };
+        const { client, calls } = proposalClient(app);
+        const result = await proposeAndPost(client, messageContext, content);
+
+        expect(result).toMatchObject({
+            kind: "actions_unavailable",
+            unavailable: [{ reason: "missing_inbox_route" }],
+        });
+        expect(inferOnDeviceMock).not.toHaveBeenCalled();
+        expect(calls.createAiAppCardProvenance).not.toHaveBeenCalled();
+        expect(calls.sendMessageWithContent).not.toHaveBeenCalled();
+    });
+});
+
+describe("provenance before posting", () => {
+    const messageContext: MessageContext = {
+        chatId: { kind: "group_chat", groupId: "aaaaa-aa" },
+    };
+    const content = { kind: "text_content", text: "paid 20" } as const;
+
+    beforeEach(() => {
+        // These tests exercise the dormant post-attestation pipeline. Production remains false and
+        // the proposal-entry tests below prove that no caller reaches this path while it is absent.
+        attestationAvailableMock.mockReturnValue(true);
+    });
+
+    it("binds provenance and the send to the same preallocated message id", async () => {
+        const provenance = new Uint8Array([1, 2, 3]);
+        const createAiAppCardProvenance = vi.fn(async () => ({
+            provenance,
+            expiresAt: BigInt(Date.now() + 60_000),
+        }));
+        const sendMessageWithContent = vi.fn(async () => ({ kind: "success" }));
+        const client = {
+            createAiAppCardProvenance,
+            sendMessageWithContent,
+        } as unknown as OpenChat;
+
+        const result = await proposeAndPostCandidate(client, messageContext, content, CANDIDATE, {
+            amount: 20,
+        });
+
+        expect(result.kind).toBe("ready");
+        const provenanceCalls = createAiAppCardProvenance.mock.calls as unknown as unknown[][];
+        const sendCalls = sendMessageWithContent.mock.calls as unknown as unknown[][];
+        const provedMessageId = provenanceCalls[0][5] as bigint;
+        const exactContent = provenanceCalls[0][3] as Record<string, unknown>;
+        const sendArgs = sendCalls[0];
+        expect(sendArgs[5]).toBe(provedMessageId);
+        expect(sendArgs[1]).toMatchObject({ appProvenance: provenance });
+        expect(exactContent).toEqual({
+            title: "Log expense",
+            rows: [{ label: "Amount", value: "20" }],
+            confirmLabel: "Add",
+            cancelLabel: "Dismiss",
+            actionId: DEF.name,
+            disclosure: undefined,
+            expiresAt: undefined,
+            confirmPayload: new TextEncoder().encode('{"amount":20}'),
+        });
+        expect(Object.keys(exactContent).sort()).toEqual([
+            "actionId",
+            "cancelLabel",
+            "confirmLabel",
+            "confirmPayload",
+            "disclosure",
+            "expiresAt",
+            "rows",
+            "title",
+        ]);
+        expect(createAiAppCardProvenance).toHaveBeenCalledWith(
+            APP.id,
+            APP.updated,
+            DEF.name,
+            exactContent,
+            messageContext.chatId,
+            provedMessageId,
+            undefined,
+        );
+    });
+
+    it("binds a thread card to Some(threadRootMessageIndex)", async () => {
+        const createAiAppCardProvenance = vi.fn(async () => ({
+            provenance: new Uint8Array([9]),
+            expiresAt: BigInt(Date.now() + 60_000),
+        }));
+        const client = {
+            createAiAppCardProvenance,
+            sendMessageWithContent: vi.fn(async () => ({ kind: "success" })),
+        } as unknown as OpenChat;
+        const threadContext: MessageContext = { ...messageContext, threadRootMessageIndex: 42 };
+        await proposeAndPostCandidate(client, threadContext, content, CANDIDATE, { amount: 20 });
+        const provenanceCalls = createAiAppCardProvenance.mock.calls as unknown as unknown[][];
+        expect(provenanceCalls[0][6]).toBe(42);
+    });
+
+    it("fails closed and never sends when authoritative provenance is unavailable", async () => {
+        const sendMessageWithContent = vi.fn();
+        const client = {
+            createAiAppCardProvenance: vi.fn(async () => undefined),
+            sendMessageWithContent,
+        } as unknown as OpenChat;
+        const result = await proposeAndPostCandidate(client, messageContext, content, CANDIDATE, {
+            amount: 20,
+        });
+        expect(result.kind).toBe("error");
+        expect(sendMessageWithContent).not.toHaveBeenCalled();
+    });
+
+    it("never mints provenance or sends for a multi-entry manual extraction", async () => {
+        const createAiAppCardProvenance = vi.fn();
+        const sendMessageWithContent = vi.fn();
+        const client = {
+            createAiAppCardProvenance,
+            sendMessageWithContent,
+        } as unknown as OpenChat;
+        const result = await proposeAndPostCandidate(client, messageContext, content, CANDIDATE, [
+            { amount: 20 },
+            { amount: 30 },
+        ]);
+        expect(result.kind).toBe("error");
+        expect(createAiAppCardProvenance).not.toHaveBeenCalled();
+        expect(sendMessageWithContent).not.toHaveBeenCalled();
+    });
+});
 
 // Proposing that ends without a word is the defect this whole describe exists for: a user taps
 // "Propose action", nothing happens, nothing is said, and there is no way to tell a bug from an app
@@ -260,6 +529,10 @@ const EVERY_RESULT: Record<ProposeResult["kind"], ProposeResult> = {
     ready_multi: { kind: "ready_multi", card: CARD, extracted: [{ amount: 20 }] },
     choose: { kind: "choose", candidates: [CANDIDATE] },
     link_required: { kind: "link_required", app: APP },
+    actions_unavailable: {
+        kind: "actions_unavailable",
+        unavailable: [{ app: APP, reason: "content_attestation_unavailable" }],
+    },
     no_actions: { kind: "no_actions" },
     unavailable: { kind: "unavailable", reason: "no model" },
     unsupported_content: { kind: "unsupported_content" },
@@ -321,6 +594,7 @@ function flowDeps(overrides: Partial<ProposeFlowDeps> = {}): {
     [K in keyof ProposeFlowDeps]: ReturnType<typeof vi.fn>;
 } & ProposeFlowDeps {
     const deps = {
+        preflight: vi.fn(async () => undefined),
         canInfer: vi.fn(() => true),
         promptForExtraction: vi.fn(() => undefined),
         propose: resolving({ kind: "ready", card: CARD, extracted: {} }),
@@ -334,6 +608,22 @@ function flowDeps(overrides: Partial<ProposeFlowDeps> = {}): {
 }
 
 describe("runProposeFlow", () => {
+    it("reports an attestation blocker before model checks, prompts, or proposal work", async () => {
+        const blocker: ProposeResult = {
+            kind: "actions_unavailable",
+            unavailable: [{ app: APP, reason: "content_attestation_unavailable" }],
+        };
+        const deps = flowDeps({
+            preflight: vi.fn(async () => blocker),
+            canInfer: vi.fn(() => false),
+        });
+        await runProposeFlow(deps);
+        expect(deps.toast).toHaveBeenCalledWith(expect.stringContaining("temporarily unavailable"));
+        expect(deps.canInfer).not.toHaveBeenCalled();
+        expect(deps.promptForExtraction).not.toHaveBeenCalled();
+        expect(deps.propose).not.toHaveBeenCalled();
+    });
+
     it("with no model and nothing supplied, TELLS the user instead of doing nothing", async () => {
         const deps = flowDeps({ canInfer: vi.fn(() => false) });
         await runProposeFlow(deps);
@@ -435,8 +725,7 @@ describe("runProposeFlow", () => {
 
 // Crude on purpose. The two ChatMessage trees are near-copies, and the only reason the silent propose
 // survived in one of them is that the fix went into whichever file someone had open. Nothing else
-// notices when the trees drift: the one live harness that covers this (IOU's
-// scripts/live/verify-nomodel-guide.ts) selects `.bubble-wrapper`, which exists only in the classic
+// notices when the trees drift: an external live harness selects `.bubble-wrapper`, which exists only in the classic
 // tree, so it has never once looked at the mobile one.
 describe("both ChatMessage trees run the SHARED propose flow", () => {
     const TREES = {

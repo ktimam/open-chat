@@ -1,7 +1,8 @@
+use crate::TestEnv;
 use crate::client;
 use crate::env::ENV;
+use crate::fan_out_delivery_tests;
 use crate::utils::now_millis;
-use crate::TestEnv;
 use candid::Principal;
 use oc_error_codes::OCErrorCode;
 use p256_key_pair::P256KeyPair;
@@ -10,38 +11,52 @@ use rand::SeedableRng;
 use rand::rngs::StdRng;
 use std::ops::Deref;
 use testing::rng::{random_principal, random_string};
-use types::{AiAppId, AiAppManifest, CanisterId, TimestampMillis};
+use types::{AiAppId, AiAppRegistration, CanisterId, TimestampMillis};
 
 // Must match backend/canisters/user_index/impl/src/updates/revoke_ai_app_user_key.rs exactly.
-const REVOKE_CHALLENGE_DOMAIN: &[u8] = b"oc-revoke-ai-app-user-key-v1";
+const REVOKE_CHALLENGE_DOMAIN: &[u8] = b"oc-revoke-ai-app-user-key-v3\0";
 
-fn revoke_challenge_preimage(canister_id: Principal, public_key: &str, timestamp: TimestampMillis) -> Vec<u8> {
+fn revoke_challenge_preimage(
+    canister_id: Principal,
+    app_subject: &[u8],
+    app_id: AiAppId,
+    key_version: u64,
+    public_key: &str,
+    timestamp: TimestampMillis,
+) -> Vec<u8> {
     let canister_id_bytes = canister_id.as_slice();
-    let mut preimage = Vec::with_capacity(REVOKE_CHALLENGE_DOMAIN.len() + canister_id_bytes.len() + public_key.len() + 8);
+    let mut preimage =
+        Vec::with_capacity(REVOKE_CHALLENGE_DOMAIN.len() + canister_id_bytes.len() + app_subject.len() + public_key.len() + 24);
     preimage.extend_from_slice(REVOKE_CHALLENGE_DOMAIN);
     preimage.extend_from_slice(canister_id_bytes);
+    preimage.extend_from_slice(app_subject);
+    preimage.extend_from_slice(&app_id.to_le_bytes());
+    preimage.extend_from_slice(&key_version.to_le_bytes());
     preimage.extend_from_slice(public_key.as_bytes());
     preimage.extend_from_slice(&timestamp.to_le_bytes());
     preimage
 }
 
-fn register_per_user_app(env: &mut PocketIc, sender: Principal, user_index: CanisterId) -> AiAppId {
-    client::user_index::happy_path::register_ai_app(
-        env,
-        sender,
-        user_index,
-        AiAppManifest {
-            name: random_string(),
-            description: "revoke test app".to_string(),
-            icon_url: None,
-            app_canister_id: None,
-            inbox_canister_id: None,
-            consumer_public_key: String::new(),
-            per_user_keys: true,
-            actions: vec![],
-            surfaces: vec![],
-        },
-    )
+fn register_per_user_app(
+    env: &mut PocketIc,
+    canister_ids: &crate::CanisterIds,
+    controller: Principal,
+    owner: &crate::User,
+) -> AiAppRegistration {
+    let inbox = client::create_canister(env, controller);
+    let draft = fan_out_delivery_tests::register_per_user_app(env, canister_ids.user_index, controller, owner, Some(inbox));
+    fan_out_delivery_tests::install_inbox_at(env, controller, canister_ids, inbox, draft.id, canister_ids.user_index);
+    fan_out_delivery_tests::publish_registered_app(env, canister_ids.user_index, owner, draft.id)
+}
+
+fn app_canister(app: &AiAppRegistration) -> CanisterId {
+    app.manifest.app_canister_id.expect("test app must pin its verifier canister")
+}
+
+struct PairedKey {
+    keypair: P256KeyPair,
+    app_subject: Vec<u8>,
+    key_version: u64,
 }
 
 // Pairs a fresh delivery key with the owner via a link code, returning the keypair so the caller can
@@ -50,41 +65,52 @@ fn pair_key(
     env: &mut PocketIc,
     owner: Principal,
     user_index: CanisterId,
-    app_id: AiAppId,
+    app: &AiAppRegistration,
     rng: &mut StdRng,
-) -> P256KeyPair {
+) -> PairedKey {
     let kp = P256KeyPair::new(rng);
     let code = match client::execute_msgpack_update::<_, user_index_canister::create_ai_app_link_code::Response>(
         env,
         owner,
         user_index,
         "create_ai_app_link_code_msgpack",
-        &user_index_canister::create_ai_app_link_code::Args { app_id },
+        &user_index_canister::create_ai_app_link_code::Args { app_id: app.id },
     ) {
         user_index_canister::create_ai_app_link_code::Response::Success(r) => r.code,
         other => panic!("expected code, got {other:?}"),
     };
-    let claim: user_index_canister::claim_ai_app_link_code::Response = client::execute_msgpack_update(
+    let claim: user_index_canister::c2c_claim_ai_app_link_code::Response = client::execute_msgpack_update(
         env,
-        random_principal(),
+        app_canister(app),
         user_index,
-        "claim_ai_app_link_code_msgpack",
-        &user_index_canister::claim_ai_app_link_code::Args {
+        "c2c_claim_ai_app_link_code_msgpack",
+        &user_index_canister::c2c_claim_ai_app_link_code::Args {
             code,
             public_key: kp.public_key_pem().to_string(),
         },
     );
-    assert!(
-        matches!(claim, user_index_canister::claim_ai_app_link_code::Response::Success),
-        "pairing claim must Succeed: {claim:?}"
-    );
-    kp
+    match claim {
+        user_index_canister::c2c_claim_ai_app_link_code::Response::Success(result) => {
+            assert_eq!(result.app_id, app.id);
+            assert_eq!(result.app_canister_id, app_canister(app));
+            assert_eq!(result.app_subject.len(), 32);
+            PairedKey {
+                keypair: kp,
+                app_subject: result.app_subject.to_vec(),
+                key_version: result.key_version,
+            }
+        }
+        other => panic!("app-authenticated pairing claim must succeed: {other:?}"),
+    }
 }
 
 fn revoke(
     env: &mut PocketIc,
     caller: Principal,
     user_index: CanisterId,
+    app_subject: Vec<u8>,
+    app_id: AiAppId,
+    key_version: u64,
     public_key: String,
     signature: Vec<u8>,
     timestamp: TimestampMillis,
@@ -95,6 +121,9 @@ fn revoke(
         user_index,
         "revoke_ai_app_user_key_msgpack",
         &user_index_canister::revoke_ai_app_user_key::Args {
+            app_subject,
+            app_id,
+            key_version,
             public_key,
             signature,
             timestamp,
@@ -108,23 +137,41 @@ fn revoke(
 fn revoke_with_valid_signature_then_key_not_found() {
     let mut wrapper = ENV.deref().get();
     let TestEnv {
-        env, canister_ids, controller, ..
+        env,
+        canister_ids,
+        controller,
+        ..
     } = wrapper.env();
     let user_index = canister_ids.user_index;
 
     let owner = client::register_diamond_user(env, canister_ids, *controller);
-    let app_id = register_per_user_app(env, owner.principal, user_index);
+    let app = register_per_user_app(env, canister_ids, *controller, &owner);
+    let app_id = app.id;
 
     let mut rng = StdRng::seed_from_u64(1_001);
-    let kp = pair_key(env, owner.principal, user_index, app_id, &mut rng);
+    let PairedKey {
+        keypair: kp,
+        app_subject,
+        key_version,
+    } = pair_key(env, owner.principal, user_index, &app, &mut rng);
     let pem = kp.public_key_pem().to_string();
 
     let timestamp = now_millis(env);
-    let preimage = revoke_challenge_preimage(user_index, &pem, timestamp);
+    let preimage = revoke_challenge_preimage(user_index, &app_subject, app_id, key_version, &pem, timestamp);
     // jwt::sign_bytes produces the exact ECDSA-SHA256 raw (r||s) signature the endpoint verifies.
     let signature = jwt::sign_bytes(&preimage, kp.secret_key_der(), &mut rng).unwrap();
 
-    let first = revoke(env, random_principal(), user_index, pem.clone(), signature.clone(), timestamp);
+    let first = revoke(
+        env,
+        app_canister(&app),
+        user_index,
+        app_subject.clone(),
+        app_id,
+        key_version,
+        pem.clone(),
+        signature.clone(),
+        timestamp,
+    );
     assert!(
         matches!(first, user_index_canister::revoke_ai_app_user_key::Response::Success),
         "valid signature must revoke, got {first:?}"
@@ -132,9 +179,19 @@ fn revoke_with_valid_signature_then_key_not_found() {
 
     // The key is gone now, so a repeat (fresh valid signature) is KeyNotFound.
     let timestamp2 = now_millis(env);
-    let preimage2 = revoke_challenge_preimage(user_index, &pem, timestamp2);
+    let preimage2 = revoke_challenge_preimage(user_index, &app_subject, app_id, key_version, &pem, timestamp2);
     let signature2 = jwt::sign_bytes(&preimage2, kp.secret_key_der(), &mut rng).unwrap();
-    let second = revoke(env, random_principal(), user_index, pem, signature2, timestamp2);
+    let second = revoke(
+        env,
+        app_canister(&app),
+        user_index,
+        app_subject,
+        app_id,
+        key_version,
+        pem,
+        signature2,
+        timestamp2,
+    );
     assert!(
         matches!(second, user_index_canister::revoke_ai_app_user_key::Response::KeyNotFound),
         "revoking an already-removed key must be KeyNotFound, got {second:?}"
@@ -146,22 +203,40 @@ fn revoke_with_valid_signature_then_key_not_found() {
 fn revoke_with_bad_signature_is_invalid_signature() {
     let mut wrapper = ENV.deref().get();
     let TestEnv {
-        env, canister_ids, controller, ..
+        env,
+        canister_ids,
+        controller,
+        ..
     } = wrapper.env();
     let user_index = canister_ids.user_index;
 
     let owner = client::register_diamond_user(env, canister_ids, *controller);
-    let app_id = register_per_user_app(env, owner.principal, user_index);
+    let app = register_per_user_app(env, canister_ids, *controller, &owner);
+    let app_id = app.id;
 
     let mut rng = StdRng::seed_from_u64(2_002);
-    let kp = pair_key(env, owner.principal, user_index, app_id, &mut rng);
+    let PairedKey {
+        keypair: kp,
+        app_subject,
+        key_version,
+    } = pair_key(env, owner.principal, user_index, &app, &mut rng);
     let pem = kp.public_key_pem().to_string();
 
     let timestamp = now_millis(env);
     // A valid signature, but over the WRONG message -> verifies against neither the preimage nor key.
     let wrong_signature = jwt::sign_bytes(b"not the challenge", kp.secret_key_der(), &mut rng).unwrap();
 
-    let response = revoke(env, random_principal(), user_index, pem, wrong_signature, timestamp);
+    let response = revoke(
+        env,
+        app_canister(&app),
+        user_index,
+        app_subject,
+        app_id,
+        key_version,
+        pem,
+        wrong_signature,
+        timestamp,
+    );
     match response {
         user_index_canister::revoke_ai_app_user_key::Response::Error(e) => {
             assert!(
@@ -178,24 +253,42 @@ fn revoke_with_bad_signature_is_invalid_signature() {
 fn revoke_with_stale_timestamp_is_expired() {
     let mut wrapper = ENV.deref().get();
     let TestEnv {
-        env, canister_ids, controller, ..
+        env,
+        canister_ids,
+        controller,
+        ..
     } = wrapper.env();
     let user_index = canister_ids.user_index;
 
     let owner = client::register_diamond_user(env, canister_ids, *controller);
-    let app_id = register_per_user_app(env, owner.principal, user_index);
+    let app = register_per_user_app(env, canister_ids, *controller, &owner);
+    let app_id = app.id;
 
     let mut rng = StdRng::seed_from_u64(3_003);
-    let kp = pair_key(env, owner.principal, user_index, app_id, &mut rng);
+    let PairedKey {
+        keypair: kp,
+        app_subject,
+        key_version,
+    } = pair_key(env, owner.principal, user_index, &app, &mut rng);
     let pem = kp.public_key_pem().to_string();
 
     // 6 minutes in the past — beyond the 5-minute REVOKE_PAST_WINDOW_MS. Signature is valid over
     // this exact (stale) preimage, so the ONLY reason to reject is the window: pins Expired.
     let stale = now_millis(env).saturating_sub(6 * 60 * 1000);
-    let preimage = revoke_challenge_preimage(user_index, &pem, stale);
+    let preimage = revoke_challenge_preimage(user_index, &app_subject, app_id, key_version, &pem, stale);
     let signature = jwt::sign_bytes(&preimage, kp.secret_key_der(), &mut rng).unwrap();
 
-    let response = revoke(env, random_principal(), user_index, pem, signature, stale);
+    let response = revoke(
+        env,
+        app_canister(&app),
+        user_index,
+        app_subject,
+        app_id,
+        key_version,
+        pem,
+        signature,
+        stale,
+    );
     match response {
         user_index_canister::revoke_ai_app_user_key::Response::Error(e) => {
             assert!(e.matches_code(OCErrorCode::Expired), "expected Expired, got {e:?}");
@@ -209,14 +302,11 @@ fn revoke_with_stale_timestamp_is_expired() {
 #[test]
 fn repeated_failed_claims_are_throttled() {
     let mut wrapper = ENV.deref().get();
-    let TestEnv {
-        env, canister_ids, ..
-    } = wrapper.env();
+    let TestEnv { env, canister_ids, .. } = wrapper.env();
     let user_index = canister_ids.user_index;
 
-    // A real, well-formed key so claim gets past key validation and reaches the code lookup (which
-    // is what records a failure). The code itself never exists -> CodeNotFound each time. claim has
-    // no caller guard, so no registered user is needed.
+    // A real, well-formed key and a non-existent token. C2C claim records bounded failures before
+    // any expensive key work; no registered user is needed for these misses.
     let mut rng = StdRng::seed_from_u64(4_004);
     let pem = P256KeyPair::new(&mut rng).public_key_pem().to_string();
 
@@ -225,35 +315,38 @@ fn repeated_failed_claims_are_throttled() {
 
     // First 10 failures: each a genuine miss (CodeNotFound), each counted.
     for i in 0..10 {
-        let response: user_index_canister::claim_ai_app_link_code::Response = client::execute_msgpack_update(
+        let response: user_index_canister::c2c_claim_ai_app_link_code::Response = client::execute_msgpack_update(
             env,
             caller,
             user_index,
-            "claim_ai_app_link_code_msgpack",
-            &user_index_canister::claim_ai_app_link_code::Args {
+            "c2c_claim_ai_app_link_code_msgpack",
+            &user_index_canister::c2c_claim_ai_app_link_code::Args {
                 code: format!("no-such-code-{i}-{}", random_string()),
                 public_key: pem.clone(),
             },
         );
         assert!(
-            matches!(response, user_index_canister::claim_ai_app_link_code::Response::CodeNotFound),
+            matches!(
+                response,
+                user_index_canister::c2c_claim_ai_app_link_code::Response::CodeNotFound
+            ),
             "miss #{i} should be CodeNotFound, got {response:?}"
         );
     }
 
     // The 11th call is rejected by the throttle before the lookup.
-    let throttled: user_index_canister::claim_ai_app_link_code::Response = client::execute_msgpack_update(
+    let throttled: user_index_canister::c2c_claim_ai_app_link_code::Response = client::execute_msgpack_update(
         env,
         caller,
         user_index,
-        "claim_ai_app_link_code_msgpack",
-        &user_index_canister::claim_ai_app_link_code::Args {
+        "c2c_claim_ai_app_link_code_msgpack",
+        &user_index_canister::c2c_claim_ai_app_link_code::Args {
             code: format!("no-such-code-final-{}", random_string()),
             public_key: pem,
         },
     );
     match throttled {
-        user_index_canister::claim_ai_app_link_code::Response::Error(e) => {
+        user_index_canister::c2c_claim_ai_app_link_code::Response::Error(e) => {
             assert!(e.matches_code(OCErrorCode::Throttled), "expected Throttled, got {e:?}");
         }
         other => panic!("11th failed claim must be Error(Throttled), got {other:?}"),
@@ -266,31 +359,55 @@ fn repeated_failed_claims_are_throttled() {
 fn claim_revoke_reclaim_round_trip_uses_fresh_key() {
     let mut wrapper = ENV.deref().get();
     let TestEnv {
-        env, canister_ids, controller, ..
+        env,
+        canister_ids,
+        controller,
+        ..
     } = wrapper.env();
     let user_index = canister_ids.user_index;
 
     let owner = client::register_diamond_user(env, canister_ids, *controller);
-    let app_id = register_per_user_app(env, owner.principal, user_index);
+    let app = register_per_user_app(env, canister_ids, *controller, &owner);
+    let app_id = app.id;
     let mut rng = StdRng::seed_from_u64(5_005);
 
     // 1) CLAIM happy path: pair kp1 via a link code.
-    let kp1 = pair_key(env, owner.principal, user_index, app_id, &mut rng);
+    let PairedKey {
+        keypair: kp1,
+        app_subject: app_subject1,
+        key_version: key_version1,
+    } = pair_key(env, owner.principal, user_index, &app, &mut rng);
     let pem1 = kp1.public_key_pem().to_string();
 
     // 2) REVOKE happy path: valid challenge signature over the canonical preimage.
     let timestamp = now_millis(env);
-    let preimage = revoke_challenge_preimage(user_index, &pem1, timestamp);
+    let preimage = revoke_challenge_preimage(user_index, &app_subject1, app_id, key_version1, &pem1, timestamp);
     let signature = jwt::sign_bytes(&preimage, kp1.secret_key_der(), &mut rng).unwrap();
-    let revoked = revoke(env, random_principal(), user_index, pem1.clone(), signature, timestamp);
+    let revoked = revoke(
+        env,
+        app_canister(&app),
+        user_index,
+        app_subject1,
+        app_id,
+        key_version1,
+        pem1.clone(),
+        signature,
+        timestamp,
+    );
     assert!(
         matches!(revoked, user_index_canister::revoke_ai_app_user_key::Response::Success),
         "revoke must Succeed: {revoked:?}"
     );
 
     // 3) RECONNECT: a fresh code + a FRESH keypair claims successfully (old one was cleared).
-    let kp2 = pair_key(env, owner.principal, user_index, app_id, &mut rng);
+    let PairedKey {
+        keypair: kp2,
+        app_subject: app_subject2,
+        key_version: key_version2,
+    } = pair_key(env, owner.principal, user_index, &app, &mut rng);
     let pem2 = kp2.public_key_pem().to_string();
+    assert_eq!(app_subject2.len(), 32);
+    assert!(key_version2 > key_version1, "reconnect must advance the binding version");
     assert_ne!(pem1, pem2, "the reconnect must use a new keypair");
     assert_ne!(
         ecies_payload::key_fingerprint(&pem1).unwrap(),
@@ -317,44 +434,49 @@ fn claim_revoke_reclaim_round_trip_uses_fresh_key() {
 fn throttled_caller_recovers_after_window() {
     let mut wrapper = ENV.deref().get();
     let TestEnv {
-        env, canister_ids, controller, ..
+        env,
+        canister_ids,
+        controller,
+        ..
     } = wrapper.env();
     let user_index = canister_ids.user_index;
 
     let mut rng = StdRng::seed_from_u64(6_006);
     let pem = P256KeyPair::new(&mut rng).public_key_pem().to_string();
-    let caller = random_principal();
+    let owner = client::register_diamond_user(env, canister_ids, *controller);
+    let app = register_per_user_app(env, canister_ids, *controller, &owner);
+    let caller = app_canister(&app);
 
     // Trip the per-caller throttle: 10 genuine misses...
     for i in 0..10 {
-        let response: user_index_canister::claim_ai_app_link_code::Response = client::execute_msgpack_update(
+        let response: user_index_canister::c2c_claim_ai_app_link_code::Response = client::execute_msgpack_update(
             env,
             caller,
             user_index,
-            "claim_ai_app_link_code_msgpack",
-            &user_index_canister::claim_ai_app_link_code::Args {
+            "c2c_claim_ai_app_link_code_msgpack",
+            &user_index_canister::c2c_claim_ai_app_link_code::Args {
                 code: format!("miss-{i}-{}", random_string()),
                 public_key: pem.clone(),
             },
         );
         assert!(matches!(
             response,
-            user_index_canister::claim_ai_app_link_code::Response::CodeNotFound
+            user_index_canister::c2c_claim_ai_app_link_code::Response::CodeNotFound
         ));
     }
     // ...and prove it tripped (11th call is Throttled).
-    let throttled: user_index_canister::claim_ai_app_link_code::Response = client::execute_msgpack_update(
+    let throttled: user_index_canister::c2c_claim_ai_app_link_code::Response = client::execute_msgpack_update(
         env,
         caller,
         user_index,
-        "claim_ai_app_link_code_msgpack",
-        &user_index_canister::claim_ai_app_link_code::Args {
+        "c2c_claim_ai_app_link_code_msgpack",
+        &user_index_canister::c2c_claim_ai_app_link_code::Args {
             code: random_string(),
             public_key: pem.clone(),
         },
     );
     match throttled {
-        user_index_canister::claim_ai_app_link_code::Response::Error(e) => {
+        user_index_canister::c2c_claim_ai_app_link_code::Response::Error(e) => {
             assert!(e.matches_code(OCErrorCode::Throttled), "expected Throttled, got {e:?}");
         }
         other => panic!("11th failed claim must be Error(Throttled), got {other:?}"),
@@ -365,8 +487,7 @@ fn throttled_caller_recovers_after_window() {
     env.tick();
 
     // Mint a REAL code AFTER the advance (codes carry a 10-minute TTL)...
-    let owner = client::register_diamond_user(env, canister_ids, *controller);
-    let app_id = register_per_user_app(env, owner.principal, user_index);
+    let app_id = app.id;
     let code = match client::execute_msgpack_update::<_, user_index_canister::create_ai_app_link_code::Response>(
         env,
         owner.principal,
@@ -378,15 +499,18 @@ fn throttled_caller_recovers_after_window() {
         other => panic!("expected code, got {other:?}"),
     };
     // ...and claim it from the PREVIOUSLY-THROTTLED caller: the failure bucket was pruned.
-    let recovered: user_index_canister::claim_ai_app_link_code::Response = client::execute_msgpack_update(
+    let recovered: user_index_canister::c2c_claim_ai_app_link_code::Response = client::execute_msgpack_update(
         env,
         caller,
         user_index,
-        "claim_ai_app_link_code_msgpack",
-        &user_index_canister::claim_ai_app_link_code::Args { code, public_key: pem },
+        "c2c_claim_ai_app_link_code_msgpack",
+        &user_index_canister::c2c_claim_ai_app_link_code::Args { code, public_key: pem },
     );
     assert!(
-        matches!(recovered, user_index_canister::claim_ai_app_link_code::Response::Success),
+        matches!(
+            recovered,
+            user_index_canister::c2c_claim_ai_app_link_code::Response::Success(_)
+        ),
         "post-window claim must Succeed (no permanent lock-out), got {recovered:?}"
     );
 }

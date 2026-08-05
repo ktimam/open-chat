@@ -5,7 +5,11 @@
     // just renders an empty iframe — a cross-origin host cannot detect that — so the user must
     // always have a way out to the real page.
     import { i18nKey } from "@src/i18n/i18n";
-    import { openSurfaceExternally } from "@utils/aiAppSurfaces";
+    import {
+        openSurfaceExternally,
+        type AiAppSurfaceDataDisclosure,
+    } from "@utils/aiAppSurfaces";
+    import { normalizeAiAppSurfaceUrl } from "@utils/cardBridge";
     import type { OpenChat } from "openchat-client";
     import { getContext } from "svelte";
     import OpenInNew from "svelte-material-icons/OpenInNew.svelte";
@@ -14,6 +18,8 @@
     import ModalContent from "../ModalContent.svelte";
     import Overlay from "../Overlay.svelte";
     import Translatable from "../Translatable.svelte";
+    import AiAppSurfaceDestination from "./AiAppSurfaceDestination.svelte";
+    import HardenedAiAppSurface from "./HardenedAiAppSurface.svelte";
 
     const client = getContext<OpenChat>("client");
 
@@ -22,10 +28,29 @@
         title: string;
         // The surface URL with its placeholders already substituted (see utils/aiAppSurfaces.ts).
         url: string;
+        display?: "sheet" | "external";
+        dataDisclosures?: AiAppSurfaceDataDisclosure[];
         onDismiss: () => void;
+        onConsent?: () => void;
     }
 
-    let { title, url, onDismiss }: Props = $props();
+    let {
+        title,
+        url,
+        display = "sheet",
+        dataDisclosures = [],
+        onDismiss,
+        onConsent,
+    }: Props = $props();
+    let normalizedUrl = $derived(
+        normalizeAiAppSurfaceUrl(url, { allowLocalDevelopment: import.meta.env.DEV }),
+    );
+
+    function openBrowser() {
+        if (normalizedUrl === undefined) return;
+        onConsent?.();
+        if (openSurfaceExternally(client, normalizedUrl) && display === "external") onDismiss();
+    }
 </script>
 
 <Overlay dismissible onClose={onDismiss}>
@@ -34,15 +59,44 @@
             <div class="hdr">{title}</div>
         {/snippet}
         {#snippet body()}
-            <iframe {title} src={url}></iframe>
+            {#if display === "sheet"}
+                <HardenedAiAppSurface
+                    {title}
+                    {url}
+                    {dataDisclosures}
+                    {onConsent}
+                />
+            {:else if normalizedUrl !== undefined}
+                <div class="external-prompt">
+                    <AiAppSurfaceDestination {title} {normalizedUrl} {dataDisclosures} />
+                    <span>
+                        Opening hands this exact URL to your browser. No navigation occurs until you
+                        choose Open.
+                    </span>
+                </div>
+            {:else}
+                <div class="blocked" role="alert">This external app URL is not allowed.</div>
+            {/if}
         {/snippet}
         {#snippet footer()}
-            <ButtonGroup>
-                <Button hollow small onClick={() => openSurfaceExternally(client, url)}>
-                    <OpenInNew size="1em" color="currentColor" />
-                    <Translatable resourceKey={i18nKey("aiApps.openInBrowser")} />
-                </Button>
-            </ButtonGroup>
+            <div class="footer">
+                {#if display === "sheet" && normalizedUrl !== undefined}
+                    <span class="destination">Browser destination: <code>{normalizedUrl}</code></span>
+                {/if}
+                <ButtonGroup>
+                    {#if display === "external"}
+                        <Button hollow small onClick={onDismiss}>Not now</Button>
+                    {/if}
+                    <Button
+                        hollow
+                        small
+                        disabled={normalizedUrl === undefined}
+                        onClick={openBrowser}>
+                        <OpenInNew size="1em" color="currentColor" />
+                        <Translatable resourceKey={i18nKey("aiApps.openInBrowser")} />
+                    </Button>
+                </ButtonGroup>
+            </div>
         {/snippet}
     </ModalContent>
 </Overlay>
@@ -51,13 +105,25 @@
     .hdr {
         font-weight: 700;
     }
-    /* An iframe has no intrinsic size, so it needs an explicit tall height. */
-    iframe {
-        width: 100%;
-        min-width: min(80vw, 640px);
-        height: 60vh;
-        border: none;
+
+    .external-prompt,
+    .blocked,
+    .footer {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: var(--pad-sm);
+    }
+
+    .external-prompt,
+    .blocked {
+        padding: var(--pad-md);
+        border: var(--bw) solid var(--bd);
         border-radius: var(--rd);
-        background: var(--input-bg);
+    }
+
+    .destination {
+        overflow-wrap: anywhere;
+        text-align: start;
     }
 </style>

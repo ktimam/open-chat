@@ -45,4 +45,10 @@ describe("matchesKeyword", () => {
     test("an empty keyword never matches", () => {
         expect(matchesKeyword("anything", "")).toBe(false);
     });
+
+    test("treats regex metacharacters as plain text without compiling an untrusted pattern", () => {
+        expect(matchesKeyword("paid (a+)+$ today", "(a+)+$")).toBe(true);
+        expect(matchesKeyword(`${"a".repeat(10_000)}!`, "(a+)+$")).toBe(false);
+        expect(matchesKeyword("x", "x".repeat(65))).toBe(false);
+    });
 });

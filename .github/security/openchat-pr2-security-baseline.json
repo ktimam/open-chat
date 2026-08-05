@@ -1,0 +1,121 @@
+{
+  "schemaVersion": 1,
+  "scope": "PR2: generic external-app interfaces and in-chat cards",
+  "baseCommit": "f0c740207d0a4cbe0c4cb45a9dc8995c31922497",
+  "reviewedOn": "2026-08-05",
+  "expiresOn": "2026-08-31",
+  "trackingIssue": "https://github.com/ktimam/open-chat/issues/23",
+  "reviewedDependencyFiles": {
+    "Cargo.lock": "af1a0d9408bb506ac39f88ffba8bace76444e16f97e7d86921c21504dbda70d7",
+    "Cargo.toml": "3cfb9b6192d421386a594aa600aa5d6d7769cf93b90871c912c70302ff1f89d0",
+    "backend/canisters/action_inbox/api/Cargo.toml": "6203a604fa8ca51e6db401f547cd179f3b071cd8e1440805075cea84d56c1bc4",
+    "backend/canisters/action_inbox/impl/Cargo.toml": "3082eb7446766127364015c1b131965a2f19ae08cb8cf623ea3666eb86c9a551",
+    "backend/canisters/group_index/api/Cargo.toml": "9d45da01a651cf89134ecf85f3cb3ae7203ca5973bbac4f28c9176db21aa46b3",
+    "backend/canisters/group_index/impl/Cargo.toml": "546fd811cfd890502502c69833facb08189940877e167696320d1db8ee15d7af",
+    "backend/canisters/local_user_index/impl/Cargo.toml": "5cca8023b8ebf762c1e42e94ea63cd44893bb461b0a471a9133639f447dea021",
+    "backend/canisters/user_index/api/Cargo.toml": "ace0c0814f579e12be93cb45688656329f7f2774bda54a0a6ae0110ab05327f7",
+    "backend/canisters/user_index/impl/Cargo.toml": "efa7d429376a5e513e8228a7a0d566661cc7ffda7a029b5c580edd40b14a7ed3",
+    "backend/external_canisters/ai_app_verifier/api/Cargo.toml": "3db8a909077f2725ab79be3af9b1a12b552287becac0d5d157e741e335cfe251",
+    "backend/external_canisters/ai_app_verifier/test_impl/Cargo.toml": "d4f89366707ca3c46fe66532a906f666c930bac1f665641d46bb757462a56ba7",
+    "backend/integration_tests/Cargo.toml": "49fbbadd1fd37ca74c088a79db6e3c8aeb7b85b7d101456732739548c5c1c073",
+    "backend/libraries/p256_key_pair/Cargo.toml": "43153db404002d4a8f026dd05491ee250b398c5434c5b4a3ee036bd95c9171e8",
+    "frontend/app/package.json": "9b8491176aa551daa9d48c0ff9fc045d7d38f080e4b846072b295bdd1faef752",
+    "frontend/package-lock.json": "0824b1c762affd02a52e972464a917e6ba46cee115d702de7dba40201737cce1"
+  },
+  "ciRuntime": {
+    "nodeVersion": "24.18.1",
+    "cargoAuditVersion": "0.22.2"
+  },
+  "npm": {
+    "ownership": "PR2 changes no frontend package manifest or lockfile. Findings are inherited and any increase fails.",
+    "productionMaximum": { "info": 0, "low": 11, "moderate": 43, "high": 16, "critical": 1, "total": 71 },
+    "allMaximum": { "info": 0, "low": 14, "moderate": 44, "high": 60, "critical": 6, "total": 124 }
+  },
+  "rust": {
+    "ownership": "The PR2 lockfile adds no external package/version tuple. These 19 vulnerabilities and 39 warnings are inherited; any tuple change requires review.",
+    "vulnerabilities": [
+      "RUSTSEC-2023-0071:rsa@0.9.10",
+      "RUSTSEC-2026-0009:time@0.3.44",
+      "RUSTSEC-2026-0045:aws-lc-sys@0.30.0",
+      "RUSTSEC-2026-0046:aws-lc-sys@0.30.0",
+      "RUSTSEC-2026-0047:aws-lc-sys@0.30.0",
+      "RUSTSEC-2026-0048:aws-lc-sys@0.30.0",
+      "RUSTSEC-2026-0049:rustls-webpki@0.103.4",
+      "RUSTSEC-2026-0098:rustls-webpki@0.101.7",
+      "RUSTSEC-2026-0098:rustls-webpki@0.103.4",
+      "RUSTSEC-2026-0099:rustls-webpki@0.101.7",
+      "RUSTSEC-2026-0099:rustls-webpki@0.103.4",
+      "RUSTSEC-2026-0104:rustls-webpki@0.101.7",
+      "RUSTSEC-2026-0104:rustls-webpki@0.103.4",
+      "RUSTSEC-2026-0185:quinn-proto@0.11.14",
+      "RUSTSEC-2026-0194:quick-xml@0.37.5",
+      "RUSTSEC-2026-0194:quick-xml@0.38.2",
+      "RUSTSEC-2026-0195:quick-xml@0.37.5",
+      "RUSTSEC-2026-0195:quick-xml@0.38.2",
+      "RUSTSEC-2026-0204:crossbeam-epoch@0.9.18"
+    ],
+    "warnings": [
+      "unmaintained:ansi_term@0.12.1:RUSTSEC-2021-0139",
+      "unmaintained:atk@0.18.2:RUSTSEC-2024-0413",
+      "unmaintained:atk-sys@0.18.2:RUSTSEC-2024-0416",
+      "unmaintained:atty@0.2.14:RUSTSEC-2024-0375",
+      "unmaintained:backoff@0.4.0:RUSTSEC-2025-0012",
+      "unmaintained:custom_derive@0.1.7:RUSTSEC-2025-0058",
+      "unmaintained:dotenv@0.15.0:RUSTSEC-2021-0141",
+      "unmaintained:fxhash@0.2.1:RUSTSEC-2025-0057",
+      "unmaintained:gdk@0.18.2:RUSTSEC-2024-0412",
+      "unmaintained:gdk-sys@0.18.2:RUSTSEC-2024-0418",
+      "unmaintained:gdkwayland-sys@0.18.2:RUSTSEC-2024-0411",
+      "unmaintained:gdkx11@0.18.2:RUSTSEC-2024-0417",
+      "unmaintained:gdkx11-sys@0.18.2:RUSTSEC-2024-0414",
+      "unmaintained:gtk@0.18.2:RUSTSEC-2024-0415",
+      "unmaintained:gtk-sys@0.18.2:RUSTSEC-2024-0420",
+      "unmaintained:gtk3-macros@0.18.2:RUSTSEC-2024-0419",
+      "unmaintained:instant@0.1.13:RUSTSEC-2024-0384",
+      "unmaintained:paste@1.0.15:RUSTSEC-2024-0436",
+      "unmaintained:proc-macro-error@1.0.4:RUSTSEC-2024-0370",
+      "unmaintained:rustls-pemfile@1.0.4:RUSTSEC-2025-0134",
+      "unmaintained:rustls-pemfile@2.2.0:RUSTSEC-2025-0134",
+      "unmaintained:rusttype@0.9.3:RUSTSEC-2021-0140",
+      "unmaintained:serde_cbor@0.11.2:RUSTSEC-2021-0127",
+      "unmaintained:ttf-parser@0.15.2:RUSTSEC-2026-0192",
+      "unmaintained:unic-char-property@0.9.0:RUSTSEC-2025-0081",
+      "unmaintained:unic-char-range@0.9.0:RUSTSEC-2025-0075",
+      "unmaintained:unic-common@0.9.0:RUSTSEC-2025-0080",
+      "unmaintained:unic-ucd-ident@0.9.0:RUSTSEC-2025-0100",
+      "unmaintained:unic-ucd-version@0.9.0:RUSTSEC-2025-0098",
+      "unsound:anyhow@1.0.99:RUSTSEC-2026-0190",
+      "unsound:atty@0.2.14:RUSTSEC-2021-0145",
+      "unsound:event-listener@5.4.1:RUSTSEC-2026-0221",
+      "unsound:glib@0.18.5:RUSTSEC-2024-0429",
+      "unsound:rand@0.7.3:RUSTSEC-2026-0097",
+      "unsound:rand@0.8.5:RUSTSEC-2026-0097",
+      "unsound:rand@0.9.2:RUSTSEC-2026-0097",
+      "yanked:ic-cdk-timers@0.12.2:",
+      "yanked:spin@0.9.8:",
+      "yanked:tauri-plugin-deep-link@2.4.8:"
+    ]
+  },
+  "directRustPackages": [
+    {
+      "name": "subtle",
+      "version": "2.6.1",
+      "license": "BSD-3-Clause",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "manifest": "backend/canisters/action_inbox/impl/Cargo.toml"
+    },
+    {
+      "name": "zeroize",
+      "version": "1.8.1",
+      "license": "Apache-2.0 OR MIT",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "manifest": "backend/canisters/user_index/impl/Cargo.toml"
+    }
+  ],
+  "workspaceOnlyPackages": [
+    {
+      "name": "ai_app_verifier_test_canister_impl",
+      "manifest": "backend/external_canisters/ai_app_verifier/test_impl/Cargo.toml"
+    }
+  ]
+}

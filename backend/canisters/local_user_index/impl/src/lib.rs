@@ -58,6 +58,7 @@ mod jobs;
 mod lifecycle;
 mod memory;
 mod model;
+mod pr2_entropy;
 mod queries;
 mod updates;
 
@@ -597,6 +598,8 @@ struct Data {
     pub openai_api_key: Option<String>,
     #[serde(default)]
     pub action_inbox_canister_id: Option<CanisterId>,
+    #[serde(default)]
+    pub pr2_entropy: types::Pr2EntropyGate,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -690,6 +693,7 @@ impl Data {
             blocked_username_patterns: Vec::new(),
             openai_api_key,
             action_inbox_canister_id: None,
+            pr2_entropy: types::Pr2EntropyGate::default(),
         }
     }
 }

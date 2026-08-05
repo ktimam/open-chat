@@ -18,6 +18,8 @@ pub enum Response {
     Success(SuccessResult),
     TermTooShort(u8),
     TermTooLong(u8),
+    InvalidPageSize(u8),
+    ResponseTooLarge(u32),
     Error(OCError),
 }
 

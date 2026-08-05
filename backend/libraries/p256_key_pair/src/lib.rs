@@ -2,7 +2,7 @@ use p256::pkcs8::DecodePrivateKey;
 use p256::{
     NistP256, ecdsa,
     elliptic_curve::{NonZeroScalar, rand_core::CryptoRngCore, subtle::CtOption},
-    pkcs8::{EncodePrivateKey, EncodePublicKey},
+    pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding},
 };
 use serde::{Deserialize, Serialize};
 use std::error::Error;
@@ -45,7 +45,7 @@ impl P256KeyPair {
     }
 
     fn signing_key_to_public_key_pem(sk: ecdsa::SigningKey) -> String {
-        sk.verifying_key().to_public_key_pem(Default::default()).unwrap()
+        sk.verifying_key().to_public_key_pem(LineEnding::LF).unwrap()
     }
 
     fn to_der(p256_sk: &ecdsa::SigningKey) -> Result<Vec<u8>, Box<dyn Error>> {
@@ -56,5 +56,21 @@ impl P256KeyPair {
         let p256_sk = p256::SecretKey::from(NonZeroScalar::from_repr(scalar.unwrap().into()).unwrap());
         let pkcs8_der = p256_sk.to_pkcs8_der()?;
         Ok(pkcs8_der.as_bytes().to_vec())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use p256::pkcs8::DecodePublicKey;
+
+    #[test]
+    fn generated_public_key_is_lf_encoded_p256_spki_pem() {
+        let signing_key = ecdsa::SigningKey::from_slice(&[1; 32]).unwrap();
+        let pem = P256KeyPair::signing_key_to_public_key_pem(signing_key);
+
+        assert!(!pem.contains('\r'));
+        assert!(pem.ends_with("-----END PUBLIC KEY-----\n"));
+        assert!(p256::PublicKey::from_public_key_pem(&pem).is_ok());
     }
 }

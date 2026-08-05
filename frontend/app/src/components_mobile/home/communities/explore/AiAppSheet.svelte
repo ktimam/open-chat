@@ -8,7 +8,6 @@
     import { toastStore } from "@src/stores/toast";
     import {
         homeSurfaceOpening,
-        openSurfaceExternally,
         type SurfaceOpening,
     } from "@utils/aiAppSurfaces";
     import { Body, BodySmall, CommonButton, Container, Sheet, Title } from "component-lib";
@@ -41,11 +40,7 @@
 
     function openHome() {
         if (homeSurface === undefined) return;
-        if (homeSurface.surface.display === "sheet") {
-            onOpenSurface(homeSurface);
-        } else {
-            openSurfaceExternally(client, homeSurface.url);
-        }
+        onOpenSurface(homeSurface);
     }
 
     let disconnecting = $state(false);

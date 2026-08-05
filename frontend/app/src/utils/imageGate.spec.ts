@@ -34,6 +34,12 @@ vi.mock("./onDeviceInference", () => ({
     onDeviceInferenceCapability: () => facade.capability,
 }));
 
+// This suite isolates the model-modality gate. The production switch remains false; overriding it
+// here prevents the separate app-content-attestation preflight from short-circuiting these tests.
+vi.mock("./aiActionAvailability", () => ({
+    appContentAttestationAvailable: () => true,
+}));
+
 import { proposeAiActionForMessage, proposeAndPostCandidate } from "./aiActionRunner";
 import { inferOnDevice } from "./onDeviceInference";
 
@@ -66,15 +72,26 @@ const APP = {
     id: 7,
     owner: "owner",
     published: true,
-    manifest: { name: "iou", description: "IOU", consumerPublicKey: "", perUserKeys: true, actions: [ACTION] },
+    manifest: {
+        name: "sample-app",
+        description: "Sample app",
+        consumerPublicKey: "",
+        perUserKeys: true,
+        actions: [ACTION],
+        surfaces: [{ kind: "card", url: "https://app.example/card", display: "sheet" }],
+        inboxCanisterId: "aaaaa-aa",
+    },
+    created: 0n,
+    updated: 0n,
 } as unknown as AiAppRegistration;
 
-const CHAT = { kind: "direct_chat", userId: "u2" } as const;
+const CHAT = { kind: "group_chat", groupId: "aaaaa-aa" } as const;
 const CONTEXT = { chatId: CHAT } as unknown as MessageContext;
 
 const sendMessageWithContent = vi.fn(async () => ({ kind: "success" }));
 
 const client = {
+    enabledAiApps: async () => [APP.id],
     aiApps: async () => [APP],
     myAiAppKeys: async () => [{ appId: APP.id, publicKey: RECIPIENT }],
     aiAppUserKeys: async () => [],

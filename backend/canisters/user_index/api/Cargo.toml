@@ -6,10 +6,12 @@ edition.workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+action_inbox_canister = { path = "../../action_inbox/api" }
 candid = { workspace = true }
 candid_gen = { path = "../../../libraries/candid_gen" }
 constants = { path = "../../../libraries/constants" }
 human_readable = { path = "../../../libraries/human_readable" }
+hex = { workspace = true }
 ic-ledger-types = { workspace = true }
 modclub_canister = { path = "../../../external_canisters/modclub/api" }
 oc_error_codes = { path = "../../../libraries/error_codes" }
