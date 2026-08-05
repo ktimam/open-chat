@@ -41,3 +41,20 @@ fn actions_is_a_replicated_update_across_the_public_contract_and_clients() {
     assert!(integration_client.contains("generate_msgpack_update_call!(actions);"));
     assert!(!integration_client.contains("generate_msgpack_query_call!(actions);"));
 }
+
+#[test]
+fn signature_version_validation_dependency_is_available_in_production_builds() {
+    let manifest = read_repo_file("backend/canisters/action_inbox/impl/Cargo.toml");
+    let production_dependencies = manifest
+        .split("[dependencies]")
+        .nth(1)
+        .and_then(|section| section.split("[dev-dependencies]").next())
+        .expect("ActionInbox implementation has a production dependency section");
+
+    assert!(
+        production_dependencies
+            .lines()
+            .any(|line| line.trim_start().starts_with("ecies_payload =")),
+        "ecies_payload constants are used by live deposit validation and must not be dev-only"
+    );
+}
