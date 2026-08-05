@@ -3,7 +3,10 @@ use ic_cdk_timers::TimerId;
 use rand::rngs::StdRng;
 use std::cell::Cell;
 use std::time::Duration;
-use types::{Pr2EntropyReseedAdmission, Pr2EntropyReseedTicket};
+use types::{
+    PR2_ENTROPY_RESEED_WATCHDOG_MS, Pr2EntropyCommitmentMode, Pr2EntropyReseedAdmission, Pr2EntropyReseedTicket,
+    Pr2EntropyReseedWatchdog,
+};
 
 thread_local! {
     static TIMER_ID: Cell<Option<TimerId>> = Cell::default();
@@ -56,11 +59,36 @@ fn attempt_reseed() {
         state.data.pr2_entropy.begin_reseed(canister_version, now)
     });
     match admission {
-        Pr2EntropyReseedAdmission::Ready | Pr2EntropyReseedAdmission::InProgress => {}
+        Pr2EntropyReseedAdmission::Ready => {}
+        Pr2EntropyReseedAdmission::InProgress {
+            ticket,
+            watchdog_delay_ms,
+        } => schedule_watchdog(ticket, watchdog_delay_ms),
         Pr2EntropyReseedAdmission::RetryAfter(delay_ms) => schedule(Duration::from_millis(delay_ms)),
         Pr2EntropyReseedAdmission::Started(ticket) => {
+            schedule_watchdog(ticket, PR2_ENTROPY_RESEED_WATCHDOG_MS);
             ic_cdk::futures::spawn(finish_reseed(ticket));
         }
+    }
+}
+
+fn schedule_watchdog(ticket: Pr2EntropyReseedTicket, delay_ms: u64) {
+    let _ = ic_cdk_timers::set_timer(Duration::from_millis(delay_ms), async move {
+        check_watchdog(ticket);
+    });
+}
+
+fn check_watchdog(ticket: Pr2EntropyReseedTicket) {
+    let current_version = ic_cdk::api::canister_version();
+    let now = canister_time::now_millis();
+    let outcome = mutate_state(|state| {
+        ensure_current_version(state, current_version);
+        state.data.pr2_entropy.check_reseed_watchdog(ticket, current_version, now)
+    });
+    match outcome {
+        Pr2EntropyReseedWatchdog::Stale => {}
+        Pr2EntropyReseedWatchdog::Pending(delay_ms) => schedule_watchdog(ticket, delay_ms),
+        Pr2EntropyReseedWatchdog::Expired => schedule(Duration::ZERO),
     }
 }
 
@@ -71,15 +99,17 @@ async fn finish_reseed(ticket: Pr2EntropyReseedTicket) {
     let retry = mutate_state(|state| {
         ensure_current_version(state, current_version);
         let canister_id = state.env.canister_id();
+        let commitment_mode = Pr2EntropyCommitmentMode::from_test_mode(state.data.test_mode);
         match raw_rand {
-            Ok(ref bytes) => !state
-                .data
-                .pr2_entropy
-                .finish_reseed(ticket, current_version, canister_id, bytes, now),
-            Err(_) => {
-                state.data.pr2_entropy.fail_reseed(ticket, current_version, now);
-                true
+            Ok(ref bytes) => {
+                let was_current = state.data.pr2_entropy.is_active_reseed_ticket(ticket, current_version);
+                was_current
+                    && !state
+                        .data
+                        .pr2_entropy
+                        .finish_reseed(ticket, current_version, canister_id, commitment_mode, bytes, now)
             }
+            Err(_) => state.data.pr2_entropy.fail_reseed(ticket, current_version, now),
         }
     });
     if retry {

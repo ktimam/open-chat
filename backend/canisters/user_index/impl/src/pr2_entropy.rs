@@ -3,7 +3,10 @@ use ic_cdk_timers::TimerId;
 use rand::rngs::StdRng;
 use std::cell::Cell;
 use std::time::Duration;
-use types::{Pr2EntropyReseedAdmission, Pr2EntropyReseedTicket};
+use types::{
+    PR2_ENTROPY_RESEED_WATCHDOG_MS, Pr2EntropyCommitmentMode, Pr2EntropyReseedAdmission, Pr2EntropyReseedTicket,
+    Pr2EntropyReseedWatchdog,
+};
 
 const ACTION_SIGNING_KEY_INIT_PURPOSE: &[u8] = b"user-index/action-signing-key-init/v1";
 const SCOPED_IDENTITY_KEY_INIT_PURPOSE: &[u8] = b"user-index/scoped-identity-key-init/v1";
@@ -89,11 +92,36 @@ fn attempt_reseed() {
         state.data.pr2_entropy.begin_reseed(canister_version, now)
     });
     match admission {
-        Pr2EntropyReseedAdmission::Ready | Pr2EntropyReseedAdmission::InProgress => {}
+        Pr2EntropyReseedAdmission::Ready => {}
+        Pr2EntropyReseedAdmission::InProgress {
+            ticket,
+            watchdog_delay_ms,
+        } => schedule_watchdog(ticket, watchdog_delay_ms),
         Pr2EntropyReseedAdmission::RetryAfter(delay_ms) => schedule(Duration::from_millis(delay_ms)),
         Pr2EntropyReseedAdmission::Started(ticket) => {
+            schedule_watchdog(ticket, PR2_ENTROPY_RESEED_WATCHDOG_MS);
             ic_cdk::futures::spawn(finish_reseed(ticket));
         }
+    }
+}
+
+fn schedule_watchdog(ticket: Pr2EntropyReseedTicket, delay_ms: u64) {
+    let _ = ic_cdk_timers::set_timer(Duration::from_millis(delay_ms), async move {
+        check_watchdog(ticket);
+    });
+}
+
+fn check_watchdog(ticket: Pr2EntropyReseedTicket) {
+    let current_version = current_canister_version();
+    let now = canister_time::now_millis();
+    let outcome = mutate_state(|state| {
+        ensure_current_bearer_epoch_for_version(state, current_version);
+        state.data.pr2_entropy.check_reseed_watchdog(ticket, current_version, now)
+    });
+    match outcome {
+        Pr2EntropyReseedWatchdog::Stale => {}
+        Pr2EntropyReseedWatchdog::Pending(delay_ms) => schedule_watchdog(ticket, delay_ms),
+        Pr2EntropyReseedWatchdog::Expired => schedule(Duration::ZERO),
     }
 }
 
@@ -104,18 +132,21 @@ async fn finish_reseed(ticket: Pr2EntropyReseedTicket) {
     let retry = mutate_state(|state| {
         ensure_current_bearer_epoch_for_version(state, current_version);
         let canister_id = state.env.canister_id();
-        let accepted = match raw_rand {
-            Ok(ref bytes) => state
-                .data
-                .pr2_entropy
-                .finish_reseed(ticket, current_version, canister_id, bytes, now),
-            Err(_) => {
-                state.data.pr2_entropy.fail_reseed(ticket, current_version, now);
-                false
+        let commitment_mode = Pr2EntropyCommitmentMode::from_test_mode(state.data.test_mode);
+        match raw_rand {
+            Ok(ref bytes) => {
+                let was_current = state.data.pr2_entropy.is_active_reseed_ticket(ticket, current_version);
+                if !state
+                    .data
+                    .pr2_entropy
+                    .finish_reseed(ticket, current_version, canister_id, commitment_mode, bytes, now)
+                {
+                    return was_current;
+                }
             }
-        };
-        if !accepted {
-            return true;
+            Err(_) => {
+                return state.data.pr2_entropy.fail_reseed(ticket, current_version, now);
+            }
         }
 
         // Existing valid keys are preserved by ensure_initialized. Missing keys are created only

@@ -188,11 +188,12 @@ mod tests {
             panic!("entropy reseed must start")
         };
         let canister_id = state.env.canister_id();
+        let commitment_mode = types::Pr2EntropyCommitmentMode::from_test_mode(state.data.test_mode);
         assert!(
             state
                 .data
                 .pr2_entropy
-                .finish_reseed(ticket, canister_version, canister_id, &raw_rand, now)
+                .finish_reseed(ticket, canister_version, canister_id, commitment_mode, &raw_rand, now)
         );
     }
 

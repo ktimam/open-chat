@@ -615,6 +615,7 @@ impl Default for Data {
             ticket,
             crate::pr2_entropy::TEST_CANISTER_VERSION,
             Principal::from_slice(&[1, 2, 3]),
+            types::Pr2EntropyCommitmentMode::TestMode,
             &[0x51; 32],
             0,
         ));
