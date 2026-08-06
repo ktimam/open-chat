@@ -569,11 +569,11 @@ fn app_key_lookup_rejects_browser_callers_and_accepts_local_user_index() {
     let setup = setup(env, canister_ids, *controller);
     let mut rng = StdRng::seed_from_u64(4243);
     let recipient_a = new_recipient(&mut rng);
-    set_key(
+    let _selector = link_key(
         env,
         canister_ids.user_index,
         &setup.user_a,
-        setup.app.id,
+        &setup.app,
         recipient_a.pk_pem.clone(),
     );
     let args = user_index_canister::ai_app_user_keys::Args {
