@@ -3,7 +3,7 @@ use crate::model::ai_app_card_tokens::{
     Capability, InsertError, MAX_RECIPIENT_PUBLIC_KEY_BYTES, MIN_RECIPIENT_PUBLIC_KEY_BYTES, TOKEN_BYTES,
 };
 use crate::updates::create_ai_app_card_provenance::{canonical_non_direct_chat_key, resolve_current_card_app};
-use crate::{RuntimeState, mutate_state};
+use crate::{RuntimeState, mutate_state, read_state};
 use canister_api_macros::update;
 use constants::MINUTE_IN_MS;
 use rand::Rng;
@@ -17,7 +17,7 @@ const CAPABILITY_ENTROPY_PURPOSE: &[u8] = b"user-index/card-capability/v1";
 // Successful responses contain a live bearer, so do not trace this method.
 #[update(guard = "caller_is_local_user_index_canister", msgpack = true)]
 async fn c2c_create_ai_app_card_capability(args: Args) -> Response {
-    if !mutate_state(crate::pr2_entropy::is_ready) {
+    if !read_state(crate::pr2_entropy::is_ready) {
         return Error("AI-app card capability service temporarily unavailable".to_string());
     }
     let binding = group_index_canister::ai_app_card_authority::AiAppCardAuthorityBindingV1 {

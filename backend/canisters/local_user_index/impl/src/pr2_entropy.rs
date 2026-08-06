@@ -1,48 +1,36 @@
-use crate::{RuntimeState, mutate_state, read_state};
+use crate::{RuntimeState, mutate_state};
 use ic_cdk_timers::TimerId;
 use rand::rngs::StdRng;
 use std::cell::Cell;
 use std::time::Duration;
 use types::{
-    PR2_ENTROPY_RESEED_WATCHDOG_MS, Pr2EntropyCommitmentMode, Pr2EntropyReseedAdmission, Pr2EntropyReseedTicket,
-    Pr2EntropyReseedWatchdog,
+    PR2_ENTROPY_RESEED_WATCHDOG_MS, Pr2EntropyCommitmentMode, Pr2EntropyLifecycleId, Pr2EntropyReseedAdmission,
+    Pr2EntropyReseedTicket, Pr2EntropyReseedWatchdog,
 };
 
 thread_local! {
     static TIMER_ID: Cell<Option<TimerId>> = Cell::default();
-    static TIMER_CANISTER_VERSION: Cell<Option<u64>> = Cell::default();
 }
 
 /// Reseeds only the PR2 envelope stream. The established LocalUserIndex RNG remains untouched.
 pub(crate) fn start_after_lifecycle() {
-    let canister_version = ic_cdk::api::canister_version();
-    mutate_state(|state| ensure_current_version(state, canister_version));
-    schedule(Duration::ZERO);
-}
-
-pub(crate) fn ensure_current_version(state: &mut RuntimeState, canister_version: u64) {
-    let changed = state.data.pr2_entropy.ensure_canister_version(canister_version);
-    #[cfg(target_arch = "wasm32")]
-    if changed {
-        schedule(Duration::ZERO);
+    let version_salt = ic_cdk::api::canister_version();
+    match mutate_state(|state| advance_lifecycle(state, version_salt)) {
+        Ok(_) => schedule(Duration::ZERO),
+        Err(error) => tracing::error!(version_salt, error, "PR2 entropy lifecycle advance failed closed"),
     }
-    #[cfg(not(target_arch = "wasm32"))]
-    let _ = changed;
 }
 
-pub(crate) fn output_rng(state: &mut RuntimeState, canister_version: u64, purpose: &[u8]) -> Result<StdRng, &'static str> {
-    ensure_current_version(state, canister_version);
-    state.data.pr2_entropy.output_rng(canister_version, purpose)
+pub(crate) fn advance_lifecycle(state: &mut RuntimeState, version_salt: u64) -> Result<Pr2EntropyLifecycleId, &'static str> {
+    state.data.pr2_entropy.advance_lifecycle(version_salt)
+}
+
+pub(crate) fn output_rng(state: &mut RuntimeState, purpose: &[u8]) -> Result<StdRng, &'static str> {
+    let canister_id = state.env.canister_id();
+    state.data.pr2_entropy.output_rng(canister_id, purpose)
 }
 
 fn schedule(delay: Duration) {
-    let canister_version = ic_cdk::api::canister_version();
-    if TIMER_CANISTER_VERSION.get() != Some(canister_version) {
-        if let Some(timer_id) = TIMER_ID.take() {
-            ic_cdk_timers::clear_timer(timer_id);
-        }
-        TIMER_CANISTER_VERSION.set(Some(canister_version));
-    }
     if TIMER_ID.get().is_some() {
         return;
     }
@@ -51,15 +39,10 @@ fn schedule(delay: Duration) {
 
 fn attempt_reseed() {
     TIMER_ID.set(None);
-    let canister_version = ic_cdk::api::canister_version();
-    TIMER_CANISTER_VERSION.set(Some(canister_version));
     let now = canister_time::now_millis();
-    let admission = mutate_state(|state| {
-        ensure_current_version(state, canister_version);
-        state.data.pr2_entropy.begin_reseed(canister_version, now)
-    });
+    let admission = mutate_state(|state| state.data.pr2_entropy.begin_reseed(now));
     match admission {
-        Pr2EntropyReseedAdmission::Ready => {}
+        Pr2EntropyReseedAdmission::Unavailable | Pr2EntropyReseedAdmission::Ready => {}
         Pr2EntropyReseedAdmission::InProgress {
             ticket,
             watchdog_delay_ms,
@@ -67,7 +50,7 @@ fn attempt_reseed() {
         Pr2EntropyReseedAdmission::RetryAfter(delay_ms) => schedule(Duration::from_millis(delay_ms)),
         Pr2EntropyReseedAdmission::Started(ticket) => {
             schedule_watchdog(ticket, PR2_ENTROPY_RESEED_WATCHDOG_MS);
-            ic_cdk::futures::spawn(finish_reseed(ticket));
+            ic_cdk::futures::spawn_migratory(finish_reseed(ticket));
         }
     }
 }
@@ -79,12 +62,8 @@ fn schedule_watchdog(ticket: Pr2EntropyReseedTicket, delay_ms: u64) {
 }
 
 fn check_watchdog(ticket: Pr2EntropyReseedTicket) {
-    let current_version = ic_cdk::api::canister_version();
     let now = canister_time::now_millis();
-    let outcome = mutate_state(|state| {
-        ensure_current_version(state, current_version);
-        state.data.pr2_entropy.check_reseed_watchdog(ticket, current_version, now)
-    });
+    let outcome = mutate_state(|state| state.data.pr2_entropy.check_reseed_watchdog(ticket, now));
     match outcome {
         Pr2EntropyReseedWatchdog::Stale => {}
         Pr2EntropyReseedWatchdog::Pending(delay_ms) => schedule_watchdog(ticket, delay_ms),
@@ -93,24 +72,21 @@ fn check_watchdog(ticket: Pr2EntropyReseedTicket) {
 }
 
 async fn finish_reseed(ticket: Pr2EntropyReseedTicket) {
-    let test_mode = read_state(|state| state.data.test_mode);
-    let raw_rand = utils::canister::request_raw_rand(test_mode).await;
-    let current_version = ic_cdk::api::canister_version();
+    let raw_rand = ic_cdk_management_canister::raw_rand().await;
     let now = canister_time::now_millis();
     let retry = mutate_state(|state| {
-        ensure_current_version(state, current_version);
         let canister_id = state.env.canister_id();
         let commitment_mode = Pr2EntropyCommitmentMode::from_test_mode(state.data.test_mode);
         match raw_rand {
             Ok(ref bytes) => {
-                let was_current = state.data.pr2_entropy.is_active_reseed_ticket(ticket, current_version);
+                let was_current = state.data.pr2_entropy.is_active_reseed_ticket(ticket);
                 was_current
                     && !state
                         .data
                         .pr2_entropy
-                        .finish_reseed(ticket, current_version, canister_id, commitment_mode, bytes, now)
+                        .finish_reseed(ticket, canister_id, commitment_mode, bytes, now)
             }
-            Err(_) => state.data.pr2_entropy.fail_reseed(ticket, current_version, now),
+            Err(_) => state.data.pr2_entropy.fail_reseed(ticket, now),
         }
     });
     if retry {

@@ -38,7 +38,6 @@ fn remove_my_ai_app_key_impl(args: Args, state: &mut RuntimeState) -> Response {
 /// Invalidates every still-pending authority derived from the exact user/app consent tuple. This is
 /// also used by direct set, successful app claim, and app-initiated revoke.
 pub(crate) fn invalidate_pending_ai_app_link_state(user_id: types::UserId, app_id: types::AiAppId, state: &mut RuntimeState) {
-    crate::pr2_entropy::ensure_current_bearer_epoch(state);
     let now = state.env.now();
     state.data.ai_app_link_codes.remove_user_app(user_id, app_id, now);
     state

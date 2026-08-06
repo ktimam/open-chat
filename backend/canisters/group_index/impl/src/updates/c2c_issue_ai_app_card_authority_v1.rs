@@ -18,12 +18,10 @@ const AUTHORITY_ENTROPY_PURPOSE: &[u8] = b"group-index/card-authority/v1";
 // A successful response contains a live bearer token, so this method must never be traced.
 #[update(guard = "caller_is_group_or_community_canister", msgpack = true)]
 fn c2c_issue_ai_app_card_authority_v1(args: Args) -> Response {
-    let canister_version = ic_cdk::api::canister_version();
-    mutate_state(|state| issue(args, state, canister_version))
+    mutate_state(|state| issue(args, state))
 }
 
-fn issue(args: Args, state: &mut RuntimeState, canister_version: u64) -> Response {
-    crate::pr2_entropy::ensure_current_version(state, canister_version);
+fn issue(args: Args, state: &mut RuntimeState) -> Response {
     if let Err(error) = validate_binding_shape(&args.binding) {
         return InvalidRequest(error);
     }
@@ -32,7 +30,7 @@ fn issue(args: Args, state: &mut RuntimeState, canister_version: u64) -> Respons
         Some(value) => value,
         None => return InvalidRoute,
     };
-    let mut rng = match crate::pr2_entropy::output_rng(state, canister_version, AUTHORITY_ENTROPY_PURPOSE) {
+    let mut rng = match crate::pr2_entropy::output_rng(state, AUTHORITY_ENTROPY_PURPOSE) {
         Ok(rng) => rng,
         Err(_) => return EntropyUnavailable,
     };
@@ -180,11 +178,9 @@ mod tests {
         assert!(resolve_route(&value, Some(Principal::from_slice(&[8])), &state).is_none());
     }
 
-    fn reseed(state: &mut RuntimeState, canister_version: u64, raw_rand: [u8; 32]) {
-        crate::pr2_entropy::ensure_current_version(state, canister_version);
+    fn reseed_current_lifecycle(state: &mut RuntimeState, raw_rand: [u8; 32]) {
         let now = state.env.now();
-        let types::Pr2EntropyReseedAdmission::Started(ticket) = state.data.pr2_entropy.begin_reseed(canister_version, now)
-        else {
+        let types::Pr2EntropyReseedAdmission::Started(ticket) = state.data.pr2_entropy.begin_reseed(now) else {
             panic!("entropy reseed must start")
         };
         let canister_id = state.env.canister_id();
@@ -193,7 +189,7 @@ mod tests {
             state
                 .data
                 .pr2_entropy
-                .finish_reseed(ticket, canister_version, canister_id, commitment_mode, &raw_rand, now)
+                .finish_reseed(ticket, canister_id, commitment_mode, &raw_rand, now)
         );
     }
 
@@ -215,13 +211,13 @@ mod tests {
         let mut second_binding = first_binding.clone();
         second_binding.context.message_id = MessageId::from(2u64);
 
-        reseed(&mut first_state, 12, [12; 32]);
+        crate::pr2_entropy::advance_lifecycle(&mut first_state, 12).unwrap();
+        reseed_current_lifecycle(&mut first_state, [12; 32]);
         let Success(first) = issue(
             Args {
                 binding: first_binding.clone(),
             },
             &mut first_state,
-            12,
         ) else {
             panic!("first authority issuance must succeed")
         };
@@ -245,6 +241,7 @@ mod tests {
         let mut restored_state = state();
         restored_state.data.pr2_entropy = restored_entropy;
         restored_state.data.ai_app_card_authority = restored_authorities;
+        crate::pr2_entropy::advance_lifecycle(&mut restored_state, 13).unwrap();
 
         assert!(matches!(
             issue(
@@ -252,7 +249,6 @@ mod tests {
                     binding: second_binding.clone(),
                 },
                 &mut restored_state,
-                13,
             ),
             EntropyUnavailable
         ));
@@ -266,7 +262,7 @@ mod tests {
             crate::model::ai_app_card_authority::CheckResult::NotFound
         );
 
-        reseed(&mut restored_state, 13, [13; 32]);
+        reseed_current_lifecycle(&mut restored_state, [13; 32]);
         assert_eq!(
             restored_state.data.ai_app_card_authority.check(
                 first.token.as_ref(),
@@ -276,7 +272,7 @@ mod tests {
             ),
             crate::model::ai_app_card_authority::CheckResult::NotFound
         );
-        let Success(after_restore) = issue(Args { binding: second_binding }, &mut restored_state, 13) else {
+        let Success(after_restore) = issue(Args { binding: second_binding }, &mut restored_state) else {
             panic!("post-restore authority issuance must succeed")
         };
         assert_ne!(

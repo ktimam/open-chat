@@ -1,9 +1,9 @@
 use crate::guards::caller_is_local_user_index_canister;
 use crate::model::ai_app_card_tokens::{LookupConfirmationGrantResult, TOKEN_BYTES};
-use crate::mutate_state;
 use crate::updates::c2c_create_ai_app_card_confirmation_grant::current_user_key_binding;
 use crate::updates::c2c_redeem_ai_app_card_capability::app_user_key_binding_matches;
 use crate::updates::create_ai_app_card_provenance::{canonical_non_direct_chat_key, resolve_current_card_app};
+use crate::{mutate_state, read_state};
 use canister_api_macros::update;
 use user_index_canister::c2c_consume_ai_app_card_confirmation_grant::{Response::*, *};
 
@@ -12,7 +12,7 @@ async fn c2c_consume_ai_app_card_confirmation_grant(args: Args) -> Response {
     if args.confirmation_lease_generation == 0 {
         return InvalidRequest("invalid confirmation lease generation".to_string());
     }
-    if !mutate_state(crate::pr2_entropy::is_ready) {
+    if !read_state(crate::pr2_entropy::is_ready) {
         return InvalidRequest("confirmation grant service temporarily unavailable".to_string());
     }
     let binding = group_index_canister::ai_app_card_authority::AiAppCardAuthorityBindingV1 {

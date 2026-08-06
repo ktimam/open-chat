@@ -10,7 +10,7 @@ use rand::SeedableRng;
 use rand::rngs::StdRng;
 use std::ops::Deref;
 use std::time::Duration;
-use types::{AiAppId, AiAppRegistration, CanisterId};
+use types::{AiAppId, AiAppRegistration, CanisterId, Empty};
 
 fn register_per_user_app(
     env: &mut PocketIc,
@@ -52,12 +52,9 @@ fn try_create_link_code(
 }
 
 fn wait_for_link_code_after_entropy(env: &mut PocketIc, sender: Principal, user_index: CanisterId, app_id: AiAppId) -> String {
-    // Start the scheduled reseed attempt before moving beyond its watchdog deadline. PocketIC does
-    // not advance wall-clock time when ticking, so both operations are needed to prove that a lost
-    // pre-restore callback cannot keep the gate permanently unavailable.
-    env.tick();
-    env.advance_time(Duration::from_millis(types::PR2_ENTROPY_RESEED_WATCHDOG_MS + 1));
-    for _ in 0..20 {
+    // Poll the freshly scheduled bounded callback directly. Artificially crossing the watchdog
+    // deadline first would test retry recovery rather than normal lifecycle readiness.
+    for _ in 0..100 {
         env.tick();
         match try_create_link_code(env, sender, user_index, app_id) {
             user_index_canister::create_ai_app_link_code::Response::Success(result) => return result.code,
@@ -66,6 +63,31 @@ fn wait_for_link_code_after_entropy(env: &mut PocketIc, sender: Principal, user_
         }
     }
     panic!("fresh raw_rand reseed did not complete after snapshot restoration")
+}
+
+fn upgrade_user_index_same_wasm_while_stopped(env: &mut PocketIc, user_index: CanisterId, controller: Principal) {
+    env.upgrade_canister(
+        user_index,
+        wasms::USER_INDEX.module.clone().into(),
+        candid::encode_one(user_index_canister::post_upgrade::Args {
+            wasm_version: wasms::USER_INDEX.version,
+        })
+        .unwrap(),
+        Some(controller),
+    )
+    .expect("same-Wasm recovery upgrade must succeed while the canister remains stopped");
+}
+
+fn wait_for_initial_entropy_without_issuing_a_bearer(env: &mut PocketIc, user_index: CanisterId) {
+    for _ in 0..20 {
+        env.tick();
+        let response: user_index_canister::action_signing_keys::Response =
+            client::execute_query(env, Principal::anonymous(), user_index, "action_signing_keys", &Empty {});
+        if matches!(response, user_index_canister::action_signing_keys::Response::Success(_)) {
+            return;
+        }
+    }
+    panic!("fresh UserIndex entropy did not become ready before the snapshot drill")
 }
 
 fn public_claim(
@@ -113,9 +135,9 @@ fn my_keys(env: &PocketIc, caller: Principal, user_index: CanisterId) -> Vec<typ
     }
 }
 
-// Snapshot loading does not run a lifecycle hook, so the first issuance must fail closed, schedule
-// an on-demand raw_rand reseed for the new canister version, and only then issue a token distinct
-// from the pre-restore bearer.
+// Release gate for https://github.com/ktimam/open-chat/issues/51. Supported recovery is strictly
+// stop -> load snapshot -> same-Wasm upgrade while stopped -> start. The upgrade installs a fresh
+// logical lifecycle before any restored bearer can be used.
 #[test]
 fn restored_user_index_snapshot_never_reissues_a_link_bearer() {
     let mut wrapper = ENV.deref().get();
@@ -129,6 +151,11 @@ fn restored_user_index_snapshot_never_reissues_a_link_bearer() {
     let owner = client::register_diamond_user(env, canister_ids, *controller);
     let app_id = register_per_user_app(env, canister_ids, *controller, &owner).id;
     let user_index_controller = canister_ids.openchat_installer;
+
+    // Prove the pre-snapshot entropy epoch is ready without exposing or consuming a bearer. This
+    // preserves the drill's snapshot-before-first-bearer invariant while avoiding a race with the
+    // asynchronous raw_rand callback scheduled during UserIndex installation.
+    wait_for_initial_entropy_without_issuing_a_bearer(env, canister_ids.user_index);
 
     env.stop_canister(canister_ids.user_index, Some(user_index_controller))
         .unwrap();
@@ -144,6 +171,7 @@ fn restored_user_index_snapshot_never_reissues_a_link_bearer() {
         .unwrap();
     env.load_canister_snapshot(canister_ids.user_index, Some(user_index_controller), snapshot.id)
         .unwrap();
+    upgrade_user_index_same_wasm_while_stopped(env, canister_ids.user_index, user_index_controller);
     env.start_canister(canister_ids.user_index, Some(user_index_controller))
         .unwrap();
 
@@ -159,7 +187,7 @@ fn restored_user_index_snapshot_never_reissues_a_link_bearer() {
 }
 
 #[test]
-fn restored_pending_entropy_timer_is_replaced_for_the_new_canister_version() {
+fn restored_pending_entropy_timer_is_recreated_by_the_recovery_upgrade() {
     let mut wrapper = ENV.deref().get();
     let TestEnv {
         env,
@@ -172,9 +200,8 @@ fn restored_pending_entropy_timer_is_replaced_for_the_new_canister_version() {
     let app_id = register_per_user_app(env, canister_ids, *controller, &owner).id;
     let user_index_controller = canister_ids.openchat_installer;
 
-    // post_upgrade schedules a zero-delay reseed. Snapshot it before another round can consume the
-    // timer, then restore into a newer canister version. The restored heap contains the old timer
-    // sentinel even though that exact system timer is not guaranteed to survive snapshot loading.
+    // post_upgrade schedules a zero-delay reseed. Snapshot it before another round consumes the
+    // timer, then prove the mandatory same-Wasm recovery upgrade recreates lifecycle work.
     env.upgrade_canister(
         canister_ids.user_index,
         wasms::USER_INDEX.module.clone().into(),
@@ -192,6 +219,7 @@ fn restored_pending_entropy_timer_is_replaced_for_the_new_canister_version() {
         .unwrap();
     env.load_canister_snapshot(canister_ids.user_index, Some(user_index_controller), snapshot.id)
         .unwrap();
+    upgrade_user_index_same_wasm_while_stopped(env, canister_ids.user_index, user_index_controller);
     env.start_canister(canister_ids.user_index, Some(user_index_controller))
         .unwrap();
 

@@ -606,14 +606,14 @@ impl Data {
 impl Default for Data {
     fn default() -> Data {
         let mut pr2_entropy = types::Pr2EntropyGate::default();
-        let types::Pr2EntropyReseedAdmission::Started(ticket) =
-            pr2_entropy.begin_reseed(crate::pr2_entropy::TEST_CANISTER_VERSION, 0)
-        else {
+        pr2_entropy
+            .advance_lifecycle(crate::pr2_entropy::TEST_CANISTER_VERSION)
+            .unwrap();
+        let types::Pr2EntropyReseedAdmission::Started(ticket) = pr2_entropy.begin_reseed(0) else {
             unreachable!()
         };
         assert!(pr2_entropy.finish_reseed(
             ticket,
-            crate::pr2_entropy::TEST_CANISTER_VERSION,
             Principal::from_slice(&[1, 2, 3]),
             types::Pr2EntropyCommitmentMode::TestMode,
             &[0x51; 32],

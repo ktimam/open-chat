@@ -11,10 +11,8 @@ fn c2c_validate_ai_app_card_authority_v1(args: Args) -> Response {
     if args.token.len() != AI_APP_CARD_AUTHORITY_TOKEN_BYTES {
         return NotFound;
     }
-    let canister_version = ic_cdk::api::canister_version();
     mutate_state(|state| {
-        crate::pr2_entropy::ensure_current_version(state, canister_version);
-        if !state.data.pr2_entropy.is_ready(canister_version) {
+        if !state.data.pr2_entropy.is_ready() {
             return NotFound;
         }
         let owner = resolve_route(&args.binding, None, state).map(|(_, owner)| owner);

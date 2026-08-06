@@ -1,7 +1,7 @@
 use crate::guards::caller_is_local_user_index_canister;
 use crate::model::ai_app_card_tokens::{ConfirmationGrant, InsertError, TOKEN_BYTES};
 use crate::updates::create_ai_app_card_provenance::{canonical_non_direct_chat_key, resolve_current_card_app};
-use crate::{RuntimeState, mutate_state};
+use crate::{RuntimeState, mutate_state, read_state};
 use ai_app_verifier_canister::c2c_attest_ai_app_card_confirmation_v1::{self, CardConfirmationAttestationBindingV1};
 use canister_api_macros::update;
 use constants::MINUTE_IN_MS;
@@ -16,7 +16,7 @@ const CONFIRMATION_GRANT_ENTROPY_PURPOSE: &[u8] = b"user-index/card-confirmation
 
 #[update(guard = "caller_is_local_user_index_canister", msgpack = true)]
 async fn c2c_create_ai_app_card_confirmation_grant(args: Args) -> Response {
-    if !mutate_state(crate::pr2_entropy::is_ready) {
+    if !read_state(crate::pr2_entropy::is_ready) {
         return Error("confirmation grant service temporarily unavailable".to_string());
     }
     let authority_binding = group_index_canister::ai_app_card_authority::AiAppCardAuthorityBindingV1 {
@@ -68,7 +68,7 @@ async fn c2c_create_ai_app_card_confirmation_grant(args: Args) -> Response {
         },
     )
     .await;
-    if !mutate_state(crate::pr2_entropy::is_ready) {
+    if !read_state(crate::pr2_entropy::is_ready) {
         mutate_state(|state| {
             state
                 .data

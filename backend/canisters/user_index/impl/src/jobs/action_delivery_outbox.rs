@@ -14,17 +14,15 @@ const ACTION_INBOX_METHOD: &str = "c2c_notify_actions_msgpack";
 thread_local! {
     static TIMER_ID: Cell<Option<TimerId>> = Cell::default();
     static TIMER_DUE_AT: Cell<u64> = Cell::default();
-    static TIMER_CANISTER_VERSION: Cell<Option<u64>> = Cell::default();
 }
 
 pub(crate) fn start_job_if_required(state: &RuntimeState) -> bool {
-    reset_restored_timer_sentinel();
     let Some(due_at) = state.data.action_delivery_outbox.next_retry_at() else {
         return false;
     };
     let existing_due = TIMER_DUE_AT.get();
     if let Some(timer_id) = TIMER_ID.get() {
-        if existing_due != 0 && existing_due <= due_at {
+        if existing_timer_is_soon_enough(existing_due, due_at) {
             return false;
         }
         ic_cdk_timers::clear_timer(timer_id);
@@ -38,41 +36,19 @@ pub(crate) fn start_job_if_required(state: &RuntimeState) -> bool {
     true
 }
 
-fn reset_restored_timer_sentinel() {
-    reset_restored_timer_sentinel_for_version(current_canister_version());
-}
-
-fn reset_restored_timer_sentinel_for_version(canister_version: u64) {
-    if TIMER_CANISTER_VERSION.get() == Some(canister_version) {
-        return;
-    }
-    if let Some(timer_id) = TIMER_ID.take() {
-        ic_cdk_timers::clear_timer(timer_id);
-    }
-    TIMER_DUE_AT.set(0);
-    TIMER_CANISTER_VERSION.set(Some(canister_version));
-}
-
-#[cfg(not(test))]
-fn current_canister_version() -> u64 {
-    ic_cdk::api::canister_version()
-}
-
-#[cfg(test)]
-fn current_canister_version() -> u64 {
-    1
+fn existing_timer_is_soon_enough(existing_due: u64, required_due: u64) -> bool {
+    existing_due != 0 && existing_due <= required_due
 }
 
 fn run() {
     TIMER_ID.set(None);
     TIMER_DUE_AT.set(0);
-    TIMER_CANISTER_VERSION.set(Some(current_canister_version()));
     let dispatch = mutate_state(|state| {
         let now = state.env.now();
         state.data.action_delivery_outbox.begin_due_retry(now)
     });
     if let Some(dispatch) = dispatch {
-        ic_cdk::futures::spawn(deliver_and_record(dispatch));
+        ic_cdk::futures::spawn_migratory(deliver_and_record(dispatch));
     } else {
         read_state(start_job_if_required);
     }
@@ -130,17 +106,11 @@ mod tests {
     }
 
     #[test]
-    fn restored_scheduler_epoch_discards_only_stale_timer_metadata() {
-        TIMER_CANISTER_VERSION.set(Some(7));
-        TIMER_DUE_AT.set(123);
-        assert!(TIMER_ID.get().is_none());
-
-        reset_restored_timer_sentinel_for_version(8);
-
-        assert_eq!(TIMER_CANISTER_VERSION.get(), Some(8));
-        assert_eq!(TIMER_DUE_AT.get(), 0);
-        assert!(TIMER_ID.get().is_none());
-        TIMER_CANISTER_VERSION.set(None);
+    fn existing_timer_and_due_at_are_sufficient_within_one_wasm_instance() {
+        assert!(existing_timer_is_soon_enough(100, 100));
+        assert!(existing_timer_is_soon_enough(100, 101));
+        assert!(!existing_timer_is_soon_enough(101, 100));
+        assert!(!existing_timer_is_soon_enough(0, 100));
     }
 
     #[test]
