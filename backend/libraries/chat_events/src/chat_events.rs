@@ -107,10 +107,6 @@ pub fn ai_app_card_content_hash_from_initial(
     })
 }
 
-// Deliberate release gate: the attestation layer is complete, but private viewer context remains
-// disabled until explicit product/user approval enables the handoff in a later change.
-const AI_APP_PRIVATE_CONTEXT_DELIVERY_ENABLED: bool = false;
-
 impl ChatEvents {
     pub fn import_events(chat: Chat, events: Vec<(EventContext, ByteBuf)>) {
         stable_memory::write_events_as_bytes(chat, events);
@@ -797,8 +793,17 @@ impl ChatEvents {
         message_id: MessageId,
         min_visible_event_index: EventIndex,
         now: TimestampMillis,
+        private_context_delivery_enabled: bool,
     ) -> OCResult<AiAppCardCapabilitySource> {
-        self.ai_app_card_attested_source(thread_root_message_index, message_id, min_visible_event_index, now, true)
+        if !private_context_delivery_enabled {
+            return Err(OCErrorCode::InvalidRequest.with_message("private app-card context delivery is not enabled"));
+        }
+        if matches!(self.chat, Chat::Direct(_)) {
+            return Err(
+                OCErrorCode::InvalidRequest.with_message("private app-card context is only available in multi-user chats")
+            );
+        }
+        self.ai_app_card_attested_source(thread_root_message_index, message_id, min_visible_event_index, now)
     }
 
     pub fn ai_app_card_confirmation_source(
@@ -808,7 +813,7 @@ impl ChatEvents {
         min_visible_event_index: EventIndex,
         now: TimestampMillis,
     ) -> OCResult<AiAppCardCapabilitySource> {
-        self.ai_app_card_attested_source(thread_root_message_index, message_id, min_visible_event_index, now, false)
+        self.ai_app_card_attested_source(thread_root_message_index, message_id, min_visible_event_index, now)
     }
 
     pub fn ai_app_card_confirmation_reservation_source(
@@ -845,7 +850,6 @@ impl ChatEvents {
         message_id: MessageId,
         min_visible_event_index: EventIndex,
         now: TimestampMillis,
-        require_private_delivery_enabled: bool,
     ) -> OCResult<AiAppCardCapabilitySource> {
         let Some((message, _)) = self.message_internal(min_visible_event_index, thread_root_message_index, message_id.into())
         else {
@@ -862,9 +866,6 @@ impl ChatEvents {
         };
         if app_card_private_handoff_is_forbidden(&card) {
             return Err(OCErrorCode::InvalidRequest.with_message("card content is not fully attested"));
-        }
-        if require_private_delivery_enabled && !AI_APP_PRIVATE_CONTEXT_DELIVERY_ENABLED {
-            return Err(OCErrorCode::InvalidRequest.with_message("private app-card context delivery is not enabled"));
         }
         let Some(content_hash) = card.app_content_hash else {
             return Err(OCErrorCode::InvalidRequest.with_message("card has no canonical content commitment"));
@@ -3362,6 +3363,8 @@ pub struct VideoCallInternal {
 mod action_card_security_tests {
     use super::*;
     use candid::Principal;
+    use ic_stable_structures::DefaultMemoryImpl;
+    use ic_stable_structures::memory_manager::{MemoryId, MemoryManager};
     use types::{ActionCardContentInitial, ActionCardRow};
 
     #[derive(Serialize)]
@@ -3409,7 +3412,46 @@ mod action_card_security_tests {
         let mut internal: ActionCardContentInternal = initial.into();
         internal.app_verified = app_verified;
         internal.app_content_verified = app_content_verified;
+        internal.app_content_hash = app_content_verified.then_some([9; 32]);
         MessageContentInternal::ActionCard(internal)
+    }
+
+    fn events_with_card(chat: Chat, content: MessageContentInternal, now: TimestampMillis) -> (ChatEvents, MessageId) {
+        let memory = MemoryManager::init(DefaultMemoryImpl::default());
+        stable_memory_map::init(memory.get(MemoryId::new(1)));
+        let message_id = MessageId::from(77u64);
+        let sender = Principal::from_slice(&[31]).into();
+        let mut events = match chat {
+            Chat::Direct(them) => ChatEvents::new_direct_chat(them.into(), None, 1, now),
+            Chat::Group(group_id) => ChatEvents::new_group_chat(
+                MultiUserChat::Group(group_id),
+                "test".to_string(),
+                String::new(),
+                sender,
+                None,
+                1,
+                now,
+            ),
+            Chat::Channel(_, _) => unreachable!("this focused test only constructs groups and direct chats"),
+        };
+        events.push_message::<NullEventPusher>(
+            PushMessageArgs {
+                sender,
+                thread_root_message_index: None,
+                message_id,
+                content,
+                sender_context: None,
+                mentioned: Vec::new(),
+                replies_to: None,
+                forwarded: false,
+                sender_is_bot: false,
+                block_level_markdown: false,
+                og_previews: Vec::new(),
+                now,
+            },
+            None,
+        );
+        (events, message_id)
     }
 
     fn text() -> MessageContentInternal {
@@ -3468,6 +3510,60 @@ mod action_card_security_tests {
 
         assert!(app_card_private_handoff_is_forbidden(&coordinates_only));
         assert!(!app_card_private_handoff_is_forbidden(&fully_attested));
+    }
+
+    #[test]
+    fn private_capability_requires_a_pending_fully_attested_multi_user_card() {
+        let now = 100;
+        let group = Chat::Group(chat_id(5));
+        let (events, message_id) = events_with_card(group, card(true, true), now);
+        let source = events
+            .ai_app_card_capability_source(None, message_id, EventIndex::default(), now, true)
+            .expect("a fully attested pending group card should yield its bound capability source");
+        assert_eq!(source.app_id, 7);
+        assert_eq!(source.app_revision, 11);
+        assert_eq!(source.action_id, "sample.action");
+        assert_eq!(source.content_hash, [9; 32]);
+
+        // The local-only private-context gate must not disable the original stored-payload
+        // confirmation source used by production canisters.
+        assert!(
+            events
+                .ai_app_card_capability_source(None, message_id, EventIndex::default(), now, false)
+                .is_err()
+        );
+        assert!(
+            events
+                .ai_app_card_confirmation_source(None, message_id, EventIndex::default(), now)
+                .is_ok()
+        );
+
+        for content in [card(false, false), card(true, false)] {
+            let (events, message_id) = events_with_card(group, content, now);
+            assert!(
+                events
+                    .ai_app_card_capability_source(None, message_id, EventIndex::default(), now, true)
+                    .is_err()
+            );
+        }
+
+        let (direct, message_id) = events_with_card(Chat::Direct(chat_id(6)), card(true, true), now);
+        assert!(
+            direct
+                .ai_app_card_capability_source(None, message_id, EventIndex::default(), now, true)
+                .is_err()
+        );
+
+        let MessageContentInternal::ActionCard(mut expired) = card(true, true) else {
+            unreachable!();
+        };
+        expired.expires_at = Some(now - 1);
+        let (events, message_id) = events_with_card(group, MessageContentInternal::ActionCard(expired), now);
+        assert!(
+            events
+                .ai_app_card_capability_source(None, message_id, EventIndex::default(), now, true)
+                .is_err()
+        );
     }
 
     #[test]

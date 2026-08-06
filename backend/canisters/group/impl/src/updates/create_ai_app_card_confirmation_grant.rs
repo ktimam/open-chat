@@ -4,12 +4,11 @@ use group_canister::create_ai_app_card_confirmation_grant::{Response::*, *};
 use local_user_index_canister::c2c_create_ai_app_card_confirmation_grant as relay;
 use types::Chat;
 
-// Activated only after the complete backend/frontend protocol and replay suite are green.
-const AI_APP_EDITED_CONFIRMATION_ENABLED: bool = false;
-
 #[update(msgpack = true)]
 async fn create_ai_app_card_confirmation_grant(args: Args) -> Response {
-    if !AI_APP_EDITED_CONFIRMATION_ENABLED {
+    // The generic edited-confirmation protocol is intentionally local/test-mode only until its
+    // production rollout is approved separately.
+    if !read_state(|state| state.data.test_mode) {
         return AppUnavailable;
     }
     let mut prepared = match read_state(|state| prepare(&args, state)) {
@@ -80,6 +79,9 @@ impl Prepared {
 }
 
 fn prepare(args: &Args, state: &RuntimeState) -> Result<Prepared, oc_error_codes::OCError> {
+    if !state.data.test_mode {
+        return Err(oc_error_codes::OCErrorCode::InvalidRequest.with_message("edited card confirmation is not enabled"));
+    }
     if args.confirm_payload.is_empty() || args.confirm_payload.len() > types::MAX_AI_APP_CONFIRM_PAYLOAD_BYTES {
         return Err(oc_error_codes::OCErrorCode::InvalidRequest.with_message(format!(
             "confirmation payload must contain 1..={} bytes",
@@ -117,6 +119,9 @@ fn prepare(args: &Args, state: &RuntimeState) -> Result<Prepared, oc_error_codes
 }
 
 fn revalidate(prepared: &Prepared, state: &RuntimeState) -> Result<(), oc_error_codes::OCError> {
+    if !state.data.test_mode {
+        return Err(oc_error_codes::OCErrorCode::InvalidRequest.with_message("edited card confirmation is not enabled"));
+    }
     state.data.verify_not_frozen()?;
     if state.data.local_user_index_canister_id != prepared.local_user_index_canister_id
         || state.data.group_index_canister_id != prepared.group_index_canister_id

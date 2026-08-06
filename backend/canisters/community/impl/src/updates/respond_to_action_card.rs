@@ -7,12 +7,10 @@ use oc_error_codes::OCErrorCode;
 use serde_bytes::ByteBuf;
 use types::{ActionCardResponse, ActionCardState, CanisterId, Chat, OCResult, TimestampMillis, UserId};
 
-const AI_APP_EDITED_CONFIRMATION_ENABLED: bool = false;
-
-fn requested_confirm_payload_hash(args: &Args) -> OCResult<Option<[u8; 32]>> {
+fn requested_confirm_payload_hash(args: &Args, edited_confirmation_enabled: bool) -> OCResult<Option<[u8; 32]>> {
     match (&args.confirm_payload_override, &args.confirmation_grant) {
         (None, None) => Ok(None),
-        (Some(payload), Some(grant)) if AI_APP_EDITED_CONFIRMATION_ENABLED => {
+        (Some(payload), Some(grant)) if edited_confirmation_enabled => {
             if payload.is_empty()
                 || payload.len() > types::MAX_AI_APP_CONFIRM_PAYLOAD_BYTES
                 || grant.len() != types::AI_APP_CARD_TOKEN_BYTES
@@ -236,7 +234,9 @@ fn prepare(args: &Args, state: &mut RuntimeState) -> OCResult<Prepared> {
     {
         return Err(OCErrorCode::InvalidRequest.with_message("cancel cannot carry a confirmation payload or grant"));
     }
-    let requested_payload_hash = requested_confirm_payload_hash(args)?;
+    // Persisted test_mode is the explicit local-only release gate. Production canisters continue
+    // to reject edited payloads while retaining the original stored-payload confirmation path.
+    let requested_payload_hash = requested_confirm_payload_hash(args, state.data.test_mode)?;
 
     // Confirm of a Pending, routing-bearing card: peek the deposit (no state change) and defer the
     // commit until the deposit lands.
@@ -310,6 +310,9 @@ fn prepare(args: &Args, state: &mut RuntimeState) -> OCResult<Prepared> {
 
 fn revalidate_before_deposit(user_id: UserId, deposit: &DepositInstruction, state: &RuntimeState) -> OCResult {
     state.data.verify_not_frozen()?;
+    if deposit.confirmation_grant.is_some() && !state.data.test_mode {
+        return Err(OCErrorCode::InvalidRequest.with_message("edited card confirmation is not enabled"));
+    }
     if state.data.local_user_index_canister_id != deposit.local_user_index_canister_id
         || state.data.group_index_canister_id != deposit.group_index_canister_id
     {
@@ -406,36 +409,105 @@ mod tests {
 
     #[test]
     fn none_override_keeps_stored() {
-        assert_eq!(requested_confirm_payload_hash(&args(None, None)).unwrap(), None);
+        assert_eq!(requested_confirm_payload_hash(&args(None, None), false).unwrap(), None);
+        assert_eq!(requested_confirm_payload_hash(&args(None, None), true).unwrap(), None);
     }
 
     #[test]
-    fn empty_override_is_rejected() {
-        // len 0 is outside 1..=MAX — a member must not be able to blank the payload to empty bytes.
-        assert!(requested_confirm_payload_hash(&args(Some(ByteBuf::new()), None)).is_err());
+    fn payload_without_a_grant_is_rejected() {
+        // Edited payload and grant are an atomic pair; neither may be supplied alone.
+        assert!(requested_confirm_payload_hash(&args(Some(ByteBuf::new()), None), true).is_err());
     }
 
     #[test]
-    fn different_override_is_rejected() {
+    fn valid_edited_payload_with_exact_size_grant_hashes_the_exact_bytes_in_test_mode() {
+        let edited = ByteBuf::from(b"EDITED".to_vec());
+        let expected = types::ai_app_card_confirm_payload_hash_v1(&edited).unwrap();
+        assert_eq!(
+            requested_confirm_payload_hash(
+                &args(Some(edited), Some(ByteBuf::from(vec![7; types::AI_APP_CARD_TOKEN_BYTES])),),
+                true,
+            )
+            .unwrap(),
+            Some(expected)
+        );
+    }
+
+    #[test]
+    fn production_gate_rejects_a_well_shaped_edited_confirmation() {
         assert!(
-            requested_confirm_payload_hash(&args(
-                Some(ByteBuf::from(b"EDITED".to_vec())),
-                Some(ByteBuf::from(vec![7; types::AI_APP_CARD_TOKEN_BYTES])),
-            ))
+            requested_confirm_payload_hash(
+                &args(
+                    Some(ByteBuf::from(b"EDITED".to_vec())),
+                    Some(ByteBuf::from(vec![7; types::AI_APP_CARD_TOKEN_BYTES])),
+                ),
+                false,
+            )
             .is_err()
         );
     }
 
     #[test]
-    fn byte_identical_override_is_rejected_without_a_one_time_grant() {
-        // The 16_384-byte bound is INCLUSIVE — exactly MAX is deposited.
-        assert!(requested_confirm_payload_hash(&args(None, Some(ByteBuf::from(vec![7; 32])))).is_err());
+    fn maximum_size_edited_payload_is_accepted() {
+        let edited = ByteBuf::from(vec![b'x'; types::MAX_AI_APP_CONFIRM_PAYLOAD_BYTES]);
+        let expected = types::ai_app_card_confirm_payload_hash_v1(&edited).unwrap();
+        assert_eq!(
+            requested_confirm_payload_hash(
+                &args(Some(edited), Some(ByteBuf::from(vec![7; types::AI_APP_CARD_TOKEN_BYTES])),),
+                true,
+            )
+            .unwrap(),
+            Some(expected)
+        );
+    }
+
+    #[test]
+    fn empty_override_is_rejected_even_with_a_valid_grant() {
+        assert!(
+            requested_confirm_payload_hash(
+                &args(
+                    Some(ByteBuf::new()),
+                    Some(ByteBuf::from(vec![7; types::AI_APP_CARD_TOKEN_BYTES])),
+                ),
+                true,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn grant_without_a_payload_is_rejected() {
+        // A bearer without its bound edited bytes must not enter the consume path.
+        assert!(
+            requested_confirm_payload_hash(
+                &args(None, Some(ByteBuf::from(vec![7; types::AI_APP_CARD_TOKEN_BYTES])),),
+                true,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn wrong_size_grants_are_rejected() {
+        let edited = ByteBuf::from(b"EDITED".to_vec());
+        for grant_len in [types::AI_APP_CARD_TOKEN_BYTES - 1, types::AI_APP_CARD_TOKEN_BYTES + 1] {
+            assert!(
+                requested_confirm_payload_hash(&args(Some(edited.clone()), Some(ByteBuf::from(vec![7; grant_len]))), true,)
+                    .is_err()
+            );
+        }
     }
 
     #[test]
     fn oversized_override_is_rejected() {
         // One byte over MAX (16_385) is rejected — the cap limits how much a member can deposit.
         let edited = ByteBuf::from(vec![b'x'; types::MAX_AI_APP_CONFIRM_PAYLOAD_BYTES + 1]);
-        assert!(requested_confirm_payload_hash(&args(Some(edited), Some(ByteBuf::from(vec![7; 32])))).is_err());
+        assert!(
+            requested_confirm_payload_hash(
+                &args(Some(edited), Some(ByteBuf::from(vec![7; types::AI_APP_CARD_TOKEN_BYTES])),),
+                true,
+            )
+            .is_err()
+        );
     }
 }
