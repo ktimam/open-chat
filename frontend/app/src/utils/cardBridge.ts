@@ -459,7 +459,35 @@ export function buildCardInit(
     context: CardInitContext,
     frameNonce: string,
 ): CardInitMessage {
-    return { type: "oc:card:init", version: 2, frameNonce, data, context };
+    // Svelte's `$state` deeply proxies assigned objects. A capability is assigned after the private
+    // context grant, so forwarding that state object directly makes browser `postMessage` throw a
+    // DataCloneError. Copy every protocol field explicitly at this trust boundary, including the
+    // nested app-scoped binding, so no framework Proxy (or unexpected property) crosses the frame.
+    const cloneSafeContext: CardInitContext = {
+        appId: context.appId,
+        appRevision: context.appRevision,
+        actionId: context.actionId,
+        theme: context.theme,
+        readonly: context.readonly,
+        ...(context.privateContext === undefined
+            ? {}
+            : {
+                  privateContext: {
+                      capability: context.privateContext.capability,
+                      expiresAt: context.privateContext.expiresAt,
+                      context: {
+                          contextVersion: context.privateContext.context.contextVersion,
+                          appSubject: context.privateContext.context.appSubject,
+                          chatHandle: context.privateContext.context.chatHandle,
+                          messageHandle: context.privateContext.context.messageHandle,
+                          appId: context.privateContext.context.appId,
+                          appRevision: context.privateContext.context.appRevision,
+                          actionId: context.privateContext.context.actionId,
+                      },
+                  },
+              }),
+    };
+    return { type: "oc:card:init", version: 2, frameNonce, data, context: cloneSafeContext };
 }
 
 export function newCardFrameNonce(): string {
