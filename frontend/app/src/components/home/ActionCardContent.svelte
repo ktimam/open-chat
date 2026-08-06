@@ -45,6 +45,7 @@
         supportsCredentiallessIframe,
         reverseMapRows,
         startCardHandshakeTimeout,
+        startCardBootstrapRetry,
         visibleRows,
         type CardApprovalRequest,
         type CardCapabilityAttemptBinding,
@@ -197,6 +198,7 @@
     let capabilityAttempt: CardCapabilityAttemptBinding | undefined;
     let confirmationAttempt: CardConfirmationAttemptBinding | undefined;
     let cancelPrivateContextTimeout: (() => void) | undefined;
+    let cancelCardBootstrapRetry: (() => void) | undefined;
     let componentMounted = false;
     let frameNonce = $state(newCardFrameNonce());
     let approvalRequest = $state<CardApprovalRequest | undefined>(undefined);
@@ -307,6 +309,8 @@
             cancelled = true;
             componentMounted = false;
             cancelPrivateContextTimeout?.();
+            cancelCardBootstrapRetry?.();
+            cancelCardBootstrapRetry = undefined;
             capabilityAttempt = undefined;
             confirmationAttempt = undefined;
         };
@@ -347,6 +351,8 @@
     // sender origin opaque (`null`), so every message must also come from this exact iframe WindowProxy
     // and carry its fresh per-load nonce. Confirm/cancel then pass separate host authority gates.
     function resetFrameSession() {
+        cancelCardBootstrapRetry?.();
+        cancelCardBootstrapRetry = undefined;
         cancelPrivateContextTimeout?.();
         cancelPrivateContextTimeout = undefined;
         frameNonce = newCardFrameNonce();
@@ -453,7 +459,23 @@
     function onIframeLoad() {
         resetFrameSession();
         const target = iframeEl?.contentWindow;
-        if (target != null) target.postMessage(buildCardBootstrap(frameNonce), "*");
+        if (target == null) return;
+        const loadedNonce = frameNonce;
+        cancelCardBootstrapRetry = startCardBootstrapRetry(() => {
+            // Stop a stale loop if the frame/session has changed between interval ticks. Ready is
+            // also cancelled synchronously below, but this guard keeps the helper fail-safe.
+            if (
+                !loadRequested ||
+                readySeen ||
+                frameNonce !== loadedNonce ||
+                iframeEl?.contentWindow !== target
+            ) {
+                cancelCardBootstrapRetry?.();
+                cancelCardBootstrapRetry = undefined;
+                return;
+            }
+            target.postMessage(buildCardBootstrap(loadedNonce), "*");
+        });
     }
 
     function onBridgeMessage(event: MessageEvent) {
@@ -472,6 +494,8 @@
                     return;
                 resolvedAppIdentity = candidateAppIdentity;
                 readySeen = true;
+                cancelCardBootstrapRetry?.();
+                cancelCardBootstrapRetry = undefined;
                 cardLoadFailed = false;
                 break;
             case "oc:card:resize":
