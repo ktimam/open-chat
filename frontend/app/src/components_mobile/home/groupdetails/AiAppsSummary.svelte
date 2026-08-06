@@ -124,17 +124,32 @@
         setupSurface = opening;
     }
 
-    // On-demand pairing for per-user-keys apps: "Connect" when no key is registered, "Reconnect"
-    // when one is. Reconnect matters when the APP side dropped its half of the pairing (e.g. the
-    // user disconnected inside the app): OpenChat still holds a stale key, so the propose flow
-    // never re-offers the consent sheet — this opens it explicitly, and claiming the fresh code
-    // simply upserts (replaces) the key. One-sided, no disconnect required first.
+    // Merge Connect + Open setup: pair first when this user has no key, then continue directly to
+    // the per-chat setup surface after pairing succeeds. Reconnect remains an explicit key refresh
+    // and does not reopen setup unless it came from the primary Connect action.
     let linkingApp = $state<AiAppRegistration | undefined>(undefined);
+    let pendingSetup = $state<SurfaceOpening | undefined>(undefined);
+
+    function startConnect(app: AiAppRegistration) {
+        const setup = chatLinkSurfaceOpening(app, chat.id);
+        const needsPairing = app.manifest.perUserKeys && !connected.has(app.id);
+        if (needsPairing) {
+            pendingSetup = setup;
+            linkingApp = app;
+        } else if (setup !== undefined) {
+            openSetup(setup);
+        }
+    }
 
     function onLinked() {
         linkingApp = undefined;
         toastStore.showSuccessToast(i18nKey("aiApps.linkComplete"));
         load(); // refresh the connected set
+        const setup = pendingSetup;
+        pendingSetup = undefined;
+        if (setup !== undefined) {
+            openSetup(setup);
+        }
     }
 </script>
 
@@ -157,6 +172,8 @@
         {:else}
             {#each apps as app (app.id)}
                 {@const setup = chatLinkSurfaceOpening(app, chat.id)}
+                {@const needsPairing = app.manifest.perUserKeys && !connected.has(app.id)}
+                {@const showPrimary = needsPairing || setup !== undefined}
                 <Container
                     mainAxisAlignment={"spaceBetween"}
                     crossAxisAlignment={"center"}
@@ -168,37 +185,42 @@
                                 {app.manifest.description}
                             </BodySmall>
                         {/if}
-                        {#if setup !== undefined || connected.has(app.id) || app.manifest.perUserKeys}
+                        {#if showPrimary || connected.has(app.id)}
                             <!-- Plain div, not Container: the action row can hold three buttons,
                                  which overflow a non-wrapping flex row on a narrow window — this
                                  wraps them onto extra lines instead of clipping. -->
                             <div class="app-actions">
-                                {#if setup !== undefined}
+                                {#if showPrimary}
                                     <CommonButton
-                                        onClick={() => openSetup(setup)}
+                                        onClick={() => startConnect(app)}
                                         size={"small_text"}>
                                         {#snippet icon(color, size)}
-                                            <OpenInNew {color} {size} />
-                                        {/snippet}
-                                        <Translatable resourceKey={i18nKey("aiApps.openSetup")} />
-                                    </CommonButton>
-                                {/if}
-                                {#if app.manifest.perUserKeys}
-                                    <CommonButton
-                                        onClick={() => (linkingApp = app)}
-                                        size={"small_text"}>
-                                        {#snippet icon(color, size)}
-                                            <LinkVariant {color} {size} />
+                                            {#if needsPairing}
+                                                <LinkVariant {color} {size} />
+                                            {:else}
+                                                <OpenInNew {color} {size} />
+                                            {/if}
                                         {/snippet}
                                         <Translatable
                                             resourceKey={i18nKey(
-                                                connected.has(app.id)
-                                                    ? "aiApps.reconnect"
-                                                    : "aiApps.connect",
+                                                needsPairing
+                                                    ? "aiApps.connect"
+                                                    : "aiApps.openSetup",
                                             )} />
                                     </CommonButton>
                                 {/if}
                                 {#if connected.has(app.id)}
+                                    {#if app.manifest.perUserKeys}
+                                        <CommonButton
+                                            onClick={() => (linkingApp = app)}
+                                            size={"small_text"}>
+                                            {#snippet icon(color, size)}
+                                                <LinkVariant {color} {size} />
+                                            {/snippet}
+                                            <Translatable
+                                                resourceKey={i18nKey("aiApps.reconnect")} />
+                                        </CommonButton>
+                                    {/if}
                                     <CommonButton
                                         onClick={() => disconnectApp(app)}
                                         loading={disconnecting.has(app.id)}
@@ -236,7 +258,10 @@
     {#if linkingApp !== undefined}
         <AiAppLinkSheet
             app={linkingApp}
-            onDismiss={() => (linkingApp = undefined)}
+            onDismiss={() => {
+                linkingApp = undefined;
+                pendingSetup = undefined;
+            }}
             {onLinked} />
     {/if}
 {/if}
