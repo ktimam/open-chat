@@ -6,8 +6,8 @@
 // confirmed action card in that chat (and any time on demand from the group-details Apps row).
 // Surface kinds OpenChat does not know are ignored.
 
-import type { AiAppRegistration, AiAppSurface, ChatIdentifier, OpenChat } from "openchat-client";
-import { chatKeyFor, isSafeAiActionFieldName } from "openchat-client";
+import type { AiAppRegistration, AiAppSurface, ChatIdentifier, OpenChat } from "@client";
+import { chatKeyFor, isSafeAiActionFieldName } from "@client";
 import { normalizeAiAppSurfaceUrl } from "./cardBridge";
 import { configKeys } from "./config";
 import { openExternalUrl } from "./urls";

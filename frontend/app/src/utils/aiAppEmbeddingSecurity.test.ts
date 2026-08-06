@@ -181,6 +181,7 @@ describe("embedded app surface isolation", () => {
     });
 
     it("cancels link consent only from explicit desktop/mobile close handlers", () => {
+        const helper = readFileSync(resolve(process.cwd(), "src/utils/aiAppLinkConsent.ts"), "utf8");
         const desktop = readFileSync(
             resolve(process.cwd(), "src/components/home/AiAppLinkModal.svelte"),
             "utf8",
@@ -190,11 +191,16 @@ describe("embedded app surface isolation", () => {
             "utf8",
         );
         for (const source of [desktop, mobile]) {
-            expect(source).toContain("cancelAiAppLinkConsent(client, app.id, pendingCodeRequest)");
+            expect(source).toContain("() => linkCode?.code");
+            expect(source).toContain("cancelAiAppLinkConsent(");
             expect(source).toContain("async function cancelLink()");
             expect(source).toContain("completed = true");
+            expect(source).toContain("onDismiss();");
+            expect(source).not.toContain("if (cancelled)");
             expect(source).not.toContain("onDestroy");
         }
+        expect(helper).toContain("client.cancelAiAppLinkCode(code)");
+        expect(helper).not.toContain("client.removeMyAiAppKey(");
         expect(desktop).toContain("onClose={cancelLink}");
         expect(desktop).not.toContain("onClose={onDismiss}");
         expect(mobile).toContain("<Sheet onDismiss={cancelLink}>");

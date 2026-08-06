@@ -3886,6 +3886,10 @@ export class OpenChatAgent extends EventTarget {
         return this._userIndexClient.createAiAppLinkCode(appId);
     }
 
+    cancelAiAppLinkCode(code: string): Promise<boolean> {
+        return this._userIndexClient.cancelAiAppLinkCode(code);
+    }
+
     createAiAppCardProvenance(
         appId: number,
         appRevision: bigint,

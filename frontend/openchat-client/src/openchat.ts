@@ -7382,6 +7382,16 @@ export class OpenChat {
             .catch(() => undefined);
     }
 
+    // Cancel only this pending bearer. This never disconnects an already-installed app key.
+    cancelAiAppLinkCode(code: string): Promise<boolean> {
+        return this.#worker
+            .send({
+                kind: "cancelAiAppLinkCode",
+                code,
+            })
+            .catch(() => false);
+    }
+
     createAiAppCardProvenance(
         appId: number,
         appRevision: bigint,

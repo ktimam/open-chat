@@ -222,6 +222,21 @@ impl AiAppLinkCodes {
         self.remove_code(&code).is_some()
     }
 
+    /// Cancels only the supplied bearer when it is still outstanding for the exact caller. The
+    /// token itself selects the app, which prevents an old modal from cancelling a newer token for
+    /// the same tuple. A foreign, replaced, consumed, or malformed token is a no-op.
+    pub fn cancel_bound(&mut self, code: &str, this_canister_id: CanisterId, user_id: UserId, now: TimestampMillis) -> bool {
+        self.ensure_indexes(now);
+        if !is_valid_claim_token(code) {
+            return false;
+        }
+        let digest = token_digest(code, this_canister_id);
+        let owned_by_caller = self.codes.get(&digest).is_some_and(|entry| entry.user_id == user_id);
+        let removed = owned_by_caller && self.remove_code(&digest).is_some();
+        self.prune_expired_bounded(now);
+        removed
+    }
+
     /// Removes every outstanding capability for an app. Work is bounded by the per-app token cap.
     pub fn remove_app(&mut self, app_id: AiAppId, now: TimestampMillis) -> usize {
         self.ensure_indexes(now);
@@ -547,6 +562,47 @@ mod tests {
         assert!(codes.remove_user_app(user_a, 7, 1));
         assert!(matches!(codes.claim(&token(1), 2), ClaimLinkCodeResult::NotFound));
         assert!(matches!(codes.claim(&token(2), 2), ClaimLinkCodeResult::Valid(_)));
+    }
+
+    #[test]
+    fn exact_token_cancellation_is_caller_bound() {
+        let mut codes = AiAppLinkCodes::default();
+        let owner = user(1);
+        let attacker = user(2);
+        let code = token(101);
+        codes.insert(code.clone(), owner, 7, 1_000, 1).unwrap();
+
+        assert!(!codes.cancel_bound(&code, test_canister_id(), attacker, 2));
+        assert!(matches!(codes.claim(&code, 2), ClaimLinkCodeResult::Valid(_)));
+    }
+
+    #[test]
+    fn stale_token_cannot_cancel_its_replacement() {
+        let mut codes = AiAppLinkCodes::default();
+        let owner = user(1);
+        let stale = token(201);
+        let current = token(202);
+        codes.insert(stale.clone(), owner, 7, 1_000, 1).unwrap();
+        codes.insert(current.clone(), owner, 7, 1_000, 2).unwrap();
+
+        assert!(!codes.cancel_bound(&stale, test_canister_id(), owner, 3));
+        assert!(matches!(codes.claim(&current, 3), ClaimLinkCodeResult::Valid(_)));
+    }
+
+    #[test]
+    fn cancellation_and_claim_are_serialized_without_reviving_authority() {
+        let owner = user(1);
+        let code = token(301);
+
+        let mut cancel_first = AiAppLinkCodes::default();
+        cancel_first.insert(code.clone(), owner, 7, 1_000, 1).unwrap();
+        assert!(cancel_first.cancel_bound(&code, test_canister_id(), owner, 2));
+        assert!(matches!(cancel_first.claim(&code, 2), ClaimLinkCodeResult::NotFound));
+
+        let mut claim_first = AiAppLinkCodes::default();
+        claim_first.insert(code.clone(), owner, 7, 1_000, 1).unwrap();
+        assert!(matches!(claim_first.claim(&code, 2), ClaimLinkCodeResult::Valid(_)));
+        assert!(!claim_first.cancel_bound(&code, test_canister_id(), owner, 2));
     }
 
     #[test]

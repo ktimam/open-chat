@@ -201,6 +201,7 @@ fn claim_token_contract_documents_full_entropy() {
 #[test]
 fn bearer_token_endpoints_are_not_argument_or_result_traced() {
     for endpoint in [
+        "cancel_ai_app_link_code.rs",
         "claim_ai_app_link_code.rs",
         "create_ai_app_link_code.rs",
         "c2c_claim_ai_app_link_code.rs",

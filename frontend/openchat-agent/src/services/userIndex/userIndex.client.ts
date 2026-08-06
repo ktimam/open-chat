@@ -63,6 +63,8 @@ import {
     UserIndexAiAppUserKeysArgs,
     UserIndexAiAppUserKeysResponse,
     UserIndexMyAiAppKeysResponse,
+    UserIndexCancelAiAppLinkCodeArgs,
+    UserIndexCancelAiAppLinkCodeResponse,
     UserIndexCreateAiAppLinkCodeArgs,
     UserIndexCreateAiAppLinkCodeResponse,
     UserIndexCreateAiAppCardProvenanceArgs,
@@ -148,6 +150,7 @@ import {
     registerAiAppResponse,
     aiAppUserKeysResponse,
     myAiAppKeysResponse,
+    cancelAiAppLinkCodeResponse,
     createAiAppLinkCodeResponse,
     apiAiAppCardContentV1,
     createAiAppCardProvenanceResponse,
@@ -868,6 +871,16 @@ export class UserIndexClient extends SingleCanisterMsgpackAgent {
             aiAppUserKeysResponse,
             UserIndexAiAppUserKeysArgs,
             UserIndexAiAppUserKeysResponse,
+        );
+    }
+
+    cancelAiAppLinkCode(code: string): Promise<boolean> {
+        return this.update(
+            "cancel_ai_app_link_code",
+            { code },
+            cancelAiAppLinkCodeResponse,
+            UserIndexCancelAiAppLinkCodeArgs,
+            UserIndexCancelAiAppLinkCodeResponse,
         );
     }
 

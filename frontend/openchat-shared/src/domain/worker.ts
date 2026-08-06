@@ -444,6 +444,7 @@ export type WorkerRequest =
     | MyAiAppKeys
     | AiAppUserKeysLookup
     | CreateAiAppLinkCode
+    | CancelAiAppLinkCode
     | CreateAiAppCardProvenance
     | CreateAiAppCardConfirmationGrant
     | CreateAiAppCardCapability
@@ -2316,6 +2317,11 @@ type CreateAiAppLinkCode = {
     appId: number;
 };
 
+type CancelAiAppLinkCode = {
+    kind: "cancelAiAppLinkCode";
+    code: string;
+};
+
 type CreateAiAppCardProvenance = {
     kind: "createAiAppCardProvenance";
     appId: number;
@@ -2788,6 +2794,8 @@ export type WorkerResult<T> = T extends Init
     ? AiAppMemberKey[]
     : T extends CreateAiAppLinkCode
     ? AiAppLinkCode | undefined
+    : T extends CancelAiAppLinkCode
+    ? boolean
     : T extends CreateAiAppCardProvenance
     ? AiAppCardProvenance | undefined
     : T extends CreateAiAppCardConfirmationGrant

@@ -12,6 +12,7 @@ use utils::cycles::init_cycles_dispenser_client;
 use utils::env::canister::CanisterEnv;
 
 const PR2_SENSITIVE_HISTORY_MARKERS: &[&str] = &[
+    "cancel_ai_app_link_code",
     "create_ai_app_link_code",
     "claim_ai_app_link_code",
     "c2c_claim_ai_app_link_code",

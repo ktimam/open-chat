@@ -18,7 +18,7 @@
         type AiAppLinkCode,
         type AiAppRegistration,
         type OpenChat,
-    } from "openchat-client";
+    } from "@client";
     import { getContext } from "svelte";
     import OpenInNew from "svelte-material-icons/OpenInNew.svelte";
     import Button from "../Button.svelte";
@@ -96,14 +96,13 @@
     async function cancelLink() {
         if (completed || cancelling) return;
         cancelling = true;
-        const cancelled = await cancelAiAppLinkConsent(client, app.id, pendingCodeRequest);
-        if (cancelled) {
-            completed = true;
-            onDismiss();
-            return;
-        }
-        cancelling = false;
-        toastStore.showFailureToast(i18nKey("aiApps.disconnectFailed"));
+        await cancelAiAppLinkConsent(
+            client,
+            () => linkCode?.code,
+            pendingCodeRequest,
+        );
+        completed = true;
+        onDismiss();
     }
 
     async function copyCode() {

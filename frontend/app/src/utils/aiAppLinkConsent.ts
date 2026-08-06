@@ -1,26 +1,27 @@
-import type { OpenChat } from "openchat-client";
+import type { OpenChat } from "@client";
 
 /**
  * Cancel an explicit app-link consent attempt. Waiting for an in-flight create request closes the
  * race where the cancel reaches UserIndex first and a delayed create then leaves a fresh redeemable
- * code behind. The backend endpoint is idempotent and also disconnects a key that won the race.
+ * code behind. The backend endpoint cancels only that exact token and never disconnects a key.
  *
  * This helper is intentionally called only by user-driven close/cancel handlers, never teardown.
  */
 export async function cancelAiAppLinkConsent(
-    client: Pick<OpenChat, "removeMyAiAppKey">,
-    appId: number,
+    client: Pick<OpenChat, "cancelAiAppLinkCode" | "removeMyAiAppKey">,
+    codeSource: string | undefined | (() => string | undefined),
     pendingCodeRequest?: Promise<unknown>,
-): Promise<boolean> {
+): Promise<void> {
     try {
         await pendingCodeRequest;
     } catch {
-        // A failed create still needs the idempotent invalidation call: the request may have reached
-        // the canister even when the client did not receive its response.
+        // If the response was lost, there is no bearer the client can cancel. It expires by TTL.
     }
+    const code = typeof codeSource === "function" ? codeSource() : codeSource;
+    if (code === undefined) return;
     try {
-        return await client.removeMyAiAppKey(appId);
+        await client.cancelAiAppLinkCode(code);
     } catch {
-        return false;
+        // Closing is never blocked. A response-lost token is bounded by its short server TTL.
     }
 }

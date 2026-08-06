@@ -6533,6 +6533,24 @@ export const UserIndexClaimAiAppLinkCodeResponse = Type.Union([
     }),
 ]);
 
+export type UserIndexCancelAiAppLinkCodeArgs = Static<typeof UserIndexCancelAiAppLinkCodeArgs>;
+export const UserIndexCancelAiAppLinkCodeArgs = Type.Object({
+    code: Type.String(),
+});
+
+export type UserIndexCancelAiAppLinkCodeResponse = Static<
+    typeof UserIndexCancelAiAppLinkCodeResponse
+>;
+export const UserIndexCancelAiAppLinkCodeResponse = Type.Union([
+    Type.Literal("Success"),
+    Type.Object({
+        InvalidRequest: Type.String(),
+    }),
+    Type.Object({
+        Error: OCError,
+    }),
+]);
+
 export type UserIndexCreateAiAppLinkCodeArgs = Static<typeof UserIndexCreateAiAppLinkCodeArgs>;
 export const UserIndexCreateAiAppLinkCodeArgs = Type.Object({
     app_id: Type.Number(),

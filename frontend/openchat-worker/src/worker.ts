@@ -1185,6 +1185,9 @@ function getAction(
         case "createAiAppLinkCode":
             return agent.createAiAppLinkCode(payload.appId);
 
+        case "cancelAiAppLinkCode":
+            return agent.cancelAiAppLinkCode(payload.code);
+
         case "createAiAppCardProvenance":
             return agent.createAiAppCardProvenance(
                 payload.appId,

@@ -24,6 +24,7 @@ pub mod c2c_send_openchat_bot_messages;
 pub mod c2c_set_avatar;
 pub mod c2c_suspend_users;
 pub mod c2c_validate_ai_app_card_provenance;
+pub mod cancel_ai_app_link_code;
 pub mod claim_ai_app_link_code;
 mod contest_moderation_sanction;
 pub mod create_ai_app_card_provenance;

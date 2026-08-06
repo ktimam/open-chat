@@ -99,6 +99,7 @@ import type {
     UserIndexRegisterAiAppResponse,
     UserIndexAiAppUserKeysResponse,
     UserIndexMyAiAppKeysResponse,
+    UserIndexCancelAiAppLinkCodeResponse,
     UserIndexCreateAiAppLinkCodeResponse,
     UserIndexCreateAiAppCardProvenanceResponse,
     UserIndexExploreAiAppsResponse,
@@ -788,6 +789,12 @@ export function createAiAppLinkCodeResponse(
         };
     }
     return undefined;
+}
+
+export function cancelAiAppLinkCodeResponse(
+    value: UserIndexCancelAiAppLinkCodeResponse,
+): boolean {
+    return value === "Success";
 }
 
 export function aiAppsByIdsResponse(value: UserIndexAiAppsByIdsResponse): AiAppRegistration[] {

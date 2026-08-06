@@ -12,7 +12,7 @@
     import { connectSurfaceOpening, openSurfaceExternally } from "@utils/aiAppSurfaces";
     import { cancelAiAppLinkConsent } from "@utils/aiAppLinkConsent";
     import { Body, BodySmall, CommonButton, Container, Sheet, Title } from "component-lib";
-    import type { AiAppLinkCode, AiAppRegistration, OpenChat } from "openchat-client";
+    import type { AiAppLinkCode, AiAppRegistration, OpenChat } from "@client";
     import { getContext } from "svelte";
     import Check from "svelte-material-icons/Check.svelte";
     import ContentCopy from "svelte-material-icons/ContentCopy.svelte";
@@ -92,14 +92,13 @@
     async function cancelLink() {
         if (completed || cancelling) return;
         cancelling = true;
-        const cancelled = await cancelAiAppLinkConsent(client, app.id, pendingCodeRequest);
-        if (cancelled) {
-            completed = true;
-            onDismiss();
-            return;
-        }
-        cancelling = false;
-        toastStore.showFailureToast(i18nKey("aiApps.disconnectFailed"));
+        await cancelAiAppLinkConsent(
+            client,
+            () => linkCode?.code,
+            pendingCodeRequest,
+        );
+        completed = true;
+        onDismiss();
     }
 
     async function copyCode() {

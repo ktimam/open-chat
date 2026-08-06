@@ -80,6 +80,7 @@ fn main() {
     generate_ts_method!(user_index, ai_apps);
     generate_ts_method!(user_index, ai_apps_by_ids);
     generate_ts_method!(user_index, activate_action_signing_key);
+    generate_ts_method!(user_index, cancel_ai_app_link_code);
     generate_ts_method!(user_index, claim_ai_app_link_code);
     generate_ts_method!(user_index, create_ai_app_card_provenance);
     generate_ts_method!(user_index, create_ai_app_link_code);

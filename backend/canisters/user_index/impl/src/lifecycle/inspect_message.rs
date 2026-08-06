@@ -53,6 +53,7 @@ fn method_is_valid(method_name: &str, permissions: CallerPermissions) -> bool {
         | "submit_proof_of_unique_personhood"
         | "update_bot"
         | "update_diamond_membership_subscription"
+        | "cancel_ai_app_link_code"
         | "create_ai_app_link_code"
         | "delete_ai_app"
         | "set_my_ai_app_key"
