@@ -283,12 +283,103 @@ describe("buildCardInit", () => {
                 },
             },
         };
-        expect(buildCardInit({ amount: 5 }, context, "nonce-1")).toEqual({
+        const init = buildCardInit({ amount: 5 }, context, "nonce-1");
+        expect(init).toEqual({
             type: "oc:card:init",
             version: 2,
             frameNonce: "nonce-1",
             data: { amount: 5 },
             context,
+        });
+
+        context.theme = "light";
+        context.privateContext!.capability = "changed";
+        context.privateContext!.context.chatHandle = "changed";
+        expect(init.context.theme).toBe("dark");
+        expect(init.context.privateContext?.capability).toBe("opaque");
+        expect(init.context.privateContext?.context.chatHandle).toBe("chat");
+    });
+
+    test("copies a proxied capability context into a structured-clone-safe init message", () => {
+        const proxiedContext = new Proxy<CardInitContext>(
+            {
+                appId: 7,
+                appRevision: 123n,
+                actionId: "sample.add",
+                theme: "dark",
+                readonly: false,
+                privateContext: {
+                    capability: "opaque",
+                    expiresAt: 456n,
+                    context: {
+                        contextVersion: 1,
+                        appSubject: "subject",
+                        chatHandle: "chat",
+                        messageHandle: "message",
+                        appId: 7,
+                        appRevision: 123n,
+                        actionId: "sample.add",
+                    },
+                },
+            },
+            {},
+        );
+
+        expect(() => structuredClone(proxiedContext)).toThrow();
+        const init = buildCardInit({ amount: 5 }, proxiedContext, "nonce-1");
+        expect(() => structuredClone(init)).not.toThrow();
+        expect(init.context).not.toBe(proxiedContext);
+        expect(init.context).toEqual(proxiedContext);
+    });
+
+    test("removes a nested app-scoped context Proxy without changing its security bindings", () => {
+        const proxiedAppContext = new Proxy(
+            {
+                contextVersion: 1 as const,
+                appSubject: "subject",
+                chatHandle: "chat",
+                messageHandle: "message",
+                appId: 7,
+                appRevision: 123n,
+                actionId: "sample.add",
+            },
+            {},
+        );
+        const proxiedPrivateContext = new Proxy(
+            {
+                capability: "opaque",
+                expiresAt: 456n,
+                context: proxiedAppContext,
+            },
+            {},
+        );
+        const context: CardInitContext = {
+            appId: 7,
+            appRevision: 123n,
+            actionId: "sample.add",
+            theme: "light",
+            readonly: true,
+            privateContext: proxiedPrivateContext,
+        };
+
+        expect(() => structuredClone(proxiedPrivateContext)).toThrow();
+        expect(() => structuredClone(proxiedAppContext)).toThrow();
+        const init = buildCardInit({}, context, "nonce-2");
+        expect(() => structuredClone(init)).not.toThrow();
+        expect(init.context.privateContext).not.toBe(proxiedPrivateContext);
+        expect(init.context.privateContext?.context).not.toBe(proxiedAppContext);
+        expect(init.context.privateContext).toEqual({
+            capability: "opaque",
+            expiresAt: 456n,
+            context: {
+                contextVersion: 1,
+                appSubject: "subject",
+                chatHandle: "chat",
+                messageHandle: "message",
+                appId: 7,
+                appRevision: 123n,
+                actionId: "sample.add",
+            },
         });
     });
 });
