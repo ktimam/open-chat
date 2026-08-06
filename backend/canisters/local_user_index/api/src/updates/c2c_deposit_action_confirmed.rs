@@ -3,9 +3,9 @@ use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use types::{AiAppId, CanisterId, Chat, MessageId, MessageIndex, TimestampMillis, UserId};
 
-/// Chat canisters send at most one member beyond the eight-recipient per-user fan-out cap. Put the
-/// authenticated confirmer first so a member outside the collection's iteration prefix is never
-/// accidentally omitted from the authoritative context.
+/// Chat canisters send a bounded membership assertion with the authenticated confirmer first. This
+/// keeps the authority context and wire cost bounded while guaranteeing the actual confirmer is
+/// present; per-user delivery still targets only that confirmer.
 pub const MAX_ASSERTED_ACTION_CARD_MEMBERS: usize = 9;
 
 pub fn bounded_action_card_members(confirmed_by: UserId, member_user_ids: impl IntoIterator<Item = UserId>) -> Vec<UserId> {
@@ -22,13 +22,13 @@ pub fn bounded_action_card_members(confirmed_by: UserId, member_user_ids: impl I
 }
 
 // Generic deposit: a chat canister hands local_user_index an opaque payload plus immutable app/action
-// provenance and authoritative member ids. local_user_index resolves the exact published manifest,
-// inbox and registered recipient keys before encrypting/signing the v4 envelopes. OpenChat never
-// interprets the payload.
+// provenance and a bounded authoritative membership context. local_user_index resolves the exact
+// published manifest, inbox and actual confirmer key before encrypting/signing the v4 envelope.
+// OpenChat never interprets the payload.
 #[derive(CandidType, Serialize, Deserialize, Debug)]
 pub struct Args {
     // Legacy sender-carried routing fields, retained only for wire compatibility. The receiver
-    // ignores them and resolves the exact published app revision, inbox and member keys itself.
+    // ignores them and resolves the exact published app revision, inbox and confirmer key itself.
     #[serde(default)]
     pub consumer_public_key_pem: String,
     #[serde(default)]
@@ -70,7 +70,8 @@ pub struct ActionDepositContext {
     #[serde(default)]
     pub action_id: String,
     // Authoritative chat membership derived by the calling child canister, never by the message
-    // sender. Used only to resolve per-user delivery keys; bounded again by local_user_index.
+    // sender. It proves the confirmer remains a member and binds the card identity; per-user
+    // delivery targets only `confirmed_by`. Bounded again by local_user_index.
     #[serde(default)]
     pub member_user_ids: Vec<UserId>,
 }

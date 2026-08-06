@@ -2,7 +2,7 @@ use crate::TestEnv;
 use crate::client;
 use crate::env::ENV;
 use crate::fan_out_delivery_tests::{
-    confirm_raw, fetch_actions, inbox_deposit_fixture, install_inbox, new_recipient, post_card, set_key, setup,
+    confirm_raw, fetch_actions, inbox_deposit_fixture, install_inbox, link_key, new_recipient, post_card, setup,
 };
 use crate::utils::{now_millis, tick_many};
 use candid::Principal;
@@ -12,8 +12,8 @@ use rand::rngs::StdRng;
 use std::ops::Deref;
 use types::ActionCardResponse;
 
-// A prepare/deposit failure must release the card reservation. Retrying the same card after repairing
-// the authoritative key then deposits exactly once per member.
+// A prepare/deposit failure must release the card reservation. Retrying the same card after linking
+// the actual confirmer deposits exactly once to that confirmer and nowhere else.
 #[test]
 fn failed_confirm_releases_reservation_for_retry() {
     let mut wrapper = ENV.deref().get();
@@ -27,14 +27,23 @@ fn failed_confirm_releases_reservation_for_retry() {
     let mut rng = StdRng::seed_from_u64(9_001);
     let recipient_a = new_recipient(&mut rng);
     let recipient_b = new_recipient(&mut rng);
-    set_key(
+    let selector_a = link_key(
         env,
         canister_ids.user_index,
         &fixture.user_a,
-        fixture.app.id,
+        &fixture.app,
         recipient_a.pk_pem.clone(),
     );
-    let message_id = post_card(env, &fixture.user_a, fixture.group_id, &fixture.app, None, vec![], None);
+    let message_id = post_card(
+        env,
+        canister_ids.user_index,
+        &fixture.user_a,
+        fixture.group_id,
+        &fixture.app,
+        None,
+        vec![],
+        None,
+    );
 
     let failed = confirm_raw(env, &fixture.user_b, fixture.group_id, message_id);
     assert!(
@@ -42,15 +51,15 @@ fn failed_confirm_releases_reservation_for_retry() {
         "a missing authoritative key must fail before deposit: {failed:?}"
     );
     assert!(
-        fetch_actions(env, fixture.user_a.principal, fixture.inbox, &recipient_a.fingerprint).is_empty(),
+        fetch_actions(env, fixture.user_a.principal, fixture.inbox, &selector_a).is_empty(),
         "failed preparation must be atomic"
     );
 
-    set_key(
+    let selector_b = link_key(
         env,
         canister_ids.user_index,
         &fixture.user_b,
-        fixture.app.id,
+        &fixture.app,
         recipient_b.pk_pem.clone(),
     );
     let retried = confirm_raw(env, &fixture.user_b, fixture.group_id, message_id);
@@ -60,11 +69,12 @@ fn failed_confirm_releases_reservation_for_retry() {
     );
     tick_many(env, 10);
     assert_eq!(
-        fetch_actions(env, fixture.user_a.principal, fixture.inbox, &recipient_a.fingerprint).len(),
-        1
+        fetch_actions(env, fixture.user_a.principal, fixture.inbox, &selector_a).len(),
+        0,
+        "the nonconfirmer must not receive a delivery on retry"
     );
     assert_eq!(
-        fetch_actions(env, fixture.user_b.principal, fixture.inbox, &recipient_b.fingerprint).len(),
+        fetch_actions(env, fixture.user_b.principal, fixture.inbox, &selector_b).len(),
         1
     );
 }
@@ -107,8 +117,7 @@ fn duplicate_full_identity_dedupes_to_single_action() {
 
 // Both calls are submitted before either result is awaited. The first call reserves the Pending card
 // before its cross-canister deposit; a different actor cannot replace that durable attempt or issue a
-// second outbound deposit. Payload-takeover and post-timeout retry boundaries are covered directly by
-// the serialized card-state tests while edited confirmation remains feature-gated.
+// second outbound deposit. The sole delivery must use the winning actor's linked selector.
 #[test]
 fn concurrent_distinct_actor_confirms_issue_one_outbound_delivery() {
     let mut wrapper = ENV.deref().get();
@@ -122,21 +131,30 @@ fn concurrent_distinct_actor_confirms_issue_one_outbound_delivery() {
     let mut rng = StdRng::seed_from_u64(9_003);
     let recipient_a = new_recipient(&mut rng);
     let recipient_b = new_recipient(&mut rng);
-    set_key(
+    let selector_a = link_key(
         env,
         canister_ids.user_index,
         &fixture.user_a,
-        fixture.app.id,
+        &fixture.app,
         recipient_a.pk_pem.clone(),
     );
-    set_key(
+    let selector_b = link_key(
         env,
         canister_ids.user_index,
         &fixture.user_b,
-        fixture.app.id,
+        &fixture.app,
         recipient_b.pk_pem.clone(),
     );
-    let message_id = post_card(env, &fixture.user_a, fixture.group_id, &fixture.app, None, vec![], None);
+    let message_id = post_card(
+        env,
+        canister_ids.user_index,
+        &fixture.user_a,
+        fixture.group_id,
+        &fixture.app,
+        None,
+        vec![],
+        None,
+    );
     let confirm_bytes = msgpack::serialize_then_unwrap(&group_canister::respond_to_action_card::Args {
         thread_root_message_index: None,
         message_id,
@@ -166,24 +184,24 @@ fn concurrent_distinct_actor_confirms_issue_one_outbound_delivery() {
         msgpack::deserialize_then_unwrap(&env.await_call(call_b).expect("await confirm B"));
     tick_many(env, 10);
 
-    let successes = [&result_a, &result_b]
-        .into_iter()
-        .filter(|result| matches!(result, group_canister::respond_to_action_card::Response::Success(_)))
-        .count();
+    let success_a = matches!(&result_a, group_canister::respond_to_action_card::Response::Success(_));
+    let success_b = matches!(&result_b, group_canister::respond_to_action_card::Response::Success(_));
+    let successes = usize::from(success_a) + usize::from(success_b);
     assert_eq!(
         successes, 1,
         "exactly one competing confirmer may reserve and commit the card: A={result_a:?}, B={result_b:?}"
     );
-    assert_eq!(
-        fetch_actions(env, fixture.user_a.principal, fixture.inbox, &recipient_a.fingerprint).len(),
-        1,
-        "only one outbound fan-out may reach member A"
-    );
-    assert_eq!(
-        fetch_actions(env, fixture.user_b.principal, fixture.inbox, &recipient_b.fingerprint).len(),
-        1,
-        "only one outbound fan-out may reach member B"
-    );
+    let actions_a = fetch_actions(env, fixture.user_a.principal, fixture.inbox, &selector_a);
+    let actions_b = fetch_actions(env, fixture.user_b.principal, fixture.inbox, &selector_b);
+    assert_eq!(actions_a.len() + actions_b.len(), 1, "exactly one total delivery is allowed");
+    if success_a {
+        assert_eq!(actions_a.len(), 1, "the successful A confirmer must receive the delivery");
+        assert!(actions_b.is_empty(), "the losing B actor must receive no delivery");
+    } else {
+        assert!(success_b);
+        assert_eq!(actions_b.len(), 1, "the successful B confirmer must receive the delivery");
+        assert!(actions_a.is_empty(), "the losing A actor must receive no delivery");
+    }
 }
 
 fn notify(

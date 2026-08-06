@@ -12,3 +12,7 @@ ai_app_verifier_canister = { path = "../api" }
 candid = { workspace = true }
 ic-cdk = { workspace = true }
 serde = { workspace = true }
+serde_bytes = { workspace = true }
+types = { path = "../../../libraries/types" }
+user_index_canister = { path = "../../../canisters/user_index/api" }
+user_index_canister_c2c_client = { path = "../../../canisters/user_index/c2c_client" }

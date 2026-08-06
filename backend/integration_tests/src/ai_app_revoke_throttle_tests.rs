@@ -10,7 +10,7 @@ use pocket_ic::PocketIc;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use std::ops::Deref;
-use testing::rng::{random_principal, random_string};
+use testing::rng::random_string;
 use types::{AiAppId, AiAppRegistration, CanisterId, TimestampMillis};
 
 // Must match backend/canisters/user_index/impl/src/updates/revoke_ai_app_user_key.rs exactly.
@@ -79,12 +79,11 @@ fn pair_key(
         user_index_canister::create_ai_app_link_code::Response::Success(r) => r.code,
         other => panic!("expected code, got {other:?}"),
     };
-    let claim: user_index_canister::c2c_claim_ai_app_link_code::Response = client::execute_msgpack_update(
+    let claim = fan_out_delivery_tests::claim_link_code_via_app(
         env,
         app_canister(app),
         user_index,
-        "c2c_claim_ai_app_link_code_msgpack",
-        &user_index_canister::c2c_claim_ai_app_link_code::Args {
+        user_index_canister::c2c_claim_ai_app_link_code::Args {
             code,
             public_key: kp.public_key_pem().to_string(),
         },
@@ -115,12 +114,11 @@ fn revoke(
     signature: Vec<u8>,
     timestamp: TimestampMillis,
 ) -> user_index_canister::revoke_ai_app_user_key::Response {
-    client::execute_msgpack_update(
+    fan_out_delivery_tests::revoke_user_key_via_app(
         env,
         caller,
         user_index,
-        "revoke_ai_app_user_key_msgpack",
-        &user_index_canister::revoke_ai_app_user_key::Args {
+        user_index_canister::revoke_ai_app_user_key::Args {
             app_subject,
             app_id,
             key_version,
@@ -302,25 +300,29 @@ fn revoke_with_stale_timestamp_is_expired() {
 #[test]
 fn repeated_failed_claims_are_throttled() {
     let mut wrapper = ENV.deref().get();
-    let TestEnv { env, canister_ids, .. } = wrapper.env();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+        ..
+    } = wrapper.env();
     let user_index = canister_ids.user_index;
 
-    // A real, well-formed key and a non-existent token. C2C claim records bounded failures before
-    // any expensive key work; no registered user is needed for these misses.
+    // A real, well-formed key and a non-existent token. The registered verifier performs the actual
+    // C2C calls so this exercises the endpoint's bounded per-app failure bucket, not ingress guards.
     let mut rng = StdRng::seed_from_u64(4_004);
     let pem = P256KeyPair::new(&mut rng).public_key_pem().to_string();
-
-    // A single fresh caller so all failures land on ONE per-caller bucket.
-    let caller = random_principal();
+    let owner = client::register_diamond_user(env, canister_ids, *controller);
+    let app = register_per_user_app(env, canister_ids, *controller, &owner);
+    let caller = app_canister(&app);
 
     // First 10 failures: each a genuine miss (CodeNotFound), each counted.
     for i in 0..10 {
-        let response: user_index_canister::c2c_claim_ai_app_link_code::Response = client::execute_msgpack_update(
+        let response = fan_out_delivery_tests::claim_link_code_via_app(
             env,
             caller,
             user_index,
-            "c2c_claim_ai_app_link_code_msgpack",
-            &user_index_canister::c2c_claim_ai_app_link_code::Args {
+            user_index_canister::c2c_claim_ai_app_link_code::Args {
                 code: format!("no-such-code-{i}-{}", random_string()),
                 public_key: pem.clone(),
             },
@@ -335,12 +337,11 @@ fn repeated_failed_claims_are_throttled() {
     }
 
     // The 11th call is rejected by the throttle before the lookup.
-    let throttled: user_index_canister::c2c_claim_ai_app_link_code::Response = client::execute_msgpack_update(
+    let throttled = fan_out_delivery_tests::claim_link_code_via_app(
         env,
         caller,
         user_index,
-        "c2c_claim_ai_app_link_code_msgpack",
-        &user_index_canister::c2c_claim_ai_app_link_code::Args {
+        user_index_canister::c2c_claim_ai_app_link_code::Args {
             code: format!("no-such-code-final-{}", random_string()),
             public_key: pem,
         },
@@ -449,12 +450,11 @@ fn throttled_caller_recovers_after_window() {
 
     // Trip the per-caller throttle: 10 genuine misses...
     for i in 0..10 {
-        let response: user_index_canister::c2c_claim_ai_app_link_code::Response = client::execute_msgpack_update(
+        let response = fan_out_delivery_tests::claim_link_code_via_app(
             env,
             caller,
             user_index,
-            "c2c_claim_ai_app_link_code_msgpack",
-            &user_index_canister::c2c_claim_ai_app_link_code::Args {
+            user_index_canister::c2c_claim_ai_app_link_code::Args {
                 code: format!("miss-{i}-{}", random_string()),
                 public_key: pem.clone(),
             },
@@ -465,12 +465,11 @@ fn throttled_caller_recovers_after_window() {
         ));
     }
     // ...and prove it tripped (11th call is Throttled).
-    let throttled: user_index_canister::c2c_claim_ai_app_link_code::Response = client::execute_msgpack_update(
+    let throttled = fan_out_delivery_tests::claim_link_code_via_app(
         env,
         caller,
         user_index,
-        "c2c_claim_ai_app_link_code_msgpack",
-        &user_index_canister::c2c_claim_ai_app_link_code::Args {
+        user_index_canister::c2c_claim_ai_app_link_code::Args {
             code: random_string(),
             public_key: pem.clone(),
         },
@@ -499,12 +498,11 @@ fn throttled_caller_recovers_after_window() {
         other => panic!("expected code, got {other:?}"),
     };
     // ...and claim it from the PREVIOUSLY-THROTTLED caller: the failure bucket was pruned.
-    let recovered: user_index_canister::c2c_claim_ai_app_link_code::Response = client::execute_msgpack_update(
+    let recovered = fan_out_delivery_tests::claim_link_code_via_app(
         env,
         caller,
         user_index,
-        "c2c_claim_ai_app_link_code_msgpack",
-        &user_index_canister::c2c_claim_ai_app_link_code::Args { code, public_key: pem },
+        user_index_canister::c2c_claim_ai_app_link_code::Args { code, public_key: pem },
     );
     assert!(
         matches!(

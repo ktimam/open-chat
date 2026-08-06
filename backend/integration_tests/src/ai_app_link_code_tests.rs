@@ -66,6 +66,13 @@ fn wait_for_link_code_after_entropy(env: &mut PocketIc, sender: Principal, user_
 }
 
 fn upgrade_user_index_same_wasm_while_stopped(env: &mut PocketIc, user_index: CanisterId, controller: Principal) {
+    // PocketIC rate-limits repeated install_code calls per execution round. Recovery may
+    // legitimately follow another upgrade, so cross a bounded simulated cooldown while the
+    // canister remains stopped.
+    for _ in 0..10 * 60 {
+        env.advance_time(Duration::from_secs(1));
+        env.tick();
+    }
     env.upgrade_canister(
         user_index,
         wasms::USER_INDEX.module.clone().into(),
@@ -113,12 +120,11 @@ fn c2c_claim(
     code: String,
     public_key: String,
 ) -> user_index_canister::c2c_claim_ai_app_link_code::Response {
-    client::execute_msgpack_update(
+    fan_out_delivery_tests::claim_link_code_via_app(
         env,
         app_canister,
         user_index,
-        "c2c_claim_ai_app_link_code_msgpack",
-        &user_index_canister::c2c_claim_ai_app_link_code::Args { code, public_key },
+        user_index_canister::c2c_claim_ai_app_link_code::Args { code, public_key },
     )
 }
 
@@ -572,7 +578,7 @@ fn set_my_ai_app_key_rotation_replaces_previous_key() {
     // lingering key1 would keep receiving fan-out envelopes after rotation.
     let response: user_index_canister::ai_app_user_keys::Response = client::execute_msgpack_query(
         env,
-        owner.principal,
+        owner.local_user_index,
         canister_ids.user_index,
         "ai_app_user_keys_msgpack",
         &user_index_canister::ai_app_user_keys::Args {
@@ -634,7 +640,7 @@ fn delete_ai_app_cleans_per_user_keys_and_outstanding_codes() {
     );
     let user_index_canister::ai_app_user_keys::Response::Success(result) = client::execute_msgpack_query(
         env,
-        owner.principal,
+        owner.local_user_index,
         canister_ids.user_index,
         "ai_app_user_keys_msgpack",
         &user_index_canister::ai_app_user_keys::Args {
