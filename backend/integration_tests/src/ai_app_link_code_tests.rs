@@ -52,6 +52,11 @@ fn try_create_link_code(
 }
 
 fn wait_for_link_code_after_entropy(env: &mut PocketIc, sender: Principal, user_index: CanisterId, app_id: AiAppId) -> String {
+    // Start the scheduled reseed attempt before moving beyond its watchdog deadline. PocketIC does
+    // not advance wall-clock time when ticking, so both operations are needed to prove that a lost
+    // pre-restore callback cannot keep the gate permanently unavailable.
+    env.tick();
+    env.advance_time(Duration::from_millis(types::PR2_ENTROPY_RESEED_WATCHDOG_MS + 1));
     for _ in 0..20 {
         env.tick();
         match try_create_link_code(env, sender, user_index, app_id) {
@@ -123,19 +128,24 @@ fn restored_user_index_snapshot_never_reissues_a_link_bearer() {
 
     let owner = client::register_diamond_user(env, canister_ids, *controller);
     let app_id = register_per_user_app(env, canister_ids, *controller, &owner).id;
+    let user_index_controller = canister_ids.openchat_installer;
 
-    env.stop_canister(canister_ids.user_index, Some(*controller)).unwrap();
-    let snapshot = env
-        .take_canister_snapshot(canister_ids.user_index, Some(*controller), None)
+    env.stop_canister(canister_ids.user_index, Some(user_index_controller))
         .unwrap();
-    env.start_canister(canister_ids.user_index, Some(*controller)).unwrap();
+    let snapshot = env
+        .take_canister_snapshot(canister_ids.user_index, Some(user_index_controller), None)
+        .unwrap();
+    env.start_canister(canister_ids.user_index, Some(user_index_controller))
+        .unwrap();
 
     let first = create_link_code(env, owner.principal, canister_ids.user_index, app_id);
 
-    env.stop_canister(canister_ids.user_index, Some(*controller)).unwrap();
-    env.load_canister_snapshot(canister_ids.user_index, Some(*controller), snapshot.id)
+    env.stop_canister(canister_ids.user_index, Some(user_index_controller))
         .unwrap();
-    env.start_canister(canister_ids.user_index, Some(*controller)).unwrap();
+    env.load_canister_snapshot(canister_ids.user_index, Some(user_index_controller), snapshot.id)
+        .unwrap();
+    env.start_canister(canister_ids.user_index, Some(user_index_controller))
+        .unwrap();
 
     assert!(matches!(
         try_create_link_code(env, owner.principal, canister_ids.user_index, app_id),
@@ -160,6 +170,7 @@ fn restored_pending_entropy_timer_is_replaced_for_the_new_canister_version() {
 
     let owner = client::register_diamond_user(env, canister_ids, *controller);
     let app_id = register_per_user_app(env, canister_ids, *controller, &owner).id;
+    let user_index_controller = canister_ids.openchat_installer;
 
     // post_upgrade schedules a zero-delay reseed. Snapshot it before another round can consume the
     // timer, then restore into a newer canister version. The restored heap contains the old timer
@@ -171,16 +182,18 @@ fn restored_pending_entropy_timer_is_replaced_for_the_new_canister_version() {
             wasm_version: wasms::USER_INDEX.version,
         })
         .unwrap(),
-        Some(*controller),
+        Some(user_index_controller),
     )
     .unwrap();
-    env.stop_canister(canister_ids.user_index, Some(*controller)).unwrap();
+    env.stop_canister(canister_ids.user_index, Some(user_index_controller))
+        .unwrap();
     let snapshot = env
-        .take_canister_snapshot(canister_ids.user_index, Some(*controller), None)
+        .take_canister_snapshot(canister_ids.user_index, Some(user_index_controller), None)
         .unwrap();
-    env.load_canister_snapshot(canister_ids.user_index, Some(*controller), snapshot.id)
+    env.load_canister_snapshot(canister_ids.user_index, Some(user_index_controller), snapshot.id)
         .unwrap();
-    env.start_canister(canister_ids.user_index, Some(*controller)).unwrap();
+    env.start_canister(canister_ids.user_index, Some(user_index_controller))
+        .unwrap();
 
     assert!(matches!(
         try_create_link_code(env, owner.principal, canister_ids.user_index, app_id),

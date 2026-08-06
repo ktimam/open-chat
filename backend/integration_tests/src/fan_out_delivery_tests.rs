@@ -93,6 +93,9 @@ pub(crate) fn setup(env: &mut PocketIc, canister_ids: &crate::CanisterIds, contr
 /// verifies that the exact pinned id became active. Production consumers must provision the pin
 /// through an independently authenticated channel instead of trusting this discovery query.
 fn activate_initial_action_signing_key_for_local_test(env: &mut PocketIc, user_index: CanisterId, controller: Principal) {
+    // UserIndex creates its initial staged key from an asynchronous raw_rand callback. Drive the
+    // lifecycle timer and management-canister callback rounds before treating the keyring as ready.
+    tick_many(env, 10);
     let response: user_index_canister::action_signing_keys::Response =
         client::execute_query(env, Principal::anonymous(), user_index, "action_signing_keys", &Empty {});
     let user_index_canister::action_signing_keys::Response::Success(keys) = response else {
