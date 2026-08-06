@@ -1,4 +1,4 @@
-use crate::{RuntimeState, mutate_state};
+use crate::{RuntimeState, mutate_state, read_state};
 use ic_cdk_timers::TimerId;
 use rand::rngs::StdRng;
 use std::cell::Cell;
@@ -93,7 +93,8 @@ fn check_watchdog(ticket: Pr2EntropyReseedTicket) {
 }
 
 async fn finish_reseed(ticket: Pr2EntropyReseedTicket) {
-    let raw_rand = ic_cdk::management_canister::raw_rand().await;
+    let test_mode = read_state(|state| state.data.test_mode);
+    let raw_rand = utils::canister::request_raw_rand(test_mode).await;
     let current_version = ic_cdk::api::canister_version();
     let now = canister_time::now_millis();
     let retry = mutate_state(|state| {
