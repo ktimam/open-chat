@@ -54,12 +54,10 @@ async fn c2c_deposit_action_confirmed(args: Args) -> Response {
     if let Err(error) = verify_chat_caller_and_members(&args.context, caller, current_registration.kind) {
         return Error(error);
     }
-    let canister_version = ic_cdk::api::canister_version();
-    let (deposits, recipient_key_bindings, action_id) =
-        match mutate_state(|state| prepare(args, authoritative_route, state, canister_version)) {
-            Ok(prepared) => prepared,
-            Err(response) => return response,
-        };
+    let (deposits, recipient_key_bindings, action_id) = match mutate_state(|state| prepare(args, authoritative_route, state)) {
+        Ok(prepared) => prepared,
+        Err(response) => return response,
+    };
     let relay_args = user_index_canister::c2c_deposit_actions::Args {
         authority_context,
         content_hash,
@@ -314,7 +312,6 @@ fn prepare(
     args: Args,
     authoritative_route: ManifestRoute,
     state: &mut RuntimeState,
-    canister_version: u64,
 ) -> Result<
     (
         Vec<user_index_canister::c2c_deposit_actions::UnsignedActionDeposit>,
@@ -377,7 +374,7 @@ fn prepare(
     )
     .map_err(Error)?;
     let payload_hash = types::ai_app_card_confirm_payload_hash_v1(args.plaintext.as_ref()).map_err(Error)?;
-    let mut batch_rng = crate::pr2_entropy::output_rng(state, canister_version, ACTION_ENVELOPE_ENTROPY_PURPOSE)
+    let mut batch_rng = crate::pr2_entropy::output_rng(state, ACTION_ENVELOPE_ENTROPY_PURPOSE)
         .map_err(|_| Error("action envelope entropy unavailable".to_string()))?;
 
     let mut deposits = Vec::with_capacity(recipients.len());
@@ -817,47 +814,45 @@ mod tests {
             },
         };
 
-        let reseed = |state: &mut RuntimeState, canister_version: u64, raw_rand: [u8; 32]| {
-            crate::pr2_entropy::ensure_current_version(state, canister_version);
+        let reseed_current_lifecycle = |state: &mut RuntimeState, raw_rand: [u8; 32]| {
             let now = state.env.now();
-            let types::Pr2EntropyReseedAdmission::Started(ticket) = state.data.pr2_entropy.begin_reseed(canister_version, now)
-            else {
+            let canister_id = state.env.canister_id();
+            let types::Pr2EntropyReseedAdmission::Started(ticket) = state.data.pr2_entropy.begin_reseed(now) else {
                 panic!("entropy reseed must start")
             };
-            let canister_id = state.env.canister_id();
             let commitment_mode = types::Pr2EntropyCommitmentMode::from_test_mode(state.data.test_mode);
-            assert!(state.data.pr2_entropy.finish_reseed(
-                ticket,
-                canister_version,
-                canister_id,
-                commitment_mode,
-                &raw_rand,
-                now
-            ));
+            assert!(
+                state
+                    .data
+                    .pr2_entropy
+                    .finish_reseed(ticket, canister_id, commitment_mode, &raw_rand, now)
+            );
         };
 
         let mut before_restore = RuntimeState::new(Box::new(TestEnv::default()), data());
-        reseed(&mut before_restore, 12, [12; 32]);
+        crate::pr2_entropy::advance_lifecycle(&mut before_restore, 12).unwrap();
+        reseed_current_lifecycle(&mut before_restore, [12; 32]);
         let snapshot = msgpack::serialize_to_vec(&before_restore.data.pr2_entropy).unwrap();
-        let first = prepare(args(1, br#"{"record":1}"#), route(), &mut before_restore, 12)
+        let first = prepare(args(1, br#"{"record":1}"#), route(), &mut before_restore)
             .unwrap()
             .0
             .remove(0);
 
         let mut after_restore = RuntimeState::new(Box::new(TestEnv::default()), data());
         after_restore.data.pr2_entropy = msgpack::deserialize(&snapshot[..]).unwrap();
+        crate::pr2_entropy::advance_lifecycle(&mut after_restore, 13).unwrap();
         assert!(matches!(
-            prepare(args(2, br#"{"record":2}"#), route(), &mut after_restore, 13),
+            prepare(args(2, br#"{"record":2}"#), route(), &mut after_restore),
             Err(local_user_index_canister::c2c_deposit_action_confirmed::Response::Error(message))
                 if message == "action envelope entropy unavailable"
         ));
 
-        reseed(&mut after_restore, 13, [13; 32]);
-        let second = prepare(args(2, br#"{"record":2}"#), route(), &mut after_restore, 13)
+        reseed_current_lifecycle(&mut after_restore, [13; 32]);
+        let second = prepare(args(2, br#"{"record":2}"#), route(), &mut after_restore)
             .unwrap()
             .0
             .remove(0);
-        let third = prepare(args(3, br#"{"record":3}"#), route(), &mut after_restore, 13)
+        let third = prepare(args(3, br#"{"record":3}"#), route(), &mut after_restore)
             .unwrap()
             .0
             .remove(0);

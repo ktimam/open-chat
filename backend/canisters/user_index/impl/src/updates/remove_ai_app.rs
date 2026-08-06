@@ -34,7 +34,6 @@ pub(crate) fn remove_app_and_dependents(app_id: AiAppId, state: &mut crate::Runt
         .ai_app_user_keys
         .queue_app_cleanup(app_id)
         .map_err(|error| error.message())?;
-    crate::pr2_entropy::ensure_current_bearer_epoch(state);
     state.data.ai_app_link_codes.remove_app(app_id, state.env.now());
     state.data.ai_app_card_tokens.remove_app(app_id);
     let removed = state.data.ai_apps.remove(app_id);

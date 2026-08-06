@@ -57,19 +57,10 @@ pub enum CheckResult {
 }
 
 impl AiAppCardAuthorityStore {
-    /// Invalidates every short-lived authority and secondary index when the system canister
-    /// version changes. A snapshot restore increments that version, so neither a live nor a
-    /// previously consumed bearer from the restored heap can be revived. Route metadata is also
-    /// reset to avoid reusing a restored route generation.
-    pub fn ensure_canister_version(&mut self, canister_version: u64) -> bool {
-        let changed = self.canister_version != Some(canister_version);
-        if changed {
-            *self = Self {
-                canister_version: Some(canister_version),
-                ..Default::default()
-            };
-        }
-        changed
+    /// Invalidates every short-lived authority and secondary index at a logical lifecycle
+    /// transition. Route metadata is also reset to avoid reusing a restored route generation.
+    pub fn invalidate_all(&mut self) {
+        *self = Self::default();
     }
 
     pub fn stored_binding(&self, raw_token: &[u8]) -> Option<AiAppCardAuthorityBindingV1> {
@@ -445,7 +436,7 @@ mod tests {
     }
 
     #[test]
-    fn canister_version_epoch_preserves_same_version_and_clears_every_index_on_change() {
+    fn lifecycle_invalidation_clears_every_authority_index() {
         let group = Principal::from_slice(&[7]);
         let owner = Principal::from_slice(&[8]);
         let route = CardRouteKey::Group(group.into());
@@ -453,22 +444,9 @@ mod tests {
         let raw_token = [0xA5; 32];
         let mut store = AiAppCardAuthorityStore::default();
 
-        // A missing legacy epoch is not trusted.
         store.insert(&raw_token, expected.clone(), route, owner, 20, 1).unwrap();
-        store.ensure_canister_version(12);
+        store.invalidate_all();
         assert_eq!(store.check(&raw_token, &expected, Some(owner), 2), CheckResult::NotFound);
-        assert!(store.records.is_empty());
-        assert!(store.expiry_index.is_empty());
-        assert!(store.per_child_counts.is_empty());
-        assert!(store.route_generations.is_empty());
-        assert_eq!(store.next_route_generation, 0);
-
-        store.insert(&raw_token, expected.clone(), route, owner, 20, 2).unwrap();
-        store.ensure_canister_version(12);
-        assert_eq!(store.check(&raw_token, &expected, Some(owner), 3), CheckResult::Valid);
-
-        store.ensure_canister_version(13);
-        assert_eq!(store.check(&raw_token, &expected, Some(owner), 3), CheckResult::NotFound);
         assert!(store.records.is_empty());
         assert!(store.expiry_index.is_empty());
         assert!(store.per_child_counts.is_empty());
