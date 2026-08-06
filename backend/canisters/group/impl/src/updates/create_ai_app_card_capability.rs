@@ -41,6 +41,7 @@ fn revalidate(prepared: &Prepared, state: &RuntimeState) -> Result<(), oc_error_
         prepared.args.thread_root_message_index,
         prepared.args.message_id,
         state.env.now(),
+        state.data.test_mode,
     )?;
     if !state.data.enabled_ai_apps.contains(&source.app_id)
         || source.app_id != prepared.args.app_id
@@ -100,6 +101,7 @@ fn prepare(args: &Args, state: &RuntimeState) -> Result<Prepared, oc_error_codes
         args.thread_root_message_index,
         args.message_id,
         state.env.now(),
+        state.data.test_mode,
     )?;
     if !state.data.enabled_ai_apps.contains(&source.app_id) {
         return Err(

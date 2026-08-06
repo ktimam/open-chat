@@ -1788,10 +1788,16 @@ impl GroupChatCore {
         thread_root_message_index: Option<MessageIndex>,
         message_id: MessageId,
         now: TimestampMillis,
+        private_context_delivery_enabled: bool,
     ) -> OCResult<chat_events::AiAppCardCapabilitySource> {
         let member = self.members.get_verified_member(user_id)?;
-        self.events
-            .ai_app_card_capability_source(thread_root_message_index, message_id, member.min_visible_event_index(), now)
+        self.events.ai_app_card_capability_source(
+            thread_root_message_index,
+            message_id,
+            member.min_visible_event_index(),
+            now,
+            private_context_delivery_enabled,
+        )
     }
 
     pub fn ai_app_card_confirmation_source(
