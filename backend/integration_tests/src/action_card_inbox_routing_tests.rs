@@ -2,31 +2,14 @@ use crate::TestEnv;
 use crate::client;
 use crate::env::ENV;
 use crate::fan_out_delivery_tests::{
-    confirm_raw, fetch_actions, inbox_deposit_fixture, new_recipient, post_card, publish_per_user_app, register_per_user_app,
-    set_key, setup,
+    card_content_fixture, confirm_raw, fetch_actions, inbox_deposit_fixture, link_key, new_recipient, post_card,
+    publish_per_user_app, register_per_user_app, setup,
 };
+use crate::utils::tick_many;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
-use serde_bytes::ByteBuf;
 use std::ops::Deref;
-use types::{ActionCardResponse, AiAppCardContext, AiAppRegistration, Chat, MessageId};
-
-fn card_identity(chat_key: &str, thread_root_message_index: Option<u32>, message_id: u64) -> [u8; 32] {
-    const DOMAIN: &[u8] = b"openchat/action-inbox/card-identity/v3\0";
-    let mut canonical = Vec::with_capacity(DOMAIN.len() + chat_key.len() + 1 + 5 + 8);
-    canonical.extend_from_slice(DOMAIN);
-    canonical.extend_from_slice(chat_key.as_bytes());
-    canonical.push(0);
-    match thread_root_message_index {
-        None => canonical.push(0),
-        Some(index) => {
-            canonical.push(1);
-            canonical.extend_from_slice(&index.to_be_bytes());
-        }
-    }
-    canonical.extend_from_slice(&message_id.to_be_bytes());
-    sha256::sha256(&canonical)
-}
+use types::{AiAppRegistration, Chat, MessageId};
 
 #[test]
 fn publication_and_inbox_both_reject_a_cross_app_namespace() {
@@ -86,64 +69,58 @@ fn user_index_rejects_a_stale_revision_before_using_relay_authority() {
         ..
     } = wrapper.env();
     let fixture = setup(env, canister_ids, *controller);
-    let fingerprint = [92u8; 32];
-    let stale_revision = fixture.app.updated.saturating_sub(1);
-    let group_chat = Chat::Group(fixture.group_id.into());
-    let chat_key = format!("group:{}", fixture.group_id);
-    let message_id = MessageId::from(1u64);
-    let response: user_index_canister::c2c_deposit_actions::Response = client::execute_msgpack_update(
+    let mut rng = StdRng::seed_from_u64(7_901);
+    let recipient = new_recipient(&mut rng);
+    let selector = link_key(
         env,
-        fixture.group_lui,
         canister_ids.user_index,
-        "c2c_deposit_actions_msgpack",
-        &user_index_canister::c2c_deposit_actions::Args {
-            authority_context: AiAppCardContext {
-                user_id: fixture.user_a.user_id,
-                chat: group_chat,
-                chat_key: chat_key.clone(),
-                thread_root_message_index: None,
-                message_id,
-                app_id: fixture.app.id,
-                app_revision: stale_revision,
-                action_id: fixture.app.manifest.actions[0].name.clone(),
-            },
-            content_hash: [3; 32],
-            confirmation_lease_generation: 1,
-            authority: ByteBuf::from(vec![
-                4;
-                group_index_canister::ai_app_card_authority::AI_APP_CARD_AUTHORITY_TOKEN_BYTES
-            ]),
-            confirmed_by: fixture.user_a.user_id,
-            app_id: fixture.app.id,
-            app_revision: stale_revision,
-            action_id: fixture.app.manifest.actions[0].name.clone(),
-            recipient_key_bindings: vec![user_index_canister::c2c_deposit_actions::RecipientKeyBinding {
-                user_ids: vec![fixture.user_a.user_id],
-                key_fingerprint: ByteBuf::from(fingerprint.to_vec()),
-            }],
-            deposits: vec![user_index_canister::c2c_deposit_actions::UnsignedActionDeposit {
-                idempotency_key: ByteBuf::from(card_identity(&chat_key, None, message_id.as_u64()).to_vec()),
-                payload_hash: ByteBuf::from(vec![7; 32]),
-                consumer_key_fingerprint: ByteBuf::from(fingerprint.to_vec()),
-                acknowledgement_secret_hash: ByteBuf::from(vec![5; 32]),
-                ephemeral_public_key: ByteBuf::from(vec![2; 65]),
-                ciphertext: ByteBuf::from(vec![3]),
-                created_at: 1,
-            }],
+        &fixture.user_a,
+        &fixture.app,
+        recipient.pk_pem.clone(),
+    );
+    let message_id = post_card(
+        env,
+        canister_ids.user_index,
+        &fixture.user_a,
+        fixture.group_id,
+        &fixture.app,
+        None,
+        vec![],
+        None,
+    );
+
+    let mut changed_manifest = fixture.app.manifest.clone();
+    changed_manifest.description.push_str(" (new revision)");
+    let updated: user_index_canister::register_ai_app::Response = client::execute_msgpack_update(
+        env,
+        fixture.user_a.principal,
+        canister_ids.user_index,
+        "register_ai_app_msgpack",
+        &user_index_canister::register_ai_app::Args {
+            manifest: changed_manifest,
         },
     );
+    let user_index_canister::register_ai_app::Response::Success(updated) = updated else {
+        panic!("owner must be able to create the newer app revision: {updated:?}")
+    };
+    assert_eq!(updated.id, fixture.app.id);
+    assert!(updated.updated > fixture.app.updated);
+    assert!(!updated.published, "a changed manifest must require fresh verification");
+
+    let response = confirm_raw(env, &fixture.user_a, fixture.group_id, message_id);
     assert!(
-        matches!(response, user_index_canister::c2c_deposit_actions::Response::Error(_)),
-        "a stale revision must fail at UserIndex before dispatch: {response:?}"
+        matches!(response, group_canister::respond_to_action_card::Response::Error(_)),
+        "a card bound to the stale revision must fail before dispatch: {response:?}"
     );
-    assert!(fetch_actions(env, fixture.user_a.principal, fixture.inbox, &fingerprint).is_empty());
+    tick_many(env, 10);
+    assert!(fetch_actions(env, fixture.user_a.principal, fixture.inbox, &selector).is_empty());
 }
 
 // Routing is part of the published app contract. Neither a card-carried canister id nor the LUI's
 // legacy global setting may supply a missing manifest inbox, otherwise an untrusted card author can
 // redirect encrypted confirmations to a canister of their choosing.
 #[test]
-fn missing_manifest_inbox_does_not_fall_back_to_card_or_global_routing() {
+fn missing_manifest_inbox_rejects_provenance_before_card_or_global_routing() {
     let mut wrapper = ENV.deref().get();
     let TestEnv {
         env,
@@ -170,62 +147,38 @@ fn missing_manifest_inbox_does_not_fall_back_to_card_or_global_routing() {
         local_user_index_canister::set_action_inbox_canister::Response::Success
     ));
 
-    let mut rng = StdRng::seed_from_u64(8_001);
-    let recipient_a = new_recipient(&mut rng);
-    let recipient_b = new_recipient(&mut rng);
-    set_key(
-        env,
-        canister_ids.user_index,
-        &fixture.user_a,
-        app.id,
-        recipient_a.pk_pem.clone(),
-    );
-    set_key(
-        env,
-        canister_ids.user_index,
-        &fixture.user_b,
-        app.id,
-        recipient_b.pk_pem.clone(),
-    );
+    let selector_a = [93u8; 32];
+    let selector_b = [94u8; 32];
 
-    let message_id = post_card(
+    let message_id = MessageId::from(8_001u64);
+    let provenance: user_index_canister::create_ai_app_card_provenance::Response = client::execute_msgpack_update(
         env,
-        &fixture.user_a,
-        fixture.group_id,
-        &app,
-        Some(recipient_a.pk_pem.clone()),
-        vec![recipient_b.pk_pem.clone()],
-        Some(fixture.inbox),
-    );
-    let response = confirm_raw(env, &fixture.user_b, fixture.group_id, message_id);
-    assert!(
-        matches!(response, group_canister::respond_to_action_card::Response::Error(_)),
-        "an app without a manifest inbox must fail closed: {response:?}"
-    );
-    assert!(
-        fetch_actions(env, fixture.user_a.principal, fixture.inbox, &recipient_a.fingerprint).is_empty(),
-        "the card-carried/global fallback must not receive a deposit"
-    );
-    assert!(
-        fetch_actions(env, fixture.user_b.principal, fixture.inbox, &recipient_b.fingerprint).is_empty(),
-        "the card-carried/global fallback must not receive a fan-out deposit"
-    );
-
-    let cancel = client::execute_msgpack_update::<_, group_canister::respond_to_action_card::Response>(
-        env,
-        fixture.user_b.principal,
-        fixture.group_id.into(),
-        "respond_to_action_card_msgpack",
-        &group_canister::respond_to_action_card::Args {
+        fixture.user_a.principal,
+        canister_ids.user_index,
+        "create_ai_app_card_provenance_msgpack",
+        &user_index_canister::create_ai_app_card_provenance::Args {
+            app_id: app.id,
+            app_revision: app.updated,
+            action_id: app.manifest.actions[0].name.clone(),
+            content: card_content_fixture(),
+            chat: Chat::Group(fixture.group_id),
             thread_root_message_index: None,
             message_id,
-            response: ActionCardResponse::Cancel,
-            confirm_payload_override: None,
-            confirmation_grant: None,
         },
     );
     assert!(
-        matches!(cancel, group_canister::respond_to_action_card::Response::Success(_)),
-        "a failed confirm must release its reservation and leave the card cancellable: {cancel:?}"
+        matches!(
+            provenance,
+            user_index_canister::create_ai_app_card_provenance::Response::AppUnavailable
+        ),
+        "an app without a manifest inbox must fail before a routable card can enter chat: {provenance:?}"
+    );
+    assert!(
+        fetch_actions(env, fixture.user_a.principal, fixture.inbox, &selector_a).is_empty(),
+        "the card-carried/global fallback must not receive a deposit"
+    );
+    assert!(
+        fetch_actions(env, fixture.user_b.principal, fixture.inbox, &selector_b).is_empty(),
+        "the card-carried/global fallback must not receive the confirmer delivery"
     );
 }

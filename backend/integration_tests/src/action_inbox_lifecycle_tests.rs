@@ -1,7 +1,7 @@
 use crate::TestEnv;
 use crate::client;
 use crate::env::ENV;
-use crate::fan_out_delivery_tests::{confirm, fetch_actions, inbox_deposit_fixture, new_recipient, post_card, set_key, setup};
+use crate::fan_out_delivery_tests::{confirm, fetch_actions, inbox_deposit_fixture, link_key, new_recipient, post_card, setup};
 use crate::wasms;
 use ct_codecs::{Base64UrlSafeNoPadding, Decoder};
 use oc_error_codes::OCErrorCode;
@@ -50,6 +50,7 @@ fn acknowledge(
     sender: candid::Principal,
     inbox: candid::Principal,
     recipient: &crate::fan_out_delivery_tests::Recipient,
+    selector: &[u8; 32],
     action: &action_inbox_canister::actions::StoredAction,
 ) -> action_inbox_canister::acknowledge_actions::Response {
     let envelope = ecies_payload::EciesEnvelope {
@@ -60,7 +61,7 @@ fn acknowledge(
     let value: serde_json::Value = serde_json::from_slice(&plaintext).unwrap();
     let encoded_secret = value["acknowledgementSecret"].as_str().unwrap();
     let secret = Base64UrlSafeNoPadding::decode_to_vec(encoded_secret, None).unwrap();
-    acknowledge_with_secret(env, sender, inbox, &recipient.fingerprint, action.id, &secret)
+    acknowledge_with_secret(env, sender, inbox, selector, action.id, &secret)
 }
 
 fn acknowledge_with_secret(
@@ -98,38 +99,55 @@ fn old_key_can_be_drained_after_rotation_without_touching_the_new_key() {
     let mut rng = StdRng::seed_from_u64(8101);
     let old_key = new_recipient(&mut rng);
     let new_key = new_recipient(&mut rng);
-    let confirmer_key = new_recipient(&mut rng);
-    set_key(
-        env,
-        canister_ids.user_index,
-        &fixture.user_a,
-        fixture.app.id,
-        old_key.pk_pem.clone(),
-    );
-    set_key(
+    let old_selector = link_key(
         env,
         canister_ids.user_index,
         &fixture.user_b,
-        fixture.app.id,
-        confirmer_key.pk_pem.clone(),
+        &fixture.app,
+        old_key.pk_pem.clone(),
     );
-    let old_message = post_card(env, &fixture.user_a, fixture.group_id, &fixture.app, None, vec![], None);
-    confirm(env, &fixture.user_b, fixture.group_id, old_message);
-    set_key(
+    let old_message = post_card(
         env,
         canister_ids.user_index,
         &fixture.user_a,
-        fixture.app.id,
+        fixture.group_id,
+        &fixture.app,
+        None,
+        vec![],
+        None,
+    );
+    confirm(env, &fixture.user_b, fixture.group_id, old_message);
+    let new_selector = link_key(
+        env,
+        canister_ids.user_index,
+        &fixture.user_b,
+        &fixture.app,
         new_key.pk_pem.clone(),
     );
-    let new_message = post_card(env, &fixture.user_a, fixture.group_id, &fixture.app, None, vec![], None);
+    let new_message = post_card(
+        env,
+        canister_ids.user_index,
+        &fixture.user_a,
+        fixture.group_id,
+        &fixture.app,
+        None,
+        vec![],
+        None,
+    );
     confirm(env, &fixture.user_b, fixture.group_id, new_message);
 
-    let old_actions = fetch_actions(env, fixture.user_a.principal, fixture.inbox, &old_key.fingerprint);
-    let new_actions = fetch_actions(env, fixture.user_a.principal, fixture.inbox, &new_key.fingerprint);
+    let old_actions = fetch_actions(env, fixture.user_b.principal, fixture.inbox, &old_selector);
+    let new_actions = fetch_actions(env, fixture.user_b.principal, fixture.inbox, &new_selector);
     assert_eq!(old_actions.len(), 1);
     assert_eq!(new_actions.len(), 1);
-    let response = acknowledge(env, fixture.user_a.principal, fixture.inbox, &old_key, &old_actions[0]);
+    let response = acknowledge(
+        env,
+        fixture.user_b.principal,
+        fixture.inbox,
+        &old_key,
+        &old_selector,
+        &old_actions[0],
+    );
     assert!(matches!(
         response,
         action_inbox_canister::acknowledge_actions::Response::Success(
@@ -139,9 +157,9 @@ fn old_key_can_be_drained_after_rotation_without_touching_the_new_key() {
             }
         )
     ));
-    assert!(fetch_actions(env, fixture.user_a.principal, fixture.inbox, &old_key.fingerprint).is_empty());
+    assert!(fetch_actions(env, fixture.user_b.principal, fixture.inbox, &old_selector).is_empty());
     assert_eq!(
-        fetch_actions(env, fixture.user_a.principal, fixture.inbox, &new_key.fingerprint).len(),
+        fetch_actions(env, fixture.user_b.principal, fixture.inbox, &new_selector).len(),
         1
     );
 }
@@ -159,23 +177,25 @@ fn sybil_invalid_secrets_cannot_acknowledge_or_lock_out_the_valid_holder() {
     let mut rng = StdRng::seed_from_u64(8102);
     let recipient = new_recipient(&mut rng);
     let attacker = new_recipient(&mut rng);
-    set_key(
-        env,
-        canister_ids.user_index,
-        &fixture.user_a,
-        fixture.app.id,
-        recipient.pk_pem.clone(),
-    );
-    set_key(
+    let selector = link_key(
         env,
         canister_ids.user_index,
         &fixture.user_b,
-        fixture.app.id,
-        attacker.pk_pem.clone(),
+        &fixture.app,
+        recipient.pk_pem.clone(),
     );
-    let message = post_card(env, &fixture.user_a, fixture.group_id, &fixture.app, None, vec![], None);
+    let message = post_card(
+        env,
+        canister_ids.user_index,
+        &fixture.user_a,
+        fixture.group_id,
+        &fixture.app,
+        None,
+        vec![],
+        None,
+    );
     confirm(env, &fixture.user_b, fixture.group_id, message);
-    let actions = fetch_actions(env, fixture.user_a.principal, fixture.inbox, &recipient.fingerprint);
+    let actions = fetch_actions(env, fixture.user_b.principal, fixture.inbox, &selector);
     assert_eq!(actions.len(), 1);
 
     let envelope = ecies_payload::EciesEnvelope {
@@ -185,9 +205,9 @@ fn sybil_invalid_secrets_cannot_acknowledge_or_lock_out_the_valid_holder() {
     assert!(ecies_payload::decrypt(&envelope, &attacker.sk_pem).is_err());
     let response = acknowledge_with_secret(
         env,
-        fixture.user_a.principal,
+        fixture.user_b.principal,
         fixture.inbox,
-        &recipient.fingerprint,
+        &selector,
         actions[0].id,
         &[0; action_inbox_canister::acknowledge_actions::ACKNOWLEDGEMENT_SECRET_BYTES],
     );
@@ -196,7 +216,7 @@ fn sybil_invalid_secrets_cannot_acknowledge_or_lock_out_the_valid_holder() {
         action_inbox_canister::acknowledge_actions::Response::NotAuthorized
     ));
     assert_eq!(
-        fetch_actions(env, fixture.user_a.principal, fixture.inbox, &recipient.fingerprint).len(),
+        fetch_actions(env, fixture.user_b.principal, fixture.inbox, &selector).len(),
         1
     );
 
@@ -206,14 +226,7 @@ fn sybil_invalid_secrets_cannot_acknowledge_or_lock_out_the_valid_holder() {
         let mut wrong_secret = [0; action_inbox_canister::acknowledge_actions::ACKNOWLEDGEMENT_SECRET_BYTES];
         wrong_secret[0] = value;
         assert!(matches!(
-            acknowledge_with_secret(
-                env,
-                caller,
-                fixture.inbox,
-                &recipient.fingerprint,
-                actions[0].id,
-                &wrong_secret,
-            ),
+            acknowledge_with_secret(env, caller, fixture.inbox, &selector, actions[0].id, &wrong_secret,),
             action_inbox_canister::acknowledge_actions::Response::NotAuthorized
         ));
     }
@@ -225,7 +238,14 @@ fn sybil_invalid_secrets_cannot_acknowledge_or_lock_out_the_valid_holder() {
     );
 
     assert!(matches!(
-        acknowledge(env, fixture.user_a.principal, fixture.inbox, &recipient, &actions[0]),
+        acknowledge(
+            env,
+            fixture.user_b.principal,
+            fixture.inbox,
+            &recipient,
+            &selector,
+            &actions[0]
+        ),
         action_inbox_canister::acknowledge_actions::Response::Success(
             action_inbox_canister::acknowledge_actions::SuccessResult {
                 acknowledged: 1,
@@ -247,24 +267,25 @@ fn retained_actions_and_acknowledgement_survive_a_canister_upgrade() {
     let fixture = setup(env, canister_ids, *controller);
     let mut rng = StdRng::seed_from_u64(8103);
     let recipient = new_recipient(&mut rng);
-    let confirmer = new_recipient(&mut rng);
-    set_key(
-        env,
-        canister_ids.user_index,
-        &fixture.user_a,
-        fixture.app.id,
-        recipient.pk_pem.clone(),
-    );
-    set_key(
+    let selector = link_key(
         env,
         canister_ids.user_index,
         &fixture.user_b,
-        fixture.app.id,
-        confirmer.pk_pem.clone(),
+        &fixture.app,
+        recipient.pk_pem.clone(),
     );
-    let message = post_card(env, &fixture.user_a, fixture.group_id, &fixture.app, None, vec![], None);
+    let message = post_card(
+        env,
+        canister_ids.user_index,
+        &fixture.user_a,
+        fixture.group_id,
+        &fixture.app,
+        None,
+        vec![],
+        None,
+    );
     confirm(env, &fixture.user_b, fixture.group_id, message);
-    let before = fetch_actions(env, fixture.user_a.principal, fixture.inbox, &recipient.fingerprint);
+    let before = fetch_actions(env, fixture.user_b.principal, fixture.inbox, &selector);
     assert_eq!(before.len(), 1);
 
     env.upgrade_canister(
@@ -278,11 +299,11 @@ fn retained_actions_and_acknowledgement_survive_a_canister_upgrade() {
     )
     .unwrap();
 
-    let after = fetch_actions(env, fixture.user_a.principal, fixture.inbox, &recipient.fingerprint);
+    let after = fetch_actions(env, fixture.user_b.principal, fixture.inbox, &selector);
     assert_eq!(after.len(), 1);
     assert_eq!(after[0].id, before[0].id);
     assert!(matches!(
-        acknowledge(env, fixture.user_a.principal, fixture.inbox, &recipient, &after[0]),
+        acknowledge(env, fixture.user_b.principal, fixture.inbox, &recipient, &selector, &after[0]),
         action_inbox_canister::acknowledge_actions::Response::Success(_)
     ));
 }

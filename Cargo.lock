@@ -194,6 +194,10 @@ dependencies = [
  "candid",
  "ic-cdk 0.20.2",
  "serde",
+ "serde_bytes",
+ "types",
+ "user_index_canister",
+ "user_index_canister_c2c_client",
 ]
 
 [[package]]

@@ -15,9 +15,9 @@ use types::CanisterId;
 
 const ACTION_ENVELOPE_ENTROPY_PURPOSE: &[u8] = b"local-user-index/action-envelope/v4";
 
-// A chat canister forwards an opaque payload plus immutable app/action provenance and user ids derived
-// from authoritative membership. We validate a one-use GroupIndex authority, resolve the exact
-// published route/key, wrap the payload in the plaintext context envelope (v4), and encrypt
+// A chat canister forwards an opaque payload plus immutable app/action provenance and a bounded
+// membership witness. We validate a one-use GroupIndex authority, resolve the exact route and actual
+// confirmer key, wrap the payload in the plaintext context envelope (v4), and encrypt
 // separately. UserIndex—not this shard—signs only after consuming the same authority.
 #[update(guard = "caller_is_local_child_canister", msgpack = true)]
 async fn c2c_deposit_action_confirmed(args: Args) -> Response {
@@ -170,12 +170,10 @@ fn validate_encoded_deposit_payload<T: Serialize>(args: &T) -> Result<usize, Str
     }
 }
 
-// Bound on fan-out recipients per confirm. Generous for the intended surface (both sides of a direct
-// chat; small groups) while capping the per-confirm encrypt/sign work an abusive card could demand.
+// Bound on distinct delivery keys per confirm. A per-user route supplies only the actual confirmer's
+// key; a shared-key route supplies the app-level key. Retain a hard cap on encryption/signing work.
 const MAX_DEPOSIT_RECIPIENTS: usize = user_index_canister::c2c_deposit_actions::MAX_RECIPIENT_KEY_BINDINGS;
-// Group/community canisters send one item beyond the per-user fan-out cap as an overflow sentinel.
-// App-level delivery has one registry key and remains available in larger chats; per-user delivery
-// rejects the sentinel after resolving the exact key mode.
+// The membership witness is separately bounded and always puts the authenticated confirmer first.
 const MAX_ASSERTED_CHAT_MEMBERS: usize =
     local_user_index_canister::c2c_deposit_action_confirmed::MAX_ASSERTED_ACTION_CARD_MEMBERS;
 const MAX_CONFIRM_PAYLOAD_BYTES: usize = 16 * 1024;
@@ -341,8 +339,8 @@ fn prepare(
         .content_hash
         .ok_or_else(|| Error("verified card has no content hash".to_string()))?;
     let confirmation_lease_generation = args.context.confirmation_lease_generation;
-    // Recipients come only from the vouched action/manifest or guarded per-member key lookup. Reject
-    // an empty/oversized set so two-phase confirmation leaves the card retryable rather than dropping.
+    // The delivery key comes only from the vouched app route and, in per-user mode, the current
+    // confirmer binding. Reject an empty/oversized set so two-phase confirmation stays retryable.
     let mut recipients: Vec<ManifestRecipient> = Vec::new();
     for recipient in supplied_recipients {
         if !recipient.public_key.is_empty()
@@ -365,7 +363,7 @@ fn prepare(
     // Deterministic dedupe key: the STABLE identity of the confirmed card (chat + message id), NOT the
     // confirm payload. The short of it is that a user
     // retry, the platform's automatic c2c retry, AND a concurrent distinct-payload confirm all dedupe to
-    // a single deposit per recipient fingerprint bucket.
+    // a single deposit in the selected consumer queue.
     let idempotency_key = card_identity_digest(
         &args.context.chat,
         args.context.thread_root_message_index,
@@ -380,15 +378,15 @@ fn prepare(
     let mut deposits = Vec::with_capacity(recipients.len());
     let mut recipient_key_bindings = Vec::with_capacity(recipients.len());
     for recipient in recipients {
-        // A malformed key among the recipients fails the WHOLE batch (atomic with two-phase confirm:
-        // the card stays Pending and the user can retry) rather than silently dropping one member.
+        // A malformed selected route key fails the whole operation (atomic with two-phase confirm:
+        // the card stays Pending and the confirmer can retry) rather than silently dropping delivery.
         let fingerprint = recipient.consumer_queue_selector;
         let mut acknowledgement_secret = [0u8; action_inbox_canister::acknowledge_actions::ACKNOWLEDGEMENT_SECRET_BYTES];
         batch_rng.fill_bytes(&mut acknowledgement_secret);
         let encoded_acknowledgement_secret =
             Base64UrlSafeNoPadding::encode_to_string(acknowledgement_secret).map_err(|error| Error(error.to_string()))?;
-        // Context + action payload are identical across recipients, but each encrypted envelope gets
-        // an independent bearer secret so compromising one recipient cannot acknowledge another.
+        // Each encrypted envelope gets an independent bearer secret so a stale/rotated queue cannot
+        // acknowledge another delivery.
         let plaintext = action_deposit_envelope::wrap_plaintext(
             &external_context,
             &content_hash,
