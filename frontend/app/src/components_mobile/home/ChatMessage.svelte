@@ -12,7 +12,7 @@
     import {
         markSurfaceShownAfterConsent,
         surfaceToOpenAfterConfirm,
-        type SurfaceOpening,
+        type ChatLinkSurfaceOpening,
     } from "@utils/aiAppSurfaces";
     import {
         autoProposeSuggestions,
@@ -61,6 +61,7 @@
         undeletingMessagesStore,
         type UserSummary,
     } from "@client";
+    import { chatIdentifierToString } from "@shared";
     import { getContext, onDestroy, onMount, tick } from "svelte";
     import Reply from "svelte-material-icons/Reply.svelte";
     import Robot from "svelte-material-icons/RobotOutline.svelte";
@@ -333,7 +334,40 @@
 
     // A "sheet"-display chat_link surface to host after a successful confirm (see
     // openSurfaceAfterConfirm below).
-    let confirmSurface = $state<SurfaceOpening | undefined>(undefined);
+    let confirmSurface = $state<ChatLinkSurfaceOpening | undefined>(undefined);
+    let confirmSurfaceHandedOff = $state(false);
+    let confirmSurfaceRequest = 0;
+
+    $effect(() => {
+        const chatMarker = chatIdentifierToString(chatId);
+        void chatMarker;
+        return () => {
+            confirmSurfaceRequest += 1;
+            const opening = confirmSurface;
+            confirmSurface = undefined;
+            if (opening !== undefined && !confirmSurfaceHandedOff) {
+                void client.cancelAiAppChatLinkToken(opening.chatLinkToken);
+            }
+            confirmSurfaceHandedOff = false;
+        };
+    });
+
+    function consentToConfirmSurface() {
+        if (confirmSurface === undefined) return;
+        confirmSurfaceHandedOff = true;
+        markSurfaceShownAfterConsent(confirmSurface, chatId, $currentUserIdStore);
+    }
+
+    async function dismissConfirmSurface() {
+        confirmSurfaceRequest += 1;
+        const opening = confirmSurface;
+        const cancel = opening !== undefined && !confirmSurfaceHandedOff;
+        confirmSurface = undefined;
+        confirmSurfaceHandedOff = false;
+        if (cancel && opening !== undefined) {
+            await client.cancelAiAppChatLinkToken(opening.chatLinkToken);
+        }
+    }
 
     // The decisions live in runProposeFlow (utils/aiActionRunner), shared with the classic tree; this
     // component supplies only the surfaces this tree has — the chooser and consent sheets. Both trees
@@ -424,7 +458,6 @@
         popHistoryStateWithAction("emoji_picker_action");
     }
 
-
     function openUserProfile(ev?: Event) {
         if (sender?.kind === "bot") {
             botProfile = {
@@ -478,6 +511,8 @@
         const appId = msg.content.kind === "action_card_content" ? msg.content.appId : undefined;
         const appRevision =
             msg.content.kind === "action_card_content" ? msg.content.appRevision : undefined;
+        const surfaceRequest =
+            response === "confirm" && actionId !== undefined ? ++confirmSurfaceRequest : undefined;
         return client
             .respondToActionCard(
                 chatId,
@@ -496,21 +531,28 @@
                     }
                     return;
                 }
-                if (response === "confirm" && actionId !== undefined) {
-                    void openSurfaceAfterConfirm(actionId, appId, appRevision);
+                if (
+                    response === "confirm" &&
+                    actionId !== undefined &&
+                    surfaceRequest !== undefined &&
+                    surfaceRequest === confirmSurfaceRequest
+                ) {
+                    void openSurfaceAfterConfirm(actionId, appId, appRevision, surfaceRequest);
                 }
             });
     }
 
     // After the first successfully confirmed action in a chat, the owning app's "chat_link"
-    // surface (when it declares one) opens so the user can finish configuring the chat inside the
-    // app — "sheet" surfaces embed in a bottom sheet, "external" ones open the system browser.
-    // surfaceToOpenAfterConfirm persists the once-per-(app, chat) marker.
+    // surface (when it declares one) is presented behind a host-owned consent sheet. Nothing loads
+    // or opens externally until the user chooses Load/Open; only then is the once-per-(app, chat)
+    // marker persisted.
     async function openSurfaceAfterConfirm(
         actionId: string,
         appId: number | undefined,
         appRevision: bigint | undefined,
+        surfaceRequest: number,
     ) {
+        if (surfaceRequest !== confirmSurfaceRequest) return;
         const opening = await surfaceToOpenAfterConfirm(
             client,
             chatId,
@@ -520,6 +562,11 @@
             $currentUserIdStore,
         );
         if (opening === undefined) return;
+        if (surfaceRequest !== confirmSurfaceRequest || confirmSurface !== undefined) {
+            await client.cancelAiAppChatLinkToken(opening.chatLinkToken);
+            return;
+        }
+        confirmSurfaceHandedOff = false;
         confirmSurface = opening;
     }
 
@@ -779,9 +826,8 @@
         url={confirmSurface.url}
         display={confirmSurface.surface.display}
         dataDisclosures={confirmSurface.dataDisclosures}
-        onConsent={() =>
-            markSurfaceShownAfterConsent(confirmSurface!, chatId, $currentUserIdStore)}
-        onDismiss={() => (confirmSurface = undefined)}
+        onConsent={consentToConfirmSurface}
+        onDismiss={dismissConfirmSurface}
     />
 {/if}
 

@@ -5,14 +5,8 @@
     // owner. Publishing is owner + governance/test_mode gated in the canister.
     import { i18nKey } from "@src/i18n/i18n";
     import { toastStore } from "@src/stores/toast";
-    import {
-        Body,
-        BodySmall,
-        CommonButton,
-        Container,
-        Subtitle,
-    } from "component-lib";
-    import { type AiAppRegistration, type OpenChat } from "openchat-client";
+    import { Body, BodySmall, CommonButton, Container, Subtitle } from "component-lib";
+    import { type AiAppRegistration, type OpenChat } from "@client";
     import { getContext, onMount } from "svelte";
     import CheckDecagram from "svelte-material-icons/CheckDecagram.svelte";
     import Upload from "svelte-material-icons/Upload.svelte";
@@ -62,11 +56,7 @@
 </script>
 
 <SlidingPageContent title={i18nKey("aiApps.myApps")}>
-    <Container
-        padding={["xxl", "lg", "huge"]}
-        gap={"lg"}
-        height={"fill"}
-        direction={"vertical"}>
+    <Container padding={["xxl", "lg", "huge"]} gap={"lg"} height={"fill"} direction={"vertical"}>
         {#if loading}
             <BodySmall colour={"textSecondary"}>
                 <Translatable resourceKey={i18nKey("aiApps.loading")} />
@@ -80,7 +70,8 @@
                 <Container
                     mainAxisAlignment={"spaceBetween"}
                     crossAxisAlignment={"center"}
-                    gap={"md"}>
+                    gap={"md"}
+                >
                     <Container direction={"vertical"} gap={"xs"}>
                         <Container crossAxisAlignment={"center"} gap={"sm"}>
                             <Subtitle fontWeight={"bold"}>{app.manifest.name}</Subtitle>
@@ -94,14 +85,16 @@
                                     app.published
                                         ? "aiApps.statusPublished"
                                         : "aiApps.statusPrivate",
-                                )} />
+                                )}
+                            />
                         </BodySmall>
                     </Container>
                     {#if !app.published}
                         <CommonButton
                             onClick={() => publishApp(app)}
                             loading={publishing.has(app.id)}
-                            size={"small_text"}>
+                            size={"small_text"}
+                        >
                             {#snippet icon(color, size)}
                                 <Upload {color} {size} />
                             {/snippet}

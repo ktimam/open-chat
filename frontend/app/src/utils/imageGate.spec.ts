@@ -14,8 +14,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // Lives in its own file (not aiActionRunner.spec.ts) because it needs the on-device facade mocked
 // WHOLE — capability included — and that spec deliberately stubs only inferOnDevice.
 
-import type { AiAppRegistration, MessageContent, MessageContext, OpenChat } from "openchat-client";
-import type { OnDeviceInferenceCapability } from "openchat-shared";
+import type { AiAppRegistration, MessageContent, MessageContext, OpenChat } from "@client";
+import type { OnDeviceInferenceCapability } from "@shared";
 
 // The on-device facade, replaced entirely: `capability` is what the gate reads, `inferOnDevice` is the
 // runtime the gate is supposed to keep the image away from. Both must be stubbed here — reaching the

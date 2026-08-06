@@ -12,9 +12,9 @@
 // Performance: the per-chat vocabulary is cached for ~60s, so evaluating a message is pure
 // string work — zero canister calls on the message path while the cache is warm.
 
-import type { ChatIdentifier, EventWrapper, Message, OpenChat } from "openchat-client";
+import type { ChatIdentifier, EventWrapper, Message, OpenChat } from "@client";
 import { matchesKeyword } from "./keywordMatch";
-import { chatIdentifierToString } from "openchat-client";
+import { chatIdentifierToString } from "@client";
 import { writable } from "svelte/store";
 import { autoProposeSuggestions as autoProposeEnabled } from "../stores/settings";
 import { configKeys } from "./config";

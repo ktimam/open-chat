@@ -63,6 +63,7 @@ import type {
     DiamondMembershipDuration,
     DiamondMembershipFees,
     AiAppLinkCode,
+    AiAppChatLinkToken,
     AiAppCardCapability,
     AiAppCardConfirmationGrant,
     AiAppCardContentV1,
@@ -3888,6 +3889,32 @@ export class OpenChatAgent extends EventTarget {
 
     cancelAiAppLinkCode(code: string): Promise<boolean> {
         return this._userIndexClient.cancelAiAppLinkCode(code);
+    }
+
+    createAiAppChatLinkToken(
+        chatId: ChatIdentifier,
+        appId: number,
+        appRevision: bigint,
+    ): Promise<AiAppChatLinkToken | undefined> {
+        if (offline()) return Promise.resolve(undefined);
+        switch (chatId.kind) {
+            case "group_chat":
+                return this._groupClient.createAiAppChatLinkToken(
+                    chatId.groupId,
+                    appId,
+                    appRevision,
+                );
+            case "channel":
+                return this._communityClient.createAiAppChatLinkToken(chatId, appId, appRevision);
+            case "direct_chat":
+                return this._userClient instanceof UserClient
+                    ? this._userClient.createAiAppChatLinkToken(chatId.userId, appId, appRevision)
+                    : Promise.resolve(undefined);
+        }
+    }
+
+    cancelAiAppChatLinkToken(token: Uint8Array): Promise<boolean> {
+        return this._userIndexClient.cancelAiAppChatLinkToken(token);
     }
 
     createAiAppCardProvenance(

@@ -1,4 +1,4 @@
-import type { AiAppCardConfirmationGrant } from "openchat-shared";
+import type { AiAppCardConfirmationGrant } from "@shared";
 
 type ConfirmationGrantResponse =
     | { Success: { grant: Uint8Array | number[]; expires_at: bigint } }

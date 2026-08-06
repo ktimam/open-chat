@@ -2,6 +2,7 @@ import type { HttpAgent, Identity } from "@icp-sdk/core/agent";
 import type {
     AcceptP2PSwapResponse,
     AccessGateConfig,
+    AiAppChatLinkToken,
     AiAppCardCapability,
     AiAppCardConfirmationGrant,
     AddRemoveReactionResponse,
@@ -96,6 +97,8 @@ import {
     GroupRespondToActionCardResponse,
     GroupCreateAiAppCardCapabilityArgs,
     GroupCreateAiAppCardCapabilityResponse,
+    GroupCreateAiAppChatLinkTokenArgs,
+    GroupCreateAiAppChatLinkTokenResponse,
     GroupCreateAiAppCardConfirmationGrantArgs,
     GroupCreateAiAppCardConfirmationGrantResponse,
     GroupRegisterProposalVoteArgs,
@@ -147,6 +150,7 @@ import {
 import { MultiCanisterMsgpackAgent } from "../canisterAgent/msgpack";
 import type { IChatEventsReader } from "../common/chatEvents";
 import { createAiAppCardCapabilityResponse } from "../common/aiAppCardCapability";
+import { createAiAppChatLinkTokenResponse } from "../common/aiAppChatLinkToken";
 import { createAiAppCardConfirmationGrantResponse } from "../common/aiAppCardConfirmationGrant";
 import {
     acceptP2PSwapSuccess,
@@ -827,6 +831,23 @@ export class GroupClient
             createAiAppCardCapabilityResponse,
             GroupCreateAiAppCardCapabilityArgs,
             GroupCreateAiAppCardCapabilityResponse,
+        );
+    }
+
+    createAiAppChatLinkToken(
+        groupId: string,
+        appId: number,
+        appRevision: bigint,
+    ): Promise<AiAppChatLinkToken | undefined> {
+        return this.update(
+            groupId,
+            "create_ai_app_chat_link_token",
+            { app_id: appId, app_revision: appRevision },
+            createAiAppChatLinkTokenResponse,
+            GroupCreateAiAppChatLinkTokenArgs,
+            GroupCreateAiAppChatLinkTokenResponse,
+            undefined,
+            { sensitive: true },
         );
     }
 

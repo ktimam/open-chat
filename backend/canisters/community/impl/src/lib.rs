@@ -15,8 +15,8 @@ use fire_and_forget_handler::FireAndForgetHandler;
 use gated_groups::{GatePayment, calculate_gate_payments};
 use group_chat_core::{AccessRulesInternal, AddResult};
 use group_community_common::{
-    Achievements, ExpiringMember, ExpiringMemberActions, ExpiringMembers, Members, PaymentReceipts, PendingPaymentsQueue,
-    UserCache,
+    Achievements, AiAppChatLinkAdmission, ExpiringMember, ExpiringMemberActions, ExpiringMembers, Members, PaymentReceipts,
+    PendingPaymentsQueue, UserCache,
 };
 use ic_principal::Principal;
 use installed_bots::InstalledBots;
@@ -49,6 +49,7 @@ use utils::regular_jobs::RegularJobs;
 
 mod activity_notifications;
 mod ai_app_card_authority;
+mod ai_app_chat_link_authority;
 mod guards;
 mod jobs;
 mod lifecycle;
@@ -569,6 +570,8 @@ struct Data {
     moderation_flags: Timestamped<u32>,
     idempotency_checker: IdempotencyChecker,
     public_channel_list_updated: TimestampMillis,
+    #[serde(default)]
+    ai_app_chat_link_admission: AiAppChatLinkAdmission,
 }
 
 impl Data {
@@ -680,6 +683,7 @@ impl Data {
             moderation_flags: Timestamped::default(),
             idempotency_checker: IdempotencyChecker::default(),
             public_channel_list_updated: now,
+            ai_app_chat_link_admission: AiAppChatLinkAdmission::default(),
         }
     }
 

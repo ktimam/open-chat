@@ -8,7 +8,7 @@ import {
     type AppScopedCardContext,
     type AiAppCardChatContext,
     isSafeAiActionFieldName,
-} from "openchat-shared";
+} from "@shared";
 
 // Reserved legacy rows are ignored fail-closed. They are never parsed or forwarded as app data.
 const RESERVED_CARD_ROW_PREFIX = "__oc_";
@@ -241,9 +241,7 @@ function ipv4Octets(hostname: string): number[] | undefined {
     const parts = hostname.split(".");
     if (parts.length !== 4) return undefined;
     const octets = parts.map(Number);
-    return octets.every((v) => Number.isInteger(v) && v >= 0 && v <= 255)
-        ? octets
-        : undefined;
+    return octets.every((v) => Number.isInteger(v) && v >= 0 && v <= 255) ? octets : undefined;
 }
 
 function isNonPublicIpv4([a, b, c]: number[]): boolean {
@@ -263,7 +261,10 @@ function isNonPublicIpv4([a, b, c]: number[]): boolean {
 }
 
 function expandIpv6(hostname: string): number[] | undefined {
-    const raw = hostname.replace(/^\[|\]$/g, "").toLowerCase().split("%")[0];
+    const raw = hostname
+        .replace(/^\[|\]$/g, "")
+        .toLowerCase()
+        .split("%")[0];
     if (!raw.includes(":")) return undefined;
     const halves = raw.split("::");
     if (halves.length > 2) return undefined;

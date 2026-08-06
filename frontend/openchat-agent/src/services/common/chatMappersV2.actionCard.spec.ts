@@ -1,4 +1,4 @@
-import type { ActionCardContent } from "openchat-shared";
+import type { ActionCardContent } from "@shared";
 import { describe, expect, it } from "vitest";
 import { apiMessageContent, messageContent } from "./chatMappersV2";
 

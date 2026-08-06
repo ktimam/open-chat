@@ -7,7 +7,7 @@
     // components_mobile/home/user_profile/MyApps.svelte.
     import { i18nKey } from "@src/i18n/i18n";
     import { toastStore } from "@src/stores/toast";
-    import { type AiAppRegistration, type OpenChat } from "openchat-client";
+    import { type AiAppRegistration, type OpenChat } from "@client";
     import { getContext, onMount } from "svelte";
     import CheckDecagram from "svelte-material-icons/CheckDecagram.svelte";
     import Upload from "svelte-material-icons/Upload.svelte";
@@ -59,7 +59,8 @@
     <CollapsibleCard
         onToggle={myAppsSectionOpen.toggle}
         open={$myAppsSectionOpen}
-        headerText={i18nKey("aiApps.myApps")}>
+        headerText={i18nKey("aiApps.myApps")}
+    >
         <div class="apps">
             {#each apps as app (app.id)}
                 <div class="app">
@@ -76,14 +77,16 @@
                                     app.published
                                         ? "aiApps.statusPublished"
                                         : "aiApps.statusPrivate",
-                                )} />
+                                )}
+                            />
                         </div>
                     </div>
                     {#if !app.published}
                         <Button
                             small
                             loading={publishing.has(app.id)}
-                            onClick={() => publishApp(app)}>
+                            onClick={() => publishApp(app)}
+                        >
                             <Upload size="1em" color="currentColor" />
                             <Translatable resourceKey={i18nKey("aiApps.publish")} />
                         </Button>

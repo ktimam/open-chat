@@ -11,6 +11,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 const SECRET_BYTES: usize = 32;
 const SUBJECT_DOMAIN_V1: &[u8] = b"openchat/ai-app/scoped-subject/v1\0";
 const CHAT_HANDLE_DOMAIN_V1: &[u8] = b"openchat/ai-app/scoped-chat/v1\0";
+const DIRECT_CHAT_HANDLE_DOMAIN_V1: &[u8] = b"openchat/ai-app/scoped-direct-chat/v1\0";
 const MESSAGE_HANDLE_DOMAIN_V1: &[u8] = b"openchat/ai-app/scoped-message/v1\0";
 const CONSUMER_QUEUE_SELECTOR_DOMAIN_V1: &[u8] = b"openchat/ai-app/consumer-queue-selector/v1\0";
 
@@ -55,6 +56,28 @@ impl AiAppScopedIdentityKey {
     ) -> Result<[u8; 32], String> {
         let mut preimage = app_scope_preimage(CHAT_HANDLE_DOMAIN_V1, user_index_canister_id, app_id, app_canister_id)?;
         put_chat(&mut preimage, chat)?;
+        self.mac(&preimage)
+    }
+
+    /// A direct chat is represented differently in each participant's User canister. Sort the
+    /// exact pair before MACing so both sides obtain one canonical app-scoped handle without
+    /// disclosing either global user id.
+    pub fn direct_chat_handle(
+        &self,
+        user_index_canister_id: CanisterId,
+        app_id: AiAppId,
+        app_canister_id: CanisterId,
+        first_user_id: UserId,
+        second_user_id: UserId,
+    ) -> Result<[u8; 32], String> {
+        if first_user_id == second_user_id {
+            return Err("direct chat participants must be distinct".to_string());
+        }
+        let mut participants = [Principal::from(first_user_id), Principal::from(second_user_id)];
+        participants.sort_unstable_by(|a, b| a.as_slice().cmp(b.as_slice()));
+        let mut preimage = app_scope_preimage(DIRECT_CHAT_HANDLE_DOMAIN_V1, user_index_canister_id, app_id, app_canister_id)?;
+        put_principal(&mut preimage, participants[0])?;
+        put_principal(&mut preimage, participants[1])?;
         self.mac(&preimage)
     }
 
@@ -252,6 +275,15 @@ mod tests {
         );
         assert_ne!(subject, chat_handle);
         assert_ne!(chat_handle, message);
+
+        let direct_ab = key.direct_chat_handle(registry, 7, app_canister, user(9), user(10)).unwrap();
+        let direct_ba = key.direct_chat_handle(registry, 7, app_canister, user(10), user(9)).unwrap();
+        assert_eq!(direct_ab, direct_ba);
+        assert_ne!(
+            direct_ab,
+            key.direct_chat_handle(registry, 7, app_canister, user(9), user(11)).unwrap()
+        );
+        assert!(key.direct_chat_handle(registry, 7, app_canister, user(9), user(9)).is_err());
     }
 
     #[test]

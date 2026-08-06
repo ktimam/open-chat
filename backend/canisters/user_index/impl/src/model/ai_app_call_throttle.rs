@@ -6,6 +6,7 @@ use types::{AiAppId, Milliseconds, TimestampMillis};
 
 const WINDOW: Milliseconds = 60 * 60 * 1000;
 const MAX_FAILURES_PER_CALLER: usize = 10;
+const MAX_CHAT_LINK_FAILURES_PER_APP_CALLER: usize = 1_000;
 const CARD_ATTESTATION_WINDOW: Milliseconds = 60 * 1000;
 const MAX_CARD_ATTESTATION_ATTEMPTS_PER_CALLER: usize = 20;
 const MAX_CARD_ATTESTATION_ATTEMPTS_PER_CALLER_APP: usize = 10;
@@ -53,6 +54,10 @@ pub struct AiAppCallThrottle {
     claim_failures: HashMap<Principal, Vec<TimestampMillis>>,
     #[serde(default)]
     card_redeem_failures: HashMap<Principal, Vec<TimestampMillis>>,
+    #[serde(default)]
+    chat_link_redeem_failures: HashMap<(Principal, [u8; 32]), Vec<TimestampMillis>>,
+    #[serde(default)]
+    chat_link_redeem_failures_by_caller: HashMap<Principal, Vec<TimestampMillis>>,
     /// All full-card attestation attempts, recorded before the inter-canister await. Unlike the
     /// failure buckets, this also bounds concurrent calls and calls whose target rejects or traps.
     #[serde(default)]
@@ -299,6 +304,49 @@ impl AiAppCallThrottle {
         failures.entry(caller).or_default().push(now);
     }
 
+    pub fn check_chat_link_redeem(
+        &mut self,
+        caller: Principal,
+        app_subject: [u8; 32],
+        now: TimestampMillis,
+    ) -> Result<(), Milliseconds> {
+        self.check_chat_link_redeem_caller(caller, now)?;
+        Self::prune_with_window(&mut self.chat_link_redeem_failures, now, WINDOW);
+        let key = (caller, app_subject);
+        if let Some(failures) = self.chat_link_redeem_failures.get(&key)
+            && failures.len() >= MAX_FAILURES_PER_CALLER
+        {
+            return Err(Self::retry_after(failures, now));
+        }
+        Ok(())
+    }
+
+    pub fn record_chat_link_redeem_failure(&mut self, caller: Principal, app_subject: [u8; 32], now: TimestampMillis) {
+        self.record_chat_link_redeem_caller_failure(caller, now);
+        Self::prune_with_window(&mut self.chat_link_redeem_failures, now, WINDOW);
+        let key = (caller, app_subject);
+        Self::make_room_for_subject(&mut self.chat_link_redeem_failures, key);
+        self.chat_link_redeem_failures.entry(key).or_default().push(now);
+    }
+
+    pub fn check_chat_link_redeem_caller(&mut self, caller: Principal, now: TimestampMillis) -> Result<(), Milliseconds> {
+        self.clear_legacy();
+        Self::prune(&mut self.chat_link_redeem_failures_by_caller, now);
+        if let Some(failures) = self.chat_link_redeem_failures_by_caller.get(&caller)
+            && failures.len() >= MAX_CHAT_LINK_FAILURES_PER_APP_CALLER
+        {
+            return Err(Self::retry_after(failures, now));
+        }
+        Ok(())
+    }
+
+    pub fn record_chat_link_redeem_caller_failure(&mut self, caller: Principal, now: TimestampMillis) {
+        self.clear_legacy();
+        Self::prune(&mut self.chat_link_redeem_failures_by_caller, now);
+        Self::make_room_for_caller(&mut self.chat_link_redeem_failures_by_caller, caller);
+        self.chat_link_redeem_failures_by_caller.entry(caller).or_default().push(now);
+    }
+
     fn failures_mut(&mut self, kind: AiAppCallKind) -> &mut HashMap<Principal, Vec<TimestampMillis>> {
         match kind {
             AiAppCallKind::Claim => &mut self.claim_failures,
@@ -309,6 +357,25 @@ impl AiAppCallThrottle {
 
     fn prune(failures: &mut HashMap<Principal, Vec<TimestampMillis>>, now: TimestampMillis) {
         Self::prune_with_window(failures, now, WINDOW);
+    }
+
+    fn make_room_for_subject(failures: &mut HashMap<(Principal, [u8; 32]), Vec<TimestampMillis>>, key: (Principal, [u8; 32])) {
+        if !failures.contains_key(&key) && failures.len() >= MAX_TRACKED_CALLERS_PER_ENDPOINT {
+            if let Some(oldest) = failures
+                .iter()
+                .min_by(|((caller_a, subject_a), times_a), ((caller_b, subject_b), times_b)| {
+                    times_a
+                        .last()
+                        .unwrap_or(&0)
+                        .cmp(times_b.last().unwrap_or(&0))
+                        .then_with(|| caller_a.as_slice().cmp(caller_b.as_slice()))
+                        .then_with(|| subject_a.cmp(subject_b))
+                })
+                .map(|(key, _)| *key)
+            {
+                failures.remove(&oldest);
+            }
+        }
     }
 
     fn prune_with_window<K: Eq + Hash>(
@@ -397,6 +464,34 @@ mod tests {
         assert!(throttle.check(AiAppCallKind::CardRedeem, caller, 1).is_err());
         assert!(throttle.check(AiAppCallKind::Claim, caller, 1).is_ok());
         assert!(throttle.check(AiAppCallKind::CardRedeem, caller, WINDOW + 2).is_ok());
+    }
+
+    #[test]
+    fn chat_link_redeem_failures_are_scoped_to_exact_app_subject() {
+        let mut throttle = AiAppCallThrottle::default();
+        let caller = principal(11);
+        let subject_a = [1; 32];
+        let subject_b = [2; 32];
+        for _ in 0..MAX_FAILURES_PER_CALLER {
+            throttle.record_chat_link_redeem_failure(caller, subject_a, 1);
+        }
+        assert!(throttle.check_chat_link_redeem(caller, subject_a, 1).is_err());
+        assert!(throttle.check_chat_link_redeem(caller, subject_b, 1).is_ok());
+        assert!(throttle.check_chat_link_redeem(principal(12), subject_a, 1).is_ok());
+        assert!(throttle.check_chat_link_redeem(caller, subject_a, WINDOW + 2).is_ok());
+    }
+
+    #[test]
+    fn rotating_untrusted_subjects_cannot_evade_the_high_app_caller_ceiling() {
+        let mut throttle = AiAppCallThrottle::default();
+        let caller = principal(15);
+        for seed in 0..MAX_CHAT_LINK_FAILURES_PER_APP_CALLER {
+            let mut subject = [0; 32];
+            subject[..8].copy_from_slice(&(seed as u64).to_be_bytes());
+            throttle.record_chat_link_redeem_failure(caller, subject, 1);
+        }
+        assert!(throttle.check_chat_link_redeem(caller, [0xFE; 32], 1).is_err());
+        assert!(throttle.check_chat_link_redeem(principal(16), [0xFE; 32], 1).is_ok());
     }
 
     #[test]

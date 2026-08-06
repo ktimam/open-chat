@@ -2,10 +2,16 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
+const APP_ROOT = resolve(__dirname, "../..");
+
+function appPath(path: string): string {
+    return resolve(APP_ROOT, path);
+}
+
 describe("embedded app surface isolation", () => {
     it("uses one click-gated opaque sandbox host on desktop and mobile", () => {
         const hardened = readFileSync(
-            resolve(process.cwd(), "src/components/home/HardenedAiAppSurface.svelte"),
+            appPath("src/components/home/HardenedAiAppSurface.svelte"),
             "utf8",
         );
         expect(hardened).toContain('sandbox="allow-scripts"');
@@ -19,7 +25,7 @@ describe("embedded app surface isolation", () => {
             "src/components/home/AiAppSurfaceModal.svelte",
             "src/components_mobile/home/AiAppSurfaceSheet.svelte",
         ]) {
-            const host = readFileSync(resolve(process.cwd(), file), "utf8");
+            const host = readFileSync(appPath(file), "utf8");
             expect(host).toContain("HardenedAiAppSurface");
             expect(host).not.toContain("<iframe");
         }
@@ -30,7 +36,7 @@ describe("embedded app surface isolation", () => {
             "src/components/home/ChatMessage.svelte",
             "src/components_mobile/home/ChatMessage.svelte",
         ]) {
-            const message = readFileSync(resolve(process.cwd(), file), "utf8");
+            const message = readFileSync(appPath(file), "utf8");
             expect(message).toContain("confirmSurface = opening");
             expect(message).toContain("markSurfaceShownAfterConsent");
             expect(message).not.toContain("openSurfaceExternally(client, opening.url)");
@@ -39,7 +45,7 @@ describe("embedded app surface isolation", () => {
             "src/components/home/AiAppSurfaceModal.svelte",
             "src/components_mobile/home/AiAppSurfaceSheet.svelte",
         ]) {
-            const prompt = readFileSync(resolve(process.cwd(), file), "utf8");
+            const prompt = readFileSync(appPath(file), "utf8");
             expect(prompt).toContain("normalizeAiAppSurfaceUrl");
             expect(prompt).toContain("AiAppSurfaceDestination");
             expect(prompt).toContain("Not now");
@@ -47,10 +53,8 @@ describe("embedded app surface isolation", () => {
     });
 
     it("enumerates private redemption metadata before load and separates its grant", () => {
-        const card = readFileSync(
-            resolve(process.cwd(), "src/components/home/ActionCardContent.svelte"),
-            "utf8",
-        );
+        const card = readFileSync(appPath("src/components/home/ActionCardContent.svelte"), "utf8");
+        const normalizedCard = card.replace(/\s+/g, " ");
         for (const category of [
             "stable OpenChat user ID",
             "stable chat identifiers",
@@ -59,7 +63,7 @@ describe("embedded app surface isolation", () => {
             "message, optional thread",
             "recipient-key scheme/public key",
         ]) {
-            expect(card).toContain(category);
+            expect(normalizedCard).toContain(category);
         }
         expect(card).toContain("let cardActivated = $derived(readySeen)");
         expect(card).toContain("Private app context is not shared");
@@ -74,10 +78,7 @@ describe("embedded app surface isolation", () => {
     });
 
     it("keeps card redirects opaque and binds bridge messages to source + per-load nonce", () => {
-        const card = readFileSync(
-            resolve(process.cwd(), "src/components/home/ActionCardContent.svelte"),
-            "utf8",
-        );
+        const card = readFileSync(appPath("src/components/home/ActionCardContent.svelte"), "utf8");
         expect(card).toContain('sandbox="allow-scripts"');
         expect(card).toContain('referrerpolicy="no-referrer"');
         expect(card).not.toContain('sandbox="allow-scripts allow-same-origin"');
@@ -88,18 +89,51 @@ describe("embedded app surface isolation", () => {
         expect(card).toContain("import.meta.env.DEV");
     });
 
-    it("keeps even backend-attested app rendering behind the client release gate", () => {
-        const card = readFileSync(
-            resolve(process.cwd(), "src/components/home/ActionCardContent.svelte"),
+    it("uses the same one-time per-chat mint and exact dismiss cancellation after confirm", () => {
+        const resolver = readFileSync(appPath("src/utils/aiAppSurfaces.ts"), "utf8");
+        expect(resolver).toContain("return createChatLinkSurfaceOpening(client, app, chatId)");
+        for (const file of [
+            "src/components/home/ChatMessage.svelte",
+            "src/components_mobile/home/ChatMessage.svelte",
+        ]) {
+            const message = readFileSync(appPath(file), "utf8");
+            expect(message).toContain("confirmSurfaceHandedOff = false");
+            expect(message).toContain("onConsent={consentToConfirmSurface}");
+            expect(message).toContain("onDismiss={dismissConfirmSurface}");
+            expect(message).toContain("client.cancelAiAppChatLinkToken(opening.chatLinkToken)");
+            expect(message).toContain("opening !== undefined && !confirmSurfaceHandedOff");
+            expect(message).toContain("let confirmSurfaceRequest = 0");
+            expect(message).toContain("chatIdentifierToString(chatId)");
+            expect(message).toContain("confirmSurfaceRequest += 1");
+            expect(message).toContain("surfaceRequest !== confirmSurfaceRequest");
+            expect(message).toContain(
+                "await client.cancelAiAppChatLinkToken(opening.chatLinkToken)",
+            );
+        }
+    });
+
+    it("accurately distinguishes URL-fragment exposure from HTTP request logging", () => {
+        const disclosure = readFileSync(
+            appPath("src/components/home/AiAppSurfaceDestination.svelte"),
             "utf8",
         );
+        expect(disclosure).toContain("browser history");
+        expect(disclosure).toContain("browsers do");
+        expect(disclosure).toContain("not send it in HTTP requests.");
+        expect(disclosure).not.toContain(
+            "These identifiers can appear in the external app's request logs.",
+        );
+    });
+
+    it("keeps even backend-attested app rendering behind the client release gate", () => {
+        const card = readFileSync(appPath("src/components/home/ActionCardContent.svelte"), "utf8");
         expect(card).toContain("appCardRenderingAvailable");
         expect(card).toContain("appCardRenderingBlocked = true");
         expect(card).toContain("App rendering is disabled by this client's release gate");
     });
 
     it("compiles every experimental app-card switch closed outside local development", () => {
-        const rollup = readFileSync(resolve(process.cwd(), "rollup.config.mjs"), "utf8");
+        const rollup = readFileSync(appPath("rollup.config.mjs"), "utf8");
         expect(rollup).toContain('process.env.OC_BUILD_ENV === "development"');
         expect(rollup).toContain('process.env.OC_DFX_NETWORK === "local"');
         for (const flag of [
@@ -115,19 +149,10 @@ describe("embedded app surface isolation", () => {
     });
 
     it("keeps capabilities/final grants out of URLs, storage, logs, and unrelated frames", () => {
-        const card = readFileSync(
-            resolve(process.cwd(), "src/components/home/ActionCardContent.svelte"),
-            "utf8",
-        );
-        const bridge = readFileSync(resolve(process.cwd(), "src/utils/cardBridge.ts"), "utf8");
-        const worker = readFileSync(
-            resolve(process.cwd(), "../openchat-worker/src/worker.ts"),
-            "utf8",
-        );
-        const workerClient = readFileSync(
-            resolve(process.cwd(), "../openchat-client/src/workerAgent.ts"),
-            "utf8",
-        );
+        const card = readFileSync(appPath("src/components/home/ActionCardContent.svelte"), "utf8");
+        const bridge = readFileSync(appPath("src/utils/cardBridge.ts"), "utf8");
+        const worker = readFileSync(appPath("../openchat-worker/src/worker.ts"), "utf8");
+        const workerClient = readFileSync(appPath("../openchat-client/src/workerAgent.ts"), "utf8");
         expect(bridge).toContain("event.source === expectedSource");
         expect(card).toContain("grant.grant.slice()");
         expect(card).not.toMatch(/localStorage[^\n]*(cardCapability|confirmationGrant)/);
@@ -143,10 +168,7 @@ describe("embedded app surface isolation", () => {
     });
 
     it("times out a non-handshaking frame and keeps classic confirmation fail-closed", () => {
-        const card = readFileSync(
-            resolve(process.cwd(), "src/components/home/ActionCardContent.svelte"),
-            "utf8",
-        );
+        const card = readFileSync(appPath("src/components/home/ActionCardContent.svelte"), "utf8");
         expect(card).toContain("startCardHandshakeTimeout");
         expect(card).toContain("startCardBootstrapRetry");
         expect(card).toContain("cancelCardBootstrapRetry?.()");
@@ -168,9 +190,9 @@ describe("embedded app surface isolation", () => {
 
     it("documents only the registered-canister link claim and the versioned revoke tuple", () => {
         const files = [
-            resolve(process.cwd(), "src/components/home/AiAppLinkModal.svelte"),
-            resolve(process.cwd(), "src/components_mobile/home/AiAppLinkSheet.svelte"),
-            resolve(process.cwd(), "../openchat-shared/src/domain/aiAction.ts"),
+            appPath("src/components/home/AiAppLinkModal.svelte"),
+            appPath("src/components_mobile/home/AiAppLinkSheet.svelte"),
+            appPath("../openchat-shared/src/domain/aiAction.ts"),
         ].map((file) => readFileSync(file, "utf8"));
         for (const source of files) {
             expect(source).toContain("c2c_claim_ai_app_link_code");
@@ -181,13 +203,10 @@ describe("embedded app surface isolation", () => {
     });
 
     it("cancels link consent only from explicit desktop/mobile close handlers", () => {
-        const helper = readFileSync(resolve(process.cwd(), "src/utils/aiAppLinkConsent.ts"), "utf8");
-        const desktop = readFileSync(
-            resolve(process.cwd(), "src/components/home/AiAppLinkModal.svelte"),
-            "utf8",
-        );
+        const helper = readFileSync(appPath("src/utils/aiAppLinkConsent.ts"), "utf8");
+        const desktop = readFileSync(appPath("src/components/home/AiAppLinkModal.svelte"), "utf8");
         const mobile = readFileSync(
-            resolve(process.cwd(), "src/components_mobile/home/AiAppLinkSheet.svelte"),
+            appPath("src/components_mobile/home/AiAppLinkSheet.svelte"),
             "utf8",
         );
         for (const source of [desktop, mobile]) {

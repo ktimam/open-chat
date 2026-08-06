@@ -1,4 +1,4 @@
-import type { AiActionDefinition } from "openchat-shared";
+import type { AiActionDefinition } from "@shared";
 
 interface VocabularyEntry {
     title: string;

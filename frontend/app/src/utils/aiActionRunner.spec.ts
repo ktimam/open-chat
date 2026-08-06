@@ -21,9 +21,9 @@ vi.mock("./onDeviceInference", () => ({
     onDeviceInferenceCapability: vi.fn(() => ({ selectedModalities: ["text"] })),
 }));
 
-import type { ActionCardContent, AiActionDefinition, AiAppRegistration } from "openchat-shared";
-import { MAX_AI_ACTION_CANDIDATES } from "openchat-shared";
-import type { MessageContext, OpenChat } from "openchat-client";
+import type { ActionCardContent, AiActionDefinition, AiAppRegistration } from "@shared";
+import { MAX_AI_ACTION_CANDIDATES } from "@shared";
+import type { MessageContext, OpenChat } from "@client";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {

@@ -274,6 +274,14 @@ export interface AiAppLinkCode {
     expiresAt: bigint;
 }
 
+// A short-lived, one-time bearer minted by the authoritative chat canister for one exact
+// app/revision/chat tuple. The raw 32 bytes are kept only long enough to build or cancel the
+// chat_link URL; they must never be persisted or logged.
+export interface AiAppChatLinkToken {
+    token: Uint8Array;
+    expiresAt: bigint;
+}
+
 // Short-lived, viewer/card/recipient-key-bound authority for a private app-card context. The UI
 // represents the opaque token as unpadded base64url solely for delivery to the exact sandboxed
 // WindowProxy after source + opaque-origin + per-load nonce checks.

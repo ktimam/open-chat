@@ -12,8 +12,8 @@ use fire_and_forget_handler::FireAndForgetHandler;
 use gated_groups::{GatePayment, calculate_gate_payments};
 use group_chat_core::{AddResult as AddMemberResult, GroupChatCore, GroupMemberInternal, InvitedUsersSuccess, UserInvitation};
 use group_community_common::{
-    Achievements, ExpiringMemberActions, ExpiringMembers, PaymentReceipts, PaymentRecipient, PendingPayment,
-    PendingPaymentReason, PendingPaymentsQueue, UserCache,
+    Achievements, AiAppChatLinkAdmission, ExpiringMemberActions, ExpiringMembers, PaymentReceipts, PaymentRecipient,
+    PendingPayment, PendingPaymentReason, PendingPaymentsQueue, UserCache,
 };
 use ic_principal::Principal;
 use installed_bots::InstalledBots;
@@ -47,6 +47,7 @@ use utils::regular_jobs::RegularJobs;
 
 mod activity_notifications;
 mod ai_app_card_authority;
+mod ai_app_chat_link_authority;
 mod guards;
 mod jobs;
 mod lifecycle;
@@ -592,6 +593,8 @@ struct Data {
     // client intersects this set with the directory).
     #[serde(default)]
     pub enabled_ai_apps: BTreeSet<AiAppId>,
+    #[serde(default)]
+    pub ai_app_chat_link_admission: AiAppChatLinkAdmission,
 }
 
 fn init_instruction_counts_log() -> InstructionCountsLog {
@@ -687,6 +690,7 @@ impl Data {
             bots: InstalledBots::default(),
             idempotency_checker: IdempotencyChecker::default(),
             enabled_ai_apps: BTreeSet::new(),
+            ai_app_chat_link_admission: AiAppChatLinkAdmission::default(),
         }
     }
 

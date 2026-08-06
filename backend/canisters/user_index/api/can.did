@@ -132,24 +132,25 @@ type AppScopedCardContext = record {
 };
 type Args = record { key_id : blob };
 type Args_1 = record { lookups : vec AiAppLookup };
-type Args_10 = record {
+type Args_10 = record { name : text };
+type Args_11 = record {
   page_size : nat8;
   page_index : nat32;
   search_term : opt text;
 };
-type Args_11 = record {
+type Args_12 = record {
   page_size : nat8;
   page_index : nat32;
   installation_location : opt BotInstallationLocation;
   search_term : opt text;
   exclude_installed : bool;
 };
-type Args_12 = record { updates_since : nat64 };
-type Args_13 = record { page_size : nat8; page_index : nat32 };
-type Args_14 = record { app_id : nat32 };
-type Args_15 = record { bot_id : principal };
-type Args_16 = record { manifest : AiAppManifest };
-type Args_17 = record {
+type Args_13 = record { updates_since : nat64 };
+type Args_14 = record { page_size : nat8; page_index : nat32 };
+type Args_15 = record { app_id : nat32 };
+type Args_16 = record { bot_id : principal };
+type Args_17 = record { manifest : AiAppManifest };
+type Args_18 = record {
   id : nat32;
   url : text;
   expires : nat64;
@@ -160,10 +161,10 @@ type Args_17 = record {
   chit_reward : nat32;
   submitted_by : principal;
 };
-type Args_18 = record { app_id : nat32 };
-type Args_19 = record { bot_id : principal };
+type Args_19 = record { app_id : nat32 };
 type Args_2 = record { user_id : principal; achievement_id : nat32 };
-type Args_20 = record {
+type Args_20 = record { bot_id : principal };
+type Args_21 = record {
   // Raw 64-byte P-256 ECDSA signature (r||s, as WebCrypto emits) over the canonical revoke
   // challenge — proof the caller holds the private key for `public_key`. See the endpoint comment.
   signature : blob;
@@ -176,8 +177,8 @@ type Args_20 = record {
   // Client clock (ms) at signing time; bound into the challenge to give a replay window.
   timestamp : nat64;
 };
-type Args_21 = record { max_results : nat8; search_term : text };
-type Args_22 = record {
+type Args_22 = record { max_results : nat8; search_term : text };
+type Args_23 = record {
   "principal" : opt principal;
   endpoint : opt text;
   owner : opt principal;
@@ -185,12 +186,12 @@ type Args_22 = record {
   definition : opt BotDefinition;
   avatar : OptionUpdate;
 };
-type Args_23 = record { username : opt text; user_id : opt principal };
-type Args_24 = record {
+type Args_24 = record { username : opt text; user_id : opt principal };
+type Args_25 = record {
   user_groups : vec UserGroup;
   users_suspended_since : opt nat64;
 };
-type Args_25 = record { month : nat8; year : nat16; users : vec principal };
+type Args_26 = record { month : nat8; year : nat16; users : vec principal };
 type Args_3 = record { updated_since : nat64 };
 type Args_4 = record {
   // P-256 SPKI PEM key the exact registered app canister binds for this user.
@@ -204,14 +205,19 @@ type Args_6 = record {
   recipient_public_key : blob;
   recipient_key_scheme : text;
 };
-type Args_7 = record { username : text; is_bot : bool };
-type Args_8 = record {
+type Args_7 = record {
+  // Exactly 32 bytes, decoded from the canonical base64url launch fragment.
+  token : blob;
+  // The app account currently signed in. A mismatch never consumes the token.
+  expected_app_subject : blob;
+};
+type Args_8 = record { username : text; is_bot : bool };
+type Args_9 = record {
   // P-256 SPKI PEM public key to register for the code's (user, app) pair.
   public_key : text;
   // The 256-bit lowercase-hex claim token the user copied from OpenChat.
   code : text;
 };
-type Args_9 = record { name : text };
 type AutonomousConfig = record { permissions : BotPermissions };
 type BotCommandDefinition = record {
   permissions : BotPermissions;
@@ -489,56 +495,64 @@ type ReferralMetrics = record {
 };
 type Response = variant { NotInitialised; Success : SuccessResult };
 type Response_1 = variant { NotStaged; InvalidKeyId; Success };
-type Response_10 = variant { SuccessV2 : SuccessResult_7 };
-type Response_11 = variant {
+type Response_10 = variant {
+  Error : record { nat16; opt text };
+  UsernameTaken;
+  UsernameTooShort : nat16;
+  UsernameInvalid;
+  UsernameTooLong : nat16;
+  Success;
+};
+type Response_11 = variant { SuccessV2 : SuccessResult_8 };
+type Response_12 = variant {
   CodeExpired;
   Error : record { nat16; opt text };
   InvalidRequest : text;
   CodeNotFound;
 };
-type Response_12 = variant {
+type Response_13 = variant {
   Error : record { nat16; opt text };
-  Success : SuccessResult_8;
+  Success : SuccessResult_9;
   UserNotFound;
 };
-type Response_13 = variant {
+type Response_14 = variant {
   Error : record { nat16; opt text };
   NotFound;
   Success;
 };
-type Response_14 = variant { Success : vec DiamondMembershipFees };
-type Response_15 = variant {
+type Response_15 = variant { Success : vec DiamondMembershipFees };
+type Response_16 = variant {
   InvalidPageSize : nat8;
   Error : record { nat16; opt text };
   TermTooShort : nat8;
   ResponseTooLarge : nat32;
-  Success : SuccessResult_9;
+  Success : SuccessResult_10;
   TermTooLong : nat8;
 };
-type Response_16 = variant {
+type Response_17 = variant {
   Error : record { nat16; opt text };
   TermTooShort : nat8;
-  Success : SuccessResult_10;
+  Success : SuccessResult_11;
   TermTooLong : nat8;
   InvalidTerm;
 };
-type Response_17 = variant { Success : SuccessResult_11; SuccessNoUpdates };
-type Response_18 = variant {
+type Response_18 = variant { Success : SuccessResult_12; SuccessNoUpdates };
+type Response_19 = variant {
   InvalidPageSize : nat8;
   ResponseTooLarge : nat32;
-  Success : SuccessResult_12;
+  Success : SuccessResult_13;
   UserNotFound;
 };
-type Response_19 = variant { Success : SuccessResult_13 };
 type Response_2 = variant { Success : SuccessResult_1 };
-type Response_20 = variant { Success : principal };
-type Response_21 = variant { Success : SuccessResult_14 };
-type Response_22 = variant {
+type Response_20 = variant { Success : SuccessResult_14 };
+type Response_21 = variant { Success : principal };
+type Response_22 = variant { Success : SuccessResult_15 };
+type Response_23 = variant {
   Error : record { nat16; opt text };
   NotInitialised;
   Success : text;
 };
-type Response_23 = variant {
+type Response_24 = variant {
   Error : record { nat16; opt text };
   // The manifest declared no `app_canister_id`, or that canister did not vouch for the app's
   // name (returned false, trapped, or was unreachable). Publishing is blocked until an app
@@ -548,37 +562,37 @@ type Response_23 = variant {
   NotAuthorised;
   Success;
 };
-type Response_24 = variant {
+type Response_25 = variant {
   Error : record { nat16; opt text };
   NotFound;
   NotAuthorised;
   Success;
 };
-type Response_25 = variant { Success : ReferralMetrics };
-type Response_26 = variant {
+type Response_26 = variant { Success : ReferralMetrics };
+type Response_27 = variant {
   Error : record { nat16; opt text };
   Success : AiAppRegistration;
   InvalidRequest : text;
 };
-type Response_27 = variant {
+type Response_28 = variant {
   Error : record { nat16; opt text };
   NotAuthorised;
   Success;
   BotNotFound;
 };
-type Response_28 = variant {
+type Response_29 = variant {
   Error : record { nat16; opt text };
   Success;
   KeyNotFound;
 };
-type Response_29 = variant { Success : Result };
 type Response_3 = variant {
   ResponseTooLarge : nat32;
   Success : SuccessResult_1;
   TooManyApps : nat8;
 };
-type Response_30 = variant { Error : text; Success : Args };
-type Response_31 = variant {
+type Response_30 = variant { Success : Result };
+type Response_31 = variant { Error : text; Success : Args };
+type Response_32 = variant {
   Error : record { nat16; opt text };
   TooManyCommands;
   DescriptionTooLong;
@@ -595,18 +609,18 @@ type Response_31 = variant {
   OwnerNotFound;
   PrincipalInvalid;
 };
-type Response_32 = variant {
+type Response_33 = variant {
   Error : record { nat16; opt text };
   Success : UserSummary;
   UserNotFound;
 };
-type Response_33 = variant {
+type Response_34 = variant {
   Error : record { nat16; opt text };
   Success : principal;
   NewRegistrationsClosed;
 };
-type Response_34 = variant { Success : Result_1 };
-type Response_35 = variant { Success : SuccessResult_15 };
+type Response_35 = variant { Success : Result_1 };
+type Response_36 = variant { Success : SuccessResult_16 };
 type Response_4 = variant {
   InvalidCaller;
   Error : record { nat16; opt text };
@@ -641,11 +655,13 @@ type Response_8 = variant {
 };
 type Response_9 = variant {
   Error : record { nat16; opt text };
-  UsernameTaken;
-  UsernameTooShort : nat16;
-  UsernameInvalid;
-  UsernameTooLong : nat16;
-  Success;
+  TokenNotFound;
+  SubjectMismatch;
+  NotAuthorized;
+  Success : SuccessResult_7;
+  TokenExpired;
+  AppUnavailable;
+  InvalidRequest : text;
 };
 type Result = record { timestamp : nat64; users : vec UserSummary };
 type Result_1 = record {
@@ -669,15 +685,19 @@ type SuccessResult = record {
   purpose : text;
 };
 type SuccessResult_1 = record { apps : vec AiAppRegistration };
-type SuccessResult_10 = record { total : nat32; matches : vec BotMatch };
-type SuccessResult_11 = record {
+type SuccessResult_10 = record {
+  total : nat32;
+  matches : vec AiAppRegistration;
+};
+type SuccessResult_11 = record { total : nat32; matches : vec BotMatch };
+type SuccessResult_12 = record {
   last_updated : nat64;
   added_or_updated : vec ExternalAchievement;
 };
-type SuccessResult_12 = record { total : nat32; apps : vec AiAppRegistration };
-type SuccessResult_13 = record { users : vec principal };
+type SuccessResult_13 = record { total : nat32; apps : vec AiAppRegistration };
 type SuccessResult_14 = record { users : vec principal };
-type SuccessResult_15 = record { chit : vec Chit };
+type SuccessResult_15 = record { users : vec principal };
+type SuccessResult_16 = record { chit : vec Chit };
 type SuccessResult_2 = record { remaining_chit_budget : nat32 };
 type SuccessResult_3 = record {
   timestamp : nat64;
@@ -715,11 +735,22 @@ type SuccessResult_6 = record {
   expires_at : nat64;
 };
 type SuccessResult_7 = record {
+  // Exact consent/key lifecycle epoch for this user/app binding.
+  app_user_key_version : nat64;
+  subject_version : nat16;
+  app_revision : nat64;
+  app_id : nat32;
+  app_subject : blob;
+  chat_handle_version : nat16;
+  app_canister_id : principal;
+  chat_handle : blob;
+};
+type SuccessResult_8 = record {
   all_time : vec ChitUserBalance;
   last_month : vec ChitUserBalance;
   this_month : vec ChitUserBalance;
 };
-type SuccessResult_8 = record {
+type SuccessResult_9 = record {
   streak : nat16;
   max_streak : nat16;
   username : text;
@@ -742,10 +773,6 @@ type SuccessResult_8 = record {
   suspension_details : opt SuspensionDetails;
   is_platform_moderator : bool;
   diamond_membership_details : opt DiamondMembershipDetails;
-};
-type SuccessResult_9 = record {
-  total : nat32;
-  matches : vec AiAppRegistration;
 };
 // How OpenChat presents a surface when it opens it.
 type SurfaceDisplay = variant {
@@ -809,33 +836,34 @@ service : {
   c2c_claim_ai_app_link_code : (Args_4) -> (Response_6);
   c2c_get_ai_app_action_inbox_selector : (Args_5) -> (Response_7);
   c2c_redeem_ai_app_card_capability : (Args_6) -> (Response_8);
-  check_username : (Args_7) -> (Response_9) query;
-  chit_leaderboard : (record {}) -> (Response_10) query;
-  claim_ai_app_link_code : (Args_8) -> (Response_11);
-  current_user : (record {}) -> (Response_12) query;
-  delete_ai_app : (Args_9) -> (Response_13);
-  diamond_membership_fees : (record {}) -> (Response_14) query;
-  explore_ai_apps : (Args_10) -> (Response_15) query;
-  explore_bots : (Args_11) -> (Response_16) query;
-  external_achievements : (Args_12) -> (Response_17) query;
-  my_ai_apps : (Args_13) -> (Response_18) query;
-  platform_moderators : (record {}) -> (Response_19) query;
-  platform_moderators_group : (record {}) -> (Response_20) query;
-  platform_operators : (record {}) -> (Response_21) query;
-  public_key : (record {}) -> (Response_22) query;
-  publish_ai_app : (Args_14) -> (Response_23);
-  publish_bot : (Args_15) -> (Response_24);
-  referral_metrics : (record {}) -> (Response_25) query;
-  register_ai_app : (Args_16) -> (Response_26);
-  register_external_achievement : (Args_17) -> (SuccessOnly);
-  remove_ai_app : (Args_18) -> (Response_13);
-  remove_bot : (Args_19) -> (Response_27);
-  revoke_ai_app_user_key : (Args_20) -> (Response_28);
-  search : (Args_21) -> (Response_29) query;
-  stage_action_signing_key : (record {}) -> (Response_30);
-  update_bot : (Args_22) -> (Response_31);
-  user : (Args_23) -> (Response_32) query;
-  user_registration_canister : (record {}) -> (Response_33) query;
-  users : (Args_24) -> (Response_34) query;
-  users_chit : (Args_25) -> (Response_35) query;
+  c2c_redeem_ai_app_chat_link_token : (Args_7) -> (Response_9);
+  check_username : (Args_8) -> (Response_10) query;
+  chit_leaderboard : (record {}) -> (Response_11) query;
+  claim_ai_app_link_code : (Args_9) -> (Response_12);
+  current_user : (record {}) -> (Response_13) query;
+  delete_ai_app : (Args_10) -> (Response_14);
+  diamond_membership_fees : (record {}) -> (Response_15) query;
+  explore_ai_apps : (Args_11) -> (Response_16) query;
+  explore_bots : (Args_12) -> (Response_17) query;
+  external_achievements : (Args_13) -> (Response_18) query;
+  my_ai_apps : (Args_14) -> (Response_19) query;
+  platform_moderators : (record {}) -> (Response_20) query;
+  platform_moderators_group : (record {}) -> (Response_21) query;
+  platform_operators : (record {}) -> (Response_22) query;
+  public_key : (record {}) -> (Response_23) query;
+  publish_ai_app : (Args_15) -> (Response_24);
+  publish_bot : (Args_16) -> (Response_25);
+  referral_metrics : (record {}) -> (Response_26) query;
+  register_ai_app : (Args_17) -> (Response_27);
+  register_external_achievement : (Args_18) -> (SuccessOnly);
+  remove_ai_app : (Args_19) -> (Response_14);
+  remove_bot : (Args_20) -> (Response_28);
+  revoke_ai_app_user_key : (Args_21) -> (Response_29);
+  search : (Args_22) -> (Response_30) query;
+  stage_action_signing_key : (record {}) -> (Response_31);
+  update_bot : (Args_23) -> (Response_32);
+  user : (Args_24) -> (Response_33) query;
+  user_registration_canister : (record {}) -> (Response_34) query;
+  users : (Args_25) -> (Response_35) query;
+  users_chit : (Args_26) -> (Response_36) query;
 }

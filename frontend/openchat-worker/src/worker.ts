@@ -1188,6 +1188,16 @@ function getAction(
         case "cancelAiAppLinkCode":
             return agent.cancelAiAppLinkCode(payload.code);
 
+        case "createAiAppChatLinkToken":
+            return agent.createAiAppChatLinkToken(
+                payload.chatId,
+                payload.appId,
+                payload.appRevision,
+            );
+
+        case "cancelAiAppChatLinkToken":
+            return agent.cancelAiAppChatLinkToken(payload.token);
+
         case "createAiAppCardProvenance":
             return agent.createAiAppCardProvenance(
                 payload.appId,

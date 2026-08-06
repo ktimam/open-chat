@@ -15,6 +15,7 @@ use fire_and_forget_handler::FireAndForgetHandler;
 use group_index_canister::ChildCanisterType;
 use local_user_index_canister::{GroupIndexEvent as LocalIndexEvent, ModerationFlagsChanged, NameChanged, VerifiedChanged};
 use model::ai_app_card_authority::AiAppCardAuthorityStore;
+use model::ai_app_chat_link_authority::AiAppChatLinkAuthorityStore;
 use model::local_index_event_batch::LocalIndexEventBatch;
 use model::local_index_map::LocalIndexMap;
 use rand::Rng;
@@ -327,6 +328,8 @@ struct Data {
     #[serde(default)]
     pub ai_app_card_authority: AiAppCardAuthorityStore,
     #[serde(default)]
+    pub ai_app_chat_link_authority: AiAppChatLinkAuthorityStore,
+    #[serde(default)]
     pub pr2_entropy: types::Pr2EntropyGate,
     pub fire_and_forget_handler: FireAndForgetHandler,
     pub video_call_operators: Vec<Principal>,
@@ -374,6 +377,7 @@ impl Data {
             cached_metrics: CachedMetrics::default(),
             local_index_map: LocalIndexMap::default(),
             ai_app_card_authority: AiAppCardAuthorityStore::default(),
+            ai_app_chat_link_authority: AiAppChatLinkAuthorityStore::default(),
             pr2_entropy: types::Pr2EntropyGate::default(),
             fire_and_forget_handler: FireAndForgetHandler::default(),
             video_call_operators,
@@ -484,6 +488,7 @@ impl Default for Data {
             cached_metrics: CachedMetrics::default(),
             local_index_map: LocalIndexMap::default(),
             ai_app_card_authority: AiAppCardAuthorityStore::default(),
+            ai_app_chat_link_authority: AiAppChatLinkAuthorityStore::default(),
             pr2_entropy: types::Pr2EntropyGate::default(),
             fire_and_forget_handler: FireAndForgetHandler::default(),
             video_call_operators: Vec::default(),

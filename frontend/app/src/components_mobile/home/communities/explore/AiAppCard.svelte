@@ -3,7 +3,7 @@
     // generic. There is no app detail screen yet; per-chat enablement (the actionable surface)
     // lives in each chat's Apps settings, which this card points the user towards.
     import { BodySmall, Container, Subtitle } from "component-lib";
-    import type { AiAppRegistration } from "openchat-client";
+    import type { AiAppRegistration } from "@client";
     import { i18nKey } from "../../../../i18n/i18n";
     import Translatable from "../../../Translatable.svelte";
     import AiAppIcon from "./AiAppIcon.svelte";
@@ -45,7 +45,8 @@
                     resourceKey={i18nKey(
                         actionCount === 1 ? "aiApps.actionCountOne" : "aiApps.actionCount",
                         { count: actionCount.toString() },
-                    )} />
+                    )}
+                />
             </BodySmall>
         </Container>
     </Container>

@@ -184,9 +184,33 @@ fn validate_surface(surface: &AiAppSurface, allow_loopback_http: bool) -> Result
     if url_length == 0 || url_length > MAX_SURFACE_URL_LENGTH {
         return Err(format!("url must be between 1 and {MAX_SURFACE_URL_LENGTH} characters"));
     }
-    // External app URLs may contain only the public app id. Raw OpenChat chat/message/user
-    // coordinates never belong in a URL; app-scoped card context travels over the private bridge.
-    let substituted = surface.url.replace("{appId}", "1");
+    // A chat-link launch carries exactly one short-lived opaque bearer in the fragment. It is the
+    // only chat-varying URL material OpenChat may disclose. Query/path placement would send it to
+    // servers and intermediaries, while any use on another surface would create ambient authority.
+    const CHAT_LINK_KIND: &str = "chat_link";
+    const CHAT_LINK_TOKEN: &str = "{chatLinkToken}";
+    let token_count = surface.url.matches(CHAT_LINK_TOKEN).count();
+    if surface.kind == CHAT_LINK_KIND {
+        if token_count != 1 {
+            return Err("chat_link url must contain exactly one {chatLinkToken} placeholder".to_string());
+        }
+        let fragment = surface
+            .url
+            .find('#')
+            .ok_or_else(|| "{chatLinkToken} must be placed in the URL fragment".to_string())?;
+        let token = surface.url.find(CHAT_LINK_TOKEN).unwrap();
+        if token <= fragment {
+            return Err("{chatLinkToken} must be placed in the URL fragment".to_string());
+        }
+    } else if token_count != 0 {
+        return Err("{chatLinkToken} is allowed only on chat_link surfaces".to_string());
+    }
+    // All other OpenChat chat/message/user coordinates remain forbidden. The public app id is the
+    // only reusable placeholder; token substitution uses a canonical 43-character base64url value.
+    let substituted = surface
+        .url
+        .replace("{appId}", "1")
+        .replace(CHAT_LINK_TOKEN, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
     if substituted.contains('{') || substituted.contains('}') {
         return Err("surface url contains an unsupported placeholder".to_string());
     }
@@ -649,7 +673,7 @@ mod tests {
             validate_surface(
                 &surface(
                     "chat_link",
-                    "https://app.example/link?chat={chatKey}",
+                    "https://app.example/link?chat={chatKey}#token={chatLinkToken}",
                     types::SurfaceDisplay::External
                 ),
                 false
@@ -661,7 +685,7 @@ mod tests {
             validate_surface(
                 &surface(
                     "chat_link",
-                    "https://app.example/link?app={appId}",
+                    "https://app.example/link?app={appId}#token={chatLinkToken}",
                     types::SurfaceDisplay::External
                 ),
                 false
@@ -670,14 +694,11 @@ mod tests {
         );
         assert!(
             validate_surface(
-                &surface("chat_link", "http://app.example/link", types::SurfaceDisplay::External),
-                false
-            )
-            .is_err()
-        );
-        assert!(
-            validate_surface(
-                &surface("chat_link", "javascript:alert(1)", types::SurfaceDisplay::External),
+                &surface(
+                    "chat_link",
+                    "http://app.example/link#token={chatLinkToken}",
+                    types::SurfaceDisplay::External
+                ),
                 false
             )
             .is_err()
@@ -686,13 +707,56 @@ mod tests {
             validate_surface(
                 &surface(
                     "chat_link",
-                    "https://user:password@app.example/link",
+                    "javascript:alert(1)#{chatLinkToken}",
                     types::SurfaceDisplay::External
                 ),
                 false
             )
             .is_err()
         );
+        assert!(
+            validate_surface(
+                &surface(
+                    "chat_link",
+                    "https://user:password@app.example/link#{chatLinkToken}",
+                    types::SurfaceDisplay::External
+                ),
+                false
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn chat_link_requires_one_fragment_only_opaque_launch_token() {
+        let valid = surface(
+            "chat_link",
+            "https://app.example/settings#openchat={chatLinkToken}",
+            types::SurfaceDisplay::External,
+        );
+        assert!(validate_surface(&valid, false).is_ok());
+        for url in [
+            "https://app.example/settings",
+            "https://app.example/settings?token={chatLinkToken}",
+            "https://app.example/{chatLinkToken}#settings",
+            "https://app.example/settings#{chatLinkToken}/{chatLinkToken}",
+            "https://app.example/settings#token=%7BchatLinkToken%7D",
+        ] {
+            assert!(validate_surface(&surface("chat_link", url, types::SurfaceDisplay::External), false).is_err());
+        }
+        for kind in ["connect", "home", "card"] {
+            assert!(
+                validate_surface(
+                    &surface(
+                        kind,
+                        "https://app.example/settings#token={chatLinkToken}",
+                        types::SurfaceDisplay::External,
+                    ),
+                    false,
+                )
+                .is_err()
+            );
+        }
     }
 
     // The pre-existing "must parse" check still applies regardless of display.

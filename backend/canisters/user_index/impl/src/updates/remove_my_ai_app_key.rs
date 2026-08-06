@@ -44,12 +44,14 @@ pub(crate) fn invalidate_pending_ai_app_link_state(user_id: types::UserId, app_i
         .data
         .ai_app_card_tokens
         .remove_capabilities_for_user_app(user_id, app_id);
+    state.data.ai_app_chat_link_tokens.remove_user_app(user_id, app_id);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::Data;
+    use crate::model::ai_app_chat_link_tokens::{AiAppChatLinkToken, LookupResult};
     use crate::model::user::User;
     use types::{AiAppManifest, UserId};
     use utils::env::test::TestEnv;
@@ -113,10 +115,35 @@ mod tests {
                 now,
             )
             .unwrap();
+        let chat_link_raw = [0xDA; crate::model::ai_app_chat_link_tokens::TOKEN_BYTES];
+        data.ai_app_chat_link_tokens
+            .insert(
+                this_canister,
+                &chat_link_raw,
+                AiAppChatLinkToken {
+                    user_id,
+                    chat: types::Chat::Group(candid::Principal::from_slice(&[20]).into()),
+                    app_id,
+                    app_revision: now,
+                    app_canister_id: candid::Principal::from_slice(&[8]),
+                    issuer_local_user_index_canister_id: candid::Principal::from_slice(&[9]),
+                    app_user_key_fingerprint: [1; 32],
+                    app_user_key_version: 0,
+                    app_subject: [2; 32],
+                    chat_handle: [3; 32],
+                    expires_at: now + 1_000,
+                },
+                now,
+            )
+            .unwrap();
         let mut state = RuntimeState::new(Box::new(env), data);
 
         assert!(matches!(remove_my_ai_app_key_impl(Args { app_id }, &mut state), Success));
         assert!(!state.data.ai_app_link_codes.contains_bound(&code, this_canister));
+        assert_eq!(
+            state.data.ai_app_chat_link_tokens.lookup(this_canister, &chat_link_raw, now),
+            LookupResult::NotFound
+        );
         assert_eq!(state.data.ai_app_user_keys.binding_epoch(user_id, app_id), 1);
     }
 

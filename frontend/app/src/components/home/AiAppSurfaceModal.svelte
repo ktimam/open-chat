@@ -7,10 +7,11 @@
     import { i18nKey } from "@src/i18n/i18n";
     import {
         openSurfaceExternally,
+        redactedAiAppSurfaceDisplayUrl,
         type AiAppSurfaceDataDisclosure,
     } from "@utils/aiAppSurfaces";
     import { normalizeAiAppSurfaceUrl } from "@utils/cardBridge";
-    import type { OpenChat } from "openchat-client";
+    import type { OpenChat } from "@client";
     import { getContext } from "svelte";
     import OpenInNew from "svelte-material-icons/OpenInNew.svelte";
     import Button from "../Button.svelte";
@@ -45,6 +46,7 @@
     let normalizedUrl = $derived(
         normalizeAiAppSurfaceUrl(url, { allowLocalDevelopment: import.meta.env.DEV }),
     );
+    let displayUrl = $derived(redactedAiAppSurfaceDisplayUrl(normalizedUrl ?? "", dataDisclosures));
 
     function openBrowser() {
         if (normalizedUrl === undefined) return;
@@ -60,18 +62,13 @@
         {/snippet}
         {#snippet body()}
             {#if display === "sheet"}
-                <HardenedAiAppSurface
-                    {title}
-                    {url}
-                    {dataDisclosures}
-                    {onConsent}
-                />
+                <HardenedAiAppSurface {title} {url} {dataDisclosures} {onConsent} />
             {:else if normalizedUrl !== undefined}
                 <div class="external-prompt">
-                    <AiAppSurfaceDestination {title} {normalizedUrl} {dataDisclosures} />
+                    <AiAppSurfaceDestination {title} {displayUrl} {dataDisclosures} />
                     <span>
-                        Opening hands this exact URL to your browser. No navigation occurs until you
-                        choose Open.
+                        Opening hands the full destination URL to your browser. No navigation occurs
+                        until you choose Open.
                     </span>
                 </div>
             {:else}
@@ -81,7 +78,7 @@
         {#snippet footer()}
             <div class="footer">
                 {#if display === "sheet" && normalizedUrl !== undefined}
-                    <span class="destination">Browser destination: <code>{normalizedUrl}</code></span>
+                    <span class="destination">Browser destination: <code>{displayUrl}</code></span>
                 {/if}
                 <ButtonGroup>
                     {#if display === "external"}
@@ -91,7 +88,8 @@
                         hollow
                         small
                         disabled={normalizedUrl === undefined}
-                        onClick={openBrowser}>
+                        onClick={openBrowser}
+                    >
                         <OpenInNew size="1em" color="currentColor" />
                         <Translatable resourceKey={i18nKey("aiApps.openInBrowser")} />
                     </Button>

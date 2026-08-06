@@ -36,6 +36,7 @@ pub(crate) fn remove_app_and_dependents(app_id: AiAppId, state: &mut crate::Runt
         .map_err(|error| error.message())?;
     state.data.ai_app_link_codes.remove_app(app_id, state.env.now());
     state.data.ai_app_card_tokens.remove_app(app_id);
+    state.data.ai_app_chat_link_tokens.remove_app(app_id);
     let removed = state.data.ai_apps.remove(app_id);
     #[cfg(target_arch = "wasm32")]
     crate::jobs::migrate_ai_app_user_keys::start_job_if_required(state);

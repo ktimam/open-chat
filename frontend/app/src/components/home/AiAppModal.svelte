@@ -6,11 +6,8 @@
     // stays where it lives: each chat's Apps settings.
     import { i18nKey } from "@src/i18n/i18n";
     import { toastStore } from "@src/stores/toast";
-    import {
-        homeSurfaceOpening,
-        type SurfaceOpening,
-    } from "@utils/aiAppSurfaces";
-    import { mobileWidth, type AiAppRegistration, type OpenChat } from "openchat-client";
+    import { homeSurfaceOpening, type SurfaceOpening } from "@utils/aiAppSurfaces";
+    import { mobileWidth, type AiAppRegistration, type OpenChat } from "@client";
     import { getContext } from "svelte";
     import Web from "svelte-material-icons/Web.svelte";
     import Button from "../Button.svelte";
@@ -116,13 +113,15 @@
                             loading={disconnecting}
                             small={!$mobileWidth}
                             tiny={$mobileWidth}
-                            onClick={disconnect}>
+                            onClick={disconnect}
+                        >
                             <Translatable resourceKey={i18nKey("aiApps.disconnect")} />
                         </Button>
                     {/if}
                     <Button small={!$mobileWidth} tiny={$mobileWidth} onClick={onConnect}>
                         <Translatable
-                            resourceKey={i18nKey(connected ? "aiApps.reconnect" : "aiApps.connect")} />
+                            resourceKey={i18nKey(connected ? "aiApps.reconnect" : "aiApps.connect")}
+                        />
                     </Button>
                 {:else}
                     <Button secondary small={!$mobileWidth} tiny={$mobileWidth} onClick={onDismiss}>

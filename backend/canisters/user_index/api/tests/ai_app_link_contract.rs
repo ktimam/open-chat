@@ -141,6 +141,182 @@ fn type_block<'a>(candid: &'a str, name: &str) -> &'a str {
     &candid[start..end]
 }
 
+#[test]
+fn chat_link_launch_contract_is_opaque_exact_app_scoped_and_exact_retry_idempotent() {
+    let candid = read_repo_file("backend/canisters/user_index/api/can.did");
+    let args = method_args_record(&candid, "c2c_redeem_ai_app_chat_link_token");
+    assert!(args.contains("token : blob"));
+    assert!(args.contains("expected_app_subject : blob"));
+    for raw in ["user_id", "chat_key", "chat_id", "channel_id"] {
+        assert!(!args.contains(raw), "redeem args leaked raw coordinate: {raw}");
+    }
+
+    let response = method_response_variant(&candid, "c2c_redeem_ai_app_chat_link_token");
+    for variant in [
+        "TokenNotFound",
+        "TokenExpired",
+        "NotAuthorized",
+        "SubjectMismatch",
+        "AppUnavailable",
+        "InvalidRequest : text",
+        "Error : record { nat16; opt text }",
+    ] {
+        assert!(response.contains(variant), "missing redemption result: {variant}");
+    }
+    let success = method_success_record(&candid, "c2c_redeem_ai_app_chat_link_token");
+    for field in [
+        "app_subject : blob",
+        "subject_version : nat16",
+        "app_id : nat32",
+        "app_revision : nat64",
+        "app_canister_id : principal",
+        "app_user_key_version : nat64",
+        "chat_handle : blob",
+        "chat_handle_version : nat16",
+    ] {
+        assert!(success.contains(field), "missing app-scoped result: {field}");
+    }
+    for raw in ["user_id", "chat_key", "chat :"] {
+        assert!(!success.contains(raw), "redemption leaked raw coordinate: {raw}");
+    }
+
+    let redeem = read_repo_file("backend/canisters/user_index/impl/src/updates/c2c_redeem_ai_app_chat_link_token.rs");
+    let caller_check = redeem
+        .find("caller != token.app_canister_id")
+        .expect("exact app caller check");
+    let subject_check = redeem
+        .find("ct_eq(&token.app_subject)")
+        .expect("constant-time expected subject check");
+    let redeem_store = redeem
+        .find(".redeem(this_canister_id, &args.token, now)")
+        .expect("atomic redeem-to-receipt transition");
+    assert!(caller_check < redeem_store && subject_check < redeem_store);
+    assert!(redeem.contains("already_redeemed"));
+    assert!(redeem.contains("success_result(&token)"));
+    assert!(redeem.contains("app_user_key_version"));
+    assert!(redeem.contains("app_user_key_fingerprint"));
+
+    let model = read_repo_file("backend/canisters/user_index/impl/src/model/ai_app_chat_link_tokens.rs");
+    assert!(model.contains("TOKEN_DIGEST_DOMAIN"));
+    assert!(model.contains("MAX_OUTSTANDING_PER_USER"));
+    assert!(model.contains("MAX_ISSUED_PER_USER_APP_WINDOW"));
+    assert!(model.contains("redeemed_receipts"));
+    assert!(model.contains("RECEIPT_RECOVERY_WINDOW_MS"));
+    assert!(model.contains("MAX_RECEIPTS_PER_USER"));
+    assert!(model.contains("MAX_RECEIPTS_PER_APP"));
+    assert!(!model.contains("raw_token: Vec"));
+}
+
+#[test]
+fn every_chat_kind_uses_an_authoritative_route_and_revalidates_after_awaits() {
+    let group = read_repo_file("backend/canisters/group/impl/src/updates/create_ai_app_chat_link_token.rs");
+    let community = read_repo_file("backend/canisters/community/impl/src/updates/create_ai_app_chat_link_token.rs");
+    for source in [&group, &community] {
+        assert!(source.contains("AiAppChatLinkAuthorityBindingV1"));
+        assert!(!source.contains("AiAppCardContext"));
+        assert!(source.contains("enabled_ai_apps.contains"));
+        assert!(source.contains("get_calling_member(true)"));
+        assert!(!source.contains("get_caller_user_id"));
+        let local_prepare = source
+            .find("mutate_state(|state| prepare(&args, state))")
+            .expect("child-local admission must run in mutable state");
+        let remote_issue = source
+            .find("ai_app_chat_link_authority::issue")
+            .expect("GroupIndex authority issue");
+        assert!(
+            local_prepare < remote_issue,
+            "child-local admission must precede the first await"
+        );
+        assert!(source.contains(".ai_app_chat_link_admission"));
+        assert!(source.contains(".reserve(user_id, args.app_id, state.env.now())"));
+        assert!(source.contains("cancel_authority(&prepared).await"));
+        assert!(source.contains("release_admission(&prepared)"));
+        assert_eq!(source.matches("revalidate(&prepared, state)").count(), 2);
+    }
+    assert_eq!(group.matches("get_calling_member(true)").count(), 2);
+    assert_eq!(community.matches("get_calling_member(true)").count(), 2);
+    assert_eq!(
+        community.matches("channel.chat.members.get_verified_member(user_id)").count(),
+        2
+    );
+
+    let user = read_repo_file("backend/canisters/user/impl/src/updates/create_ai_app_chat_link_token.rs");
+    assert!(user.contains("caller_is_owner"));
+    assert!(user.contains("direct_chats.exists"));
+    assert!(user.contains("revalidate(&prepared, state)"));
+
+    let relay = read_repo_file("backend/canisters/local_user_index/impl/src/updates/c2c_create_ai_app_chat_link_token.rs");
+    assert!(relay.contains("authoritative_child_registration"));
+    assert!(relay.contains("current_registration != initial_registration"));
+    assert!(relay.contains("canonical distinct participant pair"));
+    assert!(relay.contains("requires dedicated route authority"));
+}
+
+#[test]
+fn local_admission_precedes_remote_authority_and_every_post_mint_rejection_cleans_up() {
+    let user_index = read_repo_file("backend/canisters/user_index/impl/src/updates/c2c_create_ai_app_chat_link_token.rs");
+    let admission = user_index
+        .find(".check_admission(args.user_id, args.app_id, now)")
+        .expect("local admission check");
+    let authority = user_index
+        .find("crate::ai_app_chat_link_authority::consume")
+        .expect("remote authority consumption");
+    assert!(
+        admission < authority,
+        "local limits must reject before remote authority consumption"
+    );
+
+    let model = read_repo_file("backend/canisters/user_index/impl/src/model/ai_app_chat_link_tokens.rs");
+    assert!(model.contains("self.check_admission(entry.user_id, entry.app_id, now)?"));
+    assert!(model.contains("cancel_from_issuer"));
+    assert!(model.contains("issuer_local_user_index_canister_id"));
+
+    for endpoint in [
+        "backend/canisters/group/impl/src/updates/create_ai_app_chat_link_token.rs",
+        "backend/canisters/community/impl/src/updates/create_ai_app_chat_link_token.rs",
+        "backend/canisters/user/impl/src/updates/create_ai_app_chat_link_token.rs",
+    ] {
+        let source = read_repo_file(endpoint);
+        assert!(source.contains("cleanup_success(&prepared"));
+        assert!(source.contains("c2c_cancel_ai_app_chat_link_token"));
+    }
+    let relay = read_repo_file("backend/canisters/local_user_index/impl/src/updates/c2c_create_ai_app_chat_link_token.rs");
+    assert_eq!(
+        relay
+            .matches("cleanup_success(user_index_canister_id, &args, &result).await")
+            .count(),
+        2
+    );
+    assert!(relay.contains("user_index_canister_c2c_client::c2c_cancel_ai_app_chat_link_token"));
+
+    let child_admission = read_repo_file("backend/libraries/group_community_common/src/ai_app_chat_link_admission.rs");
+    assert!(child_admission.contains("MAX_CHAT_LINK_ATTEMPTS_PER_USER_APP_WINDOW"));
+    assert!(child_admission.contains("MAX_CHAT_LINK_ATTEMPTS_PER_CHILD_WINDOW"));
+    assert!(child_admission.contains("MAX_TRACKED_CHAT_LINK_ADMISSION_SUBJECTS"));
+    assert!(child_admission.contains("pub fn is_current"));
+    assert!(child_admission.contains("pub fn release"));
+
+    let authority_cancel =
+        read_repo_file("backend/canisters/group_index/impl/src/updates/c2c_cancel_ai_app_chat_link_authority_v1.rs");
+    assert!(authority_cancel.contains("caller_is_group_or_community_canister"));
+    assert!(authority_cancel.contains("caller_matches_chat"));
+    let authority_cancel_compact: String = authority_cancel
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect();
+    assert!(authority_cancel_compact.contains(".ai_app_chat_link_authority.consume("));
+    assert!(!authority_cancel.contains("resolve_route"));
+}
+
+#[test]
+fn chat_link_manifest_accepts_only_one_fragment_token_and_no_other_surface_can_use_it() {
+    let source = read_repo_file("backend/canisters/user_index/impl/src/updates/register_ai_app.rs");
+    assert!(source.contains("token_count != 1"));
+    assert!(source.contains("token <= fragment"));
+    assert!(source.contains("token_count != 0"));
+    assert!(source.contains("chat_link_requires_one_fragment_only_opaque_launch_token"));
+}
+
 fn method_response_variant<'a>(candid: &'a str, method: &str) -> &'a str {
     let service = candid
         .split_once("service : {")
@@ -164,6 +340,23 @@ fn method_response_variant<'a>(candid: &'a str, method: &str) -> &'a str {
         .map(|offset| start + offset + 3)
         .unwrap_or_else(|| panic!("unterminated Candid response type {response_type}"));
     &candid[start..end]
+}
+
+fn method_args_record<'a>(candid: &'a str, method: &str) -> &'a str {
+    let service = candid
+        .split_once("service : {")
+        .map(|(_, service)| service)
+        .expect("Candid service block");
+    let signature = service
+        .lines()
+        .find(|line| line.trim_start().starts_with(&format!("{method} :")))
+        .unwrap_or_else(|| panic!("missing Candid method {method}"));
+    let args_type = signature
+        .split_once(": (")
+        .and_then(|(_, args)| args.split_once(')'))
+        .map(|(args, _)| args)
+        .unwrap_or_else(|| panic!("missing args type for Candid method {method}"));
+    type_block(candid, args_type)
 }
 
 fn method_success_record<'a>(candid: &'a str, method: &str) -> &'a str {
@@ -209,6 +402,10 @@ fn bearer_token_endpoints_are_not_argument_or_result_traced() {
         "c2c_validate_ai_app_card_provenance.rs",
         "c2c_create_ai_app_card_capability.rs",
         "c2c_redeem_ai_app_card_capability.rs",
+        "c2c_create_ai_app_chat_link_token.rs",
+        "c2c_cancel_ai_app_chat_link_token.rs",
+        "c2c_redeem_ai_app_chat_link_token.rs",
+        "cancel_ai_app_chat_link_token.rs",
         "c2c_deposit_actions.rs",
         "revoke_ai_app_user_key.rs",
         "set_my_ai_app_key.rs",
@@ -225,6 +422,9 @@ fn bearer_token_endpoints_are_not_argument_or_result_traced() {
 
     for endpoint in [
         "backend/canisters/local_user_index/impl/src/updates/c2c_deposit_action_confirmed.rs",
+        "backend/canisters/local_user_index/impl/src/updates/c2c_create_ai_app_chat_link_token.rs",
+        "backend/canisters/local_user_index/impl/src/updates/c2c_cancel_ai_app_chat_link_token.rs",
+        "backend/canisters/group_index/impl/src/updates/c2c_cancel_ai_app_chat_link_authority_v1.rs",
         "backend/canisters/action_inbox/impl/src/updates/c2c_notify_actions.rs",
     ] {
         let source = read_repo_file(endpoint);

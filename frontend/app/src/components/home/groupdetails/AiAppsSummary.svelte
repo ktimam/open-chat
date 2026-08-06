@@ -9,18 +9,24 @@
     import { i18nKey } from "@src/i18n/i18n";
     import { toastStore } from "@src/stores/toast";
     import {
-        chatLinkSurfaceOpening,
-        type SurfaceOpening,
+        bindPendingChatLinkSetup,
+        createChatLinkSurfaceOpening,
+        hasChatLinkSurface,
+        pendingChatLinkSetupAppForChat,
+        type ChatLinkSurfaceOpening,
+        type PendingChatLinkSetup,
     } from "@utils/aiAppSurfaces";
     import {
         anonUserStore,
+        currentUserIdStore,
         ROLE_ADMIN,
         ROLE_OWNER,
         selectedChatSummaryStore,
         type AiAppRegistration,
         type MultiUserChat,
         type OpenChat,
-    } from "openchat-client";
+    } from "@client";
+    import { chatIdentifierToString, chatKeyFor } from "@shared";
     import { getContext } from "svelte";
     import LinkOff from "svelte-material-icons/LinkOff.svelte";
     import LinkVariant from "svelte-material-icons/LinkVariant.svelte";
@@ -120,10 +126,55 @@
     // An app with a "chat_link" surface gets an "Open setup" affordance that opens that surface for
     // THIS chat on demand — deliberately not gated by the once-per-(app, chat) shown-marker the
     // post-confirm auto-open uses.
-    let setupSurface = $state<SurfaceOpening | undefined>(undefined);
+    let setupSurface = $state<ChatLinkSurfaceOpening | undefined>(undefined);
+    let setupHandedOff = $state(false);
+    let openingSetup = $state<number | undefined>(undefined);
+    let openingRequest = 0;
 
-    function openSetup(opening: SurfaceOpening) {
+    $effect(() => {
+        const chatMarker = chatIdentifierToString(chat.id);
+        void chatMarker;
+        return () => {
+            openingRequest += 1;
+            openingSetup = undefined;
+            const opening = setupSurface;
+            setupSurface = undefined;
+            if (opening !== undefined && !setupHandedOff) {
+                void client.cancelAiAppChatLinkToken(opening.chatLinkToken);
+            }
+            setupHandedOff = false;
+        };
+    });
+
+    async function openSetup(app: AiAppRegistration) {
+        if (openingSetup !== undefined || setupSurface !== undefined) return;
+        const request = ++openingRequest;
+        const chatId = chat.id;
+        openingSetup = app.id;
+        const opening = await createChatLinkSurfaceOpening(client, app, chatId);
+        if (request !== openingRequest) {
+            if (opening !== undefined) {
+                await client.cancelAiAppChatLinkToken(opening.chatLinkToken);
+            }
+            return;
+        }
+        openingSetup = undefined;
+        if (opening === undefined) {
+            toastStore.showFailureToast(i18nKey("aiApps.openSetupFailed"));
+            return;
+        }
+        setupHandedOff = false;
         setupSurface = opening;
+    }
+
+    async function dismissSetup() {
+        const opening = setupSurface;
+        const cancel = opening !== undefined && !setupHandedOff;
+        setupSurface = undefined;
+        setupHandedOff = false;
+        if (cancel && opening !== undefined) {
+            await client.cancelAiAppChatLinkToken(opening.chatLinkToken);
+        }
     }
 
     // `linkingApp` drives the AiAppLinkModal (a high-entropy claim token). `pendingSetup` is the per-chat
@@ -133,18 +184,28 @@
     // already-linked user re-pairing after the app dropped its half) sets `linkingApp` directly with
     // no `pendingSetup`, so it just re-pairs.
     let linkingApp = $state<AiAppRegistration | undefined>(undefined);
-    let pendingSetup = $state<SurfaceOpening | undefined>(undefined);
+    let pendingSetup = $state<PendingChatLinkSetup | undefined>(undefined);
+
+    $effect(() => {
+        const pendingChatKey = chatKeyFor(chat.id, $currentUserIdStore);
+        void pendingChatKey;
+        return () => {
+            pendingSetup = undefined;
+        };
+    });
 
     // Single entry point for the merged "Connect" / "Open setup" action: pair first if needed
     // (deferring the setup surface to onLinked), otherwise open the setup surface right away.
     function startConnect(app: AiAppRegistration) {
-        const setup = chatLinkSurfaceOpening(app, chat.id);
+        const hasSetup = hasChatLinkSurface(app);
         const needsPairing = app.manifest.perUserKeys && !connected.has(app.id);
         if (needsPairing) {
-            pendingSetup = setup; // opened by onLinked() once the key is registered
+            pendingSetup = hasSetup
+                ? bindPendingChatLinkSetup(app, chat.id, $currentUserIdStore)
+                : undefined;
             linkingApp = app;
-        } else if (setup !== undefined) {
-            openSetup(setup);
+        } else if (hasSetup) {
+            void openSetup(app);
         }
     }
 
@@ -153,11 +214,9 @@
         toastStore.showSuccessToast(i18nKey("aiApps.linkComplete"));
         load(); // refresh the connected set
         // Merge: after pairing, continue straight to the per-chat setup surface (if the app has one).
-        const setup = pendingSetup;
+        const app = pendingChatLinkSetupAppForChat(pendingSetup, chat.id, $currentUserIdStore);
         pendingSetup = undefined;
-        if (setup !== undefined) {
-            openSetup(setup);
-        }
+        if (app !== undefined) void openSetup(app);
     }
 </script>
 
@@ -165,12 +224,13 @@
     <CollapsibleCard
         onToggle={groupAiAppsOpen.toggle}
         open={$groupAiAppsOpen}
-        headerText={i18nKey("aiApps.title")}>
+        headerText={i18nKey("aiApps.title")}
+    >
         <div class="apps">
             {#each apps as app (app.id)}
-                {@const setup = chatLinkSurfaceOpening(app, chat.id)}
+                {@const hasSetup = hasChatLinkSurface(app)}
                 {@const needsPairing = app.manifest.perUserKeys && !connected.has(app.id)}
-                {@const showPrimary = needsPairing || setup !== undefined}
+                {@const showPrimary = needsPairing || hasSetup}
                 <div class="app">
                     <div class="app-info">
                         <div class="name">{app.manifest.name}</div>
@@ -183,7 +243,14 @@
                                     <!-- Merged Connect + Open setup: when unpaired, "Connect" pairs
                                          the delivery key AND then opens the chat setup surface; once
                                          paired it's just "Open setup" for the per-chat surface. -->
-                                    <Button tiny hollow onClick={() => startConnect(app)}>
+                                    <Button
+                                        tiny
+                                        hollow
+                                        loading={openingSetup === app.id}
+                                        disabled={openingSetup !== undefined &&
+                                            openingSetup !== app.id}
+                                        onClick={() => startConnect(app)}
+                                    >
                                         {#if needsPairing}
                                             <LinkVariant size="1em" color="currentColor" />
                                         {:else}
@@ -191,8 +258,11 @@
                                         {/if}
                                         <Translatable
                                             resourceKey={i18nKey(
-                                                needsPairing ? "aiApps.connect" : "aiApps.openSetup",
-                                            )} />
+                                                needsPairing
+                                                    ? "aiApps.connect"
+                                                    : "aiApps.openSetup",
+                                            )}
+                                        />
                                     </Button>
                                 {/if}
                                 {#if connected.has(app.id)}
@@ -200,14 +270,16 @@
                                         <Button tiny hollow onClick={() => (linkingApp = app)}>
                                             <LinkVariant size="1em" color="currentColor" />
                                             <Translatable
-                                                resourceKey={i18nKey("aiApps.reconnect")} />
+                                                resourceKey={i18nKey("aiApps.reconnect")}
+                                            />
                                         </Button>
                                     {/if}
                                     <Button
                                         tiny
                                         hollow
                                         loading={disconnecting.has(app.id)}
-                                        onClick={() => disconnectApp(app)}>
+                                        onClick={() => disconnectApp(app)}
+                                    >
                                         <LinkOff size="1em" color="currentColor" />
                                         <Translatable resourceKey={i18nKey("aiApps.disconnect")} />
                                     </Button>
@@ -222,7 +294,8 @@
                         checked={enabled.has(app.id)}
                         disabled={!canManage}
                         waiting={toggling.has(app.id)}
-                        onChange={() => toggleApp(app)} />
+                        onChange={() => toggleApp(app)}
+                    />
                 </div>
             {/each}
         </div>
@@ -235,7 +308,9 @@
         url={setupSurface.url}
         display={setupSurface.surface.display}
         dataDisclosures={setupSurface.dataDisclosures}
-        onDismiss={() => (setupSurface = undefined)} />
+        onConsent={() => (setupHandedOff = true)}
+        onDismiss={dismissSetup}
+    />
 {/if}
 
 {#if linkingApp !== undefined}
@@ -245,7 +320,8 @@
             linkingApp = undefined;
             pendingSetup = undefined;
         }}
-        {onLinked} />
+        {onLinked}
+    />
 {/if}
 
 <style lang="scss">

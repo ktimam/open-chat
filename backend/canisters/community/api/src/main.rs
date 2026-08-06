@@ -61,6 +61,7 @@ fn main() {
     generate_ts_method!(community, respond_to_action_card);
     generate_ts_method!(community, create_ai_app_card_confirmation_grant);
     generate_ts_method!(community, create_ai_app_card_capability);
+    generate_ts_method!(community, create_ai_app_chat_link_token);
     generate_ts_method!(community, set_ai_app_enabled);
     generate_ts_method!(community, register_proposal_vote_v2);
     generate_ts_method!(community, register_webhook);

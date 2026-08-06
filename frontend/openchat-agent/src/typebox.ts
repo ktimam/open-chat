@@ -6551,6 +6551,22 @@ export const UserIndexCancelAiAppLinkCodeResponse = Type.Union([
     }),
 ]);
 
+export type UserIndexCancelAiAppChatLinkTokenArgs = Static<
+    typeof UserIndexCancelAiAppChatLinkTokenArgs
+>;
+export const UserIndexCancelAiAppChatLinkTokenArgs = Type.Object({
+    token: TSBytes,
+});
+
+export type UserIndexCancelAiAppChatLinkTokenResponse = Static<
+    typeof UserIndexCancelAiAppChatLinkTokenResponse
+>;
+export const UserIndexCancelAiAppChatLinkTokenResponse = Type.Union([
+    Type.Literal("Success"),
+    Type.Object({ InvalidRequest: Type.String() }),
+    Type.Object({ Error: OCError }),
+]);
+
 export type UserIndexCreateAiAppLinkCodeArgs = Static<typeof UserIndexCreateAiAppLinkCodeArgs>;
 export const UserIndexCreateAiAppLinkCodeArgs = Type.Object({
     app_id: Type.Number(),
@@ -8715,6 +8731,19 @@ const CreateAiAppCardCapabilitySuccess = Type.Object({
         action_id: Type.String(),
     }),
 });
+
+const CreateAiAppChatLinkTokenSuccess = Type.Object({
+    token: TSBytes,
+    expires_at: Type.BigInt(),
+});
+const CreateAiAppChatLinkTokenResponse = Type.Union([
+    Type.Object({ Success: CreateAiAppChatLinkTokenSuccess }),
+    Type.Literal("AppUnavailable"),
+    Type.Literal("ChatNotFound"),
+    Type.Literal("NotAuthorized"),
+    Type.Object({ InvalidRequest: Type.String() }),
+    Type.Object({ Error: OCError }),
+]);
 const CreateAiAppCardCapabilityResponse = Type.Union([
     Type.Object({ Success: CreateAiAppCardCapabilitySuccess }),
     Type.Literal("InvalidProvenance"),
@@ -8764,6 +8793,18 @@ export type GroupCreateAiAppCardCapabilityResponse = Static<
 >;
 export const GroupCreateAiAppCardCapabilityResponse = CreateAiAppCardCapabilityResponse;
 
+export type GroupCreateAiAppChatLinkTokenArgs = Static<
+    typeof GroupCreateAiAppChatLinkTokenArgs
+>;
+export const GroupCreateAiAppChatLinkTokenArgs = Type.Object({
+    app_id: Type.Number(),
+    app_revision: Type.BigInt(),
+});
+export type GroupCreateAiAppChatLinkTokenResponse = Static<
+    typeof GroupCreateAiAppChatLinkTokenResponse
+>;
+export const GroupCreateAiAppChatLinkTokenResponse = CreateAiAppChatLinkTokenResponse;
+
 export type UserRespondToActionCardArgs = Static<typeof UserRespondToActionCardArgs>;
 export const UserRespondToActionCardArgs = Type.Object({
     user_id: UserId,
@@ -8798,6 +8839,17 @@ export type UserCreateAiAppCardCapabilityResponse = Static<
     typeof UserCreateAiAppCardCapabilityResponse
 >;
 export const UserCreateAiAppCardCapabilityResponse = CreateAiAppCardCapabilityResponse;
+
+export type UserCreateAiAppChatLinkTokenArgs = Static<typeof UserCreateAiAppChatLinkTokenArgs>;
+export const UserCreateAiAppChatLinkTokenArgs = Type.Object({
+    user_id: UserId,
+    app_id: Type.Number(),
+    app_revision: Type.BigInt(),
+});
+export type UserCreateAiAppChatLinkTokenResponse = Static<
+    typeof UserCreateAiAppChatLinkTokenResponse
+>;
+export const UserCreateAiAppChatLinkTokenResponse = CreateAiAppChatLinkTokenResponse;
 
 export type CommunityRespondToActionCardArgs = Static<typeof CommunityRespondToActionCardArgs>;
 export const CommunityRespondToActionCardArgs = Type.Object({
@@ -8835,6 +8887,19 @@ export type CommunityCreateAiAppCardCapabilityResponse = Static<
     typeof CommunityCreateAiAppCardCapabilityResponse
 >;
 export const CommunityCreateAiAppCardCapabilityResponse = CreateAiAppCardCapabilityResponse;
+
+export type CommunityCreateAiAppChatLinkTokenArgs = Static<
+    typeof CommunityCreateAiAppChatLinkTokenArgs
+>;
+export const CommunityCreateAiAppChatLinkTokenArgs = Type.Object({
+    channel_id: ChannelId,
+    app_id: Type.Number(),
+    app_revision: Type.BigInt(),
+});
+export type CommunityCreateAiAppChatLinkTokenResponse = Static<
+    typeof CommunityCreateAiAppChatLinkTokenResponse
+>;
+export const CommunityCreateAiAppChatLinkTokenResponse = CreateAiAppChatLinkTokenResponse;
 
 export type CommunityCreateAiAppCardConfirmationGrantArgs = Static<
     typeof CommunityCreateAiAppCardConfirmationGrantArgs

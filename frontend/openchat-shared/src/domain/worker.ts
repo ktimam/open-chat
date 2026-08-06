@@ -191,6 +191,7 @@ import type {
     OptionalChatPermissions,
 } from "./permission";
 import type {
+    AiAppChatLinkToken,
     AiAppCardCapability,
     AiAppCardConfirmationGrant,
     AiAppCardContentV1,
@@ -445,6 +446,8 @@ export type WorkerRequest =
     | AiAppUserKeysLookup
     | CreateAiAppLinkCode
     | CancelAiAppLinkCode
+    | CreateAiAppChatLinkToken
+    | CancelAiAppChatLinkToken
     | CreateAiAppCardProvenance
     | CreateAiAppCardConfirmationGrant
     | CreateAiAppCardCapability
@@ -2023,6 +2026,7 @@ export type WorkerResponseInner =
     | AiAppMemberKey[]
     | ExploreAiAppsResponse
     | AiAppLinkCode
+    | AiAppChatLinkToken
     | AiAppCardProvenance
     | AiAppCardConfirmationGrant
     | AiAppCardCapability
@@ -2320,6 +2324,18 @@ type CreateAiAppLinkCode = {
 type CancelAiAppLinkCode = {
     kind: "cancelAiAppLinkCode";
     code: string;
+};
+
+type CreateAiAppChatLinkToken = {
+    kind: "createAiAppChatLinkToken";
+    chatId: ChatIdentifier;
+    appId: number;
+    appRevision: bigint;
+};
+
+type CancelAiAppChatLinkToken = {
+    kind: "cancelAiAppChatLinkToken";
+    token: Uint8Array;
 };
 
 type CreateAiAppCardProvenance = {
@@ -2795,6 +2811,10 @@ export type WorkerResult<T> = T extends Init
     : T extends CreateAiAppLinkCode
     ? AiAppLinkCode | undefined
     : T extends CancelAiAppLinkCode
+    ? boolean
+    : T extends CreateAiAppChatLinkToken
+    ? AiAppChatLinkToken | undefined
+    : T extends CancelAiAppChatLinkToken
     ? boolean
     : T extends CreateAiAppCardProvenance
     ? AiAppCardProvenance | undefined

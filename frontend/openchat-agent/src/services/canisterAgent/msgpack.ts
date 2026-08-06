@@ -18,6 +18,10 @@ import { typeboxValidate } from "../../utils/typebox";
 import { toCanisterResponseError } from "../error";
 import { CanisterAgent } from "./base";
 
+export interface MsgpackCallOptions {
+    sensitive?: boolean;
+}
+
 abstract class MsgpackCanisterAgent extends CanisterAgent {
     constructor(identity: Identity, agent: HttpAgent, canisterName: string) {
         super(identity, agent, canisterName);
@@ -93,12 +97,17 @@ abstract class MsgpackCanisterAgent extends CanisterAgent {
         requestValidator: In,
         responseValidator: Resp,
         onRequestAccepted?: () => void,
+        options?: MsgpackCallOptions,
     ): Promise<Out> {
         const start = performance.now();
         let isError = false;
         try {
             const canisterIdPrincipal = Principal.fromText(canisterId);
-            const payload = MsgpackCanisterAgent.prepareMsgpackArgs(args, requestValidator);
+            const payload = MsgpackCanisterAgent.prepareMsgpackArgs(
+                args,
+                requestValidator,
+                options,
+            );
 
             const { requestId, response } = await this.agent.call(canisterIdPrincipal, {
                 methodName: methodName + "_msgpack",
@@ -132,6 +141,7 @@ abstract class MsgpackCanisterAgent extends CanisterAgent {
                                     MsgpackCanisterAgent.deserializeResponse(
                                         reply.slice().buffer,
                                         responseValidator,
+                                        options,
                                     ),
                                 ),
                             );
@@ -205,6 +215,7 @@ abstract class MsgpackCanisterAgent extends CanisterAgent {
                         MsgpackCanisterAgent.deserializeResponse(
                             reply.slice().buffer,
                             responseValidator,
+                            options,
                         ),
                     ),
                 );
@@ -215,24 +226,37 @@ abstract class MsgpackCanisterAgent extends CanisterAgent {
             }
         } catch (err) {
             isError = true;
-            console.log(err, args);
+            if (options?.sensitive) {
+                console.log("Sensitive Msgpack update failed", {
+                    canisterId,
+                    methodName,
+                    valuesRedacted: true,
+                });
+            } else {
+                console.log(err, args);
+            }
             throw toCanisterResponseError(err as Error, this.identity);
         } finally {
             this.writeTrace(methodName, true, performance.now() - start, isError);
         }
     }
 
-    private static prepareMsgpackArgs<T extends TSchema>(value: unknown, validator: T): Uint8Array {
-        const validated = typeboxValidate(value, validator);
+    private static prepareMsgpackArgs<T extends TSchema>(
+        value: unknown,
+        validator: T,
+        options?: MsgpackCallOptions,
+    ): Uint8Array {
+        const validated = typeboxValidate(value, validator, options);
         return serializeToMsgPack(validated);
     }
 
     private static deserializeResponse<Resp extends TSchema>(
         responseBytes: ArrayBuffer,
         validator: Resp,
+        options?: MsgpackCallOptions,
     ): Static<Resp> {
         const response = deserializeFromMsgPack(new Uint8Array(responseBytes));
-        return typeboxValidate(response, validator);
+        return typeboxValidate(response, validator, options);
     }
 }
 
@@ -269,6 +293,7 @@ export abstract class SingleCanisterMsgpackAgent extends MsgpackCanisterAgent {
         requestValidator: In,
         responseValidator: Resp,
         onRequestAccepted?: () => void,
+        options?: MsgpackCallOptions,
     ): Promise<Out> {
         return this.executeMsgpackUpdate(
             this.canisterId,
@@ -278,6 +303,7 @@ export abstract class SingleCanisterMsgpackAgent extends MsgpackCanisterAgent {
             requestValidator,
             responseValidator,
             onRequestAccepted,
+            options,
         );
     }
 }
@@ -313,6 +339,7 @@ export abstract class MultiCanisterMsgpackAgent extends MsgpackCanisterAgent {
         requestValidator: In,
         responseValidator: Resp,
         onRequestAccepted?: () => void,
+        options?: MsgpackCallOptions,
     ): Promise<Out> {
         return this.executeMsgpackUpdate(
             canisterId,
@@ -322,6 +349,7 @@ export abstract class MultiCanisterMsgpackAgent extends MsgpackCanisterAgent {
             requestValidator,
             responseValidator,
             onRequestAccepted,
+            options,
         );
     }
 }

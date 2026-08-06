@@ -2,6 +2,7 @@ import type { HttpAgent, Identity } from "@icp-sdk/core/agent";
 import type {
     AcceptP2PSwapResponse,
     AccessGateConfig,
+    AiAppChatLinkToken,
     AiAppCardCapability,
     AiAppCardConfirmationGrant,
     AddMembersToChannelResponse,
@@ -134,6 +135,8 @@ import {
     CommunityRespondToActionCardResponse,
     CommunityCreateAiAppCardCapabilityArgs,
     CommunityCreateAiAppCardCapabilityResponse,
+    CommunityCreateAiAppChatLinkTokenArgs,
+    CommunityCreateAiAppChatLinkTokenResponse,
     CommunityCreateAiAppCardConfirmationGrantArgs,
     CommunityCreateAiAppCardConfirmationGrantResponse,
     CommunitySetAiAppEnabledArgs,
@@ -197,6 +200,7 @@ import {
 import { MultiCanisterMsgpackAgent } from "../canisterAgent/msgpack";
 import type { IChatEventsReader } from "../common/chatEvents";
 import { createAiAppCardCapabilityResponse } from "../common/aiAppCardCapability";
+import { createAiAppChatLinkTokenResponse } from "../common/aiAppChatLinkToken";
 import { createAiAppCardConfirmationGrantResponse } from "../common/aiAppCardConfirmationGrant";
 import {
     acceptP2PSwapSuccess,
@@ -1065,6 +1069,27 @@ export class CommunityClient
             createAiAppCardCapabilityResponse,
             CommunityCreateAiAppCardCapabilityArgs,
             CommunityCreateAiAppCardCapabilityResponse,
+        );
+    }
+
+    createAiAppChatLinkToken(
+        chatId: ChannelIdentifier,
+        appId: number,
+        appRevision: bigint,
+    ): Promise<AiAppChatLinkToken | undefined> {
+        return this.update(
+            chatId.communityId,
+            "create_ai_app_chat_link_token",
+            {
+                channel_id: toBigInt32(chatId.channelId),
+                app_id: appId,
+                app_revision: appRevision,
+            },
+            createAiAppChatLinkTokenResponse,
+            CommunityCreateAiAppChatLinkTokenArgs,
+            CommunityCreateAiAppChatLinkTokenResponse,
+            undefined,
+            { sensitive: true },
         );
     }
 

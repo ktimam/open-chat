@@ -26,6 +26,7 @@ pub(crate) fn advance_lifecycle(state: &mut RuntimeState, version_salt: u64) -> 
     // Authorities and every secondary index are lifecycle-local. Clear them even if generation
     // overflow makes the new entropy lifecycle terminally unavailable.
     state.data.ai_app_card_authority.invalidate_all();
+    state.data.ai_app_chat_link_authority.invalidate_all();
     state.data.pr2_entropy.advance_lifecycle(version_salt)
 }
 

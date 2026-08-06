@@ -1805,6 +1805,7 @@
         "noneEnabled": "No AI apps are enabled in this chat",
         "openInBrowser": "Open in browser",
         "openSetup": "Open setup",
+        "openSetupFailed": "Couldn't create a secure setup link. Try again.",
         "actionCount": "{count} actions",
         "actionCountOne": "1 action",
         "actionsHeading": "Actions",

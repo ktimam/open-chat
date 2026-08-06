@@ -42,6 +42,7 @@ pub(crate) fn start_after_lifecycle() {
 pub(crate) fn advance_lifecycle(state: &mut RuntimeState, version_salt: u64) -> Result<Pr2EntropyLifecycleId, &'static str> {
     state.data.ai_app_link_codes.invalidate_all();
     state.data.ai_app_card_tokens.invalidate_all_bearers();
+    state.data.ai_app_chat_link_tokens.invalidate_active_bearers();
     state.data.pr2_entropy.advance_lifecycle(version_salt)
 }
 
@@ -169,6 +170,7 @@ mod tests {
     use super::*;
     use crate::model::action_delivery_outbox::ActionDeliveryStart;
     use crate::model::ai_app_card_tokens::{Provenance, ProvenanceStatus, TOKEN_BYTES};
+    use crate::model::ai_app_chat_link_tokens::{AiAppChatLinkToken, LookupResult, RedeemResult};
     use crate::{Data, RuntimeState};
     use rand::SeedableRng;
     use rand::rngs::StdRng;
@@ -194,6 +196,8 @@ mod tests {
         };
         let link_code = "ab".repeat(32);
         let provenance = [0xCD; TOKEN_BYTES];
+        let chat_link_token = [0xCE; crate::model::ai_app_chat_link_tokens::TOKEN_BYTES];
+        let redeemed_chat_link_token = [0xCF; crate::model::ai_app_chat_link_tokens::TOKEN_BYTES];
         let mut data = Data::default();
         data.ai_app_link_codes
             .insert_bound(
@@ -208,6 +212,31 @@ mod tests {
                 now,
             )
             .unwrap();
+        data.ai_app_chat_link_tokens
+            .insert(
+                canister_id,
+                &redeemed_chat_link_token,
+                AiAppChatLinkToken {
+                    user_id,
+                    chat: context.chat,
+                    app_id: 7,
+                    app_revision: 11,
+                    app_canister_id: candid::Principal::from_slice(&[9]),
+                    issuer_local_user_index_canister_id: candid::Principal::from_slice(&[10]),
+                    app_user_key_fingerprint: [6; 32],
+                    app_user_key_version: 3,
+                    app_subject: [7; 32],
+                    chat_handle: [8; 32],
+                    expires_at: now + 1_000,
+                },
+                now,
+            )
+            .unwrap();
+        assert!(matches!(
+            data.ai_app_chat_link_tokens
+                .redeem(canister_id, &redeemed_chat_link_token, now),
+            RedeemResult::Success(_)
+        ));
         data.ai_app_card_tokens
             .insert_provenance(
                 canister_id,
@@ -215,6 +244,26 @@ mod tests {
                 Provenance {
                     context: context.clone(),
                     content_hash: [4; 32],
+                    expires_at: now + 1_000,
+                },
+                now,
+            )
+            .unwrap();
+        data.ai_app_chat_link_tokens
+            .insert(
+                canister_id,
+                &chat_link_token,
+                AiAppChatLinkToken {
+                    user_id,
+                    chat: context.chat,
+                    app_id: 7,
+                    app_revision: 11,
+                    app_canister_id: candid::Principal::from_slice(&[9]),
+                    issuer_local_user_index_canister_id: candid::Principal::from_slice(&[10]),
+                    app_user_key_fingerprint: [6; 32],
+                    app_user_key_version: 3,
+                    app_subject: [7; 32],
+                    chat_handle: [8; 32],
                     expires_at: now + 1_000,
                 },
                 now,
@@ -245,6 +294,24 @@ mod tests {
                 .provenance_status(canister_id, &provenance, &context, &[4; 32], now),
             ProvenanceStatus::NotFound
         );
+        assert_eq!(
+            state.data.ai_app_chat_link_tokens.lookup(canister_id, &chat_link_token, now),
+            LookupResult::NotFound
+        );
+        assert!(matches!(
+            state
+                .data
+                .ai_app_chat_link_tokens
+                .lookup(canister_id, &redeemed_chat_link_token, now),
+            LookupResult::Redeemed(_)
+        ));
+        assert!(matches!(
+            state
+                .data
+                .ai_app_chat_link_tokens
+                .redeem(canister_id, &redeemed_chat_link_token, now),
+            RedeemResult::Replay(_)
+        ));
         assert!(!state.data.pr2_entropy.is_ready());
         assert_eq!(state.data.pr2_bearer_canister_version, legacy_marker_before);
         assert_eq!(

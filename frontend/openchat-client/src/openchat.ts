@@ -170,6 +170,7 @@ import {
     type DiamondMembershipDuration,
     type DiamondMembershipFees,
     type AiAppLinkCode,
+    type AiAppChatLinkToken,
     type AiAppCardCapability,
     type AiAppCardConfirmationGrant,
     type AiAppCardContentV1,
@@ -7389,6 +7390,29 @@ export class OpenChat {
                 kind: "cancelAiAppLinkCode",
                 code,
             })
+            .catch(() => false);
+    }
+
+    // Mint a one-time bearer scoped by the authoritative chat canister to this exact
+    // app/revision/chat. The caller must cancel it if the user dismisses before handing it off.
+    createAiAppChatLinkToken(
+        chatId: ChatIdentifier,
+        appId: number,
+        appRevision: bigint,
+    ): Promise<AiAppChatLinkToken | undefined> {
+        return this.#worker
+            .send({
+                kind: "createAiAppChatLinkToken",
+                chatId,
+                appId,
+                appRevision,
+            })
+            .catch(() => undefined);
+    }
+
+    cancelAiAppChatLinkToken(token: Uint8Array): Promise<boolean> {
+        return this.#worker
+            .send({ kind: "cancelAiAppChatLinkToken", token: token.slice() })
             .catch(() => false);
     }
 

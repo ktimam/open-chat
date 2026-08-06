@@ -65,6 +65,8 @@ import {
     UserIndexMyAiAppKeysResponse,
     UserIndexCancelAiAppLinkCodeArgs,
     UserIndexCancelAiAppLinkCodeResponse,
+    UserIndexCancelAiAppChatLinkTokenArgs,
+    UserIndexCancelAiAppChatLinkTokenResponse,
     UserIndexCreateAiAppLinkCodeArgs,
     UserIndexCreateAiAppLinkCodeResponse,
     UserIndexCreateAiAppCardProvenanceArgs,
@@ -151,6 +153,7 @@ import {
     aiAppUserKeysResponse,
     myAiAppKeysResponse,
     cancelAiAppLinkCodeResponse,
+    cancelAiAppChatLinkTokenResponse,
     createAiAppLinkCodeResponse,
     apiAiAppCardContentV1,
     createAiAppCardProvenanceResponse,
@@ -208,7 +211,10 @@ export class UserIndexClient extends SingleCanisterMsgpackAgent {
                         // blocking terms notice and, offline, lock the user out entirely
                         const latest = await this.chatsDb.getCachedCurrentUser();
                         const accepted = latest?.acceptedTermsVersion;
-                        if (accepted !== undefined && (liveUser.acceptedTermsVersion ?? 0) < accepted) {
+                        if (
+                            accepted !== undefined &&
+                            (liveUser.acceptedTermsVersion ?? 0) < accepted
+                        ) {
                             liveUser = { ...liveUser, acceptedTermsVersion: accepted };
                         }
                         this.chatsDb.setCachedCurrentUser(liveUser);
@@ -260,7 +266,11 @@ export class UserIndexClient extends SingleCanisterMsgpackAgent {
         );
     }
 
-    setVaultLegalHold(reportIndex: bigint, legalHold: boolean, reference: string): Promise<boolean> {
+    setVaultLegalHold(
+        reportIndex: bigint,
+        legalHold: boolean,
+        reference: string,
+    ): Promise<boolean> {
         return this.update(
             "set_vault_legal_hold",
             { report_index: reportIndex, legal_hold: legalHold, reference },
@@ -881,6 +891,18 @@ export class UserIndexClient extends SingleCanisterMsgpackAgent {
             cancelAiAppLinkCodeResponse,
             UserIndexCancelAiAppLinkCodeArgs,
             UserIndexCancelAiAppLinkCodeResponse,
+        );
+    }
+
+    cancelAiAppChatLinkToken(token: Uint8Array): Promise<boolean> {
+        return this.update(
+            "cancel_ai_app_chat_link_token",
+            { token: token.slice() },
+            cancelAiAppChatLinkTokenResponse,
+            UserIndexCancelAiAppChatLinkTokenArgs,
+            UserIndexCancelAiAppChatLinkTokenResponse,
+            undefined,
+            { sensitive: true },
         );
     }
 

@@ -96,11 +96,7 @@
     async function cancelLink() {
         if (completed || cancelling) return;
         cancelling = true;
-        await cancelAiAppLinkConsent(
-            client,
-            () => linkCode?.code,
-            pendingCodeRequest,
-        );
+        await cancelAiAppLinkConsent(client, () => linkCode?.code, pendingCodeRequest);
         completed = true;
         onDismiss();
     }
@@ -134,7 +130,9 @@
     <ModalContent closeIcon onClose={cancelLink}>
         {#snippet header()}
             <div class="hdr">
-                <Translatable resourceKey={i18nKey("aiApps.linkTitle", { name: app.manifest.name })} />
+                <Translatable
+                    resourceKey={i18nKey("aiApps.linkTitle", { name: app.manifest.name })}
+                />
             </div>
         {/snippet}
         {#snippet body()}
@@ -144,11 +142,12 @@
                 {/if}
                 <p>
                     <Translatable
-                        resourceKey={i18nKey("aiApps.linkExplain", { name: app.manifest.name })} />
+                        resourceKey={i18nKey("aiApps.linkExplain", { name: app.manifest.name })}
+                    />
                 </p>
                 <p class="desc">
-                    Only the exact registered app canister can redeem this code. Replacement keys are
-                    versioned so an old disconnect proof cannot revoke the new connection.
+                    Only the exact registered app canister can redeem this code. Replacement keys
+                    are versioned so an old disconnect proof cannot revoke the new connection.
                 </p>
 
                 {#if linkCode !== undefined}
@@ -161,7 +160,8 @@
                             <Translatable
                                 resourceKey={i18nKey("aiApps.linkCodeExpires", {
                                     remaining: formatRemaining(),
-                                })} />
+                                })}
+                            />
                         {/if}
                     </div>
 
@@ -172,11 +172,12 @@
                                 <Translatable
                                     resourceKey={i18nKey("aiApps.linkStepOpen", {
                                         name: app.manifest.name,
-                                    })} />
+                                    })}
+                                />
                                 <div class="connect-destination">
                                     <AiAppSurfaceDestination
                                         title={app.manifest.name}
-                                        normalizedUrl={connectSurface.url}
+                                        displayUrl={connectSurface.url}
                                         dataDisclosures={connectSurface.dataDisclosures}
                                     />
                                 </div>
@@ -185,19 +186,22 @@
                                         hollow
                                         small
                                         onClick={() =>
-                                            openSurfaceExternally(client, connectSurface.url)}>
+                                            openSurfaceExternally(client, connectSurface.url)}
+                                    >
                                         <OpenInNew size="1em" color="currentColor" />
                                         <Translatable
                                             resourceKey={i18nKey("aiApps.linkOpenConnectPage", {
                                                 name: app.manifest.name,
-                                            })} />
+                                            })}
+                                        />
                                     </Button>
                                 </div>
                             {:else}
                                 <Translatable
                                     resourceKey={i18nKey("aiApps.linkInstruction", {
                                         name: app.manifest.name,
-                                    })} />
+                                    })}
+                                />
                             {/if}
                         </li>
                         <li><Translatable resourceKey={i18nKey("aiApps.linkStepPaste")} /></li>
@@ -209,7 +213,8 @@
                             <Translatable
                                 resourceKey={i18nKey("aiApps.linkNotYet", {
                                     name: app.manifest.name,
-                                })} />
+                                })}
+                            />
                         </p>
                     {/if}
                 {:else if codeFailed}
@@ -222,11 +227,7 @@
         {#snippet footer()}
             <ButtonGroup>
                 {#if linkCode !== undefined && !expired}
-                    <Button
-                        secondary
-                        small={!$mobileWidth}
-                        tiny={$mobileWidth}
-                        onClick={copyCode}>
+                    <Button secondary small={!$mobileWidth} tiny={$mobileWidth} onClick={copyCode}>
                         <Translatable resourceKey={i18nKey("aiApps.linkCodeCopy")} />
                     </Button>
                 {/if}
@@ -236,7 +237,8 @@
                         loading={loadingCode}
                         small={!$mobileWidth}
                         tiny={$mobileWidth}
-                        onClick={fetchCode}>
+                        onClick={fetchCode}
+                    >
                         <Translatable resourceKey={i18nKey("aiApps.linkNewCode")} />
                     </Button>
                 {/if}
@@ -245,7 +247,8 @@
                     disabled={loadingCode || cancelling || linkCode === undefined}
                     small={!$mobileWidth}
                     tiny={$mobileWidth}
-                    onClick={checkConnection}>
+                    onClick={checkConnection}
+                >
                     <Translatable resourceKey={i18nKey("aiApps.checkConnection")} />
                 </Button>
             </ButtonGroup>

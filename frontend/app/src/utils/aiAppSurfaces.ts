@@ -6,14 +6,16 @@
 // confirmed action card in that chat (and any time on demand from the group-details Apps row).
 // Surface kinds OpenChat does not know are ignored.
 
-import type { AiAppRegistration, AiAppSurface, ChatIdentifier, OpenChat } from "@client";
-import { chatKeyFor, isSafeAiActionFieldName } from "@client";
+import type { OpenChat } from "@client";
+import type { AiAppRegistration, AiAppSurface, ChatIdentifier } from "@shared";
+import { chatKeyFor, isSafeAiActionFieldName } from "@shared";
 import { normalizeAiAppSurfaceUrl } from "./cardBridge";
 import { configKeys } from "./config";
 import { openExternalUrl } from "./urls";
 
 export type AiAppSurfaceDataDisclosure =
     | "app_id"
+    | "one_time_chat_link_token"
     | "chat_id"
     | "direct_participant_ids";
 
@@ -23,9 +25,14 @@ export interface SurfaceOpening {
     surface: AiAppSurface;
     // The surface URL with its optional public {appId} placeholder substituted.
     url: string;
-    // Stable identifiers visibly included in the destination URL. Host-owned consent UI renders
-    // these categories before an iframe request or browser handoff.
+    // Values visibly included in the destination URL. Host-owned consent UI renders these
+    // categories before an iframe request or browser handoff.
     dataDisclosures: AiAppSurfaceDataDisclosure[];
+}
+
+export interface ChatLinkSurfaceOpening extends SurfaceOpening {
+    chatLinkToken: Uint8Array;
+    expiresAt: bigint;
 }
 
 // A "card" surface resolved for a specific action, carrying the extra data the in-bubble card renderer
@@ -57,6 +64,7 @@ export interface ResolvedActionApp {
 // The surface kinds OpenChat knows how to act on.
 // "chat_link": a page where the user configures/links a CHAT inside the app.
 const CHAT_LINK_KIND = "chat_link";
+const CHAT_LINK_TOKEN_PLACEHOLDER = "{chatLinkToken}";
 // "connect": the app's claim-token entry page — where the user pastes the high-entropy token the
 // consent sheet displays. Chat-independent (only {appId} is substituted); the pairing sheet offers
 // it as an "open the right page" shortcut so the user isn't left hunting through the app's menus.
@@ -105,28 +113,167 @@ function substitutePlaceholders(template: string, appId: number): string | undef
 function surfaceDataDisclosures(template: string): AiAppSurfaceDataDisclosure[] {
     const disclosures: AiAppSurfaceDataDisclosure[] = [];
     if (template.includes("{appId}")) disclosures.push("app_id");
+    if (template.includes(CHAT_LINK_TOKEN_PLACEHOLDER)) {
+        disclosures.push("one_time_chat_link_token");
+    }
     return disclosures;
 }
 
-// The app's "chat_link" surface resolved against a chat, or undefined when the app declares none.
-// chatKeyFor returns a canonical key for EVERY chat kind — group, channel AND direct. Direct keys
-// bind the sorted viewer/counterpart pair, so direct callers must supply currentUserId. NOT gated by the
-// shown-marker: this is what the ungated "Open setup" affordance uses (groupdetails/AiAppsSummary
-// for group chats, groupdetails/AiAppsDirectSummary for direct chats).
-export function chatLinkSurfaceOpening(
-    app: AiAppRegistration,
-    _chatId: ChatIdentifier,
-    _currentUserId?: string,
-): SurfaceOpening | undefined {
-    const surface = (app.manifest.surfaces ?? []).find((s) => s.kind === CHAT_LINK_KIND);
+export function redactedAiAppSurfaceDisplayUrl(
+    url: string,
+    dataDisclosures: AiAppSurfaceDataDisclosure[],
+): string {
+    if (!dataDisclosures.includes("one_time_chat_link_token")) return url;
+    try {
+        const parsed = new URL(url);
+        parsed.hash = "one-time-token-redacted";
+        return parsed.href;
+    } catch {
+        return "External app destination (one-time token redacted)";
+    }
+}
+
+interface ValidatedChatLinkDescriptor {
+    readonly app: AiAppRegistration;
+    readonly surface: AiAppSurface;
+    readonly template: string;
+    readonly appId: number;
+    readonly appRevision: bigint;
+}
+
+// Locate a structurally valid "chat_link" template without minting its bearer token. This is not
+// gated by the shown-marker: the Settings affordance may deliberately reopen setup for a chat.
+function chatLinkDescriptor(app: AiAppRegistration): ValidatedChatLinkDescriptor | undefined {
+    const surface = (app.manifest.surfaces ?? []).find(
+        (candidate) => candidate.kind === CHAT_LINK_KIND,
+    );
     if (surface === undefined) return undefined;
-    const resolved = substitutePlaceholders(surface.url, app.id);
+    const template = surface.url;
+    const appId = app.id;
+    const appRevision = app.updated;
+    // Exactly one canonical bearer placeholder is required, and it must be in the fragment so it
+    // never enters HTTP request targets, intermediary logs, or referrers.
+    const parts = template.split(CHAT_LINK_TOKEN_PLACEHOLDER);
+    const tokenIndex = template.indexOf(CHAT_LINK_TOKEN_PLACEHOLDER);
+    const fragmentIndex = template.indexOf("#");
+    if (parts.length !== 2 || fragmentIndex < 0 || tokenIndex <= fragmentIndex) return undefined;
+    // Validate the complete template synchronously without minting a real bearer. This also rejects
+    // every legacy raw-chat/raw-user placeholder and any unknown future placeholder fail-closed.
+    const resolved = substitutePlaceholders(
+        template.replace(CHAT_LINK_TOKEN_PLACEHOLDER, "A".repeat(43)),
+        appId,
+    );
     if (resolved === undefined) return undefined;
+    if (
+        normalizeAiAppSurfaceUrl(resolved, {
+            allowLocalDevelopment: import.meta.env.DEV,
+        }) === undefined
+    ) {
+        return undefined;
+    }
+
+    const surfaceSnapshot = Object.freeze({ ...surface, url: template });
+    const manifestSnapshot = Object.freeze({
+        ...app.manifest,
+        surfaces: (app.manifest.surfaces ?? []).map((candidate) =>
+            candidate === surface ? surfaceSnapshot : { ...candidate },
+        ),
+    });
+    const appSnapshot = Object.freeze({ ...app, manifest: manifestSnapshot });
+    return Object.freeze({
+        app: appSnapshot,
+        surface: surfaceSnapshot,
+        template,
+        appId,
+        appRevision,
+    });
+}
+
+// Used while rendering Settings. A real token is minted only after the user's click and, for a
+// per-user-key app, only after pairing succeeds.
+export function hasChatLinkSurface(app: AiAppRegistration): boolean {
+    return chatLinkDescriptor(app) !== undefined;
+}
+
+function base64Url(bytes: Uint8Array): string {
+    let binary = "";
+    for (const byte of bytes) binary += String.fromCharCode(byte);
+    return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+}
+
+// The authoritative group/community/user canister mints this opaque bearer for one exact
+// app/revision/chat tuple. The URL contains no raw chat or user coordinates.
+export async function createChatLinkSurfaceOpening(
+    client: OpenChat,
+    app: AiAppRegistration,
+    chatId: ChatIdentifier,
+): Promise<ChatLinkSurfaceOpening | undefined> {
+    const descriptor = chatLinkDescriptor(app);
+    if (descriptor === undefined) return undefined;
+    const minted = await client.createAiAppChatLinkToken(
+        chatId,
+        descriptor.appId,
+        descriptor.appRevision,
+    );
+    if (minted === undefined) return undefined;
+    const encodedToken = base64Url(minted.token);
+    if (encodedToken.length !== 43) {
+        await client.cancelAiAppChatLinkToken(minted.token);
+        return undefined;
+    }
+    const resolved = substitutePlaceholders(
+        descriptor.template.replace(CHAT_LINK_TOKEN_PLACEHOLDER, encodeURIComponent(encodedToken)),
+        descriptor.appId,
+    );
+    if (resolved === undefined) {
+        await client.cancelAiAppChatLinkToken(minted.token);
+        return undefined;
+    }
     const url = normalizeAiAppSurfaceUrl(resolved, {
         allowLocalDevelopment: import.meta.env.DEV,
     });
-    if (url === undefined) return undefined;
-    return { app, surface, url, dataDisclosures: surfaceDataDisclosures(surface.url) };
+    if (url === undefined) {
+        await client.cancelAiAppChatLinkToken(minted.token);
+        return undefined;
+    }
+    return {
+        app: descriptor.app,
+        surface: descriptor.surface,
+        url,
+        dataDisclosures: surfaceDataDisclosures(descriptor.template),
+        chatLinkToken: minted.token.slice(),
+        expiresAt: minted.expiresAt,
+    };
+}
+
+export interface PendingChatLinkSetup {
+    readonly app: AiAppRegistration;
+    readonly chatKey: string;
+    readonly initiatingUserId: string | undefined;
+}
+
+export function bindPendingChatLinkSetup(
+    app: AiAppRegistration,
+    chatId: ChatIdentifier,
+    currentUserId?: string,
+): PendingChatLinkSetup | undefined {
+    const chatKey = chatKeyFor(chatId, currentUserId);
+    return chatKey === undefined
+        ? undefined
+        : Object.freeze({ app, chatKey, initiatingUserId: currentUserId });
+}
+
+export function pendingChatLinkSetupAppForChat(
+    pending: PendingChatLinkSetup | undefined,
+    chatId: ChatIdentifier,
+    currentUserId?: string,
+): AiAppRegistration | undefined {
+    const chatKey = chatKeyFor(chatId, currentUserId);
+    return chatKey !== undefined &&
+        pending?.chatKey === chatKey &&
+        pending.initiatingUserId === currentUserId
+        ? pending.app
+        : undefined;
 }
 
 // The app's "card" surface resolved against a chat: the in-bubble card renderer OpenChat embeds.
@@ -322,8 +469,8 @@ function markShown(marker: string): void {
 // What (if anything) to open after the user successfully confirms an action card: the app owning
 // the card's action — the directory app whose manifest declares an action named `actionId`,
 // preferring apps enabled in the chat — and its "chat_link" surface, gated to once per (app, chat).
-// When this returns an opening the shown-marker has already been persisted, so the caller MUST
-// present it (per `surface.display`: "sheet" embeds in-app, "external" opens a browser tab).
+// A returned opening remains unmarked until the host-owned Load/Open choice. If the caller abandons
+// it before handoff, it must cancel the returned one-time token.
 export async function surfaceToOpenAfterConfirm(
     client: OpenChat,
     chatId: ChatIdentifier,
@@ -331,7 +478,7 @@ export async function surfaceToOpenAfterConfirm(
     appId: number | undefined,
     appRevision: bigint | undefined,
     currentUserId?: string,
-): Promise<SurfaceOpening | undefined> {
+): Promise<ChatLinkSurfaceOpening | undefined> {
     const chatKey = chatKeyFor(chatId, currentUserId);
     if (chatKey === undefined) return undefined;
     const marker = aiAppSurfaceMarkerForViewer(currentUserId, appId ?? -1, chatKey);
@@ -345,10 +492,8 @@ export async function surfaceToOpenAfterConfirm(
     const app = appForPostConfirm(apps, enabledIds, actionId, appId, appRevision);
     if (app === undefined) return undefined;
 
-    const opening = chatLinkSurfaceOpening(app, chatId, currentUserId);
-    if (opening === undefined) return undefined;
     if (shownMarkers.has(marker)) return undefined;
-    return opening;
+    return createChatLinkSurfaceOpening(client, app, chatId);
 }
 
 // Call only from the host-owned Load/Open choice. Merely resolving or displaying a prompt must not

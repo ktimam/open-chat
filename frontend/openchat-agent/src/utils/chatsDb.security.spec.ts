@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Principal } from "@icp-sdk/core/principal";
-import type { ActionCardContent, EventWrapper, Message } from "openchat-shared";
+import type { ActionCardContent, EventWrapper, Message } from "@shared";
 import { ChatsDb } from "./chatsDb";
 
 const CHAT = { kind: "group_chat", groupId: "aaaaa-aa" } as const;
@@ -44,7 +44,9 @@ describe("ChatsDb provenance persistence", () => {
             put: vi.fn((store: keyof typeof stores, value: unknown, key: string) => {
                 stores[store].set(key, value);
             }),
-            getAll: vi.fn((store: keyof typeof stores) => Promise.resolve([...stores[store].values()])),
+            getAll: vi.fn((store: keyof typeof stores) =>
+                Promise.resolve([...stores[store].values()]),
+            ),
         };
         const createDb = () => {
             const db = new ChatsDb({ toString: () => "test-user" } as Principal);

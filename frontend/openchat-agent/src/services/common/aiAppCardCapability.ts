@@ -1,4 +1,4 @@
-import type { AiAppCardCapability } from "openchat-shared";
+import type { AiAppCardCapability } from "@shared";
 
 type CapabilityResponse =
     | {
@@ -50,11 +50,12 @@ export function createAiAppCardCapabilityResponse(
     const context = "context" in success ? success.context : undefined;
     if (typeof context !== "object" || context === null) return undefined;
     const expiresAt = "expires_at" in success ? success.expires_at : undefined;
-    const contextVersion =
-        "context_version" in context ? context.context_version : undefined;
+    const contextVersion = "context_version" in context ? context.context_version : undefined;
     const appSubject = exactBytes("app_subject" in context ? context.app_subject : undefined);
     const chatHandle = exactBytes("chat_handle" in context ? context.chat_handle : undefined);
-    const messageHandle = exactBytes("message_handle" in context ? context.message_handle : undefined);
+    const messageHandle = exactBytes(
+        "message_handle" in context ? context.message_handle : undefined,
+    );
     const appId = "app_id" in context ? context.app_id : undefined;
     const appRevision = "app_revision" in context ? context.app_revision : undefined;
     const actionId = "action_id" in context ? context.action_id : undefined;
@@ -77,7 +78,8 @@ export function createAiAppCardCapabilityResponse(
         typeof actionId !== "string" ||
         actionId.length === 0 ||
         actionId.length > 128
-    ) return undefined;
+    )
+        return undefined;
     return {
         capability: base64Url(token),
         expiresAt,

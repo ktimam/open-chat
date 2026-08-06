@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import type { AiAppRegistration, ChatIdentifier, OpenChat } from "openchat-client";
+import type { AiAppRegistration, ChatIdentifier, OpenChat } from "@client";
 import { describe, expect, it, vi } from "vitest";
 import { resolveActionAppForCard } from "./aiAppSurfaces";
 
@@ -72,7 +72,7 @@ describe("directory-bound card surface resolution", () => {
 
     it("checks backend-hydrated appVerified before lookup or iframe creation", () => {
         const source = readFileSync(
-            resolve(process.cwd(), "src/components/home/ActionCardContent.svelte"),
+            resolve(__dirname, "../components/home/ActionCardContent.svelte"),
             "utf8",
         );
         const compact = source.replace(/\s+/g, " ");

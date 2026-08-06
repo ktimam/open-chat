@@ -4,6 +4,7 @@ pub mod action_signing_keyring;
 pub mod ai_action_registry;
 pub mod ai_app_call_throttle;
 pub mod ai_app_card_tokens;
+pub mod ai_app_chat_link_tokens;
 pub mod ai_app_link_codes;
 pub mod ai_app_registry;
 pub mod ai_app_scoped_identity;

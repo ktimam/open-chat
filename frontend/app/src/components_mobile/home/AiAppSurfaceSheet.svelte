@@ -7,11 +7,12 @@
     import { i18nKey } from "@src/i18n/i18n";
     import {
         openSurfaceExternally,
+        redactedAiAppSurfaceDisplayUrl,
         type AiAppSurfaceDataDisclosure,
     } from "@utils/aiAppSurfaces";
     import { normalizeAiAppSurfaceUrl } from "@utils/cardBridge";
     import { BodySmall, CommonButton, Container, Sheet, Title } from "component-lib";
-    import type { OpenChat } from "openchat-client";
+    import type { OpenChat } from "@client";
     import { getContext } from "svelte";
     import Close from "svelte-material-icons/Close.svelte";
     import OpenInNew from "svelte-material-icons/OpenInNew.svelte";
@@ -43,6 +44,7 @@
     let normalizedUrl = $derived(
         normalizeAiAppSurfaceUrl(url, { allowLocalDevelopment: import.meta.env.DEV }),
     );
+    let displayUrl = $derived(redactedAiAppSurfaceDisplayUrl(normalizedUrl ?? "", dataDisclosures));
 
     function openBrowser() {
         if (normalizedUrl === undefined) return;
@@ -67,10 +69,10 @@
             <HardenedAiAppSurface {title} {url} {dataDisclosures} {onConsent} />
         {:else if normalizedUrl !== undefined}
             <div class="external-prompt">
-                <AiAppSurfaceDestination {title} {normalizedUrl} {dataDisclosures} />
+                <AiAppSurfaceDestination {title} {displayUrl} {dataDisclosures} />
                 <BodySmall>
-                    Opening hands this exact URL to your browser. No navigation occurs until you
-                    choose Open.
+                    Opening hands the full destination URL to your browser. No navigation occurs
+                    until you choose Open.
                 </BodySmall>
             </div>
         {:else}
@@ -78,7 +80,7 @@
         {/if}
 
         {#if display === "sheet" && normalizedUrl !== undefined}
-            <BodySmall>Browser destination: <code>{normalizedUrl}</code></BodySmall>
+            <BodySmall>Browser destination: <code>{displayUrl}</code></BodySmall>
         {/if}
         <Container mainAxisAlignment={"center"} crossAxisAlignment={"center"} gap={"md"}>
             {#if display === "external"}
@@ -87,7 +89,8 @@
             <CommonButton
                 onClick={openBrowser}
                 disabled={normalizedUrl === undefined}
-                size={"small_text"}>
+                size={"small_text"}
+            >
                 {#snippet icon(color, size)}
                     <OpenInNew {color} {size} />
                 {/snippet}

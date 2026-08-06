@@ -44,6 +44,7 @@ use utils::idempotency_checker::IdempotencyChecker;
 use utils::time::MonthKey;
 
 mod ai_app_card_authority;
+mod ai_app_chat_link_authority;
 mod guards;
 mod jobs;
 mod lifecycle;
@@ -439,6 +440,8 @@ struct Data {
     #[serde(default)]
     pub ai_app_card_tokens: crate::model::ai_app_card_tokens::AiAppCardTokens,
     #[serde(default)]
+    pub ai_app_chat_link_tokens: crate::model::ai_app_chat_link_tokens::AiAppChatLinkTokens,
+    #[serde(default)]
     pub action_signing_keyring: crate::model::action_signing_keyring::ActionSigningKeyring,
     #[serde(default)]
     pub ai_app_scoped_identity_key: crate::model::ai_app_scoped_identity::AiAppScopedIdentityKey,
@@ -542,6 +545,7 @@ impl Data {
             ai_app_link_codes: crate::model::ai_app_link_codes::AiAppLinkCodes::default(),
             ai_app_call_throttle: crate::model::ai_app_call_throttle::AiAppCallThrottle::default(),
             ai_app_card_tokens: crate::model::ai_app_card_tokens::AiAppCardTokens::default(),
+            ai_app_chat_link_tokens: crate::model::ai_app_chat_link_tokens::AiAppChatLinkTokens::default(),
             action_signing_keyring: crate::model::action_signing_keyring::ActionSigningKeyring::default(),
             ai_app_scoped_identity_key: crate::model::ai_app_scoped_identity::AiAppScopedIdentityKey::default(),
             action_delivery_outbox: crate::model::action_delivery_outbox::ActionDeliveryOutbox::default(),
@@ -685,6 +689,7 @@ impl Default for Data {
             ai_app_link_codes: crate::model::ai_app_link_codes::AiAppLinkCodes::default(),
             ai_app_call_throttle: crate::model::ai_app_call_throttle::AiAppCallThrottle::default(),
             ai_app_card_tokens: crate::model::ai_app_card_tokens::AiAppCardTokens::default(),
+            ai_app_chat_link_tokens: crate::model::ai_app_chat_link_tokens::AiAppChatLinkTokens::default(),
             action_signing_keyring: crate::model::action_signing_keyring::ActionSigningKeyring::default(),
             ai_app_scoped_identity_key: crate::model::ai_app_scoped_identity::AiAppScopedIdentityKey::default(),
             action_delivery_outbox: crate::model::action_delivery_outbox::ActionDeliveryOutbox::default(),

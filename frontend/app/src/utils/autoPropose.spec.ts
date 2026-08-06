@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AiActionDefinition } from "openchat-shared";
+import type { AiActionDefinition } from "@shared";
 import {
     buildBoundedAutoProposeVocabulary,
     MAX_AUTO_PROPOSE_KEYWORDS,

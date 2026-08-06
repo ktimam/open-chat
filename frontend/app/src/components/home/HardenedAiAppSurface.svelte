@@ -4,7 +4,10 @@
         normalizeAiAppSurfaceUrl,
         supportsCredentiallessIframe,
     } from "../../utils/cardBridge";
-    import type { AiAppSurfaceDataDisclosure } from "../../utils/aiAppSurfaces";
+    import {
+        redactedAiAppSurfaceDisplayUrl,
+        type AiAppSurfaceDataDisclosure,
+    } from "../../utils/aiAppSurfaces";
     import { onMount } from "svelte";
     import AiAppSurfaceDestination from "./AiAppSurfaceDestination.svelte";
 
@@ -23,6 +26,7 @@
     let normalizedUrl = $derived(
         normalizeAiAppSurfaceUrl(url, { allowLocalDevelopment: import.meta.env.DEV }),
     );
+    let displayUrl = $derived(redactedAiAppSurfaceDisplayUrl(normalizedUrl ?? "", dataDisclosures));
     let allowed = $derived(normalizedUrl !== undefined);
     let consentCurrent = $derived(
         loadRequested && isEmbeddedSurfaceConsentCurrent(consentedUrl, normalizedUrl),
@@ -48,7 +52,7 @@
     </div>
 {:else if !consentCurrent}
     <div class="load-gate">
-        <AiAppSurfaceDestination {title} normalizedUrl={normalizedUrl ?? ""} {dataDisclosures} />
+        <AiAppSurfaceDestination {title} {displayUrl} {dataDisclosures} />
         <span>
             Loading contacts this external origin and may share your IP address. Supported embedded
             mode omits destination credentials and referrer, and runs the page in an opaque sandbox.

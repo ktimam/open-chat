@@ -12,7 +12,7 @@
     import {
         markSurfaceShownAfterConsent,
         surfaceToOpenAfterConfirm,
-        type SurfaceOpening,
+        type ChatLinkSurfaceOpening,
     } from "@utils/aiAppSurfaces";
     import {
         autoProposeSuggestions,
@@ -52,6 +52,7 @@
         undeletingMessagesStore,
         type UserSummary,
     } from "@client";
+    import { chatIdentifierToString } from "@shared";
     import { getContext, onDestroy, onMount, tick } from "svelte";
     import { _ } from "svelte-i18n";
     import Close from "svelte-material-icons/Close.svelte";
@@ -352,7 +353,40 @@
     // back to this imperative flow so the propose that triggered it resumes on success.
     let linkModalApp = $state<AiAppRegistration | undefined>(undefined);
     let linkModalResolve: ((linked: boolean) => void) | undefined;
-    let confirmSurface = $state<SurfaceOpening | undefined>(undefined);
+    let confirmSurface = $state<ChatLinkSurfaceOpening | undefined>(undefined);
+    let confirmSurfaceHandedOff = $state(false);
+    let confirmSurfaceRequest = 0;
+
+    $effect(() => {
+        const chatMarker = chatIdentifierToString(chatId);
+        void chatMarker;
+        return () => {
+            confirmSurfaceRequest += 1;
+            const opening = confirmSurface;
+            confirmSurface = undefined;
+            if (opening !== undefined && !confirmSurfaceHandedOff) {
+                void client.cancelAiAppChatLinkToken(opening.chatLinkToken);
+            }
+            confirmSurfaceHandedOff = false;
+        };
+    });
+
+    function consentToConfirmSurface() {
+        if (confirmSurface === undefined) return;
+        confirmSurfaceHandedOff = true;
+        markSurfaceShownAfterConsent(confirmSurface, chatId, $currentUserIdStore);
+    }
+
+    async function dismissConfirmSurface() {
+        confirmSurfaceRequest += 1;
+        const opening = confirmSurface;
+        const cancel = opening !== undefined && !confirmSurfaceHandedOff;
+        confirmSurface = undefined;
+        confirmSurfaceHandedOff = false;
+        if (cancel && opening !== undefined) {
+            await client.cancelAiAppChatLinkToken(opening.chatLinkToken);
+        }
+    }
 
     function closeLinkModal(linked: boolean) {
         linkModalApp = undefined;
@@ -516,6 +550,8 @@
         const appId = msg.content.kind === "action_card_content" ? msg.content.appId : undefined;
         const appRevision =
             msg.content.kind === "action_card_content" ? msg.content.appRevision : undefined;
+        const surfaceRequest =
+            response === "confirm" && actionId !== undefined ? ++confirmSurfaceRequest : undefined;
         return client
             .respondToActionCard(
                 chatId,
@@ -535,13 +571,19 @@
                     }
                     return;
                 }
-                if (response !== "confirm" || actionId === undefined) return;
+                if (
+                    response !== "confirm" ||
+                    actionId === undefined ||
+                    surfaceRequest === undefined ||
+                    surfaceRequest !== confirmSurfaceRequest
+                ) {
+                    return;
+                }
                 // After the first successfully confirmed action in a chat, open the owning app's
                 // "chat_link" surface (when it declares one) so the user can finish configuring
-                // the chat inside the app. The classic layout keeps this minimal: whatever the
-                // surface's display, the substituted URL opens in a new tab (the mobile layout
-                // hosts "sheet" surfaces in-app). surfaceToOpenAfterConfirm persists the
-                // once-per-(app, chat) marker.
+                // the chat inside the app. The host presents its consent modal first; no iframe or
+                // browser navigation occurs until the user chooses Load/Open, and only that choice
+                // persists the once-per-(app, chat) marker.
                 const opening = await surfaceToOpenAfterConfirm(
                     client,
                     chatId,
@@ -550,9 +592,13 @@
                     appRevision,
                     $currentUserIdStore,
                 );
-                if (opening !== undefined) {
-                    confirmSurface = opening;
+                if (opening === undefined) return;
+                if (surfaceRequest !== confirmSurfaceRequest || confirmSurface !== undefined) {
+                    await client.cancelAiAppChatLinkToken(opening.chatLinkToken);
+                    return;
                 }
+                confirmSurfaceHandedOff = false;
+                confirmSurface = opening;
             });
     }
 
@@ -637,7 +683,6 @@
     let canTranslate = $derived((client.getMessageText(msg.content) ?? "").length > 0);
 </script>
 
-
 {#if botProfile !== undefined}
     <BotProfile {...botProfile} />
 {/if}
@@ -660,9 +705,8 @@
         url={confirmSurface.url}
         display={confirmSurface.surface.display}
         dataDisclosures={confirmSurface.dataDisclosures}
-        onConsent={() =>
-            markSurfaceShownAfterConsent(confirmSurface!, chatId, $currentUserIdStore)}
-        onDismiss={() => (confirmSurface = undefined)}
+        onConsent={consentToConfirmSurface}
+        onDismiss={dismissConfirmSurface}
     />
 {/if}
 

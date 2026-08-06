@@ -9,16 +9,21 @@
     import { i18nKey } from "@src/i18n/i18n";
     import { toastStore } from "@src/stores/toast";
     import {
-        chatLinkSurfaceOpening,
-        type SurfaceOpening,
+        bindPendingChatLinkSetup,
+        createChatLinkSurfaceOpening,
+        hasChatLinkSurface,
+        pendingChatLinkSetupAppForChat,
+        type ChatLinkSurfaceOpening,
+        type PendingChatLinkSetup,
     } from "@utils/aiAppSurfaces";
     import { Body, BodySmall, CommonButton, Container } from "component-lib";
     import {
+        currentUserIdStore,
         type AiAppRegistration,
         type ChatIdentifier,
-        currentUserIdStore,
         type OpenChat,
-    } from "openchat-client";
+    } from "@client";
+    import { chatIdentifierToString, chatKeyFor } from "@shared";
     import { getContext } from "svelte";
     import LinkOff from "svelte-material-icons/LinkOff.svelte";
     import LinkVariant from "svelte-material-icons/LinkVariant.svelte";
@@ -45,10 +50,7 @@
     // chat_link surface, or already connected. Others have no actionable affordance here, so hide them.
     let relevant = $derived(
         apps.filter(
-            (app) =>
-                app.manifest.perUserKeys ||
-                connected.has(app.id) ||
-                chatLinkSurfaceOpening(app, chatId, $currentUserIdStore) !== undefined,
+            (app) => app.manifest.perUserKeys || connected.has(app.id) || hasChatLinkSurface(app),
         ),
     );
 
@@ -57,9 +59,7 @@
             client.myAiAppKeys(),
             client.exploreAiApps(undefined, 0, 8),
         ]);
-        const exact = await client.aiApps(
-            myKeys.map((key) => ({ appId: key.appId })),
-        );
+        const exact = await client.aiApps(myKeys.map((key) => ({ appId: key.appId })));
         const byId = new Map(directory.matches.map((app) => [app.id, app]));
         for (const app of exact) byId.set(app.id, app);
         apps = [...byId.values()].sort((left, right) => left.id - right.id);
@@ -86,22 +86,77 @@
         disconnecting = done;
     }
 
-    let setupSurface = $state<SurfaceOpening | undefined>(undefined);
-    function openSetup(opening: SurfaceOpening) {
+    let setupSurface = $state<ChatLinkSurfaceOpening | undefined>(undefined);
+    let setupHandedOff = $state(false);
+    let openingSetup = $state<number | undefined>(undefined);
+    let openingRequest = 0;
+
+    $effect(() => {
+        const chatMarker = chatIdentifierToString(chatId);
+        void chatMarker;
+        return () => {
+            openingRequest += 1;
+            openingSetup = undefined;
+            const opening = setupSurface;
+            setupSurface = undefined;
+            if (opening !== undefined && !setupHandedOff) {
+                void client.cancelAiAppChatLinkToken(opening.chatLinkToken);
+            }
+            setupHandedOff = false;
+        };
+    });
+
+    async function openSetup(app: AiAppRegistration) {
+        if (openingSetup !== undefined || setupSurface !== undefined) return;
+        const request = ++openingRequest;
+        openingSetup = app.id;
+        const opening = await createChatLinkSurfaceOpening(client, app, chatId);
+        if (request !== openingRequest) {
+            if (opening !== undefined) {
+                await client.cancelAiAppChatLinkToken(opening.chatLinkToken);
+            }
+            return;
+        }
+        openingSetup = undefined;
+        if (opening === undefined) {
+            toastStore.showFailureToast(i18nKey("aiApps.openSetupFailed"));
+            return;
+        }
+        setupHandedOff = false;
         setupSurface = opening;
     }
 
+    async function dismissSetup() {
+        const opening = setupSurface;
+        const cancel = opening !== undefined && !setupHandedOff;
+        setupSurface = undefined;
+        setupHandedOff = false;
+        if (cancel && opening !== undefined) {
+            await client.cancelAiAppChatLinkToken(opening.chatLinkToken);
+        }
+    }
+
     let linkingApp = $state<AiAppRegistration | undefined>(undefined);
-    let pendingSetup = $state<SurfaceOpening | undefined>(undefined);
+    let pendingSetup = $state<PendingChatLinkSetup | undefined>(undefined);
+
+    $effect(() => {
+        const pendingChatKey = chatKeyFor(chatId, $currentUserIdStore);
+        void pendingChatKey;
+        return () => {
+            pendingSetup = undefined;
+        };
+    });
 
     function startConnect(app: AiAppRegistration) {
-        const setup = chatLinkSurfaceOpening(app, chatId, $currentUserIdStore);
+        const hasSetup = hasChatLinkSurface(app);
         const needsPairing = app.manifest.perUserKeys && !connected.has(app.id);
         if (needsPairing) {
-            pendingSetup = setup;
+            pendingSetup = hasSetup
+                ? bindPendingChatLinkSetup(app, chatId, $currentUserIdStore)
+                : undefined;
             linkingApp = app;
-        } else if (setup !== undefined) {
-            openSetup(setup);
+        } else if (hasSetup) {
+            void openSetup(app);
         }
     }
 
@@ -109,11 +164,9 @@
         linkingApp = undefined;
         toastStore.showSuccessToast(i18nKey("aiApps.linkComplete"));
         load();
-        const setup = pendingSetup;
+        const app = pendingChatLinkSetupAppForChat(pendingSetup, chatId, $currentUserIdStore);
         pendingSetup = undefined;
-        if (setup !== undefined) {
-            openSetup(setup);
-        }
+        if (app !== undefined) void openSetup(app);
     }
 </script>
 
@@ -126,9 +179,9 @@
         </Body>
 
         {#each relevant as app (app.id)}
-            {@const setup = chatLinkSurfaceOpening(app, chatId, $currentUserIdStore)}
+            {@const hasSetup = hasChatLinkSurface(app)}
             {@const needsPairing = app.manifest.perUserKeys && !connected.has(app.id)}
-            {@const showPrimary = needsPairing || setup !== undefined}
+            {@const showPrimary = needsPairing || hasSetup}
             <Container mainAxisAlignment={"spaceBetween"} crossAxisAlignment={"center"} gap={"md"}>
                 <Container direction={"vertical"} gap={"xs"}>
                     <Body fontWeight={"bold"}>{app.manifest.name}</Body>
@@ -141,7 +194,12 @@
                          overflow a non-wrapping flex row on a narrow window — this wraps them. -->
                     <div class="app-actions">
                         {#if showPrimary}
-                            <CommonButton onClick={() => startConnect(app)} size={"small_text"}>
+                            <CommonButton
+                                onClick={() => startConnect(app)}
+                                loading={openingSetup === app.id}
+                                disabled={openingSetup !== undefined && openingSetup !== app.id}
+                                size={"small_text"}
+                            >
                                 {#snippet icon(color, size)}
                                     {#if needsPairing}
                                         <LinkVariant {color} {size} />
@@ -152,14 +210,16 @@
                                 <Translatable
                                     resourceKey={i18nKey(
                                         needsPairing ? "aiApps.connect" : "aiApps.openSetup",
-                                    )} />
+                                    )}
+                                />
                             </CommonButton>
                         {/if}
                         {#if connected.has(app.id)}
                             {#if app.manifest.perUserKeys}
                                 <CommonButton
                                     onClick={() => (linkingApp = app)}
-                                    size={"small_text"}>
+                                    size={"small_text"}
+                                >
                                     {#snippet icon(color, size)}
                                         <LinkVariant {color} {size} />
                                     {/snippet}
@@ -169,7 +229,8 @@
                             <CommonButton
                                 onClick={() => disconnectApp(app)}
                                 loading={disconnecting.has(app.id)}
-                                size={"small_text"}>
+                                size={"small_text"}
+                            >
                                 {#snippet icon(color, size)}
                                     <LinkOff {color} {size} />
                                 {/snippet}
@@ -188,7 +249,9 @@
             url={setupSurface.url}
             display={setupSurface.surface.display}
             dataDisclosures={setupSurface.dataDisclosures}
-            onDismiss={() => (setupSurface = undefined)} />
+            onConsent={() => (setupHandedOff = true)}
+            onDismiss={dismissSetup}
+        />
     {/if}
 
     {#if linkingApp !== undefined}
@@ -198,7 +261,8 @@
                 linkingApp = undefined;
                 pendingSetup = undefined;
             }}
-            {onLinked} />
+            {onLinked}
+        />
     {/if}
 {/if}
 

@@ -13,6 +13,8 @@ const PR2_SENSITIVE_HISTORY_MARKERS: &[&str] = &[
     "c2c_deposit_action_confirmed",
     "c2c_validate_ai_app_card_provenance",
     "c2c_create_ai_app_card_capability",
+    "c2c_create_ai_app_chat_link_token",
+    "c2c_cancel_ai_app_chat_link_token",
     "c2c_create_ai_app_card_confirmation_grant",
     "c2c_consume_ai_app_card_confirmation_grant",
 ];

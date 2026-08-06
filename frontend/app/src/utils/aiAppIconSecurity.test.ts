@@ -6,7 +6,7 @@ import { deriveCardOrigin } from "./cardBridge";
 describe("AI app icon privacy policy", () => {
     it("uses anonymous, no-referrer loading with the shared production URL policy", () => {
         const source = readFileSync(
-            resolve(process.cwd(), "src/components/home/communities/explore/AiAppIcon.svelte"),
+            resolve(__dirname, "../components/home/communities/explore/AiAppIcon.svelte"),
             "utf8",
         );
         expect(source).toContain('crossorigin="anonymous"');

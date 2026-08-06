@@ -8,6 +8,7 @@ import {
     Stream,
     toBigInt32,
     type AcceptP2PSwapResponse,
+    type AiAppChatLinkToken,
     type AiAppCardCapability,
     type AddRemoveReactionResponse,
     type ApproveTransferResponse,
@@ -118,6 +119,8 @@ import {
     UserRespondToActionCardResponse,
     UserCreateAiAppCardCapabilityArgs,
     UserCreateAiAppCardCapabilityResponse,
+    UserCreateAiAppChatLinkTokenArgs,
+    UserCreateAiAppChatLinkTokenResponse,
     UserEventsArgs,
     UserEventsByIndexArgs,
     UserEventsResponse,
@@ -195,6 +198,7 @@ import type { UserDb } from "../../utils/userCache";
 import { SingleCanisterMsgpackAgent } from "../canisterAgent/msgpack";
 import type { IChatEventsReader } from "../common/chatEvents";
 import { createAiAppCardCapabilityResponse } from "../common/aiAppCardCapability";
+import { createAiAppChatLinkTokenResponse } from "../common/aiAppChatLinkToken";
 import {
     acceptP2PSwapSuccess,
     apiChatIdentifier,
@@ -579,6 +583,26 @@ export class UserClient
             createAiAppCardCapabilityResponse,
             UserCreateAiAppCardCapabilityArgs,
             UserCreateAiAppCardCapabilityResponse,
+        );
+    }
+
+    createAiAppChatLinkToken(
+        userId: string,
+        appId: number,
+        appRevision: bigint,
+    ): Promise<AiAppChatLinkToken | undefined> {
+        return this.update(
+            "create_ai_app_chat_link_token",
+            {
+                user_id: principalStringToBytes(userId),
+                app_id: appId,
+                app_revision: appRevision,
+            },
+            createAiAppChatLinkTokenResponse,
+            UserCreateAiAppChatLinkTokenArgs,
+            UserCreateAiAppChatLinkTokenResponse,
+            undefined,
+            { sensitive: true },
         );
     }
 

@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
+const APP_ROOT = resolve(__dirname, "../..");
+
 type SettingsEntryPoint = {
     label: string;
     component: string;
@@ -19,7 +21,7 @@ const SETTINGS_ENTRY_POINTS: SettingsEntryPoint[] = [
         mount: "src/components/home/groupdetails/GroupDetailsBody.svelte",
         componentName: "AiAppsSummary",
         mountMarkup: "<AiAppsSummary {chat} />",
-        surfaceResolverCall: "chatLinkSurfaceOpening(app, chat.id)",
+        surfaceResolverCall: "createChatLinkSurfaceOpening(client, app, chatId)",
         surfaceHost: "AiAppSurfaceModal",
     },
     {
@@ -28,7 +30,7 @@ const SETTINGS_ENTRY_POINTS: SettingsEntryPoint[] = [
         mount: "src/components/home/groupdetails/DirectChatDetails.svelte",
         componentName: "AiAppsDirectSummary",
         mountMarkup: "<AiAppsDirectSummary chatId={chat.id} />",
-        surfaceResolverCall: "chatLinkSurfaceOpening(app, chatId, $currentUserIdStore)",
+        surfaceResolverCall: "createChatLinkSurfaceOpening(client, app, chatId)",
         surfaceHost: "AiAppSurfaceModal",
     },
     {
@@ -37,7 +39,7 @@ const SETTINGS_ENTRY_POINTS: SettingsEntryPoint[] = [
         mount: "src/components_mobile/home/groupdetails/GroupDetails.svelte",
         componentName: "AiAppsSummary",
         mountMarkup: "<AiAppsSummary {chat} />",
-        surfaceResolverCall: "chatLinkSurfaceOpening(app, chat.id)",
+        surfaceResolverCall: "createChatLinkSurfaceOpening(client, app, chatId)",
         surfaceHost: "AiAppSurfaceSheet",
     },
     {
@@ -46,13 +48,13 @@ const SETTINGS_ENTRY_POINTS: SettingsEntryPoint[] = [
         mount: "src/components_mobile/home/groupdetails/DirectChatDetails.svelte",
         componentName: "AiAppsDirectSummary",
         mountMarkup: "<AiAppsDirectSummary chatId={chat.id} />",
-        surfaceResolverCall: "chatLinkSurfaceOpening(app, chatId, $currentUserIdStore)",
+        surfaceResolverCall: "createChatLinkSurfaceOpening(client, app, chatId)",
         surfaceHost: "AiAppSurfaceSheet",
     },
 ];
 
 function source(path: string): string {
-    return readFileSync(resolve(process.cwd(), path), "utf8");
+    return readFileSync(resolve(APP_ROOT, path), "utf8");
 }
 
 function compact(value: string): string {
@@ -71,8 +73,10 @@ describe.each(SETTINGS_ENTRY_POINTS)("$label in-chat Settings AI apps entry poin
     it("shows registered chat_link setup through the hardened surface host", () => {
         const component = source(entry.component);
         expect(compact(component)).toContain(compact(entry.surfaceResolverCall));
-        expect(component).toContain("setup !== undefined");
+        expect(component).toContain("hasChatLinkSurface(app)");
         expect(component).toContain('"aiApps.openSetup"');
+        expect(component).toContain("openingSetup === app.id");
+        expect(component).toContain('i18nKey("aiApps.openSetupFailed")');
         expect(component).toContain(`<${entry.surfaceHost}`);
         expect(component).toContain("url={setupSurface.url}");
     });
@@ -96,11 +100,38 @@ describe.each(SETTINGS_ENTRY_POINTS)("$label in-chat Settings AI apps entry poin
             "const needsPairing = app.manifest.perUserKeys && !connected.has(app.id)",
         );
         expect(component).toContain("onClick={() => startConnect(app)}");
-        expect(component).toContain("pendingSetup = setup");
-        expect(component).toContain("const setup = pendingSetup");
-        expect(component).toMatch(
-            /const setup = pendingSetup; pendingSetup = undefined; if \(setup !== undefined\) \{ openSetup\(setup\); \}/,
+        expect(component).toContain("bindPendingChatLinkSetup(app");
+        expect(component).toContain("pendingChatLinkSetupAppForChat(");
+        expect(component).toContain("pendingSetup = undefined");
+        expect(component).toContain("if (app !== undefined) void openSetup(app)");
+    });
+
+    it("cancels the exact minted token only when setup is dismissed before handoff", () => {
+        const component = compact(source(entry.component));
+        expect(component).toContain("let setupHandedOff = $state(false)");
+        expect(component).toContain("onConsent={() => (setupHandedOff = true)}");
+        expect(component).toContain("onDismiss={dismissSetup}");
+        expect(component).toContain("client.cancelAiAppChatLinkToken(opening.chatLinkToken)");
+        expect(component).toContain("opening !== undefined && !setupHandedOff");
+    });
+
+    it("serializes setup mints and cancels a result made stale by chat change or unmount", () => {
+        const component = compact(source(entry.component));
+
+        expect(component).toContain(
+            "if (openingSetup !== undefined || setupSurface !== undefined) return",
         );
+        expect(component).toContain("let openingRequest = 0");
+        expect(component).toContain("const request = ++openingRequest");
+        expect(component).toContain("openingSetup = app.id");
+        expect(component).toContain("request !== openingRequest");
+        expect(component).toContain("$effect(() => {");
+        expect(component).toContain("chatIdentifierToString(");
+        expect(component).toContain("openingRequest += 1");
+        expect(component).toContain(
+            "disabled={openingSetup !== undefined && openingSetup !== app.id}",
+        );
+        expect(component).toContain("await client.cancelAiAppChatLinkToken(opening.chatLinkToken)");
     });
 
     it("passes only the shared resolver's URL to the surface host", () => {
@@ -114,28 +145,36 @@ describe.each(SETTINGS_ENTRY_POINTS)("$label in-chat Settings AI apps entry poin
 });
 
 describe("shared chat_link URL privacy used by all Settings entries", () => {
-    it("substitutes only public appId and rejects unresolved raw-chat placeholders", () => {
+    it("mints one canonical opaque fragment token and rejects raw-chat placeholders", () => {
         const resolver = compact(source("src/utils/aiAppSurfaces.ts"));
-        const start = resolver.indexOf("export function chatLinkSurfaceOpening(");
-        const end = resolver.indexOf("export function cardSurfaceOpening(", start);
+        const start = resolver.indexOf("export async function createChatLinkSurfaceOpening(");
+        const end = resolver.indexOf("export interface PendingChatLinkSetup", start);
         const chatLinkResolver = resolver.slice(start, end);
 
-        expect(chatLinkResolver).toContain("_chatId: ChatIdentifier");
-        expect(chatLinkResolver).toContain("_currentUserId?: string");
-        expect(chatLinkResolver).toContain("substitutePlaceholders(surface.url, app.id)");
+        expect(resolver).toContain("export function hasChatLinkSurface(");
+        expect(chatLinkResolver).toContain("const descriptor = chatLinkDescriptor(app)");
+        expect(chatLinkResolver).toContain("descriptor.appId");
+        expect(chatLinkResolver).toContain("descriptor.appRevision");
+        expect(chatLinkResolver).toContain("CHAT_LINK_TOKEN_PLACEHOLDER");
+        expect(resolver).toContain("template.split(CHAT_LINK_TOKEN_PLACEHOLDER)");
+        expect(resolver).toContain('template.indexOf("#")');
         expect(chatLinkResolver).not.toContain("chatKeyFor(");
-        expect(chatLinkResolver).not.toContain("encodeURIComponent(_chatId");
-        expect(chatLinkResolver).not.toContain("encodeURIComponent(_currentUserId");
+        expect(chatLinkResolver).not.toContain("encodeURIComponent(chatId");
+        expect(chatLinkResolver).not.toContain("currentUserId");
 
         // The existing behavior suite in aiAppSurfaces.test.ts exercises both successful appId
         // substitution and rejection of legacy {chatKey}; keep that regression alongside this
         // four-entry-point wiring contract rather than duplicating resolver implementation here.
         const resolverBehavior = compact(source("src/utils/aiAppSurfaces.test.ts"));
-        expect(resolverBehavior).toContain('url: "https://app.example/setup?app={appId}"');
-        expect(resolverBehavior).toContain('url: "https://app.example/setup?chat={chatKey}"');
-        expect(resolverBehavior).toContain('expect(opening?.dataDisclosures).toEqual(["app_id"])');
         expect(resolverBehavior).toContain(
-            'expect(chatLinkSurfaceOpening(legacy, direct, "scp3f-4qbae-aq")).toBeUndefined()',
+            'url: "https://app.example/setup#app={appId}&token={chatLinkToken}"',
         );
+        expect(resolverBehavior).toContain(
+            'url: "https://app.example/settings#openchat-routing/{chatLinkToken}"',
+        );
+        expect(resolverBehavior).toContain('url: "https://app.example/setup?chat={chatKey}"');
+        expect(resolverBehavior).toContain('"one_time_chat_link_token"');
+        expect(resolverBehavior).toContain("expect(first?.url).not.toBe(second?.url)");
+        expect(resolverBehavior).toContain("expect(hasChatLinkSurface(legacy)).toBe(false)");
     });
 });

@@ -31,6 +31,7 @@ pub mod cancel_p2p_swap;
 pub mod claim_daily_chit;
 pub mod configure_wallet;
 pub mod create_ai_app_card_capability;
+pub mod create_ai_app_chat_link_token;
 pub mod create_community;
 pub mod create_group;
 pub mod delete_community;

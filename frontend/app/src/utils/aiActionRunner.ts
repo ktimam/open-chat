@@ -24,8 +24,8 @@ import {
     type AiAppRegistration,
     type ModelModality,
     type RunAiActionResult,
-} from "openchat-shared";
-import type { ChatIdentifier, MessageContent, MessageContext, OpenChat } from "openchat-client";
+} from "@shared";
+import type { ChatIdentifier, MessageContent, MessageContext, OpenChat } from "@client";
 import { appContentAttestationAvailable } from "./aiActionAvailability";
 import { cardSurfaceOpening } from "./aiAppSurfaces";
 import { inferOnDevice, onDeviceInferenceCapability } from "./onDeviceInference";

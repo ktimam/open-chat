@@ -1,13 +1,18 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import type { AiAppRegistration, AiAppSurface, ChatIdentifier, OpenChat } from "openchat-client";
+import type { OpenChat } from "@client";
+import type { AiAppRegistration, AiAppSurface, ChatIdentifier } from "@shared";
+
+// Surface URL tests do not exercise local inference; isolate them from the multi-GB WASM loader.
+vi.mock("./onDeviceInference", () => ({ isNativeClient: () => false }));
 import {
     appForPostConfirm,
     aiAppSurfaceMarkerForViewer,
     cardSurfaceOpening,
     cardSurfaceForAction,
-    chatLinkSurfaceOpening,
+    createChatLinkSurfaceOpening,
+    hasChatLinkSurface,
     markSurfaceShownAfterConsent,
     parseAiAppSurfaceShownMarkers,
     resolveActionAppForCard,
@@ -43,6 +48,11 @@ function stubClient(apps: AiAppRegistration[], enabledIds: number[]): OpenChat {
     return {
         aiApps: async () => apps,
         enabledAiApps: async (_chatId: ChatIdentifier) => enabledIds,
+        createAiAppChatLinkToken: async () => ({
+            token: Uint8Array.from({ length: 32 }, (_, index) => index),
+            expiresAt: 123n,
+        }),
+        cancelAiAppChatLinkToken: async () => true,
     } as unknown as OpenChat;
 }
 
@@ -59,7 +69,6 @@ describe("cardSurfaceOpening", () => {
             CHAT,
         );
         expect(opening).toBeDefined();
-        // chatKeyFor(direct_chat u1) === "direct:u1" → encodeURIComponent → "direct%3Au1"
         expect(opening!.url).toBe("https://app.example/chat/card?app=7");
         expect(opening!.dataDisclosures).toEqual(["app_id"]);
     });
@@ -88,26 +97,165 @@ describe("cardSurfaceOpening", () => {
 });
 
 describe("surface destination disclosure and consent markers", () => {
-    it("discloses only the public app id and rejects legacy raw-chat placeholders", () => {
+    it("mints a canonical fragment bearer without exposing raw chat or user identifiers", async () => {
         const direct: ChatIdentifier = { kind: "direct_chat", userId: "ed6q5-uqcai-ba" };
-        const opening = chatLinkSurfaceOpening(
-            app(73, {
-                surfaces: [
-                    {
-                        kind: "chat_link",
-                        url: "https://app.example/setup?app={appId}",
-                    },
-                ],
-            }),
-            direct,
-            "scp3f-4qbae-aq",
+        const target = app(73, {
+            surfaces: [
+                {
+                    kind: "chat_link",
+                    url: "https://app.example/setup#app={appId}&token={chatLinkToken}",
+                },
+            ],
+        });
+        expect(hasChatLinkSurface(target)).toBe(true);
+        const client = stubClient([], []);
+        const opening = await createChatLinkSurfaceOpening(client, target, direct);
+        expect(opening?.dataDisclosures).toEqual(["app_id", "one_time_chat_link_token"]);
+        expect(opening?.url).toBe(
+            "https://app.example/setup#app=73&token=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
         );
-        expect(opening?.dataDisclosures).toEqual(["app_id"]);
-        expect(opening?.url).toBe("https://app.example/setup?app=73");
+        expect(opening?.url).not.toContain(direct.userId);
         const legacy = app(73, {
             surfaces: [{ kind: "chat_link", url: "https://app.example/setup?chat={chatKey}" }],
         });
-        expect(chatLinkSurfaceOpening(legacy, direct, "scp3f-4qbae-aq")).toBeUndefined();
+        expect(hasChatLinkSurface(legacy)).toBe(false);
+    });
+
+    it("preserves a path-like fragment route around the canonical token", async () => {
+        const target = app(73, {
+            surfaces: [
+                {
+                    kind: "chat_link",
+                    url: "https://app.example/settings#openchat-routing/{chatLinkToken}",
+                },
+            ],
+        });
+
+        const opening = await createChatLinkSurfaceOpening(stubClient([], []), target, CHAT);
+
+        expect(opening?.url).toBe(
+            "https://app.example/settings#openchat-routing/AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        );
+        expect(opening?.dataDisclosures).toEqual(["one_time_chat_link_token"]);
+    });
+
+    it("uses unpadded base64url rather than hex or standard base64", async () => {
+        const target = app(73, {
+            surfaces: [
+                {
+                    kind: "chat_link",
+                    url: "https://app.example/settings#token={chatLinkToken}",
+                },
+            ],
+        });
+        const client = {
+            createAiAppChatLinkToken: async () => ({
+                token: new Uint8Array(32).fill(0xff),
+                expiresAt: 123n,
+            }),
+            cancelAiAppChatLinkToken: async () => true,
+        } as unknown as OpenChat;
+
+        const opening = await createChatLinkSurfaceOpening(client, target, CHAT);
+        const encoded = opening?.url.split("#token=")[1];
+
+        expect(encoded).toMatch(/^[A-Za-z0-9_-]{43}$/);
+        expect(encoded).toContain("_");
+        expect(encoded).not.toMatch(/[+/=]/);
+    });
+
+    it("cancels a malformed minted bearer instead of constructing a URL", async () => {
+        const token = new Uint8Array(31);
+        const cancelAiAppChatLinkToken = vi.fn(async () => true);
+        const client = {
+            createAiAppChatLinkToken: async () => ({ token, expiresAt: 123n }),
+            cancelAiAppChatLinkToken,
+        } as unknown as OpenChat;
+        const target = app(73, {
+            surfaces: [
+                {
+                    kind: "chat_link",
+                    url: "https://app.example/settings#token={chatLinkToken}",
+                },
+            ],
+        });
+
+        await expect(createChatLinkSurfaceOpening(client, target, CHAT)).resolves.toBeUndefined();
+        expect(cancelAiAppChatLinkToken).toHaveBeenCalledOnce();
+        expect(cancelAiAppChatLinkToken).toHaveBeenCalledWith(token);
+    });
+
+    it("uses one immutable validated descriptor across the mint await", async () => {
+        const originalUrl = "https://app.example/settings#token={chatLinkToken}";
+        const target = app(41, {
+            surfaces: [{ kind: "chat_link", url: originalUrl }],
+        });
+        let resolveMint!: (value: { token: Uint8Array; expiresAt: bigint }) => void;
+        const mint = new Promise<{ token: Uint8Array; expiresAt: bigint }>((resolve) => {
+            resolveMint = resolve;
+        });
+        const createAiAppChatLinkToken = vi.fn(() => mint);
+        const client = {
+            createAiAppChatLinkToken,
+            cancelAiAppChatLinkToken: vi.fn(async () => true),
+        } as unknown as OpenChat;
+
+        const openingPromise = createChatLinkSurfaceOpening(client, target, CHAT);
+        target.id = 99;
+        target.updated = 999n;
+        target.manifest.name = "mutated app";
+        target.manifest.surfaces![0].url =
+            "https://attacker.example/settings#token={chatLinkToken}";
+        resolveMint({ token: new Uint8Array(32).fill(7), expiresAt: 123n });
+        const opening = await openingPromise;
+
+        expect(createAiAppChatLinkToken).toHaveBeenCalledWith(CHAT, 41, 410n);
+        expect(opening?.url).toMatch(/^https:\/\/app\.example\/settings#token=/);
+        expect(opening?.app.id).toBe(41);
+        expect(opening?.app.updated).toBe(410n);
+        expect(opening?.app.manifest.name).toBe("app41");
+        expect(opening?.surface.url).toBe(originalUrl);
+    });
+
+    it("requires exactly one canonical token placeholder after the fragment marker", () => {
+        const urls = [
+            "https://app.example/setup?token={chatLinkToken}",
+            "https://app.example/setup#{chatLinkToken}{chatLinkToken}",
+            "https://app.example/setup#token=%7BchatLinkToken%7D",
+            "https://app.example/setup#token={chat_link_token}",
+            "https://app.example/setup#token={chatLinkToken}&chat={chatId}",
+            "https://app.example/setup#token={chatLinkToken}&user={viewerId}",
+        ];
+        for (const url of urls) {
+            expect(hasChatLinkSurface(app(73, { surfaces: [{ kind: "chat_link", url }] }))).toBe(
+                false,
+            );
+        }
+    });
+
+    it("creates distinct URLs for distinct chats and opaque tokens", async () => {
+        const target = app(73, {
+            surfaces: [
+                {
+                    kind: "chat_link",
+                    url: "https://app.example/setup#token={chatLinkToken}",
+                },
+            ],
+        });
+        const firstChat: ChatIdentifier = { kind: "group_chat", groupId: "group-one" };
+        const secondChat: ChatIdentifier = { kind: "group_chat", groupId: "group-two" };
+        const client = {
+            createAiAppChatLinkToken: async (chatId: ChatIdentifier) => ({
+                token: new Uint8Array(32).fill(chatId === firstChat ? 1 : 2),
+                expiresAt: 123n,
+            }),
+            cancelAiAppChatLinkToken: async () => true,
+        } as unknown as OpenChat;
+        const first = await createChatLinkSurfaceOpening(client, target, firstChat);
+        const second = await createChatLinkSurfaceOpening(client, target, secondChat);
+        expect(first?.url).not.toBe(second?.url);
+        expect(first?.url).not.toContain(firstChat.groupId);
+        expect(second?.url).not.toContain(secondChat.groupId);
     });
 
     it("treats malformed or oversized cached markers as empty", () => {
@@ -131,7 +279,7 @@ describe("surface destination disclosure and consent markers", () => {
             surfaces: [
                 {
                     kind: "chat_link",
-                    url: "https://app.example/setup?app={appId}",
+                    url: "https://app.example/setup#app={appId}&token={chatLinkToken}",
                 },
             ],
             actions: [{ name: "sample.action" }],
@@ -431,7 +579,7 @@ describe("resolveActionAppForCard — authoritative host identity", () => {
 
     it("renders registry identity in host-owned chrome separately from the sender title", () => {
         const source = readFileSync(
-            resolve(process.cwd(), "src/components/home/ActionCardContent.svelte"),
+            resolve(__dirname, "../components/home/ActionCardContent.svelte"),
             "utf8",
         );
         expect(source).toContain('class="app-identity"');

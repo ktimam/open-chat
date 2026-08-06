@@ -5,7 +5,7 @@
         aiAppCardChatContext,
         type ChatIdentifier,
         OpenChat,
-    } from "openchat-client";
+    } from "@client";
     import { getContext, onMount } from "svelte";
     import { currentTheme } from "../../theme/themes";
     import {
@@ -115,12 +115,14 @@
             (!cardContentAttested ||
                 resolvedAppIdentity === undefined ||
                 !finalConfirmationAvailable)
-        ) return;
+        )
+            return;
         if (
             (confirmPayloadOverride === undefined) !== (confirmationGrant === undefined) ||
             (response === "cancel" &&
                 (confirmPayloadOverride !== undefined || confirmationGrant !== undefined))
-        ) return;
+        )
+            return;
         if (busy) return;
         busy = true;
         try {
@@ -237,7 +239,8 @@
             cardAppId === undefined ||
             content.appRevision === undefined ||
             resolvedAppIdentity?.id !== cardAppId
-        ) return undefined;
+        )
+            return undefined;
         return cardAttemptKey({
             viewerId,
             chat,
@@ -324,7 +327,8 @@
             cardOrigin === undefined ||
             cardAppId === undefined ||
             content.appRevision === undefined
-        ) return;
+        )
+            return;
         // The locally available exact confirmPayload wins. Received cards intentionally do not hydrate
         // it, so their public init is reconstructed only from safe manifest-mapped public rows. Private
         // app data is never recovered from a hidden row; it requires the separately authorized encrypted
@@ -334,14 +338,18 @@
             Object.keys(decoded).length > 0
                 ? decoded
                 : reverseMapRows(content.rows, cardLabelToField);
-        const init = buildCardInit(data, {
-            appId: cardAppId,
-            appRevision: content.appRevision,
-            actionId: content.actionId,
-            theme: $currentTheme.mode,
-            readonly: cardReadonly,
-            privateContext: cardCapability,
-        }, frameNonce);
+        const init = buildCardInit(
+            data,
+            {
+                appId: cardAppId,
+                appRevision: content.appRevision,
+                actionId: content.actionId,
+                theme: $currentTheme.mode,
+                readonly: cardReadonly,
+                privateContext: cardCapability,
+            },
+            frameNonce,
+        );
         // `sandbox="allow-scripts"` gives the frame an opaque origin, so targetOrigin must be `*`.
         // The target is the exact frame WindowProxy and every protocol message is bound to frameNonce.
         target.postMessage(init, "*");
@@ -396,7 +404,8 @@
             target === null ||
             target === undefined ||
             currentCardAttemptKey() === undefined
-        ) return;
+        )
+            return;
         privateContextRequested = true;
         capabilityPending = true;
         const requestedNonce = frameNonce;
@@ -447,7 +456,8 @@
                 capability === undefined ||
                 capability.expiresAt <= BigInt(Date.now()) ||
                 !cardCapabilityAttemptStillCurrent(attempt, current, componentMounted)
-            ) return;
+            )
+                return;
             cardCapability = capability;
             postInit();
         } finally {
@@ -482,7 +492,8 @@
         if (
             iframeEl === undefined ||
             !isCardBridgeEventForFrame(event, iframeEl.contentWindow, "null", frameNonce)
-        ) return;
+        )
+            return;
         const msg = event.data;
         if (!isRecord(msg)) return;
         switch (msg.type) {
@@ -490,7 +501,10 @@
                 if (readySeen) return;
                 // Public rendering requires no recipient key. Key generation/disclosure starts only
                 // after the separate host-owned private-context grant.
-                if (!isCardPublicReadyMessage(msg, frameNonce) || candidateAppIdentity === undefined)
+                if (
+                    !isCardPublicReadyMessage(msg, frameNonce) ||
+                    candidateAppIdentity === undefined
+                )
                     return;
                 resolvedAppIdentity = candidateAppIdentity;
                 readySeen = true;
@@ -515,13 +529,11 @@
                         pending,
                         readonly,
                     })
-                ) return;
+                )
+                    return;
                 const recipientKey = decodeCardRecipientPublicKey(msg, frameNonce);
                 if (recipientKey === undefined) return;
-                void mintPrivateContextCapability(
-                    recipientKey.scheme,
-                    recipientKey.publicKey,
-                );
+                void mintPrivateContextCapability(recipientKey.scheme, recipientKey.publicKey);
                 break;
             }
             case "oc:card:confirm":
@@ -553,7 +565,8 @@
                 acknowledged,
             ) ||
             request === undefined
-        ) return;
+        )
+            return;
         approvalRequest = undefined;
         confirmationGrantFailed = false;
         if (request.kind === "cancel") {
@@ -594,11 +607,7 @@
             }
             // The opaque grant never enters the iframe, URL, storage, or logs. The exact byte copy
             // attested above is passed with it to the authoritative chat canister exactly once.
-            await onRespond?.(
-                "confirm",
-                attempt.confirmPayload.slice(),
-                grant.grant.slice(),
-            );
+            await onRespond?.("confirm", attempt.confirmPayload.slice(), grant.grant.slice());
         } finally {
             if (confirmationAttempt === attempt) confirmationAttempt = undefined;
             busy = false;
@@ -651,7 +660,8 @@
     $effect(() => {
         // Any state/context transition invalidates a pending iframe request. The user must approve a
         // fresh snapshot from the currently active frame/card, never a stale request.
-        const valid = cardCancelable && cardActivated && loadRequested && content.state === "pending";
+        const valid =
+            cardCancelable && cardActivated && loadRequested && content.state === "pending";
         void messageId;
         void cardOrigin;
         if (!valid) {
@@ -664,7 +674,8 @@
 <div class="action-card" class:collapsed class:has-frame={cardUrl !== undefined}>
     <div
         class="app-identity"
-        class:unverified={!cardContentAttested || (appResolutionComplete && resolvedAppIdentity === undefined)}
+        class:unverified={!cardContentAttested ||
+            (appResolutionComplete && resolvedAppIdentity === undefined)}
         aria-live="polite"
     >
         {#if resolvedAppIdentity !== undefined}
@@ -723,14 +734,16 @@
                     <span>Destination: <code>{cardOrigin}</code></span>
                     <span>Exact card URL: <code>{cardUrl}</code></span>
                     <span>
-                        Loading contacts this external origin and shares the existing card fields plus
-                        app/revision/action, message, optional thread, and stable chat identifiers. In
-                        a direct chat, the chat identity contains both participant identifiers.
+                        Loading contacts this external origin and shares the existing card fields
+                        plus app/revision/action, message, optional thread, and stable chat
+                        identifiers. In a direct chat, the chat identity contains both participant
+                        identifiers.
                     </span>
                     <span>
                         If you separately grant private context later, redemption also reveals your
                         stable OpenChat user ID and this tab's recipient-key scheme/public key, then
-                        returns encrypted app-defined private data. Capabilities never enter this URL.
+                        returns encrypted app-defined private data. Capabilities never enter this
+                        URL.
                     </span>
                     <button
                         disabled={readonly || !pending || !credentiallessSupported}
@@ -747,127 +760,145 @@
                         <span class="card-load-error">
                             The app card did not complete its isolated handshake in time.
                         </span>
-                        <button onclick={chooseClassicFallback}>Use read-only OpenChat summary</button>
+                        <button onclick={chooseClassicFallback}
+                            >Use read-only OpenChat summary</button
+                        >
                     {/if}
                 </div>
             {:else}
-            <div class="untrusted-frame-label">Untrusted app content</div>
-            <!-- App-rendered card pixels remain untrusted. The opaque sandbox prevents redirects from
+                <div class="untrusted-frame-label">Untrusted app content</div>
+                <!-- App-rendered card pixels remain untrusted. The opaque sandbox prevents redirects from
                  inheriting any destination origin; the height is driven by the nonce-bound bridge. -->
-            <!-- credentialless: OpenChat is cross-origin-isolated (COEP: credentialless) for its wasm
+                <!-- credentialless: OpenChat is cross-origin-isolated (COEP: credentialless) for its wasm
                  inference, which otherwise ERR_BLOCKED_BY_RESPONSE a cross-origin iframe. The
                  credentialless attribute loads the app card in an anonymous context (no cookies /
                  partitioned storage — the card page needs no session anyway), which is permitted
                  inside a COEP document. -->
-            <iframe
-                bind:this={iframeEl}
-                class="card-frame"
-                class:inactive={!cardActivated}
-                title="Isolated action app card"
-                src={cardUrl}
-                credentialless
-                sandbox="allow-scripts"
-                referrerpolicy="no-referrer"
-                onload={onIframeLoad}
-                style={`height: ${cardActivated ? cardHeight : 1}px;`}
-            ></iframe>
-            {#if !cardActivated}
-                <div class="card-loading" aria-live="polite">
-                    {capabilityPending ? "Verifying app card…" : "Waiting for the isolated app…"}
-                </div>
-            {/if}
+                <iframe
+                    bind:this={iframeEl}
+                    class="card-frame"
+                    class:inactive={!cardActivated}
+                    title="Isolated action app card"
+                    src={cardUrl}
+                    credentialless
+                    sandbox="allow-scripts"
+                    referrerpolicy="no-referrer"
+                    onload={onIframeLoad}
+                    style={`height: ${cardActivated ? cardHeight : 1}px;`}
+                ></iframe>
+                {#if !cardActivated}
+                    <div class="card-loading" aria-live="polite">
+                        {capabilityPending
+                            ? "Verifying app card…"
+                            : "Waiting for the isolated app…"}
+                    </div>
+                {/if}
 
-            {#if approvalRequest !== undefined && cardActivated}
-                <div class="host-approval" role="group" aria-label="Approve app card request">
-                    <strong>
-                        {approvalRequest.kind === "confirm"
-                            ? "The app requests confirmation"
-                            : "The app requests cancellation"}
-                    </strong>
-                    <pre class="approval-summary">{canonicalCardApprovalSummary(approvalRequest)}</pre>
-                    {#if approvalRequest.kind === "confirm" && content.disclosure !== undefined}
-                        <label class="disclosure" onclick={(e) => e.stopPropagation()}>
-                            <input type="checkbox" bind:checked={acknowledged} disabled={busy} />
-                            <span>{content.disclosure}</span>
-                        </label>
-                    {/if}
-                    <div class="actions">
-                        <button class="cancel" disabled={busy} onclick={dismissApproval}>Dismiss</button>
+                {#if approvalRequest !== undefined && cardActivated}
+                    <div class="host-approval" role="group" aria-label="Approve app card request">
+                        <strong>
+                            {approvalRequest.kind === "confirm"
+                                ? "The app requests confirmation"
+                                : "The app requests cancellation"}
+                        </strong>
+                        <pre class="approval-summary">{canonicalCardApprovalSummary(
+                                approvalRequest,
+                            )}</pre>
+                        {#if approvalRequest.kind === "confirm" && content.disclosure !== undefined}
+                            <label class="disclosure" onclick={(e) => e.stopPropagation()}>
+                                <input
+                                    type="checkbox"
+                                    bind:checked={acknowledged}
+                                    disabled={busy}
+                                />
+                                <span>{content.disclosure}</span>
+                            </label>
+                        {/if}
+                        <div class="actions">
+                            <button class="cancel" disabled={busy} onclick={dismissApproval}
+                                >Dismiss</button
+                            >
+                            <button
+                                class="confirm"
+                                disabled={!canApprovePendingRequest}
+                                onclick={approveRequest}
+                            >
+                                {#if busy}
+                                    <Spinner size="1.1em" foregroundColour="transparent" />
+                                {:else if approvalRequest.kind === "confirm"}
+                                    Confirm request
+                                {:else}
+                                    Cancel card
+                                {/if}
+                            </button>
+                        </div>
+                    </div>
+                {/if}
+
+                {#if cardActivated && cardCancelable && !finalConfirmationAvailable}
+                    <div class="host-approval" role="group" aria-label="Card actions">
+                        <span class="card-load-error">
+                            Confirmation is disabled until the server binds the exact final payload
+                            to this viewer, card, and app revision.
+                        </span>
+                        <div class="actions">
+                            <button
+                                class="cancel"
+                                disabled={busy}
+                                onclick={(e) => respond("cancel", e)}>Cancel card</button
+                            >
+                        </div>
+                    </div>
+                {/if}
+
+                {#if confirmationGrantFailed}
+                    <div class="card-load-error" role="alert">
+                        The exact confirmation payload could not be authorized. Review the request
+                        and try again; no payload was submitted.
+                    </div>
+                {/if}
+
+                {#if cardActivated && cardCapability === undefined}
+                    <div class="private-context-consent">
+                        <strong>Private app context is not shared</strong>
+                        <span>
+                            A separate grant can let the registered app show viewer-owned details,
+                            such as an account-defined type. Redemption is bound to this viewer,
+                            chat, thread, message, app revision, action, frame nonce, and recipient
+                            key. OpenChat treats the returned app payload as opaque.
+                        </span>
                         <button
-                            class="confirm"
-                            disabled={!canApprovePendingRequest}
-                            onclick={approveRequest}
+                            disabled={!privateContextAvailable ||
+                                capabilityPending ||
+                                !pending ||
+                                readonly}
+                            onclick={requestPrivateContext}
                         >
-                            {#if busy}
-                                <Spinner size="1.1em" foregroundColour="transparent" />
-                            {:else if approvalRequest.kind === "confirm"}
-                                Confirm request
-                            {:else}
-                                Cancel card
-                            {/if}
+                            {capabilityPending
+                                ? "Preparing private context…"
+                                : "Share private context"}
                         </button>
+                        {#if !privateContextAvailable}
+                            <span>
+                                Private-context grant remains disabled until the backend and
+                                registered app redemption/decryption contracts align.
+                            </span>
+                        {:else}
+                            <span>
+                                The short-lived capability is delivered only to this isolated frame
+                                and is never stored or shown in the URL. Other chat members receive
+                                no viewer-private fields.
+                            </span>
+                        {/if}
                     </div>
-                </div>
-            {/if}
-
-            {#if cardActivated && cardCancelable && !finalConfirmationAvailable}
-                <div class="host-approval" role="group" aria-label="Card actions">
-                    <span class="card-load-error">
-                        Confirmation is disabled until the server binds the exact final payload to
-                        this viewer, card, and app revision.
-                    </span>
-                    <div class="actions">
-                        <button
-                            class="cancel"
-                            disabled={busy}
-                            onclick={(e) => respond("cancel", e)}>Cancel card</button>
-                    </div>
-                </div>
-            {/if}
-
-            {#if confirmationGrantFailed}
-                <div class="card-load-error" role="alert">
-                    The exact confirmation payload could not be authorized. Review the request and try
-                    again; no payload was submitted.
-                </div>
-            {/if}
-
-            {#if cardActivated && cardCapability === undefined}
-                <div class="private-context-consent">
-                    <strong>Private app context is not shared</strong>
-                    <span>
-                        A separate grant can let the registered app show viewer-owned details, such as
-                        an account-defined type. Redemption is bound to this viewer, chat, thread,
-                        message, app revision, action, frame nonce, and recipient key. OpenChat treats
-                        the returned app payload as opaque.
-                    </span>
-                    <button
-                        disabled={!privateContextAvailable || capabilityPending || !pending || readonly}
-                        onclick={requestPrivateContext}
-                    >
-                        {capabilityPending ? "Preparing private context…" : "Share private context"}
-                    </button>
-                    {#if !privateContextAvailable}
-                        <span>
-                            Private-context grant remains disabled until the backend and registered app
-                            redemption/decryption contracts align.
-                        </span>
-                    {:else}
-                        <span>
-                            The short-lived capability is delivered only to this isolated frame and is
-                            never stored or shown in the URL. Other chat members receive no
-                            viewer-private fields.
-                        </span>
-                    {/if}
-                </div>
-            {/if}
+                {/if}
             {/if}
         {:else}
             {#if cardContentAttestationBlocked}
                 <div class="card-load-error" role="alert">
                     This card's app/revision/action coordinates match the directory, but its title,
-                    rows, and payload are not attested as app-authored. App rendering and confirmation
-                    are disabled.
+                    rows, and payload are not attested as app-authored. App rendering and
+                    confirmation are disabled.
                 </div>
             {/if}
             {#if appCardRenderingBlocked}

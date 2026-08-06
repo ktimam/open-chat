@@ -92,11 +92,7 @@
     async function cancelLink() {
         if (completed || cancelling) return;
         cancelling = true;
-        await cancelAiAppLinkConsent(
-            client,
-            () => linkCode?.code,
-            pendingCodeRequest,
-        );
+        await cancelAiAppLinkConsent(client, () => linkCode?.code, pendingCodeRequest);
         completed = true;
         onDismiss();
     }
@@ -138,11 +134,12 @@
 
         <Body>
             <Translatable
-                resourceKey={i18nKey("aiApps.linkExplain", { name: app.manifest.name })} />
+                resourceKey={i18nKey("aiApps.linkExplain", { name: app.manifest.name })}
+            />
         </Body>
         <BodySmall colour={"textSecondary"}>
-            Only the exact registered app canister can redeem this code. Replacement keys are versioned
-            so an old disconnect proof cannot revoke the new connection.
+            Only the exact registered app canister can redeem this code. Replacement keys are
+            versioned so an old disconnect proof cannot revoke the new connection.
         </BodySmall>
 
         {#if linkCode !== undefined}
@@ -155,7 +152,8 @@
                     <Translatable
                         resourceKey={i18nKey("aiApps.linkCodeExpires", {
                             remaining: formatRemaining(),
-                        })} />
+                        })}
+                    />
                 {/if}
             </div>
 
@@ -173,32 +171,36 @@
                             <Translatable
                                 resourceKey={i18nKey("aiApps.linkStepOpen", {
                                     name: app.manifest.name,
-                                })} />
+                                })}
+                            />
                         </BodySmall>
                         <div class="connect-destination">
                             <AiAppSurfaceDestination
                                 title={app.manifest.name}
-                                normalizedUrl={connectSurface.url}
+                                displayUrl={connectSurface.url}
                                 dataDisclosures={connectSurface.dataDisclosures}
                             />
                         </div>
                         <CommonButton
                             onClick={() => openSurfaceExternally(client, connectSurface.url)}
-                            size={"small_text"}>
+                            size={"small_text"}
+                        >
                             {#snippet icon(color, size)}
                                 <OpenInNew {color} {size} />
                             {/snippet}
                             <Translatable
                                 resourceKey={i18nKey("aiApps.linkOpenConnectPage", {
                                     name: app.manifest.name,
-                                })} />
+                                })}
+                            />
                         </CommonButton>
                     {:else}
                         <BodySmall>
                             <Translatable
                                 resourceKey={i18nKey("aiApps.linkInstruction", {
                                     name: app.manifest.name,
-                                })} />
+                                })}
+                            />
                         </BodySmall>
                     {/if}
                 </li>
@@ -217,7 +219,8 @@
             {#if notLinkedYet}
                 <BodySmall colour={"textSecondary"}>
                     <Translatable
-                        resourceKey={i18nKey("aiApps.linkNotYet", { name: app.manifest.name })} />
+                        resourceKey={i18nKey("aiApps.linkNotYet", { name: app.manifest.name })}
+                    />
                 </BodySmall>
             {/if}
         {:else if codeFailed}
@@ -248,7 +251,8 @@
                 loading={checking}
                 disabled={loadingCode || cancelling || linkCode === undefined}
                 onClick={checkConnection}
-                size={"medium"}>
+                size={"medium"}
+            >
                 {#snippet icon(color, size)}
                     <Check {color} {size} />
                 {/snippet}

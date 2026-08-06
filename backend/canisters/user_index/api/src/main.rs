@@ -29,6 +29,7 @@ fn main() {
     generate_candid_method!(user_index, award_external_achievement, update);
     generate_candid_method!(user_index, activate_action_signing_key, update);
     generate_candid_method!(user_index, c2c_claim_ai_app_link_code, update);
+    generate_candid_method!(user_index, c2c_redeem_ai_app_chat_link_token, update);
     generate_candid_method!(user_index, c2c_get_ai_app_action_inbox_selector, update);
     generate_candid_method!(user_index, claim_ai_app_link_code, update);
     generate_candid_method!(user_index, c2c_redeem_ai_app_card_capability, update);
@@ -81,6 +82,7 @@ fn main() {
     generate_ts_method!(user_index, ai_apps_by_ids);
     generate_ts_method!(user_index, activate_action_signing_key);
     generate_ts_method!(user_index, cancel_ai_app_link_code);
+    generate_ts_method!(user_index, cancel_ai_app_chat_link_token);
     generate_ts_method!(user_index, claim_ai_app_link_code);
     generate_ts_method!(user_index, create_ai_app_card_provenance);
     generate_ts_method!(user_index, create_ai_app_link_code);

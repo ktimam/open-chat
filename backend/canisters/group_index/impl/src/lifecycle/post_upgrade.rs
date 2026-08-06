@@ -13,6 +13,9 @@ use utils::env::canister::CanisterEnv;
 
 const PR2_SENSITIVE_HISTORY_MARKERS: &[&str] = &[
     "c2c_issue_ai_app_card_authority_v1",
+    "c2c_issue_ai_app_chat_link_authority_v1",
+    "c2c_cancel_ai_app_chat_link_authority_v1",
+    "c2c_consume_ai_app_chat_link_authority_v1",
     "c2c_validate_ai_app_card_authority_v1",
     "c2c_consume_ai_app_card_authority_v1",
 ];

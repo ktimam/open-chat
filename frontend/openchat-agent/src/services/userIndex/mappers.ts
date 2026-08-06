@@ -100,6 +100,7 @@ import type {
     UserIndexAiAppUserKeysResponse,
     UserIndexMyAiAppKeysResponse,
     UserIndexCancelAiAppLinkCodeResponse,
+    UserIndexCancelAiAppChatLinkTokenResponse,
     UserIndexCreateAiAppLinkCodeResponse,
     UserIndexCreateAiAppCardProvenanceResponse,
     UserIndexExploreAiAppsResponse,
@@ -791,8 +792,12 @@ export function createAiAppLinkCodeResponse(
     return undefined;
 }
 
-export function cancelAiAppLinkCodeResponse(
-    value: UserIndexCancelAiAppLinkCodeResponse,
+export function cancelAiAppLinkCodeResponse(value: UserIndexCancelAiAppLinkCodeResponse): boolean {
+    return value === "Success";
+}
+
+export function cancelAiAppChatLinkTokenResponse(
+    value: UserIndexCancelAiAppChatLinkTokenResponse,
 ): boolean {
     return value === "Success";
 }

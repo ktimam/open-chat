@@ -15,7 +15,10 @@ generate_c2c_call!(users_chit);
 
 // Updates
 generate_c2c_call!(c2c_ai_app_confirmed_action_route);
+generate_c2c_call!(c2c_cancel_ai_app_chat_link_token);
 generate_c2c_call!(c2c_claim_ai_app_link_code);
+generate_c2c_call!(c2c_create_ai_app_chat_link_token);
+generate_c2c_call!(c2c_redeem_ai_app_chat_link_token);
 generate_c2c_call!(c2c_get_ai_app_action_inbox_selector);
 generate_c2c_call!(add_local_user_index_canister);
 generate_c2c_call!(c2c_deposit_actions);

@@ -6,12 +6,9 @@
     // enablement stays where it lives: each chat's Apps settings.
     import { i18nKey } from "@src/i18n/i18n";
     import { toastStore } from "@src/stores/toast";
-    import {
-        homeSurfaceOpening,
-        type SurfaceOpening,
-    } from "@utils/aiAppSurfaces";
+    import { homeSurfaceOpening, type SurfaceOpening } from "@utils/aiAppSurfaces";
     import { Body, BodySmall, CommonButton, Container, Sheet, Title } from "component-lib";
-    import type { AiAppRegistration, OpenChat } from "openchat-client";
+    import type { AiAppRegistration, OpenChat } from "@client";
     import { getContext } from "svelte";
     import LinkOff from "svelte-material-icons/LinkOff.svelte";
     import LinkVariant from "svelte-material-icons/LinkVariant.svelte";
@@ -119,7 +116,8 @@
                         <LinkVariant {color} {size} />
                     {/snippet}
                     <Translatable
-                        resourceKey={i18nKey(connected ? "aiApps.reconnect" : "aiApps.connect")} />
+                        resourceKey={i18nKey(connected ? "aiApps.reconnect" : "aiApps.connect")}
+                    />
                 </CommonButton>
             </Container>
         {/if}
