@@ -148,6 +148,9 @@ describe("embedded app surface isolation", () => {
             "utf8",
         );
         expect(card).toContain("startCardHandshakeTimeout");
+        expect(card).toContain("startCardBootstrapRetry");
+        expect(card).toContain("cancelCardBootstrapRetry?.()");
+        expect(card).toContain("frameNonce !== loadedNonce");
         expect(card).toContain("frameNonce !== expectedNonce");
         expect(card).toContain("Retry app card");
         expect(card).toContain("Use read-only OpenChat summary");

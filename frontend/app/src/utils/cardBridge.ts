@@ -470,6 +470,7 @@ export function newCardFrameNonce(): string {
 }
 
 export const CARD_HANDSHAKE_TIMEOUT_MS = 10_000;
+export const CARD_BOOTSTRAP_RETRY_MS = 250;
 
 // A frame blocked by CSP/network policy (or one that never implements the nonce-bound v2 ready
 // handshake) must not remain an invisible 1px element forever. Returning cleanup makes Svelte effects,
@@ -485,6 +486,26 @@ export function startCardHandshakeTimeout(
     return () => {
         active = false;
         clearTimeout(handle);
+    };
+}
+
+// The iframe load event can fire before a client-side app has installed its bridge listener (for
+// example while React/Svelte hydrates). Bootstrap is idempotent and contains only the fresh frame
+// nonce, so repeat it briefly until the nonce-bound ready response arrives. The owner must cancel
+// this loop on ready, frame reset, timeout, or teardown.
+export function startCardBootstrapRetry(
+    sendBootstrap: () => void,
+    retryMs = CARD_BOOTSTRAP_RETRY_MS,
+): () => void {
+    let active = true;
+    sendBootstrap();
+    const handle = setInterval(() => {
+        if (active) sendBootstrap();
+    }, retryMs);
+    return () => {
+        if (!active) return;
+        active = false;
+        clearInterval(handle);
     };
 }
 

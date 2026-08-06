@@ -29,6 +29,7 @@ import {
     normalizeAiAppSurfaceUrl,
     reverseMapRows,
     snapshotCardConfirmPayload,
+    startCardBootstrapRetry,
     startCardHandshakeTimeout,
     supportsCredentiallessIframe,
     visibleRows,
@@ -768,6 +769,54 @@ describe("card handshake timeout", () => {
             cleanup();
             vi.advanceTimersByTime(100);
             expect(timedOut).not.toHaveBeenCalled();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+});
+
+describe("card bootstrap retry", () => {
+    test("sends immediately and retries when the iframe listener missed the load-time bootstrap", () => {
+        vi.useFakeTimers();
+        try {
+            const send = vi.fn();
+            const cleanup = startCardBootstrapRetry(send, 25);
+            expect(send).toHaveBeenCalledTimes(1);
+            vi.advanceTimersByTime(75);
+            expect(send).toHaveBeenCalledTimes(4);
+            cleanup();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    test("ready cleanup cancels every later retry", () => {
+        vi.useFakeTimers();
+        try {
+            const send = vi.fn();
+            const ready = startCardBootstrapRetry(send, 25);
+            vi.advanceTimersByTime(24);
+            ready();
+            ready();
+            vi.advanceTimersByTime(100);
+            expect(send).toHaveBeenCalledTimes(1);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    test("session-reset cleanup stops an old nonce while a new session retries independently", () => {
+        vi.useFakeTimers();
+        try {
+            const oldSession = vi.fn();
+            const newSession = vi.fn();
+            const cancelOld = startCardBootstrapRetry(oldSession, 25);
+            cancelOld();
+            const cancelNew = startCardBootstrapRetry(newSession, 25);
+            vi.advanceTimersByTime(50);
+            expect(oldSession).toHaveBeenCalledTimes(1);
+            expect(newSession).toHaveBeenCalledTimes(3);
+            cancelNew();
         } finally {
             vi.useRealTimers();
         }
