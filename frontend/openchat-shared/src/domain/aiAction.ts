@@ -194,10 +194,7 @@ export function aiAppCardChatContext(
     }
 }
 
-export function chatKeyFor(
-    chatId: ChatIdentifier,
-    currentUserId?: string,
-): string | undefined {
+export function chatKeyFor(chatId: ChatIdentifier, currentUserId?: string): string | undefined {
     switch (chatId.kind) {
         case "group_chat":
             return `group:${chatId.groupId}`;
@@ -335,6 +332,8 @@ export type RunAiActionResult =
     | { kind: "ready_multi"; card: ActionCardContent; extracted: Record<string, unknown>[] }
     // No native runtime / no model selected — the caller must degrade gracefully (no autonomous fallback).
     | { kind: "unavailable"; reason: string }
+    // The input contains image bytes, but this app action did not opt into image extraction.
+    | { kind: "image_not_accepted" }
     // The model ran but produced nothing parseable as the declared structured output.
     | { kind: "no_extraction"; raw: string }
     | { kind: "error"; error: string };
@@ -497,7 +496,10 @@ function boundedRules(rules: readonly AiActionRule[]): AiActionRule[] {
                 if (rule.text.length <= MAX_AI_ACTION_INSTRUCTION_LENGTH) bounded.push(rule);
                 break;
             case "context":
-                bounded.push({ kind: "context", provide: rule.provide.filter((p) => p === "today") });
+                bounded.push({
+                    kind: "context",
+                    provide: rule.provide.filter((p) => p === "today"),
+                });
                 break;
             case "from_message":
                 if (isSafeAiActionFieldName(rule.field)) {
@@ -516,7 +518,9 @@ function boundedRules(rules: readonly AiActionRule[]): AiActionRule[] {
                     bounded.push({
                         kind: "normalize",
                         field: rule.field,
-                        ops: rule.ops.filter((op) => NORMALIZE_OPS.includes(op)).slice(0, NORMALIZE_OPS.length),
+                        ops: rule.ops
+                            .filter((op) => NORMALIZE_OPS.includes(op))
+                            .slice(0, NORMALIZE_OPS.length),
                     });
                 }
                 break;
@@ -616,9 +620,62 @@ function applyNormalizeOp(op: AiActionNormalizeOp, v: unknown): unknown {
     }
 }
 
-// Tiny local schema conformance pass (type/enum/minimum/exclusiveMinimum only — deliberately
-// not a full JSON-schema validator and no added dependency). Drops keys the schema doesn't declare and
-// DELETES fields that violate their declared constraint: visible omission beats silent wrongness.
+function isStrictCalendarDate(value: string): boolean {
+    if (value.length !== 10 || value[4] !== "-" || value[7] !== "-") return false;
+    for (let index = 0; index < value.length; index++) {
+        if (index === 4 || index === 7) continue;
+        const code = value.charCodeAt(index);
+        if (code < 48 || code > 57) return false;
+    }
+    const year = Number(value.slice(0, 4));
+    const month = Number(value.slice(5, 7));
+    const day = Number(value.slice(8, 10));
+    if (year < 1 || month < 1 || month > 12 || day < 1) return false;
+    const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+    const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    return day <= daysInMonth[month - 1];
+}
+
+function conformsToSafeStringFormat(format: unknown, value: string): boolean {
+    switch (format) {
+        case "date":
+            return isStrictCalendarDate(value);
+        case "ascii-uppercase":
+            return [...value].every((character) => {
+                const code = character.charCodeAt(0);
+                return code >= 65 && code <= 90;
+            });
+        case "no-nul":
+            return !value.includes(String.fromCharCode(0));
+        case "utf8-no-nul": {
+            // JavaScript strings may contain lone UTF-16 surrogates, but Rust/serde strings and
+            // Candid text are Unicode scalar values. Reject them here so exact-card provenance
+            // cannot be minted for bytes the app boundary is structurally unable to decode.
+            for (let index = 0; index < value.length; index++) {
+                const code = value.charCodeAt(index);
+                if (code === 0) return false;
+                if (code >= 0xd800 && code <= 0xdbff) {
+                    if (index + 1 >= value.length) return false;
+                    const next = value.charCodeAt(index + 1);
+                    if (next < 0xdc00 || next > 0xdfff) return false;
+                    index++;
+                } else if (code >= 0xdc00 && code <= 0xdfff) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        default:
+            // JSON Schema permits implementation-defined formats. Unknown formats remain annotations.
+            return true;
+    }
+}
+
+// Tiny local schema conformance pass (type/enum/numeric bounds, bounded string lengths, standard
+// format: "date", and deterministic allowlisted string formats only — deliberately not a full
+// JSON-schema validator and no added dependency). utf8-no-nul additionally keeps exact payloads
+// representable at Rust/Candid app boundaries. Drops keys the schema doesn't declare and DELETES
+// fields that violate their declared constraint: visible omission beats silent wrongness.
 function conformToSchema(
     extracted: Record<string, unknown>,
     schema: object | undefined,
@@ -643,6 +700,10 @@ function conformToSchema(
             pattern?: unknown;
             minimum?: unknown;
             exclusiveMinimum?: unknown;
+            maximum?: unknown;
+            minLength?: unknown;
+            maxLength?: unknown;
+            format?: unknown;
         };
         if (p.type === "number" && typeof value !== "number") continue;
         if (p.type === "string" && typeof value !== "string") continue;
@@ -660,6 +721,29 @@ function conformToSchema(
             value <= p.exclusiveMinimum
         ) {
             continue;
+        }
+        if (typeof p.maximum === "number" && typeof value === "number" && value > p.maximum) {
+            continue;
+        }
+        if (typeof value === "string") {
+            const length = [...value].length;
+            if (
+                typeof p.minLength === "number" &&
+                Number.isSafeInteger(p.minLength) &&
+                p.minLength >= 0 &&
+                length < p.minLength
+            ) {
+                continue;
+            }
+            if (
+                typeof p.maxLength === "number" &&
+                Number.isSafeInteger(p.maxLength) &&
+                p.maxLength >= 0 &&
+                length > p.maxLength
+            ) {
+                continue;
+            }
+            if (!conformsToSafeStringFormat(p.format, value)) continue;
         }
         // Manifest patterns are untrusted and JavaScript's backtracking RegExp engine has no timeout.
         // Fail closed for any patterned field rather than execute a potential ReDoS expression such
@@ -724,8 +808,9 @@ export function matchesKeyword(text: string, keyword: string): boolean {
 //   2. keyword_map rules with mode "override" scan the message (case-insensitive WHOLE-WORD match per
 //      keyword); the first mapping with any match wins. Mode "hint" is prompt-guidance only.
 //   3. normalize ops run in order on the field when it is present.
-//   4. schema conformance (type/enum/numeric bounds) deletes violating fields and drops undeclared
-//      keys. Untrusted regex patterns fail closed and are never executed.
+//   4. schema conformance (type/enum/numeric bounds/safe string lengths/bounded string formats)
+//      deletes violating fields and drops undeclared keys. Untrusted regex patterns fail closed and
+//      are never executed.
 export function applyRulesPostPass(
     rules: AiActionRule[],
     extracted: Record<string, unknown>,
@@ -894,6 +979,9 @@ export async function runAiAction(
     appId?: number,
     appRevision?: bigint,
 ): Promise<RunAiActionResult> {
+    if (input.image !== undefined && def.acceptsImage !== true) {
+        return { kind: "image_not_accepted" };
+    }
     if (normalizedCardRows(def.card.rows) === undefined) {
         return { kind: "error", error: "The action card template is invalid." };
     }
@@ -984,8 +1072,7 @@ export async function runAiAction(
     }
     return {
         kind: "error",
-        error:
-            "Multiple action entries require an access-controlled exact-payload endpoint before a card can be posted.",
+        error: "Multiple action entries require an access-controlled exact-payload endpoint before a card can be posted.",
     };
 }
 
@@ -1125,7 +1212,8 @@ function ruleFromWire(entry: unknown): AiActionRule | undefined {
             !isSafeAiActionFieldName(r.field) ||
             !Array.isArray(r.ops) ||
             r.ops.length > NORMALIZE_OPS.length
-        ) return undefined;
+        )
+            return undefined;
         // Unrecognised ops (forward compatibility) are skipped rather than failing the rule.
         const ops = r.ops.filter((o): o is AiActionNormalizeOp =>
             NORMALIZE_OPS.includes(o as AiActionNormalizeOp),

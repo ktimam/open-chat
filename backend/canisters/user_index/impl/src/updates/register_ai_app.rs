@@ -866,6 +866,24 @@ mod tests {
     }
 
     #[test]
+    fn schema_bounded_constraints_and_safe_formats_are_accepted() {
+        let mut value = action();
+        value.response_schema = r#"{
+            "type":"object",
+            "properties":{
+                "amount":{"type":"number","minimum":0.005,"maximum":90071992547409.9},
+                "currency":{"type":"string","minLength":3,"maxLength":3,"format":"ascii-uppercase"},
+                "date":{"type":"string","minLength":10,"maxLength":10,"format":"date"},
+                "note":{"type":"string","maxLength":4096,"format":"utf8-no-nul"}
+            },
+            "required":["amount"]
+        }"#
+        .to_string();
+
+        assert!(validate_action_definition(&mut value, false).is_ok());
+    }
+
+    #[test]
     fn rule_and_keyword_aggregate_limits_accept_at_limit_and_reject_above() {
         let instruction = || {
             AiActionRule::Instruction(types::InstructionRule {

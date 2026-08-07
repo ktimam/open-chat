@@ -122,18 +122,21 @@ describe("parseExtractionList", () => {
         expect(parseExtractionList("no json here")).toBeUndefined();
     });
 
-    it.each([31, 32])("retains the valid %i-candidate boundary but the runner blocks multi posting", async (count) => {
-        const raw = JSON.stringify(
-            Array.from({ length: count }, (_, i) => ({ amount: i + 1, note: `entry-${i}` })),
-        );
-        expect(parseExtractionList(raw)).toHaveLength(count);
-        const result = await runAiAction(MULTI_DEF, { text: "many" }, RECIPIENT, async () => ({
-            kind: "ok",
-            text: raw,
-        }));
-        expect(result.kind).toBe("error");
-        if (result.kind === "error") expect(result.error).toContain("exact-payload endpoint");
-    });
+    it.each([31, 32])(
+        "retains the valid %i-candidate boundary but the runner blocks multi posting",
+        async (count) => {
+            const raw = JSON.stringify(
+                Array.from({ length: count }, (_, i) => ({ amount: i + 1, note: `entry-${i}` })),
+            );
+            expect(parseExtractionList(raw)).toHaveLength(count);
+            const result = await runAiAction(MULTI_DEF, { text: "many" }, RECIPIENT, async () => ({
+                kind: "ok",
+                text: raw,
+            }));
+            expect(result.kind).toBe("error");
+            if (result.kind === "error") expect(result.error).toContain("exact-payload endpoint");
+        },
+    );
 
     it("stops at a 33rd overflow sentinel and rejects before per-candidate work", async () => {
         const entries = Array.from({ length: MAX_AI_ACTION_CANDIDATES + 1 }, (_, i) => ({
@@ -297,10 +300,15 @@ describe("runAiAction", () => {
     });
     it("passes the declared prompt + image to the model, but NOT the response schema", async () => {
         let seen: InferenceRequest | undefined;
-        await runAiAction(DEF, { image: new Uint8Array([1, 2, 3]) }, RECIPIENT, async (req) => {
-            seen = req;
-            return { kind: "ok", text: "{}" };
-        });
+        await runAiAction(
+            { ...DEF, acceptsImage: true },
+            { image: new Uint8Array([1, 2, 3]) },
+            RECIPIENT,
+            async (req) => {
+                seen = req;
+                return { kind: "ok", text: "{}" };
+            },
+        );
         const today = new Date().toISOString().slice(0, 10);
         // No rules and no message text: template + the dateline only.
         expect(seen?.prompt).toBe(`${DEF.promptTemplate}\n\nToday is ${today}.`);
@@ -595,9 +603,9 @@ describe("buildMultiActionCardContent", () => {
     it("never copies the send-only exact payload into public rows", () => {
         const card = buildMultiActionCardContent(DEF, entries, RECIPIENT);
         expect(card.rows.some((r) => r.label.startsWith("__oc_"))).toBe(false);
-        expect(card.rows.some((r) => r.value === new TextDecoder().decode(card.confirmPayload!))).toBe(
-            false,
-        );
+        expect(
+            card.rows.some((r) => r.value === new TextDecoder().decode(card.confirmPayload!)),
+        ).toBe(false);
     });
     it("threads the inbox + fan-out keys exactly like the single-entry builder", () => {
         const card = buildMultiActionCardContent(DEF, entries, RECIPIENT, "aaaaa-aa", [
@@ -1145,7 +1153,9 @@ describe("chatKeyFor", () => {
         const other = "ed6q5-uqcai-ba";
         expect(chatKeyFor({ kind: "direct_chat", userId: other })).toBeUndefined();
         expect(chatKeyFor({ kind: "direct_chat", userId: other }, other)).toBeUndefined();
-        expect(chatKeyFor({ kind: "direct_chat", userId: other }, "not-a-principal")).toBeUndefined();
+        expect(
+            chatKeyFor({ kind: "direct_chat", userId: other }, "not-a-principal"),
+        ).toBeUndefined();
     });
 });
 
@@ -1198,9 +1208,7 @@ describe("real captured model replies keep every transaction", () => {
         );
         const exactArray = QWEN_3_ENTRIES.replace(/\s+/g, "");
         expect(
-            legacyBuilder.rows.some((row) =>
-                row.value.replace(/\s+/g, "").includes(exactArray),
-            ),
+            legacyBuilder.rows.some((row) => row.value.replace(/\s+/g, "").includes(exactArray)),
         ).toBe(false);
         expect(legacyBuilder.rows.some((row) => row.label.startsWith("__oc_"))).toBe(false);
     });

@@ -341,6 +341,12 @@ async function runDefinition(
     appId?: number,
     appRevision?: bigint,
 ): Promise<ProposeResult> {
+    // `acceptsImage` is an explicit app capability, not a menu hint. Enforce it before the manual
+    // seam, blob fetching, model-capability checks, or inference so an image can never reach an
+    // action that omitted/disabled image support. Text proposals are unaffected.
+    if (content.kind === "image_content" && def.acceptsImage !== true) {
+        return { kind: "image_not_accepted" };
+    }
     if (manualExtraction !== undefined) {
         return buildManualCard(
             def,
@@ -603,6 +609,8 @@ export function proposeFailureMessage(result: ProposeResult): string | undefined
             return "This message can't be turned into an action";
         case "image_unsupported":
             return `${result.modelId ?? "This model"} doesn't support images, only text. Switch to an image-capable model in profile → App settings → On-device models.`;
+        case "image_not_accepted":
+            return "This app action doesn't accept images. Choose an image-enabled action or send the details as text.";
         case "no_extraction":
             return "The model found no action in this message";
         case "error":

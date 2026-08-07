@@ -1,8 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { InferenceRequest, InferenceResult, OnDeviceInferenceCapability } from "@shared";
 
-const { attestationAvailableMock, inferOnDeviceMock } = vi.hoisted(() => ({
+const { attestationAvailableMock, inferOnDeviceMock, inferenceCapabilityMock } = vi.hoisted(() => ({
     attestationAvailableMock: vi.fn(() => false),
-    inferOnDeviceMock: vi.fn(async () => ({ kind: "unavailable", reason: "not in tests" })),
+    inferOnDeviceMock: vi.fn(
+        async (_request: InferenceRequest): Promise<InferenceResult> => ({
+            kind: "unavailable",
+            reason: "not in tests",
+        }),
+    ),
+    inferenceCapabilityMock: vi.fn(
+        (): OnDeviceInferenceCapability => ({
+            available: true,
+            runtimesSupported: ["llama-cpp"],
+            selectedModalities: ["text"],
+        }),
+    ),
 }));
 
 // These specs pin the MANUAL-extraction gate: the manual path (no on-device runtime — the caller
@@ -18,7 +31,7 @@ vi.mock("./aiActionAvailability", () => ({
 }));
 vi.mock("./onDeviceInference", () => ({
     inferOnDevice: inferOnDeviceMock,
-    onDeviceInferenceCapability: vi.fn(() => ({ selectedModalities: ["text"] })),
+    onDeviceInferenceCapability: inferenceCapabilityMock,
 }));
 
 import type { ActionCardContent, AiActionDefinition, AiAppRegistration } from "@shared";
@@ -48,6 +61,11 @@ const RECIPIENT = "-----BEGIN PUBLIC KEY-----\nABC\n-----END PUBLIC KEY-----\n";
 beforeEach(() => {
     attestationAvailableMock.mockReturnValue(false);
     inferOnDeviceMock.mockClear();
+    inferenceCapabilityMock.mockReturnValue({
+        available: true,
+        runtimesSupported: ["llama-cpp"],
+        selectedModalities: ["text"],
+    });
 });
 
 const DEF: AiActionDefinition = {
@@ -555,6 +573,104 @@ describe("provenance before posting", () => {
         );
     });
 
+    it("sanitizes image extraction before binding the exact card and payload to provenance", async () => {
+        const imageDef: AiActionDefinition = {
+            ...DEF,
+            acceptsImage: true,
+            responseSchema: {
+                type: "object",
+                properties: {
+                    amount: { type: "number", minimum: 0.005, maximum: 100_000 },
+                    currency: {
+                        type: "string",
+                        minLength: 3,
+                        maxLength: 3,
+                        format: "ascii-uppercase",
+                    },
+                    date: { type: "string", minLength: 10, maxLength: 10, format: "date" },
+                    note: { type: "string", maxLength: 4_096, format: "utf8-no-nul" },
+                },
+                required: ["amount"],
+            },
+            card: {
+                ...DEF.card,
+                rows: [
+                    { label: "Amount", valueKey: "amount" },
+                    { label: "Currency", valueKey: "currency" },
+                    { label: "Date", valueKey: "date" },
+                    { label: "Note", valueKey: "note" },
+                ],
+            },
+        };
+        const imageApp: AiAppRegistration = {
+            ...APP,
+            manifest: { ...APP.manifest, actions: [imageDef] },
+        };
+        const imageCandidate: AiActionCandidate = {
+            app: imageApp,
+            action: imageDef,
+            recipientKey: RECIPIENT,
+        };
+        const provenance = new Uint8Array([4, 5, 6]);
+        const createAiAppCardProvenance = vi.fn(async () => ({
+            provenance,
+            expiresAt: BigInt(Date.now() + 60_000),
+        }));
+        const sendMessageWithContent = vi.fn(async () => ({ kind: "success" }));
+        const client = {
+            createAiAppCardProvenance,
+            sendMessageWithContent,
+        } as unknown as OpenChat;
+        const pixels = new Uint8Array([1, 2, 3, 4]);
+        const imageContent = {
+            kind: "image_content",
+            blobData: pixels,
+        } as unknown as Parameters<typeof proposeAndPostCandidate>[2];
+
+        inferenceCapabilityMock.mockReturnValue({
+            available: true,
+            runtimesSupported: ["llama-cpp"],
+            selectedModalities: ["text", "image"],
+            selectedModelId: "vision-test",
+        });
+        inferOnDeviceMock.mockResolvedValueOnce({
+            kind: "ok",
+            text: JSON.stringify({
+                amount: 20,
+                currency: "$$$",
+                date: "08/07/2026",
+                note: `visible${String.fromCharCode(0)}hidden`,
+            }),
+        });
+
+        const result = await proposeAndPostCandidate(
+            client,
+            messageContext,
+            imageContent,
+            imageCandidate,
+        );
+
+        expect(result.kind).toBe("ready");
+        expect(inferOnDeviceMock).toHaveBeenCalledTimes(1);
+        expect(inferOnDeviceMock.mock.calls[0][0].image).toEqual(pixels);
+        const provenanceCalls = createAiAppCardProvenance.mock.calls as unknown as unknown[][];
+        const sendCalls = sendMessageWithContent.mock.calls as unknown as unknown[][];
+        const exactContent = provenanceCalls[0][3] as Record<string, unknown>;
+        const provedMessageId = provenanceCalls[0][5] as bigint;
+        expect(exactContent).toEqual({
+            title: "Log expense",
+            rows: [{ label: "Amount", value: "20" }],
+            confirmLabel: "Add",
+            cancelLabel: "Dismiss",
+            actionId: imageDef.name,
+            disclosure: undefined,
+            expiresAt: undefined,
+            confirmPayload: new TextEncoder().encode('{"amount":20}'),
+        });
+        expect(sendCalls[0][5]).toBe(provedMessageId);
+        expect(sendCalls[0][1]).toMatchObject({ appProvenance: provenance });
+    });
+
     it("binds a thread card to Some(threadRootMessageIndex)", async () => {
         const createAiAppCardProvenance = vi.fn(async () => ({
             provenance: new Uint8Array([9]),
@@ -617,6 +733,7 @@ const EVERY_RESULT: Record<ProposeResult["kind"], ProposeResult> = {
     unavailable: { kind: "unavailable", reason: "no model" },
     unsupported_content: { kind: "unsupported_content" },
     image_unsupported: { kind: "image_unsupported", modelId: "gemma-3-1b-it-q4" },
+    image_not_accepted: { kind: "image_not_accepted" },
     no_extraction: { kind: "no_extraction", raw: "{}" },
     error: { kind: "error", error: "boom" },
 };
@@ -661,6 +778,12 @@ describe("proposeFailureMessage", () => {
     it("falls back to 'This model' when no model is selected at all", () => {
         expect(proposeFailureMessage({ kind: "image_unsupported" })).toMatch(
             /^This model doesn't support images/,
+        );
+    });
+
+    it("distinguishes an app action that did not opt into images from a text-only model", () => {
+        expect(proposeFailureMessage({ kind: "image_not_accepted" })).toBe(
+            "This app action doesn't accept images. Choose an image-enabled action or send the details as text.",
         );
     });
 });

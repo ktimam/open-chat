@@ -108,6 +108,19 @@ const CANDIDATE = {
     recipientKey: RECIPIENT,
 } as unknown as Parameters<typeof proposeAndPostCandidate>[3];
 
+function candidateWithAcceptsImage(acceptsImage: boolean | undefined) {
+    const action = { ...ACTION, acceptsImage };
+    const app = {
+        ...APP,
+        manifest: { ...APP.manifest, actions: [action] },
+    } as unknown as AiAppRegistration;
+    return {
+        app,
+        action,
+        recipientKey: RECIPIENT,
+    } as unknown as Parameters<typeof proposeAndPostCandidate>[3];
+}
+
 function withCapability(selectedModalities: ("text" | "image")[], selectedModelId?: string) {
     facade.capability = {
         available: true,
@@ -165,5 +178,38 @@ describe("image gate (propose on a photo)", () => {
         expect(infer).not.toHaveBeenCalled();
         expect(sendMessageWithContent).not.toHaveBeenCalled();
         expect(r).toEqual({ kind: "image_unsupported", modelId: "gemma-3-1b-it-q4" });
+    });
+
+    for (const [label, acceptsImage] of [
+        ["explicitly false", false],
+        ["omitted", undefined],
+    ] as const) {
+        it(`an action whose acceptsImage flag is ${label} never receives image bytes`, async () => {
+            withCapability(["text", "image"], "vision-test");
+            const r = await proposeAndPostCandidate(
+                client,
+                CONTEXT,
+                IMAGE,
+                candidateWithAcceptsImage(acceptsImage),
+            );
+
+            expect(infer).not.toHaveBeenCalled();
+            expect(sendMessageWithContent).not.toHaveBeenCalled();
+            expect(r).toEqual({ kind: "image_not_accepted" });
+        });
+    }
+
+    it("acceptsImage only governs images; an opted-out action still receives ordinary text", async () => {
+        const candidate = candidateWithAcceptsImage(false);
+        const textClient = {
+            ...client,
+            aiApps: async () => [candidate.app],
+        } as unknown as OpenChat;
+
+        const r = await proposeAiActionForMessage(textClient, CHAT, TEXT);
+
+        expect(r.kind).toBe("ready");
+        expect(infer).toHaveBeenCalledTimes(1);
+        expect(infer.mock.calls[0][0].image).toBeUndefined();
     });
 });
