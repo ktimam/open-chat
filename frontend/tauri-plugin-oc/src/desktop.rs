@@ -13,9 +13,20 @@ pub fn init<R: Runtime, C: DeserializeOwned>(
 /// Access to the oc APIs.
 pub struct Oc<R: Runtime>(AppHandle<R>);
 
+fn open_url_with<E>(
+    url: &str,
+    open_url: impl FnOnce(&str) -> std::result::Result<(), E>,
+) -> OpenUrlResponse {
+    // Opening an external handler is best-effort. The desktop shell has no useful recovery UI if
+    // the operating system has no handler, and the web caller already treats the command as a
+    // fire-and-forget handoff.
+    let _ = open_url(url);
+    OpenUrlResponse::default()
+}
+
 impl<R: Runtime> Oc<R> {
-    pub fn open_url(&self, _payload: OpenUrlRequest) -> crate::Result<OpenUrlResponse> {
-        unimplemented!("not implemented for desktop environment")
+    pub fn open_url(&self, payload: OpenUrlRequest) -> crate::Result<OpenUrlResponse> {
+        Ok(open_url_with(&payload.url, |url| open::that_detached(url)))
     }
 
     pub fn sign_up(&self, _payload: SignUpRequest) -> crate::Result<SignUpResponse> {
@@ -58,5 +69,31 @@ impl<R: Runtime> Oc<R> {
         _payload: UpdateChatShortcutsRequest,
     ) -> crate::Result<UpdateChatShortcutsResponse> {
         unimplemented!("not implemented for desktop environment")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn desktop_url_bridge_passes_the_exact_url_to_the_os_opener() {
+        let url = "https://example.com/settings#opaque-fragment";
+        let mut opened = None;
+
+        let response = open_url_with(url, |actual| {
+            opened = Some(actual.to_owned());
+            Ok::<(), ()>(())
+        });
+
+        assert_eq!(opened.as_deref(), Some(url));
+        assert_eq!(response.value, None);
+    }
+
+    #[test]
+    fn desktop_url_bridge_is_best_effort_when_the_os_opener_fails() {
+        let response = open_url_with("https://example.com/", |_| Err::<(), _>("blocked"));
+
+        assert_eq!(response.value, None);
     }
 }
