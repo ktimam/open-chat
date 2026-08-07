@@ -150,13 +150,64 @@ describe("directory-bound card surface resolution", () => {
             "utf8",
         );
         const compact = source.replace(/\s+/g, " ");
-        const markerCheck = source.indexOf("content.appVerified !== true");
+        const markerCheck = source.indexOf(
+            "let resolutionAppVerified = $derived(content.appVerified === true)",
+        );
         const lookup = source.indexOf("resolveActionAppForCard(");
         expect(markerCheck).toBeGreaterThan(-1);
         expect(markerCheck).toBeLessThan(lookup);
-        expect(source).toContain("if (content.appVerified !== true)");
-        expect(source).toContain("if (!cardContentAttested)");
+        expect(source).toContain("if (!appVerified)");
+        expect(source).toContain("if (!contentAttested)");
         expect(source).toContain("Directory binding only; card content is untrusted");
         expect(compact).toContain("title, rows, and payload are not attested as app-authored");
+    });
+
+    it("retains a successfully resolved app identity across card-session resets", () => {
+        const source = readFileSync(
+            resolve(__dirname, "../components/home/ActionCardContent.svelte"),
+            "utf8",
+        );
+        const resolution = source.indexOf("const opening = resolution.cardSurface");
+        const identityBound = source.indexOf("resolvedAppIdentity = resolution.identity");
+        const resetStart = source.indexOf("function resetFrameSession()");
+        const loadStart = source.indexOf("function requestCardLoad", resetStart);
+        const resetBody = source.slice(resetStart, loadStart);
+
+        expect({
+            identityBoundBeforeSurfaceSelection:
+                identityBound >= 0 && resolution >= 0 && identityBound < resolution,
+            sessionResetPreservesIdentity: !resetBody.includes("resolvedAppIdentity = undefined"),
+        }).toEqual({
+            identityBoundBeforeSurfaceSelection: true,
+            sessionResetPreservesIdentity: true,
+        });
+    });
+
+    it("re-resolves when optimistic content becomes backend-verified", () => {
+        const source = readFileSync(
+            resolve(__dirname, "../components/home/ActionCardContent.svelte"),
+            "utf8",
+        );
+        const lifecycle = source.indexOf("// Re-run app resolution when an optimistic local card");
+        const effect = source.indexOf("$effect(() => {", lifecycle);
+        const lookup = source.indexOf("resolveActionAppForCard(", effect);
+        const end = source.indexOf("function postInit", lookup);
+        const body = source.slice(effect, end);
+
+        expect(lifecycle).toBeGreaterThan(-1);
+        expect(effect).toBeGreaterThan(lifecycle);
+        expect(lookup).toBeGreaterThan(effect);
+        expect(body).toContain("const appVerified = resolutionAppVerified");
+        expect(body).toContain("const contentAttested = resolutionContentAttested");
+        expect(body).toContain("if (!appVerified)");
+        expect(body).toContain("resolvedAppIdentity = undefined");
+        expect(body).toContain("resolvedAppIdentity = resolution.identity");
+        expect(body).toContain("if (!contentAttested)");
+        const untrackedReset = body.slice(
+            body.indexOf("untrack(() => {"),
+            body.indexOf("if (!appVerified)"),
+        );
+        expect(untrackedReset).toContain("resetFrameSession()");
+        expect(untrackedReset).toContain("resolvedAppIdentity = undefined");
     });
 });

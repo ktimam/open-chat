@@ -6,7 +6,7 @@
         type ChatIdentifier,
         OpenChat,
     } from "@client";
-    import { getContext, onMount } from "svelte";
+    import { getContext, onMount, untrack } from "svelte";
     import { currentTheme } from "../../theme/themes";
     import {
         appCardFinalConfirmationAvailable,
@@ -97,6 +97,13 @@
     let cardContentAttestationBlocked = $state(false);
     let appCardRenderingBlocked = $state(false);
     let cardContentAttested = $derived(isAppCardContentAttested(content));
+    // Primitive derived inputs prevent unrelated message-state replacements from restarting app
+    // resolution, while still observing the optimistic -> backend-verified transition.
+    let resolutionAppVerified = $derived(content.appVerified === true);
+    let resolutionContentAttested = $derived(cardContentAttested);
+    let resolutionActionId = $derived(content.actionId);
+    let resolutionAppId = $derived(content.appId);
+    let resolutionAppRevision = $derived(content.appRevision);
     const finalConfirmationAvailable = appCardFinalConfirmationAvailable();
     const privateContextAvailable = appCardPrivateContextAvailable();
 
@@ -150,12 +157,14 @@
     let displayState = $derived(expired && content.state === "pending" ? "expired" : content.state);
     // If the consumer required a disclosure, confirm is gated on the human acknowledging it.
     let acknowledged = $state(false);
+    let useClassicFallback = $state(false);
     let canConfirm = $derived(
         pending &&
             !readonly &&
             resolvedAppIdentity !== undefined &&
             cardContentAttested &&
             finalConfirmationAvailable &&
+            !useClassicFallback &&
             (content.disclosure === undefined || acknowledged),
     );
 
@@ -195,7 +204,6 @@
     let privateContextRequested = $state(false);
     let confirmationGrantFailed = $state(false);
     let cardLoadFailed = $state(false);
-    let useClassicFallback = $state(false);
     let cardCapability = $state<AiAppCardCapability | undefined>(undefined);
     let capabilityAttempt: CardCapabilityAttemptBinding | undefined;
     let confirmationAttempt: CardConfirmationAttemptBinding | undefined;
@@ -252,70 +260,94 @@
         });
     }
 
-    // Detect the owning app's card surface once. actionId + appId + chatId are stable for a given card
-    // message (state transitions replace `content` but not its identity), so a single lookup on mount
-    // suffices; a cancel token guards the async resolve against a teardown mid-flight. Passing
-    // `content.appId` binds resolution to the EXACT producing app (see cardSurfaceForAction) — a legacy
-    // card without both appId and appRevision never embeds third-party content.
+    // Component lifetime is separate from the reactive app-resolution lifetime below.
     onMount(() => {
-        let cancelled = false;
         componentMounted = true;
         credentiallessSupported = supportsCredentiallessIframe();
-        if (content.appVerified !== true) {
-            appResolutionComplete = true;
-            return;
-        }
-        void resolveActionAppForCard(
-            client,
-            chatId,
-            content.actionId,
-            content.appId,
-            content.appRevision,
-        ).then((resolution) => {
-            if (cancelled) return;
-            appResolutionComplete = true;
-            if (resolution === undefined) return;
-            candidateAppIdentity = resolution.identity;
-            const opening = resolution.cardSurface;
-            if (opening === undefined) {
-                resolvedAppIdentity = resolution.identity;
-                return;
-            }
-            if (!cardContentAttested) {
-                // appVerified currently proves only registry coordinates. The sender still controls
-                // title/rows/payload, so do not load trusted app pixels until the backend attests the
-                // complete canonical card content.
-                resolvedAppIdentity = resolution.identity;
-                cardContentAttestationBlocked = true;
-                return;
-            }
-            if (!appCardRenderingAvailable(cardContentAttested)) {
-                // Backend attestation is necessary but does not by itself activate an unfinished
-                // client capability. Keep the iframe closed unless this exact local client release
-                // has also been explicitly armed.
-                resolvedAppIdentity = resolution.identity;
-                appCardRenderingBlocked = true;
-                return;
-            }
-            const origin = deriveCardOrigin(opening.url, {
-                allowLocalDevelopment: import.meta.env.DEV,
-            });
-            // No parseable origin → decline to embed; stay on the OC-rendered rows rather than talk to
-            // an unknown origin.
-            if (origin === undefined) return;
-            cardOrigin = origin;
-            cardAppId = opening.app.id;
-            cardLabelToField = opening.labelToField;
-            cardUrl = opening.url;
-        });
         return () => {
-            cancelled = true;
             componentMounted = false;
             cancelPrivateContextTimeout?.();
             cancelCardBootstrapRetry?.();
             cancelCardBootstrapRetry = undefined;
             capabilityAttempt = undefined;
             confirmationAttempt = undefined;
+        };
+    });
+
+    // Re-run app resolution when an optimistic local card is replaced by backend-hydrated
+    // verification, or when any immutable producer coordinate changes. The lookup remains gated on
+    // appVerified and exact app/revision/action/chat coordinates; full content attestation remains a
+    // separate prerequisite for loading trusted app pixels.
+    $effect(() => {
+        const appVerified = resolutionAppVerified;
+        const contentAttested = resolutionContentAttested;
+        const actionId = resolutionActionId;
+        const appId = resolutionAppId;
+        const appRevision = resolutionAppRevision;
+        const activeChatId = chatId;
+        let cancelled = false;
+
+        // Session reset reads timers and handshake state. Keep those reads outside this effect's
+        // dependency graph so iframe activity cannot restart authoritative app resolution.
+        untrack(() => {
+            resetFrameSession();
+            appResolutionComplete = false;
+            resolvedAppIdentity = undefined;
+            candidateAppIdentity = undefined;
+            cardContentAttestationBlocked = false;
+            appCardRenderingBlocked = false;
+            cardOrigin = undefined;
+            cardAppId = undefined;
+            cardLabelToField = {};
+            cardUrl = undefined;
+            loadRequested = false;
+            cardLoadFailed = false;
+            useClassicFallback = false;
+        });
+
+        if (!appVerified) {
+            appResolutionComplete = true;
+            return () => {
+                cancelled = true;
+            };
+        }
+        void resolveActionAppForCard(client, activeChatId, actionId, appId, appRevision).then(
+            (resolution) => {
+                if (cancelled) return;
+                appResolutionComplete = true;
+                if (resolution === undefined) return;
+                candidateAppIdentity = resolution.identity;
+                resolvedAppIdentity = resolution.identity;
+                const opening = resolution.cardSurface;
+                if (opening === undefined) return;
+                if (!contentAttested) {
+                    // appVerified currently proves only registry coordinates. The sender still controls
+                    // title/rows/payload, so do not load trusted app pixels until the backend attests the
+                    // complete canonical card content.
+                    cardContentAttestationBlocked = true;
+                    return;
+                }
+                if (!appCardRenderingAvailable(contentAttested)) {
+                    // Backend attestation is necessary but does not by itself activate an unfinished
+                    // client capability. Keep the iframe closed unless this exact local client release
+                    // has also been explicitly armed.
+                    appCardRenderingBlocked = true;
+                    return;
+                }
+                const origin = deriveCardOrigin(opening.url, {
+                    allowLocalDevelopment: import.meta.env.DEV,
+                });
+                // No parseable origin → decline to embed; stay on the OC-rendered rows rather than talk to
+                // an unknown origin.
+                if (origin === undefined) return;
+                cardOrigin = origin;
+                cardAppId = opening.app.id;
+                cardLabelToField = opening.labelToField;
+                cardUrl = opening.url;
+            },
+        );
+        return () => {
+            cancelled = true;
         };
     });
 
@@ -373,7 +405,6 @@
         confirmationGrantFailed = false;
         approvalRequest = undefined;
         acknowledged = false;
-        resolvedAppIdentity = undefined;
     }
 
     function requestCardLoad(e: Event) {
@@ -691,7 +722,9 @@
             <span class="app-verification">Verifying app identity…</span>
         {/if}
         {#if resolvedAppIdentity !== undefined}
-            <span class="app-verification">Directory binding only; card content is untrusted</span>
+            {#if !cardContentAttested}
+                <span class="app-verification">Directory binding only; card content is untrusted</span>
+            {/if}
         {/if}
     </div>
 
@@ -714,7 +747,9 @@
         }}
     >
         <div class="sender-title">
-            <span class="sender-title-label">Untrusted card text</span>
+            {#if !cardContentAttested}
+                <span class="sender-title-label">Untrusted card text</span>
+            {/if}
             <span class="title">{content.title}</span>
         </div>
         {#if consumed}
