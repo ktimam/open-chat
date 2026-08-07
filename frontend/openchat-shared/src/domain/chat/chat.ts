@@ -480,9 +480,10 @@ export interface ActionCardContent {
     // Hydrated only from the chat canister's private provenance validation result. This proves the
     // directory coordinates (app id/revision/action), not authorship or integrity of title/rows/payload.
     appVerified?: boolean;
-    // Reserved for a future backend attestation over the complete canonical card content. Until the
-    // server hydrates this independently as true, clients must treat display/payload as sender-authored,
-    // must not load the app renderer, and must fail confirmation closed.
+    // Hydrated only after the chat canister validates one-use provenance over the complete canonical
+    // card content. Until the server establishes this independently as true, clients must treat the
+    // display/payload as sender-authored, must not load the app renderer, and must fail confirmation
+    // closed.
     appContentVerified?: boolean;
     // Send-only, short-lived proof that user_index validated this exact published app revision,
     // action, chat, and message id before the card was posted. Chat canisters store it privately and

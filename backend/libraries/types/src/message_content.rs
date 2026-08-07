@@ -961,9 +961,9 @@ pub struct ActionCardContent {
     /// sandboxed app surface, but must not label the card content itself as app-authored/verified.
     #[serde(default)]
     pub app_verified: bool,
-    /// True only after a trusted server path attests the complete canonical app-card content
-    /// (including rows and confirmation payload). No current sender/provenance path sets this.
-    /// App-bound confirmation must fail closed while this remains false.
+    /// True only after the chat canister validates one-use proposal provenance over the complete
+    /// canonical app-card content (including rows and confirmation payload). App-bound confirmation
+    /// must fail closed while this remains false.
     #[serde(default)]
     pub app_content_verified: bool,
     pub disclosure: Option<String>,
