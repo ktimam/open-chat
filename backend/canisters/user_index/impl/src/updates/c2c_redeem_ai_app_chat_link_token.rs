@@ -111,6 +111,11 @@ fn success_result(token: &AiAppChatLinkToken) -> SuccessResult {
 }
 
 fn binding_is_current(token: &AiAppChatLinkToken, state: &RuntimeState) -> bool {
+    // Stable ids may be recreated after account deletion. A surviving legacy or in-flight bearer
+    // must not authorize the replacement account, even if every other binding happens to match.
+    if state.data.users.get_by_user_id(&token.user_id).is_none() {
+        return false;
+    }
     let Some(app) = state.data.ai_apps.get(token.app_id) else {
         return false;
     };
@@ -169,6 +174,7 @@ mod tests {
     use super::*;
     use crate::Data;
     use crate::model::ai_app_chat_link_tokens::AiAppChatLinkToken;
+    use crate::model::user::User;
     use p256_key_pair::P256KeyPair;
     use rand::SeedableRng;
     use rand::rngs::StdRng;
@@ -182,6 +188,12 @@ mod tests {
         env.caller = caller;
         let now = env.now;
         let mut data = Data::default();
+        data.users.add_test_user(User {
+            principal: candid::Principal::from_slice(&[7]),
+            user_id,
+            username: "chat-link-user".to_string(),
+            ..Default::default()
+        });
         data.ai_app_scoped_identity_key
             .ensure_initialized(&mut StdRng::seed_from_u64(51))
             .unwrap();
@@ -238,6 +250,31 @@ mod tests {
             )
             .unwrap();
         (RuntimeState::new(Box::new(env), data), raw, subject)
+    }
+
+    #[test]
+    fn token_for_a_missing_account_fails_closed_without_consumption() {
+        let (mut state, raw, subject) = setup(candid::Principal::from_slice(&[8]), 10_000);
+        let user_id: UserId = candid::Principal::from_slice(&[7]).into();
+        assert!(state.data.users.delete_user(user_id, state.env.now()).is_some());
+
+        assert!(matches!(
+            redeem_impl(
+                Args {
+                    token: ByteBuf::from(raw.to_vec()),
+                    expected_app_subject: ByteBuf::from(subject.to_vec()),
+                },
+                &mut state,
+            ),
+            AppUnavailable
+        ));
+        assert!(matches!(
+            state
+                .data
+                .ai_app_chat_link_tokens
+                .lookup(state.env.canister_id(), &raw, state.env.now()),
+            LookupResult::Valid(_)
+        ));
     }
 
     #[test]

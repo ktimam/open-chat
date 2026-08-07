@@ -10,6 +10,7 @@ import {
     type AcceptP2PSwapResponse,
     type AiAppChatLinkToken,
     type AiAppCardCapability,
+    type AiAppCardConfirmationGrant,
     type AddRemoveReactionResponse,
     type ApproveTransferResponse,
     type ArchiveChatResponse,
@@ -119,6 +120,8 @@ import {
     UserRespondToActionCardResponse,
     UserCreateAiAppCardCapabilityArgs,
     UserCreateAiAppCardCapabilityResponse,
+    UserCreateAiAppCardConfirmationGrantArgs,
+    UserCreateAiAppCardConfirmationGrantResponse,
     UserCreateAiAppChatLinkTokenArgs,
     UserCreateAiAppChatLinkTokenResponse,
     UserEventsArgs,
@@ -198,6 +201,7 @@ import type { UserDb } from "../../utils/userCache";
 import { SingleCanisterMsgpackAgent } from "../canisterAgent/msgpack";
 import type { IChatEventsReader } from "../common/chatEvents";
 import { createAiAppCardCapabilityResponse } from "../common/aiAppCardCapability";
+import { createAiAppCardConfirmationGrantResponse } from "../common/aiAppCardConfirmationGrant";
 import { createAiAppChatLinkTokenResponse } from "../common/aiAppChatLinkToken";
 import {
     acceptP2PSwapSuccess,
@@ -561,6 +565,8 @@ export class UserClient
             unitResult,
             UserRespondToActionCardArgs,
             UserRespondToActionCardResponse,
+            undefined,
+            { sensitive: true },
         );
     }
 
@@ -583,6 +589,30 @@ export class UserClient
             createAiAppCardCapabilityResponse,
             UserCreateAiAppCardCapabilityArgs,
             UserCreateAiAppCardCapabilityResponse,
+            undefined,
+            { sensitive: true },
+        );
+    }
+
+    createAiAppCardConfirmationGrant(
+        userId: string,
+        messageId: bigint,
+        threadRootMessageIndex: number | undefined,
+        confirmPayload: Uint8Array,
+    ): Promise<AiAppCardConfirmationGrant | undefined> {
+        return this.update(
+            "create_ai_app_card_confirmation_grant",
+            {
+                user_id: principalStringToBytes(userId),
+                thread_root_message_index: threadRootMessageIndex,
+                message_id: messageId,
+                confirm_payload: confirmPayload.slice(),
+            },
+            createAiAppCardConfirmationGrantResponse,
+            UserCreateAiAppCardConfirmationGrantArgs,
+            UserCreateAiAppCardConfirmationGrantResponse,
+            undefined,
+            { sensitive: true },
         );
     }
 
@@ -629,6 +659,10 @@ export class UserClient
                     unitResult,
                     UserEditMessageArgs,
                     UnitResult,
+                    undefined,
+                    message.content.kind === "action_card_content"
+                        ? { sensitive: true }
+                        : undefined,
                 );
             });
     }
@@ -672,6 +706,10 @@ export class UserClient
                 UserSendMessageArgs,
                 UserSendMessageResponse,
                 onRequestAccepted,
+                newEvent.event.content.kind === "action_card_content" &&
+                    newEvent.event.content.appProvenance !== undefined
+                    ? { sensitive: true }
+                    : undefined,
             )
                 .then((resp) =>
                     this.chatsDb.setCachedMessageFromSendResponse(

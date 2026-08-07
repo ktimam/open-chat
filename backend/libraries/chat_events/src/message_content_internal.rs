@@ -76,7 +76,7 @@ const MAX_ACTION_CARD_ROWS: usize = 32;
 const MAX_ACTION_CARD_RECIPIENTS: usize = 8;
 const MAX_ACTION_CARD_PAYLOAD_BYTES: usize = 16_384;
 
-fn action_card_within_bounds(card: &ActionCardContentInitial, is_direct_chat: bool, now: TimestampMillis) -> bool {
+fn action_card_within_bounds(card: &ActionCardContentInitial, sender_user_type: UserType, now: TimestampMillis) -> bool {
     fn chars_between(value: &str, min: usize, max: usize) -> bool {
         let length = value.chars().count();
         (min..=max).contains(&length) && (min == 0 || !value.trim().is_empty())
@@ -85,8 +85,11 @@ fn action_card_within_bounds(card: &ActionCardContentInitial, is_direct_chat: bo
     let app_tuple_all_present = card.app_id.is_some() && card.app_revision.is_some() && card.app_provenance.is_some();
     let app_tuple_all_absent = card.app_id.is_none() && card.app_revision.is_none() && card.app_provenance.is_none();
     if (!app_tuple_all_present && !app_tuple_all_absent)
-        || is_direct_chat && !app_tuple_all_absent
-        || card.app_provenance.as_ref().is_some_and(|value| value.len() != 32)
+        || !app_tuple_all_absent && !matches!(sender_user_type, UserType::User)
+        || card
+            .app_provenance
+            .as_ref()
+            .is_some_and(|value| value.len() != types::AI_APP_CARD_TOKEN_BYTES)
         || !chars_between(&card.title, 1, 200)
         || !chars_between(&card.confirm_label, 1, 80)
         || !chars_between(&card.cancel_label, 1, 80)
@@ -165,7 +168,7 @@ impl MessageContentInternal {
         }
 
         if let MessageContentInitial::ActionCard(card) = &content
-            && !action_card_within_bounds(card, is_direct_chat, now)
+            && !action_card_within_bounds(card, sender_user_type, now)
         {
             return ValidateNewMessageContentResult::Error(ContentValidationError::TextTooLong(MAX_TEXT_LENGTH));
         }
@@ -2196,8 +2199,9 @@ pub struct ActionCardContentInternal {
     #[serde(rename = "ra", default, skip_serializing_if = "Option::is_none")]
     pub responded_at: Option<TimestampMillis>,
     // Internal durable confirmation reservation. It is never hydrated to clients. Reserving before
-    // the inter-canister await fixes the actor and payload for every retry; only a definite
-    // pre-deposit failure explicitly releases it.
+    // the inter-canister await fixes the actor and payload for every retry. Because sibling calls
+    // can reuse one lease, async handlers preserve it until exact completion or an explicitly
+    // proven same-execution release.
     #[serde(rename = "crb", default, skip_serializing_if = "Option::is_none")]
     pub confirmation_reserved_by: Option<UserId>,
     #[serde(rename = "cra", default, skip_serializing_if = "Option::is_none")]
@@ -2211,6 +2215,11 @@ pub struct ActionCardContentInternal {
     /// action for the same card.
     #[serde(rename = "crh", default, skip_serializing_if = "Option::is_none")]
     pub confirmation_payload_hash: Option<[u8; 32]>,
+    /// Domain-separated digest of the one-use confirmation grant consumed for the current exact
+    /// lease. It lets an ambiguous inbox delivery retry the same bearer without weakening UIX's
+    /// one-use token semantics. Server-only and cleared whenever the lease ends.
+    #[serde(rename = "cgh", default, skip_serializing_if = "Option::is_none")]
+    pub confirmation_grant_hash: Option<[u8; 32]>,
     // Legacy sender-carried routing, stored only for wire compatibility and ignored by the current
     // authoritative confirmation path. Server-only: not hydrated to clients.
     #[serde(rename = "rpk", default, skip_serializing_if = "Option::is_none")]
@@ -2274,8 +2283,8 @@ impl ActionCardContentInternal {
     ///
     /// Once present, a reservation never times out or changes generation: an outbound reply may
     /// have been lost after the inbox committed. Only an exact retry by the same actor with the same
-    /// payload commitment is admitted. A definitive failure must call `abort_confirmation` before a
-    /// different attempt can begin.
+    /// payload commitment is admitted. A handler may release it only when it can prove that its own
+    /// atomic execution created the lease and no sibling request could already be in flight.
     pub fn reserve_confirmation(&mut self, user_id: UserId, payload_hash: [u8; 32], now: TimestampMillis) -> bool {
         if !matches!(self.state, ActionCardState::Pending) {
             return false;
@@ -2295,7 +2304,50 @@ impl ActionCardContentInternal {
         self.confirmation_reserved_by = Some(user_id);
         self.confirmation_reserved_at = Some(now);
         self.confirmation_payload_hash = Some(payload_hash);
+        self.confirmation_grant_hash = None;
         true
+    }
+
+    pub fn confirmation_grant_consumed_for_lease(
+        &self,
+        user_id: UserId,
+        lease_generation: u64,
+        payload_hash: [u8; 32],
+        grant_hash: [u8; 32],
+    ) -> bool {
+        matches!(self.state, ActionCardState::Pending)
+            && self.confirmation_reserved_by == Some(user_id)
+            && self.confirmation_reserved_at.is_some()
+            && self.confirmation_lease_generation == lease_generation
+            && self.confirmation_payload_hash == Some(payload_hash)
+            && self.confirmation_grant_hash == Some(grant_hash)
+    }
+
+    /// Records a successful one-use grant consumption only for the exact durable lease. The marker
+    /// is idempotent for the same bearer and cannot be rebound: once an outbound deposit may have
+    /// started, a different grant must never take over that ambiguous lease.
+    pub fn mark_confirmation_grant_consumed_for_lease(
+        &mut self,
+        user_id: UserId,
+        lease_generation: u64,
+        payload_hash: [u8; 32],
+        grant_hash: [u8; 32],
+    ) -> bool {
+        if !matches!(self.state, ActionCardState::Pending)
+            || self.confirmation_reserved_by != Some(user_id)
+            || self.confirmation_reserved_at.is_none()
+            || self.confirmation_lease_generation != lease_generation
+            || self.confirmation_payload_hash != Some(payload_hash)
+        {
+            return false;
+        }
+        match self.confirmation_grant_hash {
+            None => {
+                self.confirmation_grant_hash = Some(grant_hash);
+                true
+            }
+            Some(existing) => existing == grant_hash,
+        }
     }
 
     /// Commits only the lease holder's successful delivery.
@@ -2308,6 +2360,7 @@ impl ActionCardContentInternal {
         let reserved_at = self.confirmation_reserved_at.unwrap_or(now);
         self.confirmation_reserved_by = None;
         self.confirmation_reserved_at = None;
+        self.confirmation_grant_hash = None;
         self.state = ActionCardState::Confirmed;
         self.responded_by = Some(user_id);
         self.responded_at = Some(reserved_at);
@@ -2334,13 +2387,15 @@ impl ActionCardContentInternal {
         let reserved_at = self.confirmation_reserved_at.unwrap_or(now);
         self.confirmation_reserved_by = None;
         self.confirmation_reserved_at = None;
+        self.confirmation_grant_hash = None;
         self.state = ActionCardState::Confirmed;
         self.responded_by = Some(user_id);
         self.responded_at = Some(reserved_at);
         true
     }
 
-    /// Releases a failed delivery without allowing another caller to release someone else's lease.
+    /// Unscoped release retained for synchronous legacy callers. This is safe only in the same
+    /// atomic execution that created the reservation; it must never be used after an await.
     pub fn abort_confirmation(&mut self, user_id: UserId) -> bool {
         if self.confirmation_reserved_by != Some(user_id) || !matches!(self.state, ActionCardState::Pending) {
             return false;
@@ -2348,6 +2403,26 @@ impl ActionCardContentInternal {
         self.confirmation_reserved_by = None;
         self.confirmation_reserved_at = None;
         self.confirmation_payload_hash = None;
+        self.confirmation_grant_hash = None;
+        true
+    }
+
+    /// Releases only the exact lease generation and payload. This prevents erasing a newer lease,
+    /// but it does not distinguish concurrent sibling requests sharing this exact lease; callers
+    /// must additionally prove that no sibling can be in flight (in practice, do not call after an
+    /// await).
+    pub fn abort_confirmation_for_lease(&mut self, user_id: UserId, lease_generation: u64, payload_hash: [u8; 32]) -> bool {
+        if self.confirmation_reserved_by != Some(user_id)
+            || self.confirmation_lease_generation != lease_generation
+            || self.confirmation_payload_hash != Some(payload_hash)
+            || !matches!(self.state, ActionCardState::Pending)
+        {
+            return false;
+        }
+        self.confirmation_reserved_by = None;
+        self.confirmation_reserved_at = None;
+        self.confirmation_payload_hash = None;
+        self.confirmation_grant_hash = None;
         true
     }
 
@@ -2386,6 +2461,7 @@ impl From<ActionCardContentInitial> for ActionCardContentInternal {
             confirmation_reserved_at: None,
             confirmation_lease_generation: 0,
             confirmation_payload_hash: None,
+            confirmation_grant_hash: None,
             recipient_public_key: value.recipient_public_key,
             recipient_public_keys: value.recipient_public_keys,
             confirm_payload: value.confirm_payload,
@@ -2611,6 +2687,66 @@ mod action_card_security_tests {
     }
 
     #[test]
+    fn consumed_grant_marker_is_durable_and_bound_to_the_exact_pending_lease() {
+        let mut leased = card();
+        let payload_hash = [7; 32];
+        let grant_hash = [8; 32];
+        assert!(leased.reserve_confirmation(user(1), payload_hash, 10));
+        let generation = leased.confirmation_lease_generation;
+
+        assert!(!leased.confirmation_grant_consumed_for_lease(user(1), generation, payload_hash, grant_hash));
+        assert!(leased.mark_confirmation_grant_consumed_for_lease(user(1), generation, payload_hash, grant_hash));
+        assert!(leased.mark_confirmation_grant_consumed_for_lease(user(1), generation, payload_hash, grant_hash));
+        assert!(
+            !leased.mark_confirmation_grant_consumed_for_lease(user(1), generation, payload_hash, [10; 32]),
+            "an ambiguous lease must never be rebound to a different consumed grant"
+        );
+        assert!(leased.confirmation_grant_consumed_for_lease(user(1), generation, payload_hash, grant_hash));
+        assert!(!leased.confirmation_grant_consumed_for_lease(user(2), generation, payload_hash, grant_hash));
+        assert!(!leased.confirmation_grant_consumed_for_lease(user(1), generation + 1, payload_hash, grant_hash));
+        assert!(!leased.confirmation_grant_consumed_for_lease(user(1), generation, [9; 32], grant_hash));
+        assert!(!leased.confirmation_grant_consumed_for_lease(user(1), generation, payload_hash, [10; 32]));
+
+        let encoded = msgpack::serialize_to_vec(&leased).unwrap();
+        let mut restored: ActionCardContentInternal = msgpack::deserialize_then_unwrap(&encoded);
+        assert!(restored.confirmation_grant_consumed_for_lease(user(1), generation, payload_hash, grant_hash));
+        assert!(restored.reserve_confirmation(user(1), payload_hash, 300_011));
+        assert!(restored.confirmation_grant_consumed_for_lease(user(1), generation, payload_hash, grant_hash));
+
+        assert!(restored.abort_confirmation(user(1)));
+        assert!(!restored.confirmation_grant_consumed_for_lease(user(1), generation, payload_hash, grant_hash));
+        assert!(restored.reserve_confirmation(user(1), payload_hash, 300_012));
+        assert_ne!(restored.confirmation_lease_generation, generation);
+        assert!(!restored.confirmation_grant_consumed_for_lease(
+            user(1),
+            restored.confirmation_lease_generation,
+            payload_hash,
+            grant_hash,
+        ));
+
+        let mut completed = card();
+        assert!(completed.reserve_confirmation(user(1), payload_hash, 20));
+        let completed_generation = completed.confirmation_lease_generation;
+        assert!(completed.mark_confirmation_grant_consumed_for_lease(user(1), completed_generation, payload_hash, grant_hash,));
+        assert!(completed.complete_confirmation_for_lease(user(1), completed_generation, payload_hash, 21,));
+        assert_eq!(completed.confirmation_grant_hash, None);
+    }
+
+    #[test]
+    fn exact_abort_cannot_release_a_different_generation_or_payload() {
+        let mut card = card();
+        let payload_hash = [7; 32];
+        assert!(card.reserve_confirmation(user(1), payload_hash, 10));
+        let generation = card.confirmation_lease_generation;
+
+        assert!(!card.abort_confirmation_for_lease(user(1), generation + 1, payload_hash));
+        assert!(!card.abort_confirmation_for_lease(user(1), generation, [8; 32]));
+        assert_eq!(card.confirmation_reserved_by, Some(user(1)));
+        assert!(card.abort_confirmation_for_lease(user(1), generation, payload_hash));
+        assert_eq!(card.confirmation_reserved_by, None);
+    }
+
+    #[test]
     fn current_card_state_round_trip_preserves_attestation_and_confirmation_lease() {
         let mut before = card();
         let content_hash = [6; 32];
@@ -2690,5 +2826,96 @@ mod action_card_security_tests {
         assert!(card.recipient_public_keys.is_empty());
         assert_eq!(card.inbox_canister_id, None);
         assert_eq!(card.confirm_payload, payload, "the opaque action payload remains frozen");
+    }
+
+    #[test]
+    fn direct_human_app_card_enters_unverified_until_trusted_provenance_marks_it() {
+        let mut content = match MessageContentInternal::validate_new_message(
+            MessageContentInitial::ActionCard(initial_card()),
+            true,
+            UserType::User,
+            false,
+            10,
+        ) {
+            ValidateNewMessageContentResult::Success(content) => content,
+            _ => panic!("a structurally valid direct app card must reach the trusted provenance verifier"),
+        };
+
+        let MessageContentInternal::ActionCard(raw) = &content else {
+            unreachable!();
+        };
+        assert!(!raw.app_verified);
+        assert!(!raw.app_content_verified);
+        assert_eq!(raw.app_content_hash, None);
+
+        let MessageContent::ActionCard(hydrated_raw) = content.clone().hydrate(None) else {
+            unreachable!();
+        };
+        assert_eq!(
+            hydrated_raw.app_id, None,
+            "raw sender coordinates must not be exposed as trusted"
+        );
+        assert_eq!(
+            hydrated_raw.app_revision, None,
+            "raw sender coordinates must not be exposed as trusted"
+        );
+        assert!(!hydrated_raw.app_verified);
+        assert!(!hydrated_raw.app_content_verified);
+
+        let content_hash = [0xA5; 32];
+        assert!(content.mark_ai_app_card_verified(content_hash));
+        let MessageContentInternal::ActionCard(verified) = &content else {
+            unreachable!();
+        };
+        assert!(verified.app_verified);
+        assert!(verified.app_content_verified);
+        assert_eq!(verified.app_content_hash, Some(content_hash));
+
+        let MessageContent::ActionCard(hydrated_verified) = content.hydrate(None) else {
+            unreachable!();
+        };
+        assert_eq!(hydrated_verified.app_id, Some(7));
+        assert_eq!(hydrated_verified.app_revision, Some(11));
+        assert!(hydrated_verified.app_verified);
+        assert!(hydrated_verified.app_content_verified);
+    }
+
+    #[test]
+    fn bot_or_webhook_cannot_supply_an_app_provenance_tuple_in_any_chat_kind() {
+        for is_direct_chat in [true, false] {
+            for sender_user_type in [UserType::Bot, UserType::BotV2, UserType::OcControlledBot, UserType::Webhook] {
+                assert!(matches!(
+                    MessageContentInternal::validate_new_message(
+                        MessageContentInitial::ActionCard(initial_card()),
+                        is_direct_chat,
+                        sender_user_type,
+                        false,
+                        10,
+                    ),
+                    ValidateNewMessageContentResult::Error(_)
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn trusted_direct_card_mirror_round_trip_preserves_server_only_attestation() {
+        let mut before = MessageContentInternal::ActionCard(card());
+        let content_hash = [0x5A; 32];
+        assert!(before.mark_ai_app_card_verified(content_hash));
+
+        // SendMessageArgs transports MessageContentInternal between the two User canisters. Its
+        // msgpack round-trip must retain the trust bits/hash; re-validating it as raw browser input
+        // on the recipient would erase the only trustworthy provenance boundary.
+        let encoded = msgpack::serialize_to_vec(&before).unwrap();
+        let after: MessageContentInternal = msgpack::deserialize_then_unwrap(&encoded);
+        let MessageContentInternal::ActionCard(after) = after else {
+            unreachable!();
+        };
+        assert!(after.app_verified);
+        assert!(after.app_content_verified);
+        assert_eq!(after.app_content_hash, Some(content_hash));
+        assert_eq!(after.app_id, Some(7));
+        assert_eq!(after.app_revision, Some(11));
     }
 }

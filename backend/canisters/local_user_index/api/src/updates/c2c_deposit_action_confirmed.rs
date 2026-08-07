@@ -38,8 +38,9 @@ pub struct Args {
     #[serde(default)]
     pub inbox_canister_id: Option<CanisterId>,
     pub context: ActionDepositContext,
-    /// One-use GroupIndex authority for this exact card, confirmer, lease, payload hash and
-    /// child-authoritative timestamp. UserIndex consumes it immediately before signing.
+    /// One-use GroupIndex authority for a group/channel card, confirmer, lease, payload hash and
+    /// child-authoritative timestamp. Direct cards carry an empty value and use the exact
+    /// User-child/current-home-LUI trust chain instead.
     pub authority: ByteBuf,
 }
 

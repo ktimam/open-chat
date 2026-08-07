@@ -65,7 +65,7 @@ describe.each(SETTINGS_ENTRY_POINTS)("$label in-chat Settings AI apps entry poin
     it("is mounted in the chat Settings page", () => {
         const mount = source(entry.mount);
         expect(mount).toContain(
-            `import ${entry.componentName} from \"./${entry.componentName}.svelte\"`,
+            `import ${entry.componentName} from "./${entry.componentName}.svelte"`,
         );
         expect(mount).toContain(entry.mountMarkup);
     });
@@ -142,6 +142,28 @@ describe.each(SETTINGS_ENTRY_POINTS)("$label in-chat Settings AI apps entry poin
         expect(component).not.toContain("{chatId}");
         expect(component).not.toContain("{viewerId}");
     });
+});
+
+describe("direct Settings app discovery", () => {
+    for (const entry of SETTINGS_ENTRY_POINTS.filter(
+        (candidate) => candidate.componentName === "AiAppsDirectSummary",
+    )) {
+        it(`${entry.label} uses the shared deterministic direct-app catalog`, () => {
+            const component = source(entry.component);
+            expect(component).toContain(
+                'import { isDirectChatCardApp, loadDirectChatAiApps } from "@utils/aiAppDirectChat"',
+            );
+            expect(component).toContain("const direct = await loadDirectChatAiApps(client)");
+            expect(component).toContain("apps = direct.apps");
+            expect(component).toContain("connected = new Set(direct.connectedKeys.keys())");
+            expect(component).toContain("exactAppIds = new Set(direct.exactAppIds)");
+            expect(component).toContain("isDirectChatCardApp(app)");
+            expect(component).toContain("!connected.has(app.id) || exactAppIds.has(app.id)");
+            expect(component).not.toContain("client.exploreAiApps(");
+            expect(component).not.toContain("client.aiApps(");
+            expect(component).not.toContain("client.myAiAppKeys(");
+        });
+    }
 });
 
 describe("shared chat_link URL privacy used by all Settings entries", () => {

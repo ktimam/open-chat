@@ -356,6 +356,10 @@ export class GroupClient
                     unitResult,
                     GroupEditMessageArgs,
                     UnitResult,
+                    undefined,
+                    message.content.kind === "action_card_content"
+                        ? { sensitive: true }
+                        : undefined,
                 );
             });
     }
@@ -411,6 +415,10 @@ export class GroupClient
                 GroupSendMessageArgs,
                 GroupSendMessageResponse,
                 onRequestAccepted,
+                newEvent.event.content.kind === "action_card_content" &&
+                    newEvent.event.content.appProvenance !== undefined
+                    ? { sensitive: true }
+                    : undefined,
             )
                 .then((resp) => {
                     const retVal: [SendMessageResponse, Message] = [resp, newEvent.event];
@@ -809,6 +817,8 @@ export class GroupClient
             unitResult,
             GroupRespondToActionCardArgs,
             GroupRespondToActionCardResponse,
+            undefined,
+            { sensitive: true },
         );
     }
 
@@ -831,6 +841,8 @@ export class GroupClient
             createAiAppCardCapabilityResponse,
             GroupCreateAiAppCardCapabilityArgs,
             GroupCreateAiAppCardCapabilityResponse,
+            undefined,
+            { sensitive: true },
         );
     }
 
@@ -868,6 +880,8 @@ export class GroupClient
             createAiAppCardConfirmationGrantResponse,
             GroupCreateAiAppCardConfirmationGrantArgs,
             GroupCreateAiAppCardConfirmationGrantResponse,
+            undefined,
+            { sensitive: true },
         );
     }
 

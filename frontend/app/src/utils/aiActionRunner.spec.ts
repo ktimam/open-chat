@@ -33,6 +33,7 @@ import {
     proposeFailureMessage,
     proposeAndPost,
     proposeAndPostCandidate,
+    proposeAiActionForMessage,
     preflightAiActionForMessage,
     resolveCandidates,
     runProposeFlow,
@@ -47,22 +48,6 @@ const RECIPIENT = "-----BEGIN PUBLIC KEY-----\nABC\n-----END PUBLIC KEY-----\n";
 beforeEach(() => {
     attestationAvailableMock.mockReturnValue(false);
     inferOnDeviceMock.mockClear();
-});
-
-describe("direct-chat candidate gate", () => {
-    it("returns no candidates or link prompt without querying apps while direct provenance is unsupported", async () => {
-        const aiApps = vi.fn();
-        const enabledAiApps = vi.fn();
-        const myAiAppKeys = vi.fn();
-        const result = await resolveCandidates(
-            { aiApps, enabledAiApps, myAiAppKeys } as unknown as OpenChat,
-            { kind: "direct_chat", userId: "2vxsx-fae" },
-        );
-        expect(result).toEqual({ candidates: [], linkRequired: [], unavailable: [] });
-        expect(aiApps).not.toHaveBeenCalled();
-        expect(enabledAiApps).not.toHaveBeenCalled();
-        expect(myAiAppKeys).not.toHaveBeenCalled();
-    });
 });
 
 const DEF: AiActionDefinition = {
@@ -283,6 +268,102 @@ const APP: AiAppRegistration = {
     updated: 0n,
     published: true,
 };
+
+const DIRECT_CHAT = { kind: "direct_chat", userId: "2vxsx-fae" } as const;
+const FATHER_KEY = "-----BEGIN PUBLIC KEY-----\nFATHER\n-----END PUBLIC KEY-----\n";
+
+function directChatClient({
+    directory = [],
+    exact = [],
+    keys = [],
+}: {
+    directory?: AiAppRegistration[];
+    exact?: AiAppRegistration[];
+    keys?: { appId: number; publicKey: string }[];
+} = {}) {
+    const calls = {
+        exploreAiApps: vi.fn(async () => ({ matches: directory, total: directory.length })),
+        aiApps: vi.fn(async () => exact),
+        myAiAppKeys: vi.fn(async () => keys),
+        enabledAiApps: vi.fn(),
+    };
+    return { calls, client: calls as unknown as OpenChat };
+}
+
+describe("direct-chat per-user-key candidate resolution", () => {
+    beforeEach(() => {
+        attestationAvailableMock.mockReturnValue(true);
+    });
+
+    it("runs a connected app using this user's key even when the app is absent from the explorer page", async () => {
+        const { client, calls } = directChatClient({
+            directory: [],
+            exact: [APP],
+            keys: [{ appId: APP.id, publicKey: FATHER_KEY }],
+        });
+
+        await expect(resolveCandidates(client, DIRECT_CHAT)).resolves.toEqual({
+            candidates: [
+                {
+                    app: APP,
+                    action: DEF,
+                    recipientKey: FATHER_KEY,
+                    inboxCanisterId: APP.manifest.inboxCanisterId,
+                },
+            ],
+            linkRequired: [],
+            unavailable: [],
+        });
+        expect(calls.exploreAiApps).toHaveBeenCalledWith(undefined, 0, 8);
+        expect(calls.myAiAppKeys).toHaveBeenCalledTimes(1);
+        expect(calls.aiApps).toHaveBeenCalledWith([{ appId: APP.id }]);
+        expect(calls.enabledAiApps).not.toHaveBeenCalled();
+    });
+
+    it("asks to link a published per-user-key app when this user has no key", async () => {
+        const { client, calls } = directChatClient({ directory: [APP] });
+
+        await expect(
+            proposeAiActionForMessage(
+                client,
+                DIRECT_CHAT,
+                { kind: "text_content", text: "paid 20" },
+                { amount: 20 },
+            ),
+        ).resolves.toEqual({ kind: "link_required", app: APP });
+        expect(calls.exploreAiApps).toHaveBeenCalledWith(undefined, 0, 8);
+        expect(calls.myAiAppKeys).toHaveBeenCalledTimes(1);
+        expect(calls.enabledAiApps).not.toHaveBeenCalled();
+        expect(inferOnDeviceMock).not.toHaveBeenCalled();
+    });
+
+    it("treats an empty app key as unconnected and never falls back to the manifest key", async () => {
+        const { client } = directChatClient({
+            directory: [APP],
+            exact: [APP],
+            keys: [{ appId: APP.id, publicKey: "" }],
+        });
+
+        await expect(resolveCandidates(client, DIRECT_CHAT)).resolves.toEqual({
+            candidates: [],
+            linkRequired: [APP],
+            unavailable: [],
+        });
+    });
+
+    it("does not use a key registered for another app to unlock this app", async () => {
+        const { client } = directChatClient({
+            directory: [APP],
+            keys: [{ appId: APP.id + 1, publicKey: FATHER_KEY }],
+        });
+
+        await expect(resolveCandidates(client, DIRECT_CHAT)).resolves.toEqual({
+            candidates: [],
+            linkRequired: [APP],
+            unavailable: [],
+        });
+    });
+});
 
 const CANDIDATE: AiActionCandidate = { app: APP, action: DEF, recipientKey: RECIPIENT };
 

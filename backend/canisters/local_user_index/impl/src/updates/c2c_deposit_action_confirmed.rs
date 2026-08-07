@@ -16,11 +16,15 @@ use types::CanisterId;
 const ACTION_ENVELOPE_ENTROPY_PURPOSE: &[u8] = b"local-user-index/action-envelope/v4";
 
 // A chat canister forwards an opaque payload plus immutable app/action provenance and a bounded
-// membership witness. We validate a one-use GroupIndex authority, resolve the exact route and actual
-// confirmer key, wrap the payload in the plaintext context envelope (v4), and encrypt
-// separately. UserIndex—not this shard—signs only after consuming the same authority.
+// membership witness. Group/channel cards carry GroupIndex authority; direct cards instead require
+// the exact registered User child and empty authority. We resolve the current route and confirmer
+// key, wrap the payload in the plaintext context envelope (v4), and encrypt separately. UserIndex,
+// not this shard, signs only after independently revalidating the applicable route authority.
 #[update(guard = "caller_is_local_child_canister", msgpack = true)]
 async fn c2c_deposit_action_confirmed(args: Args) -> Response {
+    if matches!(args.context.chat, types::Chat::Direct(_)) && !args.authority.is_empty() {
+        return Error("direct chat must not carry group route authority".to_string());
+    }
     if let Err(error) = validate_pre_await_bounds(args.plaintext.len(), args.context.member_user_ids.len()) {
         return Error(error);
     }
@@ -101,9 +105,6 @@ async fn c2c_deposit_action_confirmed(args: Args) -> Response {
 }
 
 fn verified_app_binding(context: &ActionDepositContext) -> Result<(types::AiAppId, types::TimestampMillis), String> {
-    if matches!(context.chat, types::Chat::Direct(_)) {
-        return Err("app card confirmations are not supported in direct chats".to_string());
-    }
     if !context.app_verified {
         return Err("app card provenance was not verified by the chat canister".to_string());
     }
@@ -505,9 +506,31 @@ mod tests {
     }
 
     #[test]
-    fn direct_app_card_delivery_is_explicitly_out_of_scope() {
+    fn direct_verified_app_card_is_eligible_for_delivery() {
         let peer = UserId::from(Principal::from_slice(&[9]));
-        assert!(verified_app_binding(&verified_context(Chat::Direct(peer.into()))).is_err());
+        assert_eq!(
+            verified_app_binding(&verified_context(Chat::Direct(peer.into()))),
+            Ok((7, 11)),
+            "a server-verified direct card must use the same app binding as a group card"
+        );
+    }
+
+    #[test]
+    fn direct_deposit_context_has_one_canonical_key_from_both_participant_perspectives() {
+        let alice = UserId::from(Principal::from_slice(&[1, 1, 1]));
+        let bob = UserId::from(Principal::from_slice(&[2, 2, 2]));
+
+        let mut alice_view = verified_context(Chat::Direct(bob.into()));
+        alice_view.confirmed_by = alice;
+        alice_view.member_user_ids = vec![alice, bob];
+        let mut bob_view = verified_context(Chat::Direct(alice.into()));
+        bob_view.confirmed_by = bob;
+        bob_view.member_user_ids = vec![bob, alice];
+
+        let alice_context = super::authority_context(&alice_view).unwrap();
+        let bob_context = super::authority_context(&bob_view).unwrap();
+        assert_eq!(alice_context.chat_key, bob_context.chat_key);
+        assert!(alice_context.chat_key.starts_with("direct:"));
     }
 
     fn unsigned_deposit(id: u64) -> UnsignedActionDeposit {

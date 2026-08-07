@@ -8,6 +8,7 @@
     // auto-open. Generic — nothing app-specific.
     import { i18nKey } from "@src/i18n/i18n";
     import { toastStore } from "@src/stores/toast";
+    import { isDirectChatCardApp, loadDirectChatAiApps } from "@utils/aiAppDirectChat";
     import {
         bindPendingChatLinkSetup,
         createChatLinkSurfaceOpening,
@@ -44,26 +45,25 @@
     let apps = $state<AiAppRegistration[]>([]);
     // App ids THIS user holds a per-user delivery key for (pairing) — drives Connect vs Disconnect.
     let connected = $state(new Set<number>());
+    let exactAppIds = $state(new Set<number>());
     let disconnecting = $state(new Set<number>());
 
-    // Only apps that mean something in a direct chat: connectable (per-user keys), offering a
-    // chat_link surface, or already connected. Others have no actionable affordance here, so hide them.
+    // Direct app tokens/cards require a published per-user-key registration. A connected key must
+    // also have resolved through the bounded exact lookup; never offer setup from a directory
+    // snapshot when that authoritative lookup failed.
     let relevant = $derived(
         apps.filter(
-            (app) => app.manifest.perUserKeys || connected.has(app.id) || hasChatLinkSurface(app),
+            (app) =>
+                isDirectChatCardApp(app) &&
+                (!connected.has(app.id) || exactAppIds.has(app.id)),
         ),
     );
 
     async function load() {
-        const [myKeys, directory] = await Promise.all([
-            client.myAiAppKeys(),
-            client.exploreAiApps(undefined, 0, 8),
-        ]);
-        const exact = await client.aiApps(myKeys.map((key) => ({ appId: key.appId })));
-        const byId = new Map(directory.matches.map((app) => [app.id, app]));
-        for (const app of exact) byId.set(app.id, app);
-        apps = [...byId.values()].sort((left, right) => left.id - right.id);
-        connected = new Set(myKeys.filter((k) => k.publicKey.length > 0).map((k) => k.appId));
+        const direct = await loadDirectChatAiApps(client);
+        apps = direct.apps;
+        connected = new Set(direct.connectedKeys.keys());
+        exactAppIds = new Set(direct.exactAppIds);
     }
 
     load();

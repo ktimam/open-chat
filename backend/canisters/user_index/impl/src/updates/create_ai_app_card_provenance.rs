@@ -84,24 +84,29 @@ async fn create_ai_app_card_provenance(args: Args) -> Response {
 struct PreparedCardProvenance {
     caller: Principal,
     context: AiAppCardContext,
+    account_lifecycle_epoch: u64,
     content_hash: [u8; 32],
     binding: CardAttestationBindingV1,
+    app_user_key_fingerprint: Option<[u8; 32]>,
+    app_user_key_version: Option<u64>,
 }
 
 fn prepare_ai_app_card_provenance(args: Args, state: &mut RuntimeState) -> Result<PreparedCardProvenance, Response> {
     let caller = state.env.caller();
-    let user_id = if let Some(user) = state.data.users.get_by_principal(&caller) {
-        user.user_id
+    let (user_id, account_lifecycle_epoch) = if let Some(user) = state.data.users.get_by_principal(&caller) {
+        (
+            user.user_id,
+            state
+                .data
+                .users
+                .account_lifecycle_epoch(&user.user_id)
+                .expect("a resolved user must have a lifecycle epoch"),
+        )
     } else {
         return Err(Error(OCErrorCode::InitiatorNotFound.into()));
     };
 
-    // AI-app enablement currently exists only on groups/channels. Direct cards must remain ordinary
-    // local UI and cannot obtain app-private capabilities until direct enablement is designed.
-    if matches!(args.chat, Chat::Direct(_)) {
-        return Err(AppUnavailable);
-    }
-    let chat_key = match canonical_non_direct_chat_key(args.chat) {
+    let chat_key = match canonical_card_chat_key(user_id, args.chat) {
         Ok(value) => value,
         Err(error) => return Err(InvalidRequest(error)),
     };
@@ -115,6 +120,28 @@ fn prepare_ai_app_card_provenance(args: Args, state: &mut RuntimeState) -> Resul
     }
     let Some(app) = resolve_current_card_app(&state.data.ai_apps, args.app_id, args.app_revision, &args.action_id) else {
         return Err(AppUnavailable);
+    };
+    let (app_user_key_fingerprint, app_user_key_version) = if matches!(args.chat, Chat::Direct(_)) {
+        if !app.manifest.per_user_keys {
+            return Err(AppUnavailable);
+        }
+        crate::updates::c2c_create_ai_app_card_confirmation_grant::current_user_key_binding(
+            state,
+            app,
+            &AiAppCardContext {
+                user_id,
+                chat: args.chat,
+                chat_key: chat_key.clone(),
+                thread_root_message_index: args.thread_root_message_index,
+                message_id: args.message_id,
+                app_id: args.app_id,
+                app_revision: args.app_revision,
+                action_id: args.action_id.clone(),
+            },
+        )
+        .map_err(|_| AppUnavailable)?
+    } else {
+        (None, None)
     };
     let app_canister_id = app.manifest.app_canister_id.unwrap();
     let context = AiAppCardContext {
@@ -147,6 +174,7 @@ fn prepare_ai_app_card_provenance(args: Args, state: &mut RuntimeState) -> Resul
     Ok(PreparedCardProvenance {
         caller,
         context,
+        account_lifecycle_epoch,
         content_hash,
         binding: CardAttestationBindingV1 {
             user_index_canister_id: state.env.canister_id(),
@@ -157,6 +185,8 @@ fn prepare_ai_app_card_provenance(args: Args, state: &mut RuntimeState) -> Resul
             },
             authority_content_hash: content_hash,
         },
+        app_user_key_fingerprint,
+        app_user_key_version,
     })
 }
 
@@ -180,15 +210,13 @@ fn response_attests_card(expected: &CardAttestationBindingV1, response: &c2c_att
 }
 
 fn mint_ai_app_card_provenance(prepared: PreparedCardProvenance, state: &mut RuntimeState) -> Response {
-    // A canister message's caller is immutable, but authorization can change while the verifier
-    // call is suspended. Re-check the exact admitted caller and its user binding before minting.
-    if state.env.caller() != prepared.caller
-        || state
-            .data
-            .users
-            .get_by_principal(&prepared.caller)
-            .is_none_or(|user| user.user_id != prepared.context.user_id)
-    {
+    // The verifier response resumes in a callback message, so the ambient caller is not an
+    // authorization fact from the original ingress. Re-check the principal captured before the
+    // await against the current principal -> user binding instead.
+    if state.data.users.get_by_principal(&prepared.caller).is_none_or(|user| {
+        user.user_id != prepared.context.user_id
+            || state.data.users.account_lifecycle_epoch(&user.user_id) != Some(prepared.account_lifecycle_epoch)
+    }) {
         return Error(OCErrorCode::InitiatorNotFound.into());
     }
     let current = resolve_current_card_app(
@@ -199,6 +227,17 @@ fn mint_ai_app_card_provenance(prepared: PreparedCardProvenance, state: &mut Run
     );
     if !current.is_some_and(|app| app.manifest.app_canister_id == Some(prepared.binding.app_canister_id)) {
         return AppUnavailable;
+    }
+    if matches!(prepared.context.chat, Chat::Direct(_)) {
+        let Some(app) = current else { return AppUnavailable };
+        let Ok((fingerprint, version)) =
+            crate::updates::c2c_create_ai_app_card_confirmation_grant::current_user_key_binding(state, app, &prepared.context)
+        else {
+            return AppUnavailable;
+        };
+        if fingerprint != prepared.app_user_key_fingerprint || version != prepared.app_user_key_version {
+            return AppUnavailable;
+        }
     }
     let now = state.env.now();
     let expires_at = now + PROVENANCE_TTL;
@@ -217,6 +256,8 @@ fn mint_ai_app_card_provenance(prepared: PreparedCardProvenance, state: &mut Run
             Provenance {
                 context: prepared.context.clone(),
                 content_hash: prepared.content_hash,
+                app_user_key_fingerprint: prepared.app_user_key_fingerprint,
+                app_user_key_version: prepared.app_user_key_version,
                 expires_at,
             },
             now,
@@ -241,12 +282,47 @@ fn mint_ai_app_card_provenance(prepared: PreparedCardProvenance, state: &mut Run
     Error(OCErrorCode::Impossible.with_message("can't generate AI-app card provenance"))
 }
 
-pub(crate) fn canonical_non_direct_chat_key(chat: Chat) -> Result<String, String> {
+pub(crate) fn canonical_card_chat_key(user_id: types::UserId, chat: Chat) -> Result<String, String> {
     match chat {
-        Chat::Direct(_) => Err("AI-app card capabilities are unavailable in direct chats".to_string()),
+        Chat::Direct(other) => {
+            let other_user_id: types::UserId = other.into();
+            if other_user_id == user_id {
+                return Err("direct chat participants must be distinct".to_string());
+            }
+            let mut pair = [user_id, other_user_id];
+            pair.sort_unstable();
+            Ok(format!("direct:{}:{}", pair[0], pair[1]))
+        }
         Chat::Group(chat_id) => Ok(format!("group:{chat_id}")),
         Chat::Channel(community_id, channel_id) => Ok(format!("channel:{community_id}:{channel_id}")),
     }
+}
+
+/// Validates the User -> current LocalUserIndex -> UserIndex trust chain used by direct-card C2C
+/// calls. Group and channel calls use a one-use GroupIndex authority instead and must never call
+/// this helper.
+pub(crate) fn validate_direct_card_lui_route(
+    context: &AiAppCardContext,
+    authority: &[u8],
+    caller: types::CanisterId,
+    state: &RuntimeState,
+) -> Result<(), String> {
+    if !matches!(context.chat, Chat::Direct(_)) {
+        return Err("direct-card route validation requires a direct chat".to_string());
+    }
+    if !authority.is_empty() {
+        return Err("direct chat must not carry group route authority".to_string());
+    }
+    let canonical_chat_key = canonical_card_chat_key(context.user_id, context.chat)?;
+    if context.chat_key != canonical_chat_key {
+        return Err("non-canonical chat key".to_string());
+    }
+    if state.data.users.get_by_user_id(&context.user_id).is_none()
+        || state.data.local_index_map.get_index_canister(&context.user_id) != Some(caller)
+    {
+        return Err("caller is not the user's current local user index".to_string());
+    }
+    Ok(())
 }
 
 pub(crate) fn resolve_current_card_app<'a>(
@@ -275,7 +351,11 @@ pub(crate) fn resolve_current_card_app<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::user::User;
     use candid::Principal;
+    use p256_key_pair::P256KeyPair;
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
     use types::{AiActionDefinition, AiAppManifest, AiAppSurface, MessageId, SurfaceDisplay, UserId};
 
     fn manifest() -> AiAppManifest {
@@ -325,10 +405,199 @@ mod tests {
         assert!(resolve_current_card_app(&registry, app.id, current, "spoofed.action").is_none());
     }
 
+    fn direct_fixture() -> (RuntimeState, Args, UserId, AiAppId, String) {
+        let env = utils::env::test::TestEnv::default();
+        let owner: UserId = env.caller.into();
+        let now = env.now;
+        let mut data = crate::Data::default();
+        data.users.add_test_user(User {
+            principal: env.caller,
+            user_id: owner,
+            username: "direct-proposer".to_string(),
+            ..Default::default()
+        });
+        data.ai_app_scoped_identity_key
+            .ensure_initialized(&mut StdRng::seed_from_u64(101))
+            .unwrap();
+        let mut direct_manifest = manifest();
+        direct_manifest.per_user_keys = true;
+        direct_manifest.consumer_public_key.clear();
+        let app = data.ai_apps.register(owner, direct_manifest, now, false).unwrap();
+        assert!(data.ai_apps.publish(app.id, now));
+        let revision = data.ai_apps.get(app.id).unwrap().updated;
+        let key = P256KeyPair::new(&mut StdRng::seed_from_u64(102)).public_key_pem().to_string();
+        data.ai_app_user_keys.set(owner, app.id, key.clone()).unwrap();
+        let state = RuntimeState::new(Box::new(env), data);
+        let args = Args {
+            app_id: app.id,
+            app_revision: revision,
+            action_id: "generic.action".to_string(),
+            content: types::AiAppCardContentV1 {
+                title: "Review".to_string(),
+                rows: vec![types::ActionCardRow {
+                    label: "Value".to_string(),
+                    value: "42".to_string(),
+                }],
+                confirm_label: "Confirm".to_string(),
+                cancel_label: "Cancel".to_string(),
+                action_id: "generic.action".to_string(),
+                disclosure: None,
+                expires_at: None,
+                confirm_payload: Some(ByteBuf::from(b"payload".to_vec())),
+            },
+            chat: Chat::Direct(Principal::from_slice(&[2]).into()),
+            thread_root_message_index: None,
+            message_id: MessageId::from(1u64),
+        };
+        (state, args, owner, app.id, key)
+    }
+
+    fn group_fixture_with_external_app_owner() -> (RuntimeState, Args, UserId, Principal) {
+        let env = utils::env::test::TestEnv::default();
+        let principal = env.caller;
+        let viewer: UserId = principal.into();
+        let app_owner: UserId = Principal::from_slice(&[76]).into();
+        let now = env.now;
+        let mut data = crate::Data::default();
+        data.users.add_test_user(User {
+            principal,
+            user_id: viewer,
+            username: "incumbent-group-proposer".to_string(),
+            date_created: 10,
+            ..Default::default()
+        });
+        data.ai_app_scoped_identity_key
+            .ensure_initialized(&mut StdRng::seed_from_u64(104))
+            .unwrap();
+        let app = data.ai_apps.register(app_owner, manifest(), now, false).unwrap();
+        assert!(data.ai_apps.publish(app.id, now));
+        let args = Args {
+            app_id: app.id,
+            app_revision: data.ai_apps.get(app.id).unwrap().updated,
+            action_id: "generic.action".to_string(),
+            content: types::AiAppCardContentV1 {
+                title: "Review".to_string(),
+                rows: vec![types::ActionCardRow {
+                    label: "Value".to_string(),
+                    value: "42".to_string(),
+                }],
+                confirm_label: "Confirm".to_string(),
+                cancel_label: "Cancel".to_string(),
+                action_id: "generic.action".to_string(),
+                disclosure: None,
+                expires_at: None,
+                confirm_payload: Some(ByteBuf::from(b"payload".to_vec())),
+            },
+            chat: Chat::Group(Principal::from_slice(&[75]).into()),
+            thread_root_message_index: None,
+            message_id: MessageId::from(1u64),
+        };
+        (RuntimeState::new(Box::new(env), data), args, viewer, principal)
+    }
+
     #[test]
-    fn direct_chat_is_fail_closed_until_direct_app_enablement_exists() {
-        let other = Principal::from_slice(&[2]).into();
-        assert!(canonical_non_direct_chat_key(Chat::Direct(other)).is_err());
+    fn direct_c2c_route_requires_the_users_exact_current_home_lui_and_empty_authority() {
+        let viewer_principal = Principal::from_slice(&[21]);
+        let viewer: UserId = viewer_principal.into();
+        let peer: UserId = Principal::from_slice(&[22]).into();
+        let home_lui = Principal::from_slice(&[23]);
+        let replacement_lui = Principal::from_slice(&[24]);
+        let mut pair = [viewer, peer];
+        pair.sort_unstable();
+        let context = AiAppCardContext {
+            user_id: viewer,
+            chat: Chat::Direct(peer.into()),
+            chat_key: format!("direct:{}:{}", pair[0], pair[1]),
+            thread_root_message_index: Some(3u32.into()),
+            message_id: MessageId::from(7u64),
+            app_id: 11,
+            app_revision: 13,
+            action_id: "generic.action".to_string(),
+        };
+        let mut data = crate::Data::default();
+        data.users.add_test_user(User {
+            principal: viewer_principal,
+            user_id: viewer,
+            username: "direct-viewer".to_string(),
+            ..Default::default()
+        });
+        data.local_index_map.add_index(home_lui, types::BuildVersion::default());
+        data.local_index_map
+            .add_index(replacement_lui, types::BuildVersion::default());
+        assert!(data.local_index_map.add_user(home_lui, viewer));
+        let mut state = RuntimeState::new(Box::new(utils::env::test::TestEnv::default()), data);
+
+        assert!(validate_direct_card_lui_route(&context, &[], home_lui, &state).is_ok());
+        assert!(validate_direct_card_lui_route(&context, &[1], home_lui, &state).is_err());
+        assert!(validate_direct_card_lui_route(&context, &[], replacement_lui, &state).is_err());
+
+        let mut noncanonical = context.clone();
+        noncanonical.chat_key.push_str(":redirected");
+        assert!(validate_direct_card_lui_route(&noncanonical, &[], home_lui, &state).is_err());
+
+        assert!(state.data.local_index_map.remove_user(&viewer));
+        assert!(state.data.local_index_map.add_user(replacement_lui, viewer));
+        assert!(validate_direct_card_lui_route(&context, &[], home_lui, &state).is_err());
+        assert!(validate_direct_card_lui_route(&context, &[], replacement_lui, &state).is_ok());
+    }
+
+    #[test]
+    fn direct_provenance_accepts_an_exact_published_per_user_app_with_current_key() {
+        let (mut state, args, _, _, _) = direct_fixture();
+        let prepared = prepare_ai_app_card_provenance(args, &mut state)
+            .expect("a connected per-user app must be able to attest a direct card");
+
+        assert!(prepared.context.chat_key.starts_with("direct:"));
+    }
+
+    #[test]
+    fn direct_provenance_does_not_survive_key_removal() {
+        let (mut state, args, owner, app_id, _) = direct_fixture();
+        let prepared = prepare_ai_app_card_provenance(args, &mut state).unwrap();
+        assert!(state.data.ai_app_user_keys.remove(owner, app_id).unwrap());
+
+        assert!(matches!(mint_ai_app_card_provenance(prepared, &mut state), AppUnavailable));
+    }
+
+    #[test]
+    fn direct_provenance_does_not_survive_key_replacement() {
+        let (mut state, args, owner, app_id, _) = direct_fixture();
+        let prepared = prepare_ai_app_card_provenance(args, &mut state).unwrap();
+        let replacement = P256KeyPair::new(&mut StdRng::seed_from_u64(103)).public_key_pem().to_string();
+        state.data.ai_app_user_keys.set(owner, app_id, replacement).unwrap();
+
+        assert!(matches!(mint_ai_app_card_provenance(prepared, &mut state), AppUnavailable));
+    }
+
+    #[test]
+    fn readding_the_same_key_does_not_revive_pre_revocation_direct_provenance() {
+        let (mut state, args, owner, app_id, key) = direct_fixture();
+        let prepared = prepare_ai_app_card_provenance(args, &mut state).unwrap();
+        assert!(state.data.ai_app_user_keys.remove(owner, app_id).unwrap());
+        state.data.ai_app_user_keys.set(owner, app_id, key).unwrap();
+
+        assert!(matches!(mint_ai_app_card_provenance(prepared, &mut state), AppUnavailable));
+    }
+
+    #[test]
+    fn attested_group_provenance_does_not_mint_for_a_recreated_account() {
+        let (mut state, args, viewer, principal) = group_fixture_with_external_app_owner();
+        let prepared = prepare_ai_app_card_provenance(args, &mut state).unwrap();
+
+        assert!(state.data.users.delete_user(viewer, 20).is_some());
+        state.delete_ai_app_user_state(viewer, 20);
+        state.data.users.add_test_user(User {
+            principal,
+            user_id: viewer,
+            username: "recreated-group-proposer".to_string(),
+            date_created: 30,
+            ..Default::default()
+        });
+
+        assert!(matches!(
+            mint_ai_app_card_provenance(prepared, &mut state),
+            Error(error) if error.matches_code(OCErrorCode::InitiatorNotFound)
+        ));
     }
 
     #[test]

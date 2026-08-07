@@ -61,6 +61,9 @@ fn c2c_redeem_ai_app_card_capability(args: Args) -> Response {
                 return NotFound;
             }
         };
+        if !capability_user_exists(&state.data, capability.context.user_id) {
+            return AppUnavailable;
+        }
         if caller != capability.app_canister_id {
             state
                 .data
@@ -153,6 +156,10 @@ fn c2c_redeem_ai_app_card_capability(args: Args) -> Response {
     })
 }
 
+fn capability_user_exists(data: &crate::Data, user_id: types::UserId) -> bool {
+    data.users.get_by_user_id(&user_id).is_some()
+}
+
 pub(crate) fn app_user_key_binding_matches(
     per_user_keys: bool,
     expected_fingerprint: Option<[u8; 32]>,
@@ -183,27 +190,48 @@ pub(crate) fn app_scoped_context(
     key: &crate::model::ai_app_scoped_identity::AiAppScopedIdentityKey,
     user_index_canister_id: types::CanisterId,
 ) -> Result<AppScopedCardContext, String> {
+    let (chat_handle, message_handle) = match context.chat {
+        types::Chat::Direct(other) => {
+            let other_user_id: types::UserId = other.into();
+            (
+                key.direct_chat_handle(
+                    user_index_canister_id,
+                    context.app_id,
+                    app_canister_id,
+                    context.user_id,
+                    other_user_id,
+                )?,
+                key.direct_message_handle(
+                    user_index_canister_id,
+                    context.app_id,
+                    app_canister_id,
+                    context.user_id,
+                    other_user_id,
+                    context.thread_root_message_index,
+                    context.message_id,
+                )?,
+            )
+        }
+        chat => (
+            key.chat_handle(user_index_canister_id, context.app_id, app_canister_id, chat)?,
+            key.message_handle(
+                user_index_canister_id,
+                context.app_id,
+                app_canister_id,
+                chat,
+                context.thread_root_message_index,
+                context.message_id,
+            )?,
+        ),
+    };
     Ok(AppScopedCardContext {
         context_version: user_index_canister::c2c_redeem_ai_app_card_capability::APP_SCOPED_CARD_CONTEXT_VERSION_V1,
         app_subject: serde_bytes::ByteBuf::from(
             key.app_subject(user_index_canister_id, context.app_id, app_canister_id, context.user_id)?
                 .to_vec(),
         ),
-        chat_handle: serde_bytes::ByteBuf::from(
-            key.chat_handle(user_index_canister_id, context.app_id, app_canister_id, context.chat)?
-                .to_vec(),
-        ),
-        message_handle: serde_bytes::ByteBuf::from(
-            key.message_handle(
-                user_index_canister_id,
-                context.app_id,
-                app_canister_id,
-                context.chat,
-                context.thread_root_message_index,
-                context.message_id,
-            )?
-            .to_vec(),
-        ),
+        chat_handle: serde_bytes::ByteBuf::from(chat_handle.to_vec()),
+        message_handle: serde_bytes::ByteBuf::from(message_handle.to_vec()),
         app_id: context.app_id,
         app_revision: context.app_revision,
         action_id: context.action_id.clone(),
@@ -213,6 +241,47 @@ pub(crate) fn app_scoped_context(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Data;
+    use crate::model::user::User;
+    use candid::Principal;
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
+    use types::{AiAppCardContext, Chat, MessageId, UserId};
+
+    fn user(value: u8) -> UserId {
+        Principal::from_slice(&[value]).into()
+    }
+
+    #[test]
+    fn capability_user_existence_gate_fails_closed_for_a_deleted_account() {
+        let user_id = user(9);
+        let mut data = Data::default();
+        assert!(!capability_user_exists(&data, user_id));
+        data.users.add_test_user(User {
+            principal: user_id.into(),
+            user_id,
+            username: "live-capability-user".to_string(),
+            ..Default::default()
+        });
+        assert!(capability_user_exists(&data, user_id));
+        assert!(data.users.delete_user(user_id, 1).is_some());
+        assert!(!capability_user_exists(&data, user_id));
+    }
+
+    fn direct_context(viewer: UserId, other: UserId) -> AiAppCardContext {
+        let mut pair = [viewer, other];
+        pair.sort_unstable();
+        AiAppCardContext {
+            user_id: viewer,
+            chat: Chat::Direct(other.into()),
+            chat_key: format!("direct:{}:{}", pair[0], pair[1]),
+            thread_root_message_index: Some(3u32.into()),
+            message_id: MessageId::from(7u64),
+            app_id: 11,
+            app_revision: 13,
+            action_id: "generic.action".to_string(),
+        }
+    }
 
     #[test]
     fn key_mode_and_exact_fingerprint_are_both_required() {
@@ -255,5 +324,48 @@ mod tests {
             Some(fingerprint),
             Some(8)
         ));
+    }
+
+    #[test]
+    fn direct_app_scoped_chat_and_message_handles_are_symmetric() {
+        let alice = user(1);
+        let bob = user(2);
+        let user_index = Principal::from_slice(&[3]);
+        let app_canister = Principal::from_slice(&[4]);
+        let mut key = crate::model::ai_app_scoped_identity::AiAppScopedIdentityKey::default();
+        key.ensure_initialized(&mut StdRng::seed_from_u64(91)).unwrap();
+
+        let alice_view = app_scoped_context(&direct_context(alice, bob), app_canister, &key, user_index).unwrap();
+        let bob_view = app_scoped_context(&direct_context(bob, alice), app_canister, &key, user_index).unwrap();
+
+        assert_ne!(
+            alice_view.app_subject, bob_view.app_subject,
+            "the app subject remains user-specific"
+        );
+        assert_eq!(
+            alice_view.chat_handle, bob_view.chat_handle,
+            "the exact sorted participant pair must produce one opaque chat handle"
+        );
+        assert_eq!(
+            alice_view.message_handle, bob_view.message_handle,
+            "both stored perspectives of one direct message must produce one opaque message handle"
+        );
+    }
+
+    #[test]
+    fn direct_app_scoped_context_rejects_a_self_chat() {
+        let alice = user(1);
+        let mut key = crate::model::ai_app_scoped_identity::AiAppScopedIdentityKey::default();
+        key.ensure_initialized(&mut StdRng::seed_from_u64(92)).unwrap();
+
+        assert!(
+            app_scoped_context(
+                &direct_context(alice, alice),
+                Principal::from_slice(&[4]),
+                &key,
+                Principal::from_slice(&[3]),
+            )
+            .is_err()
+        );
     }
 }

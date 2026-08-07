@@ -4,6 +4,7 @@ use crate::model::action_delivery_outbox::{
 };
 use crate::model::ai_app_registry::AiAppRegistry;
 use crate::model::ai_app_user_keys::AiAppUserKeys;
+use crate::updates::create_ai_app_card_provenance::validate_direct_card_lui_route;
 use crate::{mutate_state, read_state};
 use action_inbox_canister::c2c_notify_actions;
 use canister_api_macros::update;
@@ -43,17 +44,27 @@ async fn c2c_deposit_actions(args: Args) -> Response {
             return Error(error);
         }
     };
+    if matches!(args.authority_context.chat, types::Chat::Direct(_))
+        && let Err(error) =
+            read_state(|state| validate_direct_card_lui_route(&args.authority_context, &args.authority, caller, state))
+    {
+        finish_action_deposit_admission(caller, args.app_id, admitted_at);
+        return Error(error);
+    }
     if let Err(error) = validate_encoded_deposit_payload(&args) {
         finish_action_deposit_admission(caller, args.app_id, admitted_at);
         return Error(error);
     }
-    let (attempt_id, attempt_created_at) = match action_delivery_attempt_identity(&authority_binding) {
+    let delivery_identity = match action_delivery_identity(&authority_binding) {
         Ok(identity) => identity,
         Err(error) => {
             finish_action_deposit_admission(caller, args.app_id, admitted_at);
             return Error(error);
         }
     };
+    let slot_id = delivery_identity.slot_id;
+    let attempt_id = delivery_identity.attempt_id;
+    let attempt_created_at = delivery_identity.attempt_created_at;
     let reserved_bytes = match estimated_signed_request_size(&args) {
         Ok(bytes) => bytes,
         Err(error) => {
@@ -63,10 +74,14 @@ async fn c2c_deposit_actions(args: Args) -> Response {
     };
     let outbox_start = mutate_state(|state| {
         let now = state.env.now();
-        state
-            .data
-            .action_delivery_outbox
-            .start(attempt_id, args.app_id, reserved_bytes, attempt_created_at, now)
+        state.data.action_delivery_outbox.start_in_slot(
+            slot_id,
+            attempt_id,
+            args.app_id,
+            reserved_bytes,
+            attempt_created_at,
+            now,
+        )
     });
     let preparation_epoch = match outbox_start {
         Ok(ActionDeliveryStart::Prepare { epoch }) => epoch,
@@ -127,28 +142,34 @@ async fn c2c_deposit_actions(args: Args) -> Response {
         finish_action_deposit_admission(caller, args.app_id, admitted_at);
         return Error(error);
     }
-    // Validate the exact GroupIndex assertion without destructively consuming its bearer. The
-    // durable full-attempt outbox is the semantic one-use barrier: concurrent/replayed equivalent
-    // tokens observe one stored attempt, while any changed binding fails GroupIndex validation.
-    // A lost validation callback has no remote side effect and is safely retryable after the lease.
-    match crate::ai_app_card_authority::validate(authority_binding.clone(), &args.authority).await {
-        Ok(validated) if validated == authority_binding => {}
-        _ => {
-            abort_action_delivery_preparation(attempt_id, preparation_epoch);
-            finish_action_deposit_admission(caller, args.app_id, admitted_at);
-            return Error("action deposit authority is invalid or stale".to_string());
+    // Group/channel cards validate the exact GroupIndex assertion without destructively consuming
+    // its bearer. Direct cards already proved the exact current home LUI and carry no GroupIndex
+    // token. The durable full-attempt outbox is the semantic one-use barrier: equivalent retries
+    // observe one stored attempt, while a changed binding produces a different identity or fails
+    // route validation. A lost validation callback has no remote side effect and is safely retryable.
+    if !matches!(args.authority_context.chat, types::Chat::Direct(_)) {
+        match crate::ai_app_card_authority::validate(authority_binding.clone(), &args.authority).await {
+            Ok(validated) if validated == authority_binding => {}
+            _ => {
+                abort_action_delivery_preparation(attempt_id, preparation_epoch);
+                finish_action_deposit_admission(caller, args.app_id, admitted_at);
+                return Error("action deposit authority is invalid or stale".to_string());
+            }
         }
     }
     // Recheck the authoritative shard, app/account keys and exact route after the validation await and
     // immediately before signing.
     if !read_state(|state| {
-        resolve_current_route(
-            &state.data.ai_apps,
-            &state.data.ai_app_user_keys,
-            &state.data.ai_app_scoped_identity_key,
-            state.env.canister_id(),
-            &args,
-        ) == Ok(inbox_canister_id)
+        let direct_route_is_current = !matches!(args.authority_context.chat, types::Chat::Direct(_))
+            || validate_direct_card_lui_route(&args.authority_context, &args.authority, caller, state).is_ok();
+        direct_route_is_current
+            && resolve_current_route(
+                &state.data.ai_apps,
+                &state.data.ai_app_user_keys,
+                &state.data.ai_app_scoped_identity_key,
+                state.env.canister_id(),
+                &args,
+            ) == Ok(inbox_canister_id)
     }) {
         abort_action_delivery_preparation(attempt_id, preparation_epoch);
         finish_action_deposit_admission(caller, args.app_id, admitted_at);
@@ -226,17 +247,20 @@ async fn c2c_deposit_actions(args: Args) -> Response {
     // Observe revocation/re-registration after the await. A definite Success remains Success because
     // the side effect already happened; failures remain ambiguity-safe and reveal no remote details.
     let _route_still_current = read_state(|state| {
-        resolve_current_route_bindings(
-            &state.data.ai_apps,
-            &state.data.ai_app_user_keys,
-            &state.data.ai_app_scoped_identity_key,
-            state.env.canister_id(),
-            app_id,
-            app_revision,
-            &action_id,
-            args.confirmed_by,
-            &recipient_key_bindings,
-        ) == Ok(inbox_canister_id)
+        let direct_route_is_current = !matches!(args.authority_context.chat, types::Chat::Direct(_))
+            || validate_direct_card_lui_route(&args.authority_context, &args.authority, caller, state).is_ok();
+        direct_route_is_current
+            && resolve_current_route_bindings(
+                &state.data.ai_apps,
+                &state.data.ai_app_user_keys,
+                &state.data.ai_app_scoped_identity_key,
+                state.env.canister_id(),
+                app_id,
+                app_revision,
+                &action_id,
+                args.confirmed_by,
+                &recipient_key_bindings,
+            ) == Ok(inbox_canister_id)
     });
     response_from_delivery_completion(completion)
 }
@@ -379,6 +403,78 @@ fn action_delivery_attempt_identity(
     Ok((sha256::sha256(&canonical), *created_at))
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ActionDeliveryIdentity {
+    slot_id: crate::model::action_delivery_outbox::ActionDeliverySlotId,
+    attempt_id: ActionDeliveryAttemptId,
+    attempt_created_at: TimestampMillis,
+}
+
+fn action_delivery_identity(binding: &AiAppCardAuthorityBindingV1) -> Result<ActionDeliveryIdentity, String> {
+    if matches!(binding.context.chat, types::Chat::Direct(_)) {
+        direct_action_delivery_identity(binding)
+    } else {
+        let (attempt_id, attempt_created_at) = action_delivery_attempt_identity(binding)?;
+        Ok(ActionDeliveryIdentity {
+            slot_id: attempt_id,
+            attempt_id,
+            attempt_created_at,
+        })
+    }
+}
+
+fn direct_action_delivery_identity(binding: &AiAppCardAuthorityBindingV1) -> Result<ActionDeliveryIdentity, String> {
+    const SLOT_DOMAIN: &[u8] = b"openchat/action-inbox/direct-delivery-slot/v1\0";
+    const ATTEMPT_DOMAIN: &[u8] = b"openchat/action-inbox/direct-delivery-attempt/v1\0";
+    let AiAppCardAuthorityOperationV1::DepositConfirmedAction {
+        confirm_payload_hash,
+        confirmation_lease_generation,
+        created_at,
+    } = &binding.operation
+    else {
+        return Err("action authority has the wrong operation".to_string());
+    };
+    if !matches!(binding.context.chat, types::Chat::Direct(_)) {
+        return Err("direct delivery identity requires a direct chat".to_string());
+    }
+
+    // `authoritative_binding` has already proved that this key is the canonical sorted direct pair
+    // plus thread/message coordinates. Both mirrored User canisters therefore derive the same slot
+    // even though their confirmer, home LUI, recipient key, and encrypted deposit differ.
+    let card_identity = card_identity_digest(
+        &binding.context.chat_key,
+        binding.context.thread_root_message_index.map(u32::from),
+        binding.context.message_id.as_u64(),
+    );
+    let mut slot = Vec::with_capacity(SLOT_DOMAIN.len() + 4 + card_identity.len());
+    slot.extend_from_slice(SLOT_DOMAIN);
+    slot.extend_from_slice(&binding.context.app_id.to_be_bytes());
+    slot.extend_from_slice(&card_identity);
+    let slot_id = sha256::sha256(&slot);
+
+    // The exact attempt excludes the current LUI route so a home-shard move can reconcile the same
+    // confirmer's immutable lease. It still commits the confirmer and every value that can change
+    // the authorized external action.
+    let mut attempt = Vec::with_capacity(ATTEMPT_DOMAIN.len() + 256 + binding.context.action_id.len());
+    attempt.extend_from_slice(ATTEMPT_DOMAIN);
+    attempt.extend_from_slice(&slot_id);
+    append_principal(&mut attempt, binding.context.user_id.into())?;
+    attempt.extend_from_slice(&binding.context.app_revision.to_be_bytes());
+    let action_len = u32::try_from(binding.context.action_id.len()).map_err(|_| "action id is too long".to_string())?;
+    attempt.extend_from_slice(&action_len.to_be_bytes());
+    attempt.extend_from_slice(binding.context.action_id.as_bytes());
+    attempt.extend_from_slice(&binding.content_hash);
+    attempt.extend_from_slice(&confirmation_lease_generation.to_be_bytes());
+    attempt.extend_from_slice(confirm_payload_hash);
+    attempt.extend_from_slice(&created_at.to_be_bytes());
+
+    Ok(ActionDeliveryIdentity {
+        slot_id,
+        attempt_id: sha256::sha256(&attempt),
+        attempt_created_at: *created_at,
+    })
+}
+
 fn append_principal(canonical: &mut Vec<u8>, principal: candid::Principal) -> Result<(), String> {
     let raw = principal.as_slice();
     let len = u8::try_from(raw.len()).map_err(|_| "principal is too long".to_string())?;
@@ -445,8 +541,17 @@ fn validate_deposit_commitments(args: &Args) -> Result<(), String> {
 }
 
 fn authoritative_binding(args: &Args, caller: CanisterId) -> Result<AiAppCardAuthorityBindingV1, String> {
-    if args.authority.len() != group_index_canister::ai_app_card_authority::AI_APP_CARD_AUTHORITY_TOKEN_BYTES {
-        return Err("action deposit authority has an invalid length".to_string());
+    match args.authority_context.chat {
+        types::Chat::Direct(_) if !args.authority.is_empty() => {
+            return Err("direct action deposit must not carry group route authority".to_string());
+        }
+        types::Chat::Direct(_) => {}
+        types::Chat::Group(_) | types::Chat::Channel(_, _)
+            if args.authority.len() != group_index_canister::ai_app_card_authority::AI_APP_CARD_AUTHORITY_TOKEN_BYTES =>
+        {
+            return Err("action deposit authority has an invalid length".to_string());
+        }
+        types::Chat::Group(_) | types::Chat::Channel(_, _) => {}
     }
     if args.confirmation_lease_generation == 0 || args.deposits.is_empty() {
         return Err("action deposit has no durable confirmation lease or deposits".to_string());
@@ -459,7 +564,7 @@ fn authoritative_binding(args: &Args, caller: CanisterId) -> Result<AiAppCardAut
     {
         return Err("action deposit routing fields do not match its authority context".to_string());
     }
-    let canonical_chat_key = canonical_chat_key(context.chat)?;
+    let canonical_chat_key = canonical_chat_key(context.user_id, context.chat)?;
     if context.chat_key != canonical_chat_key {
         return Err("action deposit structured chat and canonical chat key disagree".to_string());
     }
@@ -494,9 +599,17 @@ fn authoritative_binding(args: &Args, caller: CanisterId) -> Result<AiAppCardAut
     })
 }
 
-fn canonical_chat_key(chat: types::Chat) -> Result<String, String> {
+fn canonical_chat_key(user_id: types::UserId, chat: types::Chat) -> Result<String, String> {
     match chat {
-        types::Chat::Direct(_) => Err("confirmed-action deposits are not supported in direct chats".to_string()),
+        types::Chat::Direct(other) => {
+            let other_user_id: types::UserId = other.into();
+            if other_user_id == user_id {
+                return Err("direct chat participants must be distinct".to_string());
+            }
+            let mut pair = [user_id, other_user_id];
+            pair.sort_unstable();
+            Ok(format!("direct:{}:{}", pair[0], pair[1]))
+        }
         types::Chat::Group(chat_id) => Ok(format!("group:{chat_id}")),
         types::Chat::Channel(community_id, channel_id) => Ok(format!("channel:{community_id}:{channel_id}")),
     }
@@ -624,6 +737,13 @@ fn resolve_current_route(
         if binding.key_fingerprint.len() != 32 || deposit.consumer_key_fingerprint != binding.key_fingerprint {
             return Err("deposit fingerprint does not match its authoritative binding".to_string());
         }
+    }
+    if matches!(args.authority_context.chat, types::Chat::Direct(_))
+        && !registry
+            .get(args.app_id)
+            .is_some_and(|app| app.published && app.updated == args.app_revision && app.manifest.per_user_keys)
+    {
+        return Err("direct confirmed actions require a current per-user-key app".to_string());
     }
     resolve_current_route_bindings(
         registry,
@@ -764,10 +884,12 @@ fn validate_recipient_key_bindings(recipient_key_bindings: &[RecipientKeyBinding
 #[cfg(test)]
 mod tests {
     use super::{
-        action_delivery_attempt_identity, authoritative_binding, card_context_hash, card_identity_digest,
-        estimated_signed_request_size, resolve_current_inbox, resolve_current_route, serialize_action_inbox_request,
-        validate_deposit_commitments, validate_encoded_deposit_payload, validate_recipient_key_bindings,
+        AiAppCardAuthorityOperationV1, action_delivery_attempt_identity, action_delivery_identity, authoritative_binding,
+        card_context_hash, card_identity_digest, estimated_signed_request_size, resolve_current_inbox, resolve_current_route,
+        serialize_action_inbox_request, validate_deposit_commitments, validate_encoded_deposit_payload,
+        validate_recipient_key_bindings,
     };
+    use crate::model::action_delivery_outbox::{ActionDeliveryOutbox, ActionDeliveryOutboxError, ActionDeliveryStart};
     use crate::model::ai_app_registry::AiAppRegistry;
     use crate::model::ai_app_scoped_identity::AiAppScopedIdentityKey;
     use crate::model::ai_app_user_keys::AiAppUserKeys;
@@ -886,6 +1008,24 @@ mod tests {
             deposits,
         }
     }
+    fn direct_relay_args(confirmed_by: UserId, peer: UserId, authority: ByteBuf) -> Args {
+        let mut args = relay_args(confirmed_by, 1, 2, Vec::new(), vec![deposit(vec![1; 32])]);
+        let mut pair = [confirmed_by, peer];
+        pair.sort_unstable();
+        let chat_key = format!("direct:{}:{}", pair[0], pair[1]);
+        args.authority_context.chat = Chat::Direct(peer.into());
+        args.authority_context.chat_key = chat_key.clone();
+        args.authority = authority;
+        args.deposits[0].idempotency_key = ByteBuf::from(
+            card_identity_digest(
+                &chat_key,
+                args.authority_context.thread_root_message_index.map(u32::from),
+                args.authority_context.message_id.as_u64(),
+            )
+            .to_vec(),
+        );
+        args
+    }
 
     #[test]
     fn relay_builds_only_the_exact_groupindex_authority_binding() {
@@ -979,6 +1119,141 @@ mod tests {
     }
 
     #[test]
+    fn direct_participants_with_distinct_luis_and_keys_compete_for_one_logical_slot() {
+        let alice = owner(1);
+        let bob = owner(2);
+        let mut alice_args = direct_relay_args(alice, bob, ByteBuf::new());
+        alice_args.deposits[0].consumer_key_fingerprint = ByteBuf::from(vec![11; 32]);
+        let mut bob_args = direct_relay_args(bob, alice, ByteBuf::new());
+        bob_args.deposits[0].consumer_key_fingerprint = ByteBuf::from(vec![22; 32]);
+
+        let alice_identity =
+            action_delivery_identity(&authoritative_binding(&alice_args, Principal::from_slice(&[71])).unwrap()).unwrap();
+        let bob_identity =
+            action_delivery_identity(&authoritative_binding(&bob_args, Principal::from_slice(&[72])).unwrap()).unwrap();
+
+        assert_eq!(alice_identity.slot_id, bob_identity.slot_id);
+        assert_ne!(alice_identity.attempt_id, bob_identity.attempt_id);
+
+        let mut outbox = ActionDeliveryOutbox::default();
+        assert_eq!(
+            outbox.start_in_slot(
+                alice_identity.slot_id,
+                alice_identity.attempt_id,
+                alice_args.app_id,
+                1,
+                alice_identity.attempt_created_at,
+                alice_identity.attempt_created_at,
+            ),
+            Ok(ActionDeliveryStart::Prepare { epoch: 1 })
+        );
+        assert_eq!(
+            outbox.start_in_slot(
+                bob_identity.slot_id,
+                bob_identity.attempt_id,
+                bob_args.app_id,
+                1,
+                bob_identity.attempt_created_at,
+                bob_identity.attempt_created_at,
+            ),
+            Err(ActionDeliveryOutboxError::IdentityCollision)
+        );
+    }
+
+    #[test]
+    fn direct_exact_retry_reuses_slot_but_changed_payload_or_lease_conflicts() {
+        let alice = owner(1);
+        let bob = owner(2);
+        let caller = Principal::from_slice(&[71]);
+        let args = direct_relay_args(alice, bob, ByteBuf::new());
+        let binding = authoritative_binding(&args, caller).unwrap();
+        let baseline = action_delivery_identity(&binding).unwrap();
+        let exact_retry =
+            action_delivery_identity(&authoritative_binding(&args, Principal::from_slice(&[72])).unwrap()).unwrap();
+        assert_eq!(baseline, exact_retry);
+
+        let mut changed_payload_binding = binding.clone();
+        let AiAppCardAuthorityOperationV1::DepositConfirmedAction {
+            confirm_payload_hash, ..
+        } = &mut changed_payload_binding.operation
+        else {
+            unreachable!()
+        };
+        confirm_payload_hash[0] ^= 1;
+        let changed_payload = action_delivery_identity(&changed_payload_binding).unwrap();
+
+        let mut changed_lease_binding = binding.clone();
+        let AiAppCardAuthorityOperationV1::DepositConfirmedAction {
+            confirmation_lease_generation,
+            ..
+        } = &mut changed_lease_binding.operation
+        else {
+            unreachable!()
+        };
+        *confirmation_lease_generation += 1;
+        let changed_lease = action_delivery_identity(&changed_lease_binding).unwrap();
+
+        let mut changed_created_at_binding = binding;
+        let AiAppCardAuthorityOperationV1::DepositConfirmedAction { created_at, .. } =
+            &mut changed_created_at_binding.operation
+        else {
+            unreachable!()
+        };
+        *created_at += 1;
+        let changed_created_at = action_delivery_identity(&changed_created_at_binding).unwrap();
+
+        for changed in [changed_payload, changed_lease, changed_created_at] {
+            assert_eq!(baseline.slot_id, changed.slot_id);
+            assert_ne!(baseline.attempt_id, changed.attempt_id);
+        }
+
+        let mut outbox = ActionDeliveryOutbox::default();
+        assert_eq!(
+            outbox.start_in_slot(
+                baseline.slot_id,
+                baseline.attempt_id,
+                args.app_id,
+                1,
+                baseline.attempt_created_at,
+                baseline.attempt_created_at,
+            ),
+            Ok(ActionDeliveryStart::Prepare { epoch: 1 })
+        );
+        assert_eq!(
+            outbox.start_in_slot(
+                exact_retry.slot_id,
+                exact_retry.attempt_id,
+                args.app_id,
+                1,
+                exact_retry.attempt_created_at,
+                exact_retry.attempt_created_at,
+            ),
+            Ok(ActionDeliveryStart::Pending)
+        );
+        for changed in [changed_payload, changed_lease, changed_created_at] {
+            assert_eq!(
+                outbox.start_in_slot(
+                    changed.slot_id,
+                    changed.attempt_id,
+                    args.app_id,
+                    1,
+                    changed.attempt_created_at,
+                    changed.attempt_created_at,
+                ),
+                Err(ActionDeliveryOutboxError::IdentityCollision)
+            );
+        }
+    }
+
+    #[test]
+    fn non_direct_delivery_keeps_its_attempt_identity_as_the_slot() {
+        let args = relay_args(owner(1), 1, 2, Vec::new(), vec![deposit(vec![1; 32])]);
+        let identity = action_delivery_identity(&authoritative_binding(&args, Principal::from_slice(&[77])).unwrap()).unwrap();
+
+        assert_eq!(identity.slot_id, identity.attempt_id);
+    }
+
+    #[test]
     fn signed_request_reservation_matches_exact_fixed_width_wire_size() {
         let args = relay_args(owner(1), 7, 9, Vec::new(), vec![deposit(vec![1; 32])]);
         let estimated = estimated_signed_request_size(&args).unwrap();
@@ -1035,7 +1310,7 @@ mod tests {
     }
 
     #[test]
-    fn relay_rejects_mutated_private_context_and_non_authoritative_direct_chats() {
+    fn relay_rejects_mutated_private_context() {
         let caller = Principal::from_slice(&[77]);
 
         let mut mismatch = relay_args(owner(1), 1, 2, Vec::new(), vec![deposit(vec![1; 32])]);
@@ -1045,14 +1320,41 @@ mod tests {
         let mut noncanonical = relay_args(owner(1), 1, 2, Vec::new(), vec![deposit(vec![1; 32])]);
         noncanonical.authority_context.chat_key.push_str(":redirected");
         assert!(authoritative_binding(&noncanonical, caller).is_err());
+    }
 
-        let mut direct = relay_args(owner(1), 1, 2, Vec::new(), vec![deposit(vec![1; 32])]);
-        direct.authority_context.chat = Chat::Direct(owner(2).into());
-        direct.authority_context.chat_key = format!("direct:{}:{}", owner(1), owner(2));
-        assert_eq!(
-            authoritative_binding(&direct, caller).unwrap_err(),
-            "confirmed-action deposits are not supported in direct chats"
+    #[test]
+    fn direct_deposit_accepts_the_canonical_pair_without_groupindex_authority() {
+        let caller = Principal::from_slice(&[77]);
+        let args = direct_relay_args(owner(1), owner(2), ByteBuf::new());
+        let binding = authoritative_binding(&args, caller)
+            .expect("the confirmer's current home LUI must relay a canonical direct deposit without GroupIndex authority");
+
+        assert_eq!(binding.context, args.authority_context);
+        assert_eq!(binding.local_user_index_canister_id, caller);
+    }
+
+    #[test]
+    fn direct_deposit_rejects_nonempty_groupindex_authority() {
+        let caller = Principal::from_slice(&[77]);
+        let args = direct_relay_args(
+            owner(1),
+            owner(2),
+            ByteBuf::from(vec![
+                4;
+                group_index_canister::ai_app_card_authority::AI_APP_CARD_AUTHORITY_TOKEN_BYTES
+            ]),
         );
+        assert_eq!(
+            authoritative_binding(&args, caller).unwrap_err(),
+            "direct action deposit must not carry group route authority"
+        );
+    }
+
+    #[test]
+    fn direct_deposit_rejects_a_self_chat() {
+        let caller = Principal::from_slice(&[77]);
+        let args = direct_relay_args(owner(1), owner(1), ByteBuf::new());
+        assert!(authoritative_binding(&args, caller).is_err());
     }
 
     #[test]
@@ -1293,5 +1595,18 @@ mod tests {
         forged.recipient_key_bindings[0].key_fingerprint[0] ^= 1;
         forged.deposits[0].consumer_key_fingerprint[0] ^= 1;
         assert!(resolve_current_route(&registry, &keys, &scoped_identity_key, user_index, &forged).is_err());
+
+        forged.recipient_key_bindings[0].key_fingerprint[0] ^= 1;
+        forged.deposits[0].consumer_key_fingerprint[0] ^= 1;
+        let peer = owner(45);
+        let mut pair = [forged.confirmed_by, peer];
+        pair.sort_unstable();
+        forged.authority_context.chat = Chat::Direct(peer.into());
+        forged.authority_context.chat_key = format!("direct:{}:{}", pair[0], pair[1]);
+        forged.authority.clear();
+        assert_eq!(
+            resolve_current_route(&registry, &keys, &scoped_identity_key, user_index, &forged).unwrap_err(),
+            "direct confirmed actions require a current per-user-key app"
+        );
     }
 }

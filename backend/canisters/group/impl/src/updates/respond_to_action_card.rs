@@ -3,9 +3,9 @@ use crate::{RuntimeState, execute_update};
 use canister_api_macros::update;
 use group_canister::respond_to_action_card::{Response::*, *};
 use local_user_index_canister::c2c_deposit_action_confirmed::ActionDepositContext;
-use oc_error_codes::OCErrorCode;
+use oc_error_codes::{OCError, OCErrorCode};
 use serde_bytes::ByteBuf;
-use types::{ActionCardResponse, ActionCardState, CanisterId, Chat, OCResult, TimestampMillis, UserId};
+use types::{ActionCardResponse, ActionCardState, CanisterId, Chat, EventIndex, OCResult, TimestampMillis, UserId};
 
 fn requested_confirm_payload_hash(args: &Args, edited_confirmation_enabled: bool) -> OCResult<Option<[u8; 32]>> {
     match (&args.confirm_payload_override, &args.confirmation_grant) {
@@ -42,7 +42,27 @@ async fn respond_to_action_card(args: Args) -> Response {
         Err(error) => return Error(error),
     };
 
-    if let Some(grant) = deposit.confirmation_grant.clone() {
+    let grant_hash_to_consume = match confirmation_grant_consume_plan(
+        deposit.confirmation_grant_hash,
+        deposit.confirmation_grant.as_ref().map(|grant| grant.as_slice()),
+    ) {
+        Ok(plan) => plan,
+        Err(error) => return Error(error),
+    };
+
+    if (grant_hash_to_consume.is_some() || deposit.confirmation_grant_hash.is_none())
+        && let Err(error) = execute_update(|state| revalidate_before_deposit(user_id, &deposit, state))
+    {
+        // `reserve_action_card_confirm` may have returned a lease already shared with an in-flight
+        // exact retry. This callback cannot prove it created the lease, so it must not release it.
+        return Error(error);
+    }
+
+    let consumed_grant_hash = if let Some(grant_hash) = grant_hash_to_consume {
+        let grant = deposit
+            .confirmation_grant
+            .clone()
+            .expect("a grant hash to consume must have its bearer");
         let authority = match crate::ai_app_card_authority::issue(
             deposit.group_index_canister_id,
             confirmation_consume_binding(&deposit, &grant),
@@ -51,12 +71,10 @@ async fn respond_to_action_card(args: Args) -> Response {
         {
             Ok(token) => token,
             Err(error) => {
-                execute_update(|state| abort_response(&args, user_id, state));
                 return Error(error);
             }
         };
         if let Err(error) = execute_update(|state| revalidate_before_deposit(user_id, &deposit, state)) {
-            execute_update(|state| abort_response(&args, user_id, state));
             return Error(error);
         }
         let result = local_user_index_canister_c2c_client::c2c_consume_ai_app_card_confirmation_grant(
@@ -84,19 +102,36 @@ async fn respond_to_action_card(args: Args) -> Response {
             },
         )
         .await;
-        match result {
-            Ok(local_user_index_canister::c2c_consume_ai_app_card_confirmation_grant::Response::Success) => {}
-            Ok(_) | Err(_) => {
-                // No inbox deposit has started yet, so releasing this lease is unambiguous. The
-                // grant may have been consumed by a lost reply; the user can request a fresh one.
-                execute_update(|state| abort_response(&args, user_id, state));
-                return Error(OCErrorCode::C2CError.with_message("confirmation grant could not be consumed"));
+        if let Some(error) = confirmation_grant_consumption_error(result) {
+            // A concurrent exact retry may have consumed the one-use grant and persisted its marker
+            // before this reply arrived. Only that exact marker reconciles the failed consume. Any
+            // other state preserves the lease because this post-await outcome is ambiguous.
+            match execute_update(|state| consumed_grant_is_persisted(user_id, &deposit, grant_hash, state)) {
+                Ok(true) => {}
+                Ok(false) => return Error(error),
+                Err(marker_error) => return Error(marker_error),
             }
-        }
-        if let Err(error) = execute_update(|state| revalidate_before_deposit(user_id, &deposit, state)) {
-            execute_update(|state| abort_response(&args, user_id, state));
+        } else if let Err(error) = execute_update(|state| persist_consumed_grant(user_id, &deposit, grant_hash, state)) {
+            // The bearer is already one-use-consumed. Never release its exact lease if persisting
+            // the durable marker fails or conflicts.
             return Error(error);
         }
+        Some(grant_hash)
+    } else if let (Some(grant_hash), Some(grant)) = (
+        deposit.confirmation_grant_hash,
+        deposit.confirmation_grant.as_ref().map(|grant| grant.as_slice()),
+    ) {
+        let supplied_hash = chat_events::ai_app_card_confirmation_grant_hash_v1(grant);
+        debug_assert_eq!(grant_hash, supplied_hash);
+        Some(supplied_hash)
+    } else {
+        None
+    };
+
+    if let Some(grant_hash) = consumed_grant_hash
+        && let Err(error) = execute_update(|state| require_consumed_grant(user_id, &deposit, grant_hash, state))
+    {
+        return Error(error);
     }
 
     let deposit_authority = match crate::ai_app_card_authority::issue(
@@ -107,14 +142,19 @@ async fn respond_to_action_card(args: Args) -> Response {
     {
         Ok(token) => token,
         Err(error) => {
-            execute_update(|state| abort_response(&args, user_id, state));
             return Error(error);
         }
     };
     // The issue call yielded. Recheck the exact member/card/app/action/lease reservation before
     // handing the one-use authority and payload to LocalUserIndex.
-    if let Err(error) = execute_update(|state| revalidate_before_deposit(user_id, &deposit, state)) {
-        execute_update(|state| abort_response(&args, user_id, state));
+    let revalidation = execute_update(|state| {
+        if let Some(grant_hash) = consumed_grant_hash {
+            require_consumed_grant(user_id, &deposit, grant_hash, state)
+        } else {
+            revalidate_before_deposit(user_id, &deposit, state)
+        }
+    });
+    if let Err(error) = revalidation {
         return Error(error);
     }
 
@@ -141,7 +181,8 @@ async fn respond_to_action_card(args: Args) -> Response {
             return Error(OCErrorCode::C2CError.with_message("action deposit outcome is pending reconciliation"));
         }
         Ok(_) => {
-            execute_update(|state| abort_response(&args, user_id, state));
+            // Even a definite rejection belongs only to this callback. Another exact callback may
+            // already be awaiting delivery on the same actor/generation/payload lease.
             return Error(OCErrorCode::C2CError.with_message("action deposit was rejected"));
         }
     }
@@ -164,6 +205,7 @@ struct DepositInstruction {
     confirm_payload: ByteBuf,
     confirm_payload_hash: [u8; 32],
     confirmation_grant: Option<ByteBuf>,
+    confirmation_grant_hash: Option<[u8; 32]>,
     created_at: TimestampMillis,
     context: ActionDepositContext,
 }
@@ -242,7 +284,20 @@ fn prepare(args: &Args, state: &mut RuntimeState) -> OCResult<Prepared> {
     // to reject edited payloads while retaining the original stored-payload confirmation path.
     let requested_payload_hash = requested_confirm_payload_hash(args, state.data.test_mode)?;
 
-    // Reserve before the await so only one confirmation can start outbound delivery.
+    // Enforce chat-local app policy before reservation. A failed source lookup may be a legacy,
+    // routing-less card, so the ordinary reserve/response path remains authoritative for that case.
+    if matches!(args.response, ActionCardResponse::Confirm)
+        && let Ok(source) =
+            state
+                .data
+                .chat
+                .ai_app_card_confirmation_source(user_id, args.thread_root_message_index, args.message_id, now)
+        && !state.data.enabled_ai_apps.contains(&source.app_id)
+    {
+        return Err(OCErrorCode::InvalidRequest.with_message("the card's producing app is not enabled in this chat"));
+    }
+
+    // Reserve before the await. An exact retry intentionally reuses the same durable lease.
     if matches!(args.response, ActionCardResponse::Confirm)
         && let Some(deposit) = state.data.chat.reserve_action_card_confirm(
             user_id,
@@ -252,16 +307,6 @@ fn prepare(args: &Args, state: &mut RuntimeState) -> OCResult<Prepared> {
             now,
         )?
     {
-        if deposit
-            .app_id
-            .is_some_and(|app_id| !state.data.enabled_ai_apps.contains(&app_id))
-        {
-            let _ = state
-                .data
-                .chat
-                .abort_action_card_confirm(user_id, args.thread_root_message_index, args.message_id, now);
-            return Err(OCErrorCode::InvalidRequest.with_message("the card's producing app is not enabled in this chat"));
-        }
         // This canister IS the group, so it supplies the chat identity for the deposit context itself.
         let chat = Chat::Group(state.env.canister_id().into());
         // App-rendered cards (Phase 2): if the confirmer's app sent an edited payload within bounds,
@@ -290,6 +335,7 @@ fn prepare(args: &Args, state: &mut RuntimeState) -> OCResult<Prepared> {
                 confirm_payload,
                 confirm_payload_hash: deposit.confirm_payload_hash,
                 confirmation_grant,
+                confirmation_grant_hash: deposit.confirmation_grant_hash,
                 created_at: deposit.responded_at,
                 context: ActionDepositContext {
                     chat,
@@ -344,6 +390,66 @@ fn revalidate_before_deposit(user_id: UserId, deposit: &DepositInstruction, stat
     Ok(())
 }
 
+fn current_confirmation_grant_hash(
+    user_id: UserId,
+    deposit: &DepositInstruction,
+    state: &RuntimeState,
+) -> OCResult<Option<[u8; 32]>> {
+    state.data.chat.events.action_card_confirmation_grant_hash_for_lease(
+        deposit.context.thread_root_message_index,
+        deposit.context.message_id,
+        EventIndex::default(),
+        user_id,
+        deposit.context.confirmation_lease_generation,
+        deposit.confirm_payload_hash,
+        state.env.now(),
+    )
+}
+
+fn consumed_grant_is_persisted(
+    user_id: UserId,
+    deposit: &DepositInstruction,
+    grant_hash: [u8; 32],
+    state: &RuntimeState,
+) -> OCResult<bool> {
+    match current_confirmation_grant_hash(user_id, deposit, state)? {
+        None => Ok(false),
+        Some(existing) if existing == grant_hash => Ok(true),
+        Some(_) => Err(OCErrorCode::InvalidRequest.with_message("confirmation grant does not match the durable lease")),
+    }
+}
+
+fn require_consumed_grant(
+    user_id: UserId,
+    deposit: &DepositInstruction,
+    grant_hash: [u8; 32],
+    state: &RuntimeState,
+) -> OCResult {
+    if !consumed_grant_is_persisted(user_id, deposit, grant_hash, state)? {
+        return Err(OCErrorCode::InvalidRequest.with_message("confirmation grant marker is missing from the durable lease"));
+    }
+    revalidate_before_deposit(user_id, deposit, state)
+}
+
+fn persist_consumed_grant(
+    user_id: UserId,
+    deposit: &DepositInstruction,
+    grant_hash: [u8; 32],
+    state: &mut RuntimeState,
+) -> OCResult {
+    let now = state.env.now();
+    state.data.chat.events.mark_action_card_confirmation_grant_consumed(
+        deposit.context.thread_root_message_index,
+        deposit.context.message_id,
+        EventIndex::default(),
+        user_id,
+        deposit.context.confirmation_lease_generation,
+        deposit.confirm_payload_hash,
+        grant_hash,
+        now,
+    )
+}
+
 fn commit_response(args: &Args, user_id: UserId, state: &mut RuntimeState) -> OCResult<ActionCardState> {
     state.data.verify_not_frozen()?;
     let now = state.env.now();
@@ -374,16 +480,9 @@ fn complete_response(deposit: &DepositInstruction, user_id: UserId, state: &mut 
     Ok(result.value.state)
 }
 
-fn abort_response(args: &Args, user_id: UserId, state: &mut RuntimeState) {
-    let _ =
-        state
-            .data
-            .chat
-            .abort_action_card_confirm(user_id, args.thread_root_message_index, args.message_id, state.env.now());
-}
 #[cfg(test)]
 mod tests {
-    use super::requested_confirm_payload_hash;
+    use super::{confirmation_grant_consume_plan, requested_confirm_payload_hash};
     use group_canister::respond_to_action_card::Args;
     use serde_bytes::ByteBuf;
     use types::{ActionCardResponse, MessageId};
@@ -501,5 +600,83 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn consumed_grant_marker_skips_only_the_exact_grant() {
+        let grant = ByteBuf::from(vec![7; types::AI_APP_CARD_TOKEN_BYTES]);
+        let grant_hash = chat_events::ai_app_card_confirmation_grant_hash_v1(&grant);
+
+        assert_eq!(confirmation_grant_consume_plan(None, Some(&grant)).unwrap(), Some(grant_hash));
+        let sibling_retry_a = confirmation_grant_consume_plan(Some(grant_hash), Some(&grant)).unwrap();
+        let sibling_retry_b = confirmation_grant_consume_plan(Some(grant_hash), Some(&grant)).unwrap();
+        assert_eq!(sibling_retry_a, None);
+        assert_eq!(
+            sibling_retry_b, None,
+            "two exact callbacks sharing one lease must both reuse its durable consumed marker"
+        );
+        assert!(
+            confirmation_grant_consume_plan(Some(grant_hash), None).is_err(),
+            "omitting the consumed bearer must not use the retry fast path"
+        );
+        assert!(
+            confirmation_grant_consume_plan(Some([0xAA; 32]), Some(&grant)).is_err(),
+            "a different grant must not inherit another grant's durable consumed marker"
+        );
+    }
+
+    #[test]
+    fn shared_async_lease_is_never_aborted_and_app_policy_precedes_reservation() {
+        let source = include_str!("respond_to_action_card.rs");
+        assert!(
+            !source.contains(concat!("abort_action_card_", "confirm")),
+            "a callback cannot abort a lease that an exact sibling may already be awaiting"
+        );
+        let app_preflight = source.find(".ai_app_card_confirmation_source(").unwrap();
+        let reservation = source.find(".reserve_action_card_confirm(").unwrap();
+        assert!(
+            app_preflight < reservation,
+            "enabled-app policy must run before the shared reservation is created"
+        );
+    }
+}
+
+// `Some` means this lease has not consumed the supplied bearer yet. `None` means either no
+// bearer is involved or the exact bearer is already durably bound to this lease and must not be
+// consumed a second time.
+fn confirmation_grant_consume_plan(consumed_grant_hash: Option<[u8; 32]>, grant: Option<&[u8]>) -> OCResult<Option<[u8; 32]>> {
+    match (consumed_grant_hash, grant) {
+        (None, None) => Ok(None),
+        (None, Some(grant)) => Ok(Some(chat_events::ai_app_card_confirmation_grant_hash_v1(grant))),
+        (Some(_), None) => {
+            Err(OCErrorCode::InvalidRequest.with_message("the reserved retry requires its original confirmation grant"))
+        }
+        (Some(existing), Some(grant)) if existing == chat_events::ai_app_card_confirmation_grant_hash_v1(grant) => Ok(None),
+        (Some(_), Some(_)) => {
+            Err(OCErrorCode::InvalidRequest.with_message("confirmation grant does not match the reserved retry"))
+        }
+    }
+}
+
+fn confirmation_grant_consumption_error(
+    result: Result<local_user_index_canister::c2c_consume_ai_app_card_confirmation_grant::Response, types::C2CError>,
+) -> Option<OCError> {
+    match result {
+        Ok(local_user_index_canister::c2c_consume_ai_app_card_confirmation_grant::Response::Success) => None,
+        Ok(local_user_index_canister::c2c_consume_ai_app_card_confirmation_grant::Response::NotFound) => {
+            Some(OCErrorCode::InvalidRequest.with_message("confirmation grant was not found"))
+        }
+        Ok(local_user_index_canister::c2c_consume_ai_app_card_confirmation_grant::Response::Expired) => {
+            Some(OCErrorCode::InvalidRequest.with_message("confirmation grant expired"))
+        }
+        Ok(local_user_index_canister::c2c_consume_ai_app_card_confirmation_grant::Response::AppUnavailable) => {
+            Some(OCErrorCode::InvalidRequest.with_message("AI app is unavailable"))
+        }
+        Ok(local_user_index_canister::c2c_consume_ai_app_card_confirmation_grant::Response::InvalidRequest(error)) => {
+            Some(OCErrorCode::InvalidRequest.with_message(error))
+        }
+        Ok(local_user_index_canister::c2c_consume_ai_app_card_confirmation_grant::Response::Error(_)) | Err(_) => {
+            Some(OCErrorCode::C2CError.with_message("confirmation grant service unavailable"))
+        }
     }
 }

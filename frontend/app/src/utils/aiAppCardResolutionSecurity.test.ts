@@ -16,6 +16,7 @@ const APP = {
         name: "Generic app",
         description: "test",
         consumerPublicKey: "key",
+        perUserKeys: true,
         actions: [
             {
                 name: "entry.add",
@@ -33,6 +34,20 @@ function client(enabled: number[]): OpenChat {
         aiApps: async () => [APP],
         enabledAiApps: async () => enabled,
     } as unknown as OpenChat;
+}
+
+function directClient(
+    app: AiAppRegistration = APP,
+    keys: { appId: number; publicKey: string }[] = [
+        { appId: APP.id, publicKey: "current-user-key" },
+    ],
+) {
+    const calls = {
+        aiApps: vi.fn(async () => [app]),
+        myAiAppKeys: vi.fn(async () => keys),
+        enabledAiApps: vi.fn(async () => []),
+    };
+    return { calls, client: calls as unknown as OpenChat };
 }
 
 describe("directory-bound card surface resolution", () => {
@@ -64,10 +79,69 @@ describe("directory-bound card surface resolution", () => {
         expect(aiApps).toHaveBeenCalledWith([{ appId: APP.id, revision: APP.updated }]);
     });
 
-    it("never resolves a direct-chat iframe while direct enablement is empty", async () => {
-        expect(
-            await resolveActionAppForCard(client([]), DIRECT, "entry.add", APP.id, APP.updated),
-        ).toBeUndefined();
+    it("resolves a connected direct-chat app from its exact published revision without group enablement", async () => {
+        const { client: direct, calls } = directClient();
+
+        const resolved = await resolveActionAppForCard(
+            direct,
+            DIRECT,
+            "entry.add",
+            APP.id,
+            APP.updated,
+        );
+
+        expect(resolved?.identity).toEqual({ id: APP.id, name: APP.manifest.name });
+        expect(resolved?.cardSurface?.app).toBe(APP);
+        expect(calls.myAiAppKeys).toHaveBeenCalledOnce();
+        expect(calls.aiApps).toHaveBeenCalledOnce();
+        expect(calls.aiApps).toHaveBeenCalledWith([{ appId: APP.id, revision: APP.updated }]);
+        expect(calls.enabledAiApps).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        ["an empty current-user key", APP, [{ appId: APP.id, publicKey: "" }], APP.updated],
+        [
+            "a key registered for another app",
+            APP,
+            [{ appId: APP.id + 1, publicKey: "other-app-key" }],
+            APP.updated,
+        ],
+        [
+            "a legacy manifest-key app",
+            {
+                ...APP,
+                manifest: { ...APP.manifest, perUserKeys: false },
+            },
+            [{ appId: APP.id, publicKey: "current-user-key" }],
+            APP.updated,
+        ],
+        [
+            "an unpublished app",
+            { ...APP, published: false },
+            [{ appId: APP.id, publicKey: "current-user-key" }],
+            APP.updated,
+        ],
+        [
+            "a stale carried revision",
+            APP,
+            [{ appId: APP.id, publicKey: "current-user-key" }],
+            APP.updated - 1n,
+        ],
+        [
+            "an app without a card surface",
+            {
+                ...APP,
+                manifest: { ...APP.manifest, surfaces: [] },
+            },
+            [{ appId: APP.id, publicKey: "current-user-key" }],
+            APP.updated,
+        ],
+    ])("does not resolve a direct-chat iframe for %s", async (_label, app, keys, revision) => {
+        const { client: direct } = directClient(app as AiAppRegistration, keys);
+
+        await expect(
+            resolveActionAppForCard(direct, DIRECT, "entry.add", APP.id, revision),
+        ).resolves.toBeUndefined();
     });
 
     it("checks backend-hydrated appVerified before lookup or iframe creation", () => {

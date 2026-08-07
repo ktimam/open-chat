@@ -222,6 +222,20 @@ impl AiAppLinkCodes {
         self.remove_code(&code).is_some()
     }
 
+    /// Cancels every outstanding link code for one deleted account. The per-user index is capped by
+    /// `MAX_OUTSTANDING_TOKENS_PER_USER`, so deletion never scans the global bearer store.
+    pub fn remove_user(&mut self, user_id: UserId, now: TimestampMillis) -> usize {
+        self.ensure_indexes(now);
+        let codes: Vec<_> = self
+            .by_user_app
+            .get(&user_id)
+            .into_iter()
+            .flat_map(|apps| apps.values().cloned())
+            .take(MAX_OUTSTANDING_TOKENS_PER_USER)
+            .collect();
+        codes.iter().filter(|code| self.remove_code(code).is_some()).count()
+    }
+
     /// Cancels only the supplied bearer when it is still outstanding for the exact caller. The
     /// token itself selects the app, which prevents an old modal from cancelling a newer token for
     /// the same tuple. A foreign, replaced, consumed, or malformed token is a no-op.

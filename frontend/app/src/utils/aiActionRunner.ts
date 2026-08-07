@@ -7,10 +7,9 @@
 // revision, action, inbox and authoritative chat-member keys before depositing. Nothing here is
 // app-specific.
 //
-// Scoping (Phase A): in a group chat the actions on offer come from the AI-app directory — the apps the
-// group's owner/admins enabled in that chat (enabled ids crossed with a bounded exact lookup), flattened to
-// (app, action) pairs. Direct chats offer no actions while their provenance/send path is unsupported;
-// the UI must not offer an operation the backend will reject.
+// Groups/channels offer the bounded directory apps enabled by their admins. Direct chats have no
+// admin enablement set: they offer only exact published per-user-key apps paired by this user, while
+// an unpaired published app may request the one-time link flow.
 
 import {
     applyRulesPostPass,
@@ -27,6 +26,7 @@ import {
 } from "@shared";
 import type { ChatIdentifier, MessageContent, MessageContext, OpenChat } from "@client";
 import { appContentAttestationAvailable } from "./aiActionAvailability";
+import { isDirectChatCardApp, loadDirectChatAiApps } from "./aiAppDirectChat";
 import { cardSurfaceOpening } from "./aiAppSurfaces";
 import { inferOnDevice, onDeviceInferenceCapability } from "./onDeviceInference";
 
@@ -58,7 +58,7 @@ export interface AiActionUnavailable {
 
 export type ProposeResult =
     | RunAiActionResult
-    // No AI app is enabled in this chat (non-group chats never have one — Phase A.1).
+    // No runnable or linkable AI app is available in this chat.
     | { kind: "no_actions" }
     // The message content isn't something the runner can extract from.
     | { kind: "unsupported_content" }
@@ -102,29 +102,44 @@ function unavailableReasonForApp(
     return undefined;
 }
 
-// Resolve the (app, action) candidates on offer in a chat: the apps enabled in the chat crossed with the
-// global app directory, flattened. Groups and channels carry an admin-curated enabled set on their
-// canister; direct chats fail closed until their provenance path exists. Exported so the auto-propose matcher
-// (utils/autoPropose.ts) derives its trigger vocabulary from this same resolution.
+// Resolve the (app, action) candidates on offer in a chat. Groups/channels use their authoritative
+// admin-curated enabled set. Direct chats use only published per-user-key apps paired by this user;
+// an unpaired directory app can request linking but can never fall back to a manifest/action key.
+// Exported so auto-propose derives its trigger vocabulary from this same resolution.
 export async function resolveCandidates(
     client: OpenChat,
     chatId: ChatIdentifier,
 ): Promise<ResolvedCandidates> {
+    let enabledApps: AiAppRegistration[];
+    let directExactAppIds: ReadonlySet<number> | undefined;
+    let myKeys: Map<number, string>;
+
     if (chatId.kind === "direct_chat") {
-        // Direct provenance/send is explicitly unsupported by the backend. Do not offer a candidate
-        // or link flow that can only fail after model work and user interaction.
+        const direct = await loadDirectChatAiApps(client);
+        directExactAppIds = direct.exactAppIds;
+        myKeys = new Map(direct.connectedKeys);
+        enabledApps = direct.apps
+            .filter(
+                (app) =>
+                    isDirectChatCardApp(app) &&
+                    // A non-empty key marks the app connected, but the directory snapshot is not
+                    // enough to run it: the exact keyed lookup must also have succeeded.
+                    (!myKeys.has(app.id) || direct.exactAppIds.has(app.id)),
+            )
+            .slice(0, MAX_AI_ACTION_ENABLED_APPS);
+    } else if (chatId.kind === "group_chat" || chatId.kind === "channel") {
+        const enabledIds = await client.enabledAiApps(chatId);
+        const boundedIds = enabledIds.slice(0, MAX_AI_ACTION_ENABLED_APPS);
+        const apps = await client.aiApps(boundedIds.map((appId) => ({ appId })));
+        const enabled = new Set(boundedIds);
+        enabledApps = apps
+            .filter((app) => enabled.has(app.id))
+            .slice(0, MAX_AI_ACTION_ENABLED_APPS);
+        myKeys = new Map<number, string>();
+    } else {
         return { candidates: [], linkRequired: [], unavailable: [] };
     }
-    if (chatId.kind !== "group_chat" && chatId.kind !== "channel") {
-        return { candidates: [], linkRequired: [], unavailable: [] };
-    }
-    const enabledIds = await client.enabledAiApps(chatId);
-    const boundedIds = enabledIds.slice(0, MAX_AI_ACTION_ENABLED_APPS);
-    const apps = await client.aiApps(boundedIds.map((appId) => ({ appId })));
-    const enabled = new Set(boundedIds);
-    const enabledApps = apps
-        .filter((app) => enabled.has(app.id))
-        .slice(0, MAX_AI_ACTION_ENABLED_APPS);
+
     const unavailable: AiActionUnavailable[] = [];
     const runnableApps: AiAppRegistration[] = [];
     for (const app of enabledApps) {
@@ -138,8 +153,10 @@ export async function resolveCandidates(
 
     // The user's own registered delivery keys, fetched only when an enabled app declares per-user
     // keys — apps without per_user_keys resolve exactly as before.
-    const myKeys = new Map<number, string>();
-    if (runnableApps.some((app) => app.manifest.perUserKeys === true)) {
+    if (
+        directExactAppIds === undefined &&
+        runnableApps.some((app) => app.manifest.perUserKeys === true)
+    ) {
         for (const key of await client.myAiAppKeys()) {
             myKeys.set(key.appId, key.publicKey);
         }
@@ -386,7 +403,7 @@ export function imageUnsupportedReason(capability: {
 // The AI-app directory is the only source of actions: exactly one runnable candidate runs directly,
 // several defer to the UI's chooser. When the only enabled apps are per-user-keys apps the user
 // hasn't linked yet, the caller must run the consent flow ("link_required"). A chat with no enabled
-// app — including every non-group chat — yields "no_actions".
+// app yields "no_actions".
 export async function proposeAiActionForMessage(
     client: OpenChat,
     chatId: ChatIdentifier,

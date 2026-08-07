@@ -262,9 +262,22 @@ describe("surface destination disclosure and consent markers", () => {
         for (const raw of [null, "not-json", "{}", JSON.stringify(new Array(1_001).fill("x"))]) {
             expect(parseAiAppSurfaceShownMarkers(raw).size).toBe(0);
         }
-        expect(parseAiAppSurfaceShownMarkers(JSON.stringify(["ok", 1, ""]))).toEqual(
-            new Set(["ok"]),
-        );
+        const current = `v3:${"a".repeat(64)}`;
+        expect(
+            parseAiAppSurfaceShownMarkers(
+                JSON.stringify([current, "v2:viewer-a:7:group:raw-chat", 1, ""]),
+            ),
+        ).toEqual(new Set([current]));
+    });
+
+    it("stores only an opaque digest, never raw viewer or chat identifiers", () => {
+        const marker = aiAppSurfaceMarkerForViewer("viewer-a", 7, "group:raw-chat");
+
+        expect(marker).toMatch(/^v3:[0-9a-f]{64}$/);
+        expect(marker).not.toContain("viewer-a");
+        expect(marker).not.toContain("raw-chat");
+        expect(marker).not.toContain(":7:");
+        expect(parseAiAppSurfaceShownMarkers(JSON.stringify([marker]))).toEqual(new Set([marker]));
     });
 
     it("scopes a marker to the signed-in viewer", () => {
@@ -272,6 +285,84 @@ describe("surface destination disclosure and consent markers", () => {
             aiAppSurfaceMarkerForViewer("viewer-b", 7, "group:g"),
         );
         expect(aiAppSurfaceMarkerForViewer(undefined, 7, "group:g")).toBeUndefined();
+    });
+
+    it("opens post-confirm setup for an exact connected direct-chat app without group enablement", async () => {
+        const direct: ChatIdentifier = { kind: "direct_chat", userId: "2vxsx-fae" };
+        const target = app(908, {
+            surfaces: [
+                { kind: "card", url: CARD_URL },
+                {
+                    kind: "chat_link",
+                    url: "https://app.example/setup#token={chatLinkToken}",
+                },
+            ],
+            actions: [{ name: "sample.action" }],
+        });
+        target.manifest.perUserKeys = true;
+        const calls = {
+            myAiAppKeys: vi.fn(async () => [{ appId: target.id, publicKey: "current-user-key" }]),
+            aiApps: vi.fn(async () => [target]),
+            enabledAiApps: vi.fn(async () => []),
+            createAiAppChatLinkToken: vi.fn(async () => ({
+                token: new Uint8Array(32).fill(4),
+                expiresAt: 123n,
+            })),
+            cancelAiAppChatLinkToken: vi.fn(async () => true),
+        };
+
+        const opening = await surfaceToOpenAfterConfirm(
+            calls as unknown as OpenChat,
+            direct,
+            "sample.action",
+            target.id,
+            target.updated,
+            "aaaaa-aa",
+        );
+
+        expect(opening).toBeDefined();
+        expect(calls.aiApps).toHaveBeenCalledWith([{ appId: target.id, revision: target.updated }]);
+        expect(calls.enabledAiApps).not.toHaveBeenCalled();
+        expect(calls.createAiAppChatLinkToken).toHaveBeenCalledWith(
+            direct,
+            target.id,
+            target.updated,
+        );
+    });
+
+    it("does not mint direct post-confirm setup without this user's app key", async () => {
+        const direct: ChatIdentifier = { kind: "direct_chat", userId: "2vxsx-fae" };
+        const target = app(909, {
+            surfaces: [
+                { kind: "card", url: CARD_URL },
+                {
+                    kind: "chat_link",
+                    url: "https://app.example/setup#token={chatLinkToken}",
+                },
+            ],
+            actions: [{ name: "sample.action" }],
+        });
+        target.manifest.perUserKeys = true;
+        const calls = {
+            myAiAppKeys: vi.fn(async () => []),
+            aiApps: vi.fn(),
+            enabledAiApps: vi.fn(),
+            createAiAppChatLinkToken: vi.fn(),
+        };
+
+        await expect(
+            surfaceToOpenAfterConfirm(
+                calls as unknown as OpenChat,
+                direct,
+                "sample.action",
+                target.id,
+                target.updated,
+                "aaaaa-aa",
+            ),
+        ).resolves.toBeUndefined();
+        expect(calls.aiApps).not.toHaveBeenCalled();
+        expect(calls.enabledAiApps).not.toHaveBeenCalled();
+        expect(calls.createAiAppChatLinkToken).not.toHaveBeenCalled();
     });
 
     it("does not mark a post-confirm surface until the host-owned consent choice", async () => {

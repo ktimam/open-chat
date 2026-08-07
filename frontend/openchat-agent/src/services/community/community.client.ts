@@ -503,6 +503,10 @@ export class CommunityClient
                     unitResult,
                     CommunityEditMessageArgs,
                     UnitResult,
+                    undefined,
+                    message.content.kind === "action_card_content"
+                        ? { sensitive: true }
+                        : undefined,
                 );
             });
     }
@@ -982,6 +986,10 @@ export class CommunityClient
                 CommunitySendMessageArgs,
                 CommunitySendMessageResponse,
                 onRequestAccepted,
+                newEvent.event.content.kind === "action_card_content" &&
+                    newEvent.event.content.appProvenance !== undefined
+                    ? { sensitive: true }
+                    : undefined,
             )
                 .then((resp) => {
                     const retVal: [SendMessageResponse, Message] = [resp, newEvent.event];
@@ -1046,6 +1054,8 @@ export class CommunityClient
             unitResult,
             CommunityRespondToActionCardArgs,
             CommunityRespondToActionCardResponse,
+            undefined,
+            { sensitive: true },
         );
     }
 
@@ -1069,6 +1079,8 @@ export class CommunityClient
             createAiAppCardCapabilityResponse,
             CommunityCreateAiAppCardCapabilityArgs,
             CommunityCreateAiAppCardCapabilityResponse,
+            undefined,
+            { sensitive: true },
         );
     }
 
@@ -1111,6 +1123,8 @@ export class CommunityClient
             createAiAppCardConfirmationGrantResponse,
             CommunityCreateAiAppCardConfirmationGrantArgs,
             CommunityCreateAiAppCardConfirmationGrantResponse,
+            undefined,
+            { sensitive: true },
         );
     }
 

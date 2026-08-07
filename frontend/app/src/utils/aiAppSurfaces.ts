@@ -7,10 +7,13 @@
 // Surface kinds OpenChat does not know are ignored.
 
 import type { OpenChat } from "@client";
+import { sha256 } from "@noble/hashes/sha256";
+import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils";
 import type { AiAppRegistration, AiAppSurface, ChatIdentifier } from "@shared";
 import { chatKeyFor, isSafeAiActionFieldName } from "@shared";
 import { normalizeAiAppSurfaceUrl } from "./cardBridge";
 import { configKeys } from "./config";
+import { resolveConnectedDirectChatAiApp } from "./aiAppDirectChat";
 import { openExternalUrl } from "./urls";
 
 export type AiAppSurfaceDataDisclosure =
@@ -321,14 +324,21 @@ export async function resolveActionAppForCard(
 ): Promise<ResolvedActionApp | undefined> {
     try {
         if (appId === undefined || appRevision === undefined) return undefined;
-        const enabledIds = await client.enabledAiApps(chatId);
-        if (!enabledIds.includes(appId)) return undefined;
-        // Exact id+revision lookup: no global directory clone and no stale-revision fallback.
-        const apps = await client.aiApps([{ appId, revision: appRevision }]);
-        const app = apps.find((a) => a.id === appId);
+        let app: AiAppRegistration | undefined;
+        const directChat = chatId.kind === "direct_chat";
+        if (directChat) {
+            app = (await resolveConnectedDirectChatAiApp(client, appId, appRevision))?.app;
+        } else {
+            const enabledIds = await client.enabledAiApps(chatId);
+            if (!enabledIds.includes(appId)) return undefined;
+            // Exact id+revision lookup: no global directory clone and no stale-revision fallback.
+            const apps = await client.aiApps([{ appId, revision: appRevision }]);
+            app = apps.find(
+                (candidate) => candidate.id === appId && enabledIds.includes(candidate.id),
+            );
+        }
         if (
             app === undefined ||
-            !enabledIds.includes(app.id) ||
             !app.published ||
             app.updated !== appRevision ||
             !app.manifest.actions.some((a) => a.name === actionId)
@@ -342,7 +352,7 @@ export async function resolveActionAppForCard(
             iconUrl: validatedAppIconUrl(app.manifest.iconUrl),
         };
         const opening = cardSurfaceOpening(app, chatId);
-        if (opening === undefined) return { identity };
+        if (opening === undefined) return directChat ? undefined : { identity };
         // Build the label -> field-key map from the OWNING action's card template. `card.rows` here are
         // the client-side {label, valueKey} shape (aiActionDefinitionFromWire maps wire `field` ->
         // `valueKey`), so valueKey IS the structured field key the app expects.
@@ -419,6 +429,7 @@ function chatIndependentSurfaceOpening(
 
 const MAX_SHOWN_MARKERS = 1_000;
 const MAX_SHOWN_MARKER_LENGTH = 1_024;
+const CURRENT_SHOWN_MARKER = /^v3:[0-9a-f]{64}$/;
 
 export function parseAiAppSurfaceShownMarkers(raw: string | null): Set<string> {
     try {
@@ -430,7 +441,8 @@ export function parseAiAppSurfaceShownMarkers(raw: string | null): Set<string> {
                 (value): value is string =>
                     typeof value === "string" &&
                     value.length > 0 &&
-                    value.length <= MAX_SHOWN_MARKER_LENGTH,
+                    value.length <= MAX_SHOWN_MARKER_LENGTH &&
+                    CURRENT_SHOWN_MARKER.test(value),
             ),
         );
     } catch {
@@ -438,9 +450,18 @@ export function parseAiAppSurfaceShownMarkers(raw: string | null): Set<string> {
     }
 }
 
-const shownMarkers = parseAiAppSurfaceShownMarkers(
-    localStorage.getItem(configKeys.aiAppSurfacesShown),
-);
+const rawShownMarkers = localStorage.getItem(configKeys.aiAppSurfacesShown);
+const shownMarkers = parseAiAppSurfaceShownMarkers(rawShownMarkers);
+if (rawShownMarkers !== null) {
+    const sanitized = JSON.stringify([...shownMarkers]);
+    if (sanitized !== rawShownMarkers) {
+        try {
+            localStorage.setItem(configKeys.aiAppSurfacesShown, sanitized);
+        } catch {
+            // Sanitizing legacy raw identifiers is best-effort when storage is unavailable.
+        }
+    }
+}
 
 export function aiAppSurfaceMarkerForViewer(
     viewerId: string | undefined,
@@ -448,7 +469,8 @@ export function aiAppSurfaceMarkerForViewer(
     chatKey: string,
 ): string | undefined {
     if (viewerId === undefined || viewerId.length === 0) return undefined;
-    return `v2:${viewerId}:${appId}:${chatKey}`;
+    const preimage = `openchat.ai-app-surface-shown.v3\0${viewerId.length}:${viewerId}\0${appId}\0${chatKey.length}:${chatKey}`;
+    return `v3:${bytesToHex(sha256(utf8ToBytes(preimage)))}`;
 }
 
 function markShown(marker: string): void {
@@ -484,12 +506,23 @@ export async function surfaceToOpenAfterConfirm(
     const marker = aiAppSurfaceMarkerForViewer(currentUserId, appId ?? -1, chatKey);
     if (marker === undefined) return undefined;
 
-    const enabledIds = await client.enabledAiApps(chatId);
-    if (appId === undefined || appRevision === undefined || !enabledIds.includes(appId)) {
-        return undefined;
+    if (appId === undefined || appRevision === undefined) return undefined;
+    let app: AiAppRegistration | undefined;
+    if (chatId.kind === "direct_chat") {
+        app = (await resolveConnectedDirectChatAiApp(client, appId, appRevision))?.app;
+        if (
+            app === undefined ||
+            !app.manifest.actions.some((action) => action.name === actionId) ||
+            cardSurfaceOpening(app, chatId) === undefined
+        ) {
+            return undefined;
+        }
+    } else {
+        const enabledIds = await client.enabledAiApps(chatId);
+        if (!enabledIds.includes(appId)) return undefined;
+        const apps = await client.aiApps([{ appId, revision: appRevision }]);
+        app = appForPostConfirm(apps, enabledIds, actionId, appId, appRevision);
     }
-    const apps = await client.aiApps([{ appId, revision: appRevision }]);
-    const app = appForPostConfirm(apps, enabledIds, actionId, appId, appRevision);
     if (app === undefined) return undefined;
 
     if (shownMarkers.has(marker)) return undefined;

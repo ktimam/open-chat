@@ -76,8 +76,16 @@ fn card_attestation_reserves_before_the_third_party_await_and_revalidates_afterw
 
     let provenance = read_repo_file("backend/canisters/user_index/impl/src/updates/create_ai_app_card_provenance.rs");
     assert!(
-        provenance.contains("state.env.caller() != prepared.caller"),
-        "the authenticated OpenChat caller must be revalidated after the verifier await"
+        provenance.contains("get_by_principal(&prepared.caller)"),
+        "the captured authenticated OpenChat principal must be revalidated after the verifier await"
+    );
+    let mint = provenance
+        .split("fn mint_ai_app_card_provenance")
+        .nth(1)
+        .expect("post-await provenance mint");
+    assert!(
+        !mint.contains("state.env.caller()"),
+        "the verifier callback caller must never replace the principal captured before the await"
     );
 
     let confirmation =

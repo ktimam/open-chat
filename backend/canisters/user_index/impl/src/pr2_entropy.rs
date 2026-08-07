@@ -168,7 +168,7 @@ async fn finish_reseed(ticket: Pr2EntropyReseedTicket) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::action_delivery_outbox::ActionDeliveryStart;
+    use crate::model::action_delivery_outbox::{ActionDeliveryOutboxError, ActionDeliveryStart};
     use crate::model::ai_app_card_tokens::{Provenance, ProvenanceStatus, TOKEN_BYTES};
     use crate::model::ai_app_chat_link_tokens::{AiAppChatLinkToken, LookupResult, RedeemResult};
     use crate::{Data, RuntimeState};
@@ -244,6 +244,8 @@ mod tests {
                 Provenance {
                     context: context.clone(),
                     content_hash: [4; 32],
+                    app_user_key_fingerprint: None,
+                    app_user_key_version: None,
                     expires_at: now + 1_000,
                 },
                 now,
@@ -273,7 +275,7 @@ mod tests {
         data.action_signing_keyring.ensure_initialized(&mut key_rng, now).unwrap();
         data.ai_app_scoped_identity_key.ensure_initialized(&mut key_rng).unwrap();
         assert_eq!(
-            data.action_delivery_outbox.start([5; 32], 7, 1, now, now),
+            data.action_delivery_outbox.start_in_slot([4; 32], [5; 32], 7, 1, now, now),
             Ok(ActionDeliveryStart::Prepare { epoch: 1 })
         );
         let signing_keys_before = msgpack::serialize_to_vec(&data.action_signing_keyring).unwrap();
@@ -325,6 +327,20 @@ mod tests {
         assert_eq!(
             msgpack::serialize_to_vec(&state.data.action_delivery_outbox).unwrap(),
             outbox_before
+        );
+        assert_eq!(
+            state
+                .data
+                .action_delivery_outbox
+                .start_in_slot([4; 32], [5; 32], 7, 1, now, now),
+            Ok(ActionDeliveryStart::Pending)
+        );
+        assert_eq!(
+            state
+                .data
+                .action_delivery_outbox
+                .start_in_slot([4; 32], [6; 32], 7, 1, now, now),
+            Err(ActionDeliveryOutboxError::IdentityCollision)
         );
     }
 }

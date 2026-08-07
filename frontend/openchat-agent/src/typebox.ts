@@ -6500,9 +6500,7 @@ export const UserIndexAiAppUserKeysResponse = Type.Object({
     Success: UserIndexAiAppUserKeysSuccessResult,
 });
 
-export type UserIndexClaimAiAppLinkCodeArgs = Static<
-    typeof UserIndexClaimAiAppLinkCodeArgs
->;
+export type UserIndexClaimAiAppLinkCodeArgs = Static<typeof UserIndexClaimAiAppLinkCodeArgs>;
 export const UserIndexClaimAiAppLinkCodeArgs = Type.Object({
     /** Single-use, app-bound 256-bit token encoded as 64 lowercase hexadecimal characters. */
     code: Type.String(),
@@ -8779,9 +8777,7 @@ export type GroupCreateAiAppCardConfirmationGrantResponse = Static<
 export const GroupCreateAiAppCardConfirmationGrantResponse =
     CreateAiAppCardConfirmationGrantResponse;
 
-export type GroupCreateAiAppCardCapabilityArgs = Static<
-    typeof GroupCreateAiAppCardCapabilityArgs
->;
+export type GroupCreateAiAppCardCapabilityArgs = Static<typeof GroupCreateAiAppCardCapabilityArgs>;
 export const GroupCreateAiAppCardCapabilityArgs = Type.Object({
     thread_root_message_index: Type.Optional(MessageIndex),
     message_id: MessageId,
@@ -8793,9 +8789,7 @@ export type GroupCreateAiAppCardCapabilityResponse = Static<
 >;
 export const GroupCreateAiAppCardCapabilityResponse = CreateAiAppCardCapabilityResponse;
 
-export type GroupCreateAiAppChatLinkTokenArgs = Static<
-    typeof GroupCreateAiAppChatLinkTokenArgs
->;
+export type GroupCreateAiAppChatLinkTokenArgs = Static<typeof GroupCreateAiAppChatLinkTokenArgs>;
 export const GroupCreateAiAppChatLinkTokenArgs = Type.Object({
     app_id: Type.Number(),
     app_revision: Type.BigInt(),
@@ -8825,9 +8819,7 @@ export const UserRespondToActionCardResponse = Type.Union([
     }),
 ]);
 
-export type UserCreateAiAppCardCapabilityArgs = Static<
-    typeof UserCreateAiAppCardCapabilityArgs
->;
+export type UserCreateAiAppCardCapabilityArgs = Static<typeof UserCreateAiAppCardCapabilityArgs>;
 export const UserCreateAiAppCardCapabilityArgs = Type.Object({
     user_id: UserId,
     thread_root_message_index: Type.Optional(MessageIndex),
@@ -8839,6 +8831,21 @@ export type UserCreateAiAppCardCapabilityResponse = Static<
     typeof UserCreateAiAppCardCapabilityResponse
 >;
 export const UserCreateAiAppCardCapabilityResponse = CreateAiAppCardCapabilityResponse;
+
+export type UserCreateAiAppCardConfirmationGrantArgs = Static<
+    typeof UserCreateAiAppCardConfirmationGrantArgs
+>;
+export const UserCreateAiAppCardConfirmationGrantArgs = Type.Object({
+    user_id: UserId,
+    thread_root_message_index: Type.Optional(MessageIndex),
+    message_id: MessageId,
+    confirm_payload: TSBytes,
+});
+export type UserCreateAiAppCardConfirmationGrantResponse = Static<
+    typeof UserCreateAiAppCardConfirmationGrantResponse
+>;
+export const UserCreateAiAppCardConfirmationGrantResponse =
+    CreateAiAppCardConfirmationGrantResponse;
 
 export type UserCreateAiAppChatLinkTokenArgs = Static<typeof UserCreateAiAppChatLinkTokenArgs>;
 export const UserCreateAiAppChatLinkTokenArgs = Type.Object({

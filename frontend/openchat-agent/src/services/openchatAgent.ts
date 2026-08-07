@@ -221,6 +221,7 @@ import {
     ChatMap,
     CommonResponses,
     DestinationInvalidError,
+    ErrorCode,
     Lazy,
     MAX_ACTIVITY_EVENTS,
     ONE_MINUTE_MILLIS,
@@ -528,6 +529,14 @@ export class OpenChatAgent extends EventTarget {
         newAchievement: boolean,
     ): Promise<EditMessageResponse> {
         if (offline()) return Promise.resolve(CommonResponses.offline());
+
+        if (msg.content.kind === "action_card_content") {
+            return Promise.resolve<EditMessageResponse>({
+                kind: "error",
+                code: ErrorCode.InvalidRequest,
+                message: "Action cards cannot be edited",
+            });
+        }
 
         switch (chatId.kind) {
             case "direct_chat":
@@ -3964,9 +3973,15 @@ export class OpenChatAgent extends EventTarget {
                     recipientPublicKey,
                 );
             case "direct_chat":
-                // Direct chats have no app enablement yet; fail closed without touching the user
-                // canister even if a raw client forges an app-bound card.
-                return Promise.resolve(undefined);
+                return this._userClient instanceof UserClient
+                    ? this._userClient.createAiAppCardCapability(
+                          chatId.userId,
+                          messageId,
+                          threadRootMessageIndex,
+                          recipientKeyScheme,
+                          recipientPublicKey,
+                      )
+                    : Promise.resolve(undefined);
         }
     }
 
@@ -3993,7 +4008,14 @@ export class OpenChatAgent extends EventTarget {
                     confirmPayload,
                 );
             case "direct_chat":
-                return Promise.resolve(undefined);
+                return this._userClient instanceof UserClient
+                    ? this._userClient.createAiAppCardConfirmationGrant(
+                          chatId.userId,
+                          messageId,
+                          threadRootMessageIndex,
+                          confirmPayload,
+                      )
+                    : Promise.resolve(undefined);
         }
     }
 

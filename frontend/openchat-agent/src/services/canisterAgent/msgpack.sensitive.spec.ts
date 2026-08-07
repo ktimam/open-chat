@@ -20,6 +20,16 @@ function loggedText(calls: unknown[][]): string {
         .join(" ");
 }
 
+function methodSource(file: string, methodName: string, nextMethodName: string): string {
+    const source = readFileSync(file, "utf8");
+    const start = source.indexOf(`${methodName}(`);
+    const end = source.indexOf(`${nextMethodName}(`, start);
+
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    return source.slice(start, end);
+}
+
 class SensitiveTestAgent extends SingleCanisterMsgpackAgent {
     constructor(agent: HttpAgent) {
         super(new AnonymousIdentity(), agent, "aaaaa-aa", "SensitiveTest");
@@ -97,5 +107,150 @@ describe("sensitive Msgpack calls", () => {
             const source = readFileSync(file, "utf8");
             expect(source).toContain("sensitive: true");
         }
+    });
+
+    it("opts every confirmation-grant mint into sensitive handling", () => {
+        const clients = [
+            {
+                file: resolve(__dirname, "../group/group.client.ts"),
+                nextMethod: "searchGroupChat(",
+            },
+            {
+                file: resolve(__dirname, "../community/community.client.ts"),
+                nextMethod: "setAiAppEnabled(",
+            },
+            {
+                file: resolve(__dirname, "../user/user.client.ts"),
+                nextMethod: "createAiAppChatLinkToken(",
+            },
+        ];
+
+        for (const { file, nextMethod } of clients) {
+            const source = readFileSync(file, "utf8");
+            const start = source.indexOf("createAiAppCardConfirmationGrant(");
+            const end = source.indexOf(nextMethod, start);
+            const method = source.slice(start, end);
+
+            expect(start).toBeGreaterThanOrEqual(0);
+            expect(end).toBeGreaterThan(start);
+            expect(method).toMatch(/\{\s*sensitive:\s*true\s*\}/);
+        }
+    });
+
+    it("opts every card-capability mint into sensitive handling", () => {
+        const clients = [
+            {
+                file: resolve(__dirname, "../group/group.client.ts"),
+                nextMethod: "createAiAppChatLinkToken(",
+            },
+            {
+                file: resolve(__dirname, "../community/community.client.ts"),
+                nextMethod: "createAiAppChatLinkToken(",
+            },
+            {
+                file: resolve(__dirname, "../user/user.client.ts"),
+                nextMethod: "createAiAppCardConfirmationGrant(",
+            },
+        ];
+
+        for (const { file, nextMethod } of clients) {
+            const source = readFileSync(file, "utf8");
+            const start = source.indexOf("createAiAppCardCapability(");
+            const end = source.indexOf(nextMethod, start);
+            const method = source.slice(start, end);
+
+            expect(start).toBeGreaterThanOrEqual(0);
+            expect(end).toBeGreaterThan(start);
+            expect(method).toMatch(/\{\s*sensitive:\s*true\s*\}/);
+        }
+    });
+
+    it("opts every action-card response carrying confirmation material into sensitive handling", () => {
+        const clients = [
+            resolve(__dirname, "../group/group.client.ts"),
+            resolve(__dirname, "../community/community.client.ts"),
+            resolve(__dirname, "../user/user.client.ts"),
+        ];
+
+        for (const file of clients) {
+            const method = methodSource(file, "respondToActionCard", "createAiAppCardCapability");
+
+            expect(method).toContain("confirmation_grant");
+            expect(method).toContain("confirm_payload_override");
+            expect(method).toMatch(/\{\s*sensitive:\s*true\s*\}/);
+        }
+    });
+
+    it("opts provenance and legacy link-code bearer calls into sensitive handling", () => {
+        const file = resolve(__dirname, "../userIndex/userIndex.client.ts");
+        const methods = [
+            methodSource(file, "cancelAiAppLinkCode", "cancelAiAppChatLinkToken"),
+            methodSource(file, "createAiAppLinkCode", "createAiAppCardProvenance"),
+            methodSource(file, "createAiAppCardProvenance", "exploreAiApps"),
+        ];
+
+        for (const method of methods) {
+            expect(method).toMatch(/\{\s*sensitive:\s*true\s*\}/);
+        }
+    });
+
+    it("marks only app-provenance proposal sends as sensitive", () => {
+        const clients = [
+            {
+                file: resolve(__dirname, "../group/group.client.ts"),
+                nextMethod: "updateGroup",
+            },
+            {
+                file: resolve(__dirname, "../community/community.client.ts"),
+                nextMethod: "registerPollVote",
+            },
+            {
+                file: resolve(__dirname, "../user/user.client.ts"),
+                nextMethod: "sendMessageWithTransferToGroup",
+            },
+        ];
+
+        for (const { file, nextMethod } of clients) {
+            const method = methodSource(file, "sendMessage", nextMethod);
+
+            expect(method).toContain('kind === "action_card_content"');
+            expect(method).toContain("appProvenance !== undefined");
+            expect(method).toMatch(/\?\s*\{\s*sensitive:\s*true\s*\}\s*:\s*undefined/);
+        }
+    });
+
+    it("redacts crafted ActionCard edit calls without hiding ordinary edit diagnostics", () => {
+        const clients = [
+            {
+                file: resolve(__dirname, "../group/group.client.ts"),
+                nextMethod: "sendMessage",
+            },
+            {
+                file: resolve(__dirname, "../community/community.client.ts"),
+                nextMethod: "enableInviteCode",
+            },
+            {
+                file: resolve(__dirname, "../user/user.client.ts"),
+                nextMethod: "sendMessage",
+            },
+        ];
+
+        for (const { file, nextMethod } of clients) {
+            const method = methodSource(file, "editMessage", nextMethod);
+
+            expect(method).toContain('message.content.kind === "action_card_content"');
+            expect(method).toMatch(/\?\s*\{\s*sensitive:\s*true\s*\}\s*:\s*undefined/);
+        }
+    });
+
+    it("rejects ActionCard edits before dispatching to any canister client", () => {
+        const file = resolve(__dirname, "../openchatAgent.ts");
+        const method = methodSource(file, "editMessage", "sendMessage");
+        const guard = method.indexOf('msg.content.kind === "action_card_content"');
+        const dispatch = method.indexOf("switch (chatId.kind)");
+
+        expect(guard).toBeGreaterThanOrEqual(0);
+        expect(dispatch).toBeGreaterThan(guard);
+        expect(method.slice(guard, dispatch)).toContain("ErrorCode.InvalidRequest");
     });
 });

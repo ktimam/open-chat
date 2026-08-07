@@ -7,6 +7,9 @@ use types::{AiAppCardContext, Chat};
 
 #[update(guard = "caller_is_local_child_canister", msgpack = true)]
 async fn c2c_create_ai_app_card_capability(args: Args) -> Response {
+    if matches!(args.chat, Chat::Direct(_)) && !args.authority.is_empty() {
+        return InvalidRequest("direct chat must not carry group route authority".to_string());
+    }
     let caller = ic_cdk::api::msg_caller();
     let expected_user_id = args.user_id;
     let expected_chat = args.chat;
@@ -132,7 +135,20 @@ pub(crate) fn validate_authoritative_child_context(
         return Err("authoritative member list does not contain the viewer".to_string());
     }
     match chat {
-        Chat::Direct(_) => Err("AI-app card capabilities are unavailable in direct chats".to_string()),
+        Chat::Direct(other) => {
+            if caller_kind != AuthoritativeChildKind::User || candid::Principal::from(user_id) != caller {
+                return Err("caller is not the viewer's exact local user canister".to_string());
+            }
+            let other_user_id: types::UserId = other.into();
+            if other_user_id == user_id
+                || member_user_ids.len() != 2
+                || !member_user_ids.contains(&other_user_id)
+                || member_user_ids.iter().filter(|member| **member == user_id).count() != 1
+            {
+                return Err("direct chat must contain the canonical distinct participant pair".to_string());
+            }
+            Ok(())
+        }
         Chat::Group(chat_id) if caller_kind != AuthoritativeChildKind::Group || candid::Principal::from(chat_id) != caller => {
             Err("caller is not the asserted local group canister".to_string())
         }
@@ -151,6 +167,10 @@ mod tests {
     use candid::Principal;
     use serde_bytes::ByteBuf;
     use types::{ChatId, MessageId, UserId};
+
+    fn user(value: u8) -> UserId {
+        Principal::from_slice(&[value]).into()
+    }
 
     fn args(group: Principal, viewer: UserId) -> Args {
         Args {
@@ -255,5 +275,86 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    #[test]
+    fn direct_card_relay_accepts_only_the_exact_user_child_and_canonical_pair() {
+        let viewer = user(7);
+        let peer = user(8);
+        let caller = Principal::from(viewer);
+
+        assert!(
+            validate_authoritative_child_context(
+                viewer,
+                Chat::Direct(peer.into()),
+                &[peer, viewer],
+                caller,
+                AuthoritativeChildKind::User,
+            )
+            .is_ok(),
+            "a current User child must be allowed to relay a direct card for its exact two-user chat"
+        );
+    }
+
+    #[test]
+    fn direct_card_relay_rejects_wrong_or_reclassified_user_children() {
+        let viewer = user(7);
+        let peer = user(8);
+        let chat = Chat::Direct(peer.into());
+        let members = [viewer, peer];
+
+        assert!(
+            validate_authoritative_child_context(
+                viewer,
+                chat,
+                &members,
+                Principal::from_slice(&[9]),
+                AuthoritativeChildKind::User,
+            )
+            .is_err(),
+            "another User canister must not relay the viewer's direct card"
+        );
+        assert!(
+            validate_authoritative_child_context(
+                viewer,
+                chat,
+                &members,
+                Principal::from(viewer),
+                AuthoritativeChildKind::Group,
+            )
+            .is_err(),
+            "a reclassified child must lose direct-card authority"
+        );
+        assert!(
+            validate_authoritative_child_context(
+                viewer,
+                chat,
+                &members,
+                Principal::from(viewer),
+                AuthoritativeChildKind::Unknown,
+            )
+            .is_err(),
+            "an unregistered child must not relay a direct card"
+        );
+    }
+
+    #[test]
+    fn direct_card_relay_rejects_self_extra_missing_and_unrelated_members() {
+        let viewer = user(7);
+        let peer = user(8);
+        let mallory = user(9);
+        let caller = Principal::from(viewer);
+
+        for (chat, members) in [
+            (Chat::Direct(viewer.into()), vec![viewer, viewer]),
+            (Chat::Direct(peer.into()), vec![viewer]),
+            (Chat::Direct(peer.into()), vec![viewer, peer, mallory]),
+            (Chat::Direct(mallory.into()), vec![viewer, peer]),
+        ] {
+            assert!(
+                validate_authoritative_child_context(viewer, chat, &members, caller, AuthoritativeChildKind::User,).is_err(),
+                "malformed direct membership must fail closed"
+            );
+        }
     }
 }

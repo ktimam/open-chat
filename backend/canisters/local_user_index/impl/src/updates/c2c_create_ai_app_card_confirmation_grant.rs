@@ -10,6 +10,9 @@ use types::AiAppCardContext;
 
 #[update(guard = "caller_is_local_child_canister", msgpack = true)]
 async fn c2c_create_ai_app_card_confirmation_grant(args: Args) -> Response {
+    if matches!(args.chat, types::Chat::Direct(_)) && !args.authority.is_empty() {
+        return InvalidRequest("direct chat must not carry group route authority".to_string());
+    }
     if args.confirm_payload.is_empty() || args.confirm_payload.len() > types::MAX_AI_APP_CONFIRM_PAYLOAD_BYTES {
         return InvalidRequest(format!(
             "confirmation payload must contain 1..={} bytes",

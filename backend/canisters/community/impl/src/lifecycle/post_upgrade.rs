@@ -16,6 +16,7 @@ const PR2_SENSITIVE_HISTORY_MARKERS: &[&str] = &[
     "create_ai_app_card_capability",
     "create_ai_app_chat_link_token",
     "create_ai_app_card_confirmation_grant",
+    "edit_message",
 ];
 
 #[post_upgrade(msgpack = true)]

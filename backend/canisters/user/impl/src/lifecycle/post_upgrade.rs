@@ -12,7 +12,10 @@ use utils::env::canister::CanisterEnv;
 const PR2_SENSITIVE_HISTORY_MARKERS: &[&str] = &[
     "respond_to_action_card",
     "create_ai_app_card_capability",
+    "create_ai_app_card_confirmation_grant",
     "create_ai_app_chat_link_token",
+    "c2c_user_canister",
+    "edit_message",
 ];
 
 #[post_upgrade(msgpack = true)]

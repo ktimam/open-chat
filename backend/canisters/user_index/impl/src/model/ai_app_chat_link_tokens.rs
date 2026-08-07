@@ -71,6 +71,12 @@ pub struct AiAppChatLinkTokens {
     receipts_by_app: HashMap<AiAppId, HashSet<TokenDigest>>,
     #[serde(default)]
     issuance_windows: HashMap<(UserId, AiAppId), IssuanceWindow>,
+    /// Reverse index for deletion-time cleanup of issuance windows that may outlive both a token
+    /// and its replay receipt. Legacy states rebuild this once from the serialized source map.
+    #[serde(default)]
+    issuance_apps_by_user: HashMap<UserId, HashSet<AiAppId>>,
+    #[serde(default)]
+    issuance_user_index_initialized: bool,
     /// A zero value denotes a pre-feature or incompatible snapshot and is invalidated fail-closed.
     #[serde(default)]
     digest_version: u8,
@@ -88,6 +94,8 @@ impl Default for AiAppChatLinkTokens {
             receipts_by_user: HashMap::new(),
             receipts_by_app: HashMap::new(),
             issuance_windows: HashMap::new(),
+            issuance_apps_by_user: HashMap::new(),
+            issuance_user_index_initialized: true,
             digest_version: DIGEST_VERSION,
         }
     }
@@ -182,6 +190,10 @@ impl AiAppChatLinkTokens {
                 started_at: now,
                 count: 1,
             });
+        self.issuance_apps_by_user
+            .entry(window_key.0)
+            .or_default()
+            .insert(window_key.1);
         Ok(())
     }
 
@@ -317,7 +329,40 @@ impl AiAppChatLinkTokens {
             .collect();
         let removed_active = active.iter().filter(|digest| self.remove_digest(digest).is_some()).count();
         let removed_receipts = receipts.iter().filter(|digest| self.remove_receipt(digest).is_some()).count();
-        self.issuance_windows.remove(&(user_id, app_id));
+        self.remove_issuance_window(user_id, app_id);
+        removed_active + removed_receipts
+    }
+
+    /// Removes active bearers, redeemed replay receipts, and every issuance window for one deleted
+    /// account. Work is driven only by the capped per-user token/receipt indexes and the exact
+    /// issuance reverse index; the global stores are never scanned.
+    pub fn remove_user(&mut self, user_id: UserId) -> usize {
+        self.ensure_current();
+        let active: Vec<_> = self
+            .by_user
+            .get(&user_id)
+            .into_iter()
+            .flat_map(|values| values.iter().copied())
+            .take(MAX_OUTSTANDING_PER_USER)
+            .collect();
+        let receipts: Vec<_> = self
+            .receipts_by_user
+            .get(&user_id)
+            .into_iter()
+            .flat_map(|values| values.iter().copied())
+            .take(MAX_RECEIPTS_PER_USER)
+            .collect();
+        let apps: Vec<_> = self
+            .issuance_apps_by_user
+            .get(&user_id)
+            .into_iter()
+            .flat_map(|apps| apps.iter().copied())
+            .collect();
+        let removed_active = active.iter().filter(|digest| self.remove_digest(digest).is_some()).count();
+        let removed_receipts = receipts.iter().filter(|digest| self.remove_receipt(digest).is_some()).count();
+        for app_id in apps {
+            self.remove_issuance_window(user_id, app_id);
+        }
         removed_active + removed_receipts
     }
 
@@ -337,7 +382,14 @@ impl AiAppChatLinkTokens {
             .collect();
         let removed_active = active.iter().filter(|digest| self.remove_digest(digest).is_some()).count();
         let removed_receipts = receipts.iter().filter(|digest| self.remove_receipt(digest).is_some()).count();
-        self.issuance_windows.retain(|(_, candidate), _| *candidate != app_id);
+        let issuance_users: Vec<_> = self
+            .issuance_windows
+            .keys()
+            .filter_map(|(user_id, candidate)| (*candidate == app_id).then_some(*user_id))
+            .collect();
+        for user_id in issuance_users {
+            self.remove_issuance_window(user_id, app_id);
+        }
         removed_active + removed_receipts
     }
 
@@ -355,6 +407,8 @@ impl AiAppChatLinkTokens {
         self.receipts_by_expiry.clear();
         self.receipts_by_user.clear();
         self.receipts_by_app.clear();
+        self.issuance_apps_by_user.clear();
+        self.issuance_user_index_initialized = true;
         self.digest_version = DIGEST_VERSION;
     }
 
@@ -365,6 +419,23 @@ impl AiAppChatLinkTokens {
     fn ensure_current(&mut self) {
         if self.digest_version != DIGEST_VERSION {
             self.invalidate_all();
+        } else if !self.issuance_user_index_initialized {
+            self.issuance_apps_by_user.clear();
+            for &(user_id, app_id) in self.issuance_windows.keys() {
+                self.issuance_apps_by_user.entry(user_id).or_default().insert(app_id);
+            }
+            self.issuance_user_index_initialized = true;
+        }
+    }
+
+    fn remove_issuance_window(&mut self, user_id: UserId, app_id: AiAppId) {
+        self.issuance_windows.remove(&(user_id, app_id));
+        let empty = self.issuance_apps_by_user.get_mut(&user_id).is_some_and(|apps| {
+            apps.remove(&app_id);
+            apps.is_empty()
+        });
+        if empty {
+            self.issuance_apps_by_user.remove(&user_id);
         }
     }
 
@@ -756,5 +827,61 @@ mod tests {
         let mut restored: AiAppChatLinkTokens = msgpack::deserialize_then_unwrap(&bytes);
         assert!(matches!(restored.lookup(canister, &raw, 2), LookupResult::NotFound));
         assert_eq!(restored.len(), 0);
+    }
+
+    #[test]
+    fn legacy_issuance_index_is_rebuilt_so_account_deletion_clears_only_that_users_window() {
+        #[derive(Serialize)]
+        struct Legacy {
+            tokens: HashMap<TokenDigest, AiAppChatLinkToken>,
+            by_user: HashMap<UserId, HashSet<TokenDigest>>,
+            by_app: HashMap<AiAppId, HashSet<TokenDigest>>,
+            by_expiry: BTreeSet<(TimestampMillis, TokenDigest)>,
+            redeemed_receipts: HashMap<TokenDigest, RedeemedReceipt>,
+            receipts_by_expiry: BTreeSet<(TimestampMillis, TokenDigest)>,
+            receipts_by_user: HashMap<UserId, HashSet<TokenDigest>>,
+            receipts_by_app: HashMap<AiAppId, HashSet<TokenDigest>>,
+            issuance_windows: HashMap<(UserId, AiAppId), IssuanceWindow>,
+            digest_version: u8,
+        }
+
+        let canister = Principal::from_slice(&[1]);
+        let deleted = user(2);
+        let survivor = user(3);
+        let mut source = AiAppChatLinkTokens::default();
+        for seed in 0..MAX_ISSUED_PER_USER_APP_WINDOW as u64 {
+            let deleted_raw = raw(seed);
+            source.insert(canister, &deleted_raw, entry(deleted, 7, 100), 1).unwrap();
+            assert!(source.cancel(canister, &deleted_raw, deleted, 1));
+
+            let survivor_raw = raw(seed + 1_000);
+            source.insert(canister, &survivor_raw, entry(survivor, 7, 100), 1).unwrap();
+            assert!(source.cancel(canister, &survivor_raw, survivor, 1));
+        }
+        assert_eq!(source.check_admission(deleted, 7, 2), Err(InsertError::RateLimited));
+        assert_eq!(source.check_admission(survivor, 7, 2), Err(InsertError::RateLimited));
+
+        let bytes = msgpack::serialize_to_vec(&Legacy {
+            tokens: source.tokens.clone(),
+            by_user: source.by_user.clone(),
+            by_app: source.by_app.clone(),
+            by_expiry: source.by_expiry.clone(),
+            redeemed_receipts: source.redeemed_receipts.clone(),
+            receipts_by_expiry: source.receipts_by_expiry.clone(),
+            receipts_by_user: source.receipts_by_user.clone(),
+            receipts_by_app: source.receipts_by_app.clone(),
+            issuance_windows: source.issuance_windows.clone(),
+            digest_version: source.digest_version,
+        })
+        .unwrap();
+        let mut restored: AiAppChatLinkTokens = msgpack::deserialize_then_unwrap(&bytes);
+
+        restored.remove_user(deleted);
+        assert_eq!(restored.check_admission(deleted, 7, 2), Ok(()));
+        assert_eq!(
+            restored.check_admission(survivor, 7, 2),
+            Err(InsertError::RateLimited),
+            "another account's anti-abuse window must survive exact cleanup"
+        );
     }
 }

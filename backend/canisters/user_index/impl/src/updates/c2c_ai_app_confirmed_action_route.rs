@@ -1,6 +1,6 @@
 use crate::guards::caller_is_local_user_index_canister;
 use crate::read_state;
-use crate::updates::create_ai_app_card_provenance::resolve_current_card_app;
+use crate::updates::create_ai_app_card_provenance::{resolve_current_card_app, validate_direct_card_lui_route};
 use canister_api_macros::update;
 use group_index_canister::ai_app_card_authority::{AiAppCardAuthorityBindingV1, AiAppCardAuthorityOperationV1};
 use user_index_canister::c2c_ai_app_confirmed_action_route::{Response::*, *};
@@ -10,8 +10,9 @@ async fn c2c_ai_app_confirmed_action_route(args: Args) -> Response {
     if args.confirmation_lease_generation == 0 {
         return InvalidRequest("invalid confirmation lease generation".to_string());
     }
+    let caller = ic_cdk::api::msg_caller();
     let binding = AiAppCardAuthorityBindingV1 {
-        local_user_index_canister_id: ic_cdk::api::msg_caller(),
+        local_user_index_canister_id: caller,
         context: args.context.clone(),
         content_hash: args.content_hash,
         operation: AiAppCardAuthorityOperationV1::DepositConfirmedAction {
@@ -20,11 +21,23 @@ async fn c2c_ai_app_confirmed_action_route(args: Args) -> Response {
             created_at: args.created_at,
         },
     };
-    let validated = match crate::ai_app_card_authority::validate(binding.clone(), &args.authority).await {
-        Ok(binding) if binding == validated_binding(&args, binding.local_user_index_canister_id) => binding,
-        _ => return InvalidAuthority,
+    let validated = if matches!(args.context.chat, types::Chat::Direct(_)) {
+        if read_state(|state| validate_direct_card_lui_route(&args.context, &args.authority, caller, state)).is_err() {
+            return InvalidAuthority;
+        }
+        binding
+    } else {
+        match crate::ai_app_card_authority::validate(binding.clone(), &args.authority).await {
+            Ok(binding) if binding == validated_binding(&args, binding.local_user_index_canister_id) => binding,
+            _ => return InvalidAuthority,
+        }
     };
     read_state(|state| {
+        if matches!(args.context.chat, types::Chat::Direct(_))
+            && validate_direct_card_lui_route(&args.context, &args.authority, caller, state).is_err()
+        {
+            return InvalidAuthority;
+        }
         resolve_route(
             &validated,
             &state.data.ai_apps,
@@ -59,6 +72,9 @@ fn resolve_route(
     let Some(app) = resolve_current_card_app(registry, context.app_id, context.app_revision, &context.action_id) else {
         return AppUnavailable;
     };
+    if matches!(context.chat, types::Chat::Direct(_)) && !app.manifest.per_user_keys {
+        return AppUnavailable;
+    }
     let inbox_canister_id = app.manifest.inbox_canister_id.unwrap();
     let app_canister_id = app.manifest.app_canister_id.unwrap();
     let external_context = match crate::updates::c2c_redeem_ai_app_card_capability::app_scoped_context(
@@ -243,6 +259,15 @@ mod tests {
         }
     }
 
+    fn direct_binding(user_id: UserId, peer: UserId, app_id: u32, app_revision: u64) -> AiAppCardAuthorityBindingV1 {
+        let mut binding = binding(user_id, app_id, app_revision);
+        let mut pair = [user_id, peer];
+        pair.sort_unstable();
+        binding.context.chat = Chat::Direct(peer.into());
+        binding.context.chat_key = format!("direct:{}:{}", pair[0], pair[1]);
+        binding
+    }
+
     #[test]
     fn app_level_route_uses_the_exact_current_action_key() {
         let mut registry = AiAppRegistry::default();
@@ -305,6 +330,44 @@ mod tests {
 
         assert!(matches!(
             resolve_for_test(&binding(user(4), app_id, revision), &registry, &user_keys),
+            AppUnavailable
+        ));
+    }
+
+    #[test]
+    fn direct_route_requires_the_exact_confirmers_current_per_user_key() {
+        let confirmer = user(2);
+        let peer = user(3);
+
+        let mut per_user_registry = AiAppRegistry::default();
+        let (app_id, revision) = published_app(&mut per_user_registry, manifest(true, "", None));
+        let mut user_keys = AiAppUserKeys::default();
+        user_keys.set(confirmer, app_id, valid_key(31)).unwrap();
+        assert!(matches!(
+            resolve_for_test(
+                &direct_binding(confirmer, peer, app_id, revision),
+                &per_user_registry,
+                &user_keys,
+            ),
+            Success(_)
+        ));
+        assert!(matches!(
+            resolve_for_test(
+                &direct_binding(user(4), peer, app_id, revision),
+                &per_user_registry,
+                &user_keys,
+            ),
+            AppUnavailable
+        ));
+
+        let mut shared_registry = AiAppRegistry::default();
+        let (shared_id, shared_revision) = published_app(&mut shared_registry, manifest(false, &valid_key(32), None));
+        assert!(matches!(
+            resolve_for_test(
+                &direct_binding(confirmer, peer, shared_id, shared_revision),
+                &shared_registry,
+                &AiAppUserKeys::default(),
+            ),
             AppUnavailable
         ));
     }

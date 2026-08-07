@@ -91,8 +91,8 @@ fn mapping_and_child_registries_keep_monotonic_aba_generations() {
             "{path} must retain ABA tombstone generations"
         );
         assert!(
-            body.contains("saturating_add(1)"),
-            "{path} must advance registration generations"
+            body.contains("checked_add(1)"),
+            "{path} must advance registration generations without wrapping or reusing authority"
         );
     }
 }

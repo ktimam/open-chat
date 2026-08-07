@@ -36,8 +36,9 @@ pub struct UnsignedActionDeposit {
 /// revision and derives its administratively bound inbox before using relay authority.
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Args {
-    /// Exact private context vouched by the child and GroupIndex authority. Redundant routing fields
-    /// below remain explicit defense-in-depth commitments and must match this context exactly.
+    /// Exact private context vouched by the child plus either GroupIndex authority (group/channel)
+    /// or the exact User-child/current-home-LUI chain (direct). Redundant routing fields below
+    /// remain explicit defense-in-depth commitments and must match this context exactly.
     pub authority_context: AiAppCardContext,
     pub content_hash: [u8; 32],
     pub confirmation_lease_generation: u64,

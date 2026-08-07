@@ -13,6 +13,7 @@ const SUBJECT_DOMAIN_V1: &[u8] = b"openchat/ai-app/scoped-subject/v1\0";
 const CHAT_HANDLE_DOMAIN_V1: &[u8] = b"openchat/ai-app/scoped-chat/v1\0";
 const DIRECT_CHAT_HANDLE_DOMAIN_V1: &[u8] = b"openchat/ai-app/scoped-direct-chat/v1\0";
 const MESSAGE_HANDLE_DOMAIN_V1: &[u8] = b"openchat/ai-app/scoped-message/v1\0";
+const DIRECT_MESSAGE_HANDLE_DOMAIN_V1: &[u8] = b"openchat/ai-app/scoped-direct-message/v1\0";
 const CONSUMER_QUEUE_SELECTOR_DOMAIN_V1: &[u8] = b"openchat/ai-app/consumer-queue-selector/v1\0";
 
 /// Dedicated stable HMAC key for external-app pseudonyms. It is deliberately independent of both
@@ -92,6 +93,40 @@ impl AiAppScopedIdentityKey {
     ) -> Result<[u8; 32], String> {
         let mut preimage = app_scope_preimage(MESSAGE_HANDLE_DOMAIN_V1, user_index_canister_id, app_id, app_canister_id)?;
         put_chat(&mut preimage, chat)?;
+        match thread_root_message_index {
+            None => preimage.push(0),
+            Some(index) => {
+                preimage.push(1);
+                preimage.extend_from_slice(&u32::from(index).to_be_bytes());
+            }
+        }
+        preimage.extend_from_slice(&message_id.as_u64().to_be_bytes());
+        self.mac(&preimage)
+    }
+
+    pub fn direct_message_handle(
+        &self,
+        user_index_canister_id: CanisterId,
+        app_id: AiAppId,
+        app_canister_id: CanisterId,
+        first_user_id: UserId,
+        second_user_id: UserId,
+        thread_root_message_index: Option<MessageIndex>,
+        message_id: MessageId,
+    ) -> Result<[u8; 32], String> {
+        if first_user_id == second_user_id {
+            return Err("direct chat participants must be distinct".to_string());
+        }
+        let mut participants = [Principal::from(first_user_id), Principal::from(second_user_id)];
+        participants.sort_unstable_by(|a, b| a.as_slice().cmp(b.as_slice()));
+        let mut preimage = app_scope_preimage(
+            DIRECT_MESSAGE_HANDLE_DOMAIN_V1,
+            user_index_canister_id,
+            app_id,
+            app_canister_id,
+        )?;
+        put_principal(&mut preimage, participants[0])?;
+        put_principal(&mut preimage, participants[1])?;
         match thread_root_message_index {
             None => preimage.push(0),
             Some(index) => {

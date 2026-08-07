@@ -26,6 +26,10 @@ pub struct Provenance {
     /// Full canonical card commitment vouched by the exact registered app canister.
     #[serde(default)]
     pub content_hash: [u8; 32],
+    #[serde(default)]
+    pub app_user_key_fingerprint: Option<[u8; 32]>,
+    #[serde(default)]
+    pub app_user_key_version: Option<u64>,
     pub expires_at: TimestampMillis,
 }
 
@@ -297,6 +301,18 @@ impl AiAppCardTokens {
         ProvenanceStatus::NotFound
     }
 
+    pub fn provenance_user_key_binding(
+        &self,
+        canister_id: CanisterId,
+        token: &[u8],
+    ) -> Option<(Option<[u8; 32]>, Option<u64>)> {
+        let digest = Self::provenance_digest(canister_id, token);
+        self.provenances
+            .get(&digest)
+            .or_else(|| self.consumed_provenances.get(&digest))
+            .map(|value| (value.app_user_key_fingerprint, value.app_user_key_version))
+    }
+
     pub fn insert_capability(
         &mut self,
         canister_id: CanisterId,
@@ -475,6 +491,62 @@ impl AiAppCardTokens {
         for digest in grant_digests {
             removed += usize::from(self.remove_confirmation_grant(&digest).is_some());
         }
+        removed
+    }
+
+    /// Removes every active and consumed card authorization for one deleted account, including the
+    /// successful-mint history that must not be inherited if the same `UserId` is recreated. Token
+    /// work uses the capped per-user indexes; the issuance deque/map are hard-capped globally by
+    /// `MAX_CAPABILITY_ISSUANCES_GLOBAL`.
+    pub fn remove_user(&mut self, user_id: UserId) -> usize {
+        self.ensure_provenance_app_indexes();
+        let provenance_digests: Vec<_> = self
+            .provenance_by_user
+            .get(&user_id)
+            .into_iter()
+            .flat_map(|digests| digests.iter().copied())
+            .take(MAX_OUTSTANDING_PER_USER)
+            .collect();
+        let consumed_provenance_digests: Vec<_> = self
+            .consumed_provenance_by_user
+            .get(&user_id)
+            .into_iter()
+            .flat_map(|digests| digests.iter().copied())
+            .take(MAX_OUTSTANDING_PER_USER)
+            .collect();
+        let capability_digests: Vec<_> = self
+            .capability_by_user
+            .get(&user_id)
+            .into_iter()
+            .flat_map(|digests| digests.iter().copied())
+            .take(MAX_OUTSTANDING_PER_USER)
+            .collect();
+        let grant_digests: Vec<_> = self
+            .confirmation_grant_by_user
+            .get(&user_id)
+            .into_iter()
+            .flat_map(|digests| digests.iter().copied())
+            .take(MAX_OUTSTANDING_PER_USER)
+            .collect();
+
+        let mut removed = 0;
+        for digest in provenance_digests {
+            removed += usize::from(self.remove_provenance(&digest).is_some());
+        }
+        for digest in consumed_provenance_digests {
+            removed += usize::from(self.remove_consumed_provenance(&digest).is_some());
+        }
+        for digest in capability_digests {
+            removed += usize::from(self.remove_capability(&digest).is_some());
+        }
+        for digest in grant_digests {
+            removed += usize::from(self.remove_confirmation_grant(&digest).is_some());
+        }
+
+        self.capability_issuance_by_user_app
+            .retain(|(candidate, _), _| *candidate != user_id);
+        self.capability_issuance_global
+            .retain(|(_, candidate, _)| *candidate != user_id);
         removed
     }
 
@@ -832,6 +904,8 @@ mod tests {
         let provenance = Provenance {
             context: context(1, app_id),
             content_hash: [app_id as u8; 32],
+            app_user_key_fingerprint: None,
+            app_user_key_version: None,
             expires_at: 100,
         };
         store
@@ -893,6 +967,8 @@ mod tests {
                 Provenance {
                     context: context(1, 2),
                     content_hash: [1; 32],
+                    app_user_key_fingerprint: None,
+                    app_user_key_version: None,
                     expires_at: 100,
                 },
                 1,
@@ -915,6 +991,8 @@ mod tests {
                 Provenance {
                     context: expected.clone(),
                     content_hash: [1; 32],
+                    app_user_key_fingerprint: None,
+                    app_user_key_version: None,
                     expires_at: 100,
                 },
                 1,
@@ -1243,6 +1321,8 @@ mod tests {
                 Provenance {
                     context: context(1, 2),
                     content_hash: [2; 32],
+                    app_user_key_fingerprint: None,
+                    app_user_key_version: None,
                     expires_at: 10,
                 },
                 1,
@@ -1293,6 +1373,8 @@ mod tests {
                     Provenance {
                         context: context(1 + (seed / MAX_OUTSTANDING_PER_USER) as u8, 2),
                         content_hash: [2; 32],
+                        app_user_key_fingerprint: None,
+                        app_user_key_version: None,
                         expires_at: 10,
                     },
                     1,
@@ -1321,6 +1403,8 @@ mod tests {
                     Provenance {
                         context: context(user_byte, 2),
                         content_hash: [2; 32],
+                        app_user_key_fingerprint: None,
+                        app_user_key_version: None,
                         expires_at: 100,
                     },
                     1,
@@ -1335,6 +1419,8 @@ mod tests {
                 Provenance {
                     context: context(99, 2),
                     content_hash: [2; 32],
+                    app_user_key_fingerprint: None,
+                    app_user_key_version: None,
                     expires_at: 100,
                 },
                 1,
@@ -1348,6 +1434,8 @@ mod tests {
                 Provenance {
                     context: context(99, 3),
                     content_hash: [3; 32],
+                    app_user_key_fingerprint: None,
+                    app_user_key_version: None,
                     expires_at: 100,
                 },
                 1,

@@ -10,6 +10,7 @@ use oc_error_codes::{OCError, OCErrorCode};
 use search::simple::{Document, Query};
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
+use sha2::{Digest, Sha256};
 use std::cmp::max;
 use std::collections::btree_map::Entry::{Occupied, Vacant};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -61,14 +62,10 @@ fn action_card_edit_is_forbidden(current: &MessageContentInternal, replacement: 
     matches!(current, MessageContentInternal::ActionCard(_)) || matches!(replacement, MessageContentInternal::ActionCard(_))
 }
 
-fn app_card_confirmation_is_forbidden(card: &ActionCardContentInternal, chat: Chat) -> bool {
+fn app_card_confirmation_is_forbidden(card: &ActionCardContentInternal, _chat: Chat) -> bool {
     let has_app_binding = card.app_id.is_some() || card.app_revision.is_some();
     if has_app_binding {
-        matches!(chat, Chat::Direct(_))
-            || card.app_id.is_none()
-            || card.app_revision.is_none()
-            || !card.app_verified
-            || !card.app_content_verified
+        card.app_id.is_none() || card.app_revision.is_none() || !card.app_verified || !card.app_content_verified
     } else {
         // Old payload-bearing cards predate server-verified app provenance and authoritative route
         // resolution. Confirming them would either trust sender-carried routing or silently commit
@@ -105,6 +102,17 @@ pub fn ai_app_card_content_hash_from_initial(
         app_revision,
         content: card.into(),
     })
+}
+
+/// Stores no bearer material: the domain and explicit length make this digest unusable as any
+/// other token/commitment hash even if the raw bytes happen to be identical.
+pub fn ai_app_card_confirmation_grant_hash_v1(grant: &[u8]) -> [u8; 32] {
+    const DOMAIN: &[u8] = b"openchat/action-card-confirmation-grant/v1\0";
+    let mut hasher = Sha256::new();
+    hasher.update(DOMAIN);
+    hasher.update((grant.len() as u64).to_be_bytes());
+    hasher.update(grant);
+    hasher.finalize().into()
 }
 
 impl ChatEvents {
@@ -798,12 +806,7 @@ impl ChatEvents {
         if !private_context_delivery_enabled {
             return Err(OCErrorCode::InvalidRequest.with_message("private app-card context delivery is not enabled"));
         }
-        if matches!(self.chat, Chat::Direct(_)) {
-            return Err(
-                OCErrorCode::InvalidRequest.with_message("private app-card context is only available in multi-user chats")
-            );
-        }
-        self.ai_app_card_attested_source(thread_root_message_index, message_id, min_visible_event_index, now)
+        self.ai_app_card_attested_source(thread_root_message_index, message_id, min_visible_event_index, Some(now))
     }
 
     pub fn ai_app_card_confirmation_source(
@@ -813,7 +816,7 @@ impl ChatEvents {
         min_visible_event_index: EventIndex,
         now: TimestampMillis,
     ) -> OCResult<AiAppCardCapabilitySource> {
-        self.ai_app_card_attested_source(thread_root_message_index, message_id, min_visible_event_index, now)
+        self.ai_app_card_attested_source(thread_root_message_index, message_id, min_visible_event_index, Some(now))
     }
 
     pub fn ai_app_card_confirmation_reservation_source(
@@ -824,10 +827,11 @@ impl ChatEvents {
         user_id: UserId,
         confirmation_lease_generation: u64,
         confirm_payload_hash: [u8; 32],
-        now: TimestampMillis,
+        _now: TimestampMillis,
     ) -> OCResult<AiAppCardCapabilitySource> {
-        let source =
-            self.ai_app_card_confirmation_source(thread_root_message_index, message_id, min_visible_event_index, now)?;
+        // Expiry gates creation of a lease. Once reserved, the exact durable lease must remain
+        // inspectable until it is completed or explicitly aborted so OutcomeUnknown can reconcile.
+        let source = self.ai_app_card_attested_source(thread_root_message_index, message_id, min_visible_event_index, None)?;
         let Some((message, _)) = self.message_internal(min_visible_event_index, thread_root_message_index, message_id.into())
         else {
             return Err(OCErrorCode::MessageNotFound.into());
@@ -836,6 +840,7 @@ impl ChatEvents {
             return Err(OCErrorCode::MessageNotFound.into());
         };
         if card.confirmation_reserved_by != Some(user_id)
+            || card.confirmation_reserved_at.is_none()
             || card.confirmation_lease_generation != confirmation_lease_generation
             || card.confirmation_payload_hash != Some(confirm_payload_hash)
         {
@@ -849,7 +854,7 @@ impl ChatEvents {
         thread_root_message_index: Option<MessageIndex>,
         message_id: MessageId,
         min_visible_event_index: EventIndex,
-        now: TimestampMillis,
+        reject_expired_at: Option<TimestampMillis>,
     ) -> OCResult<AiAppCardCapabilitySource> {
         let Some((message, _)) = self.message_internal(min_visible_event_index, thread_root_message_index, message_id.into())
         else {
@@ -858,7 +863,7 @@ impl ChatEvents {
         let MessageContentInternal::ActionCard(card) = message.content else {
             return Err(OCErrorCode::MessageNotFound.into());
         };
-        if !matches!(card.state, ActionCardState::Pending) || card.is_expired(now) {
+        if !matches!(card.state, ActionCardState::Pending) || reject_expired_at.is_some_and(|now| card.is_expired(now)) {
             return Err(OCErrorCode::NoChange.into());
         }
         let (Some(app_id), Some(app_revision)) = (card.app_id, card.app_revision) else {
@@ -926,6 +931,7 @@ impl ChatEvents {
                 confirmed_by: args.user_id,
                 content_hash: card.app_content_hash,
                 confirmation_lease_generation: card.confirmation_lease_generation,
+                confirmation_grant_hash: card.confirmation_grant_hash,
                 inbox_canister_id: card.inbox_canister_id.clone(),
             }),
             _ => None,
@@ -1003,6 +1009,7 @@ impl ChatEvents {
                     confirmed_by: user_id,
                     content_hash: card.app_content_hash,
                     confirmation_lease_generation: card.confirmation_lease_generation,
+                    confirmation_grant_hash: card.confirmation_grant_hash,
                     inbox_canister_id: card.inbox_canister_id,
                 }))
             },
@@ -1011,6 +1018,83 @@ impl ChatEvents {
             Err(UpdateEventError::NoChange(error)) => Err(error.into()),
             Err(UpdateEventError::NotFound) => Err(OCErrorCode::MessageNotFound.into()),
         }
+    }
+
+    /// Persists that UserIndex consumed a one-use grant for this exact pending lease. Callers may
+    /// use the stored digest only to skip re-consuming the same bearer while reconciling an
+    /// ambiguous deposit; actor, message, generation, and payload all remain independently bound.
+    #[expect(clippy::too_many_arguments)]
+    pub fn mark_action_card_confirmation_grant_consumed(
+        &mut self,
+        thread_root_message_index: Option<MessageIndex>,
+        message_id: MessageId,
+        min_visible_event_index: EventIndex,
+        user_id: UserId,
+        confirmation_lease_generation: u64,
+        confirm_payload_hash: [u8; 32],
+        confirmation_grant_hash: [u8; 32],
+        now: TimestampMillis,
+    ) -> OCResult {
+        match self.update_message(
+            thread_root_message_index,
+            message_id.into(),
+            min_visible_event_index,
+            now,
+            false,
+            ChatEventType::MessageActionCardResponse,
+            |message, _| {
+                let MessageContentInternal::ActionCard(card) = &mut message.content else {
+                    return Err(UpdateEventError::NotFound);
+                };
+                if !card.mark_confirmation_grant_consumed_for_lease(
+                    user_id,
+                    confirmation_lease_generation,
+                    confirm_payload_hash,
+                    confirmation_grant_hash,
+                ) {
+                    return Err(UpdateEventError::NoChange(OCErrorCode::InvalidRequest));
+                }
+                Ok(())
+            },
+        ) {
+            Ok(_) => Ok(()),
+            Err(UpdateEventError::NoChange(error)) => Err(error.into()),
+            Err(UpdateEventError::NotFound) => Err(OCErrorCode::MessageNotFound.into()),
+        }
+    }
+
+    /// Returns the persisted grant digest for one exact pending lease. This is intentionally a
+    /// read of durable chat state rather than a callback-local flag: concurrent retries can race a
+    /// one-use grant consumption, and the loser must observe the winner's marker before deciding
+    /// whether the lease may be released.
+    #[expect(clippy::too_many_arguments)]
+    pub fn action_card_confirmation_grant_hash_for_lease(
+        &self,
+        thread_root_message_index: Option<MessageIndex>,
+        message_id: MessageId,
+        min_visible_event_index: EventIndex,
+        user_id: UserId,
+        confirmation_lease_generation: u64,
+        confirm_payload_hash: [u8; 32],
+        now: TimestampMillis,
+    ) -> OCResult<Option<[u8; 32]>> {
+        self.ai_app_card_confirmation_reservation_source(
+            thread_root_message_index,
+            message_id,
+            min_visible_event_index,
+            user_id,
+            confirmation_lease_generation,
+            confirm_payload_hash,
+            now,
+        )?;
+        let Some((message, _)) = self.message_internal(min_visible_event_index, thread_root_message_index, message_id.into())
+        else {
+            return Err(OCErrorCode::MessageNotFound.into());
+        };
+        let MessageContentInternal::ActionCard(card) = message.content else {
+            return Err(OCErrorCode::MessageNotFound.into());
+        };
+        Ok(card.confirmation_grant_hash)
     }
 
     /// Commits a previously reserved confirmation and emits the normal message update notification.
@@ -1050,7 +1134,8 @@ impl ChatEvents {
         }
     }
 
-    /// Releases the caller's reservation after a failed outbound delivery.
+    /// Unscoped legacy release. Safe only when the caller proves it created the reservation in the
+    /// same atomic execution and has not awaited; async handlers must preserve reused leases.
     pub fn abort_action_card_confirm(
         &mut self,
         thread_root_message_index: Option<MessageIndex>,
@@ -1071,6 +1156,44 @@ impl ChatEvents {
                     return Err(UpdateEventError::NotFound);
                 };
                 if card.abort_confirmation(user_id) {
+                    Ok(())
+                } else {
+                    Err(UpdateEventError::NoChange(OCErrorCode::NoChange))
+                }
+            },
+        ) {
+            Ok(_) => Ok(()),
+            Err(UpdateEventError::NoChange(error)) => Err(error.into()),
+            Err(UpdateEventError::NotFound) => Err(OCErrorCode::MessageNotFound.into()),
+        }
+    }
+
+    /// Releases only one exact lease generation and payload. This still cannot distinguish
+    /// concurrent sibling requests sharing that lease, so handlers must not call it after an await
+    /// or after reusing a reservation they did not prove they created.
+    #[expect(clippy::too_many_arguments)]
+    pub fn abort_action_card_confirm_for_lease(
+        &mut self,
+        thread_root_message_index: Option<MessageIndex>,
+        message_id: MessageId,
+        min_visible_event_index: EventIndex,
+        user_id: UserId,
+        confirmation_lease_generation: u64,
+        confirm_payload_hash: [u8; 32],
+        now: TimestampMillis,
+    ) -> OCResult {
+        match self.update_message(
+            thread_root_message_index,
+            message_id.into(),
+            min_visible_event_index,
+            now,
+            false,
+            ChatEventType::MessageActionCardResponse,
+            |message, _| {
+                let MessageContentInternal::ActionCard(card) = &mut message.content else {
+                    return Err(UpdateEventError::NotFound);
+                };
+                if card.abort_confirmation_for_lease(user_id, confirmation_lease_generation, confirm_payload_hash) {
                     Ok(())
                 } else {
                     Err(UpdateEventError::NoChange(OCErrorCode::NoChange))
@@ -1118,6 +1241,13 @@ impl ChatEvents {
                 card.state = new_state.clone();
                 card.responded_by = Some(responded_by);
                 card.responded_at = Some(responded_at);
+                // The other participant may have reserved its mirrored copy before this winning
+                // status arrived. The central UserIndex slot ensures that reservation never
+                // dispatched; clear its private lease metadata as the terminal state converges.
+                card.confirmation_reserved_by = None;
+                card.confirmation_reserved_at = None;
+                card.confirmation_payload_hash = None;
+                card.confirmation_grant_hash = None;
                 Ok(())
             },
         ) {
@@ -3178,6 +3308,9 @@ pub struct ActionCardDeposit {
     pub confirmed_by: UserId,
     pub content_hash: Option<[u8; 32]>,
     pub confirmation_lease_generation: u64,
+    /// Domain-separated digest of the grant consumed for this exact pending lease. Only an exact
+    /// bearer match may use the retry fast path after an ambiguous delivery.
+    pub confirmation_grant_hash: Option<[u8; 32]>,
     // Per-app inbox override carried from the card; None routes to the global action_inbox.
     pub inbox_canister_id: Option<CanisterId>,
 }
@@ -3513,7 +3646,7 @@ mod action_card_security_tests {
     }
 
     #[test]
-    fn private_capability_requires_a_pending_fully_attested_multi_user_card() {
+    fn private_capability_requires_a_pending_fully_attested_card() {
         let now = 100;
         let group = Chat::Group(chat_id(5));
         let (events, message_id) = events_with_card(group, card(true, true), now);
@@ -3547,12 +3680,25 @@ mod action_card_security_tests {
             );
         }
 
+        // Direct chats use the same trusted card source. User-canister relay authorization is what
+        // replaces the GroupIndex authority boundary; raw/coordinate-only cards still fail here.
         let (direct, message_id) = events_with_card(Chat::Direct(chat_id(6)), card(true, true), now);
-        assert!(
-            direct
-                .ai_app_card_capability_source(None, message_id, EventIndex::default(), now, true)
-                .is_err()
-        );
+        let source = direct
+            .ai_app_card_capability_source(None, message_id, EventIndex::default(), now, true)
+            .expect("a fully attested pending direct card should yield its bound relay source");
+        assert_eq!(source.app_id, 7);
+        assert_eq!(source.app_revision, 11);
+        assert_eq!(source.action_id, "sample.action");
+        assert_eq!(source.content_hash, [9; 32]);
+
+        for content in [card(false, false), card(true, false)] {
+            let (direct, message_id) = events_with_card(Chat::Direct(chat_id(7)), content, now);
+            assert!(
+                direct
+                    .ai_app_card_capability_source(None, message_id, EventIndex::default(), now, true)
+                    .is_err()
+            );
+        }
 
         let MessageContentInternal::ActionCard(mut expired) = card(true, true) else {
             unreachable!();
@@ -3567,12 +3713,367 @@ mod action_card_security_tests {
     }
 
     #[test]
-    fn app_confirmation_is_explicitly_out_of_scope_in_direct_chats() {
+    fn direct_app_confirmation_requires_full_trusted_attestation() {
         let MessageContentInternal::ActionCard(verified) = card(true, true) else {
             unreachable!();
         };
+        let MessageContentInternal::ActionCard(coordinates_only) = card(true, false) else {
+            unreachable!();
+        };
+        let MessageContentInternal::ActionCard(raw) = card(false, false) else {
+            unreachable!();
+        };
 
-        assert!(app_card_confirmation_is_forbidden(&verified, Chat::Direct(chat_id(2))));
+        assert!(!app_card_confirmation_is_forbidden(&verified, Chat::Direct(chat_id(2))));
+        assert!(app_card_confirmation_is_forbidden(
+            &coordinates_only,
+            Chat::Direct(chat_id(2))
+        ));
+        assert!(app_card_confirmation_is_forbidden(&raw, Chat::Direct(chat_id(2))));
+    }
+
+    #[test]
+    fn direct_edited_confirmation_reservation_is_payload_bound_and_completes_exactly_once() {
+        let now = 100;
+        let confirmer: UserId = Principal::from_slice(&[41]).into();
+        let requested_payload_hash = [0xCC; 32];
+        let (mut events, message_id) = events_with_card(Chat::Direct(chat_id(8)), card(true, true), now);
+
+        let first = events
+            .reserve_action_card_confirm(
+                None,
+                message_id,
+                EventIndex::default(),
+                confirmer,
+                Some(requested_payload_hash),
+                now,
+            )
+            .expect("a fully attested direct app card should reserve an edited confirmation")
+            .expect("the app-bound payload must produce a deposit instruction");
+        assert_eq!(first.confirm_payload_hash, requested_payload_hash);
+        assert_eq!(first.content_hash, Some([9; 32]));
+        assert!(first.app_verified);
+
+        // An identical retry is the same durable delivery attempt, never a second lease/deposit.
+        let retry = events
+            .reserve_action_card_confirm(
+                None,
+                message_id,
+                EventIndex::default(),
+                confirmer,
+                Some(requested_payload_hash),
+                now + 1,
+            )
+            .expect("an identical retry should reconcile the existing reservation")
+            .expect("the retry must return the exact same deposit instruction");
+        assert_eq!(retry.confirmation_lease_generation, first.confirmation_lease_generation);
+        assert_eq!(retry.confirm_payload_hash, first.confirm_payload_hash);
+        assert_eq!(retry.responded_at, first.responded_at);
+
+        let completed = events
+            .complete_action_card_confirm(
+                None,
+                message_id,
+                EventIndex::default(),
+                confirmer,
+                first.confirmation_lease_generation,
+                requested_payload_hash,
+                now + 2,
+            )
+            .expect("one successful downstream deposit should commit the direct card");
+        assert!(matches!(completed.value.state, ActionCardState::Confirmed));
+        assert!(
+            events
+                .complete_action_card_confirm(
+                    None,
+                    message_id,
+                    EventIndex::default(),
+                    confirmer,
+                    first.confirmation_lease_generation,
+                    requested_payload_hash,
+                    now + 3,
+                )
+                .is_err(),
+            "the same successful deposit must never commit or notify twice"
+        );
+    }
+
+    #[test]
+    fn mirrored_winner_clears_a_losing_local_confirmation_reservation() {
+        let now = 100;
+        let local_confirmer: UserId = Principal::from_slice(&[51]).into();
+        let remote_winner: UserId = Principal::from_slice(&[52]).into();
+        let payload_hash = [0xDD; 32];
+        let grant_hash = ai_app_card_confirmation_grant_hash_v1(&[0xDE; types::AI_APP_CARD_TOKEN_BYTES]);
+        let (mut events, message_id) = events_with_card(Chat::Direct(chat_id(11)), card(true, true), now);
+
+        let reservation = events
+            .reserve_action_card_confirm(
+                None,
+                message_id,
+                EventIndex::default(),
+                local_confirmer,
+                Some(payload_hash),
+                now,
+            )
+            .unwrap()
+            .unwrap();
+        events
+            .mark_action_card_confirmation_grant_consumed(
+                None,
+                message_id,
+                EventIndex::default(),
+                local_confirmer,
+                reservation.confirmation_lease_generation,
+                payload_hash,
+                grant_hash,
+                now + 1,
+            )
+            .unwrap();
+
+        events
+            .apply_action_card_state(None, message_id, ActionCardState::Confirmed, remote_winner, now + 2, now + 2)
+            .unwrap();
+
+        let (message, _) = events
+            .message_internal(EventIndex::default(), None, message_id.into())
+            .unwrap();
+        let MessageContentInternal::ActionCard(card) = message.content else {
+            unreachable!()
+        };
+        assert_eq!(card.state, ActionCardState::Confirmed);
+        assert_eq!(card.responded_by, Some(remote_winner));
+        assert_eq!(card.confirmation_reserved_by, None);
+        assert_eq!(card.confirmation_reserved_at, None);
+        assert_eq!(card.confirmation_payload_hash, None);
+        assert_eq!(card.confirmation_grant_hash, None);
+        assert_eq!(
+            card.confirmation_lease_generation, reservation.confirmation_lease_generation,
+            "mirror convergence must not roll the monotonic lease generation backward"
+        );
+    }
+
+    #[test]
+    fn threaded_direct_card_uses_the_same_exact_confirmation_contract() {
+        let now = 100;
+        let confirmer: UserId = Principal::from_slice(&[45]).into();
+        let sender: UserId = Principal::from_slice(&[46]).into();
+        let payload_hash = [0xCD; 32];
+        let grant_hash = ai_app_card_confirmation_grant_hash_v1(&[0xAD; types::AI_APP_CARD_TOKEN_BYTES]);
+        let (mut events, root_message_id) = events_with_card(Chat::Direct(chat_id(10)), text(), now);
+        let root_message_index = events
+            .message_internal(EventIndex::default(), None, root_message_id.into())
+            .unwrap()
+            .0
+            .message_index;
+        let message_id = MessageId::from(78u64);
+        events.push_message::<NullEventPusher>(
+            PushMessageArgs {
+                sender,
+                thread_root_message_index: Some(root_message_index),
+                message_id,
+                content: card(true, true),
+                sender_context: None,
+                mentioned: Vec::new(),
+                replies_to: None,
+                forwarded: false,
+                sender_is_bot: false,
+                block_level_markdown: false,
+                og_previews: Vec::new(),
+                now,
+            },
+            None,
+        );
+
+        let reservation = events
+            .reserve_action_card_confirm(
+                Some(root_message_index),
+                message_id,
+                EventIndex::default(),
+                confirmer,
+                Some(payload_hash),
+                now,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(reservation.thread_root_message_index, Some(root_message_index));
+        events
+            .mark_action_card_confirmation_grant_consumed(
+                Some(root_message_index),
+                message_id,
+                EventIndex::default(),
+                confirmer,
+                reservation.confirmation_lease_generation,
+                payload_hash,
+                grant_hash,
+                now + 1,
+            )
+            .unwrap();
+        assert_eq!(
+            events
+                .action_card_confirmation_grant_hash_for_lease(
+                    Some(root_message_index),
+                    message_id,
+                    EventIndex::default(),
+                    confirmer,
+                    reservation.confirmation_lease_generation,
+                    payload_hash,
+                    now + 2,
+                )
+                .unwrap(),
+            Some(grant_hash)
+        );
+        let completed = events
+            .complete_action_card_confirm(
+                Some(root_message_index),
+                message_id,
+                EventIndex::default(),
+                confirmer,
+                reservation.confirmation_lease_generation,
+                payload_hash,
+                now + 2,
+            )
+            .unwrap();
+        assert!(matches!(completed.value.state, ActionCardState::Confirmed));
+    }
+
+    #[test]
+    fn consumed_grant_marker_is_reused_only_by_the_exact_durable_lease() {
+        let now = 100;
+        let confirmer: UserId = Principal::from_slice(&[42]).into();
+        let other: UserId = Principal::from_slice(&[43]).into();
+        let payload_hash = [0xCC; 32];
+        let grant_hash = ai_app_card_confirmation_grant_hash_v1(&[0xAB; types::AI_APP_CARD_TOKEN_BYTES]);
+        let different_grant_hash = ai_app_card_confirmation_grant_hash_v1(&[0xAC; types::AI_APP_CARD_TOKEN_BYTES]);
+        let (mut events, message_id) = events_with_card(Chat::Direct(other.into()), card(true, true), now);
+
+        let first = events
+            .reserve_action_card_confirm(None, message_id, EventIndex::default(), confirmer, Some(payload_hash), now)
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.confirmation_grant_hash, None);
+        assert!(
+            events
+                .mark_action_card_confirmation_grant_consumed(
+                    None,
+                    message_id,
+                    EventIndex::default(),
+                    confirmer,
+                    first.confirmation_lease_generation,
+                    payload_hash,
+                    grant_hash,
+                    now + 1,
+                )
+                .is_ok()
+        );
+        assert_eq!(
+            events
+                .action_card_confirmation_grant_hash_for_lease(
+                    None,
+                    message_id,
+                    EventIndex::default(),
+                    confirmer,
+                    first.confirmation_lease_generation,
+                    payload_hash,
+                    now + 2,
+                )
+                .unwrap(),
+            Some(grant_hash)
+        );
+
+        let retry = events
+            .reserve_action_card_confirm(
+                None,
+                message_id,
+                EventIndex::default(),
+                confirmer,
+                Some(payload_hash),
+                now + 2,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(retry.confirmation_lease_generation, first.confirmation_lease_generation);
+        assert_eq!(retry.confirmation_grant_hash, Some(grant_hash));
+        assert!(
+            events
+                .mark_action_card_confirmation_grant_consumed(
+                    None,
+                    message_id,
+                    EventIndex::default(),
+                    confirmer,
+                    first.confirmation_lease_generation,
+                    payload_hash,
+                    different_grant_hash,
+                    now + 3,
+                )
+                .is_err(),
+            "a different bearer cannot rebind an ambiguous lease"
+        );
+        assert!(
+            events
+                .abort_action_card_confirm_for_lease(
+                    None,
+                    message_id,
+                    EventIndex::default(),
+                    confirmer,
+                    first.confirmation_lease_generation + 1,
+                    payload_hash,
+                    now + 3,
+                )
+                .is_err(),
+            "a stale callback cannot release a different generation"
+        );
+        assert_eq!(
+            events
+                .action_card_confirmation_grant_hash_for_lease(
+                    None,
+                    message_id,
+                    EventIndex::default(),
+                    confirmer,
+                    first.confirmation_lease_generation,
+                    payload_hash,
+                    now + 3,
+                )
+                .unwrap(),
+            Some(grant_hash)
+        );
+    }
+
+    #[test]
+    fn exact_confirmation_lease_remains_reconcilable_after_card_expiry() {
+        let now = 100;
+        let confirmer: UserId = Principal::from_slice(&[44]).into();
+        let MessageContentInternal::ActionCard(mut expiring) = card(true, true) else {
+            unreachable!();
+        };
+        expiring.expires_at = Some(now);
+        let (mut events, message_id) =
+            events_with_card(Chat::Direct(chat_id(9)), MessageContentInternal::ActionCard(expiring), now);
+        let reservation = events
+            .reserve_action_card_confirm(None, message_id, EventIndex::default(), confirmer, None, now)
+            .unwrap()
+            .unwrap();
+
+        assert!(
+            events
+                .ai_app_card_confirmation_source(None, message_id, EventIndex::default(), now + 1)
+                .is_err(),
+            "expiry must still reject creation of new authorization"
+        );
+        assert!(
+            events
+                .ai_app_card_confirmation_reservation_source(
+                    None,
+                    message_id,
+                    EventIndex::default(),
+                    confirmer,
+                    reservation.confirmation_lease_generation,
+                    reservation.confirm_payload_hash,
+                    now + 1,
+                )
+                .is_ok(),
+            "the exact non-expiring lease must remain available for OutcomeUnknown reconciliation"
+        );
     }
 
     #[test]

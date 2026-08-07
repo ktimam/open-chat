@@ -891,6 +891,8 @@ export class UserIndexClient extends SingleCanisterMsgpackAgent {
             cancelAiAppLinkCodeResponse,
             UserIndexCancelAiAppLinkCodeArgs,
             UserIndexCancelAiAppLinkCodeResponse,
+            undefined,
+            { sensitive: true },
         );
     }
 
@@ -913,6 +915,8 @@ export class UserIndexClient extends SingleCanisterMsgpackAgent {
             createAiAppLinkCodeResponse,
             UserIndexCreateAiAppLinkCodeArgs,
             UserIndexCreateAiAppLinkCodeResponse,
+            undefined,
+            { sensitive: true },
         );
     }
 
@@ -939,6 +943,8 @@ export class UserIndexClient extends SingleCanisterMsgpackAgent {
             createAiAppCardProvenanceResponse,
             UserIndexCreateAiAppCardProvenanceArgs,
             UserIndexCreateAiAppCardProvenanceResponse,
+            undefined,
+            { sensitive: true },
         );
     }
 

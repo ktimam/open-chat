@@ -10,6 +10,9 @@ use types::AiAppCardContext;
 
 #[update(guard = "caller_is_local_child_canister", msgpack = true)]
 async fn c2c_consume_ai_app_card_confirmation_grant(args: Args) -> Response {
+    if matches!(args.chat, types::Chat::Direct(_)) && !args.authority.is_empty() {
+        return InvalidRequest("direct chat must not carry group route authority".to_string());
+    }
     let caller = ic_cdk::api::msg_caller();
     let caller_registration = read_state(|state| authoritative_child_registration(state, caller));
     let expected_user_id = args.user_id;

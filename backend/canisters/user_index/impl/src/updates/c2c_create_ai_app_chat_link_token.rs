@@ -20,6 +20,10 @@ async fn c2c_create_ai_app_chat_link_token(args: Args) -> Response {
         return Error("AI-app chat-link service temporarily unavailable".to_string());
     }
     let caller = ic_cdk::api::msg_caller();
+    let Some(admitted_account_lifecycle_epoch) = read_state(|state| state.data.users.account_lifecycle_epoch(&args.user_id))
+    else {
+        return NotAuthorized;
+    };
     // Reject locally saturated subjects before consuming one-time GroupIndex authority. The
     // insertion path repeats this check after the await, so concurrent requests remain bounded.
     if let Err(error) = mutate_state(|state| {
@@ -49,10 +53,18 @@ async fn c2c_create_ai_app_chat_link_token(args: Args) -> Response {
         }
         Chat::Direct(_) => {}
     }
-    mutate_state(|state| create_impl(args, caller, state))
+    mutate_state(|state| create_impl(args, caller, admitted_account_lifecycle_epoch, state))
 }
 
-fn create_impl(args: Args, issuer_local_user_index_canister_id: types::CanisterId, state: &mut RuntimeState) -> Response {
+fn create_impl(
+    args: Args,
+    issuer_local_user_index_canister_id: types::CanisterId,
+    admitted_account_lifecycle_epoch: u64,
+    state: &mut RuntimeState,
+) -> Response {
+    if state.data.users.account_lifecycle_epoch(&args.user_id) != Some(admitted_account_lifecycle_epoch) {
+        return AppUnavailable;
+    }
     let Some(app) = state.data.ai_apps.get(args.app_id) else {
         return AppUnavailable;
     };
@@ -174,6 +186,7 @@ fn direct_route_is_current(args: &Args, caller: candid::Principal, state: &Runti
 mod tests {
     use super::*;
     use crate::Data;
+    use crate::model::user::User;
     use p256_key_pair::P256KeyPair;
     use rand::SeedableRng;
     use rand::rngs::StdRng;
@@ -201,6 +214,13 @@ mod tests {
         let now = env.now;
         let app_canister = candid::Principal::from_slice(&[8]);
         let mut data = Data::default();
+        data.users.add_test_user(User {
+            principal: env.caller,
+            user_id,
+            username: "chat-link-viewer".to_string(),
+            date_created: 10,
+            ..Default::default()
+        });
         data.ai_app_scoped_identity_key
             .ensure_initialized(&mut StdRng::seed_from_u64(44))
             .unwrap();
@@ -216,7 +236,7 @@ mod tests {
         };
 
         let issuer = candid::Principal::from_slice(&[30]);
-        assert!(matches!(create_impl(args, issuer, &mut state), AppUnavailable));
+        assert!(matches!(create_impl(args, issuer, 0, &mut state), AppUnavailable));
         let key = P256KeyPair::new(&mut StdRng::seed_from_u64(45)).public_key_pem().to_string();
         state.data.ai_app_user_keys.set(user_id, app.id, key).unwrap();
         let stale = Args {
@@ -226,7 +246,7 @@ mod tests {
             app_revision: app.updated.saturating_add(1),
             authority: ByteBuf::new(),
         };
-        assert!(matches!(create_impl(stale, issuer, &mut state), AppUnavailable));
+        assert!(matches!(create_impl(stale, issuer, 0, &mut state), AppUnavailable));
         let exact = Args {
             user_id,
             chat: Chat::Group(candid::Principal::from_slice(&[20]).into()),
@@ -234,7 +254,54 @@ mod tests {
             app_revision: app.updated,
             authority: ByteBuf::new(),
         };
-        assert!(matches!(create_impl(exact, issuer, &mut state), Success(_)));
+        assert!(matches!(create_impl(exact, issuer, 0, &mut state), Success(_)));
+    }
+
+    #[test]
+    fn group_chat_link_does_not_mint_for_a_recreated_account_after_authority_await() {
+        let env = TestEnv::default();
+        let viewer: UserId = env.caller.into();
+        let app_owner: UserId = candid::Principal::from_slice(&[70]).into();
+        let app_canister = candid::Principal::from_slice(&[71]);
+        let mut data = Data::default();
+        data.users.add_test_user(User {
+            principal: env.caller,
+            user_id: viewer,
+            username: "incumbent-chat-link-viewer".to_string(),
+            date_created: 10,
+            ..Default::default()
+        });
+        data.ai_app_scoped_identity_key
+            .ensure_initialized(&mut StdRng::seed_from_u64(46))
+            .unwrap();
+        let app = data.ai_apps.register(app_owner, manifest(app_canister), 10, true).unwrap();
+        assert!(data.ai_apps.publish(app.id, 11));
+        let key = P256KeyPair::new(&mut StdRng::seed_from_u64(47)).public_key_pem().to_string();
+        data.ai_app_user_keys.set(viewer, app.id, key.clone()).unwrap();
+        let args = Args {
+            user_id: viewer,
+            chat: Chat::Group(candid::Principal::from_slice(&[72]).into()),
+            app_id: app.id,
+            app_revision: data.ai_apps.get(app.id).unwrap().updated,
+            authority: ByteBuf::new(),
+        };
+        let mut state = RuntimeState::new(Box::new(env), data);
+
+        assert!(state.data.users.delete_user(viewer, 20).is_some());
+        state.delete_ai_app_user_state(viewer, 20);
+        state.data.users.add_test_user(User {
+            principal: candid::Principal::from(viewer),
+            user_id: viewer,
+            username: "recreated-chat-link-viewer".to_string(),
+            date_created: 30,
+            ..Default::default()
+        });
+        state.data.ai_app_user_keys.set(viewer, app.id, key).unwrap();
+
+        assert!(matches!(
+            create_impl(args, candid::Principal::from_slice(&[73]), 0, &mut state),
+            AppUnavailable
+        ));
     }
 
     #[test]
@@ -246,7 +313,7 @@ mod tests {
         data.local_index_map.add_index(home_lui, types::BuildVersion::default());
         data.local_index_map.add_index(other_lui, types::BuildVersion::default());
         data.local_index_map.add_user(home_lui, viewer);
-        let state = RuntimeState::new(Box::new(TestEnv::default()), data);
+        let mut state = RuntimeState::new(Box::new(TestEnv::default()), data);
         let args = Args {
             user_id: viewer,
             chat: Chat::Direct(candid::Principal::from_slice(&[24]).into()),
@@ -256,5 +323,16 @@ mod tests {
         };
         assert!(direct_route_is_current(&args, home_lui, &state));
         assert!(!direct_route_is_current(&args, other_lui, &state));
+
+        assert!(state.data.local_index_map.remove_user(&viewer));
+        assert!(state.data.local_index_map.add_user(other_lui, viewer));
+        assert!(
+            !direct_route_is_current(&args, home_lui, &state),
+            "a stale former home LUI must lose authority immediately"
+        );
+        assert!(
+            direct_route_is_current(&args, other_lui, &state),
+            "only the newly current home LUI may authorize the direct route"
+        );
     }
 }

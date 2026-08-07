@@ -1,6 +1,7 @@
 use candid::Principal;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::ops::Bound::{Excluded, Unbounded};
 use types::{AiAppId, TimestampMillis};
 
 /// A downstream call is bounded to ten seconds. The durable lease deliberately remains three times
@@ -26,13 +27,86 @@ pub const ACTION_DELIVERY_IDEMPOTENCY_HORIZON_MS: u64 = 30 * 24 * 60 * 60 * 1_00
 pub const MAX_ATTEMPTS_GLOBAL: usize = 400_000;
 pub const MAX_ATTEMPTS_PER_APP: usize = 200_000;
 
+// Index maintenance is deliberately split between user-facing calls and the existing outbox timer.
+// This bounds confirmation latency while allowing a legacy snapshot to converge quickly in the
+// background without one upgrade or update scanning all 400k retained attempts.
+const ACTION_DELIVERY_INDEX_VERSION: u8 = 1;
+const HOT_PATH_INDEX_REBUILD_BATCH: usize = 64;
+const BACKGROUND_INDEX_REBUILD_BATCH: usize = 1_024;
+const TERMINAL_PRUNE_BATCH: usize = 64;
+
+pub type ActionDeliverySlotId = [u8; 32];
 pub type ActionDeliveryAttemptId = [u8; 32];
 
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize)]
 pub struct ActionDeliveryOutbox {
     entries: BTreeMap<ActionDeliveryAttemptId, ActionDeliveryEntry>,
+    /// Only non-default (currently direct-chat) slots need a second index. Group/channel entries
+    /// continue to use their exact attempt id as the slot without duplicating up to 400k hashes.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    logical_slots: BTreeMap<ActionDeliverySlotId, ActionDeliveryAttemptId>,
     #[serde(default)]
     usage: ActionDeliveryUsage,
+    /// Time-ordered indexes make terminal cleanup and retry scheduling independent of retained
+    /// history size. They are rebuilt incrementally for snapshots written before version 1.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    terminal_expirations: BTreeMap<(TimestampMillis, ActionDeliveryAttemptId), ()>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    retry_schedule: BTreeMap<(TimestampMillis, ActionDeliveryAttemptId), ()>,
+    #[serde(default)]
+    index_state: ActionDeliveryIndexState,
+    #[cfg(test)]
+    #[serde(skip)]
+    entry_scan_visits: usize,
+}
+
+impl Default for ActionDeliveryOutbox {
+    fn default() -> Self {
+        Self {
+            entries: BTreeMap::new(),
+            logical_slots: BTreeMap::new(),
+            usage: ActionDeliveryUsage::default(),
+            terminal_expirations: BTreeMap::new(),
+            retry_schedule: BTreeMap::new(),
+            index_state: ActionDeliveryIndexState::current(),
+            #[cfg(test)]
+            entry_scan_visits: 0,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Default)]
+struct ActionDeliveryIndexState {
+    version: u8,
+    #[serde(default)]
+    rebuild_phase: ActionDeliveryIndexRebuildPhase,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rebuild_cursor: Option<ActionDeliveryAttemptId>,
+    #[serde(default)]
+    rebuilt_usage: ActionDeliveryUsage,
+    /// Captured once when a legacy migration starts. A missing/partial legacy usage index cannot
+    /// authorize fresh capacity until the bounded rebuild completes.
+    #[serde(default)]
+    active_usage_trusted: bool,
+}
+
+impl ActionDeliveryIndexState {
+    fn current() -> Self {
+        Self {
+            version: ACTION_DELIVERY_INDEX_VERSION,
+            active_usage_trusted: true,
+            ..Self::default()
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+enum ActionDeliveryIndexRebuildPhase {
+    #[default]
+    Uninitialized,
+    Clearing,
+    Scanning,
+    Failed,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -61,6 +135,10 @@ struct PendingUsage {
 
 #[derive(Serialize, Deserialize)]
 struct ActionDeliveryEntry {
+    /// Missing only in state written before logical slots existed; such entries use their exact
+    /// attempt id as their slot, preserving the legacy non-direct behavior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    logical_slot_id: Option<ActionDeliverySlotId>,
     app_id: AiAppId,
     attempt_created_at: TimestampMillis,
     /// Exact MessagePack request bytes sent to `c2c_notify_actions_msgpack`. Empty only while a
@@ -121,6 +199,7 @@ pub enum ActionDeliveryOutboxError {
     MissingPreparedRequest,
     AttemptExpired,
     AttemptInFuture,
+    IndexRebuilding,
 }
 
 impl ActionDeliveryOutboxError {
@@ -134,6 +213,7 @@ impl ActionDeliveryOutboxError {
             Self::MissingPreparedRequest => "action delivery request was not durably prepared",
             Self::AttemptExpired => "action delivery attempt has no complete network window before idempotency expiry",
             Self::AttemptInFuture => "action delivery attempt timestamp is in the future",
+            Self::IndexRebuilding => "action delivery outbox indexes are being rebuilt",
         }
     }
 }
@@ -153,42 +233,48 @@ pub struct ActionDeliveryOutboxMetrics {
     pub pending_count_rejections: u64,
     pub pending_byte_rejections: u64,
     pub expired_before_dispatch: u64,
+    pub index_rebuilding: bool,
+    pub index_rebuild_failed: bool,
 }
 
 impl ActionDeliveryUsage {
-    fn rebuilt(entries: &BTreeMap<ActionDeliveryAttemptId, ActionDeliveryEntry>, previous: &ActionDeliveryUsage) -> Self {
-        let mut usage = Self {
+    fn counters_only(previous: &ActionDeliveryUsage) -> Self {
+        Self {
             attempt_capacity_rejections: previous.attempt_capacity_rejections,
             pending_count_rejections: previous.pending_count_rejections,
             pending_byte_rejections: previous.pending_byte_rejections,
             expired_before_dispatch: previous.expired_before_dispatch,
             ..Self::default()
-        };
-        for entry in entries.values() {
-            usage.add_entry(entry);
         }
-        usage
     }
 
     fn add_entry(&mut self, entry: &ActionDeliveryEntry) {
+        self.add_values(entry.app_id, entry.state, entry.reserved_bytes);
+    }
+
+    fn add_values(&mut self, app_id: AiAppId, state: ActionDeliveryState, reserved_bytes: usize) {
         self.total_attempts += 1;
-        *self.attempts_by_app.entry(entry.app_id).or_default() += 1;
-        self.add_state(entry.state);
-        if is_pending(entry) {
+        *self.attempts_by_app.entry(app_id).or_default() += 1;
+        self.add_state(state);
+        if is_pending_state(state) {
             self.pending_count += 1;
-            self.pending_bytes = self.pending_bytes.saturating_add(entry.reserved_bytes);
-            let app = self.pending_by_app.entry(entry.app_id).or_default();
+            self.pending_bytes = self.pending_bytes.saturating_add(reserved_bytes);
+            let app = self.pending_by_app.entry(app_id).or_default();
             app.count += 1;
-            app.bytes = app.bytes.saturating_add(entry.reserved_bytes);
+            app.bytes = app.bytes.saturating_add(reserved_bytes);
         }
     }
 
     fn remove_entry(&mut self, entry: &ActionDeliveryEntry) {
+        self.remove_values(entry.app_id, entry.state, entry.reserved_bytes);
+    }
+
+    fn remove_values(&mut self, app_id: AiAppId, state: ActionDeliveryState, reserved_bytes: usize) {
         self.total_attempts = self.total_attempts.saturating_sub(1);
-        decrement_map_count(&mut self.attempts_by_app, entry.app_id);
-        self.remove_state(entry.state);
-        if is_pending(entry) {
-            self.remove_pending(entry.app_id, entry.reserved_bytes);
+        decrement_map_count(&mut self.attempts_by_app, app_id);
+        self.remove_state(state);
+        if is_pending_state(state) {
+            self.remove_pending(app_id, reserved_bytes);
         }
     }
 
@@ -280,40 +366,67 @@ impl ActionDeliveryOutbox {
         attempt_created_at: TimestampMillis,
         now: TimestampMillis,
     ) -> Result<ActionDeliveryStart, ActionDeliveryOutboxError> {
-        self.rebuild_usage_if_required();
+        self.start_in_slot(attempt_id, attempt_id, app_id, reserved_bytes, attempt_created_at, now)
+    }
+
+    /// Starts `attempt_id` after atomically claiming `slot_id`. An exact retry may observe or
+    /// replay the winning attempt, but another attempt can never prepare or dispatch from the same
+    /// semantic slot during the idempotency horizon.
+    pub fn start_in_slot(
+        &mut self,
+        slot_id: ActionDeliverySlotId,
+        attempt_id: ActionDeliveryAttemptId,
+        app_id: AiAppId,
+        reserved_bytes: usize,
+        attempt_created_at: TimestampMillis,
+        now: TimestampMillis,
+    ) -> Result<ActionDeliveryStart, ActionDeliveryOutboxError> {
+        self.advance_index_rebuild(HOT_PATH_INDEX_REBUILD_BATCH)?;
         self.prune_terminal(now);
         validate_request_size(reserved_bytes)?;
 
-        if self.entries.contains_key(&attempt_id) {
+        if let Some(entry) = self.entries.get(&attempt_id) {
+            let existing_slot_id = entry.logical_slot_id.unwrap_or(attempt_id);
+            if existing_slot_id != slot_id {
+                return Err(ActionDeliveryOutboxError::IdentityCollision);
+            }
+            if self.indexes_ready() && slot_id != attempt_id && self.logical_slots.get(&slot_id) != Some(&attempt_id) {
+                return Err(ActionDeliveryOutboxError::IdentityCollision);
+            }
             return self.start_existing(attempt_id, app_id, reserved_bytes, attempt_created_at, now);
+        }
+
+        if slot_id != attempt_id {
+            if !self.indexes_ready() {
+                return Err(ActionDeliveryOutboxError::IndexRebuilding);
+            }
+            if self.logical_slots.contains_key(&slot_id) {
+                return Err(ActionDeliveryOutboxError::IdentityCollision);
+            }
+        }
+        if !self.index_state.active_usage_trusted {
+            return Err(ActionDeliveryOutboxError::IndexRebuilding);
         }
 
         if attempt_created_at > now {
             return Err(ActionDeliveryOutboxError::AttemptInFuture);
         }
         if !delivery_window_open(attempt_created_at, now) {
-            self.usage.expired_before_dispatch = self.usage.expired_before_dispatch.saturating_add(1);
+            self.increment_expired_before_dispatch();
             return Err(ActionDeliveryOutboxError::AttemptExpired);
         }
         if let Err(error) = self.check_attempt_capacity(app_id) {
-            self.usage.attempt_capacity_rejections = self.usage.attempt_capacity_rejections.saturating_add(1);
+            self.increment_attempt_capacity_rejections();
             return Err(error);
         }
         if let Err(error) = self.check_pending_capacity(app_id, reserved_bytes, None) {
-            match error {
-                ActionDeliveryOutboxError::PendingCapacity => {
-                    self.usage.pending_count_rejections = self.usage.pending_count_rejections.saturating_add(1)
-                }
-                ActionDeliveryOutboxError::PendingByteCapacity => {
-                    self.usage.pending_byte_rejections = self.usage.pending_byte_rejections.saturating_add(1)
-                }
-                _ => {}
-            }
+            self.increment_pending_capacity_rejection(error);
             return Err(error);
         }
         self.entries.insert(
             attempt_id,
             ActionDeliveryEntry {
+                logical_slot_id: (slot_id != attempt_id).then_some(slot_id),
                 app_id,
                 attempt_created_at,
                 request: Vec::new(),
@@ -325,7 +438,10 @@ impl ActionDeliveryOutbox {
                 },
             },
         );
-        self.usage.add_entry(self.entries.get(&attempt_id).unwrap());
+        if slot_id != attempt_id {
+            self.logical_slots.insert(slot_id, attempt_id);
+        }
+        self.add_inserted_entry_to_usage(attempt_id);
         Ok(ActionDeliveryStart::Prepare { epoch: 1 })
     }
 
@@ -346,19 +462,14 @@ impl ActionDeliveryOutbox {
             ActionDeliveryState::Preparing { epoch, lease_started_at } if lease_expired(lease_started_at, now) => {
                 if !delivery_window_open(attempt_created_at, now) {
                     self.remove_attempt(&attempt_id);
-                    self.usage.expired_before_dispatch = self.usage.expired_before_dispatch.saturating_add(1);
+                    self.increment_expired_before_dispatch();
                     return Err(ActionDeliveryOutboxError::AttemptExpired);
                 }
+                if !self.index_state.active_usage_trusted {
+                    return Err(ActionDeliveryOutboxError::IndexRebuilding);
+                }
                 if let Err(error) = self.check_pending_capacity(app_id, reserved_bytes, Some(attempt_id)) {
-                    match error {
-                        ActionDeliveryOutboxError::PendingCapacity => {
-                            self.usage.pending_count_rejections = self.usage.pending_count_rejections.saturating_add(1)
-                        }
-                        ActionDeliveryOutboxError::PendingByteCapacity => {
-                            self.usage.pending_byte_rejections = self.usage.pending_byte_rejections.saturating_add(1)
-                        }
-                        _ => {}
-                    }
+                    self.increment_pending_capacity_rejection(error);
                     return Err(error);
                 }
                 let next_epoch = epoch.checked_add(1).ok_or(ActionDeliveryOutboxError::StaleEpoch)?;
@@ -372,30 +483,45 @@ impl ActionDeliveryOutbox {
                     lease_started_at: now,
                 };
                 self.usage.replace_pending_bytes(app_id, old_bytes, reserved_bytes);
+                if self.rebuild_has_scanned(&attempt_id) {
+                    self.index_state
+                        .rebuilt_usage
+                        .replace_pending_bytes(app_id, old_bytes, reserved_bytes);
+                }
                 Ok(ActionDeliveryStart::Prepare { epoch: next_epoch })
             }
             ActionDeliveryState::Preparing { .. } => Ok(ActionDeliveryStart::Pending),
             ActionDeliveryState::InFlight { epoch, lease_started_at } if lease_expired(lease_started_at, now) => {
                 if !delivery_window_open(attempt_created_at, now) {
                     self.remove_attempt(&attempt_id);
-                    self.usage.expired_before_dispatch = self.usage.expired_before_dispatch.saturating_add(1);
+                    self.increment_expired_before_dispatch();
                     return Err(ActionDeliveryOutboxError::AttemptExpired);
                 }
+                let old_state = self.entries.get(&attempt_id).unwrap().state;
                 begin_stored_retry(self.entries.get_mut(&attempt_id).unwrap(), epoch, now)?;
+                let new_state = self.entries.get(&attempt_id).unwrap().state;
+                self.replace_state_index(attempt_id, old_state, new_state);
                 Ok(ActionDeliveryStart::Dispatch)
             }
             ActionDeliveryState::InFlight { .. } => Ok(ActionDeliveryStart::Pending),
             ActionDeliveryState::OutcomeUnknown { epoch, retry_after } if now >= retry_after => {
                 if !delivery_window_open(attempt_created_at, now) {
                     self.remove_attempt(&attempt_id);
-                    self.usage.expired_before_dispatch = self.usage.expired_before_dispatch.saturating_add(1);
+                    self.increment_expired_before_dispatch();
                     return Err(ActionDeliveryOutboxError::AttemptExpired);
                 }
                 let entry = self.entries.get_mut(&attempt_id).unwrap();
                 let old_state = entry.state;
                 begin_stored_retry(entry, epoch, now)?;
-                self.usage
-                    .transition(app_id, old_state, entry.state, entry.reserved_bytes, entry.reserved_bytes);
+                let new_state = entry.state;
+                let entry_bytes = entry.reserved_bytes;
+                self.usage.transition(app_id, old_state, new_state, entry_bytes, entry_bytes);
+                if self.rebuild_has_scanned(&attempt_id) {
+                    self.index_state
+                        .rebuilt_usage
+                        .transition(app_id, old_state, new_state, entry_bytes, entry_bytes);
+                }
+                self.replace_state_index(attempt_id, old_state, new_state);
                 Ok(ActionDeliveryStart::Dispatch)
             }
             ActionDeliveryState::OutcomeUnknown { .. } => Ok(ActionDeliveryStart::Pending),
@@ -414,6 +540,7 @@ impl ActionDeliveryOutbox {
         request: Vec<u8>,
         now: TimestampMillis,
     ) -> Result<ActionDeliveryDispatch, ActionDeliveryOutboxError> {
+        self.advance_index_rebuild(HOT_PATH_INDEX_REBUILD_BATCH)?;
         validate_request_size(request.len())?;
         let entry = self
             .entries
@@ -427,7 +554,7 @@ impl ActionDeliveryOutbox {
             return Err(ActionDeliveryOutboxError::InvalidRequestSize);
         }
         if !delivery_window_open(entry.attempt_created_at, now) {
-            self.usage.expired_before_dispatch = self.usage.expired_before_dispatch.saturating_add(1);
+            self.increment_expired_before_dispatch();
             return Err(ActionDeliveryOutboxError::AttemptExpired);
         }
         let old_state = entry.state;
@@ -437,17 +564,21 @@ impl ActionDeliveryOutbox {
             epoch,
             lease_started_at: now,
         };
-        self.usage.transition(
-            entry.app_id,
-            old_state,
-            entry.state,
-            entry.reserved_bytes,
-            entry.reserved_bytes,
-        );
-        dispatch_for(attempt_id, entry)
+        let app_id = entry.app_id;
+        let new_state = entry.state;
+        let entry_bytes = entry.reserved_bytes;
+        self.usage.transition(app_id, old_state, new_state, entry_bytes, entry_bytes);
+        if self.rebuild_has_scanned(&attempt_id) {
+            self.index_state
+                .rebuilt_usage
+                .transition(app_id, old_state, new_state, entry_bytes, entry_bytes);
+        }
+        self.replace_state_index(attempt_id, old_state, new_state);
+        dispatch_for(attempt_id, self.entries.get(&attempt_id).unwrap())
     }
 
     pub fn abort_preparation(&mut self, attempt_id: ActionDeliveryAttemptId, epoch: u64) {
+        let _ = self.advance_index_rebuild(HOT_PATH_INDEX_REBUILD_BATCH);
         let remove = self.entries.get(&attempt_id).is_some_and(
             |entry| matches!(entry.state, ActionDeliveryState::Preparing { epoch: current, .. } if current == epoch),
         );
@@ -473,22 +604,20 @@ impl ActionDeliveryOutbox {
         result: ActionDeliveryRemoteResult,
         now: TimestampMillis,
     ) -> Result<ActionDeliveryCompletion, ActionDeliveryOutboxError> {
-        let entry = self
+        self.advance_index_rebuild(HOT_PATH_INDEX_REBUILD_BATCH)?;
+        let state = self
             .entries
-            .get_mut(&attempt_id)
-            .ok_or(ActionDeliveryOutboxError::MissingPreparedRequest)?;
+            .get(&attempt_id)
+            .ok_or(ActionDeliveryOutboxError::MissingPreparedRequest)?
+            .state;
 
         if matches!(result, ActionDeliveryRemoteResult::Delivered) {
-            let old_state = entry.state;
-            let old_bytes = entry.reserved_bytes;
-            make_terminal(entry, ActionDeliveryState::Delivered { completed_at: now });
-            self.usage
-                .transition(entry.app_id, old_state, entry.state, old_bytes, entry.reserved_bytes);
+            self.make_attempt_terminal(attempt_id, ActionDeliveryState::Delivered { completed_at: now });
             self.prune_terminal(now);
             return Ok(ActionDeliveryCompletion::Delivered);
         }
 
-        let current_epoch = match entry.state {
+        let current_epoch = match state {
             ActionDeliveryState::InFlight { epoch, .. } => epoch,
             ActionDeliveryState::Delivered { .. } => return Ok(ActionDeliveryCompletion::Delivered),
             ActionDeliveryState::Rejected { .. } => return Ok(ActionDeliveryCompletion::Rejected),
@@ -503,27 +632,27 @@ impl ActionDeliveryOutbox {
         match result {
             ActionDeliveryRemoteResult::Delivered => unreachable!(),
             ActionDeliveryRemoteResult::Rejected => {
-                let old_state = entry.state;
-                let old_bytes = entry.reserved_bytes;
-                make_terminal(entry, ActionDeliveryState::Rejected { completed_at: now });
-                self.usage
-                    .transition(entry.app_id, old_state, entry.state, old_bytes, entry.reserved_bytes);
+                self.make_attempt_terminal(attempt_id, ActionDeliveryState::Rejected { completed_at: now });
                 self.prune_terminal(now);
                 Ok(ActionDeliveryCompletion::Rejected)
             }
             ActionDeliveryRemoteResult::OutcomeUnknown => {
-                let old_state = entry.state;
-                entry.state = ActionDeliveryState::OutcomeUnknown {
-                    epoch,
-                    retry_after: retry_due_at(now),
+                let (app_id, old_state, new_state, entry_bytes) = {
+                    let entry = self.entries.get_mut(&attempt_id).unwrap();
+                    let old_state = entry.state;
+                    entry.state = ActionDeliveryState::OutcomeUnknown {
+                        epoch,
+                        retry_after: retry_due_at(now),
+                    };
+                    (entry.app_id, old_state, entry.state, entry.reserved_bytes)
                 };
-                self.usage.transition(
-                    entry.app_id,
-                    old_state,
-                    entry.state,
-                    entry.reserved_bytes,
-                    entry.reserved_bytes,
-                );
+                self.usage.transition(app_id, old_state, new_state, entry_bytes, entry_bytes);
+                if self.rebuild_has_scanned(&attempt_id) {
+                    self.index_state
+                        .rebuilt_usage
+                        .transition(app_id, old_state, new_state, entry_bytes, entry_bytes);
+                }
+                self.replace_state_index(attempt_id, old_state, new_state);
                 Ok(ActionDeliveryCompletion::OutcomeUnknown)
             }
         }
@@ -531,53 +660,75 @@ impl ActionDeliveryOutbox {
 
     /// Acquires exactly one due stored request for the single-flight background delivery job.
     pub fn begin_due_retry(&mut self, now: TimestampMillis) -> Option<ActionDeliveryDispatch> {
-        self.rebuild_usage_if_required();
+        if !self
+            .advance_index_rebuild(BACKGROUND_INDEX_REBUILD_BATCH)
+            .ok()
+            .unwrap_or(false)
+        {
+            return None;
+        }
+        self.prune_terminal(now);
+        if !self.indexes_ready() {
+            return None;
+        }
         loop {
-            let attempt_id = self
-                .entries
-                .iter()
-                .filter_map(|(attempt_id, entry)| retry_due(entry).filter(|due| *due <= now).map(|due| (due, *attempt_id)))
-                .min()
-                .map(|(_, attempt_id)| attempt_id)?;
-            let entry = self.entries.get(&attempt_id).unwrap();
+            let ((due_at, attempt_id), _) = self.retry_schedule.first_key_value()?;
+            let due_at = *due_at;
+            let attempt_id = *attempt_id;
+            if due_at > now {
+                return None;
+            }
+            let Some(entry) = self.entries.get(&attempt_id) else {
+                self.invalidate_indexes_for_rebuild();
+                return None;
+            };
+            if retry_due_state(entry.state) != Some(due_at) {
+                self.invalidate_indexes_for_rebuild();
+                return None;
+            }
             if !delivery_window_open(entry.attempt_created_at, now) {
                 self.remove_attempt(&attempt_id);
-                self.usage.expired_before_dispatch = self.usage.expired_before_dispatch.saturating_add(1);
+                self.increment_expired_before_dispatch();
                 continue;
             }
-            let entry = self.entries.get_mut(&attempt_id).unwrap();
             let epoch = match entry.state {
                 ActionDeliveryState::InFlight { epoch, .. } | ActionDeliveryState::OutcomeUnknown { epoch, .. } => epoch,
                 _ => return None,
             };
-            let old_state = entry.state;
-            begin_stored_retry(entry, epoch, now).ok()?;
-            self.usage.transition(
-                entry.app_id,
-                old_state,
-                entry.state,
-                entry.reserved_bytes,
-                entry.reserved_bytes,
-            );
-            return dispatch_for(attempt_id, entry).ok();
+            let (app_id, old_state, new_state, entry_bytes) = {
+                let entry = self.entries.get_mut(&attempt_id).unwrap();
+                let old_state = entry.state;
+                begin_stored_retry(entry, epoch, now).ok()?;
+                (entry.app_id, old_state, entry.state, entry.reserved_bytes)
+            };
+            self.usage.transition(app_id, old_state, new_state, entry_bytes, entry_bytes);
+            self.replace_state_index(attempt_id, old_state, new_state);
+            return dispatch_for(attempt_id, self.entries.get(&attempt_id).unwrap()).ok();
         }
     }
 
     pub fn next_retry_at(&self) -> Option<TimestampMillis> {
-        self.entries.values().filter_map(retry_due).min()
+        if self.index_state.rebuild_phase == ActionDeliveryIndexRebuildPhase::Failed {
+            None
+        } else if !self.indexes_ready() {
+            // The existing zero-delay outbox timer performs the bounded migration batches.
+            Some(0)
+        } else {
+            let retry_due = self.retry_schedule.first_key_value().map(|((due_at, _), _)| *due_at);
+            let cleanup_due = self
+                .terminal_expirations
+                .first_key_value()
+                .map(|((expires_at, _), _)| expires_at.saturating_add(1));
+            retry_due.into_iter().chain(cleanup_due).min()
+        }
     }
 
     pub fn metrics(&self) -> ActionDeliveryOutboxMetrics {
-        let repaired;
-        let usage = if self.usage.total_attempts == self.entries.len() {
-            &self.usage
-        } else {
-            repaired = ActionDeliveryUsage::rebuilt(&self.entries, &self.usage);
-            &repaired
-        };
+        let usage = &self.usage;
         ActionDeliveryOutboxMetrics {
-            total_attempts: usage.total_attempts,
-            attempt_slots_remaining: MAX_ATTEMPTS_GLOBAL.saturating_sub(usage.total_attempts),
+            // The map length is exact even while a legacy usage index is being rebuilt.
+            total_attempts: self.entries.len(),
+            attempt_slots_remaining: MAX_ATTEMPTS_GLOBAL.saturating_sub(self.entries.len()),
             pending_entries: usage.pending_count,
             preparing: usage.preparing,
             in_flight: usage.in_flight,
@@ -589,6 +740,9 @@ impl ActionDeliveryOutbox {
             pending_count_rejections: usage.pending_count_rejections,
             pending_byte_rejections: usage.pending_byte_rejections,
             expired_before_dispatch: usage.expired_before_dispatch,
+            index_rebuilding: !self.indexes_ready()
+                && self.index_state.rebuild_phase != ActionDeliveryIndexRebuildPhase::Failed,
+            index_rebuild_failed: self.index_state.rebuild_phase == ActionDeliveryIndexRebuildPhase::Failed,
         }
     }
 
@@ -632,31 +786,294 @@ impl ActionDeliveryOutbox {
     }
 
     fn prune_terminal(&mut self, now: TimestampMillis) {
-        let expired: Vec<_> = self
-            .entries
-            .iter()
-            .filter_map(|(attempt_id, entry)| {
-                terminal_completed_at(entry)
-                    .filter(|completed_at| now > completed_at.saturating_add(ACTION_DELIVERY_IDEMPOTENCY_HORIZON_MS))
-                    .map(|_| *attempt_id)
-            })
-            .collect();
-        for attempt_id in expired {
+        if !self.indexes_ready() {
+            return;
+        }
+        for _ in 0..TERMINAL_PRUNE_BATCH {
+            let Some(((expires_at, attempt_id), _)) = self.terminal_expirations.first_key_value() else {
+                break;
+            };
+            let expires_at = *expires_at;
+            let attempt_id = *attempt_id;
+            if now <= expires_at {
+                break;
+            }
+            let valid = self
+                .entries
+                .get(&attempt_id)
+                .and_then(|entry| terminal_completed_at_state(entry.state))
+                .is_some_and(|completed_at| terminal_expires_at(completed_at) == expires_at);
+            if !valid {
+                self.invalidate_indexes_for_rebuild();
+                break;
+            }
             self.remove_attempt(&attempt_id);
         }
     }
 
-    fn rebuild_usage_if_required(&mut self) {
-        if self.usage.total_attempts != self.entries.len() {
-            self.usage = ActionDeliveryUsage::rebuilt(&self.entries, &self.usage);
+    fn indexes_ready(&self) -> bool {
+        self.index_state.version == ACTION_DELIVERY_INDEX_VERSION
+            && self.index_state.rebuild_phase != ActionDeliveryIndexRebuildPhase::Failed
+            && self.index_state.active_usage_trusted
+            && self.usage.total_attempts == self.entries.len()
+    }
+
+    fn invalidate_indexes_for_rebuild(&mut self) {
+        self.index_state.version = 0;
+        self.index_state.rebuild_phase = ActionDeliveryIndexRebuildPhase::Uninitialized;
+        self.index_state.rebuild_cursor = None;
+        self.index_state.active_usage_trusted = false;
+    }
+
+    /// Advances a legacy index rebuild by at most `budget` entries (or stale index keys). The
+    /// cursor and partial usage aggregate are persisted, so upgrades during migration resume from
+    /// the same point. No public hot path performs an unbounded map walk.
+    fn advance_index_rebuild(&mut self, budget: usize) -> Result<bool, ActionDeliveryOutboxError> {
+        if self.indexes_ready() {
+            return Ok(true);
+        }
+        if self.index_state.version == ACTION_DELIVERY_INDEX_VERSION
+            && self.index_state.rebuild_phase != ActionDeliveryIndexRebuildPhase::Failed
+        {
+            self.index_state.version = 0;
+            self.index_state.rebuild_phase = ActionDeliveryIndexRebuildPhase::Uninitialized;
+            self.index_state.active_usage_trusted = false;
+        }
+        if self.index_state.rebuild_phase == ActionDeliveryIndexRebuildPhase::Failed {
+            return Err(ActionDeliveryOutboxError::IdentityCollision);
+        }
+        if self.index_state.rebuild_phase == ActionDeliveryIndexRebuildPhase::Uninitialized {
+            self.index_state.active_usage_trusted = self.usage.total_attempts == self.entries.len();
+            self.index_state.rebuilt_usage = ActionDeliveryUsage::counters_only(&self.usage);
+            self.index_state.rebuild_cursor = None;
+            self.index_state.rebuild_phase = ActionDeliveryIndexRebuildPhase::Clearing;
+        }
+
+        let mut remaining = budget.max(1);
+        if self.index_state.rebuild_phase == ActionDeliveryIndexRebuildPhase::Clearing {
+            #[cfg(test)]
+            let remaining_before_clear = remaining;
+            remove_first_keys(&mut self.logical_slots, &mut remaining);
+            remove_first_keys(&mut self.terminal_expirations, &mut remaining);
+            remove_first_keys(&mut self.retry_schedule, &mut remaining);
+            #[cfg(test)]
+            {
+                self.entry_scan_visits = self
+                    .entry_scan_visits
+                    .saturating_add(remaining_before_clear.saturating_sub(remaining));
+            }
+            if !self.logical_slots.is_empty() || !self.terminal_expirations.is_empty() || !self.retry_schedule.is_empty() {
+                return Ok(false);
+            }
+            self.index_state.rebuild_phase = ActionDeliveryIndexRebuildPhase::Scanning;
+            self.index_state.rebuild_cursor = None;
+            self.index_state.rebuilt_usage = ActionDeliveryUsage::counters_only(&self.usage);
+        }
+
+        if remaining == 0 {
+            return Ok(false);
+        }
+        let start = self.index_state.rebuild_cursor.map_or(Unbounded, Excluded);
+        let facts: Vec<_> = self
+            .entries
+            .range((start, Unbounded))
+            .take(remaining)
+            .map(|(attempt_id, entry)| {
+                (
+                    *attempt_id,
+                    entry.logical_slot_id,
+                    entry.app_id,
+                    entry.state,
+                    entry.reserved_bytes,
+                )
+            })
+            .collect();
+        #[cfg(test)]
+        {
+            self.entry_scan_visits = self.entry_scan_visits.saturating_add(facts.len());
+        }
+
+        for (attempt_id, logical_slot_id, app_id, state, reserved_bytes) in &facts {
+            if let Some(slot_id) = logical_slot_id
+                && self.logical_slots.insert(*slot_id, *attempt_id).is_some()
+            {
+                self.index_state.rebuild_phase = ActionDeliveryIndexRebuildPhase::Failed;
+                return Err(ActionDeliveryOutboxError::IdentityCollision);
+            }
+            add_state_to_index(&mut self.terminal_expirations, &mut self.retry_schedule, *attempt_id, *state);
+            self.index_state.rebuilt_usage.add_values(*app_id, *state, *reserved_bytes);
+        }
+
+        if let Some((last, ..)) = facts.last() {
+            self.index_state.rebuild_cursor = Some(*last);
+        }
+        let has_more = self
+            .index_state
+            .rebuild_cursor
+            .is_some_and(|cursor| self.entries.range((Excluded(cursor), Unbounded)).next().is_some());
+        if has_more {
+            return Ok(false);
+        }
+
+        self.usage = std::mem::take(&mut self.index_state.rebuilt_usage);
+        self.index_state.version = ACTION_DELIVERY_INDEX_VERSION;
+        self.index_state.rebuild_phase = ActionDeliveryIndexRebuildPhase::Uninitialized;
+        self.index_state.rebuild_cursor = None;
+        self.index_state.active_usage_trusted = true;
+        Ok(true)
+    }
+
+    fn rebuild_has_scanned(&self, attempt_id: &ActionDeliveryAttemptId) -> bool {
+        self.index_state.rebuild_phase == ActionDeliveryIndexRebuildPhase::Scanning
+            && self.index_state.rebuild_cursor.is_some_and(|cursor| *attempt_id <= cursor)
+    }
+
+    fn add_inserted_entry_to_usage(&mut self, attempt_id: ActionDeliveryAttemptId) {
+        let entry = self.entries.get(&attempt_id).unwrap();
+        self.usage.add_entry(entry);
+        if self.rebuild_has_scanned(&attempt_id) {
+            self.index_state
+                .rebuilt_usage
+                .add_values(entry.app_id, entry.state, entry.reserved_bytes);
+        }
+    }
+
+    fn replace_state_index(
+        &mut self,
+        attempt_id: ActionDeliveryAttemptId,
+        old_state: ActionDeliveryState,
+        new_state: ActionDeliveryState,
+    ) {
+        remove_state_from_index(
+            &mut self.terminal_expirations,
+            &mut self.retry_schedule,
+            attempt_id,
+            old_state,
+        );
+        add_state_to_index(
+            &mut self.terminal_expirations,
+            &mut self.retry_schedule,
+            attempt_id,
+            new_state,
+        );
+    }
+
+    fn make_attempt_terminal(&mut self, attempt_id: ActionDeliveryAttemptId, terminal_state: ActionDeliveryState) {
+        let (app_id, old_state, old_bytes, new_state, new_bytes) = {
+            let entry = self.entries.get_mut(&attempt_id).unwrap();
+            let old_state = entry.state;
+            let old_bytes = entry.reserved_bytes;
+            make_terminal(entry, terminal_state);
+            (entry.app_id, old_state, old_bytes, entry.state, entry.reserved_bytes)
+        };
+        self.usage.transition(app_id, old_state, new_state, old_bytes, new_bytes);
+        if self.rebuild_has_scanned(&attempt_id) {
+            self.index_state
+                .rebuilt_usage
+                .transition(app_id, old_state, new_state, old_bytes, new_bytes);
+        }
+        self.replace_state_index(attempt_id, old_state, new_state);
+    }
+
+    fn increment_expired_before_dispatch(&mut self) {
+        self.usage.expired_before_dispatch = self.usage.expired_before_dispatch.saturating_add(1);
+        if self.index_state.rebuild_phase == ActionDeliveryIndexRebuildPhase::Scanning {
+            self.index_state.rebuilt_usage.expired_before_dispatch =
+                self.index_state.rebuilt_usage.expired_before_dispatch.saturating_add(1);
+        }
+    }
+
+    fn increment_attempt_capacity_rejections(&mut self) {
+        self.usage.attempt_capacity_rejections = self.usage.attempt_capacity_rejections.saturating_add(1);
+        if self.index_state.rebuild_phase == ActionDeliveryIndexRebuildPhase::Scanning {
+            self.index_state.rebuilt_usage.attempt_capacity_rejections =
+                self.index_state.rebuilt_usage.attempt_capacity_rejections.saturating_add(1);
+        }
+    }
+
+    fn increment_pending_capacity_rejection(&mut self, error: ActionDeliveryOutboxError) {
+        match error {
+            ActionDeliveryOutboxError::PendingCapacity => {
+                self.usage.pending_count_rejections = self.usage.pending_count_rejections.saturating_add(1);
+                if self.index_state.rebuild_phase == ActionDeliveryIndexRebuildPhase::Scanning {
+                    self.index_state.rebuilt_usage.pending_count_rejections =
+                        self.index_state.rebuilt_usage.pending_count_rejections.saturating_add(1);
+                }
+            }
+            ActionDeliveryOutboxError::PendingByteCapacity => {
+                self.usage.pending_byte_rejections = self.usage.pending_byte_rejections.saturating_add(1);
+                if self.index_state.rebuild_phase == ActionDeliveryIndexRebuildPhase::Scanning {
+                    self.index_state.rebuilt_usage.pending_byte_rejections =
+                        self.index_state.rebuilt_usage.pending_byte_rejections.saturating_add(1);
+                }
+            }
+            _ => {}
         }
     }
 
     fn remove_attempt(&mut self, attempt_id: &ActionDeliveryAttemptId) {
         if let Some(entry) = self.entries.remove(attempt_id) {
+            if let Some(slot_id) = entry.logical_slot_id
+                && self.logical_slots.get(&slot_id) == Some(attempt_id)
+            {
+                self.logical_slots.remove(&slot_id);
+            }
+            remove_state_from_index(
+                &mut self.terminal_expirations,
+                &mut self.retry_schedule,
+                *attempt_id,
+                entry.state,
+            );
             self.usage.remove_entry(&entry);
+            if self.rebuild_has_scanned(attempt_id) {
+                self.index_state
+                    .rebuilt_usage
+                    .remove_values(entry.app_id, entry.state, entry.reserved_bytes);
+            }
         }
     }
+}
+
+fn remove_first_keys<K: Ord + Clone, V>(map: &mut BTreeMap<K, V>, remaining: &mut usize) {
+    while *remaining > 0 {
+        let Some(key) = map.first_key_value().map(|(key, _)| key.clone()) else {
+            break;
+        };
+        map.remove(&key);
+        *remaining -= 1;
+    }
+}
+
+fn add_state_to_index(
+    terminal_expirations: &mut BTreeMap<(TimestampMillis, ActionDeliveryAttemptId), ()>,
+    retry_schedule: &mut BTreeMap<(TimestampMillis, ActionDeliveryAttemptId), ()>,
+    attempt_id: ActionDeliveryAttemptId,
+    state: ActionDeliveryState,
+) {
+    if let Some(completed_at) = terminal_completed_at_state(state) {
+        terminal_expirations.insert((terminal_expires_at(completed_at), attempt_id), ());
+    }
+    if let Some(due_at) = retry_due_state(state) {
+        retry_schedule.insert((due_at, attempt_id), ());
+    }
+}
+
+fn remove_state_from_index(
+    terminal_expirations: &mut BTreeMap<(TimestampMillis, ActionDeliveryAttemptId), ()>,
+    retry_schedule: &mut BTreeMap<(TimestampMillis, ActionDeliveryAttemptId), ()>,
+    attempt_id: ActionDeliveryAttemptId,
+    state: ActionDeliveryState,
+) {
+    if let Some(completed_at) = terminal_completed_at_state(state) {
+        terminal_expirations.remove(&(terminal_expires_at(completed_at), attempt_id));
+    }
+    if let Some(due_at) = retry_due_state(state) {
+        retry_schedule.remove(&(due_at, attempt_id));
+    }
+}
+
+fn terminal_expires_at(completed_at: TimestampMillis) -> TimestampMillis {
+    completed_at.saturating_add(ACTION_DELIVERY_IDEMPOTENCY_HORIZON_MS)
 }
 
 fn validate_request_size(request_bytes: usize) -> Result<(), ActionDeliveryOutboxError> {
@@ -722,15 +1139,15 @@ fn is_pending_state(state: ActionDeliveryState) -> bool {
     )
 }
 
-fn terminal_completed_at(entry: &ActionDeliveryEntry) -> Option<TimestampMillis> {
-    match entry.state {
+fn terminal_completed_at_state(state: ActionDeliveryState) -> Option<TimestampMillis> {
+    match state {
         ActionDeliveryState::Delivered { completed_at } | ActionDeliveryState::Rejected { completed_at } => Some(completed_at),
         _ => None,
     }
 }
 
-fn retry_due(entry: &ActionDeliveryEntry) -> Option<TimestampMillis> {
-    match entry.state {
+fn retry_due_state(state: ActionDeliveryState) -> Option<TimestampMillis> {
+    match state {
         ActionDeliveryState::InFlight { lease_started_at, .. } => Some(retry_due_at(lease_started_at)),
         ActionDeliveryState::OutcomeUnknown { retry_after, .. } => Some(retry_after),
         _ => None,
@@ -782,6 +1199,199 @@ mod tests {
         outbox
             .store_prepared(attempt_id, 1, Principal::from_slice(&[9]), vec![1, 2, 3], now)
             .unwrap()
+    }
+
+    #[test]
+    fn logical_slot_rejects_a_competing_attempt_before_it_can_be_prepared() {
+        let mut outbox = ActionDeliveryOutbox::default();
+        let slot_id = id(40);
+        let winner_attempt_id = id(41);
+        let competing_attempt_id = id(42);
+
+        assert_eq!(
+            outbox.start_in_slot(slot_id, winner_attempt_id, 7, 3, 100, 100),
+            Ok(ActionDeliveryStart::Prepare { epoch: 1 })
+        );
+        assert_eq!(
+            outbox.start_in_slot(slot_id, competing_attempt_id, 7, 3, 100, 100),
+            Err(ActionDeliveryOutboxError::IdentityCollision)
+        );
+        assert_eq!(outbox.metrics().total_attempts, 1);
+        assert_eq!(outbox.metrics().preparing, 1);
+    }
+
+    #[test]
+    fn logical_slot_allows_only_the_exact_attempt_to_observe_its_result() {
+        let mut outbox = ActionDeliveryOutbox::default();
+        let slot_id = id(43);
+        let attempt_id = id(44);
+
+        assert_eq!(
+            outbox.start_in_slot(slot_id, attempt_id, 7, 3, 100, 100),
+            Ok(ActionDeliveryStart::Prepare { epoch: 1 })
+        );
+        assert_eq!(
+            outbox.start_in_slot(slot_id, attempt_id, 7, 3, 100, 101),
+            Ok(ActionDeliveryStart::Pending)
+        );
+        let dispatch = outbox
+            .store_prepared(attempt_id, 1, Principal::from_slice(&[9]), vec![1, 2, 3], 101)
+            .unwrap();
+        outbox
+            .complete(
+                dispatch.attempt_id,
+                dispatch.epoch,
+                ActionDeliveryRemoteResult::Delivered,
+                102,
+            )
+            .unwrap();
+        assert_eq!(
+            outbox.start_in_slot(slot_id, attempt_id, 7, 3, 100, 103),
+            Ok(ActionDeliveryStart::Delivered)
+        );
+        assert_eq!(
+            outbox.start_in_slot(slot_id, id(45), 7, 3, 100, 103),
+            Err(ActionDeliveryOutboxError::IdentityCollision)
+        );
+    }
+
+    #[test]
+    fn logical_slot_binding_survives_every_persisted_delivery_state() {
+        let slot_id = id(46);
+        let attempt_id = id(47);
+        let competitor_id = id(48);
+
+        let mut preparing = ActionDeliveryOutbox::default();
+        preparing.start_in_slot(slot_id, attempt_id, 7, 3, 100, 100).unwrap();
+
+        let mut in_flight = ActionDeliveryOutbox::default();
+        in_flight.start_in_slot(slot_id, attempt_id, 7, 3, 100, 100).unwrap();
+        let in_flight_dispatch = in_flight
+            .store_prepared(attempt_id, 1, Principal::from_slice(&[9]), vec![1, 2, 3], 100)
+            .unwrap();
+        let persisted_in_flight: ActionDeliveryOutbox =
+            msgpack::deserialize(msgpack::serialize_to_vec(&in_flight).unwrap().as_slice()).unwrap();
+
+        let mut outcome_unknown: ActionDeliveryOutbox =
+            msgpack::deserialize(msgpack::serialize_to_vec(&in_flight).unwrap().as_slice()).unwrap();
+        outcome_unknown
+            .complete(
+                attempt_id,
+                in_flight_dispatch.epoch,
+                ActionDeliveryRemoteResult::OutcomeUnknown,
+                101,
+            )
+            .unwrap();
+
+        let mut delivered: ActionDeliveryOutbox =
+            msgpack::deserialize(msgpack::serialize_to_vec(&in_flight).unwrap().as_slice()).unwrap();
+        delivered
+            .complete(
+                attempt_id,
+                in_flight_dispatch.epoch,
+                ActionDeliveryRemoteResult::Delivered,
+                101,
+            )
+            .unwrap();
+
+        let mut rejected = in_flight;
+        rejected
+            .complete(
+                attempt_id,
+                in_flight_dispatch.epoch,
+                ActionDeliveryRemoteResult::Rejected,
+                101,
+            )
+            .unwrap();
+
+        for state in [preparing, persisted_in_flight, outcome_unknown, delivered, rejected] {
+            let bytes = msgpack::serialize_to_vec(&state).unwrap();
+            let mut restored: ActionDeliveryOutbox = msgpack::deserialize(bytes.as_slice()).unwrap();
+            assert_eq!(restored.logical_slots.get(&slot_id), Some(&attempt_id));
+            assert_eq!(
+                restored.start_in_slot(slot_id, competitor_id, 7, 3, 100, 102),
+                Err(ActionDeliveryOutboxError::IdentityCollision)
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_snapshot_without_logical_slot_fields_preserves_default_slot_semantics() {
+        #[derive(serde::Serialize)]
+        struct LegacyOutbox {
+            entries: BTreeMap<ActionDeliveryAttemptId, LegacyEntry>,
+            usage: ActionDeliveryUsage,
+        }
+
+        #[derive(serde::Serialize)]
+        struct LegacyEntry {
+            app_id: AiAppId,
+            attempt_created_at: TimestampMillis,
+            request: Vec<u8>,
+            destination: Option<Principal>,
+            reserved_bytes: usize,
+            state: ActionDeliveryState,
+        }
+
+        let attempt_id = id(49);
+        let legacy = LegacyOutbox {
+            entries: BTreeMap::from([(
+                attempt_id,
+                LegacyEntry {
+                    app_id: 7,
+                    attempt_created_at: 100,
+                    request: Vec::new(),
+                    destination: None,
+                    reserved_bytes: 3,
+                    state: ActionDeliveryState::Preparing {
+                        epoch: 1,
+                        lease_started_at: 100,
+                    },
+                },
+            )]),
+            usage: ActionDeliveryUsage::default(),
+        };
+        let bytes = msgpack::serialize_to_vec(legacy).unwrap();
+        let mut restored: ActionDeliveryOutbox = msgpack::deserialize(bytes.as_slice()).unwrap();
+
+        assert!(restored.logical_slots.is_empty());
+        assert_eq!(restored.start(attempt_id, 7, 3, 100, 101), Ok(ActionDeliveryStart::Pending));
+        assert_eq!(restored.metrics().total_attempts, 1);
+    }
+
+    #[test]
+    fn abort_expiry_and_capacity_rejection_do_not_leave_logical_slot_claims() {
+        let slot_id = id(50);
+        let first_attempt = id(51);
+        let second_attempt = id(52);
+        let mut outbox = ActionDeliveryOutbox::default();
+        assert_eq!(
+            outbox.start_in_slot(slot_id, first_attempt, 7, 3, 100, 100),
+            Ok(ActionDeliveryStart::Prepare { epoch: 1 })
+        );
+        outbox.abort_preparation(first_attempt, 1);
+        assert!(outbox.logical_slots.is_empty());
+        assert_eq!(
+            outbox.start_in_slot(slot_id, second_attempt, 7, 3, 100, 100),
+            Ok(ActionDeliveryStart::Prepare { epoch: 1 })
+        );
+
+        let dispatch = outbox
+            .store_prepared(second_attempt, 1, Principal::from_slice(&[9]), vec![1, 2, 3], 100)
+            .unwrap();
+        outbox
+            .complete(second_attempt, dispatch.epoch, ActionDeliveryRemoteResult::Delivered, 101)
+            .unwrap();
+        outbox.prune_terminal(101 + ACTION_DELIVERY_IDEMPOTENCY_HORIZON_MS + 1);
+        assert!(outbox.logical_slots.is_empty());
+
+        outbox.usage.attempts_by_app.insert(7, MAX_ATTEMPTS_PER_APP);
+        assert_eq!(
+            outbox.start_in_slot(slot_id, id(53), 7, 3, 200, 200),
+            Err(ActionDeliveryOutboxError::PendingCapacity)
+        );
+        assert!(outbox.logical_slots.is_empty());
+        assert!(outbox.entries.is_empty());
     }
 
     #[test]
@@ -1177,6 +1787,194 @@ mod tests {
         outbox.prune_terminal(2 + ACTION_DELIVERY_IDEMPOTENCY_HORIZON_MS);
         assert_eq!(outbox.metrics().delivered_tombstones, 1);
         outbox.prune_terminal(2 + ACTION_DELIVERY_IDEMPOTENCY_HORIZON_MS + 1);
+        assert_eq!(outbox.metrics().delivered_tombstones, 0);
+    }
+
+    #[test]
+    fn confirmation_hot_path_does_not_scan_the_terminal_history() {
+        let mut outbox = ActionDeliveryOutbox::default();
+        for value in 0..1_024u16 {
+            let attempt_id = numbered_id(value);
+            let dispatch = prepare(&mut outbox, attempt_id, 7, 1);
+            outbox
+                .complete(attempt_id, dispatch.epoch, ActionDeliveryRemoteResult::Delivered, 2)
+                .unwrap();
+        }
+
+        outbox.entry_scan_visits = 0;
+        assert_eq!(
+            outbox.start(numbered_id(2_000), 7, 1, 3, 3),
+            Ok(ActionDeliveryStart::Prepare { epoch: 1 })
+        );
+        assert!(
+            outbox.entry_scan_visits <= HOT_PATH_INDEX_REBUILD_BATCH,
+            "one confirmation inspected {} historical entries",
+            outbox.entry_scan_visits
+        );
+
+        let dispatch = outbox
+            .store_prepared(numbered_id(2_000), 1, Principal::from_slice(&[9]), vec![1], 3)
+            .unwrap();
+        outbox.entry_scan_visits = 0;
+        outbox
+            .complete(dispatch.attempt_id, dispatch.epoch, ActionDeliveryRemoteResult::Delivered, 4)
+            .unwrap();
+        assert_eq!(outbox.entry_scan_visits, 0, "a completion scanned retained history");
+    }
+
+    #[test]
+    fn legacy_rebuild_work_is_bounded_and_fresh_direct_slots_fail_closed() {
+        let mut outbox = ActionDeliveryOutbox::default();
+        for value in 0..256u16 {
+            let attempt_id = numbered_id(value);
+            let dispatch = prepare(&mut outbox, attempt_id, 7, 1);
+            outbox
+                .complete(attempt_id, dispatch.epoch, ActionDeliveryRemoteResult::Delivered, 2)
+                .unwrap();
+        }
+        outbox.index_state = ActionDeliveryIndexState::default();
+        outbox.entry_scan_visits = 0;
+
+        assert_eq!(
+            outbox.start_in_slot(id(60), id(61), 7, 1, 3, 3),
+            Err(ActionDeliveryOutboxError::IndexRebuilding)
+        );
+        assert!(outbox.entry_scan_visits <= HOT_PATH_INDEX_REBUILD_BATCH);
+        assert_eq!(outbox.metrics().total_attempts, 256);
+        assert!(outbox.metrics().index_rebuilding);
+
+        while !outbox.indexes_ready() {
+            assert!(outbox.begin_due_retry(3).is_none());
+        }
+        let metrics = outbox.metrics();
+        assert_eq!(metrics.total_attempts, 256);
+        assert_eq!(metrics.delivered_tombstones, 256);
+        assert!(!metrics.index_rebuilding);
+        assert_eq!(
+            outbox.start_in_slot(id(60), id(61), 7, 1, 3, 3),
+            Ok(ActionDeliveryStart::Prepare { epoch: 1 })
+        );
+        assert_eq!(
+            outbox.start_in_slot(id(60), id(62), 7, 1, 3, 3),
+            Err(ActionDeliveryOutboxError::IdentityCollision)
+        );
+    }
+
+    #[test]
+    fn legacy_rebuild_cursor_and_partial_usage_survive_an_upgrade() {
+        let mut outbox = ActionDeliveryOutbox::default();
+        for value in 0..130u16 {
+            let attempt_id = numbered_id(value);
+            let mut slot_id = numbered_id(value + 1_000);
+            slot_id[31] = 1;
+            assert_eq!(
+                outbox.start_in_slot(slot_id, attempt_id, 7, 1, 1, 1),
+                Ok(ActionDeliveryStart::Prepare { epoch: 1 })
+            );
+            let dispatch = outbox
+                .store_prepared(attempt_id, 1, Principal::from_slice(&[9]), vec![1], 1)
+                .unwrap();
+            outbox
+                .complete(attempt_id, dispatch.epoch, ActionDeliveryRemoteResult::Delivered, 2)
+                .unwrap();
+        }
+        outbox.logical_slots.clear();
+        outbox.terminal_expirations.clear();
+        outbox.retry_schedule.clear();
+        outbox.index_state = ActionDeliveryIndexState::default();
+
+        assert_eq!(outbox.advance_index_rebuild(HOT_PATH_INDEX_REBUILD_BATCH), Ok(false));
+        assert_eq!(outbox.index_state.rebuild_phase, ActionDeliveryIndexRebuildPhase::Scanning);
+        assert_eq!(outbox.index_state.rebuilt_usage.total_attempts, HOT_PATH_INDEX_REBUILD_BATCH);
+        let bytes = msgpack::serialize_to_vec(&outbox).unwrap();
+        let mut restored: ActionDeliveryOutbox = msgpack::deserialize(bytes.as_slice()).unwrap();
+
+        while !restored.indexes_ready() {
+            restored.advance_index_rebuild(HOT_PATH_INDEX_REBUILD_BATCH).unwrap();
+        }
+        assert_eq!(restored.logical_slots.len(), 130);
+        assert_eq!(restored.terminal_expirations.len(), 130);
+        let metrics = restored.metrics();
+        assert_eq!(metrics.total_attempts, 130);
+        assert_eq!(metrics.delivered_tombstones, 130);
+
+        let first_attempt = numbered_id(0);
+        let mut first_slot = numbered_id(1_000);
+        first_slot[31] = 1;
+        assert_eq!(
+            restored.start_in_slot(first_slot, id(63), 7, 1, 1, 3),
+            Err(ActionDeliveryOutboxError::IdentityCollision)
+        );
+        assert_eq!(restored.logical_slots.get(&first_slot), Some(&first_attempt));
+    }
+
+    #[test]
+    fn duplicate_legacy_logical_slots_leave_the_outbox_failed_closed() {
+        let mut outbox = ActionDeliveryOutbox::default();
+        assert_eq!(
+            outbox.start_in_slot(id(70), id(71), 7, 1, 1, 1),
+            Ok(ActionDeliveryStart::Prepare { epoch: 1 })
+        );
+        assert_eq!(
+            outbox.start_in_slot(id(72), id(73), 7, 1, 1, 1),
+            Ok(ActionDeliveryStart::Prepare { epoch: 1 })
+        );
+        outbox.entries.get_mut(&id(73)).unwrap().logical_slot_id = Some(id(70));
+        outbox.logical_slots.clear();
+        outbox.index_state = ActionDeliveryIndexState::default();
+
+        assert_eq!(
+            outbox.advance_index_rebuild(BACKGROUND_INDEX_REBUILD_BATCH),
+            Err(ActionDeliveryOutboxError::IdentityCollision)
+        );
+        assert!(outbox.metrics().index_rebuild_failed);
+        assert_eq!(outbox.next_retry_at(), None);
+        assert_eq!(
+            outbox.start_in_slot(id(74), id(75), 7, 1, 1, 1),
+            Err(ActionDeliveryOutboxError::IdentityCollision)
+        );
+    }
+
+    #[test]
+    fn stale_persisted_retry_index_is_rebuilt_before_any_dispatch() {
+        let mut outbox = ActionDeliveryOutbox::default();
+        let expected = prepare(&mut outbox, id(80), 7, 1);
+        outbox.retry_schedule.clear();
+        outbox.retry_schedule.insert((1, id(81)), ());
+
+        assert!(outbox.begin_due_retry(retry_due_at(1)).is_none());
+        assert!(outbox.metrics().index_rebuilding);
+        while !outbox.indexes_ready() {
+            outbox.advance_index_rebuild(HOT_PATH_INDEX_REBUILD_BATCH).unwrap();
+        }
+
+        let retry = outbox.begin_due_retry(retry_due_at(1)).unwrap();
+        assert_eq!(retry.attempt_id, expected.attempt_id);
+        assert_eq!(retry.request, expected.request);
+        assert_eq!(retry.destination, expected.destination);
+        assert_eq!(retry.epoch, expected.epoch + 1);
+    }
+
+    #[test]
+    fn terminal_cleanup_is_time_ordered_and_bounded_per_call() {
+        let mut outbox = ActionDeliveryOutbox::default();
+        for value in 0..200u16 {
+            let attempt_id = numbered_id(value);
+            let dispatch = prepare(&mut outbox, attempt_id, 7, 1);
+            outbox
+                .complete(attempt_id, dispatch.epoch, ActionDeliveryRemoteResult::Delivered, 2)
+                .unwrap();
+        }
+
+        let expired_at = terminal_expires_at(2) + 1;
+        assert_eq!(outbox.next_retry_at(), Some(expired_at));
+        assert!(outbox.begin_due_retry(expired_at).is_none());
+        assert_eq!(outbox.metrics().total_attempts, 200 - TERMINAL_PRUNE_BATCH);
+        while outbox.metrics().total_attempts > 0 {
+            assert_eq!(outbox.next_retry_at(), Some(expired_at));
+            assert!(outbox.begin_due_retry(expired_at).is_none());
+        }
+        assert!(outbox.terminal_expirations.is_empty());
         assert_eq!(outbox.metrics().delivered_tombstones, 0);
     }
 }

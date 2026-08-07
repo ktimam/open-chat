@@ -1,7 +1,7 @@
 use constants::DAY_IN_MS;
 use search::weighted::{Document as SearchDocument, Query};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use types::{AiAppId, AiAppManifest, AiAppRegistration, Milliseconds, TimestampMillis, UserId};
 
 /// An unverified manifest is a short-lived development reservation, not a permanent namespace
@@ -20,6 +20,11 @@ pub const UNPUBLISHED_RESERVATION_TTL: Milliseconds = 30 * DAY_IN_MS;
 pub struct AiAppRegistry {
     apps: HashMap<AiAppId, AiAppRegistration>,
     next_id: AiAppId,
+    /// App ids whose owner account was deleted. The registration is retained only as a bounded
+    /// governance-recovery tombstone; it is neither visible nor controllable if that `UserId` is
+    /// later recreated. Legacy snapshots contain no quarantined rows.
+    #[serde(default)]
+    quarantined_app_ids: HashSet<AiAppId>,
     /// Missing from legacy stable state, which means every previously published row was approved
     /// by the V1 name-only verifier. Post-upgrade migrates 0 -> 2 exactly once and requires those
     /// rows to be explicitly republished through the exact-manifest V2 gate.
@@ -34,6 +39,7 @@ impl Default for AiAppRegistry {
         Self {
             apps: HashMap::new(),
             next_id: 0,
+            quarantined_app_ids: HashSet::new(),
             publication_verifier_version: PUBLICATION_VERIFIER_VERSION_V2,
         }
     }
@@ -71,7 +77,8 @@ impl AiAppRegistry {
             .apps
             .values()
             .filter(|registration| {
-                registration.owner == owner
+                !self.quarantined_app_ids.contains(&registration.id)
+                    && registration.owner == owner
                     && (registration.published || !Self::unpublished_reservation_expired(registration, now))
                     && canonical_app_name(&registration.manifest.name).is_some_and(|key| key == name_key)
             })
@@ -127,7 +134,11 @@ impl AiAppRegistry {
         let own_existing_id = self
             .apps
             .values()
-            .filter(|r| r.owner == owner && canonical_app_name(&r.manifest.name).is_some_and(|key| key == name_key))
+            .filter(|r| {
+                !self.quarantined_app_ids.contains(&r.id)
+                    && r.owner == owner
+                    && canonical_app_name(&r.manifest.name).is_some_and(|key| key == name_key)
+            })
             .min_by_key(|r| r.id)
             .map(|r| r.id);
 
@@ -146,7 +157,9 @@ impl AiAppRegistry {
         let unpublished_for_owner = self
             .apps
             .values()
-            .filter(|registration| registration.owner == owner && !registration.published)
+            .filter(|registration| {
+                !self.quarantined_app_ids.contains(&registration.id) && registration.owner == owner && !registration.published
+            })
             .count();
         if unpublished_for_owner >= MAX_UNPUBLISHED_APPS_PER_OWNER {
             return Err(RegisterAiAppError::UnpublishedOwnerQuotaExceeded);
@@ -209,11 +222,40 @@ impl AiAppRegistry {
         existing.clone()
     }
 
+    /// Revokes only registrations owned by the account being deleted. Rows remain addressable to
+    /// governance through `contains`/`remove`, but all application and owner-facing paths treat
+    /// them as unavailable. Advancing the revision also invalidates an asynchronous publication
+    /// decision that may have been issued immediately before deletion.
+    ///
+    /// The registry is globally capped, so collecting an owner's ids is bounded independently of
+    /// attacker-controlled account state.
+    pub fn quarantine_owner(&mut self, owner: UserId, now: TimestampMillis) -> Vec<AiAppId> {
+        let app_ids: Vec<_> = self
+            .apps
+            .values()
+            .filter(|registration| registration.owner == owner)
+            .map(|registration| registration.id)
+            .collect();
+        for app_id in &app_ids {
+            let app = self
+                .apps
+                .get_mut(app_id)
+                .expect("the owner registration collected above must still exist");
+            app.published = false;
+            app.updated = now.max(app.updated.saturating_add(1));
+            self.quarantined_app_ids.insert(*app_id);
+        }
+        app_ids
+    }
+
     /// Lazy expiry keeps the stable heap bounded without introducing a timer or second source of
     /// truth. It runs before every registration, so expired drafts never consume a quota/global slot.
     fn prune_expired_unpublished(&mut self, now: TimestampMillis) {
-        self.apps
-            .retain(|_, registration| !Self::unpublished_reservation_expired(registration, now));
+        let quarantined_app_ids = &self.quarantined_app_ids;
+        self.apps.retain(|app_id, registration| {
+            quarantined_app_ids.contains(app_id) || !Self::unpublished_reservation_expired(registration, now)
+        });
+        self.quarantined_app_ids.retain(|app_id| self.apps.contains_key(app_id));
     }
 
     fn unpublished_reservation_expired(registration: &AiAppRegistration, now: TimestampMillis) -> bool {
@@ -231,6 +273,9 @@ impl AiAppRegistry {
 
     /// Publishes only the exact revision sent to the asynchronous verifier.
     pub fn publish_if_current(&mut self, id: AiAppId, verified_revision: TimestampMillis, now: TimestampMillis) -> bool {
+        if self.quarantined_app_ids.contains(&id) {
+            return false;
+        }
         let Some(app) = self.apps.get(&id) else {
             return false;
         };
@@ -262,19 +307,18 @@ impl AiAppRegistry {
     }
 
     pub fn delete(&mut self, owner: UserId, name: &str) -> bool {
-        if let Some(id) = self.owned_app_id(owner, name) {
-            self.apps.remove(&id);
-            true
-        } else {
-            false
-        }
+        if let Some(id) = self.owned_app_id(owner, name) { self.remove(id) } else { false }
     }
 
     pub fn owned_app_id(&self, owner: UserId, name: &str) -> Option<AiAppId> {
         let name_key = canonical_app_name(name)?;
         self.apps
             .values()
-            .filter(|r| r.owner == owner && canonical_app_name(&r.manifest.name).is_some_and(|key| key == name_key))
+            .filter(|r| {
+                !self.quarantined_app_ids.contains(&r.id)
+                    && r.owner == owner
+                    && canonical_app_name(&r.manifest.name).is_some_and(|key| key == name_key)
+            })
             .min_by_key(|r| r.id)
             .map(|r| r.id)
     }
@@ -282,6 +326,7 @@ impl AiAppRegistry {
     /// Governance recovery for a verified app whose owner is lost or abandoned. The caller guard is
     /// enforced by the update endpoint; the model operation itself is deterministic and idempotent.
     pub fn remove(&mut self, id: AiAppId) -> bool {
+        self.quarantined_app_ids.remove(&id);
         self.apps.remove(&id).is_some()
     }
 
@@ -290,11 +335,13 @@ impl AiAppRegistry {
     }
 
     pub fn get(&self, id: AiAppId) -> Option<&AiAppRegistration> {
-        self.apps.get(&id)
+        (!self.quarantined_app_ids.contains(&id))
+            .then(|| self.apps.get(&id))
+            .flatten()
     }
 
     pub fn get_visible(&self, id: AiAppId, caller: Option<UserId>, now: TimestampMillis) -> Option<&AiAppRegistration> {
-        self.apps.get(&id).filter(|registration| {
+        self.get(id).filter(|registration| {
             registration.published
                 || (Some(registration.owner) == caller && !Self::unpublished_reservation_expired(registration, now))
         })
@@ -314,7 +361,8 @@ impl AiAppRegistry {
             .apps
             .values()
             .filter(|registration| {
-                registration.owner == owner
+                !self.quarantined_app_ids.contains(&registration.id)
+                    && registration.owner == owner
                     && (registration.published || !Self::unpublished_reservation_expired(registration, now))
             })
             .collect();
@@ -341,8 +389,9 @@ impl AiAppRegistry {
             .apps
             .values()
             .filter(|registration| {
-                registration.published
-                    || (Some(registration.owner) == caller && !Self::unpublished_reservation_expired(registration, now))
+                !self.quarantined_app_ids.contains(&registration.id)
+                    && (registration.published
+                        || (Some(registration.owner) == caller && !Self::unpublished_reservation_expired(registration, now)))
             })
             .collect();
         apps.sort_unstable_by_key(|registration| registration.id);
@@ -363,7 +412,10 @@ impl AiAppRegistry {
         let mut apps: Vec<_> = self
             .apps
             .values()
-            .filter(|r| r.published || (Some(r.owner) == caller && !Self::unpublished_reservation_expired(r, now)))
+            .filter(|r| {
+                !self.quarantined_app_ids.contains(&r.id)
+                    && (r.published || (Some(r.owner) == caller && !Self::unpublished_reservation_expired(r, now)))
+            })
             .cloned()
             .collect();
         apps.sort_unstable_by_key(|r| r.id);
@@ -380,7 +432,7 @@ impl AiAppRegistry {
         let mut matches: Vec<_> = self
             .apps
             .values()
-            .filter(|r| r.published)
+            .filter(|r| r.published && !self.quarantined_app_ids.contains(&r.id))
             .map(|r| {
                 let score = if let Some(query) = &query {
                     SearchDocument::default()
@@ -940,5 +992,62 @@ mod tests {
             registry.register(owner, manifest("id-overflow"), 3, false),
             Err(RegisterAiAppError::RegistryFull)
         ));
+    }
+
+    #[test]
+    fn deleted_owner_apps_are_quarantined_without_affecting_other_owners_or_governance_recovery() {
+        let mut registry = AiAppRegistry::default();
+        let deleted_owner = user(1);
+        let other_owner = user(2);
+        let deleted_app = registry
+            .register(deleted_owner, manifest("deleted-owner-app"), 10, false)
+            .unwrap();
+        let other_app = registry
+            .register(other_owner, manifest("other-owner-app"), 10, false)
+            .unwrap();
+        assert!(registry.publish(deleted_app.id, 11));
+        assert!(registry.publish(other_app.id, 11));
+
+        assert_eq!(registry.quarantine_owner(deleted_owner, 10), vec![deleted_app.id]);
+        assert!(registry.contains(deleted_app.id), "governance must retain a recovery handle");
+        assert!(registry.get(deleted_app.id).is_none());
+        assert!(registry.get_visible(deleted_app.id, Some(deleted_owner), 10).is_none());
+        assert!(registry.list_owned_page(deleted_owner, 10, 0, 8).0.is_empty());
+        assert!(!registry.publish_if_current(deleted_app.id, deleted_app.updated, 11));
+        assert!(
+            registry.get(other_app.id).is_some(),
+            "another owner's app is outside the deletion boundary"
+        );
+
+        let replacement = registry
+            .register(deleted_owner, manifest("deleted-owner-app"), 12, false)
+            .unwrap();
+        assert_ne!(
+            replacement.id, deleted_app.id,
+            "a recreated account must receive a new app id"
+        );
+
+        let after_retention_horizon = 11 + UNPUBLISHED_RESERVATION_TTL + 1;
+        registry
+            .register(
+                other_owner,
+                manifest("retention-prune-trigger"),
+                after_retention_horizon,
+                false,
+            )
+            .unwrap();
+        assert!(
+            registry.contains(deleted_app.id),
+            "lazy draft pruning must never erase a quarantined governance tombstone"
+        );
+
+        let bytes = msgpack::serialize_to_vec(&registry).unwrap();
+        let mut restored: AiAppRegistry = msgpack::deserialize_then_unwrap(&bytes);
+        assert!(restored.get(deleted_app.id).is_none(), "quarantine must survive an upgrade");
+        assert!(
+            restored.remove(deleted_app.id),
+            "governance can remove the retained tombstone"
+        );
+        assert!(!restored.contains(deleted_app.id));
     }
 }

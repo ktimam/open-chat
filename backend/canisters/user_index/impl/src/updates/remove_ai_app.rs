@@ -101,6 +101,8 @@ mod tests {
                 Provenance {
                     context: context.clone(),
                     content_hash: [1; 32],
+                    app_user_key_fingerprint: None,
+                    app_user_key_version: None,
                     expires_at: now + 1_000,
                 },
                 now,

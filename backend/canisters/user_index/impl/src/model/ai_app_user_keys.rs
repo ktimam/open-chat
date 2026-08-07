@@ -63,6 +63,10 @@ pub struct AiAppUserKeys {
     /// be replayed after the user links the same tuple again.
     #[serde(default)]
     binding_versions: BTreeMap<(UserId, AiAppId), u64>,
+    /// Users deleted while a legacy migration is in progress. Their not-yet-indexed keys are
+    /// discarded in bounded migration batches, with one epoch tombstone retained per tuple.
+    #[serde(default)]
+    revoked_users_during_migration: HashSet<UserId>,
 }
 
 impl Default for AiAppUserKeys {
@@ -81,6 +85,7 @@ impl Default for AiAppUserKeys {
             pending_app_deletions: BTreeSet::new(),
             pending_app_cleanup_keys: 0,
             binding_versions: BTreeMap::new(),
+            revoked_users_during_migration: HashSet::new(),
         }
     }
 }
@@ -238,29 +243,51 @@ impl AiAppUserKeys {
     /// Removes one binding. Idempotent.
     pub fn remove(&mut self, user_id: UserId, app_id: AiAppId) -> Result<bool, SetAiAppUserKeyError> {
         self.ensure_ready()?;
-        let location = (user_id, app_id);
-        let removed = self.remove_location(location);
-        // Removal also represents explicit consent cancellation before a key exists. Always advance
-        // the epoch so a delayed link claim or pre-cancel capability cannot become valid later.
-        let next_version = self
-            .binding_versions
-            .get(&location)
-            .copied()
-            .unwrap_or_default()
-            .saturating_add(1);
-        self.binding_versions.insert(location, next_version);
-        Ok(removed)
+        Ok(self.remove_location_and_advance_epoch((user_id, app_id)))
+    }
+
+    /// Removes every indexed binding for one deleted account through the same epoch-advancing path
+    /// as an explicit disconnect. Work is bounded by `MAX_KEYS_PER_USER`. If a legacy migration is
+    /// active, not-yet-indexed rows are quarantined and discarded by subsequent bounded batches.
+    pub fn remove_user(&mut self, user_id: UserId) -> usize {
+        let app_ids: Vec<_> = self
+            .by_user
+            .get(&user_id)
+            .into_iter()
+            .flat_map(|apps| apps.iter().copied())
+            .take(MAX_KEYS_PER_USER)
+            .collect();
+        let removed = app_ids
+            .into_iter()
+            .filter(|app_id| self.remove_location_and_advance_epoch((user_id, *app_id)))
+            .count();
+        if self.migration_required() {
+            self.revoked_users_during_migration.insert(user_id);
+        }
+        removed
     }
 
     /// Marks an app unavailable immediately and schedules its keys for fixed-size cleanup batches.
     pub fn queue_app_cleanup(&mut self, app_id: AiAppId) -> Result<(), SetAiAppUserKeyError> {
         self.ensure_ready()?;
+        self.queue_app_cleanup_unchecked(app_id);
+        Ok(())
+    }
+
+    /// Schedules cleanup after the registry has already quarantined the app. Unlike governance
+    /// removal, account deletion cannot be rolled back while a legacy key migration is running.
+    /// The migration consults the quarantined registry and drops all not-yet-indexed rows; this
+    /// durable marker then removes any indexed rows in bounded timer batches.
+    pub fn queue_quarantined_app_cleanup(&mut self, app_id: AiAppId) {
+        self.queue_app_cleanup_unchecked(app_id);
+    }
+
+    fn queue_app_cleanup_unchecked(&mut self, app_id: AiAppId) {
         if self.pending_app_deletions.insert(app_id) {
             self.pending_app_cleanup_keys = self
                 .pending_app_cleanup_keys
                 .saturating_add(self.by_app.get(&app_id).map_or(0, BTreeSet::len));
         }
-        Ok(())
     }
 
     /// Advances queued app deletion by at most `limit` key-or-empty-app work items.
@@ -406,6 +433,20 @@ impl AiAppUserKeys {
         true
     }
 
+    fn remove_location_and_advance_epoch(&mut self, location: (UserId, AiAppId)) -> bool {
+        let removed = self.remove_location(location);
+        // Removal also represents explicit consent cancellation before a key exists. Always advance
+        // the epoch so delayed authority cannot become valid after account recreation.
+        let next_version = self
+            .binding_versions
+            .get(&location)
+            .copied()
+            .unwrap_or_default()
+            .saturating_add(1);
+        self.binding_versions.insert(location, next_version);
+        removed
+    }
+
     pub fn migration_required(&self) -> bool {
         self.index_version != INDEX_VERSION || self.legacy_keys_pending.is_some()
     }
@@ -437,16 +478,24 @@ impl AiAppUserKeys {
         }
 
         for ((user_id, app_id), public_key) in entries {
-            let retained = app_is_eligible(app_id)
+            let location = (user_id, app_id);
+            let revoked = self.revoked_users_during_migration.contains(&user_id);
+            let retained = !revoked
+                && !self.pending_app_deletions.contains(&app_id)
+                && app_is_eligible(app_id)
                 && canonicalize_p256_public_key(&public_key)
                     .is_ok_and(|canonical| self.insert_canonical(user_id, app_id, canonical).is_ok());
             if !retained {
+                if revoked {
+                    self.remove_location_and_advance_epoch(location);
+                }
                 self.migration_dropped_keys = self.migration_dropped_keys.saturating_add(1);
             }
         }
 
         if self.legacy_keys_pending.as_ref().is_some_and(BTreeMap::is_empty) {
             self.legacy_keys_pending = None;
+            self.revoked_users_during_migration.clear();
         }
         self.legacy_keys_pending.as_ref().map_or(0, BTreeMap::len)
     }
@@ -787,5 +836,71 @@ mod tests {
         assert_eq!(restored.metrics().migration_dropped_keys, 1);
         assert_eq!(restored.keys_for_users(1, &[user(1)]).unwrap().len(), 1);
         assert!(restored.keys_for_users(2, &[user(2)]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn quarantined_app_cleanup_queued_during_legacy_migration_is_durable_and_bounded() {
+        #[derive(Serialize)]
+        struct Legacy {
+            keys: HashMap<(UserId, AiAppId), String>,
+        }
+
+        let quarantined_app = 7;
+        let legacy = Legacy {
+            keys: HashMap::from([
+                ((user(1), quarantined_app), key(35_001)),
+                ((user(2), quarantined_app), key(35_002)),
+                ((user(3), 8), key(35_003)),
+            ]),
+        };
+        let bytes = msgpack::serialize_to_vec(&legacy).unwrap();
+        let mut restored: AiAppUserKeys = msgpack::deserialize_then_unwrap(&bytes);
+        restored.queue_quarantined_app_cleanup(quarantined_app);
+
+        let checkpoint = msgpack::serialize_to_vec(&restored).unwrap();
+        let mut resumed: AiAppUserKeys = msgpack::deserialize_then_unwrap(&checkpoint);
+        assert_eq!(resumed.metrics().pending_app_deletions, 1);
+        assert_eq!(resumed.migrate_batch(MIGRATION_BATCH_SIZE, |_| true), 0);
+        assert!(
+            resumed
+                .keys_for_users(quarantined_app, &[user(1), user(2)])
+                .unwrap()
+                .is_empty(),
+            "the durable cleanup marker must hide rows even if a migration callback retained them"
+        );
+        assert_eq!(resumed.metrics().migration_dropped_keys, 2);
+        assert_eq!(resumed.process_app_cleanup_batch(1), 0);
+        assert_eq!(resumed.metrics().pending_app_deletions, 0);
+        assert_eq!(resumed.keys_for_user(user(3)).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn account_deleted_before_legacy_migration_cannot_have_keys_revived_after_upgrade() {
+        #[derive(Serialize)]
+        struct Legacy {
+            keys: HashMap<(UserId, AiAppId), String>,
+        }
+
+        let deleted = user(1);
+        let survivor = user(2);
+        let legacy = Legacy {
+            keys: HashMap::from([
+                ((deleted, 7), key(40_001)),
+                ((deleted, 8), key(40_002)),
+                ((survivor, 7), key(40_003)),
+            ]),
+        };
+        let bytes = msgpack::serialize_to_vec(&legacy).unwrap();
+        let mut restored: AiAppUserKeys = msgpack::deserialize_then_unwrap(&bytes);
+
+        assert_eq!(restored.remove_user(deleted), 0, "legacy keys are not indexed yet");
+        let checkpoint = msgpack::serialize_to_vec(&restored).unwrap();
+        let mut resumed: AiAppUserKeys = msgpack::deserialize_then_unwrap(&checkpoint);
+        assert_eq!(resumed.migrate_batch(MIGRATION_BATCH_SIZE, |_| true), 0);
+
+        assert!(resumed.keys_for_user(deleted).unwrap().is_empty());
+        assert_eq!(resumed.binding_epoch(deleted, 7), 1);
+        assert_eq!(resumed.binding_epoch(deleted, 8), 1);
+        assert_eq!(resumed.keys_for_user(survivor).unwrap().len(), 1);
     }
 }

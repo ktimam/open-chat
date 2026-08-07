@@ -3,7 +3,6 @@ use crate::updates::c2c_send_messages::{HandleMessageArgs, get_sender_status, ha
 use crate::updates::start_video_call::handle_start_video_call;
 use crate::{RuntimeState, UserEventPusher, execute_update_async, mutate_state, read_state};
 use canister_api_macros::update;
-use canister_tracing_macros::trace;
 use chat_events::{
     AddRemoveReactionArgs, DeleteUndeleteMessagesArgs, EditMessageArgs, MessageContentInternal, Reader, TipMessageArgs,
 };
@@ -20,7 +19,6 @@ use user_canister::{
 };
 
 #[update(msgpack = true)]
-#[trace]
 async fn c2c_user_canister(args: Args) -> Response {
     execute_update_async(|| c2c_user_canister_impl(args)).await
 }
