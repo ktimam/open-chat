@@ -31,11 +31,11 @@ NNS_SNS_WASM_CANISTER_ID=qaa6y-5yaaa-aaaaa-aaafa-cai
 NNS_INDEX_CANISTER_ID=qhbym-qaaaa-aaaaa-aaafq-cai
 
 echo "Building local_canister_creator"
-true # prebuilt binary
+cargo build --package local_canister_creator
 echo "Building completed"
 
 echo "Creating canisters"
-./target/debug/local_canister_creator \
+cargo run --package local_canister_creator -- \
   --ic-url http://127.0.0.1:8080/ \
   --pocket-ic-url http://127.0.0.1:$(dfx info pocketic-config-port) \
   --controller $IDENTITY \
