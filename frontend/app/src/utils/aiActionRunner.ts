@@ -269,16 +269,17 @@ export function buildManualCard(
     // The owning app id, baked onto the built card so the recipient binds the surface to this app.
     appId?: number,
     appRevision?: bigint,
+    // The actual source text, when this deterministic QC seam stands in for text inference. This
+    // keeps declared from_message/keyword rules identical to the normal runAiAction path.
+    messageText?: string,
 ): ProposeResult {
     const candidates = Array.isArray(manualExtraction) ? manualExtraction : [manualExtraction];
-    // No message text: message-driven rules (from_message / keyword_map override) don't apply to a
-    // manual extraction — normalize + schema conformance still run, per element.
     const valid: Record<string, unknown>[] = [];
     for (const candidate of candidates) {
         const finalExtraction = applyRulesPostPass(
             def.rules ?? [],
             candidate,
-            undefined,
+            messageText,
             def.responseSchema,
         );
         if (missingRequired(finalExtraction, def.responseSchema).length === 0) {
@@ -356,6 +357,7 @@ async function runDefinition(
             additionalRecipientKeys,
             appId,
             appRevision,
+            content.kind === "text_content" ? content.text : undefined,
         );
     }
 

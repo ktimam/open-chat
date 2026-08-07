@@ -133,6 +133,44 @@ describe("buildManualCard (manual-extraction gate)", () => {
         }
     });
 
+    it("applies from_message rules to the real source text in the manual QC path", () => {
+        const schema = DEF.responseSchema as {
+            type: string;
+            properties: Record<string, unknown>;
+            required: string[];
+        };
+        const def: AiActionDefinition = {
+            ...DEF,
+            rules: [{ kind: "from_message", field: "message", maxLength: 200 }],
+            responseSchema: {
+                ...schema,
+                properties: {
+                    ...schema.properties,
+                    message: { type: "string", maxLength: 200 },
+                },
+            },
+        };
+        const sourceText = "Journey qc: cleaning fee 350 EGP";
+        const r = buildManualCard(
+            def,
+            { kind: "settlement", amount: 350, currency: "EGP" },
+            RECIPIENT,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            sourceText,
+        );
+        expect(r.kind).toBe("ready");
+        if (r.kind === "ready") {
+            expect(r.extracted.message).toBe(sourceText);
+            expect(JSON.parse(new TextDecoder().decode(r.card.confirmPayload!))).toMatchObject({
+                currency: "EGP",
+                message: sourceText,
+            });
+        }
+    });
+
     it("no schema: the manual extraction passes through and builds a card", () => {
         const def: AiActionDefinition = { ...DEF, responseSchema: undefined };
         const r = buildManualCard(def, { amount: 0 }, RECIPIENT);
