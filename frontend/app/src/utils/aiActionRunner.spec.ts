@@ -857,11 +857,22 @@ describe("runProposeFlow", () => {
         expect(deps.toast).not.toHaveBeenCalled();
     });
 
-    it("never opens the manual prompt when a model IS available", async () => {
+    it("checks the inert manual seam before using an available model", async () => {
         const deps = flowDeps({ canInfer: vi.fn(() => true) });
         await runProposeFlow(deps);
-        expect(deps.promptForExtraction).not.toHaveBeenCalled();
+        expect(deps.promptForExtraction).toHaveBeenCalledOnce();
         expect(deps.propose).toHaveBeenCalled();
+    });
+
+    it("lets the explicit manual test seam override an available model deterministically", async () => {
+        const deps = flowDeps({
+            canInfer: vi.fn(() => true),
+            promptForExtraction: vi.fn(() => ({ amount: 20 })),
+        });
+        await runProposeFlow(deps);
+        expect(deps.propose).toHaveBeenCalledWith({ amount: 20 });
+        expect(deps.canInfer).not.toHaveBeenCalled();
+        expect(deps.toast).not.toHaveBeenCalled();
     });
 
     it("an 'unavailable' propose reaches the toast even when the retry prompt gives nothing", async () => {

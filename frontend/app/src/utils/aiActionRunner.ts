@@ -672,13 +672,14 @@ export async function runProposeFlow(deps: ProposeFlowDeps): Promise<void> {
         return;
     }
 
-    let extraction: ManualExtraction | undefined;
-    if (!deps.canInfer()) {
-        extraction = deps.promptForExtraction();
-        if (extraction === undefined) {
-            deps.toast(NO_MODEL_MESSAGE);
-            return;
-        }
+    // The prompt dependency is an inert check for real users: both ChatMessage trees return
+    // undefined unless the explicit local-only manualExtract test seam is armed. Check it before
+    // model availability so deterministic browser QC can override an attached web/native model
+    // without unloading or mutating that user's model state.
+    const extraction = deps.promptForExtraction();
+    if (extraction === undefined && !deps.canInfer()) {
+        deps.toast(NO_MODEL_MESSAGE);
+        return;
     }
 
     let result = await deps.propose(extraction);
