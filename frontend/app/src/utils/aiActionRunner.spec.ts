@@ -41,8 +41,10 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
     buildManualCard,
+    MANUAL_EXTRACTION_CANCELLED,
     manualExtractEnabled,
     imageUnsupportedReason,
+    parseManualExtractionPrompt,
     proposeFailureMessage,
     proposeAndPost,
     proposeAndPostCandidate,
@@ -52,6 +54,7 @@ import {
     runProposeFlow,
     NO_MODEL_MESSAGE,
     type AiActionCandidate,
+    type ManualExtractionPromptResult,
     type ProposeFlowDeps,
     type ProposeResult,
 } from "./aiActionRunner";
@@ -237,9 +240,9 @@ describe("manualExtractEnabled", () => {
     it("is false when neither the flag nor the query param is set", () => {
         expect(manualExtractEnabled()).toBe(false);
     });
-    it('is true when localStorage["oc:manualExtract"] === "1"', () => {
+    it("ignores a stale persistent flag so QC cannot contaminate a real profile", () => {
         localStorage.setItem("oc:manualExtract", "1");
-        expect(manualExtractEnabled()).toBe(true);
+        expect(manualExtractEnabled()).toBe(false);
     });
     it("is false for any other localStorage value", () => {
         localStorage.setItem("oc:manualExtract", "yes");
@@ -248,6 +251,52 @@ describe("manualExtractEnabled", () => {
     it("is true when the URL carries ?manualExtract=1", () => {
         history.replaceState({}, "", "/?manualExtract=1");
         expect(manualExtractEnabled()).toBe(true);
+    });
+});
+
+describe("parseManualExtractionPrompt", () => {
+    it("parses a valid extraction without reporting an error", () => {
+        const onInvalid = vi.fn();
+        expect(parseManualExtractionPrompt('{"amount":20,"currency":"USD"}', onInvalid)).toEqual({
+            amount: 20,
+            currency: "USD",
+        });
+        expect(onInvalid).not.toHaveBeenCalled();
+    });
+
+    it("parses an array when every extraction is a plain object", () => {
+        const onInvalid = vi.fn();
+        expect(parseManualExtractionPrompt('[{"amount":20},{"amount":30}]', onInvalid)).toEqual([
+            { amount: 20 },
+            { amount: 30 },
+        ]);
+        expect(onInvalid).not.toHaveBeenCalled();
+    });
+
+    it("maps Cancel to the cancellation sentinel without reporting invalid JSON", () => {
+        const onInvalid = vi.fn();
+        expect(parseManualExtractionPrompt(null, onInvalid)).toBe(MANUAL_EXTRACTION_CANCELLED);
+        expect(onInvalid).not.toHaveBeenCalled();
+    });
+
+    it("reports malformed JSON once and maps it to the cancellation sentinel", () => {
+        const onInvalid = vi.fn();
+        expect(parseManualExtractionPrompt('{"amount":', onInvalid)).toBe(
+            MANUAL_EXTRACTION_CANCELLED,
+        );
+        expect(onInvalid).toHaveBeenCalledOnce();
+    });
+
+    it.each([
+        ["null", "null"],
+        ["number", "7"],
+        ["string", '"expense"'],
+        ["mixed array", '[{"amount":20},null]'],
+        ["nested array item", '[{"amount":20},[{"amount":30}]]'],
+    ])("rejects valid JSON with a non-object extraction shape: %s", (_name, raw) => {
+        const onInvalid = vi.fn();
+        expect(parseManualExtractionPrompt(raw, onInvalid)).toBe(MANUAL_EXTRACTION_CANCELLED);
+        expect(onInvalid).toHaveBeenCalledOnce();
     });
 });
 
@@ -872,10 +921,9 @@ describe("runProposeFlow", () => {
         expect(deps.propose).not.toHaveBeenCalled();
     });
 
-    it("says the SAME thing when the manual seam is on but its prompt is dismissed", async () => {
-        // The seam answering `undefined` means "no extraction available" — identical to it being off.
-        // Branching on the seam before deciding whether to speak is what made a stale
-        // `oc:manualExtract` (or a browser suppressing repeat dialogs) look like a dead button.
+    it("explains the missing model when the manual seam is inactive", async () => {
+        // Undefined means the query-only seam is inactive. An explicit Cancel has its own sentinel
+        // and is tested separately as a quiet user decision.
         const deps = flowDeps({
             canInfer: vi.fn(() => false),
             promptForExtraction: vi.fn(() => undefined),
@@ -913,6 +961,19 @@ describe("runProposeFlow", () => {
         expect(deps.toast).not.toHaveBeenCalled();
     });
 
+    it("stops without inference or a card when the manual QC prompt is cancelled", async () => {
+        const deps = flowDeps({
+            canInfer: vi.fn(() => true),
+            promptForExtraction: vi.fn(
+                (): ManualExtractionPromptResult => MANUAL_EXTRACTION_CANCELLED,
+            ),
+        });
+        await runProposeFlow(deps);
+        expect(deps.propose).not.toHaveBeenCalled();
+        expect(deps.canInfer).not.toHaveBeenCalled();
+        expect(deps.toast).not.toHaveBeenCalled();
+    });
+
     it("an 'unavailable' propose reaches the toast even when the retry prompt gives nothing", async () => {
         const deps = flowDeps({
             propose: resolving({ kind: "unavailable", reason: "no runtime" }),
@@ -920,6 +981,21 @@ describe("runProposeFlow", () => {
         });
         await runProposeFlow(deps);
         expect(deps.toast).toHaveBeenCalledWith(NO_MODEL_MESSAGE);
+    });
+
+    it("an explicit Cancel at the direct unavailable retry stops without another proposal", async () => {
+        const promptForExtraction = vi
+            .fn<() => ManualExtractionPromptResult>()
+            .mockReturnValueOnce(undefined)
+            .mockReturnValueOnce(MANUAL_EXTRACTION_CANCELLED);
+        const deps = flowDeps({
+            propose: resolving({ kind: "unavailable", reason: "no runtime" }),
+            promptForExtraction,
+        });
+        await runProposeFlow(deps);
+        expect(promptForExtraction).toHaveBeenCalledTimes(2);
+        expect(deps.propose).toHaveBeenCalledOnce();
+        expect(deps.toast).not.toHaveBeenCalled();
     });
 
     // THE branch the mobile tree still got wrong: after the chooser, an `unavailable` whose retry
@@ -935,6 +1011,23 @@ describe("runProposeFlow", () => {
         await runProposeFlow(deps);
         expect(deps.chooseCandidate).toHaveBeenCalledWith([CANDIDATE]);
         expect(deps.toast).toHaveBeenCalledWith(NO_MODEL_MESSAGE);
+    });
+
+    it("an explicit Cancel at the chosen-candidate retry stops without another proposal", async () => {
+        const promptForExtraction = vi
+            .fn<() => ManualExtractionPromptResult>()
+            .mockReturnValueOnce(undefined)
+            .mockReturnValueOnce(MANUAL_EXTRACTION_CANCELLED);
+        const deps = flowDeps({
+            propose: resolving({ kind: "choose", candidates: [CANDIDATE] }),
+            chooseCandidate: vi.fn(async () => CANDIDATE),
+            proposeCandidate: resolving({ kind: "unavailable", reason: "no runtime" }),
+            promptForExtraction,
+        });
+        await runProposeFlow(deps);
+        expect(promptForExtraction).toHaveBeenCalledTimes(2);
+        expect(deps.proposeCandidate).toHaveBeenCalledOnce();
+        expect(deps.toast).not.toHaveBeenCalled();
     });
 
     it("backing out of the chooser is a choice — no candidate runs, nothing is claimed", async () => {
@@ -975,10 +1068,8 @@ describe("runProposeFlow", () => {
     });
 });
 
-// Crude on purpose. The two ChatMessage trees are near-copies, and the only reason the silent propose
-// survived in one of them is that the fix went into whichever file someone had open. Nothing else
-// notices when the trees drift: an external live harness selects `.bubble-wrapper`, which exists only in the classic
-// tree, so it has never once looked at the mobile one.
+// Keep only the cross-tree wiring check here. The parser, proposal decisions, and concurrent
+// single-flight lifecycle are behavior-tested as pure utilities above and in singleFlight.spec.ts.
 describe("both ChatMessage trees run the SHARED propose flow", () => {
     const TREES = {
         classic: "../components/home/ChatMessage.svelte",
@@ -986,13 +1077,36 @@ describe("both ChatMessage trees run the SHARED propose flow", () => {
     };
 
     for (const [tree, relative] of Object.entries(TREES)) {
-        it(`${tree}: delegates to runProposeFlow and keeps no copy of the decisions`, () => {
+        it(`${tree}: delegates decisions, parsing, and lifecycle to shared utilities`, () => {
             const src = readFileSync(fileURLToPath(new URL(relative, import.meta.url)), "utf8");
             expect(src).toContain("runProposeFlow(");
+            expect(src).toContain("const runAiActionHandler = createSingleFlight(");
+            expect(src).toContain("parseManualExtractionPrompt(");
+            expect(src).toContain("busy={proposing}");
             // Deciding for itself whether a model exists is how a tree starts owning the flow again.
             expect(src).not.toContain("canInferOnDevice()");
             // A second copy of the message is a second thing to forget to fix.
             expect(src).not.toContain("No on-device model is ready");
         });
     }
+
+    it("classic renders a real action chooser without requiring the manual-QC query", () => {
+        const src = readFileSync(
+            fileURLToPath(new URL(TREES.classic, import.meta.url)),
+            "utf8",
+        );
+        expect(src).toContain("let aiActionChooser = $state");
+        expect(src).toContain("function chooseCandidate(");
+        expect(src).toContain("chooseCandidate,");
+        expect(src).toContain("{#if aiActionChooser !== undefined}");
+        expect(src).toContain("<Button fill secondary onClick={() => closeChooser(candidate)}>");
+        expect(src).toContain("closeChooser(candidate)");
+        expect(src).not.toContain("function promptForCandidate(");
+    });
+
+    it("mobile keeps a visible working surface after the suggestion chip is dismissed", () => {
+        const src = readFileSync(fileURLToPath(new URL(TREES.mobile, import.meta.url)), "utf8");
+        expect(src).toContain("{:else if proposing}");
+        expect(src).toContain('i18nKey("aiApps.autoPropose.working")');
+    });
 });

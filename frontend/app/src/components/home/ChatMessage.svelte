@@ -2,13 +2,16 @@
     import { navigate } from "@utils/navigation";
     import {
         manualExtractEnabled,
+        parseManualExtractionPrompt,
         proposeAndPost,
         proposeAndPostCandidate,
         preflightAiActionForMessage,
         runProposeFlow,
         type AiActionCandidate,
+        type ManualExtractionPromptResult,
     } from "@utils/aiActionRunner";
     import { canInferOnDevice } from "@utils/onDeviceInference";
+    import { createSingleFlight } from "@utils/singleFlight";
     import {
         markSurfaceShownAfterConsent,
         surfaceToOpenAfterConfirm,
@@ -74,6 +77,7 @@
     import { canShareMessage } from "../../utils/share";
     import { removeQueryStringParam } from "../../utils/urls";
     import Avatar from "../Avatar.svelte";
+    import Button from "../Button.svelte";
     import BotMessageContext from "../bots/BotMessageContext.svelte";
     import BotProfile, { type BotProfileProps } from "../bots/BotProfile.svelte";
     import HoverIcon from "../HoverIcon.svelte";
@@ -315,36 +319,40 @@
 
     // The raw-JSON extraction prompt is a TEST SEAM only (Issue 1): real users with no on-device
     // model must never see a raw JSON box — they're guided to set one up (runProposeFlow says so). It
-    // runs solely when `manualExtractEnabled()` is set (localStorage flag / ?manualExtract=1), which
-    // the automated journey harness uses to drive the confirm → deposit cycle without a model.
-    function promptForExtraction():
-        | Record<string, unknown>
-        | Record<string, unknown>[]
-        | undefined {
+    // runs solely when this tab has ?manualExtract=1; the journey uses a temporary tab so the
+    // signed-in user's normal tab and persistent profile state remain untouched.
+    function promptForExtraction(): ManualExtractionPromptResult {
         if (!manualExtractEnabled()) return undefined;
         const raw = window.prompt(
             'Enter the action\'s fields as JSON to propose it, e.g. {"amount":20,"currency":"USD"}',
             "{}",
         );
-        if (raw === null) return undefined;
-        try {
-            return JSON.parse(raw) as Record<string, unknown> | Record<string, unknown>[];
-        } catch {
-            toastStore.showFailureToast(i18nKey("That isn't valid JSON"));
-            return undefined;
-        }
+        return parseManualExtractionPrompt(raw, () =>
+            toastStore.showFailureToast(
+                i18nKey("Enter a JSON object or an array of JSON objects"),
+            ),
+        );
     }
 
-    // This (classic) UI has no chooser sheet — a numbered prompt picks between multiple enabled app
-    // actions, behind the same manual-extract test seam as the JSON prompt above.
-    function promptForCandidate(candidates: AiActionCandidate[]): AiActionCandidate | undefined {
-        if (!manualExtractEnabled()) return undefined;
-        const list = candidates
-            .map((c, i) => `${i + 1}: ${c.app.manifest.name} — ${c.action.name}`)
-            .join("\n");
-        const raw = window.prompt(`Choose an action to run:\n${list}`, "1");
-        if (raw === null) return undefined;
-        return candidates[parseInt(raw, 10) - 1];
+    // Multiple generic app actions use a real chooser in every classic tab. This is independent of
+    // the query-only manual-extraction QC seam: model-backed users must be able to pick an action too.
+    let aiActionChooser = $state<{ candidates: AiActionCandidate[] } | undefined>(undefined);
+    let chooserResolve: ((candidate: AiActionCandidate | undefined) => void) | undefined;
+
+    function closeChooser(candidate: AiActionCandidate | undefined) {
+        aiActionChooser = undefined;
+        const resolve = chooserResolve;
+        chooserResolve = undefined;
+        resolve?.(candidate);
+    }
+
+    function chooseCandidate(
+        candidates: AiActionCandidate[],
+    ): Promise<AiActionCandidate | undefined> {
+        return new Promise<AiActionCandidate | undefined>((resolve) => {
+            chooserResolve = resolve;
+            aiActionChooser = { candidates };
+        });
     }
 
     // A per-user-keys app the user hasn't linked opens the proper pairing modal (AiAppLinkModal: a
@@ -410,14 +418,12 @@
     let proposing = $state(false);
 
     // The decisions live in runProposeFlow (utils/aiActionRunner), shared with the mobile tree; this
-    // component supplies only the surfaces this tree has — window prompts and the link modal. The two
-    // trees each kept their own copy of the flow until one was fixed and the other was not, and the
-    // propose button on the forgotten tree quietly did nothing.
-    async function runAiActionHandler() {
-        if (proposing) return;
-        proposing = true;
-        try {
-            await runProposeFlow({
+    // component supplies only the surfaces this tree has — the manual-QC prompt, action chooser, and
+    // link modal. The two trees each kept their own copy of the flow until one was fixed and the other
+    // was not, and the propose button on the forgotten tree quietly did nothing.
+    const runAiActionHandler = createSingleFlight(
+        () =>
+            runProposeFlow({
                 preflight: () => preflightAiActionForMessage(client, messageContext.chatId),
                 canInfer: canInferOnDevice,
                 promptForExtraction,
@@ -431,14 +437,12 @@
                         candidate,
                         extraction,
                     ),
-                chooseCandidate: promptForCandidate,
+                chooseCandidate,
                 linkApp,
                 toast: (message) => toastStore.showFailureToast(i18nKey(message)),
-            });
-        } finally {
-            proposing = false;
-        }
-    }
+            }),
+        (busy) => (proposing = busy),
+    );
 
     function proposeSuggestedAiAction() {
         dismissAutoProposeSuggestion(msg.messageId);
@@ -689,6 +693,35 @@
 
 {#if tipping !== undefined}
     <TipBuilder ledger={tipping} onClose={() => (tipping = undefined)} {msg} {messageContext} />
+{/if}
+
+{#if aiActionChooser !== undefined}
+    {@const candidates = aiActionChooser.candidates}
+    <Overlay dismissible onClose={() => closeChooser(undefined)}>
+        <ModalContent closeIcon hideFooter onClose={() => closeChooser(undefined)}>
+            {#snippet header()}
+                <Translatable resourceKey={i18nKey("aiApps.chooseAction")} />
+            {/snippet}
+            {#snippet body()}
+                <div class="ai-action-choices">
+                    {#each candidates as candidate (`${candidate.app.id}-${candidate.action.name}`)}
+                        <Button fill secondary onClick={() => closeChooser(candidate)}>
+                            <span class="ai-action-choice-label">
+                                <span class="ai-action-choice-title">
+                                    {candidate.app.manifest.name} — {candidate.action.name}
+                                </span>
+                                {#if candidate.action.description.length > 0}
+                                    <span class="ai-action-choice-description">
+                                        {candidate.action.description}
+                                    </span>
+                                {/if}
+                            </span>
+                        </Button>
+                    {/each}
+                </div>
+            {/snippet}
+        </ModalContent>
+    </Overlay>
 {/if}
 
 {#if linkModalApp !== undefined}
@@ -1219,6 +1252,33 @@
                 margin-left: $avatar-width-mob;
             }
         }
+    }
+
+    .ai-action-choices {
+        display: flex;
+        flex-direction: column;
+        gap: $sp3;
+        max-height: 60vh;
+        overflow-y: auto;
+    }
+
+    .ai-action-choice-label {
+        display: flex;
+        flex: 1;
+        flex-direction: column;
+        gap: $sp1;
+        min-width: 0;
+        text-align: start;
+    }
+
+    .ai-action-choice-title {
+        @include font(bold, normal, fs-90);
+    }
+
+    .ai-action-choice-description {
+        @include font(book, normal, fs-70);
+        color: var(--txt-light);
+        white-space: normal;
     }
 
     .propose-working {

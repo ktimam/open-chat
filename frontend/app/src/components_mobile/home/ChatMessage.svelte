@@ -2,13 +2,16 @@
     import { navigate } from "@utils/navigation";
     import {
         manualExtractEnabled,
+        parseManualExtractionPrompt,
         proposeAndPost,
         proposeAndPostCandidate,
         preflightAiActionForMessage,
         runProposeFlow,
         type AiActionCandidate,
+        type ManualExtractionPromptResult,
     } from "@utils/aiActionRunner";
     import { canInferOnDevice } from "@utils/onDeviceInference";
+    import { createSingleFlight } from "@utils/singleFlight";
     import {
         markSurfaceShownAfterConsent,
         surfaceToOpenAfterConfirm,
@@ -30,12 +33,16 @@
     import {
         Avatar,
         Body,
+        ChatFootnote,
         Column,
+        ColourVars,
         Container,
         ListAction,
         MenuTrigger,
         type PanDirection,
+        Row,
         Sheet,
+        Spinner,
     } from "component-lib";
     import {
         type AiAppRegistration,
@@ -268,24 +275,19 @@
 
     // The raw-JSON extraction prompt is a TEST SEAM only (Issue 1): real users with no on-device
     // model must never see a raw JSON box — they're guided to set one up (runProposeFlow says so). It
-    // runs solely when `manualExtractEnabled()` is set (localStorage flag / ?manualExtract=1), which
-    // the automated journey harness uses to drive the confirm → deposit cycle without a model.
-    function promptForExtraction():
-        | Record<string, unknown>
-        | Record<string, unknown>[]
-        | undefined {
+    // runs solely when this tab has ?manualExtract=1; the journey uses a temporary tab so the
+    // signed-in user's normal tab and persistent profile state remain untouched.
+    function promptForExtraction(): ManualExtractionPromptResult {
         if (!manualExtractEnabled()) return undefined;
         const raw = window.prompt(
             'Enter the action\'s fields as JSON to propose it, e.g. {"amount":20,"currency":"USD"}',
             "{}",
         );
-        if (raw === null) return undefined;
-        try {
-            return JSON.parse(raw) as Record<string, unknown> | Record<string, unknown>[];
-        } catch {
-            toastStore.showFailureToast(i18nKey("That isn't valid JSON"));
-            return undefined;
-        }
+        return parseManualExtractionPrompt(raw, () =>
+            toastStore.showFailureToast(
+                i18nKey("Enter a JSON object or an array of JSON objects"),
+            ),
+        );
     }
 
     // More than one enabled app action applies to this message — the user picks one from a sheet.
@@ -373,20 +375,24 @@
     // component supplies only the surfaces this tree has — the chooser and consent sheets. Both trees
     // used to keep their own copy of the flow, and this one was left with a chooser branch that
     // returned without a word: two candidates and no model meant a button that did nothing.
-    async function runAiActionHandler() {
-        await runProposeFlow({
-            preflight: () => preflightAiActionForMessage(client, messageContext.chatId),
-            canInfer: canInferOnDevice,
-            promptForExtraction,
-            propose: (extraction) =>
-                proposeAndPost(client, messageContext, msg.content, extraction),
-            proposeCandidate: (candidate, extraction) =>
-                proposeAndPostCandidate(client, messageContext, msg.content, candidate, extraction),
-            chooseCandidate,
-            linkApp,
-            toast: (message) => toastStore.showFailureToast(i18nKey(message)),
-        });
-    }
+    let proposing = $state(false);
+
+    const runAiActionHandler = createSingleFlight(
+        () =>
+            runProposeFlow({
+                preflight: () => preflightAiActionForMessage(client, messageContext.chatId),
+                canInfer: canInferOnDevice,
+                promptForExtraction,
+                propose: (extraction) =>
+                    proposeAndPost(client, messageContext, msg.content, extraction),
+                proposeCandidate: (candidate, extraction) =>
+                    proposeAndPostCandidate(client, messageContext, msg.content, candidate, extraction),
+                chooseCandidate,
+                linkApp,
+                toast: (message) => toastStore.showFailureToast(i18nKey(message)),
+            }),
+        (busy) => (proposing = busy),
+    );
 
     function cancelReminder(content: MessageReminderCreatedContent) {
         client
@@ -1089,10 +1095,32 @@
                             {me}
                             title={autoProposeSuggestion.title}
                             offset={!hasThread && !hasReactions && !hasTips}
+                            busy={proposing}
                             onPropose={proposeSuggestedAiAction}
                             onDismiss={() => dismissAutoProposeSuggestion(msg.messageId)}
                             onMute={muteAutoProposeSuggestions}
                         />
+                    {:else if proposing}
+                        <Row
+                            supplementalClass={"auto-propose-working"}
+                            width={"hug"}
+                            height={"hug"}
+                            padding={["xxs", "sm"]}
+                            background={ColourVars.background2}
+                            crossAxisAlignment={"center"}
+                            mainAxisAlignment={"center"}
+                            gap={"xs"}
+                            borderRadius={"circle"}
+                            borderWidth={"thick"}
+                            borderColour={ColourVars.background0}>
+                            <Spinner
+                                size={"1rem"}
+                                foregroundColour={"var(--primary)"}
+                                backgroundColour={"var(--text-tertiary)"} />
+                            <ChatFootnote>
+                                <Translatable resourceKey={i18nKey("aiApps.autoPropose.working")} />
+                            </ChatFootnote>
+                        </Row>
                     {/if}
                 </Container>
             </Container>

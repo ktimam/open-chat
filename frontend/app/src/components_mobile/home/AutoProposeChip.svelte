@@ -4,7 +4,7 @@
     // (see utils/autoPropose.ts). Tap runs the existing propose flow; the X dismisses
     // the suggestion, and long-pressing the X mutes suggestions for the whole chat.
     import { i18nKey } from "@src/i18n/i18n";
-    import { ChatFootnote, ColourVars, Container, Row } from "component-lib";
+    import { ChatFootnote, ColourVars, Container, Row, Spinner } from "component-lib";
     import { _ } from "svelte-i18n";
     import Close from "svelte-material-icons/Close.svelte";
     import Robot from "svelte-material-icons/RobotOutline.svelte";
@@ -15,12 +15,14 @@
         // The matched action's card title.
         title: string;
         offset: boolean;
+        // The propose flow is running: show progress and swallow duplicate taps.
+        busy?: boolean;
         onPropose: () => void;
         onDismiss: () => void;
         onMute: () => void;
     }
 
-    let { me, title, offset, onPropose, onDismiss, onMute }: Props = $props();
+    let { me, title, offset, busy = false, onPropose, onDismiss, onMute }: Props = $props();
 
     const LONG_PRESS_MS = 600;
     let pressTimer: number | undefined = undefined;
@@ -60,8 +62,8 @@
     mainAxisAlignment={me ? "end" : "start"}
     crossAxisAlignment={"center"}>
     <Row
-        supplementalClass={"auto-propose-chip"}
-        onClick={onPropose}
+        supplementalClass={`auto-propose-chip${busy ? " busy" : ""}`}
+        onClick={() => !busy && onPropose()}
         width={"hug"}
         height={"hug"}
         padding={["xxs", "sm"]}
@@ -72,9 +74,20 @@
         borderRadius={"circle"}
         borderWidth={"thick"}
         borderColour={ColourVars.background0}>
-        <Robot size={"1rem"} color={"var(--primary)"} />
+        {#if busy}
+            <Spinner
+                size={"1rem"}
+                foregroundColour={"var(--primary)"}
+                backgroundColour={"var(--text-tertiary)"} />
+        {:else}
+            <Robot size={"1rem"} color={"var(--primary)"} />
+        {/if}
         <ChatFootnote>
-            <Translatable resourceKey={i18nKey("aiApps.autoPropose.suggestion", { title })} />
+            {#if busy}
+                <Translatable resourceKey={i18nKey("aiApps.autoPropose.working")} />
+            {:else}
+                <Translatable resourceKey={i18nKey("aiApps.autoPropose.suggestion", { title })} />
+            {/if}
         </ChatFootnote>
         <button
             type="button"
@@ -92,6 +105,10 @@
 <style lang="scss">
     :global(.auto-propose-offset-top) {
         top: -0.5rem;
+    }
+
+    :global(.auto-propose-chip.busy) {
+        cursor: default;
     }
 
     .dismiss {

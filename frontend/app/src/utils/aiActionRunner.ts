@@ -251,6 +251,40 @@ async function contentToInput(
 // A manual extraction is either a single entry (OBJECT) or several (ARRAY of objects) — the test/
 // manual prompt answer may be either, mirroring what the model may emit.
 export type ManualExtraction = Record<string, unknown> | Record<string, unknown>[];
+export const MANUAL_EXTRACTION_CANCELLED = Symbol("manual_extraction_cancelled");
+export type ManualExtractionPromptResult =
+    | ManualExtraction
+    | typeof MANUAL_EXTRACTION_CANCELLED
+    | undefined;
+
+function isPlainExtractionObject(value: unknown): value is Record<string, unknown> {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
+}
+
+// Keep raw window.prompt handling out of the two ChatMessage trees so Cancel, malformed JSON, and
+// wrong top-level shapes have one testable meaning everywhere. The callback lets each UI surface own
+// its translated error toast.
+export function parseManualExtractionPrompt(
+    raw: string | null,
+    onInvalid: () => void,
+): ManualExtraction | typeof MANUAL_EXTRACTION_CANCELLED {
+    if (raw === null) return MANUAL_EXTRACTION_CANCELLED;
+    try {
+        const parsed: unknown = JSON.parse(raw);
+        if (
+            isPlainExtractionObject(parsed) ||
+            (Array.isArray(parsed) && parsed.every(isPlainExtractionObject))
+        ) {
+            return parsed;
+        }
+    } catch {
+        // Malformed JSON follows the same reported invalid-input path as a wrong top-level shape.
+    }
+    onInvalid();
+    return MANUAL_EXTRACTION_CANCELLED;
+}
 
 // The manual-extraction half of runDefinition, exported as a pure seam for tests. A caller-supplied
 // extraction goes through the SAME deterministic gate as the model path — the rules post-pass
@@ -307,18 +341,12 @@ export function buildManualCard(
     };
 }
 
-// Test seam for the manual-JSON extraction prompt (Issue 1): the raw `window.prompt` fallback for
-// clients with no on-device model runs ONLY when this is enabled — either
-// `localStorage["oc:manualExtract"] === "1"` or the URL carries `?manualExtract=1`. Real users
-// (seam OFF) are guided to set up an on-device model instead of seeing a raw JSON box; the automated
-// journey harness sets the flag to keep driving the confirm → deposit cycle without a model.
+// Test seam for the manual-JSON extraction prompt (Issue 1): the raw window.prompt fallback runs
+// only when this tab's URL carries ?manualExtract=1. Never read persistent storage here: a crashed
+// live journey must not leave a real profile opening test prompts on later proposals. Real users
+// are guided to set up an on-device model instead of seeing a raw JSON box.
 export function manualExtractEnabled(): boolean {
     if (typeof window === "undefined") return false;
-    try {
-        if (window.localStorage?.getItem("oc:manualExtract") === "1") return true;
-    } catch {
-        // localStorage can throw in locked-down sandboxes — treat as disabled.
-    }
     try {
         if (new URLSearchParams(window.location.search).get("manualExtract") === "1") return true;
     } catch {
@@ -635,9 +663,9 @@ export interface ProposeFlowDeps {
     preflight: () => Promise<AiActionPreflightBlocker | undefined>;
     // Is an on-device model loaded and usable right now?
     canInfer: () => boolean;
-    // The manual-JSON seam (a prompt behind `manualExtractEnabled`). Real users are never offered it,
-    // so it answers `undefined` — which means "no extraction available", NOT "stay quiet".
-    promptForExtraction: () => ManualExtraction | undefined;
+    // The manual-JSON seam is enabled only by this tab's explicit query. Undefined means the seam is
+    // disabled; the cancellation sentinel means the user explicitly cancelled and the flow must stop.
+    promptForExtraction: () => ManualExtractionPromptResult;
     propose: (extraction?: ManualExtraction) => Promise<ProposeResult>;
     proposeCandidate: (
         candidate: AiActionCandidate,
@@ -660,11 +688,11 @@ export interface ProposeFlowDeps {
  * which carried two hand-maintained copies of it. Each tree keeps its own surfaces (prompts vs
  * sheets) — only the DECISIONS live here.
  *
- * The rule the two copies kept breaking: every path that stops early must first say why. A dismissed
- * seam prompt is not a reason to go quiet — with no model there is nothing to propose and the user
- * needs to be told where to get one, whether that dead end is reached before proposing, after an
- * `unavailable`, or after an `unavailable` from a CHOSEN candidate (the branch the mobile tree
- * returned from in silence, leaving a user with two candidates and no model a dead button).
+ * The rule the two copies kept breaking: every failure path must say why. An explicit Cancel in the
+ * isolated manual-QC seam is a user decision and stops quietly; when that seam is inactive and no
+ * model exists, the user is told where to get one. The same rule applies before proposing, after an
+ * `unavailable`, and after an `unavailable` from a CHOSEN candidate (the branch the mobile tree
+ * once returned from in silence, leaving a user with two candidates and no model a dead button).
  */
 export async function runProposeFlow(deps: ProposeFlowDeps): Promise<void> {
     const blocker = await deps.preflight();
@@ -674,11 +702,11 @@ export async function runProposeFlow(deps: ProposeFlowDeps): Promise<void> {
         return;
     }
 
-    // The prompt dependency is an inert check for real users: both ChatMessage trees return
-    // undefined unless the explicit local-only manualExtract test seam is armed. Check it before
-    // model availability so deterministic browser QC can override an attached web/native model
-    // without unloading or mutating that user's model state.
-    const extraction = deps.promptForExtraction();
+    // The prompt dependency is inert for real users. Check it before model availability so an
+    // explicitly isolated QC tab can override a model without unloading or mutating model state.
+    const prompted = deps.promptForExtraction();
+    if (prompted === MANUAL_EXTRACTION_CANCELLED) return;
+    const extraction = prompted;
     if (extraction === undefined && !deps.canInfer()) {
         deps.toast(NO_MODEL_MESSAGE);
         return;
@@ -700,6 +728,7 @@ export async function runProposeFlow(deps: ProposeFlowDeps): Promise<void> {
         result = await deps.proposeCandidate(candidate, extraction);
         if (result.kind === "unavailable") {
             const retry = deps.promptForExtraction();
+            if (retry === MANUAL_EXTRACTION_CANCELLED) return;
             // NB: no early return when the seam gives nothing — falling through to the message below
             // IS the fix. Returning here is what left the mobile chooser path mute.
             if (retry !== undefined) {
@@ -708,6 +737,7 @@ export async function runProposeFlow(deps: ProposeFlowDeps): Promise<void> {
         }
     } else if (result.kind === "unavailable") {
         const retry = deps.promptForExtraction();
+        if (retry === MANUAL_EXTRACTION_CANCELLED) return;
         if (retry !== undefined) {
             result = await deps.propose(retry);
         }
