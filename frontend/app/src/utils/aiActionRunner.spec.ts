@@ -34,7 +34,12 @@ vi.mock("./onDeviceInference", () => ({
     onDeviceInferenceCapability: inferenceCapabilityMock,
 }));
 
-import type { ActionCardContent, AiActionDefinition, AiAppRegistration } from "@shared";
+import type {
+    ActionCardContent,
+    AiActionDefinition,
+    AiAppCardContentV1,
+    AiAppRegistration,
+} from "@shared";
 import { MAX_AI_ACTION_CANDIDATES } from "@shared";
 import type { MessageContext, OpenChat } from "@client";
 import { readFileSync } from "node:fs";
@@ -189,7 +194,7 @@ describe("buildManualCard (manual-extraction gate)", () => {
         }
     });
 
-    it("an ARRAY of two valid entries fails closed until exact-payload hydration exists", () => {
+    it("an ARRAY of two valid entries becomes one exact multi-entry card", () => {
         const r = buildManualCard(
             DEF,
             [
@@ -198,8 +203,51 @@ describe("buildManualCard (manual-extraction gate)", () => {
             ],
             RECIPIENT,
         );
-        expect(r.kind).toBe("error");
-        if (r.kind === "error") expect(r.error).toContain("exact-payload endpoint");
+        expect(r.kind).toBe("ready_multi");
+        if (r.kind === "ready_multi") {
+            expect(r.card.rows).toEqual([
+                { label: "Entry 1", value: "Amount: 20 · Currency: USD" },
+                { label: "Entry 2", value: "Amount: 30 · Currency: EUR" },
+            ]);
+            expect(JSON.parse(new TextDecoder().decode(r.card.confirmPayload!))).toEqual([
+                { kind: "expense", amount: 20, currency: "USD" },
+                { kind: "expense", amount: 30, currency: "EUR" },
+            ]);
+            expect(r.card.rows.some((row) => row.label.startsWith("__oc_"))).toBe(false);
+        }
+    });
+
+    it("rejects a 33rd manual candidate before building a card", () => {
+        const manual = Array.from({ length: MAX_AI_ACTION_CANDIDATES + 1 }, (_, index) => ({
+            amount: index + 1,
+        }));
+        expect(buildManualCard(DEF, manual, RECIPIENT)).toEqual({
+            kind: "error",
+            error: `The supplied extraction contains more than ${MAX_AI_ACTION_CANDIDATES} action candidates.`,
+        });
+    });
+
+    it("applies the multi-card payload bound to the manual path before posting", () => {
+        const def: AiActionDefinition = {
+            ...DEF,
+            responseSchema: {
+                type: "object",
+                properties: {
+                    amount: { type: "number", exclusiveMinimum: 0 },
+                    opaque: { type: "string" },
+                },
+                required: ["amount"],
+            },
+            card: { ...DEF.card, rows: [{ label: "Amount", valueKey: "amount" }] },
+        };
+        const manual = [
+            { amount: 1, opaque: "x".repeat(16 * 1_024) },
+            { amount: 2 },
+        ];
+        expect(buildManualCard(def, manual, RECIPIENT)).toMatchObject({
+            kind: "error",
+            error: expect.stringContaining("confirmation payload"),
+        });
     });
 
     it("an ARRAY with one valid + one degenerate element drops the bad one → single OBJECT card", () => {
@@ -786,9 +834,13 @@ describe("provenance before posting", () => {
         expect(sendMessageWithContent).not.toHaveBeenCalled();
     });
 
-    it("never mints provenance or sends for a multi-entry manual extraction", async () => {
-        const createAiAppCardProvenance = vi.fn();
-        const sendMessageWithContent = vi.fn();
+    it("mints one provenance and sends one exact card for a multi-entry extraction", async () => {
+        const provenance = new Uint8Array([7, 8, 9]);
+        const createAiAppCardProvenance = vi.fn(async () => ({
+            provenance,
+            expiresAt: BigInt(Date.now() + 60_000),
+        }));
+        const sendMessageWithContent = vi.fn(async () => ({ kind: "success" }));
         const client = {
             createAiAppCardProvenance,
             sendMessageWithContent,
@@ -797,8 +849,56 @@ describe("provenance before posting", () => {
             { amount: 20 },
             { amount: 30 },
         ]);
+        expect(result.kind).toBe("ready_multi");
+        expect(createAiAppCardProvenance).toHaveBeenCalledTimes(1);
+        expect(sendMessageWithContent).toHaveBeenCalledTimes(1);
+
+        const provenanceCalls = createAiAppCardProvenance.mock.calls as unknown as unknown[][];
+        const sendCalls = sendMessageWithContent.mock.calls as unknown as unknown[][];
+        const exactContent = provenanceCalls[0][3] as AiAppCardContentV1;
+        const provedMessageId = provenanceCalls[0][5] as bigint;
+        expect(JSON.parse(new TextDecoder().decode(exactContent.confirmPayload!))).toEqual([
+            { amount: 20 },
+            { amount: 30 },
+        ]);
+        expect(exactContent.rows).toEqual([
+            { label: "Entry 1", value: "Amount: 20" },
+            { label: "Entry 2", value: "Amount: 30" },
+        ]);
+        expect(createAiAppCardProvenance).toHaveBeenCalledWith(
+            APP.id,
+            APP.updated,
+            DEF.name,
+            exactContent,
+            messageContext.chatId,
+            provedMessageId,
+            undefined,
+        );
+        const sendCall = sendCalls[0];
+        const sentCard = sendCall[1] as ActionCardContent;
+        expect(sendCall[5]).toBe(provedMessageId);
+        expect(sentCard.appProvenance).toEqual(provenance);
+        expect(JSON.parse(new TextDecoder().decode(sentCard.confirmPayload!))).toEqual([
+            { amount: 20 },
+            { amount: 30 },
+        ]);
+    });
+
+    it("sends no partial multi-entry card when exact provenance is unavailable", async () => {
+        const createAiAppCardProvenance = vi.fn(async () => undefined);
+        const sendMessageWithContent = vi.fn();
+        const client = {
+            createAiAppCardProvenance,
+            sendMessageWithContent,
+        } as unknown as OpenChat;
+
+        const result = await proposeAndPostCandidate(client, messageContext, content, CANDIDATE, [
+            { amount: 20 },
+            { amount: 30 },
+        ]);
+
         expect(result.kind).toBe("error");
-        expect(createAiAppCardProvenance).not.toHaveBeenCalled();
+        expect(createAiAppCardProvenance).toHaveBeenCalledTimes(1);
         expect(sendMessageWithContent).not.toHaveBeenCalled();
     });
 });

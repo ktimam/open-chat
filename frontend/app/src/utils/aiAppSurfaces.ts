@@ -13,7 +13,7 @@ import type { AiAppRegistration, AiAppSurface, ChatIdentifier } from "@shared";
 import { chatKeyFor, isSafeAiActionFieldName } from "@shared";
 import { normalizeAiAppSurfaceUrl } from "./cardBridge";
 import { configKeys } from "./config";
-import { resolveConnectedDirectChatAiApp } from "./aiAppDirectChat";
+import { directChatAiAppKeys, resolveConnectedDirectChatAiApp } from "./aiAppDirectChat";
 import { openExternalUrl } from "./urls";
 
 export type AiAppSurfaceDataDisclosure =
@@ -61,6 +61,10 @@ export interface AuthoritativeAppIdentity {
 // card without treating the sender's title as app identity.
 export interface ResolvedActionApp {
     identity: AuthoritativeAppIdentity;
+    // A non-empty app-specific delivery key records this viewer's explicit, durable pairing with a
+    // per-user-key app. Card rendering may use that pairing as persistent consent to restore the
+    // separately encrypted app context; it is never itself sent to the card frame.
+    hasPersistentUserPairing: boolean;
     cardSurface?: CardSurfaceOpening;
 }
 
@@ -325,9 +329,12 @@ export async function resolveActionAppForCard(
     try {
         if (appId === undefined || appRevision === undefined) return undefined;
         let app: AiAppRegistration | undefined;
+        let hasPersistentUserPairing = false;
         const directChat = chatId.kind === "direct_chat";
         if (directChat) {
-            app = (await resolveConnectedDirectChatAiApp(client, appId, appRevision))?.app;
+            const connected = await resolveConnectedDirectChatAiApp(client, appId, appRevision);
+            app = connected?.app;
+            hasPersistentUserPairing = connected !== undefined;
         } else {
             const enabledIds = await client.enabledAiApps(chatId);
             if (!enabledIds.includes(appId)) return undefined;
@@ -346,13 +353,25 @@ export async function resolveActionAppForCard(
             return undefined;
         }
         if (app.manifest.name.length === 0) return undefined;
+        if (!directChat && app.manifest.perUserKeys === true) {
+            // Pairing restoration is optional presentation state. A transient UserIndex key lookup
+            // failure must not erase authoritative app identity/card rows; it simply leaves private
+            // context behind the manual explicit-consent path.
+            try {
+                hasPersistentUserPairing =
+                    (directChatAiAppKeys(await client.myAiAppKeys()).get(appId)?.length ?? 0) > 0;
+            } catch {
+                hasPersistentUserPairing = false;
+            }
+        }
         const identity: AuthoritativeAppIdentity = {
             id: app.id,
             name: app.manifest.name,
             iconUrl: validatedAppIconUrl(app.manifest.iconUrl),
         };
         const opening = cardSurfaceOpening(app, chatId);
-        if (opening === undefined) return directChat ? undefined : { identity };
+        if (opening === undefined)
+            return directChat ? undefined : { identity, hasPersistentUserPairing };
         // Build the label -> field-key map from the OWNING action's card template. `card.rows` here are
         // the client-side {label, valueKey} shape (aiActionDefinitionFromWire maps wire `field` ->
         // `valueKey`), so valueKey IS the structured field key the app expects.
@@ -368,12 +387,13 @@ export async function resolveActionAppForCard(
                 row.label.startsWith("__oc_") ||
                 Object.hasOwn(labelToField, row.label)
             ) {
-                return { identity };
+                return { identity, hasPersistentUserPairing };
             }
             labelToField[row.label] = row.valueKey;
         }
         return {
             identity,
+            hasPersistentUserPairing,
             cardSurface: { ...opening, labelToField },
         };
     } catch {

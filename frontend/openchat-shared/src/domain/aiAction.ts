@@ -16,6 +16,13 @@ import type { InferenceRequest, InferenceResult } from "./onDeviceModel";
 // compatible per-field bounds, but clients must remain safe when reading legacy, cached, or malformed
 // data and when a model emits an unexpectedly large candidate list.
 export const MAX_AI_ACTION_CANDIDATES = 32;
+// These byte/character ceilings mirror the card-attestation and chat-ingress protocol. Keep them
+// client-visible so a model/manual extraction fails before provenance is minted instead of relying
+// on a later canister rejection for limits the browser can compute exactly.
+export const MAX_AI_ACTION_CARD_TITLE_CHARS = 200;
+export const MAX_AI_ACTION_CARD_ROW_VALUE_CHARS = 4_096;
+export const MAX_AI_APP_CONFIRM_PAYLOAD_BYTES = 16 * 1_024;
+export const MAX_ATTESTED_ACTION_CARD_BYTES = 64 * 1_024;
 const MAX_AI_ACTION_MODEL_OUTPUT_CHARS = 131_072;
 const MAX_AI_ACTION_RULES = 20;
 const MAX_AI_ACTION_KEYWORD_MAPPINGS = 50;
@@ -327,8 +334,7 @@ export interface AiAppCardContentV1 {
 
 export type RunAiActionResult =
     | { kind: "ready"; card: ActionCardContent; extracted: Record<string, unknown> }
-    // Retained as a source-compatible result shape for callers handling older runners. New proposals
-    // fail closed before producing this until authorized exact-payload hydration exists.
+    // Several valid entries extracted from one message: one card with one frozen JSON-array payload.
     | { kind: "ready_multi"; card: ActionCardContent; extracted: Record<string, unknown>[] }
     // No native runtime / no model selected — the caller must degrade gracefully (no autonomous fallback).
     | { kind: "unavailable"; reason: string }
@@ -919,10 +925,9 @@ export function buildActionCardContent(
     };
 }
 
-// Legacy pure builder retained for bounded domain callers and tests; the current proposal path rejects
-// multi-entry cards until an access-controlled exact-payload endpoint exists. Exact entries live only
-// in confirmPayload and are never encoded into public rows. Each card row summarises one
-// entry — its value composed from the SAME template row valueKeys the single-entry card uses (so a
+// Pure multi-entry builder. Exact entries live only in confirmPayload and are never encoded into
+// public rows. Each card row summarises one entry — its value composed from the SAME template row
+// valueKeys the single-entry card uses (so a
 // direction/kind field renders through its declared value exactly as today), joined into one readable
 // line. The title reflects the entry count while deriving from the definition's own card title (no
 // app name is hardcoded). Routing (recipient key, fan-out keys, inbox) is threaded identically to the
@@ -941,9 +946,13 @@ export function buildMultiActionCardContent(
     const rows: ActionCardRow[] = extractedList.map((entry, i) => ({
         label: `Entry ${i + 1}`,
         value: templateRows
-            .map((r) => formatValue(entry[r.valueKey]))
-            .filter((v) => v.length > 0)
-            .join(" "),
+            .map((r) => ({ label: r.label, value: formatValue(entry[r.valueKey]) }))
+            .filter((row) => row.value.length > 0)
+            // Summary rows cannot use the manifest's field labels as their own row labels without
+            // multiplying row count beyond the 32-row protocol limit. Preserve that information in
+            // a deterministic, human-readable value so fields such as Type remain identifiable.
+            .map((row) => `${row.label}: ${row.value}`)
+            .join(" · "),
     }));
 
     return {
@@ -964,6 +973,63 @@ export function buildMultiActionCardContent(
         confirmPayload: new TextEncoder().encode(JSON.stringify(extractedList)),
         inboxCanisterId,
     };
+}
+
+const MAX_CANONICAL_CARD_CONTEXT_BYTES =
+    8 + // `OC-CARD\x01`
+    (4 + 29) + // length-prefixed maximum-size viewer principal
+    (1 + 4 + 29 + 4) + // largest chat variant: channel tag + community principal + channel id
+    (1 + 4) + // present thread-root tag + index
+    8 + // message id
+    4 + // app id
+    8; // app revision
+
+function utf8Length(value: string): number {
+    return new TextEncoder().encode(value).byteLength;
+}
+
+function canonicalStringLength(value: string): number {
+    return 4 + utf8Length(value);
+}
+
+function maximumCanonicalCardBytes(card: ActionCardContent): number {
+    let total = MAX_CANONICAL_CARD_CONTEXT_BYTES;
+    total += canonicalStringLength(card.title);
+    total += 4; // row count
+    for (const row of card.rows) {
+        total += canonicalStringLength(row.label);
+        total += canonicalStringLength(row.value);
+    }
+    total += canonicalStringLength(card.confirmLabel);
+    total += canonicalStringLength(card.cancelLabel);
+    total += canonicalStringLength(card.actionId);
+    total += 1 + (card.disclosure === undefined ? 0 : canonicalStringLength(card.disclosure));
+    total += card.expiresAt === undefined ? 1 : 1 + 8;
+    total +=
+        card.confirmPayload === undefined ? 1 : 1 + 4 + card.confirmPayload.byteLength;
+    return total;
+}
+
+// Validate a built multi card against the protocol bounds before the caller asks the app canister
+// to attest it. The aggregate calculation uses worst-case valid principal/chat/thread coordinates,
+// so a pass is safe for every destination while a near-boundary value may be rejected conservatively.
+export function multiActionCardBoundsError(card: ActionCardContent): string | undefined {
+    if ([...card.title].length > MAX_AI_ACTION_CARD_TITLE_CHARS) {
+        return `The multi-entry card title exceeds ${MAX_AI_ACTION_CARD_TITLE_CHARS} characters.`;
+    }
+    if (card.rows.some((row) => [...row.value].length > MAX_AI_ACTION_CARD_ROW_VALUE_CHARS)) {
+        return `A multi-entry card summary exceeds ${MAX_AI_ACTION_CARD_ROW_VALUE_CHARS} characters.`;
+    }
+    if (
+        card.confirmPayload !== undefined &&
+        card.confirmPayload.byteLength > MAX_AI_APP_CONFIRM_PAYLOAD_BYTES
+    ) {
+        return `The multi-entry confirmation payload exceeds ${MAX_AI_APP_CONFIRM_PAYLOAD_BYTES} bytes.`;
+    }
+    if (maximumCanonicalCardBytes(card) > MAX_ATTESTED_ACTION_CARD_BYTES) {
+        return "The multi-entry card exceeds OpenChat's 64 KiB attested-content limit.";
+    }
+    return undefined;
 }
 
 // Orchestrates the full proposal: run the on-device model against the declared prompt, parse, and build the
@@ -1051,9 +1117,9 @@ export async function runAiAction(
         }
     }
 
-    // 0 valid → no card. 1 valid → a single-entry card. Multiple exact entries cannot be safely
-    // reconstructed by a receiving iframe because confirmPayload is intentionally not hydrated; do
-    // not post a misleading summary or restore a hidden public-row transport.
+    // 0 valid → no card. 1 valid → a single-entry card. Multiple valid entries → one attested card
+    // whose exact JSON array remains in the server-stored confirmPayload. Public rows are summaries,
+    // never a hidden payload transport.
     if (valid.length === 0) return { kind: "no_extraction", raw: result.text };
     if (valid.length === 1) {
         return {
@@ -1070,10 +1136,19 @@ export async function runAiAction(
             extracted: valid[0],
         };
     }
-    return {
-        kind: "error",
-        error: "Multiple action entries require an access-controlled exact-payload endpoint before a card can be posted.",
-    };
+    const card = buildMultiActionCardContent(
+        def,
+        valid,
+        recipientPublicKeyPem,
+        inboxCanisterId,
+        additionalRecipientKeys,
+        appId,
+        appRevision,
+    );
+    const boundsError = multiActionCardBoundsError(card);
+    return boundsError === undefined
+        ? { kind: "ready_multi", card, extracted: valid }
+        : { kind: "error", error: boundsError };
 }
 
 // --- Directory read ------------------------------------------------------------------------------------------

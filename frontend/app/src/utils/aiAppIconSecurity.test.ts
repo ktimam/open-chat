@@ -15,8 +15,19 @@ describe("AI app icon privacy policy", () => {
         expect(source).toContain("import.meta.env.DEV");
         expect(source).toContain("failed = true");
         expect(source).toContain("remoteAllowed = $state(false)");
+        expect(source).toContain("trustedAutoLoad = false");
+        expect(source).toContain("trustedAutoLoad || remoteAllowed");
         expect(source).toContain("Load external app icon from");
         expect(source).toContain("onclick={allowRemoteIcon}");
+    });
+
+    it("allows immediate icon loading only from fully attested host-owned card chrome", () => {
+        const card = readFileSync(
+            resolve(__dirname, "../components/home/ActionCardContent.svelte"),
+            "utf8",
+        );
+        expect(card).toContain("trustedAutoLoad={cardContentAttested}");
+        expect(card).toContain("isAppCardContentAttested(content)");
     });
 
     it("blocks production localhost/private/metadata/OC-host icons and permits public HTTPS", () => {

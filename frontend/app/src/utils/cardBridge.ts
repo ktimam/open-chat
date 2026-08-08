@@ -31,51 +31,6 @@ export function isAppCardContentAttested(card: {
     return card.appVerified === true && card.appContentVerified === true;
 }
 
-/**
- * A successful provenance-backed send retains the exact confirm payload only in the current
- * sender's in-memory event. Cached/history and recipient hydration deliberately strip it. The
- * user's explicit proposal therefore doubles as load consent only for that live, fully attested
- * card; every other viewer remains behind the external-origin gate.
- */
-export function shouldAutoLoadFreshlyProposedAppCard(
-    card: {
-        appVerified?: boolean;
-        appContentVerified?: boolean;
-        confirmPayload?: Uint8Array;
-    },
-    pending: boolean,
-    readonly: boolean,
-    credentiallessSupported: boolean,
-): boolean {
-    return (
-        pending &&
-        !readonly &&
-        credentiallessSupported &&
-        isAppCardContentAttested(card) &&
-        card.confirmPayload !== undefined &&
-        card.confirmPayload.byteLength > 0
-    );
-}
-
-const FRESH_APP_CARD_AUTO_LOAD_LIMIT = 256;
-const freshlyAutoLoadedAppCards = new Set<string>();
-
-/**
- * Consume sender load consent once per exact card for this tab. This is intentionally in-memory:
- * reloads must return to explicit consent. Once the bounded set is full, further cards stay behind
- * the explicit Load gate for the rest of the tab rather than forgetting an older consent marker.
- */
-export function consumeFreshlyProposedAppCardAutoLoad(cardKey: string): boolean {
-    if (
-        cardKey.length === 0 ||
-        freshlyAutoLoadedAppCards.has(cardKey) ||
-        freshlyAutoLoadedAppCards.size >= FRESH_APP_CARD_AUTO_LOAD_LIMIT
-    )
-        return false;
-    freshlyAutoLoadedAppCards.add(cardKey);
-    return true;
-}
-
 // The context OpenChat hands the card iframe alongside the prefill data.
 export interface CardInitContext {
     appId: number;
@@ -493,6 +448,35 @@ export function reverseMapRows(
     return out;
 }
 
+// App-owned rendering is appropriate only when every public row belongs to the exact action
+// template and maps to one unique safe field. Summary rows (for example one row per item in a
+// multi-entry proposal) deliberately fail this check: launching the iframe with `{}` or a partial
+// object would hide trusted visible values and invite the app to confirm a different payload. The
+// caller then keeps the authoritative app identity but uses OpenChat's immutable stored-payload
+// renderer instead.
+export function completelyReverseMapRows(
+    rows: readonly { label: string; value: string }[],
+    labelToField: Record<string, string>,
+): Record<string, unknown> | undefined {
+    const out = Object.create(null) as Record<string, unknown>;
+    for (const row of rows) {
+        if (row.label.startsWith(RESERVED_CARD_ROW_PREFIX)) continue;
+        if (!Object.hasOwn(labelToField, row.label)) return undefined;
+        const key = labelToField[row.label];
+        if (!isSafeAiActionFieldName(key) || Object.hasOwn(out, key)) return undefined;
+        out[key] = row.value;
+    }
+    return out;
+}
+
+// `buildActionCardContent` uses this host-owned ordered label convention for a proposal containing
+// multiple exact action entries. Keep it in the immutable OpenChat renderer even if an app happens
+// to declare matching labels: one summary row is not enough to reconstruct each structured entry.
+export function isMultiEntrySummaryRows(rows: readonly { label: string }[]): boolean {
+    const visible = rows.filter((row) => !row.label.startsWith(RESERVED_CARD_ROW_PREFIX));
+    return visible.length > 1 && visible.every((row, index) => row.label === `Entry ${index + 1}`);
+}
+
 // Public summary rows for the classic renderer. Reserved legacy rows are suppressed fail-closed and
 // never parsed, forwarded, or treated as a payload. Generic over the row shape so the Svelte
 // `{#each}` keeps its own row type.
@@ -591,8 +575,9 @@ export function buildCardBootstrap(frameNonce: string): {
     return { type: "oc:card:bootstrap", version: 2, frameNonce };
 }
 
-// Sent only after the user chooses the separate host-owned Share private context action. The public
-// ready/init handshake never asks the external frame to create or disclose a recipient key.
+// Sent only after either a separate host-owned Share action or a durable, app-specific per-user
+// pairing authorizes restoration. The public ready/init handshake alone never asks the external
+// frame to create or disclose a recipient key.
 export function buildCardPrivateContextRequest(frameNonce: string): {
     type: "oc:card:private-context-request";
     version: 2;

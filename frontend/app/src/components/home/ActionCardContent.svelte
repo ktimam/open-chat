@@ -30,10 +30,10 @@
         cardAttemptKey,
         cardCapabilityAttemptStillCurrent,
         cardConfirmationAttemptStillCurrent,
-        consumeFreshlyProposedAppCardAutoLoad,
         cardApprovalRequestFromMessage,
         cardResizeHeightFromMessage,
         clampCardHeight,
+        completelyReverseMapRows,
         decodeConfirmPayload,
         decodeCardRecipientPublicKey,
         deriveCardOrigin,
@@ -41,11 +41,10 @@
         isCardBridgeEventForFrame,
         isCardPublicReadyMessage,
         isAppCardContentAttested,
+        isMultiEntrySummaryRows,
         isRecord,
         newCardFrameNonce,
-        shouldAutoLoadFreshlyProposedAppCard,
         supportsCredentiallessIframe,
-        reverseMapRows,
         startCardHandshakeTimeout,
         startCardBootstrapRetry,
         visibleRows,
@@ -61,8 +60,8 @@
     //      embeds the app's page in an iframe and relays confirm/cancel over
     //      the postMessage bridge. The user can edit values inside the frame; the host snapshots the
     //      exact encoded bytes, obtains a one-time server grant for those bytes, then passes both on.
-    //   2. No usable "card" surface → a read-only public-row summary. Confirmation fails closed because
-    //      received rows are not the app's authorized exact payload.
+    //   2. No safely reconstructable "card" surface → host-owned public rows plus the immutable,
+    //      backend-attested stored-payload confirmation path.
     interface Props {
         content: ActionCardContent;
         readonly: boolean;
@@ -94,6 +93,7 @@
     const client = getContext<OpenChat>("client");
     let resolvedAppIdentity = $state<AuthoritativeAppIdentity | undefined>(undefined);
     let candidateAppIdentity = $state<AuthoritativeAppIdentity | undefined>(undefined);
+    let hasPersistentUserPairing = $state(false);
     let appResolutionComplete = $state(false);
     let credentiallessSupported = $state(false);
     let cardContentAttestationBlocked = $state(false);
@@ -205,7 +205,6 @@
     let capabilityPending = $state(false);
     let privateContextRequested = $state(false);
     let confirmationGrantFailed = $state(false);
-    let cardLoadFailed = $state(false);
     let cardCapability = $state<AiAppCardCapability | undefined>(undefined);
     let capabilityAttempt: CardCapabilityAttemptBinding | undefined;
     let confirmationAttempt: CardConfirmationAttemptBinding | undefined;
@@ -296,6 +295,7 @@
             appResolutionComplete = false;
             resolvedAppIdentity = undefined;
             candidateAppIdentity = undefined;
+            hasPersistentUserPairing = false;
             cardContentAttestationBlocked = false;
             appCardRenderingBlocked = false;
             cardOrigin = undefined;
@@ -303,7 +303,6 @@
             cardLabelToField = {};
             cardUrl = undefined;
             loadRequested = false;
-            cardLoadFailed = false;
             useClassicFallback = false;
         });
 
@@ -320,6 +319,7 @@
                 if (resolution === undefined) return;
                 candidateAppIdentity = resolution.identity;
                 resolvedAppIdentity = resolution.identity;
+                hasPersistentUserPairing = resolution.hasPersistentUserPairing;
                 const opening = resolution.cardSurface;
                 if (opening === undefined) return;
                 if (!contentAttested) {
@@ -342,41 +342,32 @@
                 // No parseable origin → decline to embed; stay on the OC-rendered rows rather than talk to
                 // an unknown origin.
                 if (origin === undefined) return;
+                // Received cards do not hydrate their frozen confirm payload. Embed the app only if
+                // every visible row maps completely and uniquely through this exact action revision.
+                // Multi-entry summary rows therefore remain in the host-owned stored-payload path.
+                if (
+                    isMultiEntrySummaryRows(content.rows) ||
+                    completelyReverseMapRows(content.rows, opening.labelToField) === undefined
+                )
+                    return;
                 cardOrigin = origin;
                 cardAppId = opening.app.id;
                 cardLabelToField = opening.labelToField;
                 cardUrl = opening.url;
+                // App enablement/pairing plus complete backend content attestation is the durable
+                // public-rendering boundary. Keep the anonymous iframe requirement fail-closed.
+                credentiallessSupported = supportsCredentiallessIframe();
+                if (credentiallessSupported) {
+                    loadRequested = true;
+                    resetFrameSession();
+                } else {
+                    useClassicFallback = true;
+                }
             },
         );
         return () => {
             cancelled = true;
         };
-    });
-
-    // Successful provenance sends retain confirmPayload only in the current sender's live event.
-    // Track that signal separately from directory resolution: a backend event may establish trust
-    // before the worker restores the live payload. Once both arrive, consume this exact card's
-    // in-tab consent and load it once. Recipients/history have no payload; reload clears the set.
-    $effect(() => {
-        const autoLoadEligible = shouldAutoLoadFreshlyProposedAppCard(
-            content,
-            pending,
-            readonly,
-            credentiallessSupported,
-        );
-        const surfaceReady = cardUrl !== undefined && cardOrigin !== undefined;
-        const autoLoadKey = surfaceReady ? currentCardAttemptKey() : undefined;
-        if (!autoLoadEligible || autoLoadKey === undefined) return;
-
-        untrack(() => {
-            if (!consumeFreshlyProposedAppCardAutoLoad(autoLoadKey)) return;
-            // The viewer may have used the explicit Load button while the sender-only payload was
-            // still being restored. That iframe already owns a live nonce; resetting it without
-            // recreating the element would strand the ready handshake.
-            if (loadRequested) return;
-            loadRequested = true;
-            resetFrameSession();
-        });
     });
 
     function postInit() {
@@ -394,10 +385,20 @@
         // app data is never recovered from a hidden row; it requires the separately authorized encrypted
         // private-context path.
         const decoded = decodeConfirmPayload(content.confirmPayload);
+        const mappedRows = completelyReverseMapRows(content.rows, cardLabelToField);
+        if (
+            isMultiEntrySummaryRows(content.rows) ||
+            (Object.keys(decoded).length === 0 && mappedRows === undefined)
+        ) {
+            // Revalidate at the bridge boundary. If live content ever changes without immutable
+            // producer coordinates changing, remove the frame instead of sending partial data.
+            loadRequested = false;
+            useClassicFallback = true;
+            resetFrameSession();
+            return;
+        }
         const data: Record<string, unknown> =
-            Object.keys(decoded).length > 0
-                ? decoded
-                : reverseMapRows(content.rows, cardLabelToField);
+            Object.keys(decoded).length > 0 ? decoded : (mappedRows ?? Object.create(null));
         const init = buildCardInit(
             data,
             {
@@ -437,7 +438,6 @@
 
     function requestCardLoad(e: Event) {
         e.stopPropagation();
-        cardLoadFailed = false;
         useClassicFallback = false;
         loadRequested = true;
         resetFrameSession();
@@ -450,8 +450,7 @@
         resetFrameSession();
     }
 
-    function requestPrivateContext(e: Event) {
-        e.stopPropagation();
+    function beginPrivateContextRequest() {
         const target = iframeEl?.contentWindow;
         if (
             !privateContextAvailable ||
@@ -475,6 +474,11 @@
             capabilityPending = false;
         });
         target.postMessage(buildCardPrivateContextRequest(frameNonce), "*");
+    }
+
+    function requestPrivateContext(e: Event) {
+        e.stopPropagation();
+        beginPrivateContextRequest();
     }
 
     async function mintPrivateContextCapability(
@@ -569,7 +573,10 @@
                 readySeen = true;
                 cancelCardBootstrapRetry?.();
                 cancelCardBootstrapRetry = undefined;
-                cardLoadFailed = false;
+                // The viewer's non-empty per-user app key is durable app-specific consent. Restore
+                // encrypted app context once per ready handshake only while this card is actionable;
+                // beginPrivateContextRequest retains all pending/readonly/feature/key guards.
+                if (hasPersistentUserPairing) beginPrivateContextRequest();
                 break;
             case "oc:card:resize":
                 if (cardActivated) {
@@ -688,7 +695,6 @@
         return startCardHandshakeTimeout(() => {
             if (!loadRequested || readySeen || frameNonce !== expectedNonce) return;
             loadRequested = false;
-            cardLoadFailed = true;
             resetFrameSession();
         });
     });
@@ -738,9 +744,13 @@
         aria-live="polite"
     >
         {#if resolvedAppIdentity !== undefined}
-            <AiAppIcon iconUrl={resolvedAppIdentity.iconUrl} size={"1.5rem"} />
+            <AiAppIcon
+                iconUrl={resolvedAppIdentity.iconUrl}
+                size={"1.5rem"}
+                trustedAutoLoad={cardContentAttested}
+            />
             <div class="app-identity-text">
-                <span class="app-name">Directory entry: {resolvedAppIdentity.name}</span>
+                <span class="app-name">{resolvedAppIdentity.name}</span>
             </div>
         {:else if appResolutionComplete}
             <span class="app-verification">Unverified card binding</span>
@@ -791,70 +801,15 @@
         {#if cardUrl !== undefined && !useClassicFallback}
             {#if !loadRequested}
                 <div class="card-load-gate">
-                    <details class="card-security-details" onclick={(e) => e.stopPropagation()}>
-                        <summary>Security details</summary>
-                        <div class="card-security-details-content">
-                            <span>
-                                Loading contacts <code>{cardOrigin}</code>, which may reveal your IP
-                                address, and shares this card plus its chat and message identifiers{#if threadRootMessageIndex !== undefined}
-                                    and thread identifier{/if}. {#if chatId.kind === "direct_chat"}Direct
-                                    chats include both participant IDs.{/if}
-                            </span>
-                            <span>
-                                Private app context stays hidden unless you approve it separately.
-                            </span>
-                            <span>
-                                Directory App ID
-                                <code>{candidateAppIdentity?.id ?? cardAppId}</code>; revision
-                                <code>{content.appRevision}</code>; action
-                                <code>{content.actionId}</code>.
-                            </span>
-                            <span>Exact card URL: <code>{cardUrl}</code></span>
-                            <span>
-                                {#if chatId.kind === "direct_chat"}
-                                    Direct-chat participant IDs: <code>{viewerId}</code> and
-                                    <code>{chatId.userId}</code>.
-                                {:else if chatId.kind === "group_chat"}
-                                    Chat ID: <code>{chatId.groupId}</code>.
-                                {:else}
-                                    Community/channel IDs: <code
-                                        >{chatId.communityId}/{chatId.channelId}</code
-                                    >.
-                                {/if}
-                                Message ID:
-                                <code>{messageId}</code>{#if threadRootMessageIndex !== undefined};
-                                    thread ID:
-                                    <code>{threadRootMessageIndex}</code>{/if}.
-                            </span>
-                            <span>
-                                OpenChat uses a credentialless, no-referrer frame in an opaque
-                                sandbox. It sends no OpenChat credentials, referrer, capabilities,
-                                or grants in the URL.
-                            </span>
-                        </div>
-                    </details>
-                    <button
-                        disabled={readonly || !pending || !credentiallessSupported}
-                        onclick={requestCardLoad}
-                    >
-                        {cardLoadFailed ? "Retry app card" : "Load app card"}
-                    </button>
-                    {#if !credentiallessSupported}
-                        <span class="card-load-error">
-                            Secure embedded loading is unavailable in this browser.
-                        </span>
-                    {/if}
-                    {#if cardLoadFailed}
-                        <span class="card-load-error">
-                            The app card did not complete its isolated handshake in time.
-                        </span>
-                        <button onclick={chooseClassicFallback}
-                            >Use read-only OpenChat summary</button
-                        >
-                    {/if}
+                    <span class="card-load-error" role="alert">App card unavailable.</span>
+                    <span class="card-url" title={cardUrl}>{cardUrl}</span>
+                    <div class="actions">
+                        <button onclick={requestCardLoad}>Retry app card</button>
+                        <button onclick={chooseClassicFallback}>Show values</button>
+                    </div>
                 </div>
             {:else}
-                <div class="external-frame-label">External app content (isolated)</div>
+                <div class="card-url" title={cardUrl}>{cardUrl}</div>
                 <!-- App-rendered pixels are not OpenChat-owned UI. The opaque sandbox prevents redirects
                  from inheriting any destination origin; the height is driven by the nonce-bound bridge. -->
                 <!-- credentialless: OpenChat is cross-origin-isolated (COEP: credentialless) for its wasm
@@ -946,48 +901,17 @@
                     </div>
                 {/if}
 
-                {#if cardActivated && cardCapability === undefined}
-                    <div class="private-context-consent">
-                        <strong>Private app context is not shared</strong>
-                        <details
-                            class="private-context-details"
-                            onclick={(e) => e.stopPropagation()}
-                        >
-                            <summary>Private context details</summary>
-                            <div class="card-security-details-content">
-                                <span>
-                                    Sharing reveals your stable OpenChat user ID and this tab's
-                                    recipient-key scheme and public key to the app. It may return
-                                    encrypted viewer data. Other chat members receive no
-                                    viewer-private fields.
-                                </span>
-                                <span>
-                                    Redemption is bound to this viewer, chat, thread, message, app
-                                    revision, action, frame nonce, and recipient key. OpenChat
-                                    treats the returned app payload as opaque.
-                                </span>
-                                <span>
-                                    The short-lived capability is delivered only to this isolated
-                                    frame and is never stored or shown in the URL.
-                                </span>
-                                {#if !privateContextAvailable}
-                                    <span>
-                                        Private-context grant remains disabled until the backend and
-                                        registered app redemption/decryption contracts align.
-                                    </span>
-                                {/if}
-                            </div>
-                        </details>
+                {#if cardActivated && cardCapability === undefined && privateContextAvailable && !privateContextRequested}
+                    <div class="private-context-action">
                         <button
-                            disabled={!privateContextAvailable ||
-                                capabilityPending ||
-                                !pending ||
-                                readonly}
+                            disabled={capabilityPending || !pending || readonly}
                             onclick={requestPrivateContext}
                         >
                             {capabilityPending
-                                ? "Preparing private context…"
-                                : "Share private context"}
+                                ? "Restoring app data…"
+                                : hasPersistentUserPairing
+                                  ? "Restore app data"
+                                  : "Share app context"}
                         </button>
                     </div>
                 {/if}
@@ -1007,9 +931,10 @@
             {/if}
             {#if cardUrl !== undefined && useClassicFallback}
                 <div class="card-load-error" role="status">
-                    Showing the OpenChat summary only. Exact app payload is not available to this
-                    authorized view, so confirmation is disabled.
-                    <button onclick={requestCardLoad}>Retry isolated app card</button>
+                    Secure app card unavailable; confirmation is disabled.
+                    {#if credentiallessSupported}
+                        <button onclick={requestCardLoad}>Retry app card</button>
+                    {/if}
                 </div>
             {/if}
             <table class="rows">
@@ -1222,7 +1147,7 @@
     .card-load-gate,
     .card-loading,
     .host-approval,
-    .private-context-consent {
+    .private-context-action {
         display: flex;
         flex-direction: column;
         gap: $sp2;
@@ -1232,45 +1157,22 @@
     }
 
     .card-load-gate button,
-    .private-context-consent button {
+    .private-context-action button {
         align-self: flex-start;
     }
 
-    .card-security-details-content {
-        display: flex;
-        flex-direction: column;
-        gap: $sp1;
-    }
-
-    .card-security-details {
-        code {
-            overflow-wrap: anywhere;
-        }
-    }
-
-    .card-security-details,
-    .private-context-details {
+    .card-url {
         color: var(--currentChat-msg-muted);
-        font-size: var(--font-size-small, 0.85em);
-
-        summary {
-            cursor: pointer;
-            font-weight: 600;
-        }
-
-        &[open] summary {
-            margin-bottom: $sp2;
-        }
+        direction: ltr;
+        font-size: 0.75em;
+        unicode-bidi: plaintext;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
 
     .card-load-error {
         color: var(--warning);
-    }
-
-    .external-frame-label {
-        color: var(--currentChat-msg-muted);
-        font-size: 0.8em;
-        font-weight: 700;
     }
 
     .approval-summary {

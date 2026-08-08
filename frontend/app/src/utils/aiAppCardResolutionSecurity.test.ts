@@ -29,10 +29,16 @@ const APP = {
     },
 } as AiAppRegistration;
 
-function client(enabled: number[]): OpenChat {
+function client(
+    enabled: number[],
+    keys: { appId: number; publicKey: string }[] = [
+        { appId: APP.id, publicKey: "current-user-key" },
+    ],
+): OpenChat {
     return {
         aiApps: async () => [APP],
         enabledAiApps: async () => enabled,
+        myAiAppKeys: async () => keys,
     } as unknown as OpenChat;
 }
 
@@ -52,18 +58,58 @@ function directClient(
 
 describe("directory-bound card surface resolution", () => {
     it("resolves only an enabled exact published app revision/action", async () => {
+        const paired = await resolveActionAppForCard(
+            client([APP.id]),
+            GROUP,
+            "entry.add",
+            APP.id,
+            APP.updated,
+        );
+        expect(paired?.hasPersistentUserPairing).toBe(true);
         expect(
-            await resolveActionAppForCard(
-                client([APP.id]),
+            await resolveActionAppForCard(client([]), GROUP, "entry.add", APP.id, APP.updated),
+        ).toBeUndefined();
+    });
+
+    it("restores pairing only from this viewer's non-empty exact app key", async () => {
+        await expect(
+            resolveActionAppForCard(client([APP.id], []), GROUP, "entry.add", APP.id, APP.updated),
+        ).resolves.toMatchObject({ hasPersistentUserPairing: false });
+        await expect(
+            resolveActionAppForCard(
+                client([APP.id], [{ appId: APP.id + 1, publicKey: "other-key" }]),
                 GROUP,
                 "entry.add",
                 APP.id,
                 APP.updated,
             ),
-        ).toBeDefined();
-        expect(
-            await resolveActionAppForCard(client([]), GROUP, "entry.add", APP.id, APP.updated),
-        ).toBeUndefined();
+        ).resolves.toMatchObject({ hasPersistentUserPairing: false });
+        await expect(
+            resolveActionAppForCard(
+                client([APP.id], [{ appId: APP.id, publicKey: "" }]),
+                GROUP,
+                "entry.add",
+                APP.id,
+                APP.updated,
+            ),
+        ).resolves.toMatchObject({ hasPersistentUserPairing: false });
+    });
+
+    it("keeps trusted public identity available when the optional pairing lookup fails", async () => {
+        const failing = {
+            aiApps: vi.fn(async () => [APP]),
+            enabledAiApps: vi.fn(async () => [APP.id]),
+            myAiAppKeys: vi.fn(async () => {
+                throw new Error("unavailable");
+            }),
+        } as unknown as OpenChat;
+
+        await expect(
+            resolveActionAppForCard(failing, GROUP, "entry.add", APP.id, APP.updated),
+        ).resolves.toMatchObject({
+            identity: { id: APP.id, name: APP.manifest.name },
+            hasPersistentUserPairing: false,
+        });
     });
 
     it("requests only the immutable producer id and revision, never the full registry", async () => {
@@ -91,6 +137,7 @@ describe("directory-bound card surface resolution", () => {
         );
 
         expect(resolved?.identity).toEqual({ id: APP.id, name: APP.manifest.name });
+        expect(resolved?.hasPersistentUserPairing).toBe(true);
         expect(resolved?.cardSurface?.app).toBe(APP);
         expect(calls.myAiAppKeys).toHaveBeenCalledOnce();
         expect(calls.aiApps).toHaveBeenCalledOnce();

@@ -675,8 +675,8 @@ describe("resolveActionAppForCard — authoritative host identity", () => {
         );
         expect(source).toContain('class="app-identity"');
         expect(source).toContain("{resolvedAppIdentity.name}");
-        expect(source).toContain('class="card-security-details"');
-        expect(source).toContain("{candidateAppIdentity?.id ?? cardAppId}");
+        expect(source).toContain('class="card-url"');
+        expect(source).not.toContain("Security details");
         expect(source).not.toContain("{resolvedAppIdentity.id}");
         expect(source).toContain('class="sender-title"');
         expect(source).toContain("{content.title}");

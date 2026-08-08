@@ -11,7 +11,11 @@ import {
     buildActionCardContent,
     buildMultiActionCardContent,
     chatKeyFor,
+    MAX_AI_ACTION_CARD_ROW_VALUE_CHARS,
+    MAX_AI_ACTION_CARD_TITLE_CHARS,
     MAX_AI_ACTION_CANDIDATES,
+    MAX_AI_APP_CONFIRM_PAYLOAD_BYTES,
+    multiActionCardBoundsError,
     compileRules,
     missingRequired,
     parseExtraction,
@@ -123,7 +127,7 @@ describe("parseExtractionList", () => {
     });
 
     it.each([31, 32])(
-        "retains the valid %i-candidate boundary but the runner blocks multi posting",
+        "posts the valid %i-candidate boundary as one exact multi-entry card",
         async (count) => {
             const raw = JSON.stringify(
                 Array.from({ length: count }, (_, i) => ({ amount: i + 1, note: `entry-${i}` })),
@@ -133,8 +137,15 @@ describe("parseExtractionList", () => {
                 kind: "ok",
                 text: raw,
             }));
-            expect(result.kind).toBe("error");
-            if (result.kind === "error") expect(result.error).toContain("exact-payload endpoint");
+            expect(result.kind).toBe("ready_multi");
+            if (result.kind === "ready_multi") {
+                expect(result.extracted).toHaveLength(count);
+                expect(result.card.rows).toHaveLength(count);
+                expect(JSON.parse(new TextDecoder().decode(result.card.confirmPayload!))).toEqual(
+                    JSON.parse(raw),
+                );
+                expect(result.card.rows.some((row) => row.label.startsWith("__oc_"))).toBe(false);
+            }
         },
     );
 
@@ -543,7 +554,7 @@ describe("runAiAction", () => {
         }
     });
 
-    it("fails closed when more than one valid entry remains after dropping a degenerate element", async () => {
+    it("posts one multi card when more than one valid entry remains after dropping a degenerate element", async () => {
         const raw =
             '[{"amount":20,"currency":"USD","note":"lunch"},' +
             '{"amount":0,"currency":"USD"},' +
@@ -554,8 +565,106 @@ describe("runAiAction", () => {
             RECIPIENT,
             okInfer(raw),
         );
-        expect(r.kind).toBe("error");
-        if (r.kind === "error") expect(r.error).toContain("exact-payload endpoint");
+        expect(r.kind).toBe("ready_multi");
+        if (r.kind === "ready_multi") {
+            expect(r.extracted.map((entry) => entry.amount)).toEqual([20, 30]);
+            expect(JSON.parse(new TextDecoder().decode(r.card.confirmPayload!))).toEqual(
+                r.extracted,
+            );
+        }
+    });
+
+    it("accepts the exact multi-card title boundary and rejects the first character beyond it", async () => {
+        const run = (title: string) =>
+            runAiAction(
+                { ...MULTI_DEF, card: { ...MULTI_DEF.card, title } },
+                { text: "two" },
+                RECIPIENT,
+                okInfer('[{"amount":1},{"amount":2}]'),
+            );
+        // `buildMultiActionCardContent` appends ` (2 entries)` (12 characters).
+        const atBoundary = await run("T".repeat(MAX_AI_ACTION_CARD_TITLE_CHARS - 12));
+        expect(atBoundary.kind).toBe("ready_multi");
+
+        const overflow = await run("T".repeat(MAX_AI_ACTION_CARD_TITLE_CHARS - 11));
+        expect(overflow).toEqual({
+            kind: "error",
+            error: `The multi-entry card title exceeds ${MAX_AI_ACTION_CARD_TITLE_CHARS} characters.`,
+        });
+    });
+
+    it("accepts the exact summary-row boundary and rejects the first character beyond it", async () => {
+        const prefix = "Amount: 1 · Note: ";
+        const run = (noteLength: number) =>
+            runAiAction(
+                MULTI_DEF,
+                { text: "two" },
+                RECIPIENT,
+                okInfer(
+                    JSON.stringify([
+                        { amount: 1, note: "x".repeat(noteLength) },
+                        { amount: 2, note: "ok" },
+                    ]),
+                ),
+            );
+        const atBoundary = await run(MAX_AI_ACTION_CARD_ROW_VALUE_CHARS - prefix.length);
+        expect(atBoundary.kind).toBe("ready_multi");
+
+        const overflow = await run(MAX_AI_ACTION_CARD_ROW_VALUE_CHARS - prefix.length + 1);
+        expect(overflow).toEqual({
+            kind: "error",
+            error: `A multi-entry card summary exceeds ${MAX_AI_ACTION_CARD_ROW_VALUE_CHARS} characters.`,
+        });
+    });
+
+    it("accepts a 16 KiB exact array and rejects 16 KiB + 1 before provenance", async () => {
+        const def: AiActionDefinition = {
+            ...MULTI_DEF,
+            responseSchema: {
+                type: "object",
+                properties: {
+                    amount: { type: "number", exclusiveMinimum: 0 },
+                    opaque: { type: "string" },
+                },
+                required: ["amount"],
+            },
+            card: {
+                ...MULTI_DEF.card,
+                rows: [{ label: "Amount", valueKey: "amount" }],
+            },
+        };
+        const rawWithPayloadBytes = (target: number): string => {
+            const empty = JSON.stringify([{ amount: 1, opaque: "" }, { amount: 2 }]);
+            const overhead = new TextEncoder().encode(empty).byteLength;
+            return JSON.stringify([
+                { amount: 1, opaque: "x".repeat(target - overhead) },
+                { amount: 2 },
+            ]);
+        };
+        const atBoundary = await runAiAction(
+            def,
+            { text: "two" },
+            RECIPIENT,
+            okInfer(rawWithPayloadBytes(MAX_AI_APP_CONFIRM_PAYLOAD_BYTES)),
+        );
+        expect(atBoundary.kind).toBe("ready_multi");
+        if (atBoundary.kind === "ready_multi") {
+            expect(atBoundary.card.confirmPayload).toHaveLength(MAX_AI_APP_CONFIRM_PAYLOAD_BYTES);
+            // `opaque` is exact app payload, not a manifest-declared public row.
+            expect(JSON.stringify(atBoundary.card.rows)).not.toContain("opaque");
+            expect(JSON.stringify(atBoundary.card.rows)).not.toContain("xxxx");
+        }
+
+        const overflow = await runAiAction(
+            def,
+            { text: "two" },
+            RECIPIENT,
+            okInfer(rawWithPayloadBytes(MAX_AI_APP_CONFIRM_PAYLOAD_BYTES + 1)),
+        );
+        expect(overflow).toEqual({
+            kind: "error",
+            error: `The multi-entry confirmation payload exceeds ${MAX_AI_APP_CONFIRM_PAYLOAD_BYTES} bytes.`,
+        });
     });
 
     it("an ARRAY with a SINGLE valid entry collapses to the single-entry OBJECT card", async () => {
@@ -595,8 +704,8 @@ describe("buildMultiActionCardContent", () => {
         expect(card.actionId).toBe(DEF.name);
         expect(card.title).toContain("2");
         expect(card.rows).toEqual([
-            { label: "Entry 1", value: "20 USD lunch" },
-            { label: "Entry 2", value: "30 EUR dinner" },
+            { label: "Entry 1", value: "Amount: 20 · Currency: USD · Note: lunch" },
+            { label: "Entry 2", value: "Amount: 30 · Currency: EUR · Note: dinner" },
         ]);
         expect(JSON.parse(new TextDecoder().decode(card.confirmPayload!))).toEqual(entries);
     });
@@ -620,6 +729,28 @@ describe("buildMultiActionCardContent", () => {
     it("bakes the owning appId onto the multi card", () => {
         const card = buildMultiActionCardContent(DEF, entries, RECIPIENT, undefined, undefined, 7);
         expect(card.appId).toBe(7);
+    });
+
+    it("rejects a card whose individually valid rows exceed the aggregate 64 KiB bound", () => {
+        const card = buildMultiActionCardContent(DEF, entries, RECIPIENT);
+        const withinAggregate = {
+            ...card,
+            rows: Array.from({ length: 15 }, (_, index) => ({
+                label: `Entry ${index + 1}`,
+                value: "x".repeat(4_090),
+            })),
+            confirmPayload: new TextEncoder().encode("[{},{}]"),
+        };
+        expect(multiActionCardBoundsError(withinAggregate)).toBeUndefined();
+
+        const overflow = {
+            ...withinAggregate,
+            rows: [
+                ...withinAggregate.rows,
+                { label: "Entry 16", value: "x".repeat(4_090) },
+            ],
+        };
+        expect(multiActionCardBoundsError(overflow)).toMatch(/64 KiB/);
     });
 });
 
@@ -1189,28 +1320,27 @@ describe("real captured model replies keep every transaction", () => {
             kind: "ok",
             text: QWEN_3_ENTRIES,
         }));
-        expect(r.kind).toBe("error");
-        if (r.kind === "error") expect(r.error).toContain("exact-payload endpoint");
+        expect(r.kind).toBe("ready_multi");
+        if (r.kind === "ready_multi") {
+            expect(amountsOf(r.extracted)).toEqual([300, 150, 500]);
+            expect(r.card.rows).toHaveLength(3);
+        }
     });
 
     it("never encodes the exact entry array into public rows", async () => {
-        // Multi-entry proposal remains fail-closed. Even the bounded legacy builder may place exact
-        // entries only in confirmPayload, never in a public display row.
+        // Exact entries belong only in confirmPayload, never in a public display row.
         const r = await runAiAction(MULTI_DEF, { text: REPORTED_MESSAGE }, RECIPIENT, async () => ({
             kind: "ok",
             text: QWEN_3_ENTRIES,
         }));
-        expect(r.kind).toBe("error");
-        const legacyBuilder = buildMultiActionCardContent(
-            MULTI_DEF,
-            parseExtractionList(QWEN_3_ENTRIES)!,
-            RECIPIENT,
-        );
+        expect(r.kind).toBe("ready_multi");
+        if (r.kind !== "ready_multi") throw new Error("expected a multi-entry card");
         const exactArray = QWEN_3_ENTRIES.replace(/\s+/g, "");
-        expect(
-            legacyBuilder.rows.some((row) => row.value.replace(/\s+/g, "").includes(exactArray)),
-        ).toBe(false);
-        expect(legacyBuilder.rows.some((row) => row.label.startsWith("__oc_"))).toBe(false);
+        expect(r.card.rows.some((row) => row.value.replace(/\s+/g, "").includes(exactArray))).toBe(
+            false,
+        );
+        expect(r.card.rows.some((row) => row.label.startsWith("__oc_"))).toBe(false);
+        expect(JSON.parse(new TextDecoder().decode(r.card.confirmPayload!))).toEqual(r.extracted);
     });
 
     it("gives each entry its OWN note, never the whole message", async () => {
@@ -1221,15 +1351,15 @@ describe("real captured model replies keep every transaction", () => {
             kind: "ok",
             text: QWEN_3_ENTRIES,
         }));
-        expect(r.kind).toBe("error");
-        const parsed = parseExtractionList(QWEN_3_ENTRIES)!;
-        expect(parsed.map((e) => e.note)).toEqual(["Uber ride", "Food", "Movies"]);
-        for (const e of parsed) {
+        expect(r.kind).toBe("ready_multi");
+        if (r.kind !== "ready_multi") throw new Error("expected a multi-entry card");
+        expect(r.extracted.map((e) => e.note)).toEqual(["Uber ride", "Food", "Movies"]);
+        for (const e of r.extracted) {
             expect(e.note).not.toContain("500 movies");
         }
     });
 
-    it("does not repeat a transaction when the model echoes the message twice", async () => {
+    it("does not add any candidates beyond the model's duplicated reply", async () => {
         // The browser backend once received the message twice (prompt AND text) and duly extracted
         // 300 twice. The duplicate send is fixed and tested above; this pins the SYMPTOM, so a
         // reintroduction anywhere in the chain fails here too.
@@ -1243,10 +1373,12 @@ describe("real captured model replies keep every transaction", () => {
             kind: "ok",
             text: duplicated,
         }));
-        expect(r.kind).toBe("error");
+        expect(r.kind).toBe("ready_multi");
         // We do NOT dedupe (two identical real transactions are legal), so this documents today's
         // behaviour deliberately: the guard against duplicates is the single-send test, not a filter.
-        expect(amountsOf(parseExtractionList(duplicated)!)).toEqual([300, 150, 300, 150]);
+        if (r.kind === "ready_multi") {
+            expect(amountsOf(r.extracted)).toEqual([300, 150, 300, 150]);
+        }
     });
 
     it("salvages the completed transactions when the model's reply is cut off mid-object", async () => {
@@ -1261,8 +1393,10 @@ describe("real captured model replies keep every transaction", () => {
             kind: "ok",
             text: truncated,
         }));
-        expect(r.kind).toBe("error");
-        expect(amountsOf(parseExtractionList(truncated)!)).toEqual([300, 150]);
+        expect(r.kind).toBe("ready_multi");
+        if (r.kind === "ready_multi") {
+            expect(amountsOf(r.extracted)).toEqual([300, 150]);
+        }
     });
 
     it("keeps the other transactions when ONE element is degenerate", async () => {
@@ -1277,8 +1411,10 @@ describe("real captured model replies keep every transaction", () => {
             kind: "ok",
             text: withZero,
         }));
-        expect(r.kind).toBe("error");
-        if (r.kind === "error") expect(r.error).toContain("exact-payload endpoint");
+        expect(r.kind).toBe("ready_multi");
+        if (r.kind === "ready_multi") {
+            expect(amountsOf(r.extracted)).toEqual([300, 500]);
+        }
     });
 });
 

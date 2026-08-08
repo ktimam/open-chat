@@ -9,9 +9,21 @@
         chatId: ChatIdentifier;
         messageId: bigint;
         viewerId: string;
+        onRespond?: (
+            response: "confirm" | "cancel",
+            confirmPayloadOverride?: Uint8Array,
+            confirmationGrant?: Uint8Array,
+        ) => void | Promise<unknown>;
     }
 
-    let { contentStore, readonly, chatId, messageId, viewerId }: Props = $props();
+    let { contentStore, readonly, chatId, messageId, viewerId, onRespond }: Props = $props();
 </script>
 
-<ActionCardContentView content={$contentStore} {readonly} {chatId} {messageId} {viewerId} />
+<ActionCardContentView
+    content={$contentStore}
+    {readonly}
+    {chatId}
+    {messageId}
+    {viewerId}
+    {onRespond}
+/>

@@ -14,8 +14,10 @@
 import {
     applyRulesPostPass,
     buildActionCardContent,
+    buildMultiActionCardContent,
     MAX_AI_ACTION_CANDIDATES,
     missingRequired,
+    multiActionCardBoundsError,
     random64,
     runAiAction,
     type AiActionDefinition,
@@ -291,9 +293,9 @@ export function parseManualExtractionPrompt(
 // (schema conformance included) and the required-fields check, applied PER ELEMENT — so the manual
 // path can never post a card the model path would have refused (e.g. a degenerate amount 0 against a
 // schema requiring amount > 0, which the consumer then rejects as an invalid draft). Degenerate
-// elements are dropped; 0 valid → the existing "model found no action" UX (`raw` carries the ORIGINAL
-// manual extraction for surfacing), 1 valid → the single-entry OBJECT card, and multiple valid entries
-// fail closed until an access-controlled exact-payload hydration endpoint exists.
+// elements are dropped; 0 valid uses the existing "model found no action" UX (`raw` carries the
+// original manual extraction), 1 valid builds the single-entry object card, and multiple valid
+// entries build one card with one frozen JSON-array payload.
 export function buildManualCard(
     def: AiActionDefinition,
     manualExtraction: ManualExtraction,
@@ -308,6 +310,12 @@ export function buildManualCard(
     messageText?: string,
 ): ProposeResult {
     const candidates = Array.isArray(manualExtraction) ? manualExtraction : [manualExtraction];
+    if (candidates.length > MAX_AI_ACTION_CANDIDATES) {
+        return {
+            kind: "error",
+            error: `The supplied extraction contains more than ${MAX_AI_ACTION_CANDIDATES} action candidates.`,
+        };
+    }
     const valid: Record<string, unknown>[] = [];
     for (const candidate of candidates) {
         const finalExtraction = applyRulesPostPass(
@@ -335,10 +343,19 @@ export function buildManualCard(
         );
         return { kind: "ready", card, extracted: valid[0] };
     }
-    return {
-        kind: "error",
-        error: "Multiple action entries require an access-controlled exact-payload endpoint before a card can be posted.",
-    };
+    const card = buildMultiActionCardContent(
+        def,
+        valid,
+        recipientKey,
+        inboxCanisterId,
+        additionalRecipientKeys,
+        appId,
+        appRevision,
+    );
+    const boundsError = multiActionCardBoundsError(card);
+    return boundsError === undefined
+        ? { kind: "ready_multi", card, extracted: valid }
+        : { kind: "error", error: boundsError };
 }
 
 // Test seam for the manual-JSON extraction prompt (Issue 1): the raw window.prompt fallback runs
@@ -481,12 +498,6 @@ async function postCard(
     messageContext: MessageContext,
     result: ProposeResult & { kind: "ready" | "ready_multi" },
 ): Promise<ProposeResult> {
-    if (result.kind === "ready_multi") {
-        return {
-            kind: "error",
-            error: "Multiple action entries require an access-controlled exact-payload endpoint before a card can be posted.",
-        };
-    }
     try {
         const appId = result.card.appId;
         const appRevision = result.card.appRevision;

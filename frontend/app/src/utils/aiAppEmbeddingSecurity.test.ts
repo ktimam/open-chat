@@ -52,50 +52,32 @@ describe("embedded app surface isolation", () => {
         }
     });
 
-    it("keeps all trusted-recipient disclosure in closed details", () => {
+    it("auto-renders only fully mapped trusted cards with compact registered-URL chrome", () => {
         const card = readFileSync(appPath("src/components/home/ActionCardContent.svelte"), "utf8");
-        expect(card).not.toContain('class="card-load-summary"');
-        expect(card).toContain('class="card-security-details"');
-        expect(card).toContain("<summary>Security details</summary>");
-        expect(card).not.toContain("<details open");
-        expect(card).toContain('{#if chatId.kind === "direct_chat"}');
-        const gateStart = card.indexOf('<div class="card-load-gate">');
-        const gateEnd = card.indexOf('<div class="external-frame-label">', gateStart);
-        const loadGate = card.slice(gateStart, gateEnd).replace(/\s+/g, " ");
-        const detailsStart = loadGate.indexOf('<details class="card-security-details"');
-        const detailsEnd = loadGate.indexOf("</details>", detailsStart);
-        const loadDetails = loadGate.slice(detailsStart, detailsEnd);
-        expect(detailsStart).toBeGreaterThanOrEqual(0);
-        expect(loadGate.slice(0, detailsStart)).not.toContain("IP address");
-        expect(loadDetails).toContain("shares this card plus its chat and message identifiers");
-        expect(loadDetails).toContain("Private app context stays hidden");
-        expect(loadGate).toContain("Exact card URL");
-        expect(loadGate).toContain("IP address");
-        expect(loadGate).toContain("opaque sandbox");
-        expect(loadGate).not.toContain("stable OpenChat user ID");
-        expect(loadGate).not.toContain("recipient public key");
-        const privateStart = card.indexOf('<div class="private-context-consent">');
-        const privateEnd = card.indexOf("</div>", privateStart);
-        const privateConsent = card.slice(privateStart, privateEnd).replace(/\s+/g, " ");
-        const privateDetailsStart = privateConsent.indexOf(
-            '<details class="private-context-details"',
+        const compact = card.replace(/\s+/g, " ");
+        expect(card).not.toContain("Load app card");
+        expect(card).not.toContain("Security details");
+        expect(card).not.toContain("IP address");
+        expect(card).not.toContain("Direct-chat participant IDs");
+        expect(card).not.toContain("Message ID:");
+        expect(card).toContain('class="card-url"');
+        expect(card).toContain("isMultiEntrySummaryRows(content.rows)");
+        expect(card).toContain("completelyReverseMapRows(content.rows, opening.labelToField)");
+        expect(compact).toContain(
+            "isMultiEntrySummaryRows(content.rows) || completelyReverseMapRows(content.rows, opening.labelToField) === undefined",
         );
-        expect(privateDetailsStart).toBeGreaterThanOrEqual(0);
-        expect(privateConsent.slice(0, privateDetailsStart)).not.toContain(
-            "stable OpenChat user ID",
-        );
-        expect(privateConsent).toContain("stable OpenChat user ID");
-        expect(privateConsent).toContain("recipient-key scheme and public key");
-        expect(privateConsent).toContain("encrypted viewer data");
-        expect(privateConsent).toMatch(
-            /Other\s+chat\s+members\s+receive\s+no\s+viewer-private\s+fields\./,
+        expect(card).toContain("credentiallessSupported = supportsCredentiallessIframe()");
+        expect(compact).toContain(
+            "if (credentiallessSupported) { loadRequested = true; resetFrameSession(); }",
         );
         expect(card).toContain("let cardActivated = $derived(readySeen)");
-        expect(card).toContain("Private app context is not shared");
+        expect(card).not.toContain("Private context details");
+        expect(card).not.toContain("Private app context is not shared");
         expect(card).toContain("appCardPrivateContextAvailable");
         expect(card).toContain("onclick={requestPrivateContext}");
         expect(card).toContain("privateContextRequested = true");
         expect(card).toContain("buildCardPrivateContextRequest(frameNonce)");
+        expect(card).toContain("if (hasPersistentUserPairing) beginPrivateContextRequest()");
         expect(card).toContain("if (cardKey === undefined || !privateContextRequested) return");
         expect(card).toContain("canAcceptCardPrivateContextReady({");
         expect(card).toContain("explicitlyRequested: privateContextRequested");
@@ -113,33 +95,29 @@ describe("embedded app surface isolation", () => {
         expect(card).toContain("import.meta.env.DEV");
     });
 
-    it("treats only a freshly proposed live sender card as load consent", () => {
+    it("uses exact resolution and full attestation as the public rendering boundary", () => {
         const card = readFileSync(appPath("src/components/home/ActionCardContent.svelte"), "utf8");
         const cache = readFileSync(appPath("../openchat-agent/src/utils/chatsDb.ts"), "utf8");
         const compact = card.replace(/\s+/g, " ");
 
-        expect(card).toContain("shouldAutoLoadFreshlyProposedAppCard");
-        expect(card).toContain("consumeFreshlyProposedAppCardAutoLoad");
-        expect(compact).toContain("if (!autoLoadEligible || autoLoadKey === undefined) return;");
-        const consumeIndex = compact.indexOf(
-            "if (!consumeFreshlyProposedAppCardAutoLoad(autoLoadKey)) return;",
-        );
-        const preserveLoadedIndex = compact.indexOf("if (loadRequested) return;", consumeIndex);
-        const activateIndex = compact.indexOf(
-            "loadRequested = true; resetFrameSession();",
-            preserveLoadedIndex,
-        );
-        expect(consumeIndex).toBeGreaterThanOrEqual(0);
-        expect(preserveLoadedIndex).toBeGreaterThan(consumeIndex);
-        expect(activateIndex).toBeGreaterThan(preserveLoadedIndex);
-        expect(card).toContain("External app content (isolated)");
+        expect(card).not.toContain("shouldAutoLoadFreshlyProposedAppCard");
+        expect(card).not.toContain("consumeFreshlyProposedAppCardAutoLoad");
+        const lookupIndex = compact.indexOf("resolveActionAppForCard(");
+        const attestationIndex = compact.indexOf("if (!contentAttested)", lookupIndex);
+        const mappingIndex = compact.indexOf("completelyReverseMapRows(", attestationIndex);
+        const activateIndex = compact.indexOf("loadRequested = true;", mappingIndex);
+        expect(lookupIndex).toBeGreaterThanOrEqual(0);
+        expect(attestationIndex).toBeGreaterThan(lookupIndex);
+        expect(mappingIndex).toBeGreaterThan(attestationIndex);
+        expect(activateIndex).toBeGreaterThan(mappingIndex);
+        expect(card).not.toContain("External app content (isolated)");
         expect(card).not.toContain("Untrusted app content");
         expect(card).toContain("Unverified card binding");
         expect(card).toContain("Directory binding only; card content is untrusted");
         expect(card).toContain("Untrusted card text");
 
-        // The consent signal exists only in the current provenance-backed sender copy. It is
-        // deliberately absent from IndexedDB and every recipient/historical hydration.
+        // The exact payload remains sender-session-only even though public rendering no longer
+        // depends on it; recipients reconstruct only completely mapped public rows.
         expect(cache).toContain("retain a defensive copy in the current sender session");
         expect(cache).toContain("delete content.confirmPayload");
         expect(cache).toContain("confirmPayload: liveConfirmPayload");
@@ -231,7 +209,7 @@ describe("embedded app surface isolation", () => {
         expect(card).toContain("frameNonce !== loadedNonce");
         expect(card).toContain("frameNonce !== expectedNonce");
         expect(card).toContain("Retry app card");
-        expect(card).toContain("Use read-only OpenChat summary");
+        expect(card).toContain("Show values");
         const compact = card.replace(/\s+/g, " ");
         expect(compact).toContain(
             'response === "confirm" && (!cardContentAttested || !finalConfirmationAvailable)',

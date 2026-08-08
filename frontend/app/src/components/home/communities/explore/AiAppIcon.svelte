@@ -10,9 +10,13 @@
         iconUrl?: string;
         // Diameter, e.g. "3rem" (card) or "2.5rem" (modal header).
         size?: string;
+        // Host-owned trusted card chrome may load the exact registered icon immediately once the
+        // app revision and full card content are attested. Other directory surfaces retain their
+        // explicit remote-image consent button.
+        trustedAutoLoad?: boolean;
     }
 
-    let { iconUrl, size = "3rem" }: Props = $props();
+    let { iconUrl, size = "3rem", trustedAutoLoad = false }: Props = $props();
 
     // A broken / CSP-blocked image reveals the fallback badge instead of a broken-image glyph.
     let failed = $state(false);
@@ -39,7 +43,7 @@
     }
 </script>
 
-{#if safeIconUrl && remoteAllowed && !failed}
+{#if safeIconUrl && (trustedAutoLoad || remoteAllowed) && !failed}
     <img
         class="app-icon"
         style={`width:${size};height:${size}`}
@@ -47,14 +51,16 @@
         alt=""
         crossorigin="anonymous"
         referrerpolicy="no-referrer"
-        onerror={() => (failed = true)} />
+        onerror={() => (failed = true)}
+    />
 {:else if safeIconUrl && !failed}
     <button
         class="badge icon-consent"
         style={`width:${size};height:${size}`}
         aria-label={`Load external app icon from ${safeIconOrigin}`}
         title={`Load external app icon from ${safeIconOrigin}`}
-        onclick={allowRemoteIcon}>
+        onclick={allowRemoteIcon}
+    >
         <AutoFix size={"1.5rem"} color={"var(--button-txt)"} />
     </button>
 {:else}
