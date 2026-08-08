@@ -656,7 +656,12 @@
     {@const danger = ["deleteMessage", "deleteMessageForMe", "reportMenu"].indexOf(title) > -1}
     {#if menuType === "icon_buttons"}
         {@const padding: Padding = ["sm", "sm"]}
-        <IconButton size={iconButtonSize} {padding} onclick={() => menuItemOnClickHandler(title)}>
+        <IconButton
+            size={iconButtonSize}
+            {padding}
+            ariaLabel={$_(menuItemTitleToKey(title))}
+            onclick={() => menuItemOnClickHandler(title)}
+        >
             {#snippet icon(color)}
                 {@render chooseIcon(title, danger ? ColourVars.error : color)}
             {/snippet}

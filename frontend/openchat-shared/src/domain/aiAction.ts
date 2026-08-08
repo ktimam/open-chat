@@ -106,6 +106,8 @@ export type AiActionRule =
     | { kind: "from_message"; field: string; maxLength?: number }
     | { kind: "normalize"; field: string; ops: AiActionNormalizeOp[] }
     | { kind: "instruction"; text: string }
+    // Optional non-source context. `today` is supplied only alongside nonempty text evidence; it is
+    // never injected into an image-only prompt where a model could mistake it for visible content.
     | { kind: "context"; provide: "today"[] };
 
 // The frontend mirror of the on-chain AiActionDefinition (types/src/ai_actions.rs). All values are supplied by
@@ -558,10 +560,16 @@ function boundedRules(rules: readonly AiActionRule[]): AiActionRule[] {
 }
 
 // Compile the declared rules into prompt guidance lines. Only rules that need the model's cooperation
-// produce a line — normalize is deterministic (post-pass only) and context/today is already covered by
-// the dateline runAiAction always appends.
-export function compileRules(rules: AiActionRule[]): string[] {
+// produce a line — normalize is deterministic (post-pass only), while context/today is conditionally
+// supplied by runAiAction when the invocation also carries nonempty text evidence. `from_message`
+// guidance is likewise meaningful only when message text exists; image-only extraction has no source
+// text for its deterministic post-pass to copy.
+export function compileRules(
+    rules: AiActionRule[],
+    options: { hasMessageText?: boolean } = {},
+): string[] {
     const lines: string[] = [];
+    const hasMessageText = options.hasMessageText ?? true;
     for (const rule of boundedRules(rules)) {
         switch (rule.kind) {
             case "instruction":
@@ -575,7 +583,9 @@ export function compileRules(rules: AiActionRule[]): string[] {
                 }
                 break;
             case "from_message":
-                lines.push(`Set "${rule.field}" to a short phrase taken from the message.`);
+                if (hasMessageText) {
+                    lines.push(`Set "${rule.field}" to a short phrase taken from the message.`);
+                }
                 break;
             case "normalize":
             case "context":
@@ -809,10 +819,41 @@ export function matchesKeyword(text: string, keyword: string): boolean {
     return false;
 }
 
+// Build one deterministic, aggregate-bounded text view of image-model output for an override rule.
+// The raw target field is intentionally first: it may contain the model's human phrase before schema
+// conformance rejects it for not yet being the app-declared enum value. Common explanatory fields are
+// next, then every other safe string field in lexical order so JSON property order cannot affect the
+// decision. Newline separators prevent a keyword phrase from being synthesized across field edges.
+function extractedStringEvidence(extracted: Record<string, unknown>, targetField: string): string {
+    const priority = [targetField, "message", "note"];
+    const remaining = Object.keys(extracted)
+        .filter((field) => isSafeAiActionFieldName(field) && !priority.includes(field))
+        .sort();
+    const fields = [...priority, ...remaining];
+    const seen = new Set<string>();
+    let evidence = "";
+    for (const field of fields) {
+        if (seen.has(field)) continue;
+        seen.add(field);
+        const value = extracted[field];
+        if (typeof value !== "string") continue;
+
+        const separator = evidence.length === 0 ? "" : "\n";
+        const available = MAX_AI_ACTION_MESSAGE_SCAN_CHARS - evidence.length;
+        if (available <= separator.length) break;
+        evidence += separator;
+        evidence += value.slice(0, MAX_AI_ACTION_MESSAGE_SCAN_CHARS - evidence.length);
+        if (evidence.length === MAX_AI_ACTION_MESSAGE_SCAN_CHARS) break;
+    }
+    return evidence;
+}
+
 // Deterministic post-pass over the model's extraction, applied in a fixed order:
 //   1. from_message rules fill their field from the message text itself (trimmed, truncated).
-//   2. keyword_map rules with mode "override" scan the message (case-insensitive WHOLE-WORD match per
-//      keyword); the first mapping with any match wins. Mode "hint" is prompt-guidance only.
+//   2. keyword_map rules with mode "override" scan authoritative message text, or a bounded stable
+//      concatenation of raw extracted string fields only for image input without text (case-insensitive
+//      WHOLE-WORD match per keyword); the first mapping with any match wins. Mode "hint" is
+//      prompt-guidance only.
 //   3. normalize ops run in order on the field when it is present.
 //   4. schema conformance (type/enum/numeric bounds/safe string lengths/bounded string formats)
 //      deletes violating fields and drops undeclared keys. Untrusted regex patterns fail closed and
@@ -822,6 +863,7 @@ export function applyRulesPostPass(
     extracted: Record<string, unknown>,
     messageText: string | undefined,
     responseSchema?: object,
+    source: { hasImage?: boolean } = {},
 ): Record<string, unknown> {
     const safeRules = boundedRules(rules);
     let out: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
@@ -838,14 +880,22 @@ export function applyRulesPostPass(
                     .slice(0, rule.maxLength ?? 200);
             }
         }
+    }
 
-        const msg = messageText.slice(0, MAX_AI_ACTION_MESSAGE_SCAN_CHARS);
-        for (const rule of safeRules) {
-            if (rule.kind === "keyword_map" && rule.mode === "override") {
-                const hit = rule.map.find((m) => m.keywords.some((k) => matchesKeyword(msg, k)));
-                if (hit !== undefined) {
-                    out[rule.field] = hit.value;
-                }
+    for (const rule of safeRules) {
+        if (rule.kind === "keyword_map" && rule.mode === "override") {
+            // Supplied source text is authoritative even when no keyword matches it. Falling through
+            // to model-generated strings in a mixed invocation would let the model overrule the user.
+            const evidence =
+                messageText !== undefined
+                    ? messageText.slice(0, MAX_AI_ACTION_MESSAGE_SCAN_CHARS)
+                    : source.hasImage === true
+                      ? extractedStringEvidence(extracted, rule.field)
+                      : undefined;
+            if (evidence === undefined) continue;
+            const hit = rule.map.find((m) => m.keywords.some((k) => matchesKeyword(evidence, k)));
+            if (hit !== undefined) {
+                out[rule.field] = hit.value;
             }
         }
     }
@@ -882,6 +932,163 @@ export function missingRequired(
                 !Object.hasOwn(extraction, name) ||
                 extraction[name] === undefined),
     );
+}
+
+// A property schema may explicitly opt out of image-only extraction by setting
+// `x-openchat-omit-for-image-only` to the boolean `true`. This is deliberately generic: an app can
+// use it for any OPTIONAL field whose value cannot be trusted unless the user also supplied source
+// text. Unknown formats remain ordinary schema annotations, and malformed/non-boolean extension
+// values do nothing. Build a fresh object so neither the conformed candidate nor the registered
+// schema is mutated while processing one or many candidates.
+function omitImageOnlySchemaProperties(
+    extraction: Record<string, unknown>,
+    schema: object | undefined,
+): Record<string, unknown> {
+    if (schema === undefined) return extraction;
+    const props: unknown = (schema as { properties?: unknown }).properties;
+    if (props === null || typeof props !== "object" || Array.isArray(props)) return extraction;
+    const properties = props as Record<string, unknown>;
+    const out: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+
+    for (const [field, value] of Object.entries(extraction)) {
+        const propertySchema = Object.hasOwn(properties, field) ? properties[field] : undefined;
+        const omitted =
+            propertySchema !== null &&
+            typeof propertySchema === "object" &&
+            !Array.isArray(propertySchema) &&
+            Object.hasOwn(propertySchema, "x-openchat-omit-for-image-only") &&
+            (propertySchema as Record<string, unknown>)["x-openchat-omit-for-image-only"] === true;
+        if (!omitted) out[field] = value;
+    }
+    return out;
+}
+
+// A registering app may require a model-produced STRING field to be evidenced by authoritative
+// source text by setting `x-openchat-require-text-evidence: true` on that property. The normalized
+// claim itself is accepted as a whole token. A same-field keyword_map may declare aliases (including
+// symbols such as "$" that legitimately touch an amount); punctuation-bearing aliases use a bounded
+// literal match while word aliases keep the standard Unicode whole-token semantics. With no source
+// text (image-only/manual image) this policy is deliberately inactive.
+function textEvidenceMatches(text: string, token: string): boolean {
+    if (!isBoundedRuleString(token)) return false;
+    const boundedText = text.slice(0, MAX_AI_ACTION_MESSAGE_SCAN_CHARS);
+    if (/[^\p{L}\p{N}\s]/u.test(token)) {
+        return boundedText.toLowerCase().includes(token.toLowerCase());
+    }
+    return matchesKeyword(boundedText, token);
+}
+
+// If the app persists authoritative source text through a bounded from_message field, validate an
+// opted-in claim against only the prefix that can actually reach the app's attester. Otherwise a
+// token after that persisted boundary could pass here but disappear from the exact stored payload.
+// The shortest declared prefix is the conservative generic choice when an app declares more than
+// one evidence field; with no from_message rule this remains a client-side correctness policy over
+// the normal bounded source view.
+function persistedTextEvidence(
+    rules: readonly AiActionRule[],
+    schema: object | undefined,
+    messageText: string,
+): string {
+    const fromMessageRules = boundedRules(rules).filter(
+        (rule): rule is Extract<AiActionRule, { kind: "from_message" }> =>
+            rule.kind === "from_message",
+    );
+    const bounded = messageText.slice(0, MAX_AI_ACTION_MESSAGE_SCAN_CHARS).trim();
+    if (fromMessageRules.length === 0) return bounded;
+    const surviving = fromMessageRules
+        .map((rule) => bounded.slice(0, rule.maxLength ?? 200))
+        .filter((value, index) => {
+            const field = fromMessageRules[index].field;
+            return typeof conformToSchema({ [field]: value }, schema)[field] === "string";
+        });
+    if (surviving.length === 0) return "";
+    return surviving.reduce((shortest, value) =>
+        [...value].length < [...shortest].length ? value : shortest,
+    );
+}
+
+function omitUnevidencedTextSchemaProperties(
+    extraction: Record<string, unknown>,
+    schema: object | undefined,
+    rules: readonly AiActionRule[],
+    messageText: string,
+): Record<string, unknown> {
+    if (schema === undefined) return extraction;
+    const props: unknown = (schema as { properties?: unknown }).properties;
+    if (props === null || typeof props !== "object" || Array.isArray(props)) return extraction;
+    const properties = props as Record<string, unknown>;
+    const safeRules = boundedRules(rules);
+    const evidence = persistedTextEvidence(safeRules, schema, messageText);
+    const out: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+
+    for (const [field, value] of Object.entries(extraction)) {
+        const rawProperty = Object.hasOwn(properties, field) ? properties[field] : undefined;
+        const property =
+            rawProperty !== null && typeof rawProperty === "object" && !Array.isArray(rawProperty)
+                ? (rawProperty as Record<string, unknown>)
+                : undefined;
+        const requiresEvidence = property?.["x-openchat-require-text-evidence"] === true;
+        if (!requiresEvidence) {
+            out[field] = value;
+            continue;
+        }
+        if (typeof value !== "string") continue;
+        const aliases = safeRules
+            .filter(
+                (rule): rule is Extract<AiActionRule, { kind: "keyword_map" }> =>
+                    rule.kind === "keyword_map" && rule.field === field,
+            )
+            .flatMap((rule) =>
+                rule.map
+                    .filter((mapping) => mapping.value === value)
+                    .flatMap((mapping) => mapping.keywords),
+            );
+        if (
+            textEvidenceMatches(evidence, value) ||
+            aliases.some((alias) => textEvidenceMatches(evidence, alias))
+        ) {
+            out[field] = value;
+        }
+    }
+    return out;
+}
+
+// Source evidence is kept explicit at the candidate-policy boundary. `hasImage` distinguishes an
+// image-origin extraction from a text extraction that simply has no message string (for example a
+// manual/debug candidate), while nonempty `text` remains authoritative for message-driven rules in
+// a mixed invocation. Keeping all schema-owned source policy in this seam lets model and manual
+// candidates share the same ordering: rules -> conformance -> source-specific omission -> required
+// gate in the caller.
+export interface AiActionCandidateSource {
+    hasImage?: boolean;
+    text?: string;
+}
+
+export function postProcessAiActionCandidate(
+    def: AiActionDefinition,
+    candidate: Record<string, unknown>,
+    source: AiActionCandidateSource = {},
+): Record<string, unknown> {
+    const hasText = source.text !== undefined && source.text.trim().length > 0;
+    let processed = applyRulesPostPass(
+        def.rules ?? [],
+        candidate,
+        hasText ? source.text : undefined,
+        def.responseSchema,
+        { hasImage: source.hasImage === true },
+    );
+    if (hasText) {
+        processed = omitUnevidencedTextSchemaProperties(
+            processed,
+            def.responseSchema,
+            def.rules ?? [],
+            source.text!,
+        );
+    }
+    if (source.hasImage === true && !hasText) {
+        processed = omitImageOnlySchemaProperties(processed, def.responseSchema);
+    }
+    return processed;
 }
 
 // Pure: turn a registered action + a structured extraction + the recipient key into a postable ActionCard.
@@ -1005,8 +1212,7 @@ function maximumCanonicalCardBytes(card: ActionCardContent): number {
     total += canonicalStringLength(card.actionId);
     total += 1 + (card.disclosure === undefined ? 0 : canonicalStringLength(card.disclosure));
     total += card.expiresAt === undefined ? 1 : 1 + 8;
-    total +=
-        card.confirmPayload === undefined ? 1 : 1 + 4 + card.confirmPayload.byteLength;
+    total += card.confirmPayload === undefined ? 1 : 1 + 4 + card.confirmPayload.byteLength;
     return total;
 }
 
@@ -1032,6 +1238,15 @@ export function multiActionCardBoundsError(card: ActionCardContent): string | un
     return undefined;
 }
 
+export function formatLocalCalendarDate(
+    date: Pick<Date, "getFullYear" | "getMonth" | "getDate">,
+): string {
+    const year = String(date.getFullYear()).padStart(4, "0");
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+}
+
 // Orchestrates the full proposal: run the on-device model against the declared prompt, parse, and build the
 // card. `infer` is the on-device inference facade (injected so this is unit-testable without a native runtime).
 export async function runAiAction(
@@ -1052,18 +1267,25 @@ export async function runAiAction(
         return { kind: "error", error: "The action card template is invalid." };
     }
     // The native runtime reads only `prompt` (its separate `text` field is not consumed), so the
-    // message MUST be interpolated into the prompt for the model to see it. A dateline anchors
-    // relative or year-less dates in the message ("1st june") to the user's current date. Declared
-    // rules compile into a "Rules:" block of guidance lines between the template and the dateline.
+    // message MUST be interpolated into the prompt for the model to see it. An explicitly declared
+    // context/today rule anchors relative or year-less dates in nonempty message text ("1st june")
+    // to the user's current date. It is never injected for image-only input: image pixels remain the
+    // sole source evidence. Declared model-guidance rules compile into a "Rules:" block first.
     const rules = def.rules ?? [];
-    const ruleLines = compileRules(rules);
-    const today = new Date().toISOString().slice(0, 10);
+    const hasTextInput = input.text !== undefined && input.text.trim().length > 0;
+    const ruleLines = compileRules(rules, { hasMessageText: hasTextInput });
+    const providesTodayContext = boundedRules(rules).some(
+        (rule) => rule.kind === "context" && rule.provide.includes("today"),
+    );
     let prompt = def.promptTemplate;
     if (ruleLines.length > 0) {
         prompt += `\n\nRules:\n- ${ruleLines.join("\n- ")}`;
     }
-    prompt += `\n\nToday is ${today}.`;
-    if (input.text !== undefined && input.text.trim().length > 0) {
+    if (providesTodayContext && hasTextInput) {
+        const today = formatLocalCalendarDate(new Date());
+        prompt += `\n\nToday is ${today}.`;
+    }
+    if (hasTextInput) {
         prompt += `\n\nMessage:\n${input.text}`;
     }
 
@@ -1106,12 +1328,10 @@ export async function runAiAction(
     // against exclusiveMinimum 0) is DROPPED here, exactly as the single-entry gate refused it.
     const valid: Record<string, unknown>[] = [];
     for (const candidate of candidates) {
-        const finalExtraction = applyRulesPostPass(
-            rules,
-            candidate,
-            input.text,
-            def.responseSchema,
-        );
+        const finalExtraction = postProcessAiActionCandidate(def, candidate, {
+            hasImage: input.image !== undefined,
+            text: input.text,
+        });
         if (missingRequired(finalExtraction, def.responseSchema).length === 0) {
             valid.push(finalExtraction);
         }

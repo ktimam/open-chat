@@ -12,12 +12,12 @@
 // an unpaired published app may request the one-time link flow.
 
 import {
-    applyRulesPostPass,
     buildActionCardContent,
     buildMultiActionCardContent,
     MAX_AI_ACTION_CANDIDATES,
     missingRequired,
     multiActionCardBoundsError,
+    postProcessAiActionCandidate,
     random64,
     runAiAction,
     type AiActionDefinition,
@@ -253,6 +253,10 @@ async function contentToInput(
 // A manual extraction is either a single entry (OBJECT) or several (ARRAY of objects) — the test/
 // manual prompt answer may be either, mirroring what the model may emit.
 export type ManualExtraction = Record<string, unknown> | Record<string, unknown>[];
+export interface ManualExtractionSource {
+    modality: ModelModality;
+    text?: string;
+}
 export const MANUAL_EXTRACTION_CANCELLED = Symbol("manual_extraction_cancelled");
 export type ManualExtractionPromptResult =
     | ManualExtraction
@@ -305,9 +309,9 @@ export function buildManualCard(
     // The owning app id, baked onto the built card so the recipient binds the surface to this app.
     appId?: number,
     appRevision?: bigint,
-    // The actual source text, when this deterministic QC seam stands in for text inference. This
-    // keeps declared from_message/keyword rules identical to the normal runAiAction path.
-    messageText?: string,
+    // Manual/debug JSON still belongs to the selected chat-message source. Keep its modality explicit
+    // so an image extraction cannot bypass image-only schema policy merely because no model ran.
+    source: ManualExtractionSource = { modality: "text" },
 ): ProposeResult {
     const candidates = Array.isArray(manualExtraction) ? manualExtraction : [manualExtraction];
     if (candidates.length > MAX_AI_ACTION_CANDIDATES) {
@@ -318,12 +322,10 @@ export function buildManualCard(
     }
     const valid: Record<string, unknown>[] = [];
     for (const candidate of candidates) {
-        const finalExtraction = applyRulesPostPass(
-            def.rules ?? [],
-            candidate,
-            messageText,
-            def.responseSchema,
-        );
+        const finalExtraction = postProcessAiActionCandidate(def, candidate, {
+            hasImage: source.modality === "image",
+            text: source.text,
+        });
         if (missingRequired(finalExtraction, def.responseSchema).length === 0) {
             valid.push(finalExtraction);
         }
@@ -402,7 +404,9 @@ async function runDefinition(
             additionalRecipientKeys,
             appId,
             appRevision,
-            content.kind === "text_content" ? content.text : undefined,
+            content.kind === "text_content"
+                ? { modality: "text", text: content.text }
+                : { modality: "image" },
         );
     }
 

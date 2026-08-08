@@ -92,6 +92,19 @@ export interface CardPrivateContextReadyMessage {
     privateContext: { recipientKeyScheme: string; recipientPublicKey: string };
 }
 
+export type CardPrivateContextHydrationStatus = "ready" | "error";
+
+export interface CardPrivateContextStatusMessage {
+    type: "oc:card:private-context-status";
+    version: 2;
+    frameNonce: string;
+    // Echo of the exact opaque capability from the host init. It is correlation only: the iframe
+    // already received this bearer, and the host accepts no status for a different/currently absent
+    // capability.
+    capability: string;
+    status: CardPrivateContextHydrationStatus;
+}
+
 export function canAcceptCardPrivateContextReady(input: {
     explicitlyRequested: boolean;
     featureAvailable: boolean;
@@ -118,6 +131,24 @@ export function isCardPublicReadyMessage(
         message.version === 2 &&
         message.frameNonce === expectedFrameNonce
     );
+}
+
+export function cardPrivateContextStatusFromMessage(
+    message: unknown,
+    expectedFrameNonce: string,
+    expectedCapability: string,
+): CardPrivateContextHydrationStatus | undefined {
+    if (
+        !isRecord(message) ||
+        message.type !== "oc:card:private-context-status" ||
+        message.version !== 2 ||
+        message.frameNonce !== expectedFrameNonce ||
+        expectedCapability.length === 0 ||
+        message.capability !== expectedCapability
+    ) {
+        return undefined;
+    }
+    return message.status === "ready" || message.status === "error" ? message.status : undefined;
 }
 
 export interface CardRecipientKey {
@@ -529,7 +560,10 @@ export function newCardFrameNonce(): string {
 
 export const CARD_HANDSHAKE_TIMEOUT_MS = 10_000;
 export const CARD_BOOTSTRAP_RETRY_MS = 250;
-export const CARD_COLLECT_TIMEOUT_MS = 5_000;
+// Collection may legitimately wait for a paired app to fetch, unwrap, and hydrate its private
+// context after the one host click. Use the same bounded operation ceiling as grant/submission so a
+// slow local canister cannot turn that click into a forced second click.
+export const CARD_COLLECT_TIMEOUT_MS = 30_000;
 // IC updates can legitimately take several seconds under load. This is a safety ceiling, not an
 // optimistic latency target: long enough for a real update, but finite so a dead dependency cannot
 // freeze the card indefinitely.
@@ -537,7 +571,7 @@ export const CARD_CONFIRM_OPERATION_TIMEOUT_MS = 30_000;
 
 export type CardOperationSettlement<T> = { status: "settled"; value: T } | { status: "failed" };
 
-// Network-backed grant minting and final submission sit after the user's authority-bearing click.
+// Network-backed capability/grant minting and final submission must all have a finite settlement.
 // Convert rejection, synchronous throws, and a non-settling dependency into one fail-closed result so
 // the host can release its controls without leaking error details or leaving an unhandled rejection.
 export function settleCardOperationBeforeTimeout<T>(
@@ -584,6 +618,16 @@ export function startCardHandshakeTimeout(
 export function startCardCollectTimeout(
     onTimeout: () => void,
     timeoutMs = CARD_COLLECT_TIMEOUT_MS,
+): () => void {
+    return startCardHandshakeTimeout(onTimeout, timeoutMs);
+}
+
+// A minted private capability is not enough to make a paired card confirmable: the isolated app
+// must redeem, decrypt, and apply its private state, then echo an exact capability-bound status.
+// Bound that wait to the same 30-second operation ceiling used by grant minting and submission.
+export function startCardPrivateContextHydrationTimeout(
+    onTimeout: () => void,
+    timeoutMs = CARD_CONFIRM_OPERATION_TIMEOUT_MS,
 ): () => void {
     return startCardHandshakeTimeout(onTimeout, timeoutMs);
 }

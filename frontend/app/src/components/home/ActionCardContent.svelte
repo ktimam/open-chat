@@ -32,6 +32,7 @@
         cardCollectAttemptStillCurrent,
         cardConfirmationAttemptStillCurrent,
         cardCollectedConfirmFromMessage,
+        cardPrivateContextStatusFromMessage,
         cardResizeHeightFromMessage,
         clampCardHeight,
         completelyReverseMapRows,
@@ -48,6 +49,7 @@
         settleCardOperationBeforeTimeout,
         supportsCredentiallessIframe,
         startCardHandshakeTimeout,
+        startCardPrivateContextHydrationTimeout,
         startCardBootstrapRetry,
         startCardCollectTimeout,
         visibleRows,
@@ -211,6 +213,7 @@
     let loadRequested = $state(false);
     let capabilityPending = $state(false);
     let privateContextRequested = $state(false);
+    let privateContextHydrated = $state(false);
     let confirmationFailed = $state(false);
     let cardCollectionFailed = $state(false);
     let cardCapability = $state<AiAppCardCapability | undefined>(undefined);
@@ -218,6 +221,7 @@
     let collectAttempt: CardCollectAttemptBinding | undefined;
     let confirmationAttempt: CardConfirmationAttemptBinding | undefined;
     let cancelPrivateContextTimeout: (() => void) | undefined;
+    let cancelPrivateContextHydrationTimeout: (() => void) | undefined;
     let cancelCardBootstrapRetry: (() => void) | undefined;
     let cancelCollectTimeout: (() => void) | undefined;
     let componentMounted = false;
@@ -237,9 +241,21 @@
     // ready handshake can render the message's existing card values; only a later host-owned grant may
     // mint/deliver private viewer context.
     let cardActivated = $derived(readySeen);
+    // A durable per-user pairing means the app may have account-private values (for example a saved
+    // Type) to restore. Do not let the host collect the public-only first render while that restoration
+    // is absent or in flight. An unpaired card has no private context to wait for and stays one-click
+    // confirmable without any Share/Restore ceremony.
+    let persistentPrivateContextReady = $derived(
+        !hasPersistentUserPairing ||
+            (privateContextAvailable &&
+                cardCapability !== undefined &&
+                privateContextHydrated &&
+                !capabilityPending),
+    );
     let canCollectConfirm = $derived(
         cardConfirmable &&
             cardActivated &&
+            persistentPrivateContextReady &&
             !busy &&
             (content.disclosure === undefined || acknowledged),
     );
@@ -271,9 +287,11 @@
         return () => {
             componentMounted = false;
             cancelPrivateContextTimeout?.();
+            cancelPrivateContextHydrationTimeout?.();
             cancelCardBootstrapRetry?.();
             cancelCollectTimeout?.();
             cancelCardBootstrapRetry = undefined;
+            cancelPrivateContextHydrationTimeout = undefined;
             cancelCollectTimeout = undefined;
             capabilityAttempt = undefined;
             collectAttempt = undefined;
@@ -434,6 +452,8 @@
         cancelCardBootstrapRetry = undefined;
         cancelPrivateContextTimeout?.();
         cancelPrivateContextTimeout = undefined;
+        cancelPrivateContextHydrationTimeout?.();
+        cancelPrivateContextHydrationTimeout = undefined;
         cancelCollectTimeout?.();
         cancelCollectTimeout = undefined;
         if (collectAttempt !== undefined || confirmationAttempt !== undefined) busy = false;
@@ -441,6 +461,7 @@
         readySeen = false;
         capabilityPending = false;
         privateContextRequested = false;
+        privateContextHydrated = false;
         cardCapability = undefined;
         capabilityAttempt = undefined;
         collectAttempt = undefined;
@@ -495,6 +516,21 @@
         beginPrivateContextRequest();
     }
 
+    function clearPrivateContextAfterHydrationFailure(
+        expectedFrameNonce: string,
+        expectedCapability: string,
+    ) {
+        if (frameNonce !== expectedFrameNonce || cardCapability?.capability !== expectedCapability)
+            return;
+        cancelPrivateContextHydrationTimeout?.();
+        cancelPrivateContextHydrationTimeout = undefined;
+        privateContextHydrated = false;
+        cardCapability = undefined;
+        // Revoke the failed capability from the live frame as well as host state. A fresh Restore
+        // request is then the only route back to paired confirmation readiness.
+        postInit();
+    }
+
     async function mintPrivateContextCapability(
         recipientKeyScheme: string,
         recipientPublicKey: Uint8Array,
@@ -514,13 +550,17 @@
         cancelPrivateContextTimeout?.();
         cancelPrivateContextTimeout = undefined;
         try {
-            const capability = await client.createAiAppCardCapability(
-                chatId,
-                threadRootMessageIndex,
-                messageId,
-                attempt.recipientKeyScheme,
-                attempt.recipientPublicKey.slice(),
+            const capabilityResult = await settleCardOperationBeforeTimeout(() =>
+                client.createAiAppCardCapability(
+                    chatId,
+                    threadRootMessageIndex,
+                    messageId,
+                    attempt.recipientKeyScheme,
+                    attempt.recipientPublicKey.slice(),
+                ),
             );
+            if (capabilityResult.status === "failed") return;
+            const capability = capabilityResult.value;
             const currentKey = currentCardAttemptKey();
             if (currentKey === undefined) return;
             const current: CardCapabilityAttemptBinding = {
@@ -531,18 +571,31 @@
             };
             if (
                 capability === undefined ||
+                capability.capability.length === 0 ||
                 capability.expiresAt <= BigInt(Date.now()) ||
                 !cardCapabilityAttemptStillCurrent(attempt, current, componentMounted)
             )
                 return;
             cardCapability = capability;
+            privateContextHydrated = false;
+            const capabilityNonce = attempt.frameNonce;
+            const capabilityValue = capability.capability;
+            cancelPrivateContextHydrationTimeout?.();
+            cancelPrivateContextHydrationTimeout = startCardPrivateContextHydrationTimeout(() =>
+                clearPrivateContextAfterHydrationFailure(capabilityNonce, capabilityValue),
+            );
             postInit();
         } catch {
-            // Restoration is optional. Keep the card public-only and let `finally` expose the paired
-            // manual retry; never auto-loop or surface dependency details.
+            // A durable pairing may carry account-private values that affect the exact payload, so a
+            // failed restoration stays fail closed. `finally` exposes one explicit paired retry and
+            // never auto-loops or leaks dependency details.
         } finally {
-            if (capabilityAttempt === attempt) capabilityAttempt = undefined;
-            capabilityPending = false;
+            // A stale mint may finish after navigation/reset or after a newer retry started. It must
+            // not release the newer attempt's latch or enable Add against an unhydrated frame.
+            if (capabilityAttempt === attempt) {
+                capabilityAttempt = undefined;
+                capabilityPending = false;
+            }
         }
     }
 
@@ -617,6 +670,24 @@
                 const recipientKey = decodeCardRecipientPublicKey(msg, frameNonce);
                 if (recipientKey === undefined) return;
                 void mintPrivateContextCapability(recipientKey.scheme, recipientKey.publicKey);
+                break;
+            }
+            case "oc:card:private-context-status": {
+                const capability = cardCapability;
+                if (capability === undefined) return;
+                const status = cardPrivateContextStatusFromMessage(
+                    msg,
+                    frameNonce,
+                    capability.capability,
+                );
+                if (status === undefined) return;
+                if (status === "error" || capability.expiresAt <= BigInt(Date.now())) {
+                    clearPrivateContextAfterHydrationFailure(frameNonce, capability.capability);
+                    return;
+                }
+                cancelPrivateContextHydrationTimeout?.();
+                cancelPrivateContextHydrationTimeout = undefined;
+                privateContextHydrated = true;
                 break;
             }
             case "oc:card:confirm-collected":
@@ -951,6 +1022,12 @@
 
                 {#if confirmationFailed}
                     <div class="card-load-error" role="alert">Confirmation failed. Try again.</div>
+                {/if}
+
+                {#if cardActivated && hasPersistentUserPairing && !privateContextAvailable}
+                    <div class="card-load-error" role="alert">
+                        Saved app data is unavailable in this browser. Confirmation is disabled.
+                    </div>
                 {/if}
 
                 {#if cardActivated && hasPersistentUserPairing && cardCapability === undefined && privateContextAvailable && !privateContextRequested}

@@ -396,6 +396,257 @@ describe("action-card external surface load consent", () => {
         }
     });
 
+    it("times out a non-settling paired capability mint and lets a fresh Restore retry succeed", async () => {
+        const restore = setCredentiallessSupport(true);
+        mocks.privateContextAvailable = true;
+        mocks.createAiAppCardCapability
+            .mockImplementationOnce(() => new Promise(() => undefined))
+            .mockResolvedValueOnce({
+                capability: "fresh-retry-capability",
+                expiresAt: BigInt(Date.now() + 60_000),
+                context: {
+                    contextVersion: 1,
+                    appSubject: "app-subject",
+                    chatHandle: "chat-handle",
+                    messageHandle: "message-handle",
+                    appId: APP_ID,
+                    appRevision: APP_REVISION,
+                    actionId: "generic.entry.add",
+                },
+            });
+        const view = await mountCard(card({ confirmPayload: undefined }), 1_108n);
+        let postMessage: ReturnType<typeof vi.spyOn> | undefined;
+        let fakeTimers = false;
+        try {
+            await waitForResolution();
+            const ready = await completeCardReadyHandshake(view.target);
+            postMessage = ready.postMessage;
+            await vi.waitFor(() =>
+                expect(postedMessageOfType(postMessage!, "oc:card:private-context-request")).toBe(
+                    true,
+                ),
+            );
+
+            const recipientKey = btoa(String.fromCharCode(...new Uint8Array(32).fill(11)))
+                .replaceAll("+", "-")
+                .replaceAll("/", "_")
+                .replaceAll("=", "");
+            vi.useFakeTimers();
+            fakeTimers = true;
+            dispatchFromCardFrame(ready.iframe, {
+                type: "oc:card:private-context-ready",
+                version: 2,
+                frameNonce: ready.frameNonce,
+                privateContext: {
+                    recipientKeyScheme: "x25519-v1",
+                    recipientPublicKey: recipientKey,
+                },
+            });
+            await vi.advanceTimersByTimeAsync(0);
+            await tick();
+            expect(mocks.createAiAppCardCapability).toHaveBeenCalledOnce();
+            expect(
+                view.target.querySelector<HTMLButtonElement>(".private-context-action button")
+                    ?.disabled,
+            ).toBe(true);
+            expect(buttonNamed(view.target, "Add")?.disabled).toBe(true);
+
+            await vi.advanceTimersByTimeAsync(30_000);
+            await tick();
+            expect(buttonNamed(view.target, "Restore app data")?.disabled).toBe(false);
+            expect(buttonNamed(view.target, "Add")?.disabled).toBe(true);
+
+            vi.useRealTimers();
+            fakeTimers = false;
+            buttonNamed(view.target, "Restore app data")?.click();
+            await vi.waitFor(() => {
+                expect(
+                    postedCardMessages(postMessage!).filter(
+                        (message) => message.type === "oc:card:private-context-request",
+                    ),
+                ).toHaveLength(2);
+            });
+            dispatchFromCardFrame(ready.iframe, {
+                type: "oc:card:private-context-ready",
+                version: 2,
+                frameNonce: ready.frameNonce,
+                privateContext: {
+                    recipientKeyScheme: "x25519-v1",
+                    recipientPublicKey: recipientKey,
+                },
+            });
+
+            await vi.waitFor(() =>
+                expect(mocks.createAiAppCardCapability).toHaveBeenCalledTimes(2),
+            );
+            await vi.waitFor(() =>
+                expect(
+                    postedCardMessages(postMessage!).some(
+                        (message) =>
+                            message.type === "oc:card:init" &&
+                            (
+                                message as PostedCardMessage & {
+                                    context?: { privateContext?: { capability?: string } };
+                                }
+                            ).context?.privateContext?.capability === "fresh-retry-capability",
+                    ),
+                ).toBe(true),
+            );
+            expect(buttonNamed(view.target, "Add")?.disabled).toBe(true);
+            dispatchFromCardFrame(ready.iframe, {
+                type: "oc:card:private-context-status",
+                version: 2,
+                frameNonce: ready.frameNonce,
+                capability: "fresh-retry-capability",
+                status: "ready",
+            });
+            await vi.waitFor(() => expect(buttonNamed(view.target, "Add")?.disabled).toBe(false));
+            expect(buttonNamed(view.target, "Restore app data")).toBeUndefined();
+        } finally {
+            if (fakeTimers) vi.useRealTimers();
+            postMessage?.mockRestore();
+            await view.cleanup();
+            restore();
+        }
+    });
+
+    it("keeps Add disabled and exposes Restore when the exact capability reports hydration error", async () => {
+        const restore = setCredentiallessSupport(true);
+        mocks.privateContextAvailable = true;
+        mocks.createAiAppCardCapability.mockResolvedValue({
+            capability: "hydration-error-capability",
+            expiresAt: BigInt(Date.now() + 60_000),
+            context: {
+                contextVersion: 1,
+                appSubject: "app-subject",
+                chatHandle: "chat-handle",
+                messageHandle: "message-handle",
+                appId: APP_ID,
+                appRevision: APP_REVISION,
+                actionId: "generic.entry.add",
+            },
+        });
+        const view = await mountCard(card({ confirmPayload: undefined }), 1_109n);
+        let postMessage: ReturnType<typeof vi.spyOn> | undefined;
+        try {
+            await waitForResolution();
+            const ready = await completeCardReadyHandshake(view.target);
+            postMessage = ready.postMessage;
+            await vi.waitFor(() =>
+                expect(postedMessageOfType(postMessage!, "oc:card:private-context-request")).toBe(
+                    true,
+                ),
+            );
+            const recipientKey = btoa(String.fromCharCode(...new Uint8Array(32).fill(12)))
+                .replaceAll("+", "-")
+                .replaceAll("/", "_")
+                .replaceAll("=", "");
+            dispatchFromCardFrame(ready.iframe, {
+                type: "oc:card:private-context-ready",
+                version: 2,
+                frameNonce: ready.frameNonce,
+                privateContext: {
+                    recipientKeyScheme: "x25519-v1",
+                    recipientPublicKey: recipientKey,
+                },
+            });
+            await vi.waitFor(() =>
+                expect(
+                    postedCardMessages(postMessage!).some(
+                        (message) =>
+                            message.type === "oc:card:init" &&
+                            (
+                                message as PostedCardMessage & {
+                                    context?: { privateContext?: { capability?: string } };
+                                }
+                            ).context?.privateContext?.capability === "hydration-error-capability",
+                    ),
+                ).toBe(true),
+            );
+            expect(buttonNamed(view.target, "Add")?.disabled).toBe(true);
+
+            dispatchFromCardFrame(ready.iframe, {
+                type: "oc:card:private-context-status",
+                version: 2,
+                frameNonce: ready.frameNonce,
+                capability: "hydration-error-capability",
+                status: "error",
+            });
+
+            await vi.waitFor(() =>
+                expect(buttonNamed(view.target, "Restore app data")?.disabled).toBe(false),
+            );
+            expect(buttonNamed(view.target, "Add")?.disabled).toBe(true);
+        } finally {
+            postMessage?.mockRestore();
+            await view.cleanup();
+            restore();
+        }
+    });
+
+    it("bounds the exact capability hydration wait and exposes paired Restore after 30 seconds", async () => {
+        const restore = setCredentiallessSupport(true);
+        mocks.privateContextAvailable = true;
+        mocks.createAiAppCardCapability.mockResolvedValue({
+            capability: "hydration-timeout-capability",
+            expiresAt: BigInt(Date.now() + 60_000),
+            context: {
+                contextVersion: 1,
+                appSubject: "app-subject",
+                chatHandle: "chat-handle",
+                messageHandle: "message-handle",
+                appId: APP_ID,
+                appRevision: APP_REVISION,
+                actionId: "generic.entry.add",
+            },
+        });
+        const view = await mountCard(card({ confirmPayload: undefined }), 1_110n);
+        let postMessage: ReturnType<typeof vi.spyOn> | undefined;
+        let fakeTimers = false;
+        try {
+            await waitForResolution();
+            const ready = await completeCardReadyHandshake(view.target);
+            postMessage = ready.postMessage;
+            await vi.waitFor(() =>
+                expect(postedMessageOfType(postMessage!, "oc:card:private-context-request")).toBe(
+                    true,
+                ),
+            );
+            const recipientKey = btoa(String.fromCharCode(...new Uint8Array(32).fill(13)))
+                .replaceAll("+", "-")
+                .replaceAll("/", "_")
+                .replaceAll("=", "");
+            vi.useFakeTimers();
+            fakeTimers = true;
+            dispatchFromCardFrame(ready.iframe, {
+                type: "oc:card:private-context-ready",
+                version: 2,
+                frameNonce: ready.frameNonce,
+                privateContext: {
+                    recipientKeyScheme: "x25519-v1",
+                    recipientPublicKey: recipientKey,
+                },
+            });
+            await vi.advanceTimersByTimeAsync(0);
+            await tick();
+            expect(mocks.createAiAppCardCapability).toHaveBeenCalledOnce();
+            expect(buttonNamed(view.target, "Add")?.disabled).toBe(true);
+
+            await vi.advanceTimersByTimeAsync(29_999);
+            await tick();
+            expect(buttonNamed(view.target, "Restore app data")).toBeUndefined();
+            await vi.advanceTimersByTimeAsync(1);
+            await tick();
+            expect(buttonNamed(view.target, "Restore app data")?.disabled).toBe(false);
+            expect(buttonNamed(view.target, "Add")?.disabled).toBe(true);
+        } finally {
+            if (fakeTimers) vi.useRealTimers();
+            postMessage?.mockRestore();
+            await view.cleanup();
+            restore();
+        }
+    });
+
     it.each([
         ["unpaired", false, false],
         ["read-only", true, true],
@@ -719,6 +970,168 @@ describe("action-card external surface load consent", () => {
 });
 
 describe("host-initiated one-click iframe confirmation", () => {
+    beforeEach(() => {
+        // Most confirmation mechanics are deliberately exercised on the public-only path. Paired
+        // readiness has its own focused test below and must not make unrelated grant/retry tests
+        // manufacture a private capability.
+        mocks.resolveActionAppForCard.mockResolvedValue({
+            ...RESOLVED_APP,
+            hasPersistentUserPairing: false,
+        });
+    });
+
+    it("keeps paired Add disabled until private capability restoration completes", async () => {
+        const restore = setCredentiallessSupport(true);
+        mocks.privateContextAvailable = true;
+        mocks.resolveActionAppForCard.mockResolvedValue(RESOLVED_APP);
+        type Capability = {
+            capability: string;
+            expiresAt: bigint;
+            context: {
+                contextVersion: number;
+                appSubject: string;
+                chatHandle: string;
+                messageHandle: string;
+                appId: number;
+                appRevision: bigint;
+                actionId: string;
+            };
+        };
+        let resolveCapability: (capability: Capability) => void = () => undefined;
+        mocks.createAiAppCardCapability.mockImplementationOnce(
+            () =>
+                new Promise<Capability>((resolve) => {
+                    resolveCapability = resolve;
+                }),
+        );
+        const view = await mountCard(card({ confirmPayload: undefined }), 1_210n);
+        let postMessage: ReturnType<typeof vi.spyOn> | undefined;
+        try {
+            await waitForResolution();
+            const ready = await completeCardReadyHandshake(view.target);
+            postMessage = ready.postMessage;
+            await vi.waitFor(() =>
+                expect(postedMessageOfType(postMessage!, "oc:card:private-context-request")).toBe(
+                    true,
+                ),
+            );
+            expect(buttonNamed(view.target, "Add")?.disabled).toBe(true);
+            buttonNamed(view.target, "Add")?.click();
+            expect(postedMessageOfType(postMessage, "oc:card:collect-confirm")).toBe(false);
+
+            const recipientKey = btoa(String.fromCharCode(...new Uint8Array(32).fill(5)))
+                .replaceAll("+", "-")
+                .replaceAll("/", "_")
+                .replaceAll("=", "");
+            dispatchFromCardFrame(ready.iframe, {
+                type: "oc:card:private-context-ready",
+                version: 2,
+                frameNonce: ready.frameNonce,
+                privateContext: {
+                    recipientKeyScheme: "x25519-v1",
+                    recipientPublicKey: recipientKey,
+                },
+            });
+            await vi.waitFor(() => expect(mocks.createAiAppCardCapability).toHaveBeenCalledOnce());
+            expect(buttonNamed(view.target, "Add")?.disabled).toBe(true);
+
+            resolveCapability({
+                capability: "opaque-capability",
+                expiresAt: BigInt(Date.now() + 60_000),
+                context: {
+                    contextVersion: 1,
+                    appSubject: "app-subject",
+                    chatHandle: "chat-handle",
+                    messageHandle: "message-handle",
+                    appId: APP_ID,
+                    appRevision: APP_REVISION,
+                    actionId: "generic.entry.add",
+                },
+            });
+            await vi.waitFor(() =>
+                expect(
+                    postedCardMessages(postMessage!).some(
+                        (message) =>
+                            message.type === "oc:card:init" &&
+                            (
+                                message as PostedCardMessage & {
+                                    context?: { privateContext?: { capability?: string } };
+                                }
+                            ).context?.privateContext?.capability === "opaque-capability",
+                    ),
+                ).toBe(true),
+            );
+            expect(buttonNamed(view.target, "Add")?.disabled).toBe(true);
+            dispatchFromCardFrame(ready.iframe, {
+                type: "oc:card:private-context-status",
+                version: 2,
+                frameNonce: ready.frameNonce,
+                capability: "opaque-capability",
+                status: "ready",
+            });
+            await vi.waitFor(() => expect(buttonNamed(view.target, "Add")?.disabled).toBe(false));
+            buttonNamed(view.target, "Add")?.click();
+            await vi.waitFor(() =>
+                expect(
+                    postedCardMessages(postMessage!).filter(
+                        (message) => message.type === "oc:card:collect-confirm",
+                    ),
+                ).toHaveLength(1),
+            );
+        } finally {
+            postMessage?.mockRestore();
+            await view.cleanup();
+            restore();
+        }
+    });
+
+    it("keeps an unpaired card one-click confirmable without private sharing", async () => {
+        const restore = setCredentiallessSupport(true);
+        mocks.privateContextAvailable = true;
+        const view = await mountCard(card({ confirmPayload: undefined }), 1_211n);
+        let postMessage: ReturnType<typeof vi.spyOn> | undefined;
+        try {
+            await waitForResolution();
+            const ready = await completeCardReadyHandshake(view.target);
+            postMessage = ready.postMessage;
+            await vi.waitFor(() => expect(buttonNamed(view.target, "Add")?.disabled).toBe(false));
+            expect(postedMessageOfType(postMessage, "oc:card:private-context-request")).toBe(false);
+            expect(buttonNamed(view.target, "Share app context")).toBeUndefined();
+
+            buttonNamed(view.target, "Add")?.click();
+            await vi.waitFor(() =>
+                expect(
+                    postedCardMessages(postMessage!).filter(
+                        (message) => message.type === "oc:card:collect-confirm",
+                    ),
+                ).toHaveLength(1),
+            );
+        } finally {
+            postMessage?.mockRestore();
+            await view.cleanup();
+            restore();
+        }
+    });
+
+    it("fails closed with a clear status when a paired browser cannot restore private data", async () => {
+        const restore = setCredentiallessSupport(true);
+        mocks.privateContextAvailable = false;
+        mocks.resolveActionAppForCard.mockResolvedValue(RESOLVED_APP);
+        const view = await mountCard(card({ confirmPayload: undefined }), 1_212n);
+        try {
+            await waitForResolution();
+            await completeCardReadyHandshake(view.target);
+            await vi.waitFor(() => expect(buttonNamed(view.target, "Add")?.disabled).toBe(true));
+            expect(view.target.textContent).toContain(
+                "Saved app data is unavailable in this browser. Confirmation is disabled.",
+            );
+            expect(buttonNamed(view.target, "Restore app data")).toBeUndefined();
+        } finally {
+            await view.cleanup();
+            restore();
+        }
+    });
+
     it("collects only after the host Add click, grants the exact bytes, and submits without a second approval", async () => {
         const restore = setCredentiallessSupport(true);
         const onRespond = vi.fn();
@@ -1223,7 +1636,7 @@ describe("host-initiated one-click iframe confirmation", () => {
                 true,
             );
 
-            vi.advanceTimersByTime(5_000);
+            vi.advanceTimersByTime(30_000);
             await tick();
             expect(view.target.textContent).toContain("The app did not return valid card values");
             expect(buttonNamed(view.target, "Add")?.disabled).toBe(false);

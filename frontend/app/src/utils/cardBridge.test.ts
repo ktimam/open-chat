@@ -12,6 +12,7 @@ import {
     cardCollectAttemptStillCurrent,
     cardConfirmationAttemptStillCurrent,
     cardCapabilityAttemptStillCurrent,
+    cardPrivateContextStatusFromMessage,
     canAcceptCardPrivateContextReady,
     canApproveCardRequest,
     canonicalCardApprovalSummary,
@@ -584,6 +585,49 @@ describe("private card-context handshake", () => {
         ).toHaveLength(512);
         expect(decodeCardRecipientPublicKey(message(new Uint8Array(15)), nonce)).toBeUndefined();
         expect(decodeCardRecipientPublicKey(message(new Uint8Array(513)), nonce)).toBeUndefined();
+    });
+
+    test.each(["ready", "error"] as const)(
+        "accepts an exact private-context %s status bound to nonce and capability",
+        (status) => {
+            expect(
+                cardPrivateContextStatusFromMessage(
+                    {
+                        type: "oc:card:private-context-status",
+                        version: 2,
+                        frameNonce: nonce,
+                        capability: "opaque-capability",
+                        status,
+                    },
+                    nonce,
+                    "opaque-capability",
+                ),
+            ).toBe(status);
+        },
+    );
+
+    test.each([
+        ["wrong type", { type: "oc:card:private-context-ready" }],
+        ["wrong version", { version: 1 }],
+        ["wrong nonce", { frameNonce: "stale-frame" }],
+        ["wrong capability", { capability: "stale-capability" }],
+        ["unknown status", { status: "loading" }],
+        ["missing status", { status: undefined }],
+    ])("rejects private-context status with %s", (_label, override) => {
+        expect(
+            cardPrivateContextStatusFromMessage(
+                {
+                    type: "oc:card:private-context-status",
+                    version: 2,
+                    frameNonce: nonce,
+                    capability: "opaque-capability",
+                    status: "ready",
+                    ...override,
+                },
+                nonce,
+                "opaque-capability",
+            ),
+        ).toBeUndefined();
     });
 
     test("latches repeated ready and discards navigation, key/card changes, and teardown", () => {

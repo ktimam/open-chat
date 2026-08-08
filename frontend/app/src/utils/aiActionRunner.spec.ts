@@ -129,6 +129,155 @@ describe("buildManualCard (manual-extraction gate)", () => {
         }
     });
 
+    const imageOmissionDef = (required: string[] = ["amount"]): AiActionDefinition => {
+        const schema = DEF.responseSchema as {
+            type: string;
+            properties: Record<string, unknown>;
+            required: string[];
+        };
+        return {
+            ...DEF,
+            responseSchema: {
+                ...schema,
+                properties: {
+                    ...schema.properties,
+                    date: {
+                        type: "string",
+                        format: "date",
+                        "x-openchat-omit-for-image-only": true,
+                    },
+                    message: {
+                        type: "string",
+                        "x-openchat-omit-for-image-only": true,
+                    },
+                },
+                required,
+            },
+            card: {
+                ...DEF.card,
+                rows: [
+                    ...DEF.card.rows,
+                    { label: "Date", valueKey: "date" },
+                    { label: "Message", valueKey: "message" },
+                ],
+            },
+        };
+    };
+
+    it.each([undefined, "", "   "])(
+        "removes date and message from image-origin manual extraction with blank text (%s)",
+        (text) => {
+            const result = buildManualCard(
+                imageOmissionDef(),
+                {
+                    amount: 20,
+                    currency: "USD",
+                    date: "2026-08-09",
+                    message: "model-generated receipt description",
+                },
+                RECIPIENT,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                { modality: "image", text },
+            );
+
+            expect(result.kind).toBe("ready");
+            if (result.kind === "ready") {
+                expect(result.extracted).toEqual({ amount: 20, currency: "USD" });
+                expect(result.card.rows).toEqual([
+                    { label: "Amount", value: "20" },
+                    { label: "Currency", value: "USD" },
+                ]);
+                expect(JSON.parse(new TextDecoder().decode(result.card.confirmPayload!))).toEqual(
+                    result.extracted,
+                );
+            }
+        },
+    );
+
+    it("keeps image-only annotated values on the manual text path", () => {
+        const sourceText = "paid 20 USD on 2026-08-09";
+        const result = buildManualCard(
+            imageOmissionDef(),
+            {
+                amount: 20,
+                currency: "USD",
+                date: "2026-08-09",
+                message: sourceText,
+            },
+            RECIPIENT,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            { modality: "text", text: sourceText },
+        );
+
+        expect(result.kind).toBe("ready");
+        if (result.kind === "ready") {
+            expect(result.extracted.date).toBe("2026-08-09");
+            expect(result.extracted.message).toBe(sourceText);
+        }
+    });
+
+    it("uses image-extracted strings for manual keyword overrides before enum conformance", () => {
+        const def: AiActionDefinition = {
+            ...DEF,
+            acceptsImage: true,
+            rules: [
+                {
+                    kind: "keyword_map",
+                    field: "direction",
+                    mode: "override",
+                    map: [
+                        { value: "credit", keywords: ["owed to you"] },
+                        { value: "debt", keywords: ["you owe"] },
+                    ],
+                },
+            ],
+            responseSchema: {
+                type: "object",
+                properties: {
+                    amount: { type: "number", exclusiveMinimum: 0 },
+                    direction: { type: "string", enum: ["credit", "debt"] },
+                    message: { type: "string" },
+                },
+                required: ["amount", "direction"],
+            },
+        };
+
+        const result = buildManualCard(
+            def,
+            { amount: 350, direction: "owed to you", message: "Cleaning fee owed to you" },
+            RECIPIENT,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            { modality: "image" },
+        );
+
+        expect(result.kind).toBe("ready");
+        if (result.kind === "ready") expect(result.extracted.direction).toBe("credit");
+    });
+
+    it("fails closed when an image-only omitted manual field is required", () => {
+        const result = buildManualCard(
+            imageOmissionDef(["amount", "message"]),
+            { amount: 20, message: "model-generated receipt description" },
+            RECIPIENT,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            { modality: "image" },
+        );
+
+        expect(result.kind).toBe("no_extraction");
+    });
+
     it("runs declared normalize rules over the manual extraction ('350 usd' -> 350)", () => {
         const def: AiActionDefinition = {
             ...DEF,
@@ -167,7 +316,7 @@ describe("buildManualCard (manual-extraction gate)", () => {
             undefined,
             undefined,
             undefined,
-            sourceText,
+            { modality: "text", text: sourceText },
         );
         expect(r.kind).toBe("ready");
         if (r.kind === "ready") {
@@ -240,10 +389,7 @@ describe("buildManualCard (manual-extraction gate)", () => {
             },
             card: { ...DEF.card, rows: [{ label: "Amount", valueKey: "amount" }] },
         };
-        const manual = [
-            { amount: 1, opaque: "x".repeat(16 * 1_024) },
-            { amount: 2 },
-        ];
+        const manual = [{ amount: 1, opaque: "x".repeat(16 * 1_024) }, { amount: 2 }];
         expect(buildManualCard(def, manual, RECIPIENT)).toMatchObject({
             kind: "error",
             error: expect.stringContaining("confirmation payload"),
@@ -806,6 +952,66 @@ describe("provenance before posting", () => {
         expect(sendCalls[0][1]).toMatchObject({ appProvenance: provenance });
     });
 
+    it("applies the selected image modality to manual debug extraction before provenance", async () => {
+        const imageDef: AiActionDefinition = {
+            ...DEF,
+            acceptsImage: true,
+            responseSchema: {
+                type: "object",
+                properties: {
+                    amount: { type: "number", exclusiveMinimum: 0 },
+                    date: {
+                        type: "string",
+                        format: "date",
+                        "x-openchat-omit-for-image-only": true,
+                    },
+                    message: {
+                        type: "string",
+                        "x-openchat-omit-for-image-only": true,
+                    },
+                },
+                required: ["amount"],
+            },
+        };
+        const imageCandidate: AiActionCandidate = {
+            app: { ...APP, manifest: { ...APP.manifest, actions: [imageDef] } },
+            action: imageDef,
+            recipientKey: RECIPIENT,
+        };
+        const createAiAppCardProvenance = vi.fn(async () => ({
+            provenance: new Uint8Array([7]),
+            expiresAt: BigInt(Date.now() + 60_000),
+        }));
+        const client = {
+            createAiAppCardProvenance,
+            sendMessageWithContent: vi.fn(async () => ({ kind: "success" })),
+        } as unknown as OpenChat;
+        const imageContent = {
+            kind: "image_content",
+            blobData: new Uint8Array([1, 2, 3]),
+        } as unknown as Parameters<typeof proposeAndPostCandidate>[2];
+
+        const result = await proposeAndPostCandidate(
+            client,
+            messageContext,
+            imageContent,
+            imageCandidate,
+            {
+                amount: 20,
+                date: "2026-08-09",
+                message: "manual model stand-in",
+            },
+        );
+
+        expect(result.kind).toBe("ready");
+        expect(inferOnDeviceMock).not.toHaveBeenCalled();
+        const provenanceCalls = createAiAppCardProvenance.mock.calls as unknown as unknown[][];
+        expect(provenanceCalls[0][3]).toMatchObject({
+            rows: [{ label: "Amount", value: "20" }],
+            confirmPayload: new TextEncoder().encode('{"amount":20}'),
+        });
+    });
+
     it("binds a thread card to Some(threadRootMessageIndex)", async () => {
         const createAiAppCardProvenance = vi.fn(async () => ({
             provenance: new Uint8Array([9]),
@@ -1191,10 +1397,7 @@ describe("both ChatMessage trees run the SHARED propose flow", () => {
     }
 
     it("classic renders a real action chooser without requiring the manual-QC query", () => {
-        const src = readFileSync(
-            fileURLToPath(new URL(TREES.classic, import.meta.url)),
-            "utf8",
-        );
+        const src = readFileSync(fileURLToPath(new URL(TREES.classic, import.meta.url)), "utf8");
         expect(src).toContain("let aiActionChooser = $state");
         expect(src).toContain("function chooseCandidate(");
         expect(src).toContain("chooseCandidate,");
@@ -1204,9 +1407,32 @@ describe("both ChatMessage trees run the SHARED propose flow", () => {
         expect(src).not.toContain("function promptForCandidate(");
     });
 
+    it("classic exposes Propose only for confirmed active successful messages", () => {
+        const menuPath = "../components/home/ChatMessageMenu.svelte";
+        const src = readFileSync(fileURLToPath(new URL(menuPath, import.meta.url)), "utf8");
+
+        expect(src).toContain(
+            "{#if onRunAiAction !== undefined && confirmed && !inert && !failed}",
+        );
+    });
+
     it("mobile keeps a visible working surface after the suggestion chip is dismissed", () => {
         const src = readFileSync(fileURLToPath(new URL(TREES.mobile, import.meta.url)), "utf8");
         expect(src).toContain("{:else if proposing}");
         expect(src).toContain('i18nKey("aiApps.autoPropose.working")');
+    });
+
+    it("mobile icon actions expose their localized menu label to assistive technology", () => {
+        const optionsPath = "../components_mobile/home/ChatMessageOptions.svelte";
+        const iconButtonPath = "../../../component-lib/src/components/buttons/IconButton.svelte";
+        const options = readFileSync(fileURLToPath(new URL(optionsPath, import.meta.url)), "utf8");
+        const iconButton = readFileSync(
+            fileURLToPath(new URL(iconButtonPath, import.meta.url)),
+            "utf8",
+        );
+
+        expect(iconButton).toContain("ariaLabel?: string");
+        expect(iconButton).toContain("aria-label={ariaLabel}");
+        expect(options).toContain("ariaLabel={$_(menuItemTitleToKey(title))}");
     });
 });

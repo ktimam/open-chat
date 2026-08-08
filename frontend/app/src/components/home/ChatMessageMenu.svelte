@@ -604,7 +604,7 @@
                         {/snippet}
                     </MenuItem>
                 {/if}
-                {#if onRunAiAction !== undefined}
+                {#if onRunAiAction !== undefined && confirmed && !inert && !failed}
                     <MenuItem onclick={onRunAiAction}>
                         {#snippet icon()}
                             <AutoFix size={$iconSize} color={"var(--icon-inverted-txt)"} />

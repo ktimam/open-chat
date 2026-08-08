@@ -17,9 +17,11 @@ import {
     MAX_AI_APP_CONFIRM_PAYLOAD_BYTES,
     multiActionCardBoundsError,
     compileRules,
+    formatLocalCalendarDate,
     missingRequired,
     parseExtraction,
     parseExtractionList,
+    postProcessAiActionCandidate,
     rulesFromWire,
     runAiAction,
 } from "./aiAction";
@@ -298,6 +300,17 @@ describe("runAiAction", () => {
         expect(seen[0].prompt.split(message).length - 1).toBe(1);
     });
 
+    it("does not add undeclared date context to text input", async () => {
+        let seen: InferenceRequest | undefined;
+        await runAiAction(DEF, { text: "paid 20 today" }, RECIPIENT, async (req) => {
+            seen = req;
+            return { kind: "ok", text: '{"amount":20,"currency":"USD"}' };
+        });
+
+        expect(seen?.prompt).toBe(`${DEF.promptTemplate}\n\nMessage:\npaid 20 today`);
+        expect(seen?.prompt).not.toContain("Today is ");
+    });
+
     it("propagates unavailable (no autonomous fallback)", async () => {
         const r = await runAiAction(DEF, {}, RECIPIENT, async () => ({
             kind: "unavailable",
@@ -320,15 +333,120 @@ describe("runAiAction", () => {
                 return { kind: "ok", text: "{}" };
             },
         );
-        const today = new Date().toISOString().slice(0, 10);
-        // No rules and no message text: template + the dateline only.
-        expect(seen?.prompt).toBe(`${DEF.promptTemplate}\n\nToday is ${today}.`);
+        // Image pixels are the only evidence. OpenChat must not inject a date that the model can
+        // mistake for text visible in the image.
+        expect(seen?.prompt).toBe(DEF.promptTemplate);
+        expect(seen?.prompt).not.toContain("Today is ");
         // The schema is enforced deterministically AFTER generation (conformToSchema), NOT as a
         // generation-time grammar constraint — constrained decoding collapses number fields (e.g. amount)
         // to a degenerate 0 on small models. So the model must NOT receive the schema.
         expect(seen?.responseSchema).toBeUndefined();
         expect(seen?.image).toEqual(new Uint8Array([1, 2, 3]));
     });
+
+    it("omits from_message guidance for image-only input while retaining applicable rules", async () => {
+        const def: AiActionDefinition = {
+            ...DEF,
+            acceptsImage: true,
+            rules: [
+                { kind: "instruction", text: "Return one object." },
+                { kind: "from_message", field: "note" },
+                {
+                    kind: "keyword_map",
+                    field: "category",
+                    mode: "override",
+                    map: [{ value: "travel", keywords: ["hotel"] }],
+                },
+            ],
+        };
+        let seen: InferenceRequest | undefined;
+        await runAiAction(def, { image: new Uint8Array([1, 2, 3]) }, RECIPIENT, async (req) => {
+            seen = req;
+            return { kind: "ok", text: '{"amount":20,"currency":"USD"}' };
+        });
+
+        expect(seen?.prompt).toContain("Return one object.");
+        expect(seen?.prompt).toContain(
+            'Set "category" to "travel" when the message mentions any of: hotel',
+        );
+        expect(seen?.prompt).not.toContain('Set "note" to a short phrase taken from the message.');
+    });
+
+    it.each([
+        ["text", { text: "hotel receipt" }],
+        ["mixed image + text", { image: new Uint8Array([1, 2, 3]), text: "hotel receipt" }],
+    ])("retains from_message guidance for %s input", async (_label, input) => {
+        const def: AiActionDefinition = {
+            ...DEF,
+            acceptsImage: true,
+            rules: [{ kind: "from_message", field: "note" }],
+        };
+        let seen: InferenceRequest | undefined;
+        await runAiAction(def, input, RECIPIENT, async (req) => {
+            seen = req;
+            return { kind: "ok", text: '{"amount":20,"currency":"USD"}' };
+        });
+
+        expect(seen?.prompt).toContain('Set "note" to a short phrase taken from the message.');
+    });
+
+    it("adds declared date context to mixed image + nonempty text input", async () => {
+        const def: AiActionDefinition = {
+            ...DEF,
+            acceptsImage: true,
+            rules: [{ kind: "context", provide: ["today"] }],
+        };
+        let seen: InferenceRequest | undefined;
+        await runAiAction(
+            def,
+            { image: new Uint8Array([1, 2, 3]), text: "due tomorrow" },
+            RECIPIENT,
+            async (req) => {
+                seen = req;
+                return { kind: "ok", text: '{"amount":20,"currency":"USD"}' };
+            },
+        );
+
+        const today = formatLocalCalendarDate(new Date());
+        expect(seen?.prompt).toBe(
+            `${DEF.promptTemplate}\n\nToday is ${today}.\n\nMessage:\ndue tomorrow`,
+        );
+        expect(seen?.image).toEqual(new Uint8Array([1, 2, 3]));
+    });
+
+    it("formats the user's local calendar components without a UTC conversion", () => {
+        expect(
+            formatLocalCalendarDate({
+                getFullYear: () => 2026,
+                getMonth: () => 7,
+                getDate: () => 9,
+            }),
+        ).toBe("2026-08-09");
+    });
+
+    it.each([undefined, "", "   "])(
+        "does not add declared date context without nonempty text (%s)",
+        async (text) => {
+            const def: AiActionDefinition = {
+                ...DEF,
+                acceptsImage: true,
+                rules: [{ kind: "context", provide: ["today"] }],
+            };
+            let seen: InferenceRequest | undefined;
+            await runAiAction(
+                def,
+                { image: new Uint8Array([1, 2, 3]), text },
+                RECIPIENT,
+                async (req) => {
+                    seen = req;
+                    return { kind: "ok", text: '{"amount":20,"currency":"USD"}' };
+                },
+            );
+
+            expect(seen?.prompt).toBe(DEF.promptTemplate);
+            expect(seen?.prompt).not.toContain("Today is ");
+        },
+    );
 
     it("interpolates the Rules lines, Today line and Message block into the prompt", async () => {
         const def: AiActionDefinition = {
@@ -342,7 +460,8 @@ describe("runAiAction", () => {
                     map: [{ value: "travel", keywords: ["flight", "hotel"] }],
                 },
                 { kind: "from_message", field: "note" },
-                // normalize + context are deterministic / covered by the dateline: no prompt line.
+                // normalize is deterministic and context is emitted separately: neither adds a
+                // Rules-block prompt line.
                 { kind: "normalize", field: "amount", ops: ["k_m_suffix"] },
                 { kind: "context", provide: ["today"] },
             ],
@@ -352,7 +471,7 @@ describe("runAiAction", () => {
             seen = req;
             return { kind: "ok", text: "{}" };
         });
-        const today = new Date().toISOString().slice(0, 10);
+        const today = formatLocalCalendarDate(new Date());
         expect(seen?.prompt).toBe(
             `${DEF.promptTemplate}\n\n` +
                 `Rules:\n` +
@@ -396,6 +515,197 @@ describe("runAiAction", () => {
             >;
             expect(payload.category).toBe("travel");
         }
+    });
+
+    it.each([undefined, "", "   "])(
+        "maps image-extracted string evidence with blank source text (%s) before enforcing an enum schema",
+        async (text) => {
+            const def: AiActionDefinition = {
+                ...DEF,
+                acceptsImage: true,
+                responseSchema: {
+                    type: "object",
+                    required: ["amount", "direction"],
+                    properties: {
+                        amount: { type: "number" },
+                        direction: { type: "string", enum: ["credit", "debt"] },
+                        message: { type: "string" },
+                    },
+                },
+                card: {
+                    ...DEF.card,
+                    rows: [
+                        { label: "Amount", valueKey: "amount" },
+                        { label: "Direction", valueKey: "direction" },
+                    ],
+                },
+                rules: [
+                    {
+                        kind: "keyword_map",
+                        field: "direction",
+                        mode: "override",
+                        map: [
+                            { value: "credit", keywords: ["owed to you"] },
+                            { value: "debt", keywords: ["you owe"] },
+                        ],
+                    },
+                ],
+            };
+
+            const result = await runAiAction(
+                def,
+                { image: new Uint8Array([1, 2, 3]), text },
+                RECIPIENT,
+                okInfer(
+                    '{"amount":350,"direction":"owed to you","message":"Cleaning fee owed to you"}',
+                ),
+            );
+
+            expect(result.kind).toBe("ready");
+            if (result.kind === "ready") {
+                expect(result.extracted.direction).toBe("credit");
+                expect(result.card.rows).toContainEqual({ label: "Direction", value: "credit" });
+            }
+        },
+    );
+
+    describe("image-only response-schema omissions", () => {
+        const omissionDef = (annotation: unknown = true): AiActionDefinition => ({
+            ...DEF,
+            acceptsImage: true,
+            responseSchema: {
+                type: "object",
+                properties: {
+                    amount: { type: "number" },
+                    unstable: {
+                        type: "string",
+                        "x-openchat-omit-for-image-only": annotation,
+                    },
+                    retainedDate: { type: "string", format: "date" },
+                },
+                required: ["amount"],
+            },
+            card: {
+                ...DEF.card,
+                rows: [
+                    { label: "Amount", valueKey: "amount" },
+                    { label: "Unstable", valueKey: "unstable" },
+                    { label: "Retained date", valueKey: "retainedDate" },
+                ],
+            },
+        });
+
+        it.each([undefined, "", "   "])(
+            "removes only an opted-in property for image input with blank text (%s)",
+            async (text) => {
+                const result = await runAiAction(
+                    omissionDef(),
+                    { image: new Uint8Array([1, 2, 3]), text },
+                    RECIPIENT,
+                    okInfer('{"amount":20,"unstable":"model guess","retainedDate":"2026-08-09"}'),
+                );
+
+                expect(result.kind).toBe("ready");
+                if (result.kind === "ready") {
+                    expect(result.extracted).toEqual({
+                        amount: 20,
+                        retainedDate: "2026-08-09",
+                    });
+                    expect(result.card.rows).toEqual([
+                        { label: "Amount", value: "20" },
+                        { label: "Retained date", value: "2026-08-09" },
+                    ]);
+                    expect(
+                        JSON.parse(new TextDecoder().decode(result.card.confirmPayload!)),
+                    ).toEqual(result.extracted);
+                }
+            },
+        );
+
+        it.each([
+            ["text-only", { text: "source says the value" }],
+            [
+                "mixed image + nonblank text",
+                { image: new Uint8Array([1, 2, 3]), text: "source says the value" },
+            ],
+        ])("retains an opted-in property for %s input", async (_label, input) => {
+            const result = await runAiAction(
+                omissionDef(),
+                input,
+                RECIPIENT,
+                okInfer('{"amount":20,"unstable":"source value"}'),
+            );
+
+            expect(result.kind).toBe("ready");
+            if (result.kind === "ready") {
+                expect(result.extracted.unstable).toBe("source value");
+                expect(result.card.rows).toContainEqual({
+                    label: "Unstable",
+                    value: "source value",
+                });
+            }
+        });
+
+        it.each([false, "true", 1, null])(
+            "ignores a malformed or disabled annotation (%s)",
+            async (annotation) => {
+                const result = await runAiAction(
+                    omissionDef(annotation),
+                    { image: new Uint8Array([1, 2, 3]) },
+                    RECIPIENT,
+                    okInfer('{"amount":20,"unstable":"keep me"}'),
+                );
+
+                expect(result.kind).toBe("ready");
+                if (result.kind === "ready") {
+                    expect(result.extracted.unstable).toBe("keep me");
+                }
+            },
+        );
+
+        it("fails closed when an image-only omitted property is required", async () => {
+            const def = omissionDef();
+            (def.responseSchema as { required: string[] }).required.push("unstable");
+
+            const result = await runAiAction(
+                def,
+                { image: new Uint8Array([1, 2, 3]) },
+                RECIPIENT,
+                okInfer('{"amount":20,"unstable":"model guess"}'),
+            );
+
+            expect(result.kind).toBe("no_extraction");
+        });
+
+        it("applies independently to every model-produced entry without mutating the schema or source data", async () => {
+            const def = omissionDef();
+            const schemaBefore = structuredClone(def.responseSchema);
+            const source = [
+                { amount: 20, unstable: "first", retainedDate: "2026-08-09" },
+                { amount: 30, unstable: "second", retainedDate: "2026-08-10" },
+            ];
+            const sourceBefore = structuredClone(source);
+
+            const result = await runAiAction(
+                def,
+                { image: new Uint8Array([1, 2, 3]) },
+                RECIPIENT,
+                okInfer(JSON.stringify(source)),
+            );
+
+            expect(result.kind).toBe("ready_multi");
+            if (result.kind === "ready_multi") {
+                expect(result.extracted).toEqual([
+                    { amount: 20, retainedDate: "2026-08-09" },
+                    { amount: 30, retainedDate: "2026-08-10" },
+                ]);
+                expect(JSON.parse(new TextDecoder().decode(result.card.confirmPayload!))).toEqual(
+                    result.extracted,
+                );
+            }
+            expect(def.responseSchema).toEqual(schemaBefore);
+            expect(source).toEqual(sourceBefore);
+        });
     });
 
     it("from_message fills the field from the message text", async () => {
@@ -514,7 +824,7 @@ describe("runAiAction", () => {
         }
     });
 
-    it("rules-free definitions behave exactly as before", async () => {
+    it("rules-free definitions preserve extraction behavior without adding context", async () => {
         let seen: InferenceRequest | undefined;
         const r = await runAiAction(
             DEF,
@@ -525,11 +835,8 @@ describe("runAiAction", () => {
                 return { kind: "ok", text: '{"amount":20,"currency":"USD","extra":true}' };
             },
         );
-        const today = new Date().toISOString().slice(0, 10);
         // No Rules block in the prompt...
-        expect(seen?.prompt).toBe(
-            `${DEF.promptTemplate}\n\nToday is ${today}.\n\nMessage:\nI paid $20 USD for lunch`,
-        );
+        expect(seen?.prompt).toBe(`${DEF.promptTemplate}\n\nMessage:\nI paid $20 USD for lunch`);
         // ...and the extraction passes through untouched (DEF's schema declares no properties).
         expect(r.kind).toBe("ready");
         if (r.kind === "ready") {
@@ -745,10 +1052,7 @@ describe("buildMultiActionCardContent", () => {
 
         const overflow = {
             ...withinAggregate,
-            rows: [
-                ...withinAggregate.rows,
-                { label: "Entry 16", value: "x".repeat(4_090) },
-            ],
+            rows: [...withinAggregate.rows, { label: "Entry 16", value: "x".repeat(4_090) }],
         };
         expect(multiActionCardBoundsError(overflow)).toMatch(/64 KiB/);
     });
@@ -776,6 +1080,24 @@ describe("compileRules", () => {
             'Set "kind" to "a" when the message mentions any of: x, y',
             'Set "kind" to "b" when the message mentions any of: z',
             'Set "note" to a short phrase taken from the message.',
+        ]);
+    });
+
+    it("omits only from_message guidance when no message text is available", () => {
+        const rules: AiActionRule[] = [
+            { kind: "instruction", text: "Use visible evidence." },
+            { kind: "from_message", field: "note" },
+            {
+                kind: "keyword_map",
+                field: "category",
+                mode: "override",
+                map: [{ value: "travel", keywords: ["hotel"] }],
+            },
+        ];
+
+        expect(compileRules(rules, { hasMessageText: false })).toEqual([
+            "Use visible evidence.",
+            'Set "category" to "travel" when the message mentions any of: hotel',
         ]);
     });
 });
@@ -839,6 +1161,115 @@ describe("applyRulesPostPass", () => {
             // misclassification for a silent miss.
             expect(kindFor("he owed, then paid")).toBe("debt");
             expect(kindFor("(owe) 300")).toBe("debt");
+        });
+    });
+
+    describe("keyword_map override for image-extracted text evidence", () => {
+        const rules: AiActionRule[] = [
+            {
+                kind: "keyword_map",
+                field: "kind",
+                mode: "override",
+                map: [
+                    { value: "credit", keywords: ["owed to you", "receivable"] },
+                    { value: "debt", keywords: ["you owe", "owe"] },
+                ],
+            },
+        ];
+        const withImage = { hasImage: true };
+
+        it.each([
+            ["raw target field", { kind: "owed to you" }],
+            ["message field", { kind: "unknown", message: "This is owed to you" }],
+            ["note field", { kind: "unknown", note: "Account receivable" }],
+            ["another extracted string field", { kind: "unknown", details: "you owe this" }],
+        ])("scans the %s", (_label, extracted) => {
+            expect(applyRulesPostPass(rules, extracted, undefined, undefined, withImage).kind).toBe(
+                _label === "another extracted string field" ? "debt" : "credit",
+            );
+        });
+
+        it("preserves whole-word matching for extracted strings", () => {
+            expect(
+                applyRulesPostPass(
+                    rules,
+                    { kind: "unknown", note: "The power is out" },
+                    undefined,
+                    undefined,
+                    withImage,
+                ).kind,
+            ).toBe("unknown");
+        });
+
+        it("keeps first-mapping-wins order when image evidence contains competing keywords", () => {
+            expect(
+                applyRulesPostPass(
+                    rules,
+                    { kind: "unknown", message: "you owe; this is also owed to you" },
+                    undefined,
+                    undefined,
+                    withImage,
+                ).kind,
+            ).toBe("credit");
+        });
+
+        it("uses a deterministic priority independent of extracted object key order", () => {
+            const first = {
+                filler: "x".repeat(10_000),
+                note: "owed to you",
+                kind: "unknown",
+            };
+            const second = {
+                kind: "unknown",
+                note: "owed to you",
+                filler: "x".repeat(10_000),
+            };
+
+            expect(applyRulesPostPass(rules, first, undefined, undefined, withImage).kind).toBe(
+                "credit",
+            );
+            expect(applyRulesPostPass(rules, second, undefined, undefined, withImage).kind).toBe(
+                "credit",
+            );
+        });
+
+        it("bounds the aggregate extracted-string scan", () => {
+            const atBoundary = { note: `${"x".repeat(9_996)} owe` };
+            const afterBoundary = { note: `${"x".repeat(9_997)} owe` };
+
+            expect(
+                applyRulesPostPass(rules, atBoundary, undefined, undefined, withImage).kind,
+            ).toBe("debt");
+            expect(
+                applyRulesPostPass(rules, afterBoundary, undefined, undefined, withImage).kind,
+            ).toBeUndefined();
+        });
+
+        it("does not scan extracted strings without an image source", () => {
+            expect(applyRulesPostPass(rules, { kind: "owed to you" }, undefined).kind).toBe(
+                "owed to you",
+            );
+        });
+
+        it("keeps source text authoritative when both text and image are present", () => {
+            expect(
+                applyRulesPostPass(
+                    rules,
+                    { kind: "unknown", note: "owed to you" },
+                    "you owe this",
+                    undefined,
+                    withImage,
+                ).kind,
+            ).toBe("debt");
+            expect(
+                applyRulesPostPass(
+                    rules,
+                    { kind: "unknown", note: "owed to you" },
+                    "no declared keyword here",
+                    undefined,
+                    withImage,
+                ).kind,
+            ).toBe("unknown");
         });
     });
 
@@ -989,6 +1420,270 @@ describe("applyRulesPostPass", () => {
     });
 });
 
+describe("postProcessAiActionCandidate", () => {
+    const def: AiActionDefinition = {
+        ...DEF,
+        acceptsImage: true,
+        rules: [
+            {
+                kind: "keyword_map",
+                field: "direction",
+                mode: "override",
+                map: [
+                    { value: "credit", keywords: ["owed to you"] },
+                    { value: "debt", keywords: ["you owe"] },
+                ],
+            },
+        ],
+        responseSchema: {
+            type: "object",
+            properties: {
+                amount: { type: "number", exclusiveMinimum: 0 },
+                direction: { type: "string", enum: ["credit", "debt"] },
+                date: {
+                    type: "string",
+                    format: "date",
+                    "x-openchat-omit-for-image-only": true,
+                },
+                message: {
+                    type: "string",
+                    "x-openchat-omit-for-image-only": true,
+                },
+            },
+            required: ["amount", "direction"],
+        },
+    };
+
+    it.each([undefined, "", "   "])(
+        "maps image evidence and strips date/message when source text is blank (%s)",
+        (text) => {
+            expect(
+                postProcessAiActionCandidate(
+                    def,
+                    {
+                        amount: 350,
+                        direction: "owed to you",
+                        date: "2026-08-09",
+                        message: "Cleaning fee owed to you",
+                    },
+                    { hasImage: true, text },
+                ),
+            ).toEqual({ amount: 350, direction: "credit" });
+        },
+    );
+
+    it("retains annotated values and lets real source text stay authoritative for text input", () => {
+        expect(
+            postProcessAiActionCandidate(
+                def,
+                {
+                    amount: 350,
+                    direction: "owed to you",
+                    date: "2026-08-09",
+                    message: "model phrase owed to you",
+                },
+                { text: "you owe this" },
+            ),
+        ).toEqual({
+            amount: 350,
+            direction: "debt",
+            date: "2026-08-09",
+            message: "model phrase owed to you",
+        });
+    });
+
+    it("makes a required image-only omitted field visibly missing to the caller's fail-closed gate", () => {
+        const requiredMessageDef: AiActionDefinition = {
+            ...def,
+            responseSchema: {
+                ...(def.responseSchema as object),
+                required: ["amount", "direction", "message"],
+            },
+        };
+        const processed = postProcessAiActionCandidate(
+            requiredMessageDef,
+            { amount: 350, direction: "owed to you", message: "Cleaning fee owed to you" },
+            { hasImage: true },
+        );
+
+        expect(processed).toEqual({ amount: 350, direction: "credit" });
+        expect(missingRequired(processed, requiredMessageDef.responseSchema)).toEqual(["message"]);
+    });
+
+    describe("x-openchat-require-text-evidence", () => {
+        const inferOk = (text: string) => async () => ({ kind: "ok" as const, text });
+        const currencyDef = (
+            annotation: unknown = true,
+            required: string[] = ["amount"],
+        ): AiActionDefinition => ({
+            ...DEF,
+            rules: [
+                {
+                    kind: "keyword_map",
+                    field: "currency",
+                    mode: "hint",
+                    map: [
+                        { value: "USD", keywords: ["dollars", "$"] },
+                        { value: "EUR", keywords: ["euros", "€"] },
+                    ],
+                },
+            ],
+            responseSchema: {
+                type: "object",
+                properties: {
+                    amount: { type: "number", exclusiveMinimum: 0 },
+                    currency: {
+                        type: "string",
+                        enum: ["USD", "EUR", "JPY"],
+                        "x-openchat-require-text-evidence": annotation,
+                    },
+                    note: { type: "string" },
+                },
+                required,
+            },
+        });
+
+        it.each([
+            ["the direct ISO code", "Paid 20 USD for lunch"],
+            ["a whole-word alias", "Paid 20 dollars for lunch"],
+            ["a punctuation alias touching the number", "Paid $20 for lunch"],
+        ])("retains a normalized claim evidenced by %s", (_label, text) => {
+            expect(
+                postProcessAiActionCandidate(
+                    currencyDef(),
+                    { amount: 20, currency: "USD", note: "lunch" },
+                    { text },
+                ),
+            ).toEqual({ amount: 20, currency: "USD", note: "lunch" });
+        });
+
+        it.each([
+            ["a different direct claim", "Paid 20 EUR for lunch", "USD"],
+            ["an unsupported claim", "Paid 20 for lunch", "JPY"],
+        ])("deletes %s rather than trusting the model", (_label, text, currency) => {
+            expect(
+                postProcessAiActionCandidate(
+                    currencyDef(),
+                    { amount: 20, currency, note: "lunch" },
+                    { text },
+                ),
+            ).toEqual({ amount: 20, note: "lunch" });
+        });
+
+        it.each([
+            ["image-only", { hasImage: true }],
+            ["no source metadata", {}],
+            ["empty source text", { text: "" }],
+            ["whitespace source text", { text: "   " }],
+        ])("preserves the claim when there is no authoritative text: %s", (_label, source) => {
+            expect(
+                postProcessAiActionCandidate(
+                    currencyDef(),
+                    { amount: 20, currency: "USD" },
+                    source,
+                ),
+            ).toEqual({ amount: 20, currency: "USD" });
+        });
+
+        it.each([false, "true", 1, null, { enabled: true }])(
+            "ignores a malformed or disabled annotation (%s)",
+            (annotation) => {
+                expect(
+                    postProcessAiActionCandidate(
+                        currencyDef(annotation),
+                        { amount: 20, currency: "USD" },
+                        { text: "Paid 20 for lunch" },
+                    ),
+                ).toEqual({ amount: 20, currency: "USD" });
+            },
+        );
+
+        it("fails closed when evidence deletion makes a required field missing", async () => {
+            const result = await runAiAction(
+                currencyDef(true, ["amount", "currency"]),
+                { text: "Paid 20 for lunch" },
+                RECIPIENT,
+                inferOk('{"amount":20,"currency":"USD"}'),
+            );
+
+            expect(result.kind).toBe("no_extraction");
+        });
+
+        it("removes invented currencies independently from every stored multi-entry payload row", async () => {
+            const result = await runAiAction(
+                currencyDef(),
+                { text: "Lunch cost 20 and dinner cost 30" },
+                RECIPIENT,
+                inferOk(
+                    '[{"amount":20,"currency":"USD","note":"lunch"},' +
+                        '{"amount":30,"currency":"EUR","note":"dinner"}]',
+                ),
+            );
+
+            expect(result.kind).toBe("ready_multi");
+            if (result.kind === "ready_multi") {
+                const expected = [
+                    { amount: 20, note: "lunch" },
+                    { amount: 30, note: "dinner" },
+                ];
+                expect(result.extracted).toEqual(expected);
+                expect(JSON.parse(new TextDecoder().decode(result.card.confirmPayload!))).toEqual(
+                    expected,
+                );
+                expect(result.card.rows).toHaveLength(2);
+                expect(result.card.rows.some((row) => /USD|EUR/.test(row.value))).toBe(false);
+            }
+        });
+
+        it("checks only the authoritative source prefix that the app can attest", () => {
+            const def = currencyDef();
+            def.rules = [
+                ...(def.rules ?? []),
+                { kind: "from_message", field: "message", maxLength: 200 },
+            ];
+            def.responseSchema = {
+                ...(def.responseSchema as object),
+                properties: {
+                    ...((def.responseSchema as { properties: object }).properties ?? {}),
+                    message: { type: "string", maxLength: 200 },
+                },
+            };
+            const source = `${"x".repeat(205)} USD`;
+
+            expect(
+                postProcessAiActionCandidate(
+                    def,
+                    { amount: 20, currency: "USD" },
+                    { text: source },
+                ),
+            ).toEqual({ amount: 20, message: "x".repeat(200) });
+        });
+
+        it("deletes a claim when the declared evidence field cannot survive its schema", () => {
+            const def = currencyDef();
+            def.rules = [
+                ...(def.rules ?? []),
+                { kind: "from_message", field: "message", maxLength: 200 },
+            ];
+            def.responseSchema = {
+                ...(def.responseSchema as object),
+                properties: {
+                    ...((def.responseSchema as { properties: object }).properties ?? {}),
+                    message: { type: "string", maxLength: 100 },
+                },
+            };
+
+            expect(
+                postProcessAiActionCandidate(
+                    def,
+                    { amount: 20, currency: "USD" },
+                    { text: `${"x".repeat(150)} USD` },
+                ),
+            ).toEqual({ amount: 20 });
+        });
+    });
+});
+
 describe("missingRequired", () => {
     const schema = {
         type: "object",
@@ -1094,6 +1789,30 @@ describe("aiActionDefinitionFromWire", () => {
             { label: "Amount", valueKey: "amount" },
             { label: "Currency", valueKey: "currency" },
         ]);
+    });
+    it("preserves the bounded image-only omission annotation from the wire schema", () => {
+        const def = aiActionDefinitionFromWire({
+            ...WIRE,
+            response_schema: JSON.stringify({
+                type: "object",
+                properties: {
+                    optionalValue: {
+                        type: "string",
+                        "x-openchat-omit-for-image-only": true,
+                    },
+                },
+            }),
+        });
+
+        expect(def.responseSchema).toEqual({
+            type: "object",
+            properties: {
+                optionalValue: {
+                    type: "string",
+                    "x-openchat-omit-for-image-only": true,
+                },
+            },
+        });
     });
     it("tolerates a non-JSON schema string (no constraint)", () => {
         const def = aiActionDefinitionFromWire({ ...WIRE, response_schema: "not json" });
