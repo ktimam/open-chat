@@ -374,6 +374,7 @@ describe("action-card external surface load consent", () => {
             expect(view.target.querySelector("iframe")).toBeNull();
             expect(buttonNamed(view.target, "Load app card")).toBeUndefined();
             expect(view.target.textContent).not.toContain("Security details");
+            expect(view.target.querySelector(".card-url")?.textContent?.trim()).toBe(CARD_URL);
             expect(view.target.querySelector<HTMLImageElement>(".app-icon")?.src).toBe(
                 RESOLVED_APP.identity.iconUrl,
             );

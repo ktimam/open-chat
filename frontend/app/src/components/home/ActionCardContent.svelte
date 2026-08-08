@@ -160,6 +160,10 @@
     // If the consumer required a disclosure, confirm is gated on the human acknowledging it.
     let acknowledged = $state(false);
     let useClassicFallback = $state(false);
+    // A trusted card whose public rows cannot be losslessly reconstructed as one app input (most
+    // notably an Entry 1..N batch) stays in OpenChat's immutable stored-payload renderer. Keep the
+    // exact registered URL visible without loading the external frame.
+    let useStoredPayloadCard = $state(false);
     let canConfirm = $derived(
         pending &&
             !readonly &&
@@ -304,6 +308,7 @@
             cardUrl = undefined;
             loadRequested = false;
             useClassicFallback = false;
+            useStoredPayloadCard = false;
         });
 
         if (!appVerified) {
@@ -348,8 +353,11 @@
                 if (
                     isMultiEntrySummaryRows(content.rows) ||
                     completelyReverseMapRows(content.rows, opening.labelToField) === undefined
-                )
+                ) {
+                    cardUrl = opening.url;
+                    useStoredPayloadCard = true;
                     return;
+                }
                 cardOrigin = origin;
                 cardAppId = opening.app.id;
                 cardLabelToField = opening.labelToField;
@@ -798,7 +806,7 @@
     </div>
 
     {#if !collapsed}
-        {#if cardUrl !== undefined && !useClassicFallback}
+        {#if cardUrl !== undefined && !useClassicFallback && !useStoredPayloadCard}
             {#if !loadRequested}
                 <div class="card-load-gate">
                     <span class="card-load-error" role="alert">App card unavailable.</span>
@@ -917,6 +925,9 @@
                 {/if}
             {/if}
         {:else}
+            {#if cardUrl !== undefined && useStoredPayloadCard}
+                <div class="card-url" title={cardUrl}>{cardUrl}</div>
+            {/if}
             {#if cardContentAttestationBlocked}
                 <div class="card-load-error" role="alert">
                     This card's app/revision/action coordinates match the directory, but its title,
