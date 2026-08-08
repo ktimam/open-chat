@@ -17,7 +17,7 @@ const pkgAliases = [
 ]);
 
 export default defineConfig({
-    plugins: [svelte()],
+    plugins: [svelte({ configFile: src("./app/svelte.config.js") })],
     resolve: {
         alias: [
             { find: "@dfinity/agent", replacement: "@icp-sdk/core/agent" },

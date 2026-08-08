@@ -13,6 +13,7 @@ import {
     canApproveCardRequest,
     canonicalCardApprovalSummary,
     cardResponseForApproval,
+    consumeFreshlyProposedAppCardAutoLoad,
     cardApprovalRequestFromMessage,
     cardResizeHeightFromMessage,
     clampCardHeight,
@@ -23,6 +24,7 @@ import {
     isRecord,
     isEmbeddedSurfaceConsentCurrent,
     isAppCardContentAttested,
+    shouldAutoLoadFreshlyProposedAppCard,
     isCardBridgeEventForFrame,
     isCardPublicReadyMessage,
     encodeCardConfirmPayload,
@@ -179,6 +181,82 @@ describe("full-card content attestation", () => {
         expect(isAppCardContentAttested(forged)).toBe(false);
         expect(isAppCardContentAttested({ ...forged, appContentVerified: false })).toBe(false);
         expect(isAppCardContentAttested({ ...forged, appContentVerified: true })).toBe(true);
+    });
+});
+
+describe("fresh proposer app-card consent", () => {
+    const freshlyProposed = {
+        appVerified: true,
+        appContentVerified: true,
+        confirmPayload: new TextEncoder().encode('{"amount":25}'),
+    };
+
+    test("auto-loads only the attested pending card retained in the live sender session", () => {
+        expect(shouldAutoLoadFreshlyProposedAppCard(freshlyProposed, true, false, true)).toBe(true);
+    });
+
+    test("keeps recipients, historical cards, readonly views, and incomplete trust behind consent", () => {
+        expect(
+            shouldAutoLoadFreshlyProposedAppCard(
+                { ...freshlyProposed, confirmPayload: undefined },
+                true,
+                false,
+                true,
+            ),
+        ).toBe(false);
+        expect(
+            shouldAutoLoadFreshlyProposedAppCard(
+                { ...freshlyProposed, confirmPayload: new Uint8Array() },
+                true,
+                false,
+                true,
+            ),
+        ).toBe(false);
+        expect(shouldAutoLoadFreshlyProposedAppCard(freshlyProposed, false, false, true)).toBe(
+            false,
+        );
+        expect(shouldAutoLoadFreshlyProposedAppCard(freshlyProposed, true, true, true)).toBe(false);
+        expect(shouldAutoLoadFreshlyProposedAppCard(freshlyProposed, true, false, false)).toBe(
+            false,
+        );
+        expect(
+            shouldAutoLoadFreshlyProposedAppCard(
+                { ...freshlyProposed, appContentVerified: false },
+                true,
+                false,
+                true,
+            ),
+        ).toBe(false);
+        expect(
+            shouldAutoLoadFreshlyProposedAppCard(
+                { ...freshlyProposed, appVerified: false },
+                true,
+                false,
+                true,
+            ),
+        ).toBe(false);
+    });
+
+    test("consumes auto-load consent once per exact card key in this tab", () => {
+        const key = "viewer:test|direct:a:b|thread:-|message:123|app:7@2|action:test";
+        expect(consumeFreshlyProposedAppCardAutoLoad(key)).toBe(true);
+        expect(consumeFreshlyProposedAppCardAutoLoad(key)).toBe(false);
+        expect(consumeFreshlyProposedAppCardAutoLoad(key + ":other-message")).toBe(true);
+    });
+
+    test("fails closed instead of forgetting old consent when the tab marker is saturated", () => {
+        const first = "bounded-card:0";
+        let saturated = false;
+        for (let index = 0; index < 300; index++) {
+            if (!consumeFreshlyProposedAppCardAutoLoad(`bounded-card:${index}`)) {
+                saturated = true;
+                break;
+            }
+        }
+
+        expect(saturated).toBe(true);
+        expect(consumeFreshlyProposedAppCardAutoLoad(first)).toBe(false);
+        expect(consumeFreshlyProposedAppCardAutoLoad("bounded-card:after-cap")).toBe(false);
     });
 });
 

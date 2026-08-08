@@ -30,6 +30,7 @@
         cardAttemptKey,
         cardCapabilityAttemptStillCurrent,
         cardConfirmationAttemptStillCurrent,
+        consumeFreshlyProposedAppCardAutoLoad,
         cardApprovalRequestFromMessage,
         cardResizeHeightFromMessage,
         clampCardHeight,
@@ -42,6 +43,7 @@
         isAppCardContentAttested,
         isRecord,
         newCardFrameNonce,
+        shouldAutoLoadFreshlyProposedAppCard,
         supportsCredentiallessIframe,
         reverseMapRows,
         startCardHandshakeTimeout,
@@ -349,6 +351,32 @@
         return () => {
             cancelled = true;
         };
+    });
+
+    // Successful provenance sends retain confirmPayload only in the current sender's live event.
+    // Track that signal separately from directory resolution: a backend event may establish trust
+    // before the worker restores the live payload. Once both arrive, consume this exact card's
+    // in-tab consent and load it once. Recipients/history have no payload; reload clears the set.
+    $effect(() => {
+        const autoLoadEligible = shouldAutoLoadFreshlyProposedAppCard(
+            content,
+            pending,
+            readonly,
+            credentiallessSupported,
+        );
+        const surfaceReady = cardUrl !== undefined && cardOrigin !== undefined;
+        const autoLoadKey = surfaceReady ? currentCardAttemptKey() : undefined;
+        if (!autoLoadEligible || autoLoadKey === undefined) return;
+
+        untrack(() => {
+            if (!consumeFreshlyProposedAppCardAutoLoad(autoLoadKey)) return;
+            // The viewer may have used the explicit Load button while the sender-only payload was
+            // still being restored. That iframe already owns a live nonce; resetting it without
+            // recreating the element would strand the ready handshake.
+            if (loadRequested) return;
+            loadRequested = true;
+            resetFrameSession();
+        });
     });
 
     function postInit() {
@@ -801,9 +829,9 @@
                     {/if}
                 </div>
             {:else}
-                <div class="untrusted-frame-label">Untrusted app content</div>
-                <!-- App-rendered card pixels remain untrusted. The opaque sandbox prevents redirects from
-                 inheriting any destination origin; the height is driven by the nonce-bound bridge. -->
+                <div class="external-frame-label">External app content (isolated)</div>
+                <!-- App-rendered pixels are not OpenChat-owned UI. The opaque sandbox prevents redirects
+                 from inheriting any destination origin; the height is driven by the nonce-bound bridge. -->
                 <!-- credentialless: OpenChat is cross-origin-isolated (COEP: credentialless) for its wasm
                  inference, which otherwise ERR_BLOCKED_BY_RESPONSE a cross-origin iframe. The
                  credentialless attribute loads the app card in an anonymous context (no cookies /
@@ -1180,8 +1208,8 @@
         color: var(--warning);
     }
 
-    .untrusted-frame-label {
-        color: var(--warning);
+    .external-frame-label {
+        color: var(--currentChat-msg-muted);
         font-size: 0.8em;
         font-weight: 700;
     }

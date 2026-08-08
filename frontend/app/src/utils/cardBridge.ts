@@ -31,6 +31,51 @@ export function isAppCardContentAttested(card: {
     return card.appVerified === true && card.appContentVerified === true;
 }
 
+/**
+ * A successful provenance-backed send retains the exact confirm payload only in the current
+ * sender's in-memory event. Cached/history and recipient hydration deliberately strip it. The
+ * user's explicit proposal therefore doubles as load consent only for that live, fully attested
+ * card; every other viewer remains behind the external-origin gate.
+ */
+export function shouldAutoLoadFreshlyProposedAppCard(
+    card: {
+        appVerified?: boolean;
+        appContentVerified?: boolean;
+        confirmPayload?: Uint8Array;
+    },
+    pending: boolean,
+    readonly: boolean,
+    credentiallessSupported: boolean,
+): boolean {
+    return (
+        pending &&
+        !readonly &&
+        credentiallessSupported &&
+        isAppCardContentAttested(card) &&
+        card.confirmPayload !== undefined &&
+        card.confirmPayload.byteLength > 0
+    );
+}
+
+const FRESH_APP_CARD_AUTO_LOAD_LIMIT = 256;
+const freshlyAutoLoadedAppCards = new Set<string>();
+
+/**
+ * Consume sender load consent once per exact card for this tab. This is intentionally in-memory:
+ * reloads must return to explicit consent. Once the bounded set is full, further cards stay behind
+ * the explicit Load gate for the rest of the tab rather than forgetting an older consent marker.
+ */
+export function consumeFreshlyProposedAppCardAutoLoad(cardKey: string): boolean {
+    if (
+        cardKey.length === 0 ||
+        freshlyAutoLoadedAppCards.has(cardKey) ||
+        freshlyAutoLoadedAppCards.size >= FRESH_APP_CARD_AUTO_LOAD_LIMIT
+    )
+        return false;
+    freshlyAutoLoadedAppCards.add(cardKey);
+    return true;
+}
+
 // The context OpenChat hands the card iframe alongside the prefill data.
 export interface CardInitContext {
     appId: number;

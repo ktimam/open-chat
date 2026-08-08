@@ -89,6 +89,38 @@ describe("embedded app surface isolation", () => {
         expect(card).toContain("import.meta.env.DEV");
     });
 
+    it("treats only a freshly proposed live sender card as load consent", () => {
+        const card = readFileSync(appPath("src/components/home/ActionCardContent.svelte"), "utf8");
+        const cache = readFileSync(appPath("../openchat-agent/src/utils/chatsDb.ts"), "utf8");
+        const compact = card.replace(/\s+/g, " ");
+
+        expect(card).toContain("shouldAutoLoadFreshlyProposedAppCard");
+        expect(card).toContain("consumeFreshlyProposedAppCardAutoLoad");
+        expect(compact).toContain("if (!autoLoadEligible || autoLoadKey === undefined) return;");
+        const consumeIndex = compact.indexOf(
+            "if (!consumeFreshlyProposedAppCardAutoLoad(autoLoadKey)) return;",
+        );
+        const preserveLoadedIndex = compact.indexOf("if (loadRequested) return;", consumeIndex);
+        const activateIndex = compact.indexOf(
+            "loadRequested = true; resetFrameSession();",
+            preserveLoadedIndex,
+        );
+        expect(consumeIndex).toBeGreaterThanOrEqual(0);
+        expect(preserveLoadedIndex).toBeGreaterThan(consumeIndex);
+        expect(activateIndex).toBeGreaterThan(preserveLoadedIndex);
+        expect(card).toContain("External app content (isolated)");
+        expect(card).not.toContain("Untrusted app content");
+        expect(card).toContain("Unverified card binding");
+        expect(card).toContain("Directory binding only; card content is untrusted");
+        expect(card).toContain("Untrusted card text");
+
+        // The consent signal exists only in the current provenance-backed sender copy. It is
+        // deliberately absent from IndexedDB and every recipient/historical hydration.
+        expect(cache).toContain("retain a defensive copy in the current sender session");
+        expect(cache).toContain("delete content.confirmPayload");
+        expect(cache).toContain("confirmPayload: liveConfirmPayload");
+    });
+
     it("uses the same one-time per-chat mint and exact dismiss cancellation after confirm", () => {
         const resolver = readFileSync(appPath("src/utils/aiAppSurfaces.ts"), "utf8");
         expect(resolver).toContain("return createChatLinkSurfaceOpening(client, app, chatId)");
