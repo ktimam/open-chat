@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { compileString } from "sass";
 import { describe, expect, test } from "vitest";
+import { resolveDevPort } from "../devPort";
 
 const appRoot = existsSync(resolve(process.cwd(), "app", "index.html"))
     ? resolve(process.cwd(), "app")
@@ -54,5 +55,17 @@ describe("application bootstrap security", () => {
                 },
             ),
         ).not.toThrow();
+    });
+
+    test("uses one configurable port for the dev listener and HMR client", () => {
+        expect(resolveDevPort(undefined)).toBe(5001);
+        expect(resolveDevPort("5003")).toBe(5003);
+        for (const invalid of ["", "0", "65536", "5003.5", "not-a-port", " 5003 "]) {
+            expect(() => resolveDevPort(invalid)).toThrow("OC_DEV_PORT must be a valid TCP port");
+        }
+        expect(viteConfig).toContain("resolveDevPort(process.env.OC_DEV_PORT)");
+        expect(viteConfig).toMatch(/server:\s*\{[\s\S]*?\bport,[\s\S]*?strictPort/);
+        expect(viteConfig).toMatch(/hmr:\s*\{[\s\S]*?port,[\s\S]*?clientPort:\s*port/);
+        expect(viteConfig).toContain("strictPort: true");
     });
 });

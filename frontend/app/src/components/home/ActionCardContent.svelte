@@ -741,7 +741,6 @@
             <AiAppIcon iconUrl={resolvedAppIdentity.iconUrl} size={"1.5rem"} />
             <div class="app-identity-text">
                 <span class="app-name">Directory entry: {resolvedAppIdentity.name}</span>
-                <span class="app-id">App ID <code>{resolvedAppIdentity.id}</code></span>
             </div>
         {:else if appResolutionComplete}
             <span class="app-verification">Unverified card binding</span>
@@ -751,7 +750,9 @@
         {/if}
         {#if resolvedAppIdentity !== undefined}
             {#if !cardContentAttested}
-                <span class="app-verification">Directory binding only; card content is untrusted</span>
+                <span class="app-verification"
+                    >Directory binding only; card content is untrusted</span
+                >
             {/if}
         {/if}
     </div>
@@ -790,24 +791,48 @@
         {#if cardUrl !== undefined && !useClassicFallback}
             {#if !loadRequested}
                 <div class="card-load-gate">
-                    <strong>{candidateAppIdentity?.name ?? "Registered app"}</strong>
-                    <span>
-                        App ID <code>{candidateAppIdentity?.id ?? cardAppId}</code>
-                    </span>
-                    <span>Destination: <code>{cardOrigin}</code></span>
-                    <span>Exact card URL: <code>{cardUrl}</code></span>
-                    <span>
-                        Loading contacts this external origin and shares the existing card fields
-                        plus app/revision/action, message, optional thread, and stable chat
-                        identifiers. In a direct chat, the chat identity contains both participant
-                        identifiers.
-                    </span>
-                    <span>
-                        If you separately grant private context later, redemption also reveals your
-                        stable OpenChat user ID and this tab's recipient-key scheme/public key, then
-                        returns encrypted app-defined private data. Capabilities never enter this
-                        URL.
-                    </span>
+                    <details class="card-security-details" onclick={(e) => e.stopPropagation()}>
+                        <summary>Security details</summary>
+                        <div class="card-security-details-content">
+                            <span>
+                                Loading contacts <code>{cardOrigin}</code>, which may reveal your IP
+                                address, and shares this card plus its chat and message identifiers{#if threadRootMessageIndex !== undefined}
+                                    and thread identifier{/if}. {#if chatId.kind === "direct_chat"}Direct
+                                    chats include both participant IDs.{/if}
+                            </span>
+                            <span>
+                                Private app context stays hidden unless you approve it separately.
+                            </span>
+                            <span>
+                                Directory App ID
+                                <code>{candidateAppIdentity?.id ?? cardAppId}</code>; revision
+                                <code>{content.appRevision}</code>; action
+                                <code>{content.actionId}</code>.
+                            </span>
+                            <span>Exact card URL: <code>{cardUrl}</code></span>
+                            <span>
+                                {#if chatId.kind === "direct_chat"}
+                                    Direct-chat participant IDs: <code>{viewerId}</code> and
+                                    <code>{chatId.userId}</code>.
+                                {:else if chatId.kind === "group_chat"}
+                                    Chat ID: <code>{chatId.groupId}</code>.
+                                {:else}
+                                    Community/channel IDs: <code
+                                        >{chatId.communityId}/{chatId.channelId}</code
+                                    >.
+                                {/if}
+                                Message ID:
+                                <code>{messageId}</code>{#if threadRootMessageIndex !== undefined};
+                                    thread ID:
+                                    <code>{threadRootMessageIndex}</code>{/if}.
+                            </span>
+                            <span>
+                                OpenChat uses a credentialless, no-referrer frame in an opaque
+                                sandbox. It sends no OpenChat credentials, referrer, capabilities,
+                                or grants in the URL.
+                            </span>
+                        </div>
+                    </details>
                     <button
                         disabled={readonly || !pending || !credentiallessSupported}
                         onclick={requestCardLoad}
@@ -924,12 +949,35 @@
                 {#if cardActivated && cardCapability === undefined}
                     <div class="private-context-consent">
                         <strong>Private app context is not shared</strong>
-                        <span>
-                            A separate grant can let the registered app show viewer-owned details,
-                            such as an account-defined type. Redemption is bound to this viewer,
-                            chat, thread, message, app revision, action, frame nonce, and recipient
-                            key. OpenChat treats the returned app payload as opaque.
-                        </span>
+                        <details
+                            class="private-context-details"
+                            onclick={(e) => e.stopPropagation()}
+                        >
+                            <summary>Private context details</summary>
+                            <div class="card-security-details-content">
+                                <span>
+                                    Sharing reveals your stable OpenChat user ID and this tab's
+                                    recipient-key scheme and public key to the app. It may return
+                                    encrypted viewer data. Other chat members receive no
+                                    viewer-private fields.
+                                </span>
+                                <span>
+                                    Redemption is bound to this viewer, chat, thread, message, app
+                                    revision, action, frame nonce, and recipient key. OpenChat
+                                    treats the returned app payload as opaque.
+                                </span>
+                                <span>
+                                    The short-lived capability is delivered only to this isolated
+                                    frame and is never stored or shown in the URL.
+                                </span>
+                                {#if !privateContextAvailable}
+                                    <span>
+                                        Private-context grant remains disabled until the backend and
+                                        registered app redemption/decryption contracts align.
+                                    </span>
+                                {/if}
+                            </div>
+                        </details>
                         <button
                             disabled={!privateContextAvailable ||
                                 capabilityPending ||
@@ -941,18 +989,6 @@
                                 ? "Preparing private context…"
                                 : "Share private context"}
                         </button>
-                        {#if !privateContextAvailable}
-                            <span>
-                                Private-context grant remains disabled until the backend and
-                                registered app redemption/decryption contracts align.
-                            </span>
-                        {:else}
-                            <span>
-                                The short-lived capability is delivered only to this isolated frame
-                                and is never stored or shown in the URL. Other chat members receive
-                                no viewer-private fields.
-                            </span>
-                        {/if}
                     </div>
                 {/if}
             {/if}
@@ -1110,10 +1146,6 @@
     .app-id {
         color: var(--currentChat-msg-muted);
         white-space: nowrap;
-
-        code {
-            font-family: monospace;
-        }
     }
 
     .header {
@@ -1202,6 +1234,33 @@
     .card-load-gate button,
     .private-context-consent button {
         align-self: flex-start;
+    }
+
+    .card-security-details-content {
+        display: flex;
+        flex-direction: column;
+        gap: $sp1;
+    }
+
+    .card-security-details {
+        code {
+            overflow-wrap: anywhere;
+        }
+    }
+
+    .card-security-details,
+    .private-context-details {
+        color: var(--currentChat-msg-muted);
+        font-size: var(--font-size-small, 0.85em);
+
+        summary {
+            cursor: pointer;
+            font-weight: 600;
+        }
+
+        &[open] summary {
+            margin-bottom: $sp2;
+        }
     }
 
     .card-load-error {

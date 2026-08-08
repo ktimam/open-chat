@@ -52,19 +52,44 @@ describe("embedded app surface isolation", () => {
         }
     });
 
-    it("enumerates private redemption metadata before load and separates its grant", () => {
+    it("keeps all trusted-recipient disclosure in closed details", () => {
         const card = readFileSync(appPath("src/components/home/ActionCardContent.svelte"), "utf8");
-        const normalizedCard = card.replace(/\s+/g, " ");
-        for (const category of [
+        expect(card).not.toContain('class="card-load-summary"');
+        expect(card).toContain('class="card-security-details"');
+        expect(card).toContain("<summary>Security details</summary>");
+        expect(card).not.toContain("<details open");
+        expect(card).toContain('{#if chatId.kind === "direct_chat"}');
+        const gateStart = card.indexOf('<div class="card-load-gate">');
+        const gateEnd = card.indexOf('<div class="external-frame-label">', gateStart);
+        const loadGate = card.slice(gateStart, gateEnd).replace(/\s+/g, " ");
+        const detailsStart = loadGate.indexOf('<details class="card-security-details"');
+        const detailsEnd = loadGate.indexOf("</details>", detailsStart);
+        const loadDetails = loadGate.slice(detailsStart, detailsEnd);
+        expect(detailsStart).toBeGreaterThanOrEqual(0);
+        expect(loadGate.slice(0, detailsStart)).not.toContain("IP address");
+        expect(loadDetails).toContain("shares this card plus its chat and message identifiers");
+        expect(loadDetails).toContain("Private app context stays hidden");
+        expect(loadGate).toContain("Exact card URL");
+        expect(loadGate).toContain("IP address");
+        expect(loadGate).toContain("opaque sandbox");
+        expect(loadGate).not.toContain("stable OpenChat user ID");
+        expect(loadGate).not.toContain("recipient public key");
+        const privateStart = card.indexOf('<div class="private-context-consent">');
+        const privateEnd = card.indexOf("</div>", privateStart);
+        const privateConsent = card.slice(privateStart, privateEnd).replace(/\s+/g, " ");
+        const privateDetailsStart = privateConsent.indexOf(
+            '<details class="private-context-details"',
+        );
+        expect(privateDetailsStart).toBeGreaterThanOrEqual(0);
+        expect(privateConsent.slice(0, privateDetailsStart)).not.toContain(
             "stable OpenChat user ID",
-            "stable chat identifiers",
-            "both participant identifiers",
-            "app/revision/action",
-            "message, optional thread",
-            "recipient-key scheme/public key",
-        ]) {
-            expect(normalizedCard).toContain(category);
-        }
+        );
+        expect(privateConsent).toContain("stable OpenChat user ID");
+        expect(privateConsent).toContain("recipient-key scheme and public key");
+        expect(privateConsent).toContain("encrypted viewer data");
+        expect(privateConsent).toMatch(
+            /Other\s+chat\s+members\s+receive\s+no\s+viewer-private\s+fields\./,
+        );
         expect(card).toContain("let cardActivated = $derived(readySeen)");
         expect(card).toContain("Private app context is not shared");
         expect(card).toContain("appCardPrivateContextAvailable");
@@ -74,7 +99,6 @@ describe("embedded app surface isolation", () => {
         expect(card).toContain("if (cardKey === undefined || !privateContextRequested) return");
         expect(card).toContain("canAcceptCardPrivateContextReady({");
         expect(card).toContain("explicitlyRequested: privateContextRequested");
-        expect(card).toMatch(/Other\s+chat\s+members\s+receive\s+no\s+viewer-private\s+fields\./);
     });
 
     it("keeps card redirects opaque and binds bridge messages to source + per-load nonce", () => {

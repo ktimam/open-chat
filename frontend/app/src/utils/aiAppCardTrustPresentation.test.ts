@@ -12,8 +12,8 @@ describe("action-card trust presentation", () => {
     it("does not label backend-attested card content as untrusted", () => {
         const source = compactComponentSource();
 
-        expect(source).toContain(
-            '{#if !cardContentAttested} <span class="app-verification">Directory binding only; card content is untrusted</span> {/if}',
+        expect(source).toMatch(
+            /\{#if !cardContentAttested\} <span class="app-verification"[^>]*>Directory binding only; card content is untrusted<\/span[^>]*> \{\/if\}/,
         );
         expect(source).toContain(
             '{#if !cardContentAttested} <span class="sender-title-label">Untrusted card text</span> {/if}',

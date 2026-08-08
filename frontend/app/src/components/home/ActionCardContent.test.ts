@@ -5,6 +5,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 
 const mocks = vi.hoisted(() => ({
     resolveActionAppForCard: vi.fn(),
+    privateContextAvailable: false,
+    createAiAppCardCapability: vi.fn(),
 }));
 
 vi.mock("../../utils/aiAppSurfaces", () => ({
@@ -13,7 +15,7 @@ vi.mock("../../utils/aiAppSurfaces", () => ({
 
 vi.mock("../../utils/aiActionAvailability", () => ({
     appCardFinalConfirmationAvailable: () => true,
-    appCardPrivateContextAvailable: () => false,
+    appCardPrivateContextAvailable: () => mocks.privateContextAvailable,
     appCardRenderingAvailable: () => true,
 }));
 
@@ -22,6 +24,7 @@ const matchMediaDescriptor = Object.getOwnPropertyDescriptor(window, "matchMedia
 
 const CARD_URL = "https://app.example/openchat/card";
 const GROUP: ChatIdentifier = { kind: "group_chat", groupId: "aaaaa-aa" };
+const DIRECT: ChatIdentifier = { kind: "direct_chat", userId: "aaaaa-bb" };
 const VIEWER = "2vxsx-fae";
 const APP_ID = 7;
 const APP_REVISION = 2n;
@@ -84,6 +87,12 @@ function buttonNamed(target: HTMLElement, name: string): HTMLButtonElement | und
     );
 }
 
+function postedMessageOfType(postMessage: ReturnType<typeof vi.spyOn>, type: string): boolean {
+    return (postMessage.mock.calls as unknown[][]).some(
+        ([message]) => (message as { type?: string }).type === type,
+    );
+}
+
 beforeAll(async () => {
     Object.defineProperty(window, "matchMedia", {
         configurable: true,
@@ -111,7 +120,11 @@ afterAll(() => {
     }
 });
 
-async function mountCard(initialContent: ActionCardContent, messageId: bigint) {
+async function mountCard(
+    initialContent: ActionCardContent,
+    messageId: bigint,
+    chatId: ChatIdentifier = GROUP,
+) {
     const target = document.createElement("div");
     document.body.append(target);
     const contentStore = writable(initialContent);
@@ -120,11 +133,18 @@ async function mountCard(initialContent: ActionCardContent, messageId: bigint) {
         props: {
             contentStore,
             readonly: false,
-            chatId: GROUP,
+            chatId,
             messageId,
             viewerId: VIEWER,
         },
-        context: new Map([["client", {} as OpenChat]]),
+        context: new Map([
+            [
+                "client",
+                {
+                    createAiAppCardCapability: mocks.createAiAppCardCapability,
+                } as unknown as OpenChat,
+            ],
+        ]),
     });
     await tick();
     return {
@@ -145,6 +165,7 @@ async function waitForResolution(): Promise<void> {
 async function completeCardReadyHandshake(target: HTMLElement): Promise<{
     iframe: HTMLIFrameElement;
     postMessage: ReturnType<typeof vi.spyOn>;
+    frameNonce: string;
 }> {
     const iframe = target.querySelector("iframe");
     if (iframe?.contentWindow == null) throw new Error("card iframe is unavailable");
@@ -176,15 +197,150 @@ async function completeCardReadyHandshake(target: HTMLElement): Promise<{
         }),
     );
     await vi.waitFor(() => expect(iframe.classList.contains("inactive")).toBe(false));
-    return { iframe, postMessage };
+    return { iframe, postMessage, frameNonce: bootstrap.frameNonce };
 }
 
 beforeEach(() => {
     mocks.resolveActionAppForCard.mockReset();
     mocks.resolveActionAppForCard.mockResolvedValue(RESOLVED_APP);
+    mocks.privateContextAvailable = false;
+    mocks.createAiAppCardCapability.mockReset();
 });
 
 describe("action-card external surface load consent", () => {
+    it("shows no trusted-recipient description outside closed security details", async () => {
+        const restore = setCredentiallessSupport(true);
+        const view = await mountCard(card({ confirmPayload: undefined }), 1_010n);
+        try {
+            await waitForResolution();
+            await vi.waitFor(() => expect(buttonNamed(view.target, "Load app card")).toBeDefined());
+
+            expect(view.target.querySelector(".app-name")?.textContent).toContain("Generic app");
+            expect(view.target.querySelector(".title")?.textContent).toBe("Add entry");
+            expect(view.target.querySelector(".card-load-summary")).toBeNull();
+            const gate = view.target.querySelector(".card-load-gate");
+            expect(Array.from(gate?.children ?? []).map((child) => child.tagName)).toEqual([
+                "DETAILS",
+                "BUTTON",
+            ]);
+
+            const details = view.target.querySelector<HTMLDetailsElement>(".card-security-details");
+            expect(details?.open).toBe(false);
+            expect(details?.querySelector("summary")?.textContent?.trim()).toBe("Security details");
+            const technical = (details?.textContent ?? "").replace(/\s+/g, " ");
+            expect(technical).toContain("https://app.example");
+            expect(technical).toContain("IP address");
+            expect(technical).toContain("shares this card plus its chat and message identifiers");
+            expect(technical).toContain("Private app context stays hidden");
+            expect(technical).toContain("App ID");
+            expect(technical).toContain(CARD_URL);
+            expect(technical).toContain("generic.entry.add");
+            expect(technical).toContain("opaque sandbox");
+            expect(technical).toContain("aaaaa-aa");
+            expect(technical).toContain("1010");
+            expect(technical).not.toContain("stable OpenChat user ID");
+            expect(technical).not.toContain("recipient public key");
+        } finally {
+            await view.cleanup();
+            restore();
+        }
+    });
+
+    it("keeps direct-chat identifiers only inside closed security details", async () => {
+        const restore = setCredentiallessSupport(true);
+        const direct = await mountCard(card({ confirmPayload: undefined }), 1_011n, DIRECT);
+        try {
+            await waitForResolution();
+            await vi.waitFor(() =>
+                expect(buttonNamed(direct.target, "Load app card")).toBeDefined(),
+            );
+            expect(direct.target.querySelector(".card-load-summary")).toBeNull();
+            const directDetails =
+                direct.target.querySelector(".card-security-details")?.textContent;
+            expect(directDetails).toContain("both participant IDs");
+            expect(directDetails).toContain(VIEWER);
+            expect(directDetails).toContain(DIRECT.userId);
+            expect(directDetails).toContain("1011");
+        } finally {
+            await direct.cleanup();
+        }
+
+        mocks.resolveActionAppForCard.mockClear();
+        const group = await mountCard(card({ confirmPayload: undefined }), 1_012n);
+        try {
+            await waitForResolution();
+            await vi.waitFor(() =>
+                expect(buttonNamed(group.target, "Load app card")).toBeDefined(),
+            );
+            expect(group.target.querySelector(".card-load-summary")).toBeNull();
+            const groupDetails =
+                group.target.querySelector(".card-security-details")?.textContent ?? "";
+            expect(groupDetails).not.toContain("both participant IDs");
+            expect(groupDetails).toContain("aaaaa-aa");
+            expect(groupDetails).toContain("1012");
+            expect(groupDetails).not.toContain(VIEWER);
+            expect(groupDetails).not.toContain(DIRECT.userId);
+        } finally {
+            await group.cleanup();
+            restore();
+        }
+    });
+
+    it("keeps private context behind a separate post-load consent", async () => {
+        const restore = setCredentiallessSupport(true);
+        mocks.privateContextAvailable = true;
+        const view = await mountCard(card({ confirmPayload: undefined }), 1_013n);
+        let postMessage: ReturnType<typeof vi.spyOn> | undefined;
+        try {
+            await waitForResolution();
+            await vi.waitFor(() => expect(buttonNamed(view.target, "Load app card")).toBeDefined());
+
+            expect(view.target.querySelector("iframe")).toBeNull();
+            expect(view.target.querySelector(".private-context-consent")).toBeNull();
+            expect(mocks.createAiAppCardCapability).not.toHaveBeenCalled();
+
+            buttonNamed(view.target, "Load app card")?.click();
+            await vi.waitFor(() => expect(view.target.querySelector("iframe")).not.toBeNull());
+            expect(view.target.querySelector(".private-context-consent")).toBeNull();
+            expect(mocks.createAiAppCardCapability).not.toHaveBeenCalled();
+
+            const ready = await completeCardReadyHandshake(view.target);
+            postMessage = ready.postMessage;
+            await vi.waitFor(() =>
+                expect(view.target.querySelector(".private-context-consent")).not.toBeNull(),
+            );
+            const consent = view.target.querySelector(".private-context-consent");
+            expect(Array.from(consent?.children ?? []).map((child) => child.tagName)).toEqual([
+                "STRONG",
+                "DETAILS",
+                "BUTTON",
+            ]);
+            const privateDetails = consent?.querySelector<HTMLDetailsElement>(
+                ".private-context-details",
+            );
+            expect(privateDetails?.open).toBe(false);
+            expect(privateDetails?.textContent?.replace(/\s+/g, " ")).toContain(
+                "recipient-key scheme and public key",
+            );
+            expect(mocks.createAiAppCardCapability).not.toHaveBeenCalled();
+            expect(postedMessageOfType(postMessage, "oc:card:private-context-request")).toBe(false);
+
+            buttonNamed(view.target, "Share private context")?.click();
+            await vi.waitFor(() =>
+                expect(
+                    postMessage === undefined
+                        ? false
+                        : postedMessageOfType(postMessage, "oc:card:private-context-request"),
+                ).toBe(true),
+            );
+            expect(mocks.createAiAppCardCapability).not.toHaveBeenCalled();
+        } finally {
+            postMessage?.mockRestore();
+            await view.cleanup();
+            restore();
+        }
+    });
+
     it("opens a freshly proposed attested sender card without a second click", async () => {
         const restore = setCredentiallessSupport(true);
         const view = await mountCard(card(), 1_001n);
