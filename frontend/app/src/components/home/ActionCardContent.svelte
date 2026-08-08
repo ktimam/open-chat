@@ -20,17 +20,18 @@
     import {
         buildCardBusy,
         buildCardBootstrap,
+        buildCardCollectConfirm,
         buildCardInit,
         buildCardPrivateContextRequest,
         beginCardCapabilityAttempt,
+        beginCardCollectAttempt,
         beginCardConfirmationAttempt,
         canAcceptCardPrivateContextReady,
-        canApproveCardRequest,
-        canonicalCardApprovalSummary,
         cardAttemptKey,
         cardCapabilityAttemptStillCurrent,
+        cardCollectAttemptStillCurrent,
         cardConfirmationAttemptStillCurrent,
-        cardApprovalRequestFromMessage,
+        cardCollectedConfirmFromMessage,
         cardResizeHeightFromMessage,
         clampCardHeight,
         completelyReverseMapRows,
@@ -44,12 +45,14 @@
         isMultiEntrySummaryRows,
         isRecord,
         newCardFrameNonce,
+        settleCardOperationBeforeTimeout,
         supportsCredentiallessIframe,
         startCardHandshakeTimeout,
         startCardBootstrapRetry,
+        startCardCollectTimeout,
         visibleRows,
-        type CardApprovalRequest,
         type CardCapabilityAttemptBinding,
+        type CardCollectAttemptBinding,
         type CardConfirmationAttemptBinding,
     } from "../../utils/cardBridge";
     import Spinner from "../icons/Spinner.svelte";
@@ -57,9 +60,9 @@
 
     // Generic interactive confirm card. Two render modes:
     //   1. The card's owning app declares a "card" surface, so the app owns the pixels: OpenChat
-    //      embeds the app's page in an iframe and relays confirm/cancel over
-    //      the postMessage bridge. The user can edit values inside the frame; the host snapshots the
-    //      exact encoded bytes, obtains a one-time server grant for those bytes, then passes both on.
+    //      embeds the app's page in an iframe. The user edits values inside the frame, then one
+    //      host-owned click challenges it for a nonce-bound snapshot; the host obtains a one-time
+    //      exact-byte server grant and submits directly. Unsolicited app confirms have no authority.
     //   2. No safely reconstructable "card" surface → host-owned public rows plus the immutable,
     //      backend-attested stored-payload confirmation path.
     interface Props {
@@ -208,15 +211,17 @@
     let loadRequested = $state(false);
     let capabilityPending = $state(false);
     let privateContextRequested = $state(false);
-    let confirmationGrantFailed = $state(false);
+    let confirmationFailed = $state(false);
+    let cardCollectionFailed = $state(false);
     let cardCapability = $state<AiAppCardCapability | undefined>(undefined);
     let capabilityAttempt: CardCapabilityAttemptBinding | undefined;
+    let collectAttempt: CardCollectAttemptBinding | undefined;
     let confirmationAttempt: CardConfirmationAttemptBinding | undefined;
     let cancelPrivateContextTimeout: (() => void) | undefined;
     let cancelCardBootstrapRetry: (() => void) | undefined;
+    let cancelCollectTimeout: (() => void) | undefined;
     let componentMounted = false;
     let frameNonce = $state(newCardFrameNonce());
-    let approvalRequest = $state<CardApprovalRequest | undefined>(undefined);
     // The owning action's label -> field-key map, used to reverse-map the message's hydrated rows into
     // structured prefill data (the frozen confirmPayload is not hydrated on a received card today).
     let cardLabelToField = $state<Record<string, string>>({});
@@ -232,17 +237,11 @@
     // ready handshake can render the message's existing card values; only a later host-owned grant may
     // mint/deliver private viewer context.
     let cardActivated = $derived(readySeen);
-    let pendingApprovalAllowed = $derived(
-        approvalRequest?.kind === "cancel" ? cardCancelable : cardConfirmable,
-    );
-    let canApprovePendingRequest = $derived(
-        canApproveCardRequest(
-            approvalRequest,
-            pendingApprovalAllowed && cardActivated,
-            busy,
-            content.disclosure !== undefined,
-            acknowledged,
-        ),
+    let canCollectConfirm = $derived(
+        cardConfirmable &&
+            cardActivated &&
+            !busy &&
+            (content.disclosure === undefined || acknowledged),
     );
 
     function currentCardAttemptKey(): string | undefined {
@@ -273,8 +272,11 @@
             componentMounted = false;
             cancelPrivateContextTimeout?.();
             cancelCardBootstrapRetry?.();
+            cancelCollectTimeout?.();
             cancelCardBootstrapRetry = undefined;
+            cancelCollectTimeout = undefined;
             capabilityAttempt = undefined;
+            collectAttempt = undefined;
             confirmationAttempt = undefined;
         };
     });
@@ -432,15 +434,19 @@
         cancelCardBootstrapRetry = undefined;
         cancelPrivateContextTimeout?.();
         cancelPrivateContextTimeout = undefined;
+        cancelCollectTimeout?.();
+        cancelCollectTimeout = undefined;
+        if (collectAttempt !== undefined || confirmationAttempt !== undefined) busy = false;
         frameNonce = newCardFrameNonce();
         readySeen = false;
         capabilityPending = false;
         privateContextRequested = false;
         cardCapability = undefined;
         capabilityAttempt = undefined;
+        collectAttempt = undefined;
         confirmationAttempt = undefined;
-        confirmationGrantFailed = false;
-        approvalRequest = undefined;
+        confirmationFailed = false;
+        cardCollectionFailed = false;
         acknowledged = false;
     }
 
@@ -531,6 +537,9 @@
                 return;
             cardCapability = capability;
             postInit();
+        } catch {
+            // Restoration is optional. Keep the card public-only and let `finally` expose the paired
+            // manual retry; never auto-loop or surface dependency details.
         } finally {
             if (capabilityAttempt === attempt) capabilityAttempt = undefined;
             capabilityPending = false;
@@ -610,82 +619,126 @@
                 void mintPrivateContextCapability(recipientKey.scheme, recipientKey.publicKey);
                 break;
             }
-            case "oc:card:confirm":
-                if (!cardConfirmable || busy || !cardActivated) return;
-                approvalRequest = cardApprovalRequestFromMessage(msg, frameNonce);
-                break;
-            case "oc:card:cancel":
-                if (!cardCancelable || busy || !cardActivated) return;
-                approvalRequest = cardApprovalRequestFromMessage(msg, frameNonce);
+            case "oc:card:confirm-collected":
+                void submitCollectedConfirm(msg);
                 break;
         }
     }
 
-    function dismissApproval(e: Event) {
+    function requestHostConfirmation(e: Event) {
         e.stopPropagation();
-        approvalRequest = undefined;
-        acknowledged = false;
-    }
-
-    async function approveRequest(e: Event) {
-        e.stopPropagation();
-        const request = approvalRequest;
-        if (
-            !canApproveCardRequest(
-                request,
-                (request?.kind === "cancel" ? cardCancelable : cardConfirmable) && cardActivated,
-                busy,
-                content.disclosure !== undefined,
-                acknowledged,
-            ) ||
-            request === undefined
-        )
-            return;
-        approvalRequest = undefined;
-        confirmationGrantFailed = false;
-        if (request.kind === "cancel") {
-            await doRespond("cancel");
-            return;
-        }
-
-        const confirmPayload = encodeCardConfirmPayload(request);
+        const target = iframeEl?.contentWindow;
         const cardKey = currentCardAttemptKey();
-        if (confirmPayload === undefined || cardKey === undefined) return;
-        const binding: CardConfirmationAttemptBinding = {
+        if (!canCollectConfirm || target == null || cardKey === undefined) return;
+        const binding: CardCollectAttemptBinding = {
             frameNonce,
+            requestNonce: newCardFrameNonce(),
+            cardKey,
+        };
+        const attempt = beginCardCollectAttempt(collectAttempt, binding);
+        if (attempt === undefined) return;
+        collectAttempt = attempt;
+        busy = true;
+        confirmationFailed = false;
+        cardCollectionFailed = false;
+        cancelCollectTimeout?.();
+        cancelCollectTimeout = startCardCollectTimeout(() => {
+            if (collectAttempt !== attempt) return;
+            collectAttempt = undefined;
+            cancelCollectTimeout = undefined;
+            busy = false;
+            cardCollectionFailed = true;
+        });
+        // This is the authority-bearing human gesture. The trusted frame may return its current
+        // snapshot only for this fresh challenge; unsolicited app confirm/cancel messages are ignored.
+        target.postMessage(buildCardCollectConfirm(attempt.frameNonce, attempt.requestNonce), "*");
+    }
+
+    async function submitCollectedConfirm(message: unknown) {
+        const attempt = collectAttempt;
+        const cardKey = currentCardAttemptKey();
+        if (attempt === undefined || cardKey === undefined || !cardConfirmable || !cardActivated)
+            return;
+        const currentCollection: CardCollectAttemptBinding = {
+            frameNonce,
+            requestNonce: attempt.requestNonce,
+            cardKey,
+        };
+        if (!cardCollectAttemptStillCurrent(attempt, currentCollection, componentMounted)) return;
+        const payload = cardCollectedConfirmFromMessage(
+            message,
+            attempt.frameNonce,
+            attempt.requestNonce,
+        );
+        if (payload === undefined) return;
+
+        // Consume the click challenge before any async grant call. An exact replay therefore cannot
+        // mint twice even while the first submission is still in flight.
+        collectAttempt = undefined;
+        cancelCollectTimeout?.();
+        cancelCollectTimeout = undefined;
+        const confirmPayload = encodeCardConfirmPayload({ kind: "confirm", payload });
+        if (confirmPayload === undefined) {
+            busy = false;
+            cardCollectionFailed = true;
+            return;
+        }
+        const binding: CardConfirmationAttemptBinding = {
+            frameNonce: attempt.frameNonce,
             cardKey,
             confirmPayload,
         };
-        const attempt = beginCardConfirmationAttempt(confirmationAttempt, binding);
-        if (attempt === undefined) return;
-        confirmationAttempt = attempt;
-        busy = true;
-        try {
-            const grant = await client.createAiAppCardConfirmationGrant(
-                chatId,
-                threadRootMessageIndex,
-                messageId,
-                attempt.confirmPayload.slice(),
-            );
+        const confirmation = beginCardConfirmationAttempt(confirmationAttempt, binding);
+        if (confirmation === undefined) {
+            busy = false;
+            return;
+        }
+        confirmationAttempt = confirmation;
+        const stillCurrent = (): boolean => {
             const currentKey = currentCardAttemptKey();
-            if (currentKey === undefined) return;
+            if (currentKey === undefined) return false;
             const current: CardConfirmationAttemptBinding = {
                 frameNonce,
                 cardKey: currentKey,
-                confirmPayload: attempt.confirmPayload,
+                confirmPayload: confirmation.confirmPayload,
             };
-            if (!cardConfirmationAttemptStillCurrent(attempt, current, componentMounted)) return;
+            return !cardConfirmable ||
+                !cardActivated ||
+                !cardConfirmationAttemptStillCurrent(confirmation, current, componentMounted)
+                ? false
+                : true;
+        };
+        try {
+            const grantResult = await settleCardOperationBeforeTimeout(() =>
+                client.createAiAppCardConfirmationGrant(
+                    chatId,
+                    threadRootMessageIndex,
+                    messageId,
+                    confirmation.confirmPayload.slice(),
+                ),
+            );
+            if (!stillCurrent()) return;
+            if (grantResult.status === "failed") {
+                confirmationFailed = true;
+                return;
+            }
+            const grant = grantResult.value;
             if (grant === undefined || grant.expiresAt <= BigInt(Date.now())) {
-                confirmationGrantFailed = true;
+                confirmationFailed = true;
                 return;
             }
             // The opaque grant never enters the iframe, URL, storage, or logs. The exact byte copy
             // attested above is passed with it to the authoritative chat canister exactly once.
-            await onRespond?.("confirm", attempt.confirmPayload.slice(), grant.grant.slice());
+            const submitResult = await settleCardOperationBeforeTimeout(() =>
+                onRespond?.("confirm", confirmation.confirmPayload.slice(), grant.grant.slice()),
+            );
+            if (stillCurrent() && submitResult.status === "failed") confirmationFailed = true;
         } finally {
-            if (confirmationAttempt === attempt) confirmationAttempt = undefined;
-            busy = false;
-            acknowledged = false;
+            if (confirmationAttempt === confirmation) {
+                confirmationAttempt = undefined;
+                busy = false;
+                acknowledged = false;
+            }
         }
     }
 
@@ -719,10 +772,9 @@
     });
 
     $effect(() => {
-        // Relay the confirm/cancel round-trip state (`busy`) into the app card so it can lock its own
-        // in-frame buttons and show progress. Reading `busy` registers it as the dependency. Posted only
-        // to the exact frame WindowProxy after the handshake; a bare boolean carries no data. The confirm
-        // handler already screens re-entrancy and per-action authority, so this is presentation-only.
+        // Relay collect/grant/submit state into the app card so it freezes the values behind the
+        // host-owned action. Reading `busy` registers it as the dependency. This bare boolean is posted
+        // only to the exact frame WindowProxy and carries no app/canister data or authority.
         const _busy = busy;
         const target = iframeEl?.contentWindow;
         if (readySeen && cardUrl !== undefined && cardOrigin !== undefined && target != null) {
@@ -731,14 +783,19 @@
     });
 
     $effect(() => {
-        // Any state/context transition invalidates a pending iframe request. The user must approve a
-        // fresh snapshot from the currently active frame/card, never a stale request.
+        // Any state/context or final-grant availability transition invalidates a pending host-click
+        // collection challenge. A response from an old frame/card can never inherit a newer card's
+        // authority.
         const valid =
-            cardCancelable && cardActivated && loadRequested && content.state === "pending";
+            cardConfirmable && cardActivated && loadRequested && content.state === "pending";
         void messageId;
         void cardOrigin;
-        if (!valid) {
-            approvalRequest = undefined;
+        if (!valid && (collectAttempt !== undefined || confirmationAttempt !== undefined)) {
+            collectAttempt = undefined;
+            confirmationAttempt = undefined;
+            cancelCollectTimeout?.();
+            cancelCollectTimeout = undefined;
+            busy = false;
             acknowledged = false;
         }
     });
@@ -845,17 +902,9 @@
                     </div>
                 {/if}
 
-                {#if approvalRequest !== undefined && cardActivated}
-                    <div class="host-approval" role="group" aria-label="Approve app card request">
-                        <strong>
-                            {approvalRequest.kind === "confirm"
-                                ? "The app requests confirmation"
-                                : "The app requests cancellation"}
-                        </strong>
-                        <pre class="approval-summary">{canonicalCardApprovalSummary(
-                                approvalRequest,
-                            )}</pre>
-                        {#if approvalRequest.kind === "confirm" && content.disclosure !== undefined}
+                {#if cardActivated && cardCancelable}
+                    <div class="host-approval" role="group" aria-label="Card actions">
+                        {#if content.disclosure !== undefined}
                             <label class="disclosure" onclick={(e) => e.stopPropagation()}>
                                 <input
                                     type="checkbox"
@@ -866,20 +915,20 @@
                             </label>
                         {/if}
                         <div class="actions">
-                            <button class="cancel" disabled={busy} onclick={dismissApproval}
-                                >Dismiss</button
+                            <button
+                                class="cancel"
+                                disabled={busy}
+                                onclick={(e) => respond("cancel", e)}>{content.cancelLabel}</button
                             >
                             <button
                                 class="confirm"
-                                disabled={!canApprovePendingRequest}
-                                onclick={approveRequest}
+                                disabled={!canCollectConfirm}
+                                onclick={requestHostConfirmation}
                             >
                                 {#if busy}
                                     <Spinner size="1.1em" foregroundColour="transparent" />
-                                {:else if approvalRequest.kind === "confirm"}
-                                    Confirm request
                                 {:else}
-                                    Cancel card
+                                    {content.confirmLabel}
                                 {/if}
                             </button>
                         </div>
@@ -887,39 +936,30 @@
                 {/if}
 
                 {#if cardActivated && cardCancelable && !finalConfirmationAvailable}
-                    <div class="host-approval" role="group" aria-label="Card actions">
-                        <span class="card-load-error">
-                            Confirmation is disabled until the server binds the exact final payload
-                            to this viewer, card, and app revision.
-                        </span>
-                        <div class="actions">
-                            <button
-                                class="cancel"
-                                disabled={busy}
-                                onclick={(e) => respond("cancel", e)}>Cancel card</button
-                            >
-                        </div>
+                    <div class="card-load-error" role="status">
+                        Confirmation is disabled until the server binds the exact final payload to
+                        this viewer, card, and app revision.
                     </div>
                 {/if}
 
-                {#if confirmationGrantFailed}
+                {#if cardCollectionFailed}
                     <div class="card-load-error" role="alert">
-                        The exact confirmation payload could not be authorized. Review the request
-                        and try again; no payload was submitted.
+                        The app did not return valid card values. Review the card and try again; no
+                        payload was submitted.
                     </div>
                 {/if}
 
-                {#if cardActivated && cardCapability === undefined && privateContextAvailable && !privateContextRequested}
+                {#if confirmationFailed}
+                    <div class="card-load-error" role="alert">Confirmation failed. Try again.</div>
+                {/if}
+
+                {#if cardActivated && hasPersistentUserPairing && cardCapability === undefined && privateContextAvailable && !privateContextRequested}
                     <div class="private-context-action">
                         <button
                             disabled={capabilityPending || !pending || readonly}
                             onclick={requestPrivateContext}
                         >
-                            {capabilityPending
-                                ? "Restoring app data…"
-                                : hasPersistentUserPairing
-                                  ? "Restore app data"
-                                  : "Share app context"}
+                            {capabilityPending ? "Restoring app data…" : "Restore app data"}
                         </button>
                     </div>
                 {/if}
@@ -1184,21 +1224,6 @@
 
     .card-load-error {
         color: var(--warning);
-    }
-
-    .approval-summary {
-        max-height: 14rem;
-        margin: 0;
-        padding: $sp2;
-        overflow: auto;
-        border: var(--bw) solid var(--bd);
-        border-radius: var(--rd);
-        white-space: pre-wrap;
-        overflow-wrap: anywhere;
-        direction: ltr;
-        unicode-bidi: plaintext;
-        isolation: isolate;
-        font: inherit;
     }
 
     .rows {

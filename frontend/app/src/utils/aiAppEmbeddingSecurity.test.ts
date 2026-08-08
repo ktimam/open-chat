@@ -201,7 +201,7 @@ describe("embedded app surface isolation", () => {
         expect(worker).not.toContain('WORKER: unhandled error: ", err');
     });
 
-    it("times out a non-handshaking frame and keeps classic confirmation fail-closed", () => {
+    it("times out a non-handshaking frame and keeps host-initiated confirmation fail-closed", () => {
         const card = readFileSync(appPath("src/components/home/ActionCardContent.svelte"), "utf8");
         expect(card).toContain("startCardHandshakeTimeout");
         expect(card).toContain("startCardBootstrapRetry");
@@ -215,8 +215,16 @@ describe("embedded app surface isolation", () => {
             'response === "confirm" && (!cardContentAttested || !finalConfirmationAvailable)',
         );
         expect(card).toContain("appCardFinalConfirmationAvailable");
-        expect(card).toContain("if (!cardConfirmable || busy || !cardActivated) return");
-        expect(card).toContain("if (!cardCancelable || busy || !cardActivated) return");
+        expect(card).toContain(
+            "if (!canCollectConfirm || target == null || cardKey === undefined) return",
+        );
+        expect(card).toContain("cardCollectedConfirmFromMessage");
+        expect(card).toContain("collectAttempt = undefined");
+        expect(card).toContain("settleCardOperationBeforeTimeout");
+        expect(card).not.toContain("Share app context");
+        expect(card).toContain("collectAttempt !== undefined || confirmationAttempt !== undefined");
+        expect(card).toContain("!cardConfirmable ||");
+        expect(card).toContain("!cardActivated ||");
         expect(card).toContain("server binds the exact final payload");
         expect(card).toContain('respond("cancel", e)');
         expect(compact).toContain("authorized exact-payload endpoint");

@@ -529,6 +529,38 @@ export function newCardFrameNonce(): string {
 
 export const CARD_HANDSHAKE_TIMEOUT_MS = 10_000;
 export const CARD_BOOTSTRAP_RETRY_MS = 250;
+export const CARD_COLLECT_TIMEOUT_MS = 5_000;
+// IC updates can legitimately take several seconds under load. This is a safety ceiling, not an
+// optimistic latency target: long enough for a real update, but finite so a dead dependency cannot
+// freeze the card indefinitely.
+export const CARD_CONFIRM_OPERATION_TIMEOUT_MS = 30_000;
+
+export type CardOperationSettlement<T> = { status: "settled"; value: T } | { status: "failed" };
+
+// Network-backed grant minting and final submission sit after the user's authority-bearing click.
+// Convert rejection, synchronous throws, and a non-settling dependency into one fail-closed result so
+// the host can release its controls without leaking error details or leaving an unhandled rejection.
+export function settleCardOperationBeforeTimeout<T>(
+    operation: () => T | PromiseLike<T>,
+    timeoutMs = CARD_CONFIRM_OPERATION_TIMEOUT_MS,
+): Promise<CardOperationSettlement<T>> {
+    return new Promise((resolve) => {
+        let settled = false;
+        const finish = (result: CardOperationSettlement<T>) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(handle);
+            resolve(result);
+        };
+        const handle = setTimeout(() => finish({ status: "failed" }), timeoutMs);
+        void Promise.resolve()
+            .then(operation)
+            .then(
+                (value) => finish({ status: "settled", value }),
+                () => finish({ status: "failed" }),
+            );
+    });
+}
 
 // A frame blocked by CSP/network policy (or one that never implements the nonce-bound v2 ready
 // handshake) must not remain an invisible 1px element forever. Returning cleanup makes Svelte effects,
@@ -545,6 +577,15 @@ export function startCardHandshakeTimeout(
         active = false;
         clearTimeout(handle);
     };
+}
+
+// A host click opens only a short collection window. A silent/misbehaving frame must release the
+// host-owned controls instead of leaving the card permanently busy.
+export function startCardCollectTimeout(
+    onTimeout: () => void,
+    timeoutMs = CARD_COLLECT_TIMEOUT_MS,
+): () => void {
+    return startCardHandshakeTimeout(onTimeout, timeoutMs);
 }
 
 // The iframe load event can fire before a client-side app has installed its bridge listener (for
@@ -575,9 +616,8 @@ export function buildCardBootstrap(frameNonce: string): {
     return { type: "oc:card:bootstrap", version: 2, frameNonce };
 }
 
-// Sent only after either a separate host-owned Share action or a durable, app-specific per-user
-// pairing authorizes restoration. The public ready/init handshake alone never asks the external
-// frame to create or disclose a recipient key.
+// Sent only when a durable, app-specific per-user pairing authorizes restoration. The public
+// ready/init handshake alone never asks the external frame to create or disclose a recipient key.
 export function buildCardPrivateContextRequest(frameNonce: string): {
     type: "oc:card:private-context-request";
     version: 2;
@@ -586,10 +626,30 @@ export function buildCardPrivateContextRequest(frameNonce: string): {
     return { type: "oc:card:private-context-request", version: 2, frameNonce };
 }
 
-// A generic host→iframe progress signal: OpenChat relays the confirm/cancel round-trip state so the
-// app card (whose buttons live inside the iframe now) can lock its controls and show progress. A bare
-// boolean — no app or canister data — posted only to the exact card WindowProxy; `busy` already resets on
-// success OR failure (doRespond's finally), so the app re-enables correctly either way.
+// Host -> iframe request made only from the host-owned confirm button. This host-collection exchange
+// is the first unreleased v2 card contract; legacy iframe confirm/cancel is intentionally ignored.
+// `requestNonce` is fresh for this click and retained only in host memory, so the response is a
+// payload collection reply, never independent authority to submit.
+export function buildCardCollectConfirm(
+    frameNonce: string,
+    requestNonce: string,
+): {
+    type: "oc:card:collect-confirm";
+    version: 2;
+    frameNonce: string;
+    requestNonce: string;
+} {
+    return {
+        type: "oc:card:collect-confirm",
+        version: 2,
+        frameNonce,
+        requestNonce,
+    };
+}
+
+// A generic host→iframe progress signal: OpenChat relays the collect/grant/submit round-trip state so
+// the app card can freeze its editable values. A bare boolean — no app or canister data — is posted
+// only to the exact card WindowProxy; `busy` resets on success, failure, or collection timeout.
 export function buildCardBusy(
     busy: boolean,
     frameNonce: string,
@@ -662,6 +722,27 @@ export function cardApprovalRequestFromMessage(
     if (message.type !== "oc:card:confirm") return undefined;
     const payload = snapshotCardConfirmPayload(message.payload);
     return payload === undefined ? undefined : { kind: "confirm", payload };
+}
+
+// Accept a collected snapshot only when it answers the exact current host-click challenge. The
+// source WindowProxy and opaque origin are checked by ActionCardContent before this parser runs.
+// Returning the same bounded, deeply frozen JSON snapshot used by the legacy review path preserves
+// the exact-byte grant boundary without exposing private app fields as host-rendered rows.
+export function cardCollectedConfirmFromMessage(
+    message: unknown,
+    expectedFrameNonce: string,
+    expectedRequestNonce: string,
+): Record<string, CardPayload> | CardPayload[] | undefined {
+    if (
+        !isRecord(message) ||
+        message.type !== "oc:card:confirm-collected" ||
+        message.version !== 2 ||
+        message.frameNonce !== expectedFrameNonce ||
+        message.requestNonce !== expectedRequestNonce
+    ) {
+        return undefined;
+    }
+    return snapshotCardConfirmPayload(message.payload);
 }
 
 export function cardResizeHeightFromMessage(
@@ -748,6 +829,33 @@ export interface CardConfirmationAttemptBinding {
     frameNonce: string;
     cardKey: string;
     confirmPayload: Uint8Array;
+}
+
+export interface CardCollectAttemptBinding {
+    frameNonce: string;
+    requestNonce: string;
+    cardKey: string;
+}
+
+export function beginCardCollectAttempt(
+    active: CardCollectAttemptBinding | undefined,
+    binding: CardCollectAttemptBinding,
+): CardCollectAttemptBinding | undefined {
+    if (active !== undefined || binding.requestNonce.length === 0) return undefined;
+    return { ...binding };
+}
+
+export function cardCollectAttemptStillCurrent(
+    attempt: CardCollectAttemptBinding,
+    current: CardCollectAttemptBinding,
+    mounted: boolean,
+): boolean {
+    return (
+        mounted &&
+        attempt.frameNonce === current.frameNonce &&
+        attempt.requestNonce === current.requestNonce &&
+        attempt.cardKey === current.cardKey
+    );
 }
 
 export function beginCardConfirmationAttempt(

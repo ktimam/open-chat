@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
     resolveActionAppForCard: vi.fn(),
     privateContextAvailable: false,
     createAiAppCardCapability: vi.fn(),
+    createAiAppCardConfirmationGrant: vi.fn(),
 }));
 
 vi.mock("../../utils/aiAppSurfaces", () => ({
@@ -98,6 +99,17 @@ function postedMessageOfType(postMessage: ReturnType<typeof vi.spyOn>, type: str
     );
 }
 
+type PostedCardMessage = {
+    type?: string;
+    frameNonce?: string;
+    requestNonce?: string;
+    busy?: boolean;
+};
+
+function postedCardMessages(postMessage: ReturnType<typeof vi.spyOn>): PostedCardMessage[] {
+    return (postMessage.mock.calls as unknown[][]).map(([message]) => message as PostedCardMessage);
+}
+
 beforeAll(async () => {
     Object.defineProperty(window, "matchMedia", {
         configurable: true,
@@ -154,6 +166,7 @@ async function mountCard(
                 "client",
                 {
                     createAiAppCardCapability: mocks.createAiAppCardCapability,
+                    createAiAppCardConfirmationGrant: mocks.createAiAppCardConfirmationGrant,
                 } as unknown as OpenChat,
             ],
         ]),
@@ -212,11 +225,26 @@ async function completeCardReadyHandshake(target: HTMLElement): Promise<{
     return { iframe, postMessage, frameNonce: bootstrap.frameNonce };
 }
 
+function dispatchFromCardFrame(iframe: HTMLIFrameElement, data: unknown): void {
+    window.dispatchEvent(
+        new MessageEvent("message", {
+            data,
+            origin: "null",
+            source: iframe.contentWindow,
+        }),
+    );
+}
+
 beforeEach(() => {
     mocks.resolveActionAppForCard.mockReset();
     mocks.resolveActionAppForCard.mockResolvedValue(RESOLVED_APP);
     mocks.privateContextAvailable = false;
     mocks.createAiAppCardCapability.mockReset();
+    mocks.createAiAppCardConfirmationGrant.mockReset();
+    mocks.createAiAppCardConfirmationGrant.mockResolvedValue({
+        grant: new Uint8Array([7, 8, 9]),
+        expiresAt: BigInt(Date.now() + 60_000),
+    });
 });
 
 describe("action-card external surface load consent", () => {
@@ -313,6 +341,54 @@ describe("action-card external surface load consent", () => {
                     ),
                 ).toBe(true);
             });
+        } finally {
+            postMessage?.mockRestore();
+            await view.cleanup();
+            restore();
+        }
+    });
+
+    it("absorbs paired private-context restoration rejection and waits for an explicit retry", async () => {
+        const restore = setCredentiallessSupport(true);
+        mocks.privateContextAvailable = true;
+        mocks.createAiAppCardCapability.mockRejectedValueOnce(new Error("restore rejected"));
+        const view = await mountCard(card({ confirmPayload: undefined }), 1_107n);
+        let postMessage: ReturnType<typeof vi.spyOn> | undefined;
+        try {
+            await waitForResolution();
+            const ready = await completeCardReadyHandshake(view.target);
+            postMessage = ready.postMessage;
+            await vi.waitFor(() =>
+                expect(postedMessageOfType(postMessage!, "oc:card:private-context-request")).toBe(
+                    true,
+                ),
+            );
+
+            const recipientKey = btoa(String.fromCharCode(...new Uint8Array(32).fill(9)))
+                .replaceAll("+", "-")
+                .replaceAll("/", "_")
+                .replaceAll("=", "");
+            dispatchFromCardFrame(ready.iframe, {
+                type: "oc:card:private-context-ready",
+                version: 2,
+                frameNonce: ready.frameNonce,
+                privateContext: {
+                    recipientKeyScheme: "x25519-v1",
+                    recipientPublicKey: recipientKey,
+                },
+            });
+
+            await vi.waitFor(() => expect(mocks.createAiAppCardCapability).toHaveBeenCalledOnce());
+            await vi.waitFor(() =>
+                expect(buttonNamed(view.target, "Restore app data")?.disabled).toBe(false),
+            );
+            await tick();
+            expect(
+                postedCardMessages(postMessage).filter(
+                    (message) => message.type === "oc:card:private-context-request",
+                ),
+            ).toHaveLength(1);
+            expect(view.target.textContent).not.toContain("Share app context");
         } finally {
             postMessage?.mockRestore();
             await view.cleanup();
@@ -440,7 +516,7 @@ describe("action-card external surface load consent", () => {
         }
     });
 
-    it("keeps unpaired private context behind one compact explicit action", async () => {
+    it("keeps an unpaired card public-only and leaves linking to chat settings", async () => {
         const restore = setCredentiallessSupport(true);
         mocks.privateContextAvailable = true;
         mocks.resolveActionAppForCard.mockResolvedValue({
@@ -455,22 +531,12 @@ describe("action-card external surface load consent", () => {
 
             const ready = await completeCardReadyHandshake(view.target);
             postMessage = ready.postMessage;
-            await vi.waitFor(() =>
-                expect(buttonNamed(view.target, "Share app context")).toBeDefined(),
-            );
+            await tick();
+            expect(buttonNamed(view.target, "Share app context")).toBeUndefined();
+            expect(buttonNamed(view.target, "Restore app data")).toBeUndefined();
             expect(view.target.querySelector("details")).toBeNull();
             expect(mocks.createAiAppCardCapability).not.toHaveBeenCalled();
             expect(postedMessageOfType(postMessage, "oc:card:private-context-request")).toBe(false);
-
-            buttonNamed(view.target, "Share app context")?.click();
-            await vi.waitFor(() =>
-                expect(
-                    postMessage === undefined
-                        ? false
-                        : postedMessageOfType(postMessage, "oc:card:private-context-request"),
-                ).toBe(true),
-            );
-            expect(mocks.createAiAppCardCapability).not.toHaveBeenCalled();
         } finally {
             postMessage?.mockRestore();
             await view.cleanup();
@@ -648,6 +714,536 @@ describe("action-card external surface load consent", () => {
         } finally {
             await remounted.cleanup();
             restore();
+        }
+    });
+});
+
+describe("host-initiated one-click iframe confirmation", () => {
+    it("collects only after the host Add click, grants the exact bytes, and submits without a second approval", async () => {
+        const restore = setCredentiallessSupport(true);
+        const onRespond = vi.fn();
+        const messageId = 1_200n;
+        const view = await mountCard(
+            card({ confirmPayload: undefined }),
+            messageId,
+            GROUP,
+            false,
+            onRespond,
+        );
+        let postMessage: ReturnType<typeof vi.spyOn> | undefined;
+        try {
+            await waitForResolution();
+            await vi.waitFor(() => expect(view.target.querySelector("iframe")).not.toBeNull());
+            expect(buttonNamed(view.target, "Add")).toBeUndefined();
+
+            const ready = await completeCardReadyHandshake(view.target);
+            postMessage = ready.postMessage;
+            await vi.waitFor(() => expect(buttonNamed(view.target, "Add")).toBeDefined());
+            expect(view.target.textContent).not.toContain("The app requests confirmation");
+            expect(buttonNamed(view.target, "Confirm request")).toBeUndefined();
+
+            buttonNamed(view.target, "Add")?.click();
+            await vi.waitFor(() =>
+                expect(
+                    postedCardMessages(postMessage!).some(
+                        (message) => message.type === "oc:card:collect-confirm",
+                    ),
+                ).toBe(true),
+            );
+            const collect = postedCardMessages(postMessage!).find(
+                (message) => message.type === "oc:card:collect-confirm",
+            );
+            expect(collect?.frameNonce).toBe(ready.frameNonce);
+            expect(collect?.requestNonce).toMatch(/^[A-Za-z0-9_-]{43}$/);
+            expect(mocks.createAiAppCardConfirmationGrant).not.toHaveBeenCalled();
+
+            const payload = { amount: 25, opaque_ref: "opaque-private-reference" };
+            dispatchFromCardFrame(ready.iframe, {
+                type: "oc:card:confirm-collected",
+                version: 2,
+                frameNonce: ready.frameNonce,
+                requestNonce: collect?.requestNonce,
+                payload,
+            });
+
+            const exactBytes = new TextEncoder().encode(JSON.stringify(payload));
+            await vi.waitFor(() =>
+                expect(mocks.createAiAppCardConfirmationGrant).toHaveBeenCalledOnce(),
+            );
+            expect(mocks.createAiAppCardConfirmationGrant).toHaveBeenCalledWith(
+                GROUP,
+                undefined,
+                messageId,
+                exactBytes,
+            );
+            await vi.waitFor(() => expect(onRespond).toHaveBeenCalledOnce());
+            expect(onRespond).toHaveBeenCalledWith(
+                "confirm",
+                exactBytes,
+                new Uint8Array([7, 8, 9]),
+            );
+            expect(buttonNamed(view.target, "Confirm request")).toBeUndefined();
+
+            // The host consumes the request before async grant minting; replaying an exact response
+            // cannot mint or submit a second time.
+            dispatchFromCardFrame(ready.iframe, {
+                type: "oc:card:confirm-collected",
+                version: 2,
+                frameNonce: ready.frameNonce,
+                requestNonce: collect?.requestNonce,
+                payload,
+            });
+            await tick();
+            expect(mocks.createAiAppCardConfirmationGrant).toHaveBeenCalledOnce();
+            expect(onRespond).toHaveBeenCalledOnce();
+        } finally {
+            postMessage?.mockRestore();
+            await view.cleanup();
+            restore();
+        }
+    });
+
+    it("ignores unsolicited, legacy, and wrong-challenge iframe confirms", async () => {
+        const restore = setCredentiallessSupport(true);
+        const onRespond = vi.fn();
+        const view = await mountCard(
+            card({ confirmPayload: undefined }),
+            1_201n,
+            GROUP,
+            false,
+            onRespond,
+        );
+        let postMessage: ReturnType<typeof vi.spyOn> | undefined;
+        try {
+            await waitForResolution();
+            const ready = await completeCardReadyHandshake(view.target);
+            postMessage = ready.postMessage;
+
+            dispatchFromCardFrame(ready.iframe, {
+                type: "oc:card:confirm",
+                version: 2,
+                frameNonce: ready.frameNonce,
+                payload: { amount: 999 },
+            });
+            dispatchFromCardFrame(ready.iframe, {
+                type: "oc:card:confirm-collected",
+                version: 2,
+                frameNonce: ready.frameNonce,
+                requestNonce: "A".repeat(43),
+                payload: { amount: 999 },
+            });
+            await tick();
+            expect(mocks.createAiAppCardConfirmationGrant).not.toHaveBeenCalled();
+            expect(onRespond).not.toHaveBeenCalled();
+
+            buttonNamed(view.target, "Add")?.click();
+            await vi.waitFor(() =>
+                expect(
+                    postedCardMessages(postMessage!).some(
+                        (message) => message.type === "oc:card:collect-confirm",
+                    ),
+                ).toBe(true),
+            );
+            const collect = postedCardMessages(postMessage!).find(
+                (message) => message.type === "oc:card:collect-confirm",
+            );
+            dispatchFromCardFrame(ready.iframe, {
+                type: "oc:card:confirm-collected",
+                version: 2,
+                frameNonce: ready.frameNonce,
+                requestNonce: `${collect?.requestNonce}wrong`,
+                payload: { amount: 999 },
+            });
+            await tick();
+            expect(mocks.createAiAppCardConfirmationGrant).not.toHaveBeenCalled();
+            expect(onRespond).not.toHaveBeenCalled();
+        } finally {
+            postMessage?.mockRestore();
+            await view.cleanup();
+            restore();
+        }
+    });
+
+    it("unfreezes after a rejected exact grant and permits a fresh one-click retry", async () => {
+        const restore = setCredentiallessSupport(true);
+        mocks.createAiAppCardConfirmationGrant.mockRejectedValueOnce(new Error("network rejected"));
+        const onRespond = vi.fn();
+        const view = await mountCard(
+            card({ confirmPayload: undefined }),
+            1_202n,
+            GROUP,
+            false,
+            onRespond,
+        );
+        let postMessage: ReturnType<typeof vi.spyOn> | undefined;
+        try {
+            await waitForResolution();
+            const ready = await completeCardReadyHandshake(view.target);
+            postMessage = ready.postMessage;
+
+            buttonNamed(view.target, "Add")?.click();
+            await vi.waitFor(() =>
+                expect(
+                    postedCardMessages(postMessage!).filter(
+                        (message) => message.type === "oc:card:collect-confirm",
+                    ),
+                ).toHaveLength(1),
+            );
+            const first = postedCardMessages(postMessage).find(
+                (message) => message.type === "oc:card:collect-confirm",
+            )!;
+            dispatchFromCardFrame(ready.iframe, {
+                type: "oc:card:confirm-collected",
+                version: 2,
+                frameNonce: ready.frameNonce,
+                requestNonce: first.requestNonce,
+                payload: { amount: 25 },
+            });
+            await vi.waitFor(() =>
+                expect(view.target.textContent).toContain("Confirmation failed. Try again."),
+            );
+            await vi.waitFor(() => expect(buttonNamed(view.target, "Add")?.disabled).toBe(false));
+            const busySignals = () =>
+                postedCardMessages(postMessage!)
+                    .filter((message) => message.type === "oc:card:busy")
+                    .map((message) => message.busy);
+            await vi.waitFor(() => expect(busySignals().slice(-2)).toEqual([true, false]));
+
+            mocks.createAiAppCardConfirmationGrant.mockResolvedValueOnce({
+                grant: new Uint8Array([4, 5, 6]),
+                expiresAt: BigInt(Date.now() + 60_000),
+            });
+            buttonNamed(view.target, "Add")?.click();
+            await vi.waitFor(() =>
+                expect(
+                    postedCardMessages(postMessage!).filter(
+                        (message) => message.type === "oc:card:collect-confirm",
+                    ),
+                ).toHaveLength(2),
+            );
+            const requests = postedCardMessages(postMessage).filter(
+                (message) => message.type === "oc:card:collect-confirm",
+            );
+            expect(requests[1].requestNonce).not.toBe(requests[0].requestNonce);
+            dispatchFromCardFrame(ready.iframe, {
+                type: "oc:card:confirm-collected",
+                version: 2,
+                frameNonce: ready.frameNonce,
+                requestNonce: requests[1].requestNonce,
+                payload: { amount: 25 },
+            });
+            await vi.waitFor(() => expect(onRespond).toHaveBeenCalledOnce());
+        } finally {
+            postMessage?.mockRestore();
+            await view.cleanup();
+            restore();
+        }
+    });
+
+    it("invalidates in-flight confirmation on frame reset or final card state and ignores late grants", async () => {
+        const restore = setCredentiallessSupport(true);
+        type Grant = {
+            grant: Uint8Array;
+            expiresAt: bigint;
+        };
+        let resolveOldGrant: (grant: Grant) => void = () => undefined;
+        let resolveNewGrant: (grant: Grant) => void = () => undefined;
+        mocks.createAiAppCardConfirmationGrant
+            .mockImplementationOnce(
+                () =>
+                    new Promise<Grant>((resolve) => {
+                        resolveOldGrant = resolve;
+                    }),
+            )
+            .mockImplementationOnce(
+                () =>
+                    new Promise<Grant>((resolve) => {
+                        resolveNewGrant = resolve;
+                    }),
+            );
+        const onRespond = vi.fn();
+        const view = await mountCard(
+            card({ confirmPayload: undefined }),
+            1_206n,
+            GROUP,
+            false,
+            onRespond,
+        );
+        let postMessage: ReturnType<typeof vi.spyOn> | undefined;
+        try {
+            await waitForResolution();
+            const ready = await completeCardReadyHandshake(view.target);
+            postMessage = ready.postMessage;
+
+            buttonNamed(view.target, "Add")?.click();
+            await tick();
+            const firstCollect = postedCardMessages(postMessage).find(
+                (message) => message.type === "oc:card:collect-confirm",
+            )!;
+            dispatchFromCardFrame(ready.iframe, {
+                type: "oc:card:confirm-collected",
+                version: 2,
+                frameNonce: ready.frameNonce,
+                requestNonce: firstCollect.requestNonce,
+                payload: { amount: 25 },
+            });
+            await vi.waitFor(() =>
+                expect(mocks.createAiAppCardConfirmationGrant).toHaveBeenCalledOnce(),
+            );
+
+            ready.iframe.dispatchEvent(new Event("load"));
+            await vi.waitFor(() =>
+                expect(
+                    postedCardMessages(postMessage!).some(
+                        (message) =>
+                            message.type === "oc:card:bootstrap" &&
+                            message.frameNonce !== ready.frameNonce,
+                    ),
+                ).toBe(true),
+            );
+            const nextFrameNonce = postedCardMessages(postMessage)
+                .filter((message) => message.type === "oc:card:bootstrap")
+                .at(-1)?.frameNonce;
+            dispatchFromCardFrame(ready.iframe, {
+                type: "oc:card:ready",
+                version: 2,
+                frameNonce: nextFrameNonce,
+            });
+            await vi.waitFor(() => expect(buttonNamed(view.target, "Add")?.disabled).toBe(false));
+
+            resolveOldGrant({
+                grant: new Uint8Array([1, 2, 3]),
+                expiresAt: BigInt(Date.now() + 60_000),
+            });
+            await tick();
+            expect(onRespond).not.toHaveBeenCalled();
+
+            buttonNamed(view.target, "Add")?.click();
+            await vi.waitFor(() =>
+                expect(
+                    postedCardMessages(postMessage!).filter(
+                        (message) => message.type === "oc:card:collect-confirm",
+                    ),
+                ).toHaveLength(2),
+            );
+            const secondCollect = postedCardMessages(postMessage)
+                .filter((message) => message.type === "oc:card:collect-confirm")
+                .at(-1)!;
+            dispatchFromCardFrame(ready.iframe, {
+                type: "oc:card:confirm-collected",
+                version: 2,
+                frameNonce: nextFrameNonce,
+                requestNonce: secondCollect.requestNonce,
+                payload: { amount: 30 },
+            });
+            await vi.waitFor(() =>
+                expect(mocks.createAiAppCardConfirmationGrant).toHaveBeenCalledTimes(2),
+            );
+
+            view.contentStore.set(card({ confirmPayload: undefined, state: "cancelled" }));
+            await tick();
+            expect(view.target.textContent).toContain("cancelled");
+            resolveNewGrant({
+                grant: new Uint8Array([4, 5, 6]),
+                expiresAt: BigInt(Date.now() + 60_000),
+            });
+            await tick();
+            expect(onRespond).not.toHaveBeenCalled();
+        } finally {
+            postMessage?.mockRestore();
+            await view.cleanup();
+            restore();
+        }
+    });
+
+    it("bounds a never-settling grant, unfreezes the frame, and allows a fresh retry", async () => {
+        const restore = setCredentiallessSupport(true);
+        mocks.createAiAppCardConfirmationGrant.mockImplementationOnce(
+            () => new Promise(() => undefined),
+        );
+        const onRespond = vi.fn();
+        const view = await mountCard(
+            card({ confirmPayload: undefined }),
+            1_204n,
+            GROUP,
+            false,
+            onRespond,
+        );
+        let postMessage: ReturnType<typeof vi.spyOn> | undefined;
+        try {
+            await waitForResolution();
+            const ready = await completeCardReadyHandshake(view.target);
+            postMessage = ready.postMessage;
+            vi.useFakeTimers();
+
+            buttonNamed(view.target, "Add")?.click();
+            await tick();
+            const first = postedCardMessages(postMessage).find(
+                (message) => message.type === "oc:card:collect-confirm",
+            )!;
+            dispatchFromCardFrame(ready.iframe, {
+                type: "oc:card:confirm-collected",
+                version: 2,
+                frameNonce: ready.frameNonce,
+                requestNonce: first.requestNonce,
+                payload: { amount: 25 },
+            });
+            await vi.advanceTimersByTimeAsync(0);
+            expect(mocks.createAiAppCardConfirmationGrant).toHaveBeenCalledOnce();
+
+            await vi.advanceTimersByTimeAsync(30_000);
+            await tick();
+            expect(view.target.textContent).toContain("Confirmation failed. Try again.");
+            expect(buttonNamed(view.target, "Add")?.disabled).toBe(false);
+            expect(
+                postedCardMessages(postMessage)
+                    .filter((message) => message.type === "oc:card:busy")
+                    .map((message) => message.busy)
+                    .slice(-2),
+            ).toEqual([true, false]);
+
+            vi.useRealTimers();
+            mocks.createAiAppCardConfirmationGrant.mockResolvedValueOnce({
+                grant: new Uint8Array([4, 5, 6]),
+                expiresAt: BigInt(Date.now() + 60_000),
+            });
+            buttonNamed(view.target, "Add")?.click();
+            await vi.waitFor(() =>
+                expect(
+                    postedCardMessages(postMessage!).filter(
+                        (message) => message.type === "oc:card:collect-confirm",
+                    ),
+                ).toHaveLength(2),
+            );
+            const requests = postedCardMessages(postMessage).filter(
+                (message) => message.type === "oc:card:collect-confirm",
+            );
+            expect(requests[1].requestNonce).not.toBe(requests[0].requestNonce);
+            dispatchFromCardFrame(ready.iframe, {
+                type: "oc:card:confirm-collected",
+                version: 2,
+                frameNonce: ready.frameNonce,
+                requestNonce: requests[1].requestNonce,
+                payload: { amount: 25 },
+            });
+            await vi.waitFor(() => expect(onRespond).toHaveBeenCalledOnce());
+        } finally {
+            vi.useRealTimers();
+            postMessage?.mockRestore();
+            await view.cleanup();
+            restore();
+        }
+    });
+
+    it("bounds a never-settling submission and permits a fresh host-owned retry", async () => {
+        const restore = setCredentiallessSupport(true);
+        const onRespond = vi
+            .fn()
+            .mockImplementationOnce(() => new Promise(() => undefined))
+            .mockResolvedValueOnce(undefined);
+        const view = await mountCard(
+            card({ confirmPayload: undefined }),
+            1_205n,
+            GROUP,
+            false,
+            onRespond,
+        );
+        let postMessage: ReturnType<typeof vi.spyOn> | undefined;
+        try {
+            await waitForResolution();
+            const ready = await completeCardReadyHandshake(view.target);
+            postMessage = ready.postMessage;
+            vi.useFakeTimers();
+
+            buttonNamed(view.target, "Add")?.click();
+            await tick();
+            const first = postedCardMessages(postMessage).find(
+                (message) => message.type === "oc:card:collect-confirm",
+            )!;
+            dispatchFromCardFrame(ready.iframe, {
+                type: "oc:card:confirm-collected",
+                version: 2,
+                frameNonce: ready.frameNonce,
+                requestNonce: first.requestNonce,
+                payload: { amount: 25 },
+            });
+            await vi.advanceTimersByTimeAsync(0);
+            expect(onRespond).toHaveBeenCalledOnce();
+
+            await vi.advanceTimersByTimeAsync(30_000);
+            await tick();
+            expect(view.target.textContent).toContain("Confirmation failed. Try again.");
+            expect(buttonNamed(view.target, "Add")?.disabled).toBe(false);
+
+            vi.useRealTimers();
+            buttonNamed(view.target, "Add")?.click();
+            await vi.waitFor(() =>
+                expect(
+                    postedCardMessages(postMessage!).filter(
+                        (message) => message.type === "oc:card:collect-confirm",
+                    ),
+                ).toHaveLength(2),
+            );
+            const requests = postedCardMessages(postMessage).filter(
+                (message) => message.type === "oc:card:collect-confirm",
+            );
+            dispatchFromCardFrame(ready.iframe, {
+                type: "oc:card:confirm-collected",
+                version: 2,
+                frameNonce: ready.frameNonce,
+                requestNonce: requests[1].requestNonce,
+                payload: { amount: 25 },
+            });
+            await vi.waitFor(() => expect(onRespond).toHaveBeenCalledTimes(2));
+        } finally {
+            vi.useRealTimers();
+            postMessage?.mockRestore();
+            await view.cleanup();
+            restore();
+        }
+    });
+
+    it("unfreezes after a silent frame timeout and starts retry with a fresh challenge", async () => {
+        const restoreCredentialless = setCredentiallessSupport(true);
+        const view = await mountCard(card({ confirmPayload: undefined }), 1_203n);
+        let postMessage: ReturnType<typeof vi.spyOn> | undefined;
+        try {
+            await waitForResolution();
+            const ready = await completeCardReadyHandshake(view.target);
+            postMessage = ready.postMessage;
+            vi.useFakeTimers();
+
+            buttonNamed(view.target, "Add")?.click();
+            await tick();
+            const firstRequests = postedCardMessages(postMessage).filter(
+                (message) => message.type === "oc:card:collect-confirm",
+            );
+            expect(firstRequests).toHaveLength(1);
+            expect(view.target.querySelector<HTMLButtonElement>("button.confirm")?.disabled).toBe(
+                true,
+            );
+
+            vi.advanceTimersByTime(5_000);
+            await tick();
+            expect(view.target.textContent).toContain("The app did not return valid card values");
+            expect(buttonNamed(view.target, "Add")?.disabled).toBe(false);
+            const busySignals = postedCardMessages(postMessage)
+                .filter((message) => message.type === "oc:card:busy")
+                .map((message) => message.busy);
+            expect(busySignals.slice(-2)).toEqual([true, false]);
+
+            buttonNamed(view.target, "Add")?.click();
+            await tick();
+            const requests = postedCardMessages(postMessage).filter(
+                (message) => message.type === "oc:card:collect-confirm",
+            );
+            expect(requests).toHaveLength(2);
+            expect(requests[1].requestNonce).not.toBe(requests[0].requestNonce);
+        } finally {
+            vi.useRealTimers();
+            postMessage?.mockRestore();
+            await view.cleanup();
+            restoreCredentialless();
         }
     });
 });

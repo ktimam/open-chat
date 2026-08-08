@@ -2,11 +2,14 @@ import { describe, expect, test, vi } from "vitest";
 import {
     buildCardBusy,
     buildCardBootstrap,
+    buildCardCollectConfirm,
     buildCardPrivateContextRequest,
     buildCardInit,
+    beginCardCollectAttempt,
     beginCardConfirmationAttempt,
     beginCardCapabilityAttempt,
     cardAttemptKey,
+    cardCollectAttemptStillCurrent,
     cardConfirmationAttemptStillCurrent,
     cardCapabilityAttemptStillCurrent,
     canAcceptCardPrivateContextReady,
@@ -14,6 +17,7 @@ import {
     canonicalCardApprovalSummary,
     cardResponseForApproval,
     cardApprovalRequestFromMessage,
+    cardCollectedConfirmFromMessage,
     cardResizeHeightFromMessage,
     clampCardHeight,
     completelyReverseMapRows,
@@ -31,7 +35,9 @@ import {
     normalizeAiAppSurfaceUrl,
     reverseMapRows,
     snapshotCardConfirmPayload,
+    settleCardOperationBeforeTimeout,
     startCardBootstrapRetry,
+    startCardCollectTimeout,
     startCardHandshakeTimeout,
     supportsCredentiallessIframe,
     visibleRows,
@@ -715,6 +721,133 @@ describe("host-owned card approval", () => {
             ),
         ).toBe(false);
         expect(cardConfirmationAttemptStillCurrent(attempt, binding, false)).toBe(false);
+    });
+
+    test("binds host-initiated payload collection to one fresh request and the current card", () => {
+        const cardKey = cardAttemptKey({
+            viewerId: "viewer-a",
+            chat: { kind: "channel", communityId: "community", channelId: 7 },
+            messageId: 99n,
+            appId: 5,
+            appRevision: 12n,
+            actionId: "sample.confirm",
+        });
+        const binding = {
+            frameNonce: "frame-a",
+            requestNonce: "request-a",
+            cardKey,
+        };
+        const attempt = beginCardCollectAttempt(undefined, binding)!;
+
+        expect(buildCardCollectConfirm("frame-a", "request-a")).toEqual({
+            type: "oc:card:collect-confirm",
+            version: 2,
+            frameNonce: "frame-a",
+            requestNonce: "request-a",
+        });
+        expect(beginCardCollectAttempt(attempt, binding)).toBeUndefined();
+        expect(cardCollectAttemptStillCurrent(attempt, binding, true)).toBe(true);
+        expect(
+            cardCollectAttemptStillCurrent(
+                attempt,
+                { ...binding, requestNonce: "unsolicited-or-replayed" },
+                true,
+            ),
+        ).toBe(false);
+        expect(
+            cardCollectAttemptStillCurrent(
+                attempt,
+                { ...binding, frameNonce: "after-navigation" },
+                true,
+            ),
+        ).toBe(false);
+        expect(
+            cardCollectAttemptStillCurrent(
+                attempt,
+                { ...binding, cardKey: `${cardKey}-other` },
+                true,
+            ),
+        ).toBe(false);
+        expect(cardCollectAttemptStillCurrent(attempt, binding, false)).toBe(false);
+    });
+
+    test("accepts collected bytes only for the exact active host-click challenge", () => {
+        const message = {
+            type: "oc:card:confirm-collected",
+            version: 2,
+            frameNonce: "frame-a",
+            requestNonce: "request-a",
+            payload: { amount: 5, opaque_ref: "opaque" },
+        };
+        expect(cardCollectedConfirmFromMessage(message, "frame-a", "request-a")).toEqual({
+            amount: 5,
+            opaque_ref: "opaque",
+        });
+        expect(
+            cardCollectedConfirmFromMessage(message, "frame-a", "wrong-request"),
+        ).toBeUndefined();
+        expect(
+            cardCollectedConfirmFromMessage(message, "wrong-frame", "request-a"),
+        ).toBeUndefined();
+        expect(
+            cardCollectedConfirmFromMessage(
+                { ...message, type: "oc:card:confirm" },
+                "frame-a",
+                "request-a",
+            ),
+        ).toBeUndefined();
+        expect(
+            cardCollectedConfirmFromMessage({ ...message, version: 1 }, "frame-a", "request-a"),
+        ).toBeUndefined();
+    });
+
+    test("collection timeout is cancellable and cannot fire after completion", () => {
+        vi.useFakeTimers();
+        try {
+            const timedOut = vi.fn();
+            const cancel = startCardCollectTimeout(timedOut, 50);
+            vi.advanceTimersByTime(49);
+            expect(timedOut).not.toHaveBeenCalled();
+            cancel();
+            vi.advanceTimersByTime(1);
+            expect(timedOut).not.toHaveBeenCalled();
+
+            startCardCollectTimeout(timedOut, 50);
+            vi.advanceTimersByTime(50);
+            expect(timedOut).toHaveBeenCalledOnce();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    test("bounds card operations and converts throws or rejection into a fail-closed result", async () => {
+        expect(await settleCardOperationBeforeTimeout(() => "ok", 50)).toEqual({
+            status: "settled",
+            value: "ok",
+        });
+        await expect(
+            settleCardOperationBeforeTimeout(() => {
+                throw new Error("synchronous failure");
+            }, 50),
+        ).resolves.toEqual({ status: "failed" });
+        await expect(
+            settleCardOperationBeforeTimeout(
+                () => Promise.reject(new Error("asynchronous failure")),
+                50,
+            ),
+        ).resolves.toEqual({ status: "failed" });
+
+        vi.useFakeTimers();
+        try {
+            const neverSettles = settleCardOperationBeforeTimeout(
+                () => new Promise(() => undefined),
+                50,
+            );
+            await vi.advanceTimersByTimeAsync(50);
+            await expect(neverSettles).resolves.toEqual({ status: "failed" });
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     test("rejects non-JSON, prototype-polluting, deep, and oversized payloads", () => {
