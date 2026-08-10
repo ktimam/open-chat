@@ -151,11 +151,13 @@ async function mountCard(
     const target = document.createElement("div");
     document.body.append(target);
     const contentStore = writable(initialContent);
+    const reconciliationStore = writable(false);
     const chatIdStore = writable(chatId);
     const component = mount(ActionCardContentHarness, {
         target,
         props: {
             contentStore,
+            reconciliationStore,
             readonly,
             chatIdStore,
             messageId,
@@ -177,6 +179,7 @@ async function mountCard(
         target,
         component,
         contentStore,
+        reconciliationStore,
         chatIdStore,
         async cleanup() {
             await unmount(component);
@@ -187,6 +190,10 @@ async function mountCard(
 
 async function waitForResolution(): Promise<void> {
     await vi.waitFor(() => expect(mocks.resolveActionAppForCard).toHaveBeenCalled());
+    // Resolution is deliberately wrapped in the shared finite-settlement guard. Let its promise
+    // chain publish the resulting identity before callers inspect the frame/chrome.
+    await tick();
+    await tick();
 }
 
 async function completeCardReadyHandshake(target: HTMLElement): Promise<{
@@ -676,9 +683,14 @@ describe("action-card external surface load consent", () => {
         }
     });
 
-    it("renders a trusted multi-entry summary as one classic stored-payload confirmation", async () => {
+    it("restores the verified sender's multi-entry payload in one editable app card", async () => {
         const restore = setCredentiallessSupport(true);
         const onRespond = vi.fn().mockResolvedValue(true);
+        const messageId = 1_103n;
+        mocks.resolveActionAppForCard.mockResolvedValueOnce({
+            ...RESOLVED_APP,
+            hasPersistentUserPairing: false,
+        });
         const view = await mountCard(
             card({
                 title: "Add 2 entries",
@@ -687,54 +699,205 @@ describe("action-card external surface load consent", () => {
                     { label: "Entry 2", value: "Charge · 10 EGP" },
                 ],
                 confirmPayload: new TextEncoder().encode('[{"amount":25},{"amount":10}]'),
-                disclosure: "I reviewed these entries.",
             }),
-            1_103n,
+            messageId,
             GROUP,
             false,
             onRespond,
         );
+        let postMessage: ReturnType<typeof vi.spyOn> | undefined;
         try {
             await waitForResolution();
-            await vi.waitFor(() =>
-                expect(view.target.textContent).toContain("Settlement · 25 EGP"),
-            );
-
-            expect(view.target.querySelector("iframe")).toBeNull();
+            await vi.waitFor(() => expect(view.target.querySelectorAll("iframe")).toHaveLength(1));
             expect(view.target.querySelector(".action-card")?.classList.contains("has-frame")).toBe(
-                false,
+                true,
             );
-            expect(buttonNamed(view.target, "Load app card")).toBeUndefined();
-            expect(view.target.textContent).not.toContain("Security details");
-            expect(view.target.querySelector(".card-url")?.textContent?.trim()).toBe(CARD_URL);
-            expect(view.target.querySelector<HTMLImageElement>(".app-icon")?.src).toBe(
-                RESOLVED_APP.identity.iconUrl,
-            );
-            expect(view.target.querySelector(".title")?.textContent?.trim()).toBe("Add 2 entries");
-            expect(
-                Array.from(view.target.querySelectorAll("table.rows tbody tr")).map((row) => ({
-                    label: row.querySelector(".label")?.textContent?.trim(),
-                    value: row.querySelector(".value")?.textContent?.trim(),
-                })),
-            ).toEqual([
-                { label: "Entry 1", value: "Settlement · 25 EGP" },
-                { label: "Entry 2", value: "Charge · 10 EGP" },
-            ]);
+            const ready = await completeCardReadyHandshake(view.target);
+            postMessage = ready.postMessage;
+            const init = (postMessage.mock.calls as unknown[][])
+                .map(([message]) => message as { type?: string; data?: unknown })
+                .find((message) => message.type === "oc:card:init");
+            expect(init?.data).toEqual({ entries: [{ amount: 25 }, { amount: 10 }] });
 
-            expect(buttonNamed(view.target, "Add")?.disabled).toBe(true);
-            const disclosure =
-                view.target.querySelector<HTMLInputElement>('input[type="checkbox"]');
-            expect(disclosure).not.toBeNull();
-            disclosure?.click();
-            await tick();
-            expect(buttonNamed(view.target, "Add")?.disabled).toBe(false);
+            await vi.waitFor(() => expect(buttonNamed(view.target, "Add")?.disabled).toBe(false));
             buttonNamed(view.target, "Add")?.click();
+            await vi.waitFor(() =>
+                expect(
+                    postedCardMessages(postMessage!).filter(
+                        (message) => message.type === "oc:card:collect-confirm",
+                    ),
+                ).toHaveLength(1),
+            );
+            const collect = postedCardMessages(postMessage).find(
+                (message) => message.type === "oc:card:collect-confirm",
+            );
+            const editedPayload = [
+                { amount: 26, note: "edited first" },
+                { amount: 11, note: "edited second" },
+            ];
+            dispatchFromCardFrame(ready.iframe, {
+                type: "oc:card:confirm-collected",
+                version: 2,
+                frameNonce: ready.frameNonce,
+                requestNonce: collect?.requestNonce,
+                payload: editedPayload,
+            });
+
+            const exactBytes = new TextEncoder().encode(JSON.stringify(editedPayload));
+            await vi.waitFor(() =>
+                expect(mocks.createAiAppCardConfirmationGrant).toHaveBeenCalledOnce(),
+            );
+            expect(mocks.createAiAppCardConfirmationGrant).toHaveBeenCalledWith(
+                GROUP,
+                undefined,
+                messageId,
+                exactBytes,
+            );
             await vi.waitFor(() => expect(onRespond).toHaveBeenCalledOnce());
-            expect(onRespond).toHaveBeenCalledWith("confirm", undefined, undefined);
-            await vi.waitFor(() => expect(buttonNamed(view.target, "Add")?.disabled).toBe(true));
+            expect(onRespond).toHaveBeenCalledWith(
+                "confirm",
+                exactBytes,
+                new Uint8Array([7, 8, 9]),
+            );
+        } finally {
+            postMessage?.mockRestore();
+            await view.cleanup();
+            restore();
+        }
+    });
+
+    it("reconstructs a received or reloaded canonical multi card as one editable app card", async () => {
+        const restore = setCredentiallessSupport(true);
+        const onRespond = vi.fn().mockResolvedValue(true);
+        mocks.resolveActionAppForCard.mockResolvedValueOnce({
+            ...RESOLVED_APP,
+            hasPersistentUserPairing: false,
+            cardSurface: {
+                ...RESOLVED_APP.cardSurface,
+                labelToField: {
+                    Amount: "amount",
+                    Currency: "currency",
+                    Type: "kind",
+                    Direction: "direction",
+                    Date: "date",
+                    Note: "note",
+                },
+            },
+        });
+        const view = await mountCard(
+            card({
+                title: "Add to IOU (2 entries)",
+                rows: [
+                    {
+                        label: "Entry 1",
+                        value: "Amount: 200 · Type: iou · Direction: credit · Note: uber",
+                    },
+                    {
+                        label: "Entry 2",
+                        value: "Amount: 400 · Currency: EGP · Type: settlement · Direction: debt · Note: food",
+                    },
+                ],
+                confirmPayload: undefined,
+            }),
+            1_106n,
+            GROUP,
+            false,
+            onRespond,
+        );
+        let postMessage: ReturnType<typeof vi.spyOn> | undefined;
+        try {
+            await waitForResolution();
+            await vi.waitFor(() => expect(view.target.querySelectorAll("iframe")).toHaveLength(1));
+            const ready = await completeCardReadyHandshake(view.target);
+            postMessage = ready.postMessage;
+            const init = (postMessage.mock.calls as unknown[][])
+                .map(([message]) => message as { type?: string; data?: unknown })
+                .find((message) => message.type === "oc:card:init");
+            expect(init?.data).toEqual({
+                entries: [
+                    { amount: "200", kind: "iou", direction: "credit", note: "uber" },
+                    {
+                        amount: "400",
+                        currency: "EGP",
+                        kind: "settlement",
+                        direction: "debt",
+                        note: "food",
+                    },
+                ],
+            });
+            expect(view.target.textContent).not.toContain("Entry 1\t");
+
+            await vi.waitFor(() => expect(buttonNamed(view.target, "Add")?.disabled).toBe(false));
             buttonNamed(view.target, "Add")?.click();
+            await vi.waitFor(() =>
+                expect(
+                    postedCardMessages(postMessage!).filter(
+                        (message) => message.type === "oc:card:collect-confirm",
+                    ),
+                ).toHaveLength(1),
+            );
+            const collect = postedCardMessages(postMessage).find(
+                (message) => message.type === "oc:card:collect-confirm",
+            );
+            const editedPayload = [
+                { amount: 210, kind: "iou", direction: "credit", note: "edited uber" },
+                {
+                    amount: 410,
+                    currency: "EGP",
+                    kind: "settlement",
+                    direction: "debt",
+                    note: "edited food",
+                },
+            ];
+            dispatchFromCardFrame(ready.iframe, {
+                type: "oc:card:confirm-collected",
+                version: 2,
+                frameNonce: ready.frameNonce,
+                requestNonce: collect?.requestNonce,
+                payload: editedPayload,
+            });
+
+            const exactBytes = new TextEncoder().encode(JSON.stringify(editedPayload));
+            await vi.waitFor(() =>
+                expect(mocks.createAiAppCardConfirmationGrant).toHaveBeenCalledOnce(),
+            );
+            expect(mocks.createAiAppCardConfirmationGrant).toHaveBeenCalledWith(
+                GROUP,
+                undefined,
+                1_106n,
+                exactBytes,
+            );
+            await vi.waitFor(() => expect(onRespond).toHaveBeenCalledOnce());
+            expect(onRespond).toHaveBeenCalledWith(
+                "confirm",
+                exactBytes,
+                new Uint8Array([7, 8, 9]),
+            );
+        } finally {
+            postMessage?.mockRestore();
+            await view.cleanup();
+            restore();
+        }
+    });
+
+    it("shows a stable neutral shell instead of unverified sender content before acknowledgement", async () => {
+        const restore = setCredentiallessSupport(true);
+        const view = await mountCard(
+            card({
+                appVerified: false,
+                appContentVerified: false,
+                appProvenance: new Uint8Array([1, 2, 3]),
+            }),
+            1_022n,
+        );
+        try {
             await tick();
-            expect(onRespond).toHaveBeenCalledOnce();
+            expect(view.target.querySelector(".action-card.pending-verification")).not.toBeNull();
+            expect(view.target.textContent).toContain("Preparing verified card");
+            expect(view.target.textContent).not.toContain("Unverified card binding");
+            expect(view.target.textContent).not.toContain("Untrusted card text");
+            expect(view.target.textContent).not.toContain("Add entry");
+            expect(view.target.textContent).not.toContain("25");
         } finally {
             await view.cleanup();
             restore();
@@ -750,7 +913,9 @@ describe("action-card external surface load consent", () => {
                     { label: "Entry 1", value: "Settlement Â· 25 EGP" },
                     { label: "Entry 2", value: "Charge Â· 10 EGP" },
                 ],
-                confirmPayload: new TextEncoder().encode('[{"amount":25},{"amount":10}]'),
+                // Received/reloaded cards intentionally do not hydrate the sender-only payload,
+                // so they retain the host-owned stored-card confirmation path.
+                confirmPayload: undefined,
             }),
             1_104n,
             GROUP,
@@ -904,6 +1069,60 @@ describe("action-card external surface load consent", () => {
             expect(buttonNamed(view.target, "Load app card")).toBeUndefined();
         } finally {
             await view.cleanup();
+            restore();
+        }
+    });
+
+    it("re-evaluates an in-place trust mutation on the authoritative edge without remounting", async () => {
+        const restore = setCredentiallessSupport(true);
+        const optimistic = card({ appVerified: false, appContentVerified: false });
+        const view = await mountCard(optimistic, 1_018n);
+        try {
+            await tick();
+            const mountedCard = view.target.querySelector(".action-card");
+            expect(mountedCard).not.toBeNull();
+            expect(mocks.resolveActionAppForCard).not.toHaveBeenCalled();
+            expect(view.target.querySelector("iframe")).toBeNull();
+
+            optimistic.appVerified = true;
+            optimistic.appContentVerified = true;
+            view.reconciliationStore.set(true);
+            await waitForResolution();
+            await vi.waitFor(() => expect(view.target.querySelectorAll("iframe")).toHaveLength(1));
+
+            expect(view.target.querySelector(".action-card")).toBe(mountedCard);
+        } finally {
+            await view.cleanup();
+            restore();
+        }
+    });
+
+    it("bounds a hung app lookup and lets an explicit verification retry resolve", async () => {
+        const restore = setCredentiallessSupport(true);
+        mocks.resolveActionAppForCard
+            .mockImplementationOnce(() => new Promise(() => undefined))
+            .mockResolvedValueOnce(RESOLVED_APP);
+        vi.useFakeTimers();
+        const view = await mountCard(card(), 1_019n);
+        try {
+            expect(mocks.resolveActionAppForCard).toHaveBeenCalledOnce();
+            expect(view.target.textContent).toContain("Verifying app identity");
+
+            await vi.advanceTimersByTimeAsync(30_000);
+            await tick();
+            expect(view.target.textContent).not.toContain("Verifying app identity");
+            const retry = buttonNamed(view.target, "Retry verification");
+            expect(retry).toBeDefined();
+
+            retry?.click();
+            await vi.advanceTimersByTimeAsync(0);
+            await tick();
+            await tick();
+            expect(mocks.resolveActionAppForCard).toHaveBeenCalledTimes(2);
+            expect(view.target.querySelectorAll("iframe")).toHaveLength(1);
+        } finally {
+            await view.cleanup();
+            vi.useRealTimers();
             restore();
         }
     });

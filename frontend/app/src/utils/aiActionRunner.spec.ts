@@ -1759,6 +1759,8 @@ describe("both ChatMessage trees run the SHARED propose flow", () => {
         expect(src).toContain(
             "{#if onRunAiAction !== undefined && confirmed && !inert && !failed}",
         );
+        expect(src).toContain("<MenuItem onclick={() => onRunAiAction()}> ".trim());
+        expect(src).not.toContain("<MenuItem onclick={onRunAiAction}>");
     });
 
     it("mobile keeps a visible working surface after the suggestion chip is dismissed", () => {

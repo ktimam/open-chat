@@ -1125,6 +1125,7 @@ mod ai_app_user_deletion_tests {
                     AiAppChatLinkToken {
                         user_id,
                         chat,
+                        chat_name: "Household".to_string(),
                         app_id: app.id,
                         app_revision: app.updated,
                         app_canister_id,

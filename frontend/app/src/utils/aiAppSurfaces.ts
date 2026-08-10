@@ -15,6 +15,7 @@ import { openExternalUrl } from "./urls";
 export type AiAppSurfaceDataDisclosure =
     | "app_id"
     | "one_time_chat_link_token"
+    | "chat_display_name"
     | "chat_id"
     | "direct_participant_ids";
 
@@ -225,11 +226,13 @@ export async function createChatLinkSurfaceOpening(
     client: OpenChat,
     app: AiAppRegistration,
     chatId: ChatIdentifier,
+    chatName: string,
 ): Promise<ChatLinkSurfaceOpening | undefined> {
     const descriptor = chatLinkDescriptor(app);
     if (descriptor === undefined) return undefined;
     const minted = await client.createAiAppChatLinkToken(
         chatId,
+        chatName,
         descriptor.appId,
         descriptor.appRevision,
     );
@@ -258,7 +261,10 @@ export async function createChatLinkSurfaceOpening(
         app: descriptor.app,
         surface: descriptor.surface,
         url,
-        dataDisclosures: surfaceDataDisclosures(descriptor.template),
+        dataDisclosures: [
+            ...surfaceDataDisclosures(descriptor.template),
+            "chat_display_name",
+        ],
         chatLinkToken: minted.token.slice(),
         expiresAt: minted.expiresAt,
     };

@@ -24,6 +24,8 @@
                 return "the registered app identifier";
             case "one_time_chat_link_token":
                 return "an expiring one-time token scoped to this chat";
+            case "chat_display_name":
+                return "the chat name currently shown in OpenChat";
             case "chat_id":
                 return "a stable chat identifier";
             case "direct_participant_ids":
@@ -40,7 +42,7 @@
     <summary>Privacy details</summary>
     <div class="privacy-details">
         {#if dataDisclosures.length > 0}
-            <span>The destination URL shares:</span>
+            <span>Opening this setup shares:</span>
             <ul>
                 {#each dataDisclosures as disclosure (disclosure)}
                     <li>{label(disclosure)}</li>
@@ -49,8 +51,8 @@
         {/if}
         {#if requestLoggedDisclosures.length > 0}
             <span>
-                The stable identifiers above can appear in the external app's request logs.
-                OpenChat sends no referrer.
+                The non-token values above are shared with the external app only after it redeems
+                the token. OpenChat sends no referrer.
             </span>
         {/if}
         {#if hasOneTimeToken}

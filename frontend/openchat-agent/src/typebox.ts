@@ -8850,6 +8850,7 @@ export const UserCreateAiAppCardConfirmationGrantResponse =
 export type UserCreateAiAppChatLinkTokenArgs = Static<typeof UserCreateAiAppChatLinkTokenArgs>;
 export const UserCreateAiAppChatLinkTokenArgs = Type.Object({
     user_id: UserId,
+    chat_name: Type.String(),
     app_id: Type.Number(),
     app_revision: Type.BigInt(),
 });

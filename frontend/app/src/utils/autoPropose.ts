@@ -228,7 +228,7 @@ function invalidateAutoProposeRuntime(): void {
 
 /**
  * Revoke all captured/private-derived work without resetting stream watermarks. Keeping the active
- * boundaries is essential: turning consent back on must not backfill texts seen while it was off.
+ * boundaries is essential: reconnecting, enabling, or unmuting must not backfill earlier texts.
  */
 export function revokePrivateAutoProposeRuntime(): void {
     evaluationGeneration += 1;

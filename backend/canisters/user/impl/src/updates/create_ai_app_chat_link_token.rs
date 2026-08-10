@@ -50,11 +50,15 @@ fn prepare(args: &Args, state: &RuntimeState) -> Result<Prepared, Response> {
     if args.user_id == user_id || !state.data.direct_chats.exists(&args.user_id.into()) {
         return Err(ChatNotFound);
     }
+    if !types::is_valid_ai_app_chat_name(&args.chat_name) {
+        return Err(InvalidRequest("chat_name is missing or invalid".to_string()));
+    }
     Ok(Prepared {
         local_user_index_canister_id: state.data.local_user_index_canister_id,
         relay_args: relay::Args {
             user_id,
             chat: Chat::Direct(args.user_id.into()),
+            chat_name: args.chat_name.clone(),
             app_id: args.app_id,
             app_revision: args.app_revision,
             member_user_ids: vec![user_id, args.user_id],
@@ -70,6 +74,7 @@ fn revalidate(prepared: &Prepared, state: &RuntimeState) -> Result<(), Response>
     let other_user_id: types::UserId = other.into();
     if state.data.local_user_index_canister_id != prepared.local_user_index_canister_id
         || types::UserId::from(state.env.canister_id()) != prepared.relay_args.user_id
+        || !types::is_valid_ai_app_chat_name(&prepared.relay_args.chat_name)
         || !state.data.direct_chats.exists(&other_user_id.into())
     {
         return Err(NotAuthorized);

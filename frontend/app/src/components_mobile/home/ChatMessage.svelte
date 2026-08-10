@@ -1017,6 +1017,7 @@
                                     {undeleting}
                                     {intersecting}
                                     {failed}
+                                    reconciliationTrigger={confirmed}
                                     {timestamp}
                                     messageIndex={msg.messageIndex}
                                     messageId={msg.messageId}

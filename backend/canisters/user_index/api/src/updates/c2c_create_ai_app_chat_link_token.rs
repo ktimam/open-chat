@@ -6,6 +6,7 @@ use types::{AiAppId, Chat, TimestampMillis, UserId};
 pub struct Args {
     pub user_id: UserId,
     pub chat: Chat,
+    pub chat_name: String,
     pub app_id: AiAppId,
     pub app_revision: TimestampMillis,
     #[serde(default)]

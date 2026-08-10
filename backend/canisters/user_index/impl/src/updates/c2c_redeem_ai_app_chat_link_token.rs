@@ -107,6 +107,7 @@ fn success_result(token: &AiAppChatLinkToken) -> SuccessResult {
         app_user_key_version: token.app_user_key_version,
         chat_handle: ByteBuf::from(token.chat_handle.to_vec()),
         chat_handle_version: CHAT_HANDLE_VERSION_V1,
+        chat_name: types::is_valid_ai_app_chat_name(&token.chat_name).then(|| token.chat_name.clone()),
     }
 }
 
@@ -236,6 +237,7 @@ mod tests {
                 AiAppChatLinkToken {
                     user_id,
                     chat,
+                    chat_name: "Household".to_string(),
                     app_id: app.id,
                     app_revision: app.updated,
                     app_canister_id: app_canister,

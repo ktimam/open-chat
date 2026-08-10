@@ -119,6 +119,7 @@ fn prepare(args: &Args, state: &mut RuntimeState) -> Result<Prepared, oc_error_c
         relay_args: relay::Args {
             user_id,
             chat: Chat::Group(state.env.canister_id().into()),
+            chat_name: state.data.chat.name.value.clone(),
             app_id: args.app_id,
             app_revision: args.app_revision,
             member_user_ids: vec![user_id],
@@ -139,6 +140,7 @@ fn revalidate(prepared: &Prepared, state: &RuntimeState) -> Result<(), oc_error_
     if state.data.local_user_index_canister_id != prepared.local_user_index_canister_id
         || state.data.group_index_canister_id != prepared.group_index_canister_id
         || state.get_calling_member(true)?.user_id() != prepared.relay_args.user_id
+        || state.data.chat.name.value != prepared.relay_args.chat_name
         || !state.data.enabled_ai_apps.contains(&prepared.relay_args.app_id)
     {
         return Err(oc_error_codes::OCErrorCode::InitiatorNotAuthorized

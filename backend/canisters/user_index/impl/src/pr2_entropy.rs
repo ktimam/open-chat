@@ -220,6 +220,7 @@ mod tests {
                 AiAppChatLinkToken {
                     user_id,
                     chat: context.chat,
+                    chat_name: "Household".to_string(),
                     app_id: 7,
                     app_revision: 11,
                     app_canister_id: candid::Principal::from_slice(&[9]),
@@ -259,6 +260,7 @@ mod tests {
                 AiAppChatLinkToken {
                     user_id,
                     chat: context.chat,
+                    chat_name: "Household".to_string(),
                     app_id: 7,
                     app_revision: 11,
                     app_canister_id: candid::Principal::from_slice(&[9]),

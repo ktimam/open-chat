@@ -5,6 +5,7 @@
 
     interface Props {
         contentStore: Writable<ActionCardContent>;
+        reconciliationStore: Writable<boolean>;
         readonly: boolean;
         chatIdStore: Writable<ChatIdentifier>;
         messageId: bigint;
@@ -16,11 +17,20 @@
         ) => boolean | Promise<boolean>;
     }
 
-    let { contentStore, readonly, chatIdStore, messageId, viewerId, onRespond }: Props = $props();
+    let {
+        contentStore,
+        reconciliationStore,
+        readonly,
+        chatIdStore,
+        messageId,
+        viewerId,
+        onRespond,
+    }: Props = $props();
 </script>
 
 <ActionCardContentView
     content={$contentStore}
+    reconciliationTrigger={$reconciliationStore}
     {readonly}
     chatId={$chatIdStore}
     {messageId}

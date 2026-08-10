@@ -124,6 +124,7 @@ mod tests {
                 AiAppChatLinkToken {
                     user_id,
                     chat: types::Chat::Group(candid::Principal::from_slice(&[20]).into()),
+                    chat_name: "Household".to_string(),
                     app_id,
                     app_revision: now,
                     app_canister_id: candid::Principal::from_slice(&[8]),

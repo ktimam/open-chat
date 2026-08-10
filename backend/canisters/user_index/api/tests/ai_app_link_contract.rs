@@ -173,6 +173,7 @@ fn chat_link_launch_contract_is_opaque_exact_app_scoped_and_exact_retry_idempote
         "app_user_key_version : nat64",
         "chat_handle : blob",
         "chat_handle_version : nat16",
+        "chat_name : opt text",
     ] {
         assert!(success.contains(field), "missing app-scoped result: {field}");
     }

@@ -165,8 +165,12 @@ describe("surface destination disclosure and consent markers", () => {
         });
         expect(hasChatLinkSurface(target)).toBe(true);
         const client = stubClient([], []);
-        const opening = await createChatLinkSurfaceOpening(client, target, direct);
-        expect(opening?.dataDisclosures).toEqual(["app_id", "one_time_chat_link_token"]);
+        const opening = await createChatLinkSurfaceOpening(client, target, direct, "Manager");
+        expect(opening?.dataDisclosures).toEqual([
+            "app_id",
+            "one_time_chat_link_token",
+            "chat_display_name",
+        ]);
         expect(opening?.url).toBe(
             "https://app.example/setup#app=73&token=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
         );
@@ -187,12 +191,20 @@ describe("surface destination disclosure and consent markers", () => {
             ],
         });
 
-        const opening = await createChatLinkSurfaceOpening(stubClient([], []), target, CHAT);
+        const opening = await createChatLinkSurfaceOpening(
+            stubClient([], []),
+            target,
+            CHAT,
+            "Household",
+        );
 
         expect(opening?.url).toBe(
             "https://app.example/settings#openchat-routing/AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
         );
-        expect(opening?.dataDisclosures).toEqual(["one_time_chat_link_token"]);
+        expect(opening?.dataDisclosures).toEqual([
+            "one_time_chat_link_token",
+            "chat_display_name",
+        ]);
     });
 
     it("uses unpadded base64url rather than hex or standard base64", async () => {
@@ -212,7 +224,7 @@ describe("surface destination disclosure and consent markers", () => {
             cancelAiAppChatLinkToken: async () => true,
         } as unknown as OpenChat;
 
-        const opening = await createChatLinkSurfaceOpening(client, target, CHAT);
+        const opening = await createChatLinkSurfaceOpening(client, target, CHAT, "Household");
         const encoded = opening?.url.split("#token=")[1];
 
         expect(encoded).toMatch(/^[A-Za-z0-9_-]{43}$/);
@@ -236,7 +248,9 @@ describe("surface destination disclosure and consent markers", () => {
             ],
         });
 
-        await expect(createChatLinkSurfaceOpening(client, target, CHAT)).resolves.toBeUndefined();
+        await expect(
+            createChatLinkSurfaceOpening(client, target, CHAT, "Household"),
+        ).resolves.toBeUndefined();
         expect(cancelAiAppChatLinkToken).toHaveBeenCalledOnce();
         expect(cancelAiAppChatLinkToken).toHaveBeenCalledWith(token);
     });
@@ -256,7 +270,7 @@ describe("surface destination disclosure and consent markers", () => {
             cancelAiAppChatLinkToken: vi.fn(async () => true),
         } as unknown as OpenChat;
 
-        const openingPromise = createChatLinkSurfaceOpening(client, target, CHAT);
+        const openingPromise = createChatLinkSurfaceOpening(client, target, CHAT, "Household");
         target.id = 99;
         target.updated = 999n;
         target.manifest.name = "mutated app";
@@ -265,7 +279,7 @@ describe("surface destination disclosure and consent markers", () => {
         resolveMint({ token: new Uint8Array(32).fill(7), expiresAt: 123n });
         const opening = await openingPromise;
 
-        expect(createAiAppChatLinkToken).toHaveBeenCalledWith(CHAT, 41, 410n);
+        expect(createAiAppChatLinkToken).toHaveBeenCalledWith(CHAT, "Household", 41, 410n);
         expect(opening?.url).toMatch(/^https:\/\/app\.example\/settings#token=/);
         expect(opening?.app.id).toBe(41);
         expect(opening?.app.updated).toBe(410n);
@@ -307,8 +321,8 @@ describe("surface destination disclosure and consent markers", () => {
             }),
             cancelAiAppChatLinkToken: async () => true,
         } as unknown as OpenChat;
-        const first = await createChatLinkSurfaceOpening(client, target, firstChat);
-        const second = await createChatLinkSurfaceOpening(client, target, secondChat);
+        const first = await createChatLinkSurfaceOpening(client, target, firstChat, "First");
+        const second = await createChatLinkSurfaceOpening(client, target, secondChat, "Second");
         expect(first?.url).not.toBe(second?.url);
         expect(first?.url).not.toContain(firstChat.groupId);
         expect(second?.url).not.toContain(secondChat.groupId);

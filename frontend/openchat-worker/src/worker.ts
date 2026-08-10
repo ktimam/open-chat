@@ -1191,6 +1191,7 @@ function getAction(
         case "createAiAppChatLinkToken":
             return agent.createAiAppChatLinkToken(
                 payload.chatId,
+                payload.chatName,
                 payload.appId,
                 payload.appRevision,
             );

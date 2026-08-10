@@ -38,4 +38,7 @@ pub struct SuccessResult {
     pub app_user_key_version: u64,
     pub chat_handle: ByteBuf,
     pub chat_handle_version: u16,
+    /// Presentation-only label captured by OpenChat when the user explicitly opened setup.
+    /// Optional preserves decoding of any short-lived token minted before this field existed.
+    pub chat_name: Option<String>,
 }

@@ -9,6 +9,10 @@ use types::{AiAppId, TimestampMillis, UserId};
 pub struct Args {
     /// The other participant in the exact direct chat.
     pub user_id: UserId,
+    /// Presentation-only label shown for this chat by the OpenChat client. It is bound into the
+    /// opaque token and never appears in the external URL.
+    #[serde(default)]
+    pub chat_name: String,
     pub app_id: AiAppId,
     pub app_revision: TimestampMillis,
 }

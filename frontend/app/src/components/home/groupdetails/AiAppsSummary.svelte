@@ -38,7 +38,7 @@
     import Translatable from "../../Translatable.svelte";
     import AiAppLinkModal from "../AiAppLinkModal.svelte";
     import AiAppSurfaceModal from "../AiAppSurfaceModal.svelte";
-    import PrivateMatchConsentToggle from "../PrivateMatchConsentToggle.svelte";
+    import PrivateMatchAutomaticNotice from "../PrivateMatchAutomaticNotice.svelte";
 
     const client = getContext<OpenChat>("client");
 
@@ -152,7 +152,7 @@
         const request = ++openingRequest;
         const chatId = chat.id;
         openingSetup = app.id;
-        const opening = await createChatLinkSurfaceOpening(client, app, chatId);
+        const opening = await createChatLinkSurfaceOpening(client, app, chatId, chat.name);
         if (request !== openingRequest) {
             if (opening !== undefined) {
                 await client.cancelAiAppChatLinkToken(opening.chatLinkToken);
@@ -238,7 +238,7 @@
                         {#if app.manifest.description.length > 0}
                             <div class="desc">{app.manifest.description}</div>
                         {/if}
-                        <PrivateMatchConsentToggle
+                        <PrivateMatchAutomaticNotice
                             {app}
                             chatId={chat.id}
                             available={enabled.has(app.id) && connected.has(app.id)}

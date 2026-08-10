@@ -18,6 +18,10 @@ describe("message action menu responsive hover", () => {
         expect(finePointerBody).toContain(
             ":global(.bubble-wrapper:hover .menu:not(:has(.menu-icon.open)))",
         );
-        expect(finePointerBody).toContain("animation: show-bubble-menu 200ms ease-in-out forwards");
+        expect(finePointerBody).toContain("z-index: 1");
+        expect(finePointerBody).toContain("opacity: 1");
+        expect(finePointerBody).not.toContain(
+            "animation: show-bubble-menu 200ms ease-in-out forwards",
+        );
     });
 });

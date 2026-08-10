@@ -15,13 +15,15 @@ describe("opaque per-chat launch-token client plumbing", () => {
         const worker = source("../openchat-worker/src/worker.ts");
 
         expect(shared).toContain(
-            'kind: "createAiAppChatLinkToken"; chatId: ChatIdentifier; appId: number; appRevision: bigint;',
+            'kind: "createAiAppChatLinkToken"; chatId: ChatIdentifier; chatName: string; appId: number; appRevision: bigint;',
         );
         expect(shared).toContain('kind: "cancelAiAppChatLinkToken"; token: Uint8Array;');
-        expect(client).toContain('kind: "createAiAppChatLinkToken", chatId, appId, appRevision,');
+        expect(client).toContain(
+            'kind: "createAiAppChatLinkToken", chatId, chatName, appId, appRevision,',
+        );
         expect(client).toContain('kind: "cancelAiAppChatLinkToken", token: token.slice()');
         expect(worker).toContain(
-            'case "createAiAppChatLinkToken": return agent.createAiAppChatLinkToken( payload.chatId, payload.appId, payload.appRevision, );',
+            'case "createAiAppChatLinkToken": return agent.createAiAppChatLinkToken( payload.chatId, payload.chatName, payload.appId, payload.appRevision, );',
         );
         expect(worker).toContain(
             'case "cancelAiAppChatLinkToken": return agent.cancelAiAppChatLinkToken(payload.token);',
@@ -68,6 +70,9 @@ describe("opaque per-chat launch-token client plumbing", () => {
         expect(schemas).toContain('Type.Literal("AppUnavailable")');
         expect(schemas).toContain('Type.Literal("ChatNotFound")');
         expect(schemas).toContain('Type.Literal("NotAuthorized")');
+        expect(schemas).toContain(
+            "export const UserCreateAiAppChatLinkTokenArgs = Type.Object({ user_id: UserId, chat_name: Type.String(), app_id: Type.Number(), app_revision: Type.BigInt(), });",
+        );
         expect(mapper).toContain("token?.byteLength !== 32");
         expect(mapper).toContain('typeof expiresAt !== "bigint"');
         expect(mapper).not.toContain("console.");

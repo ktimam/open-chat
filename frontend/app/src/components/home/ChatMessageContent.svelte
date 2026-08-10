@@ -51,6 +51,7 @@
         undeleting?: boolean;
         intersecting: boolean;
         failed: boolean;
+        reconciliationTrigger?: boolean;
         timestamp?: bigint | undefined;
         blockLevelMarkdown: boolean;
         onExpandMessage?: (() => void) | undefined;
@@ -83,6 +84,7 @@
         undeleting = false,
         intersecting,
         failed,
+        reconciliationTrigger = false,
         timestamp = undefined,
         blockLevelMarkdown,
         onExpandMessage = undefined,
@@ -158,6 +160,7 @@
         {messageId}
         threadRootMessageIndex={messageContext.threadRootMessageIndex}
         viewerId={$currentUserIdStore}
+        {reconciliationTrigger}
         onRespond={onRespondToActionCard} />
 {:else if content.kind === "giphy_content"}
     <GiphyContent {edited} {intersecting} {fill} {content} {reply} {height} {blockLevelMarkdown} />

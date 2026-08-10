@@ -4,6 +4,17 @@ use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display, Formatter};
 use ts_export::ts_export;
 
+/// Presentation-only chat label carried inside an explicitly minted AI-app chat-link token.
+/// It is never an authorization coordinate and must never be placed in the launch URL.
+pub const MAX_AI_APP_CHAT_NAME_CHARS: usize = 80;
+
+pub fn is_valid_ai_app_chat_name(value: &str) -> bool {
+    value == value.trim()
+        && !value.is_empty()
+        && value.chars().count() <= MAX_AI_APP_CHAT_NAME_CHARS
+        && !value.chars().any(char::is_control)
+}
+
 #[ts_export]
 #[derive(CandidType, Serialize, Deserialize, Debug, Eq, PartialEq, Hash, Clone, Copy)]
 pub enum Chat {
@@ -88,5 +99,20 @@ impl TryFrom<Chat> for MultiUserChat {
             Chat::Channel(cm, ch) => Ok(MultiUserChat::Channel(cm, ch)),
             Chat::Direct(_) => Err(()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ai_app_chat_name_is_bounded_and_display_safe() {
+        assert!(is_valid_ai_app_chat_name("Manager"));
+        assert!(is_valid_ai_app_chat_name("Household 🏠"));
+        assert!(!is_valid_ai_app_chat_name(""));
+        assert!(!is_valid_ai_app_chat_name(" Manager"));
+        assert!(!is_valid_ai_app_chat_name("Manager\nHouse"));
+        assert!(!is_valid_ai_app_chat_name(&"x".repeat(MAX_AI_APP_CHAT_NAME_CHARS + 1)));
     }
 }

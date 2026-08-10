@@ -211,7 +211,10 @@
                 </ButtonGroup>
             </div>
             <div class="ai-apps">
-                <AiAppsDirectSummary chatId={chat.id} />
+                <AiAppsDirectSummary
+                    chatId={chat.id}
+                    chatName={client.getDisplayName(chat.them.userId)}
+                />
             </div>
             <div class="disappearing">
                 <Checkbox

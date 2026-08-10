@@ -36,6 +36,7 @@
         cardPrivateContextStatusFromMessage,
         cardResizeHeightFromMessage,
         clampCardHeight,
+        completelyReverseMapMultiRows,
         completelyReverseMapRows,
         decodeConfirmPayload,
         decodeCardRecipientPublicKey,
@@ -77,6 +78,10 @@
         messageId: bigint;
         threadRootMessageIndex?: number;
         viewerId: string;
+        // Production reconciles an optimistic message in place, then flips the enclosing message's
+        // authoritative edge. This value is only a reactive wake-up signal: trust is always reread
+        // from the backend-hydrated card fields below and is never inferred from this boolean.
+        reconciliationTrigger?: boolean;
         // App-rendered confirms carry exact encoded bytes plus the matching one-time server grant.
         // Classic OC-rendered cards call this with neither value and use the stored attested payload.
         onRespond?: (
@@ -93,6 +98,7 @@
         messageId,
         threadRootMessageIndex,
         viewerId,
+        reconciliationTrigger = false,
         onRespond,
     }: Props = $props();
 
@@ -101,17 +107,49 @@
     let candidateAppIdentity = $state<AuthoritativeAppIdentity | undefined>(undefined);
     let hasPersistentUserPairing = $state(false);
     let appResolutionComplete = $state(false);
+    let appResolutionLookupAttempted = $state(false);
+    let appResolutionRetryAttempt = $state(0);
     let credentiallessSupported = $state(false);
     let cardContentAttestationBlocked = $state(false);
     let appCardRenderingBlocked = $state(false);
-    let cardContentAttested = $derived(isAppCardContentAttested(content));
-    // Primitive derived inputs prevent unrelated message-state replacements from restarting app
-    // resolution, while still observing the optimistic -> backend-verified transition.
-    let resolutionAppVerified = $derived(content.appVerified === true);
+    let cardContentAttested = $derived.by(() => {
+        // Wake this derivation after an in-place optimistic -> authoritative mutation, then inspect
+        // the actual attestation fields. The edge itself confers no authority.
+        void reconciliationTrigger;
+        return isAppCardContentAttested(content);
+    });
+    // Keep resolution dependent on primitive security coordinates. Equivalent message-object
+    // replacements must not tear down a live frame, while the reconciliation edge still makes each
+    // primitive reread an in-place authoritative mutation.
+    let resolutionAppVerified = $derived.by(() => {
+        void reconciliationTrigger;
+        return content.appVerified === true;
+    });
     let resolutionContentAttested = $derived(cardContentAttested);
-    let resolutionActionId = $derived(content.actionId);
-    let resolutionAppId = $derived(content.appId);
-    let resolutionAppRevision = $derived(content.appRevision);
+    let resolutionActionId = $derived.by(() => {
+        void reconciliationTrigger;
+        return content.actionId;
+    });
+    let resolutionAppId = $derived.by(() => {
+        void reconciliationTrigger;
+        return content.appId;
+    });
+    let resolutionAppRevision = $derived.by(() => {
+        void reconciliationTrigger;
+        return content.appRevision;
+    });
+    // A locally-posted provenance-backed card is intentionally untrusted until the send response
+    // reconciles it with the canister's verification bits. Keep one stable neutral shell during
+    // that short window; never flash sender-controlled title/rows as an "unverified card" first.
+    let optimisticVerificationPending = $derived.by(() => {
+        void reconciliationTrigger;
+        return (
+            !reconciliationTrigger &&
+            content.appProvenance !== undefined &&
+            content.appProvenance.byteLength > 0 &&
+            (content.appVerified !== true || !isAppCardContentAttested(content))
+        );
+    });
     let resolutionChatKey = $derived(chatIdentifierToString(chatId));
     const finalConfirmationAvailable = appCardFinalConfirmationAvailable();
     const privateContextAvailable = appCardPrivateContextAvailable();
@@ -336,6 +374,10 @@
     // appVerified and exact app/revision/action/chat coordinates; full content attestation remains a
     // separate prerequisite for loading trusted app pixels.
     $effect(() => {
+        // A retry click only causes a fresh attempt. It is not a trust claim; the derived primitives
+        // above always come from the backend-hydrated card marker, attestation, and coordinates.
+        const retryAttempt = appResolutionRetryAttempt;
+        void retryAttempt;
         const appVerified = resolutionAppVerified;
         const contentAttested = resolutionContentAttested;
         const actionId = resolutionActionId;
@@ -350,6 +392,7 @@
         untrack(() => {
             resetFrameSession();
             appResolutionComplete = false;
+            appResolutionLookupAttempted = false;
             resolvedAppIdentity = undefined;
             candidateAppIdentity = undefined;
             hasPersistentUserPairing = false;
@@ -370,11 +413,16 @@
                 cancelled = true;
             };
         }
-        void resolveActionAppForCard(client, activeChatId, actionId, appId, appRevision).then(
-            (resolution) => {
+        appResolutionLookupAttempted = true;
+        void settleCardOperationBeforeTimeout(() =>
+            resolveActionAppForCard(client, activeChatId, actionId, appId, appRevision),
+        ).then((settlement) => {
                 if (cancelled || resolutionChatKey !== activeChatKey) return;
                 appResolutionComplete = true;
+                if (settlement.status !== "settled") return;
+                const resolution = settlement.value;
                 if (resolution === undefined) return;
+                appResolutionLookupAttempted = false;
                 candidateAppIdentity = resolution.identity;
                 resolvedAppIdentity = resolution.identity;
                 hasPersistentUserPairing = resolution.hasPersistentUserPairing;
@@ -400,13 +448,17 @@
                 // No parseable origin → decline to embed; stay on the OC-rendered rows rather than talk to
                 // an unknown origin.
                 if (origin === undefined) return;
-                // Received cards do not hydrate their frozen confirm payload. Embed the app only if
-                // every visible row maps completely and uniquely through this exact action revision.
-                // Multi-entry summary rows therefore remain in the host-owned stored-payload path.
-                if (
-                    isMultiEntrySummaryRows(content.rows) ||
-                    completelyReverseMapRows(content.rows, opening.labelToField) === undefined
-                ) {
+                // A successful provenance-backed send retains a defensive in-memory copy of the
+                // exact attested payload for this sender session. That is sufficient to restore the
+                // app's editable multi form (`decodeConfirmPayload` wraps its array as `{entries}`).
+                // Received/reloaded canonical multi cards reconstruct only their manifest-declared
+                // public summary fields. Ambiguous or legacy summaries remain immutable.
+                const decodedPayload = decodeConfirmPayload(content.confirmPayload);
+                const hasDecodedPayload = Object.keys(decodedPayload).length > 0;
+                const mappedPayload = isMultiEntrySummaryRows(content.rows)
+                    ? completelyReverseMapMultiRows(content.rows, opening.labelToField)
+                    : completelyReverseMapRows(content.rows, opening.labelToField);
+                if (!hasDecodedPayload && mappedPayload === undefined) {
                     cardUrl = opening.url;
                     useStoredPayloadCard = true;
                     return;
@@ -424,12 +476,16 @@
                 } else {
                     useClassicFallback = true;
                 }
-            },
-        );
+            });
         return () => {
             cancelled = true;
         };
     });
+
+    function retryAppResolution(e: Event) {
+        e.stopPropagation();
+        appResolutionRetryAttempt += 1;
+    }
 
     function postInit() {
         const target = iframeEl?.contentWindow;
@@ -446,11 +502,10 @@
         // app data is never recovered from a hidden row; it requires the separately authorized encrypted
         // private-context path.
         const decoded = decodeConfirmPayload(content.confirmPayload);
-        const mappedRows = completelyReverseMapRows(content.rows, cardLabelToField);
-        if (
-            isMultiEntrySummaryRows(content.rows) ||
-            (Object.keys(decoded).length === 0 && mappedRows === undefined)
-        ) {
+        const mappedRows = isMultiEntrySummaryRows(content.rows)
+            ? completelyReverseMapMultiRows(content.rows, cardLabelToField)
+            : completelyReverseMapRows(content.rows, cardLabelToField);
+        if (Object.keys(decoded).length === 0 && mappedRows === undefined) {
             // Revalidate at the bridge boundary. If live content ever changes without immutable
             // producer coordinates changing, remove the frame instead of sending partial data.
             loadRequested = false;
@@ -914,15 +969,20 @@
 <div
     class="action-card"
     class:collapsed
+    class:pending-verification={optimisticVerificationPending}
     class:has-frame={cardUrl !== undefined && !useClassicFallback && !useStoredPayloadCard}
 >
     <div
         class="app-identity"
-        class:unverified={!cardContentAttested ||
-            (appResolutionComplete && resolvedAppIdentity === undefined)}
+        class:unverified={!optimisticVerificationPending &&
+            (!cardContentAttested ||
+                (appResolutionComplete && resolvedAppIdentity === undefined))}
         aria-live="polite"
     >
-        {#if resolvedAppIdentity !== undefined}
+        {#if optimisticVerificationPending}
+            <Spinner size="1.1em" foregroundColour="transparent" />
+            <span class="app-verification">Verifying app card…</span>
+        {:else if resolvedAppIdentity !== undefined}
             <AiAppIcon
                 iconUrl={resolvedAppIdentity.iconUrl}
                 size={"1.5rem"}
@@ -934,6 +994,11 @@
         {:else if appResolutionComplete}
             <span class="app-verification">Unverified card binding</span>
             <span class="app-id">Directory coordinates unavailable</span>
+            {#if appResolutionLookupAttempted}
+                <button class="retry-verification" onclick={retryAppResolution}
+                    >Retry verification</button
+                >
+            {/if}
         {:else}
             <span class="app-verification">Verifying app identity…</span>
         {/if}
@@ -965,10 +1030,14 @@
         }}
     >
         <div class="sender-title">
-            {#if !cardContentAttested}
-                <span class="sender-title-label">Untrusted card text</span>
+            {#if optimisticVerificationPending}
+                <span class="title">Preparing verified card…</span>
+            {:else}
+                {#if !cardContentAttested}
+                    <span class="sender-title-label">Untrusted card text</span>
+                {/if}
+                <span class="title">{content.title}</span>
             {/if}
-            <span class="title">{content.title}</span>
         </div>
         {#if consumed}
             <div class="state state-{displayState}">{displayState}</div>
@@ -977,7 +1046,13 @@
     </div>
 
     {#if !collapsed}
-        {#if cardUrl !== undefined && !useClassicFallback && !useStoredPayloadCard}
+        {#if optimisticVerificationPending}
+            <div class="pending-card-shell" aria-hidden="true">
+                <span></span>
+                <span></span>
+                <span></span>
+            </div>
+        {:else if cardUrl !== undefined && !useClassicFallback && !useStoredPayloadCard}
             {#if !loadRequested}
                 <div class="card-load-gate">
                     <span class="card-load-error" role="alert">App card unavailable.</span>
@@ -1189,6 +1264,11 @@
             max-width: min(90vw, 420px);
         }
 
+        &.pending-verification:not(.collapsed) {
+            width: min(90vw, 420px);
+            min-height: 140px;
+        }
+
         // Collapsed (consumed) cards shrink to a slim strip: just the header line (title + status +
         // chevron), tighter padding, smaller type. The min-width nudges the hugging bubble wider, but
         // it MUST be bounded by the space actually available: the bubble is capped at a percentage of
@@ -1203,6 +1283,34 @@
             gap: 0;
             padding: $sp2 $sp3;
             font-size: 0.8em;
+        }
+    }
+
+    .pending-card-shell {
+        display: flex;
+        flex-direction: column;
+        gap: $sp2;
+        min-height: 58px;
+        justify-content: center;
+
+        span {
+            display: block;
+            height: 0.7rem;
+            border-radius: 999px;
+            background: var(--currentChat-msg-muted);
+            opacity: 0.18;
+
+            &:nth-child(1) {
+                width: 72%;
+            }
+
+            &:nth-child(2) {
+                width: 88%;
+            }
+
+            &:nth-child(3) {
+                width: 56%;
+            }
         }
     }
 

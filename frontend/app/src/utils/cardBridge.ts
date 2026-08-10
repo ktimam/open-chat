@@ -438,10 +438,11 @@ export function supportsCredentiallessIframe(framePrototype?: object): boolean {
     return prototype !== undefined && "credentialless" in prototype;
 }
 
-// Decode the card's frozen confirmPayload (opaque JSON bytes) into the prefill object. Tolerant by
-// design: absent/empty bytes, non-JSON, or a non-object top level all degrade to `{}` so the app card
-// still mounts and simply renders its own defaults. (On a RECEIVED card the payload is not hydrated
-// today, so `{}` is the normal Phase-1 case; the edited values the user submits are what matter.)
+// Decode the card's frozen confirmPayload (opaque JSON bytes) into the iframe's prefill object.
+// A single action is already an object. A verified sender's multi-action payload is a top-level
+// array, while the IOU iframe's explicit multi mode expects `{ entries: [...] }`; wrap only a
+// non-empty all-object array. Mixed/scalar arrays fail closed instead of seeding partial rows.
+// Received cards do not hydrate this send-only payload and therefore normally use public rows.
 export function decodeConfirmPayload(bytes?: Uint8Array): Record<string, unknown> {
     if (bytes === undefined || bytes.byteLength === 0) return {};
     let parsed: unknown;
@@ -450,7 +451,11 @@ export function decodeConfirmPayload(bytes?: Uint8Array): Record<string, unknown
     } catch {
         return {};
     }
-    return isRecord(parsed) ? parsed : {};
+    if (isRecord(parsed)) return parsed;
+    if (Array.isArray(parsed) && parsed.length > 0 && parsed.every(isRecord)) {
+        return { entries: parsed };
+    }
+    return {};
 }
 
 // Reverse-map a message's HYDRATED display rows back into the structured object the app's card page
@@ -506,6 +511,63 @@ export function completelyReverseMapRows(
 export function isMultiEntrySummaryRows(rows: readonly { label: string }[]): boolean {
     const visible = rows.filter((row) => !row.label.startsWith(RESERVED_CARD_ROW_PREFIX));
     return visible.length > 1 && visible.every((row, index) => row.label === `Entry ${index + 1}`);
+}
+
+const MULTI_ENTRY_FIELD_SEPARATOR = " · ";
+
+// Reconstruct the canonical public multi summary emitted by `buildMultiActionCardContent`. Each
+// visible Entry row contains manifest-declared `Label: value` segments in manifest order. This is
+// intentionally stricter than a general text parser: every segment must map to exactly one own,
+// safe field; fields must be unique and ordered; and an unescaped separator inside an app value
+// makes the whole reconstruction fail closed. The result contains public card fields only — hidden
+// extraction fields are neither guessed nor recovered.
+export function completelyReverseMapMultiRows(
+    rows: readonly { label: string; value: string }[],
+    labelToField: Record<string, string>,
+): Record<string, unknown> | undefined {
+    if (!isMultiEntrySummaryRows(rows)) return undefined;
+
+    const fields = Object.entries(labelToField);
+    if (fields.length === 0) return undefined;
+    const mappedKeys = new Set<string>();
+    for (const [label, key] of fields) {
+        if (
+            label.length === 0 ||
+            label.includes(MULTI_ENTRY_FIELD_SEPARATOR) ||
+            !isSafeAiActionFieldName(key) ||
+            mappedKeys.has(key)
+        )
+            return undefined;
+        mappedKeys.add(key);
+    }
+
+    const entries: Record<string, unknown>[] = [];
+    for (const row of rows.filter(
+        (candidate) => !candidate.label.startsWith(RESERVED_CARD_ROW_PREFIX),
+    )) {
+        const segments = row.value.split(MULTI_ENTRY_FIELD_SEPARATOR);
+        if (segments.length === 0) return undefined;
+        const entry = Object.create(null) as Record<string, unknown>;
+        let previousFieldIndex = -1;
+
+        for (const segment of segments) {
+            const matches = fields
+                .map(([label, key], index) => ({ label, key, index, marker: `${label}: ` }))
+                .filter(({ marker }) => segment.startsWith(marker));
+            if (matches.length !== 1) return undefined;
+            const [{ key, index, marker }] = matches;
+            const value = segment.slice(marker.length);
+            if (value.length === 0 || index <= previousFieldIndex || Object.hasOwn(entry, key))
+                return undefined;
+            entry[key] = value;
+            previousFieldIndex = index;
+        }
+
+        if (Object.keys(entry).length === 0) return undefined;
+        entries.push(entry);
+    }
+
+    return { entries };
 }
 
 // Public summary rows for the classic renderer. Reserved legacy rows are suppressed fail-closed and

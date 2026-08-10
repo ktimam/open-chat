@@ -913,6 +913,7 @@
                                 {undeleting}
                                 {intersecting}
                                 {failed}
+                                reconciliationTrigger={confirmed}
                                 {timestamp}
                                 messageIndex={msg.messageIndex}
                                 messageId={msg.messageId}
@@ -1250,7 +1251,8 @@
         }
 
         :global(.bubble-wrapper:hover .menu:not(:has(.menu-icon.open))) {
-            animation: show-bubble-menu 200ms ease-in-out forwards;
+            z-index: 1;
+            opacity: 1;
         }
     }
 

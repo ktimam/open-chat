@@ -4,7 +4,6 @@ import { resolve } from "node:path";
 import type { AiAppRegistration, ChatIdentifier } from "@shared";
 import { currentUserStore } from "@client";
 import type { AiActionCandidate } from "./aiActionRunner";
-import { setPrivateMatchConsent } from "./privateMatchConsent";
 import {
     boundedPrivateMatchCandidates,
     MAX_ACTIVE_PRIVATE_MATCH_OPERATIONS,
@@ -93,12 +92,8 @@ describe("private matcher host protocol", () => {
         expect(parsePrivateMatchResult({ ...result, count: 1 }, binding)).toBeUndefined();
     });
 
-    it("is default-off and caps explicitly consented candidates", () => {
+    it("automatically considers registered private-match candidates with a strict cap", () => {
         const candidates = Array.from({ length: 7 }, (_, index) => candidate(index + 1));
-        expect(boundedPrivateMatchCandidates(candidates, CHAT)).toEqual([]);
-        for (const value of candidates) {
-            setPrivateMatchConsent(value.app, CHAT, true, VIEWER_ID);
-        }
         expect(boundedPrivateMatchCandidates(candidates, CHAT)).toHaveLength(
             MAX_PRIVATE_MATCH_CANDIDATES,
         );
@@ -167,24 +162,16 @@ describe("private matcher host protocol", () => {
         expect(source).toContain("import.meta.hot?.dispose");
         expect(source).toContain("abortPrivateMatchOperations()");
         expect(source.indexOf("createAiAppPrivateMatchCapability(")).toBeLessThan(
+            source.indexOf("type: MSG.authorize"),
+        );
+        expect(source.indexOf("parsePrivateMatchSourceReady(event.data, binding)")).toBeLessThan(
             source.indexOf("messageText: exactMessageText"),
         );
         expect(source).not.toContain("BigInt(Date.now())");
         expect(source).not.toMatch(/console\.|localStorage|sessionStorage/);
     });
 
-    it("gates the shared consent UI on credentialless-frame support with update guidance", () => {
-        const toggle = readFileSync(
-            resolve(__dirname, "../components/home/PrivateMatchConsentToggle.svelte"),
-            "utf8",
-        );
-        expect(toggle).toContain("supportsCredentiallessIframe()");
-        expect(toggle).toContain("disabled={!available || !runtimeSupported}");
-        expect(toggle).toContain('"aiApps.privateTriggers.unsupported"');
-        expect(toggle).not.toContain("allow-same-origin");
-    });
-
-    it("stops minting and exact-text egress when consent is revoked in flight", async () => {
+    it("stops minting and exact-text egress when the viewer/runtime changes in flight", async () => {
         const descriptor = Object.getOwnPropertyDescriptor(
             HTMLIFrameElement.prototype,
             "credentialless",
@@ -196,7 +183,6 @@ describe("private matcher host protocol", () => {
         });
         const value = candidate(1);
         const start = (mint: ReturnType<typeof vi.fn>, stillCurrent?: () => boolean) => {
-            setPrivateMatchConsent(value.app, CHAT, true, VIEWER_ID);
             const running = runPrivateMatchCandidates(
                 { createAiAppPrivateMatchCapability: mint } as never,
                 CHAT,
@@ -246,28 +232,43 @@ describe("private matcher host protocol", () => {
                         },
                     }),
                 );
-            return { running, postMessage, sendReady, sendResult };
+            const sendSourceReady = () =>
+                window.dispatchEvent(
+                    new MessageEvent("message", {
+                        origin: "null",
+                        source: frame.contentWindow,
+                        data: {
+                            type: "oc:private-match:source-ready",
+                            version: 1,
+                            frameNonce: bootstrap.frameNonce,
+                            attemptId: bootstrap.attemptId,
+                        },
+                    }),
+                );
+            return { running, postMessage, sendReady, sendSourceReady, sendResult };
         };
 
         try {
-            // Revocation during child bootstrap must stop before capability minting.
+            // A stale runtime during child bootstrap must stop before capability minting.
             const mintBeforeReady = vi.fn();
-            const beforeReady = start(mintBeforeReady);
-            setPrivateMatchConsent(value.app, CHAT, false, VIEWER_ID);
+            let beforeReadyCurrent = true;
+            const beforeReady = start(mintBeforeReady, () => beforeReadyCurrent);
+            beforeReadyCurrent = false;
             beforeReady.sendReady();
             await expect(beforeReady.running).resolves.toEqual({ kind: "no_match" });
             expect(mintBeforeReady).not.toHaveBeenCalled();
 
-            // Revocation while minting must stop before the request carrying exact text.
+            // A viewer/session change while minting must stop before authorization or exact text.
+            let runtimeCurrent = true;
             let resolveCapability!: (value: unknown) => void;
             const capability = new Promise((resolve) => {
                 resolveCapability = resolve;
             });
             const mintInFlight = vi.fn(() => capability);
-            const inFlight = start(mintInFlight);
+            const inFlight = start(mintInFlight, () => runtimeCurrent);
             inFlight.sendReady();
             expect(mintInFlight).toHaveBeenCalledTimes(1);
-            setPrivateMatchConsent(value.app, CHAT, false, VIEWER_ID);
+            runtimeCurrent = false;
             resolveCapability({
                 capability: b64url(32, 8),
                 expiresAt: 60_000n,
@@ -277,7 +278,35 @@ describe("private matcher host protocol", () => {
             expect(
                 inFlight.postMessage.mock.calls.some(
                     ([message]) =>
-                        (message as { type?: string }).type === "oc:private-match:request",
+                        (message as { type?: string }).type === "oc:private-match:authorize" ||
+                        (message as { type?: string }).type === "oc:private-match:source",
+                ),
+            ).toBe(false);
+
+            // An unlinked chat is a definitive false from IOU and never receives exact text.
+            const unlinked = start(
+                vi.fn().mockResolvedValue({
+                    capability: b64url(32, 11),
+                    expiresAt: 60_000n,
+                    context: { appId: 1, appRevision: 1n, actionId: "action-1" },
+                }),
+            );
+            unlinked.sendReady();
+            await vi.waitFor(() =>
+                expect(
+                    unlinked.postMessage.mock.calls.some(
+                        ([message]) =>
+                            (message as { type?: string }).type ===
+                            "oc:private-match:authorize",
+                    ),
+                ).toBe(true),
+            );
+            unlinked.sendResult(false);
+            await expect(unlinked.running).resolves.toEqual({ kind: "no_match" });
+            expect(
+                unlinked.postMessage.mock.calls.some(
+                    ([message]) =>
+                        (message as { type?: string }).type === "oc:private-match:source",
                 ),
             ).toBe(false);
 
@@ -305,7 +334,8 @@ describe("private matcher host protocol", () => {
                 ),
             ).toBe(false);
 
-            // An extreme browser clock skew must not reject a canister-valid capability locally.
+            // An extreme browser clock skew must not reject a canister-valid capability locally,
+            // but exact source text must still wait for the linked IOU frame to request it.
             const skewedMint = vi.fn().mockResolvedValue({
                 capability: b64url(32, 9),
                 expiresAt: 1n,
@@ -317,7 +347,30 @@ describe("private matcher host protocol", () => {
                 expect(
                     skewed.postMessage.mock.calls.some(
                         ([message]) =>
-                            (message as { type?: string }).type === "oc:private-match:request",
+                            (message as { type?: string }).type === "oc:private-match:authorize",
+                    ),
+                ).toBe(true),
+            );
+            const authorize = skewed.postMessage.mock.calls.find(
+                ([message]) =>
+                    (message as { type?: string }).type === "oc:private-match:authorize",
+            )?.[0] as Record<string, unknown> | undefined;
+            expect(authorize).toBeDefined();
+            expect(authorize).not.toHaveProperty("messageText");
+            expect(
+                skewed.postMessage.mock.calls.some(
+                    ([message]) =>
+                        (message as { type?: string }).type === "oc:private-match:source",
+                ),
+            ).toBe(false);
+            skewed.sendSourceReady();
+            await vi.waitFor(() =>
+                expect(
+                    skewed.postMessage.mock.calls.some(
+                        ([message]) =>
+                            (message as { type?: string }).type === "oc:private-match:source" &&
+                            (message as { messageText?: string }).messageText ===
+                                "School expense 350 EGP",
                     ),
                 ).toBe(true),
             );
@@ -334,7 +387,7 @@ describe("private matcher host protocol", () => {
         }
     });
 
-    it("puts the separate default-off toggle in every group/direct desktop/mobile settings tree", () => {
+    it("removes the redundant opt-in toggle from every group/direct desktop/mobile settings tree", () => {
         for (const file of [
             "../components/home/groupdetails/AiAppsSummary.svelte",
             "../components_mobile/home/groupdetails/AiAppsSummary.svelte",
@@ -342,22 +395,14 @@ describe("private matcher host protocol", () => {
             "../components_mobile/home/groupdetails/AiAppsDirectSummary.svelte",
         ]) {
             const source = readFileSync(resolve(__dirname, file), "utf8");
-            expect(source).toContain("PrivateMatchConsentToggle");
+            expect(source).not.toContain("PrivateMatchConsentToggle");
         }
-        const toggle = readFileSync(
-            resolve(__dirname, "../components/home/PrivateMatchConsentToggle.svelte"),
-            "utf8",
-        );
-        expect(toggle).toContain("privateMatchConsentMarker(app, chatId, $currentUserIdStore)");
-        expect(toggle).toContain("revokePrivateAutoProposeRuntime()");
-        expect(toggle).toContain("if (lastAvailable && !available)");
-        expect(toggle).toContain("disabled={!available || !runtimeSupported}");
-        expect(toggle).toContain("unmuteAutoProposeInChat(chatId)");
         const english = readFileSync(resolve(__dirname, "../i18n/en.json"), "utf8");
-        expect(english).toContain("link this exact chat to an IOU account");
+        expect(english).toContain("automatic for chats linked to an IOU sheet");
+        expect(english).toContain("Unlinked chats never send message text to the app");
         expect(english).toContain("Saved-type name is not automatic");
         expect(english).toContain("add it as a Trigger word");
-        expect(english).toContain("keep auto-propose suggestions on");
+        expect(english).toContain("Keep auto-propose suggestions on");
         expect(english).toContain("leave this chat unmuted");
         expect(english).toContain("new text messages observed while this chat is open");
     });

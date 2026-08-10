@@ -33,15 +33,16 @@
     import AiAppLinkSheet from "../AiAppLinkSheet.svelte";
     import AiAppSurfaceSheet from "../AiAppSurfaceSheet.svelte";
     import Separator from "../Separator.svelte";
-    import PrivateMatchConsentToggle from "../../../components/home/PrivateMatchConsentToggle.svelte";
+    import PrivateMatchAutomaticNotice from "../../../components/home/PrivateMatchAutomaticNotice.svelte";
 
     const client = getContext<OpenChat>("client");
 
     interface Props {
         chatId: ChatIdentifier;
+        chatName: string;
     }
 
-    let { chatId }: Props = $props();
+    let { chatId, chatName }: Props = $props();
 
     let apps = $state<AiAppRegistration[]>([]);
     // App ids THIS user holds a per-user delivery key for (pairing) — drives Connect vs Disconnect.
@@ -111,7 +112,7 @@
         if (openingSetup !== undefined || setupSurface !== undefined) return;
         const request = ++openingRequest;
         openingSetup = app.id;
-        const opening = await createChatLinkSurfaceOpening(client, app, chatId);
+        const opening = await createChatLinkSurfaceOpening(client, app, chatId, chatName);
         if (request !== openingRequest) {
             if (opening !== undefined) {
                 await client.cancelAiAppChatLinkToken(opening.chatLinkToken);
@@ -191,7 +192,7 @@
                             {app.manifest.description}
                         </BodySmall>
                     {/if}
-                    <PrivateMatchConsentToggle
+                    <PrivateMatchAutomaticNotice
                         {app}
                         {chatId}
                         available={connected.has(app.id)}

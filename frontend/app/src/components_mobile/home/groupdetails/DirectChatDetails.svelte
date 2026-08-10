@@ -179,7 +179,10 @@
                 </DisappearingDuration>
             </Container>
 
-            <AiAppsDirectSummary chatId={chat.id} />
+            <AiAppsDirectSummary
+                chatId={chat.id}
+                chatName={client.getDisplayName(chat.them.userId)}
+            />
 
             <Container gap={"md"} padding={["zero", "lg"]} direction={"vertical"}>
                 <Body fontWeight={"bold"}>

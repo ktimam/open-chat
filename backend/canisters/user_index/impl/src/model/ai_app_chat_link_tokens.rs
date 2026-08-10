@@ -23,6 +23,9 @@ pub type TokenDigest = [u8; 32];
 pub struct AiAppChatLinkToken {
     pub user_id: UserId,
     pub chat: Chat,
+    /// Presentation-only. Missing/empty legacy values are never returned as a current chat name.
+    #[serde(default)]
+    pub chat_name: String,
     pub app_id: AiAppId,
     pub app_revision: TimestampMillis,
     pub app_canister_id: CanisterId,
@@ -528,6 +531,7 @@ mod tests {
         AiAppChatLinkToken {
             user_id,
             chat: Chat::Group(Principal::from_slice(&[20]).into()),
+            chat_name: "Household".to_string(),
             app_id,
             app_revision: 3,
             app_canister_id: Principal::from_slice(&[8]),

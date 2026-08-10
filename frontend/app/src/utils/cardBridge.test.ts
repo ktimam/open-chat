@@ -21,6 +21,7 @@ import {
     cardCollectedConfirmFromMessage,
     cardResizeHeightFromMessage,
     clampCardHeight,
+    completelyReverseMapMultiRows,
     completelyReverseMapRows,
     decodeCardRecipientPublicKey,
     decodeConfirmPayload,
@@ -244,8 +245,21 @@ describe("decodeConfirmPayload", () => {
     test("non-JSON bytes -> {}", () => {
         expect(decodeConfirmPayload(new TextEncoder().encode("{not json"))).toEqual({});
     });
-    test("a JSON array (non-object top level) -> {}", () => {
-        expect(decodeConfirmPayload(enc([1, 2, 3]))).toEqual({});
+    test("wraps a non-empty object array as editable multi-entry init data", () => {
+        expect(
+            decodeConfirmPayload(
+                enc([
+                    { amount: 25, note: "first" },
+                    { amount: 10, note: "second" },
+                ]),
+            ),
+        ).toEqual({
+            entries: [
+                { amount: 25, note: "first" },
+                { amount: 10, note: "second" },
+            ],
+        });
+        expect(decodeConfirmPayload(enc([1, { amount: 10 }]))).toEqual({});
     });
 });
 
@@ -1239,6 +1253,79 @@ describe("reverseMapRows", () => {
         expect(isMultiEntrySummaryRows([{ label: "Entry 1" }])).toBe(false);
         expect(isMultiEntrySummaryRows([{ label: "Entry 1" }, { label: "Entry 3" }])).toBe(false);
         expect(isMultiEntrySummaryRows([{ label: "Entry 1" }, { label: "Amount" }])).toBe(false);
+    });
+
+    test("losslessly reconstructs canonical multi-entry summaries for editable app cards", () => {
+        expect(
+            completelyReverseMapMultiRows(
+                [
+                    {
+                        label: "Entry 1",
+                        value: "Amount: 200 · Currency: EGP · Type: iou · Direction: credit · Note: uber",
+                    },
+                    {
+                        label: "Entry 2",
+                        value: "Amount: 400 · Type: settlement · Direction: debt · Date: 2026-08-10 · Note: food",
+                    },
+                ],
+                {
+                    Amount: "amount",
+                    Currency: "currency",
+                    Type: "kind",
+                    Direction: "direction",
+                    Date: "date",
+                    Note: "note",
+                },
+            ),
+        ).toEqual({
+            entries: [
+                {
+                    amount: "200",
+                    currency: "EGP",
+                    kind: "iou",
+                    direction: "credit",
+                    note: "uber",
+                },
+                {
+                    amount: "400",
+                    kind: "settlement",
+                    direction: "debt",
+                    date: "2026-08-10",
+                    note: "food",
+                },
+            ],
+        });
+    });
+
+    test("rejects ambiguous, reordered, duplicate, and non-canonical multi summaries", () => {
+        const map = { Amount: "amount", Type: "kind", Note: "note" };
+        expect(
+            completelyReverseMapMultiRows(
+                [
+                    { label: "Entry 1", value: "Amount: 200 · Note: safe" },
+                    { label: "Entry 2", value: "Amount: 300 · Note: text · Type: iou" },
+                ],
+                map,
+            ),
+        ).toBeUndefined();
+        expect(
+            completelyReverseMapMultiRows(
+                [
+                    { label: "Entry 1", value: "Amount: 200 · Amount: 300" },
+                    { label: "Entry 2", value: "Amount: 400" },
+                ],
+                map,
+            ),
+        ).toBeUndefined();
+        expect(
+            completelyReverseMapMultiRows(
+                [
+                    { label: "Entry 1", value: "Settlement · 200 EGP" },
+                    { label: "Entry 2", value: "Charge · 400 EGP" },
+                ],
+                map,
+            ),
+        ).toBeUndefined();
     });
 
     test("ignores reserved host rows but rejects inherited or unsafe field mappings", () => {

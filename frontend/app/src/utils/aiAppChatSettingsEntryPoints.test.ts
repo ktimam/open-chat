@@ -21,7 +21,7 @@ const SETTINGS_ENTRY_POINTS: SettingsEntryPoint[] = [
         mount: "src/components/home/groupdetails/GroupDetailsBody.svelte",
         componentName: "AiAppsSummary",
         mountMarkup: "<AiAppsSummary {chat} />",
-        surfaceResolverCall: "createChatLinkSurfaceOpening(client, app, chatId)",
+        surfaceResolverCall: "createChatLinkSurfaceOpening(client, app, chatId, chat.name)",
         surfaceHost: "AiAppSurfaceModal",
     },
     {
@@ -29,8 +29,9 @@ const SETTINGS_ENTRY_POINTS: SettingsEntryPoint[] = [
         component: "src/components/home/groupdetails/AiAppsDirectSummary.svelte",
         mount: "src/components/home/groupdetails/DirectChatDetails.svelte",
         componentName: "AiAppsDirectSummary",
-        mountMarkup: "<AiAppsDirectSummary chatId={chat.id} />",
-        surfaceResolverCall: "createChatLinkSurfaceOpening(client, app, chatId)",
+        mountMarkup:
+            "<AiAppsDirectSummary chatId={chat.id} chatName={client.getDisplayName(chat.them.userId)} />",
+        surfaceResolverCall: "createChatLinkSurfaceOpening(client, app, chatId, chatName)",
         surfaceHost: "AiAppSurfaceModal",
     },
     {
@@ -39,7 +40,7 @@ const SETTINGS_ENTRY_POINTS: SettingsEntryPoint[] = [
         mount: "src/components_mobile/home/groupdetails/GroupDetails.svelte",
         componentName: "AiAppsSummary",
         mountMarkup: "<AiAppsSummary {chat} />",
-        surfaceResolverCall: "createChatLinkSurfaceOpening(client, app, chatId)",
+        surfaceResolverCall: "createChatLinkSurfaceOpening(client, app, chatId, chat.name)",
         surfaceHost: "AiAppSurfaceSheet",
     },
     {
@@ -47,8 +48,9 @@ const SETTINGS_ENTRY_POINTS: SettingsEntryPoint[] = [
         component: "src/components_mobile/home/groupdetails/AiAppsDirectSummary.svelte",
         mount: "src/components_mobile/home/groupdetails/DirectChatDetails.svelte",
         componentName: "AiAppsDirectSummary",
-        mountMarkup: "<AiAppsDirectSummary chatId={chat.id} />",
-        surfaceResolverCall: "createChatLinkSurfaceOpening(client, app, chatId)",
+        mountMarkup:
+            "<AiAppsDirectSummary chatId={chat.id} chatName={client.getDisplayName(chat.them.userId)} />",
+        surfaceResolverCall: "createChatLinkSurfaceOpening(client, app, chatId, chatName)",
         surfaceHost: "AiAppSurfaceSheet",
     },
 ];
@@ -67,7 +69,7 @@ describe.each(SETTINGS_ENTRY_POINTS)("$label in-chat Settings AI apps entry poin
         expect(mount).toContain(
             `import ${entry.componentName} from "./${entry.componentName}.svelte"`,
         );
-        expect(mount).toContain(entry.mountMarkup);
+        expect(compact(mount)).toContain(compact(entry.mountMarkup));
     });
 
     it("shows registered chat_link setup through the hardened surface host", () => {
@@ -183,6 +185,7 @@ describe("shared chat_link URL privacy used by all Settings entries", () => {
         expect(chatLinkResolver).not.toContain("chatKeyFor(");
         expect(chatLinkResolver).not.toContain("encodeURIComponent(chatId");
         expect(chatLinkResolver).not.toContain("currentUserId");
+        expect(chatLinkResolver).toContain('"chat_display_name"');
 
         // The existing behavior suite in aiAppSurfaces.test.ts exercises both successful appId
         // substitution and rejection of legacy {chatKey}; keep that regression alongside this

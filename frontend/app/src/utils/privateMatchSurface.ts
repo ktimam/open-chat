@@ -2,16 +2,16 @@
 //
 // Each attempt gets a fresh credentialless, no-referrer, opaque-origin iframe,
 // exact WindowProxy binding, random document nonce, random attempt id and a
-// frame-generated vetKD transport key. The exact source text crosses only
-// after OpenChat mints a message/app/action/key-bound one-use capability. The
-// only accepted response is a boolean.
+// frame-generated vetKD transport key. OpenChat first mints a
+// message/app/action/key-bound one-use capability; the exact source text crosses
+// only after IOU redeems it and proves that chat already has a durable sheet
+// link. The only accepted response is a boolean.
 
 import { currentUserIdStore, type ChatIdentifier, type OpenChat } from "@client";
 import type { AiActionCandidate } from "./aiActionRunner";
 import { supportsCredentiallessIframe } from "./cardBridge";
 export { supportsCredentiallessIframe } from "./cardBridge";
 import { privateMatchSurfaceOpening } from "./aiAppSurfaces";
-import { privateMatchConsentEnabled } from "./privateMatchConsent";
 
 export const MAX_PRIVATE_MATCH_CANDIDATES = 4;
 export const MAX_PRIVATE_MATCH_CONCURRENCY = 2;
@@ -27,7 +27,9 @@ const KEY_SCHEME = "iou.vetkd.bls12-381.v1";
 const MSG = {
     bootstrap: "oc:private-match:bootstrap",
     ready: "oc:private-match:ready",
-    request: "oc:private-match:request",
+    authorize: "oc:private-match:authorize",
+    sourceReady: "oc:private-match:source-ready",
+    source: "oc:private-match:source",
     result: "oc:private-match:result",
 } as const;
 
@@ -141,6 +143,22 @@ export function parsePrivateMatchResult(
     return value.matched;
 }
 
+export function parsePrivateMatchSourceReady(
+    value: unknown,
+    expected: PrivateMatchFrameBinding,
+): boolean {
+    return (
+        isRecord(value) &&
+        value.type === MSG.sourceReady &&
+        value.version === VERSION &&
+        value.frameNonce === expected.frameNonce &&
+        value.attemptId === expected.attemptId &&
+        Object.keys(value).every((key) =>
+            ["type", "version", "frameNonce", "attemptId"].includes(key),
+        )
+    );
+}
+
 export function boundedPrivateMatchCandidates(
     candidates: readonly AiActionCandidate[],
     chatId: ChatIdentifier,
@@ -153,7 +171,7 @@ export function boundedPrivateMatchCandidates(
         const key = `${candidate.app.id}:${candidate.app.updated.toString()}:${candidate.action.name}`;
         if (
             seen.has(key) ||
-            !privateMatchConsentCurrent(candidate, chatId, expectedViewerId, stillCurrent) ||
+            !privateMatchRuntimeCurrent(expectedViewerId, stillCurrent) ||
             privateMatchSurfaceOpening(candidate.app, chatId) === undefined
         ) {
             continue;
@@ -165,17 +183,11 @@ export function boundedPrivateMatchCandidates(
     return eligible;
 }
 
-function privateMatchConsentCurrent(
-    candidate: AiActionCandidate,
-    chatId: ChatIdentifier,
+function privateMatchRuntimeCurrent(
     expectedViewerId: string,
     stillCurrent: () => boolean,
 ): boolean {
-    return (
-        stillCurrent() &&
-        currentUserIdStore.value === expectedViewerId &&
-        privateMatchConsentEnabled(candidate.app, chatId, expectedViewerId)
-    );
+    return stillCurrent() && currentUserIdStore.value === expectedViewerId;
 }
 
 async function matchOne(
@@ -192,7 +204,7 @@ async function matchOne(
     const opening = privateMatchSurfaceOpening(candidate.app, chatId);
     if (opening === undefined || !supportsCredentiallessIframe()) return "no_match";
     if (signal.aborted) return "transient";
-    if (!privateMatchConsentCurrent(candidate, chatId, expectedViewerId, stillCurrent)) {
+    if (!privateMatchRuntimeCurrent(expectedViewerId, stillCurrent)) {
         return "no_match";
     }
 
@@ -216,7 +228,9 @@ async function matchOne(
         frame.style.inset = "-2px auto auto -2px";
 
         let settled = false;
-        let requestSent = false;
+        let readyAccepted = false;
+        let authorizeSent = false;
+        let sourceSent = false;
         let frameWindow: Window | null = null;
         let timer = 0;
         let bootstrapTimer = 0;
@@ -239,21 +253,13 @@ async function matchOne(
             // `allow-scripts` without `allow-same-origin` makes every child response origin "null".
             // Require that opaque origin AND this attempt's exact WindowProxy/nonces.
             if (settled || event.source !== frameWindow || event.origin !== "null") return;
-            if (!requestSent) {
+            if (!readyAccepted) {
                 const ready = parsePrivateMatchReady(event.data, binding);
                 if (ready === undefined) return;
-                requestSent = true;
+                readyAccepted = true;
                 window.clearInterval(bootstrapTimer);
-                // Consent can be revoked while the child boots. Recheck at the last synchronous
-                // boundary before minting any capability for this app/chat.
-                if (
-                    !privateMatchConsentCurrent(
-                        candidate,
-                        chatId,
-                        expectedViewerId,
-                        stillCurrent,
-                    )
-                ) {
+                // Recheck viewer/global/mute/session state before minting any capability.
+                if (!privateMatchRuntimeCurrent(expectedViewerId, stillCurrent)) {
                     ready.recipientPublicKey.fill(0);
                     finish("no_match");
                     return;
@@ -288,28 +294,20 @@ async function matchOne(
                             finish("transient");
                             return;
                         }
-                        // Minting is asynchronous, so consent may have changed in flight. This is
-                        // the final synchronous gate before the exact source can leave OpenChat.
-                        if (
-                            !privateMatchConsentCurrent(
-                                candidate,
-                                chatId,
-                                expectedViewerId,
-                                stillCurrent,
-                            )
-                        ) {
+                        // Minting is asynchronous, so the viewer/runtime may have changed in flight.
+                        if (!privateMatchRuntimeCurrent(expectedViewerId, stillCurrent)) {
                             finish("no_match");
                             return;
                         }
-                        // The exact text first leaves OpenChat only here: after child source/key
-                        // binding and authoritative message/app/action capability minting.
+                        authorizeSent = true;
+                        // Authorization carries no source text. The IOU frame must redeem it and
+                        // prove this exact chat has a durable sheet link before requesting text.
                         frameWindow.postMessage(
                             {
-                                type: MSG.request,
+                                type: MSG.authorize,
                                 version: VERSION,
                                 ...binding,
                                 capability: capability.capability,
-                                messageText: exactMessageText,
                             },
                             "*", // opaque sandbox documents have no targetable tuple origin
                         );
@@ -320,16 +318,43 @@ async function matchOne(
                     });
                 return;
             }
+
+            if (!authorizeSent) return;
+            if (!sourceSent) {
+                const earlyResult = parsePrivateMatchResult(event.data, binding);
+                if (earlyResult !== undefined) {
+                    // A linked matcher cannot truthfully return true before seeing the exact source.
+                    finish(earlyResult ? "transient" : "no_match");
+                    return;
+                }
+                if (!parsePrivateMatchSourceReady(event.data, binding)) return;
+                if (!privateMatchRuntimeCurrent(expectedViewerId, stillCurrent)) {
+                    finish("no_match");
+                    return;
+                }
+                if (frameWindow === null) {
+                    finish("transient");
+                    return;
+                }
+                sourceSent = true;
+                // This is the only exact-text egress point, reached only after IOU proved the chat
+                // link and loaded that linked sheet's encrypted Trigger-word roster.
+                frameWindow.postMessage(
+                    {
+                        type: MSG.source,
+                        version: VERSION,
+                        ...binding,
+                        messageText: exactMessageText,
+                    },
+                    "*", // opaque sandbox documents have no targetable tuple origin
+                );
+                return;
+            }
             const matched = parsePrivateMatchResult(event.data, binding);
             if (matched !== undefined) {
                 finish(
                     matched &&
-                        privateMatchConsentCurrent(
-                            candidate,
-                            chatId,
-                            expectedViewerId,
-                            stillCurrent,
-                        )
+                        privateMatchRuntimeCurrent(expectedViewerId, stillCurrent)
                         ? "matched"
                         : "no_match",
                 );
@@ -440,7 +465,7 @@ export async function runPrivateMatchCandidates(
             next += 1;
             if (index >= queue.length) return;
             const candidate = queue[index];
-            if (!privateMatchConsentCurrent(candidate, chatId, expectedViewerId, stillCurrent)) {
+            if (!privateMatchRuntimeCurrent(expectedViewerId, stillCurrent)) {
                 continue;
             }
             const outcome = await retryTransientPrivateMatch(
@@ -460,7 +485,7 @@ export async function runPrivateMatchCandidates(
             );
             if (
                 outcome === "matched" &&
-                privateMatchConsentCurrent(candidate, chatId, expectedViewerId, stillCurrent)
+                privateMatchRuntimeCurrent(expectedViewerId, stillCurrent)
             ) {
                 match = candidate;
                 operation.abort();

@@ -651,6 +651,7 @@ export class UserClient
 
     createAiAppChatLinkToken(
         userId: string,
+        chatName: string,
         appId: number,
         appRevision: bigint,
     ): Promise<AiAppChatLinkToken | undefined> {
@@ -658,6 +659,7 @@ export class UserClient
             "create_ai_app_chat_link_token",
             {
                 user_id: principalStringToBytes(userId),
+                chat_name: chatName,
                 app_id: appId,
                 app_revision: appRevision,
             },

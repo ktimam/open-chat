@@ -18,6 +18,7 @@ async fn c2c_create_ai_app_chat_link_token(args: Args) -> Response {
         &user_index_canister::c2c_create_ai_app_chat_link_token::Args {
             user_id: args.user_id,
             chat: args.chat,
+            chat_name: args.chat_name.clone(),
             app_id: args.app_id,
             app_revision: args.app_revision,
             authority: args.authority.clone(),
@@ -68,6 +69,9 @@ async fn cleanup_success(
 }
 
 fn validate_child_context(args: &Args, caller: candid::Principal, kind: AuthoritativeChildKind) -> Result<(), String> {
+    if !types::is_valid_ai_app_chat_name(&args.chat_name) {
+        return Err("chat_name is missing or invalid".to_string());
+    }
     if !args.member_user_ids.contains(&args.user_id) {
         return Err("authoritative member list does not contain the viewer".to_string());
     }
@@ -121,6 +125,7 @@ mod tests {
         let args = Args {
             user_id: viewer,
             chat: Chat::Direct(other.into()),
+            chat_name: "Manager".to_string(),
             app_id: 1,
             app_revision: 2,
             member_user_ids: vec![viewer, other],
@@ -140,6 +145,7 @@ mod tests {
         let mut args = Args {
             user_id: viewer,
             chat: Chat::Group(group.into()),
+            chat_name: "Household".to_string(),
             app_id: 1,
             app_revision: 2,
             member_user_ids: vec![viewer],

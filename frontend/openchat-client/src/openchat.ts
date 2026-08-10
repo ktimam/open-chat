@@ -7415,6 +7415,7 @@ export class OpenChat {
     // app/revision/chat. The caller must cancel it if the user dismisses before handing it off.
     createAiAppChatLinkToken(
         chatId: ChatIdentifier,
+        chatName: string,
         appId: number,
         appRevision: bigint,
     ): Promise<AiAppChatLinkToken | undefined> {
@@ -7422,6 +7423,7 @@ export class OpenChat {
             .send({
                 kind: "createAiAppChatLinkToken",
                 chatId,
+                chatName,
                 appId,
                 appRevision,
             })

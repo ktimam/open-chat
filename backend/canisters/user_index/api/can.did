@@ -744,6 +744,8 @@ type SuccessResult_7 = record {
   chat_handle_version : nat16;
   app_canister_id : principal;
   chat_handle : blob;
+  // Presentation-only label captured when the user explicitly opened chat setup.
+  chat_name : opt text;
 };
 type SuccessResult_8 = record {
   all_time : vec ChitUserBalance;

@@ -19,6 +19,9 @@ async fn c2c_create_ai_app_chat_link_token(args: Args) -> Response {
     if !read_state(crate::pr2_entropy::is_ready) {
         return Error("AI-app chat-link service temporarily unavailable".to_string());
     }
+    if !types::is_valid_ai_app_chat_name(&args.chat_name) {
+        return InvalidRequest("chat_name is missing or invalid".to_string());
+    }
     let caller = ic_cdk::api::msg_caller();
     let Some(admitted_account_lifecycle_epoch) = read_state(|state| state.data.users.account_lifecycle_epoch(&args.user_id))
     else {
@@ -131,6 +134,7 @@ fn create_impl(
         let entry = AiAppChatLinkToken {
             user_id: args.user_id,
             chat: args.chat,
+            chat_name: args.chat_name.clone(),
             app_id: args.app_id,
             app_revision: args.app_revision,
             app_canister_id,
@@ -230,6 +234,7 @@ mod tests {
         let args = Args {
             user_id,
             chat: Chat::Group(candid::Principal::from_slice(&[20]).into()),
+            chat_name: "Household".to_string(),
             app_id: app.id,
             app_revision: app.updated,
             authority: ByteBuf::new(),
@@ -242,6 +247,7 @@ mod tests {
         let stale = Args {
             user_id,
             chat: Chat::Group(candid::Principal::from_slice(&[20]).into()),
+            chat_name: "Household".to_string(),
             app_id: app.id,
             app_revision: app.updated.saturating_add(1),
             authority: ByteBuf::new(),
@@ -250,6 +256,7 @@ mod tests {
         let exact = Args {
             user_id,
             chat: Chat::Group(candid::Principal::from_slice(&[20]).into()),
+            chat_name: "Household".to_string(),
             app_id: app.id,
             app_revision: app.updated,
             authority: ByteBuf::new(),
@@ -281,6 +288,7 @@ mod tests {
         let args = Args {
             user_id: viewer,
             chat: Chat::Group(candid::Principal::from_slice(&[72]).into()),
+            chat_name: "Household".to_string(),
             app_id: app.id,
             app_revision: data.ai_apps.get(app.id).unwrap().updated,
             authority: ByteBuf::new(),
@@ -317,6 +325,7 @@ mod tests {
         let args = Args {
             user_id: viewer,
             chat: Chat::Direct(candid::Principal::from_slice(&[24]).into()),
+            chat_name: "Manager".to_string(),
             app_id: 1,
             app_revision: 2,
             authority: ByteBuf::new(),

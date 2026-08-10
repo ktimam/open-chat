@@ -2331,6 +2331,7 @@ type CancelAiAppLinkCode = {
 type CreateAiAppChatLinkToken = {
     kind: "createAiAppChatLinkToken";
     chatId: ChatIdentifier;
+    chatName: string;
     appId: number;
     appRevision: bigint;
 };

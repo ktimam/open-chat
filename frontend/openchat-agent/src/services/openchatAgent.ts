@@ -3903,6 +3903,7 @@ export class OpenChatAgent extends EventTarget {
 
     createAiAppChatLinkToken(
         chatId: ChatIdentifier,
+        chatName: string,
         appId: number,
         appRevision: bigint,
     ): Promise<AiAppChatLinkToken | undefined> {
@@ -3918,7 +3919,12 @@ export class OpenChatAgent extends EventTarget {
                 return this._communityClient.createAiAppChatLinkToken(chatId, appId, appRevision);
             case "direct_chat":
                 return this._userClient instanceof UserClient
-                    ? this._userClient.createAiAppChatLinkToken(chatId.userId, appId, appRevision)
+                    ? this._userClient.createAiAppChatLinkToken(
+                          chatId.userId,
+                          chatName,
+                          appId,
+                          appRevision,
+                      )
                     : Promise.resolve(undefined);
         }
     }

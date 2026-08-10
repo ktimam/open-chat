@@ -197,14 +197,20 @@ describe("directory-bound card surface resolution", () => {
             "utf8",
         );
         const compact = source.replace(/\s+/g, " ");
-        const markerCheck = source.indexOf(
-            "let resolutionAppVerified = $derived(content.appVerified === true)",
-        );
+        const markerCheck = source.indexOf("let resolutionAppVerified = $derived.by");
         const lookup = source.indexOf("resolveActionAppForCard(");
         expect(markerCheck).toBeGreaterThan(-1);
         expect(markerCheck).toBeLessThan(lookup);
+        const markerBody = source.slice(markerCheck, source.indexOf("let resolutionChatKey"));
+        expect(markerBody).toContain("void reconciliationTrigger");
+        expect(markerBody).toContain("return content.appVerified === true");
+        const attestationCheck = source.indexOf("return isAppCardContentAttested(content)");
+        expect(attestationCheck).toBeGreaterThan(-1);
+        expect(attestationCheck).toBeLessThan(lookup);
         expect(source).toContain("if (!appVerified)");
         expect(source).toContain("if (!contentAttested)");
+        expect(source).toContain("settleCardOperationBeforeTimeout(() =>");
+        expect(source).toContain("Retry verification");
         expect(source).toContain("Directory binding only; card content is untrusted");
         expect(compact).toContain("title, rows, and payload are not attested as app-authored");
     });
@@ -256,5 +262,32 @@ describe("directory-bound card surface resolution", () => {
         );
         expect(untrackedReset).toContain("resetFrameSession()");
         expect(untrackedReset).toContain("resolvedAppIdentity = undefined");
+    });
+
+    it("threads the authoritative edge through both message trees only as a reconciliation trigger", () => {
+        const desktopMessage = readFileSync(
+            resolve(__dirname, "../components/home/ChatMessage.svelte"),
+            "utf8",
+        );
+        const desktopContent = readFileSync(
+            resolve(__dirname, "../components/home/ChatMessageContent.svelte"),
+            "utf8",
+        );
+        const mobileMessage = readFileSync(
+            resolve(__dirname, "../components_mobile/home/ChatMessage.svelte"),
+            "utf8",
+        );
+        const mobileContent = readFileSync(
+            resolve(__dirname, "../components_mobile/home/ChatMessageContent.svelte"),
+            "utf8",
+        );
+
+        for (const source of [desktopMessage, mobileMessage]) {
+            expect(source).toContain("reconciliationTrigger={confirmed}");
+        }
+        for (const source of [desktopContent, mobileContent]) {
+            expect(source).toContain("reconciliationTrigger?: boolean");
+            expect(source).toContain("{reconciliationTrigger}");
+        }
     });
 });
