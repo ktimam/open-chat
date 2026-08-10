@@ -6,23 +6,23 @@
     interface Props {
         contentStore: Writable<ActionCardContent>;
         readonly: boolean;
-        chatId: ChatIdentifier;
+        chatIdStore: Writable<ChatIdentifier>;
         messageId: bigint;
         viewerId: string;
         onRespond?: (
             response: "confirm" | "cancel",
             confirmPayloadOverride?: Uint8Array,
             confirmationGrant?: Uint8Array,
-        ) => void | Promise<unknown>;
+        ) => boolean | Promise<boolean>;
     }
 
-    let { contentStore, readonly, chatId, messageId, viewerId, onRespond }: Props = $props();
+    let { contentStore, readonly, chatIdStore, messageId, viewerId, onRespond }: Props = $props();
 </script>
 
 <ActionCardContentView
     content={$contentStore}
     {readonly}
-    {chatId}
+    chatId={$chatIdStore}
     {messageId}
     {viewerId}
     {onRespond}

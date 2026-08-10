@@ -138,9 +138,9 @@ describe.each(SETTINGS_ENTRY_POINTS)("$label in-chat Settings AI apps entry poin
         const component = source(entry.component);
         expect(component).toContain("url={setupSurface.url}");
         expect(component).not.toMatch(/url=\{[^}\n]*(?:chatId|chat\.id|currentUserIdStore)/);
-        expect(component).not.toContain("{chatKey}");
-        expect(component).not.toContain("{chatId}");
-        expect(component).not.toContain("{viewerId}");
+        // `chatId` is now intentionally passed to the local, sandboxed private-match consent
+        // control. The external setup surface must still receive only the URL minted by the shared
+        // resolver; the URL-specific assertion above is the actual disclosure boundary.
     });
 });
 

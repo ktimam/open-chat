@@ -5,7 +5,10 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../../utils/onDeviceInference", () => ({ isNativeClient: () => false }));
 
-import { redactedAiAppSurfaceDisplayUrl } from "../../utils/aiAppSurfaces";
+import {
+    aiAppSurfaceDestinationOrigin,
+    redactedAiAppSurfaceDisplayUrl,
+} from "../../utils/aiAppSurfaces";
 import AiAppSurfaceDestination from "./AiAppSurfaceDestination.svelte";
 import HardenedAiAppSurface from "./HardenedAiAppSurface.svelte";
 
@@ -13,13 +16,38 @@ const TOKEN = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
 const URL_WITH_BEARER = "https://app.example/settings#token=" + TOKEN;
 
 describe("AI app surface consent gate", () => {
-    it("renders a redacted destination before consent", async () => {
+    it("renders only the destination origin before consent", async () => {
+        const target = document.createElement("div");
+        document.body.append(target);
+        const displayUrl = redactedAiAppSurfaceDisplayUrl(URL_WITH_BEARER, [
+            "one_time_chat_link_token",
+        ]);
+        const component = mount(AiAppSurfaceDestination, {
+            target,
+            props: {
+                displayUrl,
+                dataDisclosures: ["one_time_chat_link_token"],
+            },
+        });
+
+        try {
+            await tick();
+            expect(aiAppSurfaceDestinationOrigin(URL_WITH_BEARER)).toBe("https://app.example");
+            expect(target.textContent).toContain("https://app.example");
+            expect(target.textContent).not.toContain("/settings");
+            expect(target.textContent).not.toContain(TOKEN);
+        } finally {
+            await unmount(component);
+            target.remove();
+        }
+    });
+
+    it("puts technical disclosure behind an accessible native details control", async () => {
         const target = document.createElement("div");
         document.body.append(target);
         const component = mount(AiAppSurfaceDestination, {
             target,
             props: {
-                title: "Example app",
                 displayUrl: redactedAiAppSurfaceDisplayUrl(URL_WITH_BEARER, [
                     "one_time_chat_link_token",
                 ]),
@@ -29,8 +57,12 @@ describe("AI app surface consent gate", () => {
 
         try {
             await tick();
-            expect(target.textContent).toContain("https://app.example/settings");
-            expect(target.textContent).not.toContain(TOKEN);
+            const details = target.querySelector("details");
+            expect(details).not.toBeNull();
+            expect(details?.hasAttribute("open")).toBe(false);
+            expect(details?.querySelector("summary")?.textContent).toBe("Privacy details");
+            expect(details?.textContent).toContain("browser history");
+            expect(details?.textContent).toContain("not send it in HTTP requests");
         } finally {
             await unmount(component);
             target.remove();
@@ -91,6 +123,19 @@ describe("AI app surface consent gate", () => {
             const source = readFileSync(file, "utf8");
             expect(source).toContain("redactedAiAppSurfaceDisplayUrl");
             expect(source).not.toMatch(/Browser destination:[^\n]*normalizedUrl/);
+            expect(source).toContain("Not now");
+            expect(source).toContain("Open {title}");
+            expect(source).not.toContain("Opening hands the full destination URL");
+            expect(source).not.toContain("<AiAppSurfaceDestination {title}");
         }
+
+        const desktop = readFileSync(files[0], "utf8").replace(/\s+/g, " ");
+        expect(desktop).toContain('<ModalContent closeIcon fill={display === "sheet"}');
+        expect(desktop).toContain('<Button hollow small onClick={onDismiss}>Not now</Button>');
+        expect(desktop).toMatch(/<Button\s+small\s+disabled=.*?>\s*<OpenInNew/s);
+
+        const mobile = readFileSync(files[1], "utf8").replace(/\s+/g, " ");
+        expect(mobile).toContain('height={display === "sheet" ? "fill" : "hug"}');
+        expect(mobile).toContain('mode={"active"}');
     });
 });

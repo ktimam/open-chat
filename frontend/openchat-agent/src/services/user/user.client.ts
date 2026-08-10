@@ -10,6 +10,7 @@ import {
     type AcceptP2PSwapResponse,
     type AiAppChatLinkToken,
     type AiAppCardCapability,
+    type AiAppPrivateMatchCapability,
     type AiAppCardConfirmationGrant,
     type AddRemoveReactionResponse,
     type ApproveTransferResponse,
@@ -120,6 +121,8 @@ import {
     UserRespondToActionCardResponse,
     UserCreateAiAppCardCapabilityArgs,
     UserCreateAiAppCardCapabilityResponse,
+    UserCreateAiAppPrivateMatchCapabilityArgs,
+    UserCreateAiAppPrivateMatchCapabilityResponse,
     UserCreateAiAppCardConfirmationGrantArgs,
     UserCreateAiAppCardConfirmationGrantResponse,
     UserCreateAiAppChatLinkTokenArgs,
@@ -589,6 +592,36 @@ export class UserClient
             createAiAppCardCapabilityResponse,
             UserCreateAiAppCardCapabilityArgs,
             UserCreateAiAppCardCapabilityResponse,
+            undefined,
+            { sensitive: true },
+        );
+    }
+
+    createAiAppPrivateMatchCapability(
+        userId: string,
+        messageId: bigint,
+        threadRootMessageIndex: number | undefined,
+        appId: number,
+        appRevision: bigint,
+        actionId: string,
+        recipientKeyScheme: string,
+        recipientPublicKey: Uint8Array,
+    ): Promise<AiAppPrivateMatchCapability | undefined> {
+        return this.update(
+            "create_ai_app_private_match_capability",
+            {
+                user_id: principalStringToBytes(userId),
+                thread_root_message_index: threadRootMessageIndex,
+                message_id: messageId,
+                app_id: appId,
+                app_revision: appRevision,
+                action_id: actionId,
+                recipient_key_scheme: recipientKeyScheme,
+                recipient_public_key: recipientPublicKey.slice(),
+            },
+            createAiAppCardCapabilityResponse,
+            UserCreateAiAppPrivateMatchCapabilityArgs,
+            UserCreateAiAppPrivateMatchCapabilityResponse,
             undefined,
             { sensitive: true },
         );

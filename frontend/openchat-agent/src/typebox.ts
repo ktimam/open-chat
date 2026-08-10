@@ -10906,3 +10906,110 @@ export const BotEventWrapper = Type.Object({
     event: BotEvent,
     timestamp: Type.BigInt(),
 });
+
+export type UserCreateAiAppPrivateMatchCapabilityArgs = Static<
+    typeof UserCreateAiAppPrivateMatchCapabilityArgs
+>;
+export const UserCreateAiAppPrivateMatchCapabilityArgs = Type.Object({
+    user_id: UserId,
+    thread_root_message_index: Type.Optional(MessageIndex),
+    message_id: MessageId,
+    app_id: Type.Number(),
+    app_revision: Type.BigInt(),
+    action_id: Type.String(),
+    recipient_key_scheme: Type.String(),
+    recipient_public_key: TSBytes,
+});
+
+export type CommunityCreateAiAppPrivateMatchCapabilityArgs = Static<
+    typeof CommunityCreateAiAppPrivateMatchCapabilityArgs
+>;
+export const CommunityCreateAiAppPrivateMatchCapabilityArgs = Type.Object({
+    channel_id: ChannelId,
+    thread_root_message_index: Type.Optional(MessageIndex),
+    message_id: MessageId,
+    app_id: Type.Number(),
+    app_revision: Type.BigInt(),
+    action_id: Type.String(),
+    recipient_key_scheme: Type.String(),
+    recipient_public_key: TSBytes,
+});
+
+export type GroupCreateAiAppPrivateMatchCapabilityArgs = Static<
+    typeof GroupCreateAiAppPrivateMatchCapabilityArgs
+>;
+export const GroupCreateAiAppPrivateMatchCapabilityArgs = Type.Object({
+    thread_root_message_index: Type.Optional(MessageIndex),
+    message_id: MessageId,
+    app_id: Type.Number(),
+    app_revision: Type.BigInt(),
+    action_id: Type.String(),
+    recipient_key_scheme: Type.String(),
+    recipient_public_key: TSBytes,
+});
+
+export type UserCreateAiAppPrivateMatchCapabilitySuccessResult = Static<
+    typeof UserCreateAiAppPrivateMatchCapabilitySuccessResult
+>;
+export const UserCreateAiAppPrivateMatchCapabilitySuccessResult = CreateAiAppCardCapabilitySuccess;
+
+export type CommunityCreateAiAppPrivateMatchCapabilitySuccessResult = Static<
+    typeof CommunityCreateAiAppPrivateMatchCapabilitySuccessResult
+>;
+export const CommunityCreateAiAppPrivateMatchCapabilitySuccessResult = CreateAiAppCardCapabilitySuccess;
+
+export type GroupCreateAiAppPrivateMatchCapabilitySuccessResult = Static<
+    typeof GroupCreateAiAppPrivateMatchCapabilitySuccessResult
+>;
+export const GroupCreateAiAppPrivateMatchCapabilitySuccessResult = CreateAiAppCardCapabilitySuccess;
+
+export type UserCreateAiAppPrivateMatchCapabilityResponse = Static<
+    typeof UserCreateAiAppPrivateMatchCapabilityResponse
+>;
+export const UserCreateAiAppPrivateMatchCapabilityResponse = Type.Union([
+    Type.Object({
+        Success: UserCreateAiAppPrivateMatchCapabilitySuccessResult,
+    }),
+    Type.Literal("InvalidSource"),
+    Type.Literal("AppUnavailable"),
+    Type.Object({
+        InvalidRequest: Type.String(),
+    }),
+    Type.Object({
+        Error: OCError,
+    }),
+]);
+
+export type CommunityCreateAiAppPrivateMatchCapabilityResponse = Static<
+    typeof CommunityCreateAiAppPrivateMatchCapabilityResponse
+>;
+export const CommunityCreateAiAppPrivateMatchCapabilityResponse = Type.Union([
+    Type.Object({
+        Success: CommunityCreateAiAppPrivateMatchCapabilitySuccessResult,
+    }),
+    Type.Literal("InvalidSource"),
+    Type.Literal("AppUnavailable"),
+    Type.Object({
+        InvalidRequest: Type.String(),
+    }),
+    Type.Object({
+        Error: OCError,
+    }),
+]);
+
+export type GroupCreateAiAppPrivateMatchCapabilityResponse = Static<
+    typeof GroupCreateAiAppPrivateMatchCapabilityResponse
+>;
+export const GroupCreateAiAppPrivateMatchCapabilityResponse = Type.Union([
+    Type.Object({
+        Success: GroupCreateAiAppPrivateMatchCapabilitySuccessResult,
+    }),
+    Type.Literal("InvalidSource"),
+    Type.Literal("AppUnavailable"),
+    Type.Object({
+        InvalidRequest: Type.String(),
+    }),
+    Type.Object({
+        Error: OCError,
+    }),
+]);

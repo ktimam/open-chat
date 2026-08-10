@@ -7,16 +7,12 @@ import type { AiAppRegistration, AiAppSurface, ChatIdentifier } from "@shared";
 // Surface URL tests do not exercise local inference; isolate them from the multi-GB WASM loader.
 vi.mock("./onDeviceInference", () => ({ isNativeClient: () => false }));
 import {
-    appForPostConfirm,
-    aiAppSurfaceMarkerForViewer,
     cardSurfaceOpening,
     cardSurfaceForAction,
     createChatLinkSurfaceOpening,
     hasChatLinkSurface,
-    markSurfaceShownAfterConsent,
-    parseAiAppSurfaceShownMarkers,
+    privateMatchSurfaceOpening,
     resolveActionAppForCard,
-    surfaceToOpenAfterConfirm,
     validatedAppIconUrl,
 } from "./aiAppSurfaces";
 
@@ -93,6 +89,66 @@ describe("cardSurfaceOpening", () => {
             cardSurfaceOpening(app(7, { surfaces: [{ kind: "chat_link", url: CARD_URL }] }), CHAT),
         ).toBeUndefined();
         expect(cardSurfaceOpening(app(7, {}), CHAT)).toBeUndefined();
+    });
+});
+
+describe("privateMatchSurfaceOpening", () => {
+    function privateApp(
+        surface: { kind: string; url: string; display: "sheet" | "external" },
+        perUserKeys = true,
+    ): AiAppRegistration {
+        const value = app(9, { surfaces: [surface] });
+        value.manifest.perUserKeys = perUserKeys;
+        return value;
+    }
+
+    it("resolves only a paired-app sheet surface without private URL material", () => {
+        const opening = privateMatchSurfaceOpening(
+            privateApp({
+                kind: "private_match",
+                url: "https://app.example/openchat/private-match",
+                display: "sheet",
+            }),
+            CHAT,
+        );
+        expect(opening?.url).toBe("https://app.example/openchat/private-match");
+        expect(opening?.dataDisclosures).toEqual([]);
+    });
+
+    it("rejects external, unpaired and capability-bearing matcher surfaces", () => {
+        expect(
+            privateMatchSurfaceOpening(
+                privateApp({
+                    kind: "private_match",
+                    url: "https://app.example/match",
+                    display: "external",
+                }),
+                CHAT,
+            ),
+        ).toBeUndefined();
+        expect(
+            privateMatchSurfaceOpening(
+                privateApp(
+                    {
+                        kind: "private_match",
+                        url: "https://app.example/match",
+                        display: "sheet",
+                    },
+                    false,
+                ),
+                CHAT,
+            ),
+        ).toBeUndefined();
+        expect(
+            privateMatchSurfaceOpening(
+                privateApp({
+                    kind: "private_match",
+                    url: "https://app.example/match#cap={capability}",
+                    display: "sheet",
+                }),
+                CHAT,
+            ),
+        ).toBeUndefined();
     });
 });
 
@@ -258,165 +314,6 @@ describe("surface destination disclosure and consent markers", () => {
         expect(second?.url).not.toContain(secondChat.groupId);
     });
 
-    it("treats malformed or oversized cached markers as empty", () => {
-        for (const raw of [null, "not-json", "{}", JSON.stringify(new Array(1_001).fill("x"))]) {
-            expect(parseAiAppSurfaceShownMarkers(raw).size).toBe(0);
-        }
-        const current = `v3:${"a".repeat(64)}`;
-        expect(
-            parseAiAppSurfaceShownMarkers(
-                JSON.stringify([current, "v2:viewer-a:7:group:raw-chat", 1, ""]),
-            ),
-        ).toEqual(new Set([current]));
-    });
-
-    it("stores only an opaque digest, never raw viewer or chat identifiers", () => {
-        const marker = aiAppSurfaceMarkerForViewer("viewer-a", 7, "group:raw-chat");
-
-        expect(marker).toMatch(/^v3:[0-9a-f]{64}$/);
-        expect(marker).not.toContain("viewer-a");
-        expect(marker).not.toContain("raw-chat");
-        expect(marker).not.toContain(":7:");
-        expect(parseAiAppSurfaceShownMarkers(JSON.stringify([marker]))).toEqual(new Set([marker]));
-    });
-
-    it("scopes a marker to the signed-in viewer", () => {
-        expect(aiAppSurfaceMarkerForViewer("viewer-a", 7, "group:g")).not.toBe(
-            aiAppSurfaceMarkerForViewer("viewer-b", 7, "group:g"),
-        );
-        expect(aiAppSurfaceMarkerForViewer(undefined, 7, "group:g")).toBeUndefined();
-    });
-
-    it("opens post-confirm setup for an exact connected direct-chat app without group enablement", async () => {
-        const direct: ChatIdentifier = { kind: "direct_chat", userId: "2vxsx-fae" };
-        const target = app(908, {
-            surfaces: [
-                { kind: "card", url: CARD_URL },
-                {
-                    kind: "chat_link",
-                    url: "https://app.example/setup#token={chatLinkToken}",
-                },
-            ],
-            actions: [{ name: "sample.action" }],
-        });
-        target.manifest.perUserKeys = true;
-        const calls = {
-            myAiAppKeys: vi.fn(async () => [{ appId: target.id, publicKey: "current-user-key" }]),
-            aiApps: vi.fn(async () => [target]),
-            enabledAiApps: vi.fn(async () => []),
-            createAiAppChatLinkToken: vi.fn(async () => ({
-                token: new Uint8Array(32).fill(4),
-                expiresAt: 123n,
-            })),
-            cancelAiAppChatLinkToken: vi.fn(async () => true),
-        };
-
-        const opening = await surfaceToOpenAfterConfirm(
-            calls as unknown as OpenChat,
-            direct,
-            "sample.action",
-            target.id,
-            target.updated,
-            "aaaaa-aa",
-        );
-
-        expect(opening).toBeDefined();
-        expect(calls.aiApps).toHaveBeenCalledWith([{ appId: target.id, revision: target.updated }]);
-        expect(calls.enabledAiApps).not.toHaveBeenCalled();
-        expect(calls.createAiAppChatLinkToken).toHaveBeenCalledWith(
-            direct,
-            target.id,
-            target.updated,
-        );
-    });
-
-    it("does not mint direct post-confirm setup without this user's app key", async () => {
-        const direct: ChatIdentifier = { kind: "direct_chat", userId: "2vxsx-fae" };
-        const target = app(909, {
-            surfaces: [
-                { kind: "card", url: CARD_URL },
-                {
-                    kind: "chat_link",
-                    url: "https://app.example/setup#token={chatLinkToken}",
-                },
-            ],
-            actions: [{ name: "sample.action" }],
-        });
-        target.manifest.perUserKeys = true;
-        const calls = {
-            myAiAppKeys: vi.fn(async () => []),
-            aiApps: vi.fn(),
-            enabledAiApps: vi.fn(),
-            createAiAppChatLinkToken: vi.fn(),
-        };
-
-        await expect(
-            surfaceToOpenAfterConfirm(
-                calls as unknown as OpenChat,
-                direct,
-                "sample.action",
-                target.id,
-                target.updated,
-                "aaaaa-aa",
-            ),
-        ).resolves.toBeUndefined();
-        expect(calls.aiApps).not.toHaveBeenCalled();
-        expect(calls.enabledAiApps).not.toHaveBeenCalled();
-        expect(calls.createAiAppChatLinkToken).not.toHaveBeenCalled();
-    });
-
-    it("does not mark a post-confirm surface until the host-owned consent choice", async () => {
-        const producer = app(907, {
-            surfaces: [
-                {
-                    kind: "chat_link",
-                    url: "https://app.example/setup#app={appId}&token={chatLinkToken}",
-                },
-            ],
-            actions: [{ name: "sample.action" }],
-        });
-        const client = stubClient([producer], [producer.id]);
-        const first = await surfaceToOpenAfterConfirm(
-            client,
-            CHAT,
-            "sample.action",
-            producer.id,
-            producer.updated,
-            "viewer-a",
-        );
-        expect(first).toBeDefined();
-        expect(
-            await surfaceToOpenAfterConfirm(
-                client,
-                CHAT,
-                "sample.action",
-                producer.id,
-                producer.updated,
-                "viewer-a",
-            ),
-        ).toBeDefined();
-        expect(markSurfaceShownAfterConsent(first!, CHAT, "viewer-a")).toBe(true);
-        expect(
-            await surfaceToOpenAfterConfirm(
-                client,
-                CHAT,
-                "sample.action",
-                producer.id,
-                producer.updated,
-                "viewer-a",
-            ),
-        ).toBeUndefined();
-        expect(
-            await surfaceToOpenAfterConfirm(
-                client,
-                CHAT,
-                "sample.action",
-                producer.id,
-                producer.updated,
-                "viewer-b",
-            ),
-        ).toBeDefined();
-    });
 });
 
 describe("cardSurfaceForAction — owner resolution + labelToField", () => {
@@ -682,38 +579,5 @@ describe("resolveActionAppForCard — authoritative host identity", () => {
         expect(source).toContain("{content.title}");
         expect(source).toContain('title="Isolated action app card"');
         expect(source).not.toContain("title={content.title}");
-    });
-});
-
-describe("appForPostConfirm — exact producer binding", () => {
-    const ACTION = "sample.action";
-    const producer = app(11, { actions: [{ name: ACTION }] });
-    const collision = app(12, { actions: [{ name: ACTION }] });
-
-    it("selects only the carried producing app id", () => {
-        expect(
-            appForPostConfirm([collision, producer], [11, 12], ACTION, 11, producer.updated)?.id,
-        ).toBe(11);
-    });
-
-    it("does not use global action-name fallback for a legacy or unknown producer", () => {
-        expect(appForPostConfirm([producer], [11], ACTION, undefined, undefined)).toBeUndefined();
-        expect(appForPostConfirm([producer], [11], ACTION, 99, 990n)).toBeUndefined();
-    });
-
-    it("does not navigate through a disabled or stale producing app", () => {
-        expect(appForPostConfirm([producer], [], ACTION, 11, producer.updated)).toBeUndefined();
-        expect(
-            appForPostConfirm(
-                [app(11, { actions: [{ name: "other.action" }] })],
-                [11],
-                ACTION,
-                11,
-                producer.updated,
-            ),
-        ).toBeUndefined();
-        expect(
-            appForPostConfirm([producer], [11], ACTION, 11, producer.updated - 1n),
-        ).toBeUndefined();
     });
 });

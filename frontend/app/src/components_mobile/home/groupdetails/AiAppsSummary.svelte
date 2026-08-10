@@ -29,6 +29,7 @@
     import AiAppLinkSheet from "../AiAppLinkSheet.svelte";
     import AiAppSurfaceSheet from "../AiAppSurfaceSheet.svelte";
     import Separator from "../Separator.svelte";
+    import PrivateMatchConsentToggle from "../../../components/home/PrivateMatchConsentToggle.svelte";
 
     const client = getContext<OpenChat>("client");
 
@@ -245,6 +246,11 @@
                                 {app.manifest.description}
                             </BodySmall>
                         {/if}
+                        <PrivateMatchConsentToggle
+                            {app}
+                            chatId={chat.id}
+                            available={enabled.has(app.id) && connected.has(app.id)}
+                        />
                         {#if showPrimary || connected.has(app.id)}
                             <!-- Plain div, not Container: the action row can hold three buttons,
                                  which overflow a non-wrapping flex row on a narrow window — this

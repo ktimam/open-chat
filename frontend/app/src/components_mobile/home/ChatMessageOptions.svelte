@@ -89,6 +89,7 @@
         translated: boolean;
         msg: Message;
         threadRootMessage: Message | undefined;
+        isThreadRoot?: boolean;
         iconButtonSize?: "xs" | "sm" | "md" | "lg";
         onCollapseMessage?: () => void;
         onRemindMe: () => void;
@@ -133,6 +134,7 @@
         translated,
         msg,
         threadRootMessage,
+        isThreadRoot = false,
         canTip,
         iconButtonSize,
         onCollapseMessage,
@@ -164,9 +166,7 @@
     );
     let inThread = $derived(threadRootMessage !== undefined);
     let threadRootMessageIndex = $derived(
-        msg.messageId === threadRootMessage?.messageId
-            ? undefined
-            : threadRootMessage?.messageIndex,
+        isThreadRoot ? undefined : threadRootMessage?.messageIndex,
     );
     let isFollowedByMe = $derived(
         threadRootMessage !== undefined &&

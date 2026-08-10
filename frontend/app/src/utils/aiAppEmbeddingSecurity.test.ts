@@ -31,15 +31,17 @@ describe("embedded app surface isolation", () => {
         }
     });
 
-    it("never auto-opens external post-confirm surfaces and marks only consent", () => {
+    it("keeps chat confirmation independent from external setup surfaces", () => {
         for (const file of [
             "src/components/home/ChatMessage.svelte",
             "src/components_mobile/home/ChatMessage.svelte",
         ]) {
             const message = readFileSync(appPath(file), "utf8");
-            expect(message).toContain("confirmSurface = opening");
-            expect(message).toContain("markSurfaceShownAfterConsent");
-            expect(message).not.toContain("openSurfaceExternally(client, opening.url)");
+            expect(message).toContain("respondToActionCard(");
+            expect(message).not.toContain("surfaceToOpenAfterConfirm");
+            expect(message).not.toContain("confirmSurface");
+            expect(message).not.toContain("AiAppSurfaceModal");
+            expect(message).not.toContain("AiAppSurfaceSheet");
         }
         for (const file of [
             "src/components/home/AiAppSurfaceModal.svelte",
@@ -123,26 +125,22 @@ describe("embedded app surface isolation", () => {
         expect(cache).toContain("confirmPayload: liveConfirmPayload");
     });
 
-    it("uses the same one-time per-chat mint and exact dismiss cancellation after confirm", () => {
+    it("mints chat setup tokens only from explicit desktop/mobile Settings entry points", () => {
         const resolver = readFileSync(appPath("src/utils/aiAppSurfaces.ts"), "utf8");
-        expect(resolver).toContain("return createChatLinkSurfaceOpening(client, app, chatId)");
+        expect(resolver).not.toContain("surfaceToOpenAfterConfirm");
         for (const file of [
-            "src/components/home/ChatMessage.svelte",
-            "src/components_mobile/home/ChatMessage.svelte",
+            "src/components/home/groupdetails/AiAppsSummary.svelte",
+            "src/components/home/groupdetails/AiAppsDirectSummary.svelte",
+            "src/components_mobile/home/groupdetails/AiAppsSummary.svelte",
+            "src/components_mobile/home/groupdetails/AiAppsDirectSummary.svelte",
         ]) {
-            const message = readFileSync(appPath(file), "utf8");
-            expect(message).toContain("confirmSurfaceHandedOff = false");
-            expect(message).toContain("onConsent={consentToConfirmSurface}");
-            expect(message).toContain("onDismiss={dismissConfirmSurface}");
-            expect(message).toContain("client.cancelAiAppChatLinkToken(opening.chatLinkToken)");
-            expect(message).toContain("opening !== undefined && !confirmSurfaceHandedOff");
-            expect(message).toContain("let confirmSurfaceRequest = 0");
-            expect(message).toContain("chatIdentifierToString(chatId)");
-            expect(message).toContain("confirmSurfaceRequest += 1");
-            expect(message).toContain("surfaceRequest !== confirmSurfaceRequest");
-            expect(message).toContain(
-                "await client.cancelAiAppChatLinkToken(opening.chatLinkToken)",
-            );
+            const settings = readFileSync(appPath(file), "utf8");
+            expect(settings).toContain("createChatLinkSurfaceOpening(client, app,");
+            expect(settings).toContain("setupHandedOff = false");
+            expect(settings).toContain("onConsent={() => (setupHandedOff = true)}");
+            expect(settings).toContain("onDismiss={dismissSetup}");
+            expect(settings).toContain("client.cancelAiAppChatLinkToken(opening.chatLinkToken)");
+            expect(settings).toContain("opening !== undefined && !setupHandedOff");
         }
     });
 

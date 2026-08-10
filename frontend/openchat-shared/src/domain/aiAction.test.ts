@@ -674,7 +674,12 @@ describe("runAiAction", () => {
                 okInfer('{"amount":20,"unstable":"model guess"}'),
             );
 
-            expect(result.kind).toBe("no_extraction");
+            expect(result).toMatchObject({
+                kind: "incomplete_extraction",
+                missingFields: ["unstable"],
+                candidateCount: 1,
+                validCandidateCount: 0,
+            });
         });
 
         it("applies independently to every model-produced entry without mutating the schema or source data", async () => {
@@ -748,7 +753,7 @@ describe("runAiAction", () => {
         }
     });
 
-    it("degenerate extraction: a required amount deleted by exclusiveMinimum 0 yields no_extraction (no card)", async () => {
+    it("reports an incomplete extraction when a required amount violates its schema", async () => {
         // Live repro: the model "extracted" a settlement with amount 0 from the message "hi". The
         // conformance pass deletes the degenerate amount, and with `amount` required the runner must
         // NOT post a card the consumer will reject — it reports "model found no action" instead.
@@ -766,9 +771,12 @@ describe("runAiAction", () => {
         };
         const raw = '{"kind":"settlement","amount":0,"currency":"USD"}';
         const r = await runAiAction(def, { text: "hi" }, RECIPIENT, okInfer(raw));
-        expect(r.kind).toBe("no_extraction");
-        if (r.kind === "no_extraction") {
+        expect(r.kind).toBe("incomplete_extraction");
+        if (r.kind === "incomplete_extraction") {
             expect(r.raw).toBe(raw);
+            expect(r.missingFields).toEqual(["amount"]);
+            expect(r.candidateCount).toBe(1);
+            expect(r.validCandidateCount).toBe(0);
         }
     });
 
@@ -861,7 +869,7 @@ describe("runAiAction", () => {
         }
     });
 
-    it("posts one multi card when more than one valid entry remains after dropping a degenerate element", async () => {
+    it("fails the whole multi proposal when one element is degenerate", async () => {
         const raw =
             '[{"amount":20,"currency":"USD","note":"lunch"},' +
             '{"amount":0,"currency":"USD"},' +
@@ -872,12 +880,11 @@ describe("runAiAction", () => {
             RECIPIENT,
             okInfer(raw),
         );
-        expect(r.kind).toBe("ready_multi");
-        if (r.kind === "ready_multi") {
-            expect(r.extracted.map((entry) => entry.amount)).toEqual([20, 30]);
-            expect(JSON.parse(new TextDecoder().decode(r.card.confirmPayload!))).toEqual(
-                r.extracted,
-            );
+        expect(r.kind).toBe("incomplete_extraction");
+        if (r.kind === "incomplete_extraction") {
+            expect(r.missingFields).toEqual(["amount"]);
+            expect(r.candidateCount).toBe(3);
+            expect(r.validCandidateCount).toBe(2);
         }
     });
 
@@ -974,7 +981,7 @@ describe("runAiAction", () => {
         });
     });
 
-    it("an ARRAY with a SINGLE valid entry collapses to the single-entry OBJECT card", async () => {
+    it("does not collapse a partial ARRAY into a misleading single-entry card", async () => {
         const raw = '[{"amount":0,"currency":"USD"},{"amount":42,"currency":"USD","note":"taxi"}]';
         const r = await runAiAction(
             MULTI_DEF,
@@ -982,20 +989,23 @@ describe("runAiAction", () => {
             RECIPIENT,
             okInfer(raw),
         );
-        expect(r.kind).toBe("ready");
-        if (r.kind === "ready") {
-            const payload = JSON.parse(new TextDecoder().decode(r.card.confirmPayload!)) as unknown;
-            expect(Array.isArray(payload)).toBe(false);
-            expect(payload).toEqual({ amount: 42, currency: "USD", note: "taxi" });
+        expect(r.kind).toBe("incomplete_extraction");
+        if (r.kind === "incomplete_extraction") {
+            expect(r.missingFields).toEqual(["amount"]);
+            expect(r.candidateCount).toBe(2);
+            expect(r.validCandidateCount).toBe(1);
         }
     });
 
-    it("an all-invalid ARRAY yields no_extraction (no card)", async () => {
+    it("an all-invalid ARRAY reports the required fields that failed", async () => {
         const raw = '[{"amount":0,"currency":"USD"},{"currency":"EUR"}]';
         const r = await runAiAction(MULTI_DEF, { text: "nothing usable" }, RECIPIENT, okInfer(raw));
-        expect(r.kind).toBe("no_extraction");
-        if (r.kind === "no_extraction") {
+        expect(r.kind).toBe("incomplete_extraction");
+        if (r.kind === "incomplete_extraction") {
             expect(r.raw).toBe(raw);
+            expect(r.missingFields).toEqual(["amount"]);
+            expect(r.candidateCount).toBe(2);
+            expect(r.validCandidateCount).toBe(0);
         }
     });
 });
@@ -1129,6 +1139,27 @@ describe("applyRulesPostPass", () => {
             },
         ];
         expect(applyRulesPostPass(rules, {}, "A Hotel Stay")).toEqual({ category: "travel" });
+    });
+
+    it("supports specific direction phrases before a bare owe shorthand fallback", () => {
+        const rules: AiActionRule[] = [
+            {
+                kind: "keyword_map",
+                field: "direction",
+                mode: "override",
+                map: [
+                    { value: "credit", keywords: ["you owe", "owe me", "owes me"] },
+                    { value: "debt", keywords: ["i owe", "owe you", "owe"] },
+                ],
+            },
+        ];
+        const directionFor = (message: string) =>
+            applyRulesPostPass(rules, {}, message).direction;
+
+        expect(directionFor("owe 200 uber")).toBe("debt");
+        expect(directionFor("I owe you 200 for Uber")).toBe("debt");
+        expect(directionFor("You owe me 200 for Uber")).toBe("credit");
+        expect(directionFor("you owe 200 for Uber")).toBe("credit");
     });
 
     // The override is deterministic and unarguable — neither the model nor the user gets a say — so a
@@ -1606,7 +1637,12 @@ describe("postProcessAiActionCandidate", () => {
                 inferOk('{"amount":20,"currency":"USD"}'),
             );
 
-            expect(result.kind).toBe("no_extraction");
+            expect(result).toMatchObject({
+                kind: "incomplete_extraction",
+                missingFields: ["currency"],
+                candidateCount: 1,
+                validCandidateCount: 0,
+            });
         });
 
         it("removes invented currencies independently from every stored multi-entry payload row", async () => {
@@ -2118,7 +2154,7 @@ describe("real captured model replies keep every transaction", () => {
         }
     });
 
-    it("keeps the other transactions when ONE element is degenerate", async () => {
+    it("does not silently drop one degenerate transaction from a captured model reply", async () => {
         // amount 0 violates exclusiveMinimum, so that element is dropped by the viability gate — but
         // dropping the whole card would lose two good transactions with it.
         const withZero = `[
@@ -2130,9 +2166,11 @@ describe("real captured model replies keep every transaction", () => {
             kind: "ok",
             text: withZero,
         }));
-        expect(r.kind).toBe("ready_multi");
-        if (r.kind === "ready_multi") {
-            expect(amountsOf(r.extracted)).toEqual([300, 500]);
+        expect(r.kind).toBe("incomplete_extraction");
+        if (r.kind === "incomplete_extraction") {
+            expect(r.missingFields).toEqual(["amount"]);
+            expect(r.candidateCount).toBe(3);
+            expect(r.validCandidateCount).toBe(2);
         }
     });
 });

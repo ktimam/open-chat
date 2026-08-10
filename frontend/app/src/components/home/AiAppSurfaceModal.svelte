@@ -6,6 +6,7 @@
     // always have a way out to the real page.
     import { i18nKey } from "@src/i18n/i18n";
     import {
+        aiAppSurfaceDestinationOrigin,
         openSurfaceExternally,
         redactedAiAppSurfaceDisplayUrl,
         type AiAppSurfaceDataDisclosure,
@@ -47,6 +48,7 @@
         normalizeAiAppSurfaceUrl(url, { allowLocalDevelopment: import.meta.env.DEV }),
     );
     let displayUrl = $derived(redactedAiAppSurfaceDisplayUrl(normalizedUrl ?? "", dataDisclosures));
+    let destinationOrigin = $derived(aiAppSurfaceDestinationOrigin(displayUrl));
 
     function openBrowser() {
         if (normalizedUrl === undefined) return;
@@ -56,7 +58,7 @@
 </script>
 
 <Overlay dismissible onClose={onDismiss}>
-    <ModalContent closeIcon fill onClose={onDismiss}>
+    <ModalContent closeIcon fill={display === "sheet"} onClose={onDismiss}>
         {#snippet header()}
             <div class="hdr">{title}</div>
         {/snippet}
@@ -65,11 +67,8 @@
                 <HardenedAiAppSurface {title} {url} {dataDisclosures} {onConsent} />
             {:else if normalizedUrl !== undefined}
                 <div class="external-prompt">
-                    <AiAppSurfaceDestination {title} {displayUrl} {dataDisclosures} />
-                    <span>
-                        Opening hands the full destination URL to your browser. No navigation occurs
-                        until you choose Open.
-                    </span>
+                    <p>Continue setting up this chat in {title}. OpenChat will open your browser.</p>
+                    <AiAppSurfaceDestination {displayUrl} {dataDisclosures} />
                 </div>
             {:else}
                 <div class="blocked" role="alert">This external app URL is not allowed.</div>
@@ -78,21 +77,32 @@
         {#snippet footer()}
             <div class="footer">
                 {#if display === "sheet" && normalizedUrl !== undefined}
-                    <span class="destination">Browser destination: <code>{displayUrl}</code></span>
+                    <span class="destination"
+                        >Browser destination: <code>{destinationOrigin}</code></span
+                    >
                 {/if}
                 <ButtonGroup>
                     {#if display === "external"}
                         <Button hollow small onClick={onDismiss}>Not now</Button>
+                        <Button
+                            small
+                            disabled={normalizedUrl === undefined}
+                            onClick={openBrowser}
+                        >
+                            <OpenInNew size="1em" color="currentColor" />
+                            Open {title}
+                        </Button>
+                    {:else}
+                        <Button
+                            hollow
+                            small
+                            disabled={normalizedUrl === undefined}
+                            onClick={openBrowser}
+                        >
+                            <OpenInNew size="1em" color="currentColor" />
+                            <Translatable resourceKey={i18nKey("aiApps.openInBrowser")} />
+                        </Button>
                     {/if}
-                    <Button
-                        hollow
-                        small
-                        disabled={normalizedUrl === undefined}
-                        onClick={openBrowser}
-                    >
-                        <OpenInNew size="1em" color="currentColor" />
-                        <Translatable resourceKey={i18nKey("aiApps.openInBrowser")} />
-                    </Button>
                 </ButtonGroup>
             </div>
         {/snippet}
@@ -113,11 +123,8 @@
         gap: var(--pad-sm);
     }
 
-    .external-prompt,
-    .blocked {
-        padding: var(--pad-md);
-        border: var(--bw) solid var(--bd);
-        border-radius: var(--rd);
+    .external-prompt p {
+        margin: 0;
     }
 
     .destination {

@@ -115,6 +115,10 @@ export type PubSubEvents = {
         context: MessageContext;
         event: EventWrapper<Message>;
     };
+    sentMessageConfirmed: {
+        context: MessageContext;
+        event: EventWrapper<Message>;
+    };
     userLoggedIn: string;
     reactionSelected: { messageId: bigint; kind: "add" | "remove" };
     userSuspensionChanged: undefined;

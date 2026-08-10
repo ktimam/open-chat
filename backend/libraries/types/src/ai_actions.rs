@@ -89,6 +89,7 @@ pub struct AiAppCardContentCommitmentV1 {
 const CARD_CONTENT_HASH_DOMAIN_V1: &[u8] = b"openchat.ai-app-card-content.v1\0";
 const CARD_CONTENT_CANONICAL_PREFIX_V1: &[u8] = b"OC-CARD\x01";
 const CARD_CONFIRM_PAYLOAD_HASH_DOMAIN_V1: &[u8] = b"openchat.ai-app-card-confirm-payload.v1\0";
+const PRIVATE_MATCH_SOURCE_HASH_DOMAIN_V1: &[u8] = b"openchat.ai-app-private-match-source.v1\0";
 pub const MAX_ATTESTED_ACTION_CARD_BYTES: usize = 64 * 1024;
 pub const MAX_AI_APP_CONFIRM_PAYLOAD_BYTES: usize = 16 * 1024;
 pub const AI_APP_CARD_TOKEN_BYTES: usize = 32;
@@ -238,6 +239,21 @@ pub fn ai_app_card_confirm_payload_hash_v1(payload: &[u8]) -> Result<[u8; 32], S
     hasher.update(len.to_be_bytes());
     hasher.update(payload);
     Ok(hasher.finalize().into())
+}
+
+/// Domain-separated commitment to the exact UTF-8 text of one authoritative chat message.
+///
+/// A private-match iframe receives the source text from its OpenChat host, while the registered app
+/// canister receives this digest only after redeeming a message-bound one-time capability. The
+/// iframe must reproduce the digest before consulting private app data, so a compromised host
+/// cannot turn the surface into an arbitrary keyword-membership oracle.
+pub fn ai_app_private_match_source_hash_v1(source: &str) -> [u8; 32] {
+    let bytes = source.as_bytes();
+    let mut hasher = Sha256::new();
+    hasher.update(PRIVATE_MATCH_SOURCE_HASH_DOMAIN_V1);
+    hasher.update((bytes.len() as u64).to_be_bytes());
+    hasher.update(bytes);
+    hasher.finalize().into()
 }
 
 #[derive(CandidType, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
@@ -646,5 +662,39 @@ mod card_content_commitment_tests {
             })
             .collect();
         assert!(ai_app_card_content_commitment_hash_v1(&value).is_err());
+    }
+}
+
+#[cfg(test)]
+mod private_match_source_commitment_tests {
+    use super::*;
+
+    #[derive(CandidType, Deserialize, Debug, PartialEq, Eq)]
+    enum LegacyCardCapabilityScope {
+        #[serde(rename = "private_context")]
+        PrivateContext,
+    }
+
+    #[test]
+    fn legacy_one_tag_card_scope_decoder_remains_compatible() {
+        let bytes = candid::encode_one(AiAppCardCapabilityScope::PrivateContext).unwrap();
+        let decoded: LegacyCardCapabilityScope = candid::decode_one(&bytes).unwrap();
+        assert_eq!(decoded, LegacyCardCapabilityScope::PrivateContext);
+    }
+
+    #[test]
+    fn frozen_utf8_length_delimited_source_digest() {
+        assert_eq!(
+            hex::encode(ai_app_private_match_source_hash_v1("School expense 350 EGP")),
+            "31c494e1ee6b6f60ce0721675f922496dea4bce13acb276d674c55bf53e1ec89"
+        );
+    }
+
+    #[test]
+    fn exact_source_bytes_are_bound() {
+        let baseline = ai_app_private_match_source_hash_v1("school expense");
+        assert_ne!(baseline, ai_app_private_match_source_hash_v1("School expense"));
+        assert_ne!(baseline, ai_app_private_match_source_hash_v1("school expense "));
+        assert_ne!(baseline, ai_app_private_match_source_hash_v1("school\0expense"));
     }
 }

@@ -65,6 +65,7 @@ import type {
     AiAppLinkCode,
     AiAppChatLinkToken,
     AiAppCardCapability,
+    AiAppPrivateMatchCapability,
     AiAppCardConfirmationGrant,
     AiAppCardContentV1,
     AiAppCardProvenance,
@@ -3978,6 +3979,56 @@ export class OpenChatAgent extends EventTarget {
                           chatId.userId,
                           messageId,
                           threadRootMessageIndex,
+                          recipientKeyScheme,
+                          recipientPublicKey,
+                      )
+                    : Promise.resolve(undefined);
+        }
+    }
+
+    createAiAppPrivateMatchCapability(
+        chatId: ChatIdentifier,
+        threadRootMessageIndex: number | undefined,
+        messageId: bigint,
+        appId: number,
+        appRevision: bigint,
+        actionId: string,
+        recipientKeyScheme: string,
+        recipientPublicKey: Uint8Array,
+    ): Promise<AiAppPrivateMatchCapability | undefined> {
+        if (offline()) return Promise.resolve(undefined);
+        switch (chatId.kind) {
+            case "group_chat":
+                return this._groupClient.createAiAppPrivateMatchCapability(
+                    chatId.groupId,
+                    messageId,
+                    threadRootMessageIndex,
+                    appId,
+                    appRevision,
+                    actionId,
+                    recipientKeyScheme,
+                    recipientPublicKey,
+                );
+            case "channel":
+                return this._communityClient.createAiAppPrivateMatchCapability(
+                    chatId,
+                    messageId,
+                    threadRootMessageIndex,
+                    appId,
+                    appRevision,
+                    actionId,
+                    recipientKeyScheme,
+                    recipientPublicKey,
+                );
+            case "direct_chat":
+                return this._userClient instanceof UserClient
+                    ? this._userClient.createAiAppPrivateMatchCapability(
+                          chatId.userId,
+                          messageId,
+                          threadRootMessageIndex,
+                          appId,
+                          appRevision,
+                          actionId,
                           recipientKeyScheme,
                           recipientPublicKey,
                       )

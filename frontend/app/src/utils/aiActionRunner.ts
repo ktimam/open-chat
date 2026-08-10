@@ -48,6 +48,18 @@ export interface AiActionCandidate {
     inboxCanisterId?: string;
 }
 
+/** Public immutable coordinates retained by an auto-propose suggestion (never private type data). */
+export interface AiActionCoordinates {
+    appId: number;
+    appRevision: bigint;
+    actionId: string;
+}
+
+export type SuggestedAiActionResolution =
+    | { kind: "candidate"; candidate: AiActionCandidate }
+    | { kind: "link_required"; app: AiAppRegistration }
+    | { kind: "stale" };
+
 export type AiActionUnavailableReason =
     | "missing_card_surface"
     | "missing_inbox_route"
@@ -204,6 +216,29 @@ export async function resolveCandidates(
     return { candidates, linkRequired, unavailable };
 }
 
+/** Re-resolve a chip's exact public app revision/action; any drift fails closed as stale. */
+export async function resolveSuggestedAiAction(
+    client: OpenChat,
+    chatId: ChatIdentifier,
+    coordinates: AiActionCoordinates,
+): Promise<SuggestedAiActionResolution> {
+    const { candidates, linkRequired } = await resolveCandidates(client, chatId);
+    const candidate = candidates.find(
+        (value) =>
+            value.app.id === coordinates.appId &&
+            value.app.updated === coordinates.appRevision &&
+            value.action.name === coordinates.actionId,
+    );
+    if (candidate !== undefined) return { kind: "candidate", candidate };
+    const app = linkRequired.find(
+        (value) =>
+            value.id === coordinates.appId &&
+            value.updated === coordinates.appRevision &&
+            value.manifest.actions.some((action) => action.name === coordinates.actionId),
+    );
+    return app === undefined ? { kind: "stale" } : { kind: "link_required", app };
+}
+
 export type AiActionPreflightBlocker = Extract<
     ProposeResult,
     { kind: "actions_unavailable" | "no_actions" }
@@ -281,7 +316,7 @@ export function parseManualExtractionPrompt(
         const parsed: unknown = JSON.parse(raw);
         if (
             isPlainExtractionObject(parsed) ||
-            (Array.isArray(parsed) && parsed.every(isPlainExtractionObject))
+            (Array.isArray(parsed) && parsed.length > 0 && parsed.every(isPlainExtractionObject))
         ) {
             return parsed;
         }
@@ -293,13 +328,9 @@ export function parseManualExtractionPrompt(
 }
 
 // The manual-extraction half of runDefinition, exported as a pure seam for tests. A caller-supplied
-// extraction goes through the SAME deterministic gate as the model path — the rules post-pass
-// (schema conformance included) and the required-fields check, applied PER ELEMENT — so the manual
-// path can never post a card the model path would have refused (e.g. a degenerate amount 0 against a
-// schema requiring amount > 0, which the consumer then rejects as an invalid draft). Degenerate
-// elements are dropped; 0 valid uses the existing "model found no action" UX (`raw` carries the
-// original manual extraction), 1 valid builds the single-entry object card, and multiple valid
-// entries build one card with one frozen JSON-array payload.
+// extraction goes through the same deterministic gate as the model path. If any candidate is
+// incomplete, fail the whole proposal instead of silently dropping rows. Otherwise one valid
+// candidate builds a single-entry card and multiple valid candidates build one frozen array card.
 export function buildManualCard(
     def: AiActionDefinition,
     manualExtraction: ManualExtraction,
@@ -314,6 +345,9 @@ export function buildManualCard(
     source: ManualExtractionSource = { modality: "text" },
 ): ProposeResult {
     const candidates = Array.isArray(manualExtraction) ? manualExtraction : [manualExtraction];
+    if (candidates.length === 0) {
+        return { kind: "no_extraction", raw: JSON.stringify(manualExtraction) };
+    }
     if (candidates.length > MAX_AI_ACTION_CANDIDATES) {
         return {
             kind: "error",
@@ -321,17 +355,27 @@ export function buildManualCard(
         };
     }
     const valid: Record<string, unknown>[] = [];
+    const missingFields = new Set<string>();
     for (const candidate of candidates) {
         const finalExtraction = postProcessAiActionCandidate(def, candidate, {
             hasImage: source.modality === "image",
             text: source.text,
         });
-        if (missingRequired(finalExtraction, def.responseSchema).length === 0) {
+        const missing = missingRequired(finalExtraction, def.responseSchema);
+        if (missing.length === 0) {
             valid.push(finalExtraction);
+        } else {
+            for (const field of missing) missingFields.add(field);
         }
     }
-    if (valid.length === 0) {
-        return { kind: "no_extraction", raw: JSON.stringify(manualExtraction) };
+    if (missingFields.size > 0) {
+        return {
+            kind: "incomplete_extraction",
+            raw: JSON.stringify(manualExtraction),
+            missingFields: [...missingFields].sort(),
+            candidateCount: candidates.length,
+            validCandidateCount: valid.length,
+        };
     }
     if (valid.length === 1) {
         const card = buildActionCardContent(
@@ -501,8 +545,12 @@ async function postCard(
     client: OpenChat,
     messageContext: MessageContext,
     result: ProposeResult & { kind: "ready" | "ready_multi" },
+    stillCurrent?: () => boolean,
 ): Promise<ProposeResult> {
     try {
+        if (stillCurrent?.() === false) {
+            return { kind: "error", error: "suggestion context changed" };
+        }
         const appId = result.card.appId;
         const appRevision = result.card.appRevision;
         if (appId === undefined || appRevision === undefined) {
@@ -528,6 +576,9 @@ async function postCard(
             messageId,
             messageContext.threadRootMessageIndex,
         );
+        if (stillCurrent?.() === false) {
+            return { kind: "error", error: "suggestion context changed" };
+        }
         if (provenance === undefined || provenance.expiresAt <= BigInt(Date.now())) {
             return {
                 kind: "error",
@@ -538,6 +589,9 @@ async function postCard(
         // NB: this does NOT throw on failure — it RESOLVES with a failure response (e.g. the chat is
         // missing from the store, or the send is throttled), which is the other half of why a failed
         // propose was completely silent. Inspect the response, don't just await it.
+        if (stillCurrent?.() === false) {
+            return { kind: "error", error: "suggestion context changed" };
+        }
         const res = await client.sendMessageWithContent(
             messageContext,
             vouchedCard,
@@ -563,15 +617,22 @@ export async function proposeAndPost(
     messageContext: MessageContext,
     content: MessageContent,
     manualExtraction?: ManualExtraction,
+    stillCurrent?: () => boolean,
 ): Promise<ProposeResult> {
+    if (stillCurrent?.() === false) {
+        return { kind: "error", error: "proposal context changed" };
+    }
     const result = await proposeAiActionForMessage(
         client,
         messageContext.chatId,
         content,
         manualExtraction,
     );
+    if (stillCurrent?.() === false) {
+        return { kind: "error", error: "proposal context changed" };
+    }
     if (result.kind === "ready" || result.kind === "ready_multi") {
-        return postCard(client, messageContext, result);
+        return postCard(client, messageContext, result, stillCurrent);
     }
     return result;
 }
@@ -584,7 +645,11 @@ export async function proposeAndPostCandidate(
     content: MessageContent,
     candidate: AiActionCandidate,
     manualExtraction?: ManualExtraction,
+    stillCurrent?: () => boolean,
 ): Promise<ProposeResult> {
+    if (stillCurrent?.() === false) {
+        return { kind: "error", error: "suggestion context changed" };
+    }
     const unavailableReason = unavailableReasonForApp(candidate.app, messageContext.chatId);
     if (unavailableReason !== undefined) {
         return {
@@ -602,8 +667,13 @@ export async function proposeAndPostCandidate(
         candidate.app.id,
         candidate.app.updated,
     );
+    // The model can run for seconds. Recheck before the only external write so switching accounts
+    // during inference cannot post A's message-derived card into B's session.
+    if (stillCurrent?.() === false) {
+        return { kind: "error", error: "suggestion context changed" };
+    }
     if (result.kind === "ready" || result.kind === "ready_multi") {
-        return postCard(client, messageContext, result);
+        return postCard(client, messageContext, result, stillCurrent);
     }
     return result;
 }
@@ -649,7 +719,14 @@ export function proposeFailureMessage(result: ProposeResult): string | undefined
             // messages below through untranslated.
             return "aiApps.noneEnabled";
         case "unavailable":
-            return NO_MODEL_MESSAGE;
+            // The ordinary unavailable reasons all mean "select/download a model". This one is
+            // different: no model choice can fix a native binary compiled without llama.cpp, so keep
+            // the capability probe's actionable update guidance instead of misdirecting the user.
+            return result.reason.startsWith(
+                "This OpenChat build does not include on-device inference.",
+            )
+                ? result.reason
+                : NO_MODEL_MESSAGE;
         case "unsupported_content":
             return "This message can't be turned into an action";
         case "image_unsupported":
@@ -658,6 +735,13 @@ export function proposeFailureMessage(result: ProposeResult): string | undefined
             return "This app action doesn't accept images. Choose an image-enabled action or send the details as text.";
         case "no_extraction":
             return "The model found no action in this message";
+        case "incomplete_extraction": {
+            const fields = result.missingFields.join(", ");
+            if (result.candidateCount > 1) {
+                return `The model produced ${result.candidateCount} action entries, but only ${result.validCandidateCount} passed validation. Nothing was posted. Missing or invalid required fields: ${fields}.`;
+            }
+            return `The model found an action, but required fields were missing or invalid: ${fields}. Nothing was posted.`;
+        }
         case "error":
             return `Action failed: ${result.error}`;
         default: {
@@ -677,7 +761,10 @@ export interface ProposeFlowDeps {
     // temporary content-attestation kill-switch must speak before any local inference work starts.
     preflight: () => Promise<AiActionPreflightBlocker | undefined>;
     // Is an on-device model loaded and usable right now?
-    canInfer: () => boolean;
+    canInfer: () =>
+        | boolean
+        | { available: boolean; reason?: string }
+        | Promise<boolean | { available: boolean; reason?: string }>;
     // The manual-JSON seam is enabled only by this tab's explicit query. Undefined means the seam is
     // disabled; the cancellation sentinel means the user explicitly cancelled and the flow must stop.
     promptForExtraction: () => ManualExtractionPromptResult;
@@ -686,6 +773,11 @@ export interface ProposeFlowDeps {
         candidate: AiActionCandidate,
         extraction?: ManualExtraction,
     ) => Promise<ProposeResult>;
+    // When a private/public trigger created the chip, re-resolve only those immutable coordinates.
+    // Stale registrations must never fall back to the generic chooser or a different candidate.
+    resolveSuggestedCandidate?: () => Promise<SuggestedAiActionResolution>;
+    // Captured-viewer guard for a suggestion. Checked around every awaited phase and before runs.
+    stillCurrent?: () => boolean;
     // Pick between several offered actions. The classic tree answers synchronously (a numbered
     // window.prompt), the mobile tree asynchronously (a sheet); undefined means the user backed out.
     chooseCandidate: (
@@ -709,38 +801,91 @@ export interface ProposeFlowDeps {
  * `unavailable`, and after an `unavailable` from a CHOSEN candidate (the branch the mobile tree
  * once returned from in silence, leaving a user with two candidates and no model a dead button).
  */
-export async function runProposeFlow(deps: ProposeFlowDeps): Promise<void> {
+async function runProposeFlowInternal(deps: ProposeFlowDeps): Promise<void> {
+    const stale = (): boolean => {
+        if (deps.stillCurrent?.() !== false) return false;
+        deps.toast("aiApps.autoPropose.stale");
+        return true;
+    };
+    if (stale()) return;
     const blocker = await deps.preflight();
+    if (stale()) return;
     if (blocker !== undefined) {
         const message = proposeFailureMessage(blocker);
         if (message !== undefined) deps.toast(message);
         return;
     }
 
+    let suggestedCandidate: AiActionCandidate | undefined;
+    if (deps.resolveSuggestedCandidate !== undefined) {
+        let resolved = await deps.resolveSuggestedCandidate();
+        if (stale()) return;
+        if (resolved.kind === "link_required") {
+            if (!(await deps.linkApp(resolved.app))) return;
+            if (stale()) return;
+            resolved = await deps.resolveSuggestedCandidate();
+            if (stale()) return;
+        }
+        if (resolved.kind !== "candidate") {
+            deps.toast("aiApps.autoPropose.stale");
+            return;
+        }
+        suggestedCandidate = resolved.candidate;
+    }
+
     // The prompt dependency is inert for real users. Check it before model availability so an
     // explicitly isolated QC tab can override a model without unloading or mutating model state.
     const prompted = deps.promptForExtraction();
+    if (stale()) return;
     if (prompted === MANUAL_EXTRACTION_CANCELLED) return;
     const extraction = prompted;
-    if (extraction === undefined && !deps.canInfer()) {
-        deps.toast(NO_MODEL_MESSAGE);
-        return;
+    if (extraction === undefined) {
+        const readiness = await deps.canInfer();
+        if (stale()) return;
+        const available = typeof readiness === "boolean" ? readiness : readiness.available;
+        if (!available) {
+            deps.toast(
+                typeof readiness === "boolean"
+                    ? NO_MODEL_MESSAGE
+                    : (readiness.reason ?? NO_MODEL_MESSAGE),
+            );
+            return;
+        }
     }
 
-    let result = await deps.propose(extraction);
+    if (stale()) return;
+    let result =
+        suggestedCandidate === undefined
+            ? await deps.propose(extraction)
+            : await deps.proposeCandidate(suggestedCandidate, extraction);
+    if (stale()) return;
+
+    // A candidate-specific run is not allowed to escape into a generic chooser/link flow even if a
+    // malformed/runtime implementation returns an impossible union member.
+    if (
+        suggestedCandidate !== undefined &&
+        (result.kind === "choose" || result.kind === "link_required")
+    ) {
+        deps.toast("aiApps.autoPropose.stale");
+        return;
+    }
 
     if (result.kind === "link_required") {
         // The pairing surface reports its own outcome, and dismissing it is a deliberate "not now" —
         // the one early exit that is honest without a toast.
         if (!(await deps.linkApp(result.app))) return;
+        if (stale()) return;
         result = await deps.propose(extraction);
+        if (stale()) return;
     }
 
     if (result.kind === "choose") {
         const candidate = await deps.chooseCandidate(result.candidates);
+        if (stale()) return;
         // Backing out of the chooser is a choice, not a failure.
         if (candidate === undefined) return;
         result = await deps.proposeCandidate(candidate, extraction);
+        if (stale()) return;
         if (result.kind === "unavailable") {
             const retry = deps.promptForExtraction();
             if (retry === MANUAL_EXTRACTION_CANCELLED) return;
@@ -748,16 +893,38 @@ export async function runProposeFlow(deps: ProposeFlowDeps): Promise<void> {
             // IS the fix. Returning here is what left the mobile chooser path mute.
             if (retry !== undefined) {
                 result = await deps.proposeCandidate(candidate, retry);
+                if (stale()) return;
             }
         }
     } else if (result.kind === "unavailable") {
         const retry = deps.promptForExtraction();
         if (retry === MANUAL_EXTRACTION_CANCELLED) return;
         if (retry !== undefined) {
-            result = await deps.propose(retry);
+            result =
+                suggestedCandidate === undefined
+                    ? await deps.propose(retry)
+                    : await deps.proposeCandidate(suggestedCandidate, retry);
+            if (stale()) return;
         }
     }
 
     const message = proposeFailureMessage(result);
     if (message !== undefined) deps.toast(message);
+}
+
+/** Failure boundary shared by both render trees so an awaited resolver/model rejection is spoken. */
+export type ProposeFlowOutcome = "consumed" | "retryable";
+
+export async function runProposeFlow(deps: ProposeFlowDeps): Promise<ProposeFlowOutcome> {
+    try {
+        await runProposeFlowInternal(deps);
+        return "consumed";
+    } catch {
+        deps.toast(
+            deps.stillCurrent?.() === false
+                ? "aiApps.autoPropose.stale"
+                : "aiApps.autoPropose.failed",
+        );
+        return "retryable";
+    }
 }

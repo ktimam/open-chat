@@ -4,7 +4,7 @@ use crate::last_updated_timestamps::LastUpdatedTimestamps;
 use crate::metrics::{ChatMetricsInternal, MetricKey};
 use crate::search_index::SearchIndex;
 use crate::*;
-use constants::{ONE_MB, OPENCHAT_BOT_USER_ID};
+use constants::{MINUTE_IN_MS, ONE_MB, OPENCHAT_BOT_USER_ID};
 use event_store_types::EventBuilder;
 use oc_error_codes::{OCError, OCErrorCode};
 use search::simple::{Document, Query};
@@ -807,6 +807,44 @@ impl ChatEvents {
             return Err(OCErrorCode::InvalidRequest.with_message("private app-card context delivery is not enabled"));
         }
         self.ai_app_card_attested_source(thread_root_message_index, message_id, min_visible_event_index, Some(now))
+    }
+
+    /// Binds one fresh, currently visible, undeleted TextContent message without returning its text
+    /// outside the authoritative chat canister. Callers must re-run this after every await and
+    /// compare the whole result before releasing a capability minted from it.
+    pub fn ai_app_private_match_source(
+        &self,
+        thread_root_message_index: Option<MessageIndex>,
+        message_id: MessageId,
+        min_visible_event_index: EventIndex,
+        now: TimestampMillis,
+    ) -> OCResult<AiAppPrivateMatchSource> {
+        const MAX_SOURCE_AGE_MS: TimestampMillis = 5 * MINUTE_IN_MS;
+
+        let Some(event) = self.event_wrapper_internal(min_visible_event_index, thread_root_message_index, message_id.into())
+        else {
+            return Err(OCErrorCode::MessageNotFound.into());
+        };
+        if event.timestamp > now
+            || now.saturating_sub(event.timestamp) > MAX_SOURCE_AGE_MS
+            || event.expires_at.is_some_and(|expires_at| expires_at <= now)
+        {
+            return Err(OCErrorCode::MessageNotFound.into());
+        }
+        let Some(message) = event.event.into_message() else {
+            return Err(OCErrorCode::MessageNotFound.into());
+        };
+        if message.deleted_by.is_some() || message.moderation_flags != 0 {
+            return Err(OCErrorCode::MessageNotFound.into());
+        }
+        let MessageContentInternal::Text(content) = message.content else {
+            return Err(OCErrorCode::MessageNotFound.into());
+        };
+        Ok(AiAppPrivateMatchSource {
+            source_binding: types::ai_app_private_match_source_hash_v1(&content.text),
+            event_index: event.index,
+            message_timestamp: event.timestamp,
+        })
     }
 
     pub fn ai_app_card_confirmation_source(
@@ -3283,6 +3321,13 @@ pub struct AiAppCardCapabilitySource {
     pub content_hash: [u8; 32],
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AiAppPrivateMatchSource {
+    pub source_binding: [u8; 32],
+    pub event_index: EventIndex,
+    pub message_timestamp: TimestampMillis,
+}
+
 pub struct RespondToActionCardResult {
     pub state: ActionCardState,
     // Present only on a confirm transition of a card that carries delivery routing.
@@ -3709,6 +3754,67 @@ mod action_card_security_tests {
             events
                 .ai_app_card_capability_source(None, message_id, EventIndex::default(), now, true)
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn private_match_binds_only_fresh_visible_undeleted_text() {
+        let now = 100;
+        let group = Chat::Group(chat_id(12));
+        let (mut events, message_id) = events_with_card(
+            group,
+            MessageContentInternal::Text(TextContentInternal {
+                text: "School expense 350 EGP".to_string(),
+            }),
+            now,
+        );
+        let source = events
+            .ai_app_private_match_source(None, message_id, EventIndex::default(), now)
+            .expect("fresh visible text must produce one exact commitment");
+        assert_eq!(
+            source.source_binding,
+            types::ai_app_private_match_source_hash_v1("School expense 350 EGP")
+        );
+        assert!(
+            events
+                .ai_app_private_match_source(None, message_id, source.event_index.incr(), now)
+                .is_err(),
+            "history hidden from the viewer must not be matchable"
+        );
+        assert!(
+            events
+                .ai_app_private_match_source(None, message_id, EventIndex::default(), now + 5 * MINUTE_IN_MS + 1)
+                .is_err(),
+            "old messages must not become a private-keyword oracle"
+        );
+        assert!(
+            events
+                .ai_app_private_match_source(Some(1u32.into()), message_id, EventIndex::default(), now)
+                .is_err(),
+            "the exact thread is part of the lookup"
+        );
+
+        events.delete_messages(DeleteUndeleteMessagesArgs {
+            caller: Principal::from_slice(&[99]).into(),
+            is_admin: true,
+            min_visible_event_index: EventIndex::default(),
+            thread_root_message_index: None,
+            message_ids: vec![message_id],
+            now: now + 1,
+        });
+        assert!(
+            events
+                .ai_app_private_match_source(None, message_id, EventIndex::default(), now + 1)
+                .is_err(),
+            "deleted text must fail closed"
+        );
+
+        let (non_text, message_id) = events_with_card(group, card(true, true), now);
+        assert!(
+            non_text
+                .ai_app_private_match_source(None, message_id, EventIndex::default(), now)
+                .is_err(),
+            "non-text content must never enter private keyword matching"
         );
     }
 

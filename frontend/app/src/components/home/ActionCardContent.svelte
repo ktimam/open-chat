@@ -3,6 +3,7 @@
         type ActionCardContent,
         type AiAppCardCapability,
         aiAppCardChatContext,
+        chatIdentifierToString,
         type ChatIdentifier,
         OpenChat,
     } from "@client";
@@ -82,7 +83,7 @@
             response: "confirm" | "cancel",
             confirmPayloadOverride?: Uint8Array,
             confirmationGrant?: Uint8Array,
-        ) => void | Promise<unknown>;
+        ) => boolean | Promise<boolean>;
     }
 
     let {
@@ -111,8 +112,26 @@
     let resolutionActionId = $derived(content.actionId);
     let resolutionAppId = $derived(content.appId);
     let resolutionAppRevision = $derived(content.appRevision);
+    let resolutionChatKey = $derived(chatIdentifierToString(chatId));
     const finalConfirmationAvailable = appCardFinalConfirmationAvailable();
     const privateContextAvailable = appCardPrivateContextAvailable();
+
+    // The canister response may arrive before the authoritative message replacement. Keep the exact
+    // card locally consumed across that reconciliation window so repeated Add clicks cannot submit
+    // the same action twice. Equivalent chat objects intentionally produce the same semantic key.
+    let cardSubmissionKey = $derived(
+        JSON.stringify([
+            viewerId,
+            resolutionChatKey,
+            threadRootMessageIndex ?? null,
+            messageId.toString(),
+            content.actionId,
+            content.appId ?? null,
+            content.appRevision?.toString() ?? null,
+        ]),
+    );
+    let submittedCardKey = $state<string | undefined>(undefined);
+    let submitted = $derived(submittedCardKey === cardSubmissionKey);
 
     // While a confirm/cancel round-trips to the canister (and, on confirm, encrypts + deposits the
     // action), show a spinner and lock both buttons so the press is acknowledged and can't be
@@ -123,28 +142,40 @@
         response: "confirm" | "cancel",
         confirmPayloadOverride?: Uint8Array,
         confirmationGrant?: Uint8Array,
-    ) {
+    ): Promise<boolean> {
         if (
             response === "confirm" &&
             (!cardContentAttested ||
                 resolvedAppIdentity === undefined ||
                 !finalConfirmationAvailable)
         )
-            return;
+            return false;
         if (
             (confirmPayloadOverride === undefined) !== (confirmationGrant === undefined) ||
             (response === "cancel" &&
                 (confirmPayloadOverride !== undefined || confirmationGrant !== undefined))
         )
-            return;
-        if (busy) return;
+            return false;
+        if (busy || (response === "confirm" && submitted)) return false;
+        const submissionKey = cardSubmissionKey;
         busy = true;
         try {
-            await onRespond?.(
-                response,
-                confirmPayloadOverride?.slice(),
-                confirmationGrant?.slice(),
-            );
+            const succeeded =
+                (await onRespond?.(
+                    response,
+                    confirmPayloadOverride?.slice(),
+                    confirmationGrant?.slice(),
+                )) === true;
+            if (
+                response === "confirm" &&
+                succeeded &&
+                cardSubmissionKey === submissionKey
+            ) {
+                submittedCardKey = submissionKey;
+            }
+            return succeeded;
+        } catch {
+            return false;
         } finally {
             busy = false;
         }
@@ -175,6 +206,7 @@
             resolvedAppIdentity !== undefined &&
             cardContentAttested &&
             finalConfirmationAvailable &&
+            !submitted &&
             !useClassicFallback &&
             (content.disclosure === undefined || acknowledged),
     );
@@ -202,7 +234,7 @@
     let cardCancelable = $derived(
         pending && !readonly && cardContentAttested && resolvedAppIdentity !== undefined,
     );
-    let cardConfirmable = $derived(cardCancelable && finalConfirmationAvailable);
+    let cardConfirmable = $derived(cardCancelable && finalConfirmationAvailable && !submitted);
     let cardReadonly = $derived(!cardConfirmable);
 
     // Resolved lazily from the owning app's manifest. While undefined we render today's rows, so an app
@@ -309,7 +341,8 @@
         const actionId = resolutionActionId;
         const appId = resolutionAppId;
         const appRevision = resolutionAppRevision;
-        const activeChatId = chatId;
+        const activeChatKey = resolutionChatKey;
+        const activeChatId = untrack(() => chatId);
         let cancelled = false;
 
         // Session reset reads timers and handshake state. Keep those reads outside this effect's
@@ -339,7 +372,7 @@
         }
         void resolveActionAppForCard(client, activeChatId, actionId, appId, appRevision).then(
             (resolution) => {
-                if (cancelled) return;
+                if (cancelled || resolutionChatKey !== activeChatKey) return;
                 appResolutionComplete = true;
                 if (resolution === undefined) return;
                 candidateAppIdentity = resolution.identity;
@@ -728,6 +761,7 @@
     async function submitCollectedConfirm(message: unknown) {
         const attempt = collectAttempt;
         const cardKey = currentCardAttemptKey();
+        const submissionKey = cardSubmissionKey;
         if (attempt === undefined || cardKey === undefined || !cardConfirmable || !cardActivated)
             return;
         const currentCollection: CardCollectAttemptBinding = {
@@ -803,7 +837,12 @@
             const submitResult = await settleCardOperationBeforeTimeout(() =>
                 onRespond?.("confirm", confirmation.confirmPayload.slice(), grant.grant.slice()),
             );
-            if (stillCurrent() && submitResult.status === "failed") confirmationFailed = true;
+            if (!stillCurrent()) return;
+            if (submitResult.status === "failed" || submitResult.value !== true) {
+                confirmationFailed = true;
+                return;
+            }
+            if (cardSubmissionKey === submissionKey) submittedCardKey = submissionKey;
         } finally {
             if (confirmationAttempt === confirmation) {
                 confirmationAttempt = undefined;
@@ -872,7 +911,11 @@
     });
 </script>
 
-<div class="action-card" class:collapsed class:has-frame={cardUrl !== undefined}>
+<div
+    class="action-card"
+    class:collapsed
+    class:has-frame={cardUrl !== undefined && !useClassicFallback && !useStoredPayloadCard}
+>
     <div
         class="app-identity"
         class:unverified={!cardContentAttested ||
@@ -980,7 +1023,7 @@
                                 <input
                                     type="checkbox"
                                     bind:checked={acknowledged}
-                                    disabled={busy}
+                                    disabled={busy || submitted}
                                 />
                                 <span>{content.disclosure}</span>
                             </label>
@@ -988,7 +1031,7 @@
                         <div class="actions">
                             <button
                                 class="cancel"
-                                disabled={busy}
+                                disabled={busy || submitted}
                                 onclick={(e) => respond("cancel", e)}>{content.cancelLabel}</button
                             >
                             <button
@@ -1084,7 +1127,7 @@
                     <input
                         type="checkbox"
                         bind:checked={acknowledged}
-                        disabled={!pending || readonly || !cardContentAttested}
+                        disabled={!pending || readonly || !cardContentAttested || submitted}
                     />
                     <span>{content.disclosure}</span>
                 </label>
@@ -1102,7 +1145,7 @@
                 <div class="actions">
                     <button
                         class="cancel"
-                        disabled={readonly || busy}
+                        disabled={readonly || busy || submitted}
                         onclick={(e) => respond("cancel", e)}
                     >
                         {content.cancelLabel}

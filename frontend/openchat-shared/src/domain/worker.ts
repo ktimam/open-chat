@@ -193,6 +193,7 @@ import type {
 import type {
     AiAppChatLinkToken,
     AiAppCardCapability,
+    AiAppPrivateMatchCapability,
     AiAppCardConfirmationGrant,
     AiAppCardContentV1,
     AiAppCardProvenance,
@@ -451,6 +452,7 @@ export type WorkerRequest =
     | CreateAiAppCardProvenance
     | CreateAiAppCardConfirmationGrant
     | CreateAiAppCardCapability
+    | CreateAiAppPrivateMatchCapability
     | RemoveMyAiAppKey
     | PublishAiApp
     | ExploreAiApps
@@ -2358,6 +2360,18 @@ type CreateAiAppCardCapability = {
     recipientPublicKey: Uint8Array;
 };
 
+type CreateAiAppPrivateMatchCapability = {
+    kind: "createAiAppPrivateMatchCapability";
+    chatId: ChatIdentifier;
+    threadRootMessageIndex: number | undefined;
+    messageId: bigint;
+    appId: number;
+    appRevision: bigint;
+    actionId: string;
+    recipientKeyScheme: string;
+    recipientPublicKey: Uint8Array;
+};
+
 type CreateAiAppCardConfirmationGrant = {
     kind: "createAiAppCardConfirmationGrant";
     chatId: ChatIdentifier;
@@ -2822,6 +2836,8 @@ export type WorkerResult<T> = T extends Init
     ? AiAppCardConfirmationGrant | undefined
     : T extends CreateAiAppCardCapability
     ? AiAppCardCapability | undefined
+    : T extends CreateAiAppPrivateMatchCapability
+    ? AiAppPrivateMatchCapability | undefined
     : T extends RemoveMyAiAppKey
     ? boolean
     : T extends PublishAiApp

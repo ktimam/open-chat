@@ -33,6 +33,7 @@ fn main() {
     generate_candid_method!(user_index, c2c_get_ai_app_action_inbox_selector, update);
     generate_candid_method!(user_index, claim_ai_app_link_code, update);
     generate_candid_method!(user_index, c2c_redeem_ai_app_card_capability, update);
+    generate_candid_method!(user_index, c2c_redeem_ai_app_private_match_capability, update);
     generate_candid_method!(user_index, delete_ai_app, update);
     generate_candid_method!(user_index, register_ai_app, update);
     generate_candid_method!(user_index, revoke_ai_app_user_key, update);

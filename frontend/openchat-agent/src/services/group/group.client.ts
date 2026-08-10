@@ -4,6 +4,7 @@ import type {
     AccessGateConfig,
     AiAppChatLinkToken,
     AiAppCardCapability,
+    AiAppPrivateMatchCapability,
     AiAppCardConfirmationGrant,
     AddRemoveReactionResponse,
     BlockUserResponse,
@@ -97,6 +98,8 @@ import {
     GroupRespondToActionCardResponse,
     GroupCreateAiAppCardCapabilityArgs,
     GroupCreateAiAppCardCapabilityResponse,
+    GroupCreateAiAppPrivateMatchCapabilityArgs,
+    GroupCreateAiAppPrivateMatchCapabilityResponse,
     GroupCreateAiAppChatLinkTokenArgs,
     GroupCreateAiAppChatLinkTokenResponse,
     GroupCreateAiAppCardConfirmationGrantArgs,
@@ -841,6 +844,36 @@ export class GroupClient
             createAiAppCardCapabilityResponse,
             GroupCreateAiAppCardCapabilityArgs,
             GroupCreateAiAppCardCapabilityResponse,
+            undefined,
+            { sensitive: true },
+        );
+    }
+
+    createAiAppPrivateMatchCapability(
+        groupId: string,
+        messageId: bigint,
+        threadRootMessageIndex: number | undefined,
+        appId: number,
+        appRevision: bigint,
+        actionId: string,
+        recipientKeyScheme: string,
+        recipientPublicKey: Uint8Array,
+    ): Promise<AiAppPrivateMatchCapability | undefined> {
+        return this.update(
+            groupId,
+            "create_ai_app_private_match_capability",
+            {
+                thread_root_message_index: threadRootMessageIndex,
+                message_id: messageId,
+                app_id: appId,
+                app_revision: appRevision,
+                action_id: actionId,
+                recipient_key_scheme: recipientKeyScheme,
+                recipient_public_key: recipientPublicKey.slice(),
+            },
+            createAiAppCardCapabilityResponse,
+            GroupCreateAiAppPrivateMatchCapabilityArgs,
+            GroupCreateAiAppPrivateMatchCapabilityResponse,
             undefined,
             { sensitive: true },
         );

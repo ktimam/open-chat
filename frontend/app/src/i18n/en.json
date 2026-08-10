@@ -1776,7 +1776,19 @@
             "muted": "AI action suggestions muted in this chat",
             "setting": "Suggest AI actions",
             "suggestion": "Propose {title}?",
-            "working": "Working…"
+            "working": "Working…",
+            "stale": "This suggestion is no longer available. Send a new message to try again.",
+            "failed": "The action could not be prepared. Please try again."
+        },
+        "privateTriggers": {
+            "label": "Use private Saved-type triggers",
+            "descriptionDirect": "For this chat only. First connect IOU, link this exact chat to an IOU account, keep auto-propose suggestions on, and leave this chat unmuted; then new text messages observed while this chat is open are sent to IOU's isolated matcher frame. Only encrypted Trigger words match—the Saved-type name is not automatic unless you add it as a Trigger word. Names and Trigger words never enter OpenChat.",
+            "descriptionGroup": "For this chat only. First connect IOU, have an admin enable it here, link this exact chat to an IOU account, keep auto-propose suggestions on, and leave this chat unmuted; then new text messages observed while this chat is open are sent to IOU's isolated matcher frame. Only encrypted Trigger words match—the Saved-type name is not automatic unless you add it as a Trigger word. Names and Trigger words never enter OpenChat.",
+            "connectFirstDirect": "Connect IOU and link this exact chat to an IOU account before turning on private triggers.",
+            "connectFirstGroup": "Connect IOU, have an admin enable it here, and link this exact chat to an IOU account before turning on private triggers.",
+            "unsupported": "Private triggers need credentialless isolated frames, which this browser does not support. Update the browser or use a supported OpenChat client.",
+            "muted": "Suggestions are muted for this chat, so private triggers are paused.",
+            "unmute": "Unmute suggestions"
         },
         "checkConnection": "Check connection",
         "chooseAction": "Choose an action",

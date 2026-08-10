@@ -42,8 +42,13 @@ export function chatStartItem(chatKey: string): FlatChatStart {
     return { kind: "chat_start", key: `chat_start_${chatKey}` };
 }
 
-export function eventKey(e: EventWrapper<ChatEvent>): string {
-    return e.event.kind === "message" ? `${e.index}_${e.event.messageId}` : e.index.toString();
+export function eventKey(e: EventWrapper<ChatEvent>, scope = "main"): string {
+    // Message identity is stable across optimistic -> authoritative index replacement. Sender is
+    // part of the semantic identity, while the caller-provided stream scope distinguishes an exact
+    // thread root wrapper from a reply even under adversarial id/index collisions.
+    return e.event.kind === "message"
+        ? JSON.stringify([scope, "message", e.event.sender, e.event.messageId.toString()])
+        : JSON.stringify([scope, "event", e.index]);
 }
 
 // Date keys must be per-day, not per-timestamp: a TimelineDate's timestamp is
@@ -60,6 +65,7 @@ function dateKey(timestamp: bigint): string {
  */
 export function flattenTimeline<T extends ChatEvent>(
     timeline: TimelineItem<T>[],
+    scopeForEvent: (event: EventWrapper<T>) => string = () => "main",
 ): FlatChatItem<T>[] {
     const result: FlatChatItem<T>[] = [];
     for (const item of timeline) {
@@ -74,7 +80,7 @@ export function flattenTimeline<T extends ChatEvent>(
                 for (let i = 0; i < group.length; i++) {
                     result.push({
                         kind: "event",
-                        key: eventKey(group[i]),
+                        key: eventKey(group[i], scopeForEvent(group[i])),
                         event: group[i],
                         first: i + 1 === group.length,
                         last: i === 0,

@@ -6,21 +6,21 @@
         proposeAndPost,
         proposeAndPostCandidate,
         preflightAiActionForMessage,
+        resolveSuggestedAiAction,
         runProposeFlow,
         type AiActionCandidate,
         type ManualExtractionPromptResult,
     } from "@utils/aiActionRunner";
-    import { canInferOnDevice } from "@utils/onDeviceInference";
+    import { onDeviceInferenceReadiness } from "@utils/onDeviceInference";
     import { createSingleFlight } from "@utils/singleFlight";
     import {
-        markSurfaceShownAfterConsent,
-        surfaceToOpenAfterConfirm,
-        type ChatLinkSurfaceOpening,
-    } from "@utils/aiAppSurfaces";
-    import {
         autoProposeSuggestions,
+        autoProposeSuggestionKey,
+        autoProposeSuggestionStillCurrent,
+        currentAutoProposeSessionEpoch,
         dismissAutoProposeSuggestion,
         muteAutoProposeInChat,
+        type AutoProposeSuggestion,
     } from "@utils/autoPropose";
     import {
         autoProposeSuggestions as autoProposeEnabled,
@@ -87,7 +87,6 @@
     import Checkbox from "../Checkbox.svelte";
     import Translatable from "../Translatable.svelte";
     import AiAppLinkSheet from "./AiAppLinkSheet.svelte";
-    import AiAppSurfaceSheet from "./AiAppSurfaceSheet.svelte";
     import AutoProposeChip from "./AutoProposeChip.svelte";
     import ChatMessageContent from "./ChatMessageContent.svelte";
     import ChatMessageMenu from "./ChatMessageMenu.svelte";
@@ -135,6 +134,7 @@
         dateFormatter?: (date: Date) => string;
         collapsed?: boolean;
         threadRootMessage: Message | undefined;
+        isThreadRoot?: boolean;
         senderContext: SenderContext | undefined;
         onExpandMessage?: (() => void) | undefined;
         // this is not to do with permission - some messages (namely thread root messages) will simply not support replying or editing inside a thread
@@ -179,6 +179,7 @@
         senderTyping,
         collapsed = false,
         threadRootMessage,
+        isThreadRoot = false,
         senderContext,
         onExpandMessage = undefined,
         supportsEdit,
@@ -195,6 +196,7 @@
 
     let msgElement: HTMLElement | undefined;
     let msgBubbleElement: HTMLElement | undefined;
+    let componentMounted = true;
 
     let multiUserChat = chatType === "group_chat" || chatType === "channel";
     let showEmojiPicker = $state(false);
@@ -243,6 +245,7 @@
     });
 
     onDestroy(() => {
+        componentMounted = false;
         if (msgElement) {
             observer?.unobserve(msgElement);
         }
@@ -334,43 +337,6 @@
         });
     }
 
-    // A "sheet"-display chat_link surface to host after a successful confirm (see
-    // openSurfaceAfterConfirm below).
-    let confirmSurface = $state<ChatLinkSurfaceOpening | undefined>(undefined);
-    let confirmSurfaceHandedOff = $state(false);
-    let confirmSurfaceRequest = 0;
-
-    $effect(() => {
-        const chatMarker = chatIdentifierToString(chatId);
-        void chatMarker;
-        return () => {
-            confirmSurfaceRequest += 1;
-            const opening = confirmSurface;
-            confirmSurface = undefined;
-            if (opening !== undefined && !confirmSurfaceHandedOff) {
-                void client.cancelAiAppChatLinkToken(opening.chatLinkToken);
-            }
-            confirmSurfaceHandedOff = false;
-        };
-    });
-
-    function consentToConfirmSurface() {
-        if (confirmSurface === undefined) return;
-        confirmSurfaceHandedOff = true;
-        markSurfaceShownAfterConsent(confirmSurface, chatId, $currentUserIdStore);
-    }
-
-    async function dismissConfirmSurface() {
-        confirmSurfaceRequest += 1;
-        const opening = confirmSurface;
-        const cancel = opening !== undefined && !confirmSurfaceHandedOff;
-        confirmSurface = undefined;
-        confirmSurfaceHandedOff = false;
-        if (cancel && opening !== undefined) {
-            await client.cancelAiAppChatLinkToken(opening.chatLinkToken);
-        }
-    }
-
     // The decisions live in runProposeFlow (utils/aiActionRunner), shared with the classic tree; this
     // component supplies only the surfaces this tree has — the chooser and consent sheets. Both trees
     // used to keep their own copy of the flow, and this one was left with a chooser branch that
@@ -378,19 +344,55 @@
     let proposing = $state(false);
 
     const runAiActionHandler = createSingleFlight(
-        () =>
-            runProposeFlow({
-                preflight: () => preflightAiActionForMessage(client, messageContext.chatId),
-                canInfer: canInferOnDevice,
+        (suggested?: AutoProposeSuggestion) => {
+            const capturedContext = {
+                chatId,
+                threadRootMessageIndex,
+            };
+            const capturedChatKey = chatIdentifierToString(chatId);
+            const capturedViewer = $currentUserIdStore;
+            const capturedSessionEpoch = currentAutoProposeSessionEpoch();
+            const capturedMessageId = msg.messageId;
+            const capturedContent = msg.content;
+            const stillCurrent = () =>
+                componentMounted &&
+                $currentUserIdStore === capturedViewer &&
+                currentAutoProposeSessionEpoch() === capturedSessionEpoch &&
+                (suggested === undefined || autoProposeSuggestionStillCurrent(suggested)) &&
+                chatIdentifierToString(chatId) === capturedChatKey &&
+                threadRootMessageIndex === capturedContext.threadRootMessageIndex &&
+                msg.messageId === capturedMessageId &&
+                msg.content === capturedContent;
+            return runProposeFlow({
+                preflight: () => preflightAiActionForMessage(client, capturedContext.chatId),
+                canInfer: onDeviceInferenceReadiness,
                 promptForExtraction,
                 propose: (extraction) =>
-                    proposeAndPost(client, messageContext, msg.content, extraction),
+                    proposeAndPost(client, capturedContext, capturedContent, extraction, stillCurrent),
                 proposeCandidate: (candidate, extraction) =>
-                    proposeAndPostCandidate(client, messageContext, msg.content, candidate, extraction),
+                    proposeAndPostCandidate(
+                        client,
+                        capturedContext,
+                        capturedContent,
+                        candidate,
+                        extraction,
+                        stillCurrent,
+                    ),
+                resolveSuggestedCandidate:
+                    suggested === undefined
+                        ? undefined
+                        : () =>
+                              resolveSuggestedAiAction(
+                                  client,
+                                  capturedContext.chatId,
+                                  suggested,
+                              ),
+                stillCurrent,
                 chooseCandidate,
                 linkApp,
                 toast: (message) => toastStore.showFailureToast(i18nKey(message)),
-            }),
+            });
+        },
         (busy) => (proposing = busy),
     );
 
@@ -508,17 +510,10 @@
         response: "confirm" | "cancel",
         confirmPayloadOverride?: Uint8Array,
         confirmationGrant?: Uint8Array,
-    ): Promise<void> {
-        // Capture before the async round-trip: the card content is replaced when its state
-        // refreshes to "confirmed". The promise is returned so the card can show a spinner and lock
-        // its buttons until the confirm/cancel (and its downstream deposit) resolves.
-        const actionId =
-            msg.content.kind === "action_card_content" ? msg.content.actionId : undefined;
-        const appId = msg.content.kind === "action_card_content" ? msg.content.appId : undefined;
-        const appRevision =
-            msg.content.kind === "action_card_content" ? msg.content.appRevision : undefined;
-        const surfaceRequest =
-            response === "confirm" && actionId !== undefined ? ++confirmSurfaceRequest : undefined;
+    ): Promise<boolean> {
+        // Return the round-trip so the card can show a spinner and lock its buttons until the
+        // confirm/cancel (and its downstream deposit) resolves. App setup remains an explicit
+        // Apps -> Open action instead of interrupting a successful confirmation.
         return client
             .respondToActionCard(
                 chatId,
@@ -535,45 +530,9 @@
                     if (response === "confirm") {
                         toastStore.showFailureToast(i18nKey("aiActions.confirmFailed"));
                     }
-                    return;
                 }
-                if (
-                    response === "confirm" &&
-                    actionId !== undefined &&
-                    surfaceRequest !== undefined &&
-                    surfaceRequest === confirmSurfaceRequest
-                ) {
-                    void openSurfaceAfterConfirm(actionId, appId, appRevision, surfaceRequest);
-                }
+                return success;
             });
-    }
-
-    // After the first successfully confirmed action in a chat, the owning app's "chat_link"
-    // surface (when it declares one) is presented behind a host-owned consent sheet. Nothing loads
-    // or opens externally until the user chooses Load/Open; only then is the once-per-(app, chat)
-    // marker persisted.
-    async function openSurfaceAfterConfirm(
-        actionId: string,
-        appId: number | undefined,
-        appRevision: bigint | undefined,
-        surfaceRequest: number,
-    ) {
-        if (surfaceRequest !== confirmSurfaceRequest) return;
-        const opening = await surfaceToOpenAfterConfirm(
-            client,
-            chatId,
-            actionId,
-            appId,
-            appRevision,
-            $currentUserIdStore,
-        );
-        if (opening === undefined) return;
-        if (surfaceRequest !== confirmSurfaceRequest || confirmSurface !== undefined) {
-            await client.cancelAiAppChatLinkToken(opening.chatLinkToken);
-            return;
-        }
-        confirmSurfaceHandedOff = false;
-        confirmSurface = opening;
     }
 
     function reportMessage() {
@@ -596,9 +555,7 @@
         inThread ? "scrollable-list-thread-messages" : "scrollable-list-chat-messages",
     );
     let threadRootMessageIndex = $derived(
-        threadRootMessage?.messageId === msg.messageId
-            ? undefined
-            : threadRootMessage?.messageIndex,
+        isThreadRoot ? undefined : threadRootMessage?.messageIndex,
     );
     let fill = $derived(client.fillMessage(msg));
     let showAvatar = $derived(
@@ -652,12 +609,34 @@
     // registered action's trigger keywords — render the under-bubble chip. Tapping it re-uses the
     // exact same propose path as the message menu.
     let autoProposeSuggestion = $derived(
-        $autoProposeEnabled && !inert ? $autoProposeSuggestions.get(msg.messageId) : undefined,
+        $autoProposeEnabled && !inert
+            ? $autoProposeSuggestions.get(
+                  autoProposeSuggestionKey(
+                      $currentUserIdStore,
+                      chatId,
+                      threadRootMessageIndex,
+                      msg.messageId,
+                  ),
+              )
+            : undefined,
     );
 
-    function proposeSuggestedAiAction() {
-        dismissAutoProposeSuggestion(msg.messageId);
-        void runAiActionHandler();
+    async function proposeSuggestedAiAction() {
+        const suggestion = autoProposeSuggestion;
+        if (suggestion === undefined) return;
+        const capturedViewer = $currentUserIdStore;
+        const capturedChatId = chatId;
+        const capturedThread = threadRootMessageIndex;
+        const capturedMessageId = msg.messageId;
+        const outcome = await runAiActionHandler(suggestion);
+        if (outcome === "consumed" && autoProposeSuggestionStillCurrent(suggestion)) {
+            dismissAutoProposeSuggestion(
+                capturedViewer,
+                capturedChatId,
+                capturedThread,
+                capturedMessageId,
+            );
+        }
     }
 
     function muteAutoProposeSuggestions() {
@@ -772,6 +751,7 @@
                 {canStartThread}
                 {multiUserChat}
                 {threadRootMessage}
+                {isThreadRoot}
                 {msg}
                 {canForward}
                 {canBlockUser}
@@ -823,17 +803,6 @@
         app={aiAppLink}
         onDismiss={() => closeAiAppLink(false)}
         onLinked={() => closeAiAppLink(true)}
-    />
-{/if}
-
-{#if confirmSurface !== undefined}
-    <AiAppSurfaceSheet
-        title={confirmSurface.app.manifest.name}
-        url={confirmSurface.url}
-        display={confirmSurface.surface.display}
-        dataDisclosures={confirmSurface.dataDisclosures}
-        onConsent={consentToConfirmSurface}
-        onDismiss={dismissConfirmSurface}
     />
 {/if}
 
@@ -968,6 +937,7 @@
                                     {canStartThread}
                                     {multiUserChat}
                                     {threadRootMessage}
+                                    {isThreadRoot}
                                     {msg}
                                     {canForward}
                                     {canBlockUser}
@@ -1097,7 +1067,13 @@
                             offset={!hasThread && !hasReactions && !hasTips}
                             busy={proposing}
                             onPropose={proposeSuggestedAiAction}
-                            onDismiss={() => dismissAutoProposeSuggestion(msg.messageId)}
+                            onDismiss={() =>
+                                dismissAutoProposeSuggestion(
+                                    $currentUserIdStore,
+                                    chatId,
+                                    threadRootMessageIndex,
+                                    msg.messageId,
+                                )}
                             onMute={muteAutoProposeSuggestions}
                         />
                     {:else if proposing}

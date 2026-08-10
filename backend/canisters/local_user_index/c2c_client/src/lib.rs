@@ -20,6 +20,7 @@ generate_c2c_call!(c2c_deposit_action_confirmed);
 generate_c2c_call!(c2c_consume_ai_app_card_confirmation_grant);
 generate_c2c_call!(c2c_create_ai_app_card_confirmation_grant);
 generate_c2c_call!(c2c_create_ai_app_card_capability);
+generate_c2c_call!(c2c_create_ai_app_private_match_capability);
 generate_c2c_call!(c2c_create_ai_app_chat_link_token);
 generate_c2c_call!(c2c_validate_ai_app_card_provenance);
 generate_c2c_call!(c2c_delete_community);

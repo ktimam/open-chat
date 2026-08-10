@@ -33,6 +33,7 @@ pub mod configure_wallet;
 pub mod create_ai_app_card_capability;
 pub mod create_ai_app_card_confirmation_grant;
 pub mod create_ai_app_chat_link_token;
+pub mod create_ai_app_private_match_capability;
 pub mod create_community;
 pub mod create_group;
 pub mod delete_community;

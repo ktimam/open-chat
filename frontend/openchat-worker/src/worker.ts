@@ -1218,6 +1218,18 @@ function getAction(
                 payload.recipientPublicKey,
             );
 
+        case "createAiAppPrivateMatchCapability":
+            return agent.createAiAppPrivateMatchCapability(
+                payload.chatId,
+                payload.threadRootMessageIndex,
+                payload.messageId,
+                payload.appId,
+                payload.appRevision,
+                payload.actionId,
+                payload.recipientKeyScheme,
+                payload.recipientPublicKey,
+            );
+
         case "createAiAppCardConfirmationGrant":
             return agent.createAiAppCardConfirmationGrant(
                 payload.chatId,

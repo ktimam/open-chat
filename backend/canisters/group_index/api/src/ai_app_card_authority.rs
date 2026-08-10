@@ -21,6 +21,13 @@ pub enum AiAppCardAuthorityOperationV1 {
         recipient_key_scheme: String,
         recipient_public_key_hash: [u8; 32],
     },
+    /// Authorize one private eligibility check for the exact source digest in the outer binding.
+    /// This is deliberately distinct from card private context: no ActionCard exists yet.
+    CreatePrivateMatchCapability {
+        source_binding: [u8; 32],
+        recipient_key_scheme: String,
+        recipient_public_key_hash: [u8; 32],
+    },
     CreateConfirmationGrant {
         confirm_payload_hash: [u8; 32],
     },

@@ -63,7 +63,7 @@
             response: "confirm" | "cancel",
             confirmPayloadOverride?: Uint8Array,
             confirmationGrant?: Uint8Array,
-        ) => void | Promise<unknown>;
+        ) => boolean | Promise<boolean>;
         ogPreviews?: OgPreview[];
         messagePreviews?: RehydratedMessagePreview[];
     }

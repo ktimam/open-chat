@@ -6,6 +6,7 @@
     // cannot detect that — so the user must always have a way out to the real page.
     import { i18nKey } from "@src/i18n/i18n";
     import {
+        aiAppSurfaceDestinationOrigin,
         openSurfaceExternally,
         redactedAiAppSurfaceDisplayUrl,
         type AiAppSurfaceDataDisclosure,
@@ -45,6 +46,7 @@
         normalizeAiAppSurfaceUrl(url, { allowLocalDevelopment: import.meta.env.DEV }),
     );
     let displayUrl = $derived(redactedAiAppSurfaceDisplayUrl(normalizedUrl ?? "", dataDisclosures));
+    let destinationOrigin = $derived(aiAppSurfaceDestinationOrigin(displayUrl));
 
     function openBrowser() {
         if (normalizedUrl === undefined) return;
@@ -54,7 +56,12 @@
 </script>
 
 <Sheet {onDismiss}>
-    <Container height={"hug"} padding={"lg"} gap={"md"} direction={"vertical"}>
+    <Container
+        height={display === "sheet" ? "fill" : "hug"}
+        padding={"lg"}
+        gap={"md"}
+        direction={"vertical"}
+    >
         <Container mainAxisAlignment={"spaceBetween"} crossAxisAlignment={"center"} gap={"md"}>
             <Title fontWeight={"bold"}>{title}</Title>
             <CommonButton onClick={onDismiss} size={"small"}>
@@ -69,33 +76,42 @@
             <HardenedAiAppSurface {title} {url} {dataDisclosures} {onConsent} />
         {:else if normalizedUrl !== undefined}
             <div class="external-prompt">
-                <AiAppSurfaceDestination {title} {displayUrl} {dataDisclosures} />
-                <BodySmall>
-                    Opening hands the full destination URL to your browser. No navigation occurs
-                    until you choose Open.
-                </BodySmall>
+                <BodySmall>Continue setting up this chat in {title}. OpenChat will open your browser.</BodySmall>
+                <AiAppSurfaceDestination {displayUrl} {dataDisclosures} />
             </div>
         {:else}
             <BodySmall colour={"textSecondary"}>This external app URL is not allowed.</BodySmall>
         {/if}
 
         {#if display === "sheet" && normalizedUrl !== undefined}
-            <BodySmall>Browser destination: <code>{displayUrl}</code></BodySmall>
+            <BodySmall>Browser destination: <code>{destinationOrigin}</code></BodySmall>
         {/if}
         <Container mainAxisAlignment={"center"} crossAxisAlignment={"center"} gap={"md"}>
             {#if display === "external"}
                 <CommonButton onClick={onDismiss} size={"small_text"}>Not now</CommonButton>
+                <CommonButton
+                    mode={"active"}
+                    size={"medium"}
+                    onClick={openBrowser}
+                    disabled={normalizedUrl === undefined}
+                >
+                    {#snippet icon(color, size)}
+                        <OpenInNew {color} {size} />
+                    {/snippet}
+                    Open {title}
+                </CommonButton>
+            {:else}
+                <CommonButton
+                    onClick={openBrowser}
+                    disabled={normalizedUrl === undefined}
+                    size={"small_text"}
+                >
+                    {#snippet icon(color, size)}
+                        <OpenInNew {color} {size} />
+                    {/snippet}
+                    <Translatable resourceKey={i18nKey("aiApps.openInBrowser")} />
+                </CommonButton>
             {/if}
-            <CommonButton
-                onClick={openBrowser}
-                disabled={normalizedUrl === undefined}
-                size={"small_text"}
-            >
-                {#snippet icon(color, size)}
-                    <OpenInNew {color} {size} />
-                {/snippet}
-                <Translatable resourceKey={i18nKey("aiApps.openInBrowser")} />
-            </CommonButton>
         </Container>
     </Container>
 </Sheet>
@@ -105,9 +121,6 @@
         display: flex;
         flex-direction: column;
         gap: var(--pad-sm);
-        padding: var(--pad-md);
-        border: var(--bw) solid var(--bd);
-        border-radius: var(--rd);
     }
 
     code {

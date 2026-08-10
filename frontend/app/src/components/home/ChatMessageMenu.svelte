@@ -90,6 +90,7 @@
         translated: boolean;
         msg: Message;
         threadRootMessage: Message | undefined;
+        isThreadRoot?: boolean;
         canTip: boolean;
         selectQuickReaction: (unicode: string) => void;
         showEmojiPicker: () => void;
@@ -133,6 +134,7 @@
         translated,
         msg,
         threadRootMessage,
+        isThreadRoot = false,
         canTip,
         selectQuickReaction,
         showEmojiPicker,
@@ -167,9 +169,7 @@
     );
     let inThread = $derived(threadRootMessage !== undefined);
     let threadRootMessageIndex = $derived(
-        msg.messageId === threadRootMessage?.messageId
-            ? undefined
-            : threadRootMessage?.messageIndex,
+        isThreadRoot ? undefined : threadRootMessage?.messageIndex,
     );
     let isFollowedByMe = $derived(
         threadRootMessage !== undefined &&

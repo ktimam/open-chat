@@ -1805,6 +1805,18 @@ impl GroupChatCore {
         )
     }
 
+    pub fn ai_app_private_match_source(
+        &self,
+        user_id: UserId,
+        thread_root_message_index: Option<MessageIndex>,
+        message_id: MessageId,
+        now: TimestampMillis,
+    ) -> OCResult<chat_events::AiAppPrivateMatchSource> {
+        let member = self.members.get_verified_member(user_id)?;
+        self.events
+            .ai_app_private_match_source(thread_root_message_index, message_id, member.min_visible_event_index(), now)
+    }
+
     pub fn ai_app_card_confirmation_source(
         &self,
         user_id: UserId,

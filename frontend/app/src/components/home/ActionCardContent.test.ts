@@ -146,17 +146,18 @@ async function mountCard(
         response: "confirm" | "cancel",
         confirmPayloadOverride?: Uint8Array,
         confirmationGrant?: Uint8Array,
-    ) => void | Promise<unknown>,
+    ) => boolean | Promise<boolean>,
 ) {
     const target = document.createElement("div");
     document.body.append(target);
     const contentStore = writable(initialContent);
+    const chatIdStore = writable(chatId);
     const component = mount(ActionCardContentHarness, {
         target,
         props: {
             contentStore,
             readonly,
-            chatId,
+            chatIdStore,
             messageId,
             viewerId: VIEWER,
             onRespond,
@@ -176,6 +177,7 @@ async function mountCard(
         target,
         component,
         contentStore,
+        chatIdStore,
         async cleanup() {
             await unmount(component);
             target.remove();
@@ -676,7 +678,7 @@ describe("action-card external surface load consent", () => {
 
     it("renders a trusted multi-entry summary as one classic stored-payload confirmation", async () => {
         const restore = setCredentiallessSupport(true);
-        const onRespond = vi.fn();
+        const onRespond = vi.fn().mockResolvedValue(true);
         const view = await mountCard(
             card({
                 title: "Add 2 entries",
@@ -699,12 +701,25 @@ describe("action-card external surface load consent", () => {
             );
 
             expect(view.target.querySelector("iframe")).toBeNull();
+            expect(view.target.querySelector(".action-card")?.classList.contains("has-frame")).toBe(
+                false,
+            );
             expect(buttonNamed(view.target, "Load app card")).toBeUndefined();
             expect(view.target.textContent).not.toContain("Security details");
             expect(view.target.querySelector(".card-url")?.textContent?.trim()).toBe(CARD_URL);
             expect(view.target.querySelector<HTMLImageElement>(".app-icon")?.src).toBe(
                 RESOLVED_APP.identity.iconUrl,
             );
+            expect(view.target.querySelector(".title")?.textContent?.trim()).toBe("Add 2 entries");
+            expect(
+                Array.from(view.target.querySelectorAll("table.rows tbody tr")).map((row) => ({
+                    label: row.querySelector(".label")?.textContent?.trim(),
+                    value: row.querySelector(".value")?.textContent?.trim(),
+                })),
+            ).toEqual([
+                { label: "Entry 1", value: "Settlement · 25 EGP" },
+                { label: "Entry 2", value: "Charge · 10 EGP" },
+            ]);
 
             expect(buttonNamed(view.target, "Add")?.disabled).toBe(true);
             const disclosure =
@@ -716,7 +731,67 @@ describe("action-card external surface load consent", () => {
             buttonNamed(view.target, "Add")?.click();
             await vi.waitFor(() => expect(onRespond).toHaveBeenCalledOnce());
             expect(onRespond).toHaveBeenCalledWith("confirm", undefined, undefined);
+            await vi.waitFor(() => expect(buttonNamed(view.target, "Add")?.disabled).toBe(true));
+            buttonNamed(view.target, "Add")?.click();
+            await tick();
+            expect(onRespond).toHaveBeenCalledOnce();
         } finally {
+            await view.cleanup();
+            restore();
+        }
+    });
+
+    it("keeps a failed stored-card confirm retryable and latches only the later success", async () => {
+        const restore = setCredentiallessSupport(true);
+        const onRespond = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+        const view = await mountCard(
+            card({
+                rows: [
+                    { label: "Entry 1", value: "Settlement Â· 25 EGP" },
+                    { label: "Entry 2", value: "Charge Â· 10 EGP" },
+                ],
+                confirmPayload: new TextEncoder().encode('[{"amount":25},{"amount":10}]'),
+            }),
+            1_104n,
+            GROUP,
+            false,
+            onRespond,
+        );
+        try {
+            await waitForResolution();
+            await vi.waitFor(() => expect(buttonNamed(view.target, "Add")?.disabled).toBe(false));
+
+            buttonNamed(view.target, "Add")?.click();
+            await vi.waitFor(() => expect(onRespond).toHaveBeenCalledOnce());
+            await vi.waitFor(() => expect(buttonNamed(view.target, "Add")?.disabled).toBe(false));
+
+            buttonNamed(view.target, "Add")?.click();
+            await vi.waitFor(() => expect(onRespond).toHaveBeenCalledTimes(2));
+            await vi.waitFor(() => expect(buttonNamed(view.target, "Add")?.disabled).toBe(true));
+        } finally {
+            await view.cleanup();
+            restore();
+        }
+    });
+
+    it("keeps the resolved frame session when chat props are replaced by an equivalent object", async () => {
+        const restore = setCredentiallessSupport(true);
+        const view = await mountCard(card(), 1_105n);
+        let postMessage: ReturnType<typeof vi.spyOn> | undefined;
+        try {
+            await waitForResolution();
+            const ready = await completeCardReadyHandshake(view.target);
+            postMessage = ready.postMessage;
+            expect(mocks.resolveActionAppForCard).toHaveBeenCalledOnce();
+
+            view.chatIdStore.set({ kind: "group_chat", groupId: "aaaaa-aa" });
+            await tick();
+
+            expect(mocks.resolveActionAppForCard).toHaveBeenCalledOnce();
+            expect(view.target.querySelector("iframe")).toBe(ready.iframe);
+            expect(ready.iframe.classList.contains("inactive")).toBe(false);
+        } finally {
+            postMessage?.mockRestore();
             await view.cleanup();
             restore();
         }
@@ -1134,7 +1209,7 @@ describe("host-initiated one-click iframe confirmation", () => {
 
     it("collects only after the host Add click, grants the exact bytes, and submits without a second approval", async () => {
         const restore = setCredentiallessSupport(true);
-        const onRespond = vi.fn();
+        const onRespond = vi.fn().mockResolvedValue(true);
         const messageId = 1_200n;
         const view = await mountCard(
             card({ confirmPayload: undefined }),
@@ -1196,6 +1271,15 @@ describe("host-initiated one-click iframe confirmation", () => {
                 new Uint8Array([7, 8, 9]),
             );
             expect(buttonNamed(view.target, "Confirm request")).toBeUndefined();
+            await vi.waitFor(() => expect(buttonNamed(view.target, "Add")?.disabled).toBe(true));
+
+            buttonNamed(view.target, "Add")?.click();
+            await tick();
+            expect(
+                postedCardMessages(postMessage).filter(
+                    (message) => message.type === "oc:card:collect-confirm",
+                ),
+            ).toHaveLength(1);
 
             // The host consumes the request before async grant minting; replaying an exact response
             // cannot mint or submit a second time.

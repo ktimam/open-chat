@@ -44,6 +44,7 @@ pub(crate) fn invalidate_pending_ai_app_link_state(user_id: types::UserId, app_i
         .data
         .ai_app_card_tokens
         .remove_capabilities_for_user_app(user_id, app_id);
+    state.data.ai_app_private_match_tokens.remove_user_app(user_id, app_id);
     state.data.ai_app_chat_link_tokens.remove_user_app(user_id, app_id);
 }
 

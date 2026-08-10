@@ -1,14 +1,18 @@
 <script lang="ts">
-    import type { AiAppSurfaceDataDisclosure } from "../../utils/aiAppSurfaces";
+    import {
+        aiAppSurfaceDestinationOrigin,
+        type AiAppSurfaceDataDisclosure,
+    } from "../../utils/aiAppSurfaces";
 
     interface Props {
-        title: string;
+        title?: string;
         displayUrl: string;
         dataDisclosures?: AiAppSurfaceDataDisclosure[];
     }
 
     let { title, displayUrl, dataDisclosures = [] }: Props = $props();
 
+    let destinationOrigin = $derived(aiAppSurfaceDestinationOrigin(displayUrl));
     let hasOneTimeToken = $derived(dataDisclosures.includes("one_time_chat_link_token"));
     let requestLoggedDisclosures = $derived(
         dataDisclosures.filter((disclosure) => disclosure !== "one_time_chat_link_token"),
@@ -28,29 +32,41 @@
     }
 </script>
 
-<strong>{title}</strong>
-<span>Destination: <code>{displayUrl}</code></span>
-{#if dataDisclosures.length > 0}
-    <span>The destination URL shares:</span>
-    <ul>
-        {#each dataDisclosures as disclosure (disclosure)}
-            <li>{label(disclosure)}</li>
-        {/each}
-    </ul>
-    {#if requestLoggedDisclosures.length > 0}
+{#if title !== undefined}
+    <strong>{title}</strong>
+{/if}
+<span>Destination: <code>{destinationOrigin}</code></span>
+<details>
+    <summary>Privacy details</summary>
+    <div class="privacy-details">
+        {#if dataDisclosures.length > 0}
+            <span>The destination URL shares:</span>
+            <ul>
+                {#each dataDisclosures as disclosure (disclosure)}
+                    <li>{label(disclosure)}</li>
+                {/each}
+            </ul>
+        {/if}
+        {#if requestLoggedDisclosures.length > 0}
+            <span>
+                The stable identifiers above can appear in the external app's request logs.
+                OpenChat sends no referrer.
+            </span>
+        {/if}
+        {#if hasOneTimeToken}
+            <span>
+                The token is opaque and expires shortly. The destination page, browser history, and
+                local software that handles the URL can observe it. Because it is in the URL
+                fragment, browsers do not send it in HTTP requests. This URL contains no raw chat
+                or user identifiers.
+            </span>
+        {/if}
         <span>
-            The stable identifiers above can appear in the external app's request logs. OpenChat
-            sends no referrer.
+            Opening shares the full destination URL with your browser. Nothing opens until you
+            continue.
         </span>
-    {/if}
-{/if}
-{#if hasOneTimeToken}
-    <span>
-        The token is opaque and expires shortly. The destination page, browser history, and local
-        software that handles the URL can observe it. Because it is in the URL fragment, browsers do
-        not send it in HTTP requests. This URL contains no raw chat or user identifiers.
-    </span>
-{/if}
+    </div>
+</details>
 
 <style>
     code {
@@ -60,5 +76,21 @@
     ul {
         margin: 0;
         padding-inline-start: 1.25rem;
+    }
+
+    details {
+        width: 100%;
+    }
+
+    summary {
+        cursor: pointer;
+        font-weight: 600;
+    }
+
+    .privacy-details {
+        display: flex;
+        flex-direction: column;
+        gap: var(--pad-sm);
+        margin-block-start: var(--pad-sm);
     }
 </style>

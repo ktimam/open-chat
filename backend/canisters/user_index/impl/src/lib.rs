@@ -212,6 +212,7 @@ impl RuntimeState {
         self.data.ai_app_user_keys.remove_user(user_id);
         self.data.ai_app_link_codes.remove_user(user_id, now);
         self.data.ai_app_card_tokens.remove_user(user_id);
+        self.data.ai_app_private_match_tokens.remove_user(user_id);
         self.data.ai_app_chat_link_tokens.remove_user(user_id);
         let quarantined_app_ids = self.data.ai_apps.quarantine_owner(user_id, now);
         for app_id in quarantined_app_ids {
@@ -221,6 +222,7 @@ impl RuntimeState {
             self.data.ai_app_user_keys.queue_quarantined_app_cleanup(app_id);
             self.data.ai_app_link_codes.remove_app(app_id, now);
             self.data.ai_app_card_tokens.remove_app(app_id);
+            self.data.ai_app_private_match_tokens.remove_app(app_id);
             self.data.ai_app_chat_link_tokens.remove_app(app_id);
         }
         #[cfg(target_arch = "wasm32")]
@@ -464,6 +466,8 @@ struct Data {
     #[serde(default)]
     pub ai_app_card_tokens: crate::model::ai_app_card_tokens::AiAppCardTokens,
     #[serde(default)]
+    pub ai_app_private_match_tokens: crate::model::ai_app_private_match_tokens::AiAppPrivateMatchTokens,
+    #[serde(default)]
     pub ai_app_chat_link_tokens: crate::model::ai_app_chat_link_tokens::AiAppChatLinkTokens,
     #[serde(default)]
     pub action_signing_keyring: crate::model::action_signing_keyring::ActionSigningKeyring,
@@ -569,6 +573,7 @@ impl Data {
             ai_app_link_codes: crate::model::ai_app_link_codes::AiAppLinkCodes::default(),
             ai_app_call_throttle: crate::model::ai_app_call_throttle::AiAppCallThrottle::default(),
             ai_app_card_tokens: crate::model::ai_app_card_tokens::AiAppCardTokens::default(),
+            ai_app_private_match_tokens: crate::model::ai_app_private_match_tokens::AiAppPrivateMatchTokens::default(),
             ai_app_chat_link_tokens: crate::model::ai_app_chat_link_tokens::AiAppChatLinkTokens::default(),
             action_signing_keyring: crate::model::action_signing_keyring::ActionSigningKeyring::default(),
             ai_app_scoped_identity_key: crate::model::ai_app_scoped_identity::AiAppScopedIdentityKey::default(),
@@ -713,6 +718,7 @@ impl Default for Data {
             ai_app_link_codes: crate::model::ai_app_link_codes::AiAppLinkCodes::default(),
             ai_app_call_throttle: crate::model::ai_app_call_throttle::AiAppCallThrottle::default(),
             ai_app_card_tokens: crate::model::ai_app_card_tokens::AiAppCardTokens::default(),
+            ai_app_private_match_tokens: crate::model::ai_app_private_match_tokens::AiAppPrivateMatchTokens::default(),
             ai_app_chat_link_tokens: crate::model::ai_app_chat_link_tokens::AiAppChatLinkTokens::default(),
             action_signing_keyring: crate::model::action_signing_keyring::ActionSigningKeyring::default(),
             ai_app_scoped_identity_key: crate::model::ai_app_scoped_identity::AiAppScopedIdentityKey::default(),

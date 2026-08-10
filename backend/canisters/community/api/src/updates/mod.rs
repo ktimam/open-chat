@@ -42,6 +42,7 @@ pub mod change_role;
 pub mod create_ai_app_card_capability;
 pub mod create_ai_app_card_confirmation_grant;
 pub mod create_ai_app_chat_link_token;
+pub mod create_ai_app_private_match_capability;
 pub mod create_channel;
 pub mod create_user_group;
 pub mod decline_invitation;

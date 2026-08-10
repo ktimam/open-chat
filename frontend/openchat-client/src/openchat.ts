@@ -172,6 +172,7 @@ import {
     type AiAppLinkCode,
     type AiAppChatLinkToken,
     type AiAppCardCapability,
+    type AiAppPrivateMatchCapability,
     type AiAppCardConfirmationGrant,
     type AiAppCardContentV1,
     type AiAppCardProvenance,
@@ -676,7 +677,10 @@ export class OpenChat {
     #recentlyActiveUsersTracker: RecentlyActiveUsersTracker = new RecentlyActiveUsersTracker();
     #inflightMessagePromises: Map<
         bigint,
-        (response: SendMessageSuccess | TransferSuccess) => void
+        {
+            resolve: (response: SendMessageSuccess | TransferSuccess) => void;
+            confirmed: (event: EventWrapper<Message>) => void;
+        }
     > = new Map();
     #refreshBalanceSemaphore: Semaphore = new Semaphore(10);
     #inflightBalanceRefreshPromises: Map<string, Promise<bigint>> = new Map();
@@ -4020,8 +4024,8 @@ export class OpenChat {
                             threadRootMessageIndex,
                         });
                     }
-                    const inflightMessagePromise = this.#inflightMessagePromises.get(messageId);
-                    if (inflightMessagePromise !== undefined) {
+                    const inflightMessage = this.#inflightMessagePromises.get(messageId);
+                    if (inflightMessage !== undefined) {
                         // If we reach here, then a message is currently being sent but the update call is yet to complete.
                         // So given that we have received the message from the backend we know that the message has
                         // successfully been sent, so we resolve the promise early.
@@ -4041,7 +4045,8 @@ export class OpenChat {
                                 transfer: content.transfer as CompletedCryptocurrencyTransfer,
                             };
                         }
-                        inflightMessagePromise(result);
+                        inflightMessage.confirmed(event as EventWrapper<Message>);
+                        inflightMessage.resolve(result);
                     }
                     if (localUpdates.deleteUnconfirmed(context, messageId)) {
                         messagesRead.confirmMessage(context, messageIndex, messageId);
@@ -4247,8 +4252,12 @@ export class OpenChat {
 
         const messageRecipients = this.#rtcMessageRecipients(chat.id);
 
+        let confirmedMessageEvent: EventWrapper<Message> | undefined;
         const sendMessagePromise: Promise<SendMessageResponse> = new Promise((resolve) => {
-            this.#inflightMessagePromises.set(messageId, resolve);
+            this.#inflightMessagePromises.set(messageId, {
+                resolve,
+                confirmed: (event) => (confirmedMessageEvent = event),
+            });
             this.#worker
                 .stream({
                     kind: "sendMessage",
@@ -4282,6 +4291,7 @@ export class OpenChat {
                         const [resp, msg] = response;
                         if (resp.kind === "success" || resp.kind === "transfer_success") {
                             const event = mergeSendMessageResponse(msg, resp);
+                            confirmedMessageEvent = event;
                             this.#addServerEventsToStores(
                                 chat.id,
                                 [event],
@@ -4330,6 +4340,14 @@ export class OpenChat {
         // if the message is found when reading new events
         return sendMessagePromise.then((resp) => {
             if (resp.kind === "success" || resp.kind === "transfer_success") {
+                // The optimistic sentMessage event is deliberately not authoritative enough for
+                // privacy-sensitive matching. Emit the exact canister-confirmed wrapper only after
+                // success (including the early success resolved by a loaded server event).
+                publish("sentMessageConfirmed", {
+                    context: messageContext,
+                    event:
+                        confirmedMessageEvent ?? mergeSendMessageResponse(messageEvent.event, resp),
+                });
                 if (ledger !== undefined) {
                     lastCryptoSent.set(ledger);
                     this.refreshAccountBalance(ledger);
@@ -7454,6 +7472,31 @@ export class OpenChat {
                 messageId,
                 recipientKeyScheme,
                 recipientPublicKey,
+            })
+            .catch(() => undefined);
+    }
+
+    createAiAppPrivateMatchCapability(
+        chatId: ChatIdentifier,
+        threadRootMessageIndex: number | undefined,
+        messageId: bigint,
+        appId: number,
+        appRevision: bigint,
+        actionId: string,
+        recipientKeyScheme: string,
+        recipientPublicKey: Uint8Array,
+    ): Promise<AiAppPrivateMatchCapability | undefined> {
+        return this.#worker
+            .send({
+                kind: "createAiAppPrivateMatchCapability",
+                chatId,
+                threadRootMessageIndex,
+                messageId,
+                appId,
+                appRevision,
+                actionId,
+                recipientKeyScheme,
+                recipientPublicKey: recipientPublicKey.slice(),
             })
             .catch(() => undefined);
     }

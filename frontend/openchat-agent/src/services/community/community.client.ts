@@ -4,6 +4,7 @@ import type {
     AccessGateConfig,
     AiAppChatLinkToken,
     AiAppCardCapability,
+    AiAppPrivateMatchCapability,
     AiAppCardConfirmationGrant,
     AddMembersToChannelResponse,
     AddRemoveReactionResponse,
@@ -135,6 +136,8 @@ import {
     CommunityRespondToActionCardResponse,
     CommunityCreateAiAppCardCapabilityArgs,
     CommunityCreateAiAppCardCapabilityResponse,
+    CommunityCreateAiAppPrivateMatchCapabilityArgs,
+    CommunityCreateAiAppPrivateMatchCapabilityResponse,
     CommunityCreateAiAppChatLinkTokenArgs,
     CommunityCreateAiAppChatLinkTokenResponse,
     CommunityCreateAiAppCardConfirmationGrantArgs,
@@ -1079,6 +1082,37 @@ export class CommunityClient
             createAiAppCardCapabilityResponse,
             CommunityCreateAiAppCardCapabilityArgs,
             CommunityCreateAiAppCardCapabilityResponse,
+            undefined,
+            { sensitive: true },
+        );
+    }
+
+    createAiAppPrivateMatchCapability(
+        chatId: ChannelIdentifier,
+        messageId: bigint,
+        threadRootMessageIndex: number | undefined,
+        appId: number,
+        appRevision: bigint,
+        actionId: string,
+        recipientKeyScheme: string,
+        recipientPublicKey: Uint8Array,
+    ): Promise<AiAppPrivateMatchCapability | undefined> {
+        return this.update(
+            chatId.communityId,
+            "create_ai_app_private_match_capability",
+            {
+                channel_id: toBigInt32(chatId.channelId),
+                thread_root_message_index: threadRootMessageIndex,
+                message_id: messageId,
+                app_id: appId,
+                app_revision: appRevision,
+                action_id: actionId,
+                recipient_key_scheme: recipientKeyScheme,
+                recipient_public_key: recipientPublicKey.slice(),
+            },
+            createAiAppCardCapabilityResponse,
+            CommunityCreateAiAppPrivateMatchCapabilityArgs,
+            CommunityCreateAiAppPrivateMatchCapabilityResponse,
             undefined,
             { sensitive: true },
         );

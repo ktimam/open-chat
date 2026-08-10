@@ -42,6 +42,7 @@ pub(crate) fn start_after_lifecycle() {
 pub(crate) fn advance_lifecycle(state: &mut RuntimeState, version_salt: u64) -> Result<Pr2EntropyLifecycleId, &'static str> {
     state.data.ai_app_link_codes.invalidate_all();
     state.data.ai_app_card_tokens.invalidate_all_bearers();
+    state.data.ai_app_private_match_tokens.invalidate_all_bearers();
     state.data.ai_app_chat_link_tokens.invalidate_active_bearers();
     state.data.pr2_entropy.advance_lifecycle(version_salt)
 }

@@ -307,6 +307,10 @@ export interface AiAppCardCapability {
     context: AppScopedCardContext;
 }
 
+// The browser envelope deliberately mirrors a card capability, while this named alias makes the
+// isolated private-match mint/redeem path explicit at its call sites.
+export type AiAppPrivateMatchCapability = AiAppCardCapability;
+
 // Opaque one-time server/app attestation over one exact final confirmation payload. Kept as raw
 // bytes because the client returns it only to the authoritative chat canister alongside the exact
 // payload bytes; it is never exposed to the iframe, URL, storage, or logs.
@@ -344,6 +348,14 @@ export type RunAiActionResult =
     | { kind: "image_not_accepted" }
     // The model ran but produced nothing parseable as the declared structured output.
     | { kind: "no_extraction"; raw: string }
+    // Structured output existed, but at least one candidate lacked an app-required field.
+    | {
+          kind: "incomplete_extraction";
+          raw: string;
+          missingFields: string[];
+          candidateCount: number;
+          validCandidateCount: number;
+      }
     | { kind: "error"; error: string };
 
 function formatValue(v: unknown): string {
@@ -1322,25 +1334,35 @@ export async function runAiAction(
         };
     }
 
-    // Deterministic post-pass over EACH candidate — the card AND the confirmPayload are built from
-    // the post-passed objects, never the raw extraction. A degenerate element (a required field the
-    // model omitted, or one the conformance pass deleted for violating its constraint — e.g. amount 0
-    // against exclusiveMinimum 0) is DROPPED here, exactly as the single-entry gate refused it.
+    // Deterministic post-pass over each candidate. The card and confirmPayload are built from the
+    // post-passed objects, never the raw extraction. If any candidate is incomplete, fail the whole
+    // proposal so a partial multi-entry result cannot masquerade as a complete card.
     const valid: Record<string, unknown>[] = [];
+    const missingFields = new Set<string>();
     for (const candidate of candidates) {
         const finalExtraction = postProcessAiActionCandidate(def, candidate, {
             hasImage: input.image !== undefined,
             text: input.text,
         });
-        if (missingRequired(finalExtraction, def.responseSchema).length === 0) {
+        const missing = missingRequired(finalExtraction, def.responseSchema);
+        if (missing.length === 0) {
             valid.push(finalExtraction);
+        } else {
+            for (const field of missing) missingFields.add(field);
         }
     }
 
-    // 0 valid → no card. 1 valid → a single-entry card. Multiple valid entries → one attested card
-    // whose exact JSON array remains in the server-stored confirmPayload. Public rows are summaries,
-    // never a hidden payload transport.
-    if (valid.length === 0) return { kind: "no_extraction", raw: result.text };
+    // One valid candidate becomes one card. Multiple valid candidates become one attested card whose
+    // exact JSON array remains in the server-stored confirmPayload; public rows stay summaries.
+    if (missingFields.size > 0) {
+        return {
+            kind: "incomplete_extraction",
+            raw: result.text,
+            missingFields: [...missingFields].sort(),
+            candidateCount: candidates.length,
+            validCandidateCount: valid.length,
+        };
+    }
     if (valid.length === 1) {
         return {
             kind: "ready",

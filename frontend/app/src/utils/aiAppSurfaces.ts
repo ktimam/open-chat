@@ -1,18 +1,14 @@
-// Post-confirm app surfaces — fully generic, driven only by registered manifest data.
+// AI app surfaces — fully generic, driven only by registered manifest data.
 //
 // An AI app's manifest may declare `surfaces`: URL templates OpenChat opens on the app's behalf.
 // The only kind OpenChat understands today is "chat_link" — a page where the user configures/links
-// a chat INSIDE the app. OpenChat opens it once per (app, chat), right after the first successfully
-// confirmed action card in that chat (and any time on demand from the group-details Apps row).
+// a chat INSIDE the app. OpenChat opens it only from the explicit Apps setup action.
 // Surface kinds OpenChat does not know are ignored.
 
 import type { OpenChat } from "@client";
-import { sha256 } from "@noble/hashes/sha256";
-import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils";
 import type { AiAppRegistration, AiAppSurface, ChatIdentifier } from "@shared";
 import { chatKeyFor, isSafeAiActionFieldName } from "@shared";
 import { normalizeAiAppSurfaceUrl } from "./cardBridge";
-import { configKeys } from "./config";
 import { directChatAiAppKeys, resolveConnectedDirectChatAiApp } from "./aiAppDirectChat";
 import { openExternalUrl } from "./urls";
 
@@ -83,6 +79,10 @@ const HOME_KIND = "home";
 // one, OpenChat embeds this page in an
 // iframe in place of its own OC-rendered rows/buttons, and the postMessage bridge relays confirm/cancel.
 const CARD_KIND = "card";
+// "private_match": an invisible, credentialless, opaque-origin iframe used only after the viewer
+// explicitly enables private triggers for this exact app+revision+chat. It receives no secrets in
+// its URL and returns one boolean over postMessage.
+const PRIVATE_MATCH_KIND = "private_match";
 const MAX_ICON_URL_LENGTH = 2_000;
 
 function isLoopbackHost(hostname: string): boolean {
@@ -137,6 +137,17 @@ export function redactedAiAppSurfaceDisplayUrl(
         return parsed.href;
     } catch {
         return "External app destination (one-time token redacted)";
+    }
+}
+
+// Consent chrome deliberately shows only the origin. Paths, query parameters, and fragments can
+// contain app-specific state or bearer material and remain behind the explicit privacy disclosure.
+export function aiAppSurfaceDestinationOrigin(url: string): string {
+    try {
+        const origin = new URL(url).origin;
+        return origin === "null" ? "" : origin;
+    } catch {
+        return "";
     }
 }
 
@@ -309,6 +320,30 @@ export function cardSurfaceOpening(
     };
 }
 
+export function privateMatchSurfaceOpening(
+    app: AiAppRegistration,
+    _chatId: ChatIdentifier,
+): SurfaceOpening | undefined {
+    if (app.manifest.perUserKeys !== true) return undefined;
+    const surface = (app.manifest.surfaces ?? []).find(
+        (candidate) => candidate.kind === PRIVATE_MATCH_KIND,
+    );
+    // The matcher is never a visible browser handoff. Requiring sheet is also mirrored by the
+    // minting canister, so an old/malformed registry cannot silently expand this data flow.
+    if (surface === undefined || surface.display !== "sheet") return undefined;
+    const resolved = substitutePlaceholders(surface.url, app.id);
+    if (resolved === undefined) return undefined;
+    const url = normalizeAiAppSurfaceUrl(resolved, {
+        allowLocalDevelopment: import.meta.env.DEV,
+    });
+    if (url === undefined) return undefined;
+    return { app, surface, url, dataDisclosures: surfaceDataDisclosures(surface.url) };
+}
+
+export function hasPrivateMatchSurface(app: AiAppRegistration): boolean {
+    return privateMatchSurfaceOpening(app, { kind: "direct_chat", userId: "aaaaa-aa" }) !== undefined;
+}
+
 // The card surface for the app that OWNS a given action, resolved against the chat. Also returns the
 // owning action's label -> field-key map so the renderer can reverse-map the message's hydrated rows
 // into structured prefill data. Returns undefined (→ OpenChat renders its own rows, fully backward
@@ -440,148 +475,6 @@ function chatIndependentSurfaceOpening(
         url,
         dataDisclosures: surfaceDataDisclosures(surface.url),
     };
-}
-
-// ---------------------------------------------------------------------------------------------
-// Once-per-(app, chat) memory for the post-confirm open, persisted as a JSON array of
-// "<appId>:<chatKey>" strings under a single localStorage key (the same pattern as the
-// auto-propose chat mutes in utils/autoPropose.ts).
-
-const MAX_SHOWN_MARKERS = 1_000;
-const MAX_SHOWN_MARKER_LENGTH = 1_024;
-const CURRENT_SHOWN_MARKER = /^v3:[0-9a-f]{64}$/;
-
-export function parseAiAppSurfaceShownMarkers(raw: string | null): Set<string> {
-    try {
-        if (raw === null) return new Set();
-        const parsed: unknown = JSON.parse(raw);
-        if (!Array.isArray(parsed) || parsed.length > MAX_SHOWN_MARKERS) return new Set();
-        return new Set(
-            parsed.filter(
-                (value): value is string =>
-                    typeof value === "string" &&
-                    value.length > 0 &&
-                    value.length <= MAX_SHOWN_MARKER_LENGTH &&
-                    CURRENT_SHOWN_MARKER.test(value),
-            ),
-        );
-    } catch {
-        return new Set();
-    }
-}
-
-const rawShownMarkers = localStorage.getItem(configKeys.aiAppSurfacesShown);
-const shownMarkers = parseAiAppSurfaceShownMarkers(rawShownMarkers);
-if (rawShownMarkers !== null) {
-    const sanitized = JSON.stringify([...shownMarkers]);
-    if (sanitized !== rawShownMarkers) {
-        try {
-            localStorage.setItem(configKeys.aiAppSurfacesShown, sanitized);
-        } catch {
-            // Sanitizing legacy raw identifiers is best-effort when storage is unavailable.
-        }
-    }
-}
-
-export function aiAppSurfaceMarkerForViewer(
-    viewerId: string | undefined,
-    appId: number,
-    chatKey: string,
-): string | undefined {
-    if (viewerId === undefined || viewerId.length === 0) return undefined;
-    const preimage = `openchat.ai-app-surface-shown.v3\0${viewerId.length}:${viewerId}\0${appId}\0${chatKey.length}:${chatKey}`;
-    return `v3:${bytesToHex(sha256(utf8ToBytes(preimage)))}`;
-}
-
-function markShown(marker: string): void {
-    if (shownMarkers.size >= MAX_SHOWN_MARKERS) {
-        const oldest = shownMarkers.values().next().value;
-        if (oldest !== undefined) shownMarkers.delete(oldest);
-    }
-    shownMarkers.add(marker);
-    try {
-        localStorage.setItem(configKeys.aiAppSurfacesShown, JSON.stringify([...shownMarkers]));
-    } catch {
-        // Persisting is best-effort; the in-memory marker still suppresses repeats this session.
-    }
-}
-
-// ---------------------------------------------------------------------------------------------
-
-// What (if anything) to open after the user successfully confirms an action card: the app owning
-// the card's action — the directory app whose manifest declares an action named `actionId`,
-// preferring apps enabled in the chat — and its "chat_link" surface, gated to once per (app, chat).
-// A returned opening remains unmarked until the host-owned Load/Open choice. If the caller abandons
-// it before handoff, it must cancel the returned one-time token.
-export async function surfaceToOpenAfterConfirm(
-    client: OpenChat,
-    chatId: ChatIdentifier,
-    actionId: string,
-    appId: number | undefined,
-    appRevision: bigint | undefined,
-    currentUserId?: string,
-): Promise<ChatLinkSurfaceOpening | undefined> {
-    const chatKey = chatKeyFor(chatId, currentUserId);
-    if (chatKey === undefined) return undefined;
-    const marker = aiAppSurfaceMarkerForViewer(currentUserId, appId ?? -1, chatKey);
-    if (marker === undefined) return undefined;
-
-    if (appId === undefined || appRevision === undefined) return undefined;
-    let app: AiAppRegistration | undefined;
-    if (chatId.kind === "direct_chat") {
-        app = (await resolveConnectedDirectChatAiApp(client, appId, appRevision))?.app;
-        if (
-            app === undefined ||
-            !app.manifest.actions.some((action) => action.name === actionId) ||
-            cardSurfaceOpening(app, chatId) === undefined
-        ) {
-            return undefined;
-        }
-    } else {
-        const enabledIds = await client.enabledAiApps(chatId);
-        if (!enabledIds.includes(appId)) return undefined;
-        const apps = await client.aiApps([{ appId, revision: appRevision }]);
-        app = appForPostConfirm(apps, enabledIds, actionId, appId, appRevision);
-    }
-    if (app === undefined) return undefined;
-
-    if (shownMarkers.has(marker)) return undefined;
-    return createChatLinkSurfaceOpening(client, app, chatId);
-}
-
-// Call only from the host-owned Load/Open choice. Merely resolving or displaying a prompt must not
-// suppress future prompts, and each signed-in viewer has an independent marker.
-export function markSurfaceShownAfterConsent(
-    opening: SurfaceOpening,
-    chatId: ChatIdentifier,
-    currentUserId: string,
-): boolean {
-    const chatKey = chatKeyFor(chatId, currentUserId);
-    if (chatKey === undefined) return false;
-    const marker = aiAppSurfaceMarkerForViewer(currentUserId, opening.app.id, chatKey);
-    if (marker === undefined) return false;
-    markShown(marker);
-    return true;
-}
-
-// Trusted post-confirm navigation never resolves globally by action name. The exact producer carried
-// by the card must still be published, enabled, and declare that action.
-export function appForPostConfirm(
-    apps: AiAppRegistration[],
-    enabledIds: number[],
-    actionId: string,
-    appId: number | undefined,
-    appRevision: bigint | undefined,
-): AiAppRegistration | undefined {
-    if (appId === undefined || appRevision === undefined || !enabledIds.includes(appId))
-        return undefined;
-    return apps.find(
-        (app) =>
-            app.id === appId &&
-            app.published &&
-            app.updated === appRevision &&
-            app.manifest.actions.some((action) => action.name === actionId),
-    );
 }
 
 // Open a surface URL outside the app, following the app-wide external-URL convention (native

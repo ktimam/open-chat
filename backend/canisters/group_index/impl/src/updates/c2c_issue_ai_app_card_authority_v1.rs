@@ -12,8 +12,10 @@ use serde_bytes::ByteBuf;
 use types::{CanisterId, Chat, Milliseconds};
 
 const AUTHORITY_TTL: Milliseconds = 2 * MINUTE_IN_MS;
+const PRIVATE_MATCH_AUTHORITY_TTL: Milliseconds = MINUTE_IN_MS;
 const MAX_TOKEN_GENERATION_ATTEMPTS: usize = 10;
 const AUTHORITY_ENTROPY_PURPOSE: &[u8] = b"group-index/card-authority/v1";
+const PRIVATE_MATCH_AUTHORITY_ENTROPY_PURPOSE: &[u8] = b"group-index/private-match-authority/v1";
 
 // A successful response contains a live bearer token, so this method must never be traced.
 #[update(guard = "caller_is_group_or_community_canister", msgpack = true)]
@@ -30,12 +32,17 @@ fn issue(args: Args, state: &mut RuntimeState) -> Response {
         Some(value) => value,
         None => return InvalidRoute,
     };
-    let mut rng = match crate::pr2_entropy::output_rng(state, AUTHORITY_ENTROPY_PURPOSE) {
+    let private_match = matches!(
+        &args.binding.operation,
+        AiAppCardAuthorityOperationV1::CreatePrivateMatchCapability { .. }
+    );
+    let entropy_purpose = if private_match { PRIVATE_MATCH_AUTHORITY_ENTROPY_PURPOSE } else { AUTHORITY_ENTROPY_PURPOSE };
+    let mut rng = match crate::pr2_entropy::output_rng(state, entropy_purpose) {
         Ok(rng) => rng,
         Err(_) => return EntropyUnavailable,
     };
     let now = state.env.now();
-    let expires_at = now.saturating_add(AUTHORITY_TTL);
+    let expires_at = now.saturating_add(if private_match { PRIVATE_MATCH_AUTHORITY_TTL } else { AUTHORITY_TTL });
     for _ in 0..MAX_TOKEN_GENERATION_ATTEMPTS {
         let mut raw = [0u8; AI_APP_CARD_AUTHORITY_TOKEN_BYTES];
         rng.fill_bytes(&mut raw);
@@ -100,6 +107,17 @@ fn validate_binding_shape(binding: &AiAppCardAuthorityBindingV1) -> Result<(), S
             recipient_key_scheme, ..
         } if recipient_key_scheme.is_empty() || recipient_key_scheme.len() > 64 => {
             Err("invalid recipient key scheme".to_string())
+        }
+        AiAppCardAuthorityOperationV1::CreatePrivateMatchCapability {
+            source_binding,
+            recipient_key_scheme,
+            ..
+        } if binding.content_hash != [0; 32]
+            || source_binding.iter().all(|byte| *byte == 0)
+            || recipient_key_scheme.is_empty()
+            || recipient_key_scheme.len() > 64 =>
+        {
+            Err("invalid private-match binding".to_string())
         }
         AiAppCardAuthorityOperationV1::ConsumeConfirmationGrant {
             confirmation_lease_generation,

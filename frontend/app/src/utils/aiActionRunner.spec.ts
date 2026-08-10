@@ -56,12 +56,15 @@ import {
     proposeAiActionForMessage,
     preflightAiActionForMessage,
     resolveCandidates,
+    resolveSuggestedAiAction,
     runProposeFlow,
     NO_MODEL_MESSAGE,
     type AiActionCandidate,
+    type AiActionPreflightBlocker,
     type ManualExtractionPromptResult,
     type ProposeFlowDeps,
     type ProposeResult,
+    type SuggestedAiActionResolution,
 } from "./aiActionRunner";
 
 const RECIPIENT = "-----BEGIN PUBLIC KEY-----\nABC\n-----END PUBLIC KEY-----\n";
@@ -101,13 +104,16 @@ const DEF: AiActionDefinition = {
 };
 
 describe("buildManualCard (manual-extraction gate)", () => {
-    it("gates a degenerate manual extraction (required amount 0) to no_extraction — no card", () => {
+    it("reports a degenerate manual extraction as incomplete — no card", () => {
         const manual = { kind: "settlement", amount: 0, currency: "USD" };
         const r = buildManualCard(DEF, manual, RECIPIENT);
-        expect(r.kind).toBe("no_extraction");
-        if (r.kind === "no_extraction") {
+        expect(r.kind).toBe("incomplete_extraction");
+        if (r.kind === "incomplete_extraction") {
             // raw carries the ORIGINAL manual extraction for the caller to surface/debug.
             expect(JSON.parse(r.raw)).toEqual(manual);
+            expect(r.missingFields).toEqual(["amount"]);
+            expect(r.candidateCount).toBe(1);
+            expect(r.validCandidateCount).toBe(0);
         }
     });
 
@@ -275,7 +281,12 @@ describe("buildManualCard (manual-extraction gate)", () => {
             { modality: "image" },
         );
 
-        expect(result.kind).toBe("no_extraction");
+        expect(result).toMatchObject({
+            kind: "incomplete_extraction",
+            missingFields: ["message"],
+            candidateCount: 1,
+            validCandidateCount: 0,
+        });
     });
 
     it("runs declared normalize rules over the manual extraction ('350 usd' -> 350)", () => {
@@ -396,7 +407,7 @@ describe("buildManualCard (manual-extraction gate)", () => {
         });
     });
 
-    it("an ARRAY with one valid + one degenerate element drops the bad one → single OBJECT card", () => {
+    it("an ARRAY with one valid + one degenerate element fails as incomplete", () => {
         const r = buildManualCard(
             DEF,
             [
@@ -405,24 +416,49 @@ describe("buildManualCard (manual-extraction gate)", () => {
             ],
             RECIPIENT,
         );
-        expect(r.kind).toBe("ready");
-        if (r.kind === "ready") {
-            const payload = JSON.parse(new TextDecoder().decode(r.card.confirmPayload!)) as unknown;
-            expect(Array.isArray(payload)).toBe(false);
-            expect(payload).toEqual({ kind: "expense", amount: 30, currency: "EUR" });
+        expect(r.kind).toBe("incomplete_extraction");
+        if (r.kind === "incomplete_extraction") {
+            expect(r.missingFields).toEqual(["amount"]);
+            expect(r.candidateCount).toBe(2);
+            expect(r.validCandidateCount).toBe(1);
         }
     });
 
-    it("an all-invalid ARRAY yields no_extraction — no card", () => {
+    it("an all-invalid ARRAY reports incomplete required fields — no card", () => {
         const arr = [
             { kind: "expense", amount: 0, currency: "USD" },
             { kind: "expense", currency: "EUR" },
         ];
         const r = buildManualCard(DEF, arr, RECIPIENT);
-        expect(r.kind).toBe("no_extraction");
-        if (r.kind === "no_extraction") {
+        expect(r.kind).toBe("incomplete_extraction");
+        if (r.kind === "incomplete_extraction") {
             expect(JSON.parse(r.raw)).toEqual(arr);
+            expect(r.missingFields).toEqual(["amount"]);
+            expect(r.candidateCount).toBe(2);
+            expect(r.validCandidateCount).toBe(0);
         }
+    });
+
+    it("deduplicates and sorts distinct missing fields across all candidates", () => {
+        const def: AiActionDefinition = {
+            ...DEF,
+            responseSchema: {
+                type: "object",
+                properties: {
+                    amount: { type: "number", exclusiveMinimum: 0 },
+                    direction: { type: "string", enum: ["credit", "debt"] },
+                },
+                required: ["amount", "direction"],
+            },
+        };
+        expect(
+            buildManualCard(def, [{ direction: "debt" }, { amount: 20 }], RECIPIENT),
+        ).toMatchObject({
+            kind: "incomplete_extraction",
+            missingFields: ["amount", "direction"],
+            candidateCount: 2,
+            validCandidateCount: 0,
+        });
     });
 });
 
@@ -465,6 +501,16 @@ describe("parseManualExtractionPrompt", () => {
             { amount: 30 },
         ]);
         expect(onInvalid).not.toHaveBeenCalled();
+    });
+
+    it("rejects an empty array instead of building a zero-entry card", () => {
+        const onInvalid = vi.fn();
+        expect(parseManualExtractionPrompt("[]", onInvalid)).toBe(MANUAL_EXTRACTION_CANCELLED);
+        expect(onInvalid).toHaveBeenCalledOnce();
+        expect(buildManualCard(DEF, [], RECIPIENT)).toEqual({
+            kind: "no_extraction",
+            raw: "[]",
+        });
     });
 
     it("maps Cancel to the cancellation sentinel without reporting invalid JSON", () => {
@@ -661,6 +707,48 @@ describe("direct-chat per-user-key candidate resolution", () => {
             linkRequired: [APP],
             unavailable: [],
         });
+    });
+
+    it("re-resolves only exact public coordinates and fails revision/action drift closed", async () => {
+        const other = { ...APP, id: 2, updated: 9n };
+        const { client } = directChatClient({
+            directory: [other, APP],
+            exact: [other, APP],
+            keys: [
+                { appId: other.id, publicKey: FATHER_KEY },
+                { appId: APP.id, publicKey: FATHER_KEY },
+            ],
+        });
+        await expect(
+            resolveSuggestedAiAction(client, DIRECT_CHAT, {
+                appId: APP.id,
+                appRevision: APP.updated,
+                actionId: DEF.name,
+            }),
+        ).resolves.toMatchObject({ kind: "candidate", candidate: { app: APP, action: DEF } });
+        await expect(
+            resolveSuggestedAiAction(client, DIRECT_CHAT, {
+                appId: APP.id,
+                appRevision: APP.updated + 1n,
+                actionId: DEF.name,
+            }),
+        ).resolves.toEqual({ kind: "stale" });
+        await expect(
+            resolveSuggestedAiAction(client, DIRECT_CHAT, {
+                appId: APP.id,
+                appRevision: APP.updated,
+                actionId: "removed.action",
+            }),
+        ).resolves.toEqual({ kind: "stale" });
+
+        const unlinked = directChatClient({ directory: [APP], exact: [APP] });
+        await expect(
+            resolveSuggestedAiAction(unlinked.client, DIRECT_CHAT, {
+                appId: APP.id,
+                appRevision: APP.updated,
+                actionId: DEF.name,
+            }),
+        ).resolves.toEqual({ kind: "link_required", app: APP });
     });
 });
 
@@ -1040,6 +1128,30 @@ describe("provenance before posting", () => {
         expect(sendMessageWithContent).not.toHaveBeenCalled();
     });
 
+    it("does not mint provenance or send when a manual extraction is incomplete", async () => {
+        const createAiAppCardProvenance = vi.fn();
+        const sendMessageWithContent = vi.fn();
+        const client = {
+            createAiAppCardProvenance,
+            sendMessageWithContent,
+        } as unknown as OpenChat;
+
+        const result = await proposeAndPostCandidate(
+            client,
+            messageContext,
+            content,
+            CANDIDATE,
+            { amount: 0 },
+        );
+
+        expect(result).toMatchObject({
+            kind: "incomplete_extraction",
+            missingFields: ["amount"],
+        });
+        expect(createAiAppCardProvenance).not.toHaveBeenCalled();
+        expect(sendMessageWithContent).not.toHaveBeenCalled();
+    });
+
     it("mints one provenance and sends one exact card for a multi-entry extraction", async () => {
         const provenance = new Uint8Array([7, 8, 9]);
         const createAiAppCardProvenance = vi.fn(async () => ({
@@ -1128,6 +1240,13 @@ const EVERY_RESULT: Record<ProposeResult["kind"], ProposeResult> = {
     image_unsupported: { kind: "image_unsupported", modelId: "gemma-3-1b-it-q4" },
     image_not_accepted: { kind: "image_not_accepted" },
     no_extraction: { kind: "no_extraction", raw: "{}" },
+    incomplete_extraction: {
+        kind: "incomplete_extraction",
+        raw: '{}',
+        missingFields: ["direction"],
+        candidateCount: 1,
+        validCandidateCount: 0,
+    },
     error: { kind: "error", error: "boom" },
 };
 
@@ -1159,6 +1278,13 @@ describe("proposeFailureMessage", () => {
         );
     });
 
+    it("tells a user to update when the native binary omitted the inference runtime", () => {
+        const reason =
+            "This OpenChat build does not include on-device inference. Update or reinstall OpenChat, then try again.";
+
+        expect(proposeFailureMessage({ kind: "unavailable", reason })).toBe(reason);
+    });
+
     it("NAMES the model that refused an image, so the user knows which one to replace", () => {
         const message = proposeFailureMessage({
             kind: "image_unsupported",
@@ -1179,9 +1305,45 @@ describe("proposeFailureMessage", () => {
             "This app action doesn't accept images. Choose an image-enabled action or send the details as text.",
         );
     });
+
+    it("reports an incomplete required field instead of claiming there was no action", () => {
+        expect(
+            proposeFailureMessage({
+                kind: "incomplete_extraction",
+                raw: '{"amount":200,"kind":"iou"}',
+                missingFields: ["direction"],
+                candidateCount: 1,
+                validCandidateCount: 0,
+            }),
+        ).toBe(
+            "The model found an action, but required fields were missing or invalid: direction. Nothing was posted.",
+        );
+    });
+
+    it("reports partial multi extraction without posting only the surviving rows", () => {
+        expect(
+            proposeFailureMessage({
+                kind: "incomplete_extraction",
+                raw: "[]",
+                missingFields: ["amount", "direction"],
+                candidateCount: 3,
+                validCandidateCount: 1,
+            }),
+        ).toBe(
+            "The model produced 3 action entries, but only 1 passed validation. Nothing was posted. Missing or invalid required fields: amount, direction.",
+        );
+    });
 });
 
 const resolving = (result: ProposeResult) => vi.fn(async () => result);
+
+function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((done) => {
+        resolve = done;
+    });
+    return { promise, resolve };
+}
 
 // The propose flow, exercised with every dependency injected: no model, no Tauri, no component. It
 // lived inside two hand-maintained ChatMessage trees until one was fixed and the other was not —
@@ -1203,7 +1365,147 @@ function flowDeps(overrides: Partial<ProposeFlowDeps> = {}): {
     return deps as ReturnType<typeof flowDeps>;
 }
 
+describe("generic proposal context guard", () => {
+    it("stops after deferred inference when the captured account/context changes", async () => {
+        attestationAvailableMock.mockReturnValue(true);
+        const inference = deferred<InferenceResult>();
+        inferOnDeviceMock.mockImplementationOnce(() => inference.promise);
+        const { client, calls } = proposalClient(APP);
+        let current = true;
+        const running = proposeAndPost(
+            client,
+            { chatId: { kind: "group_chat", groupId: "aaaaa-aa" } },
+            { kind: "text_content", text: "paid 20 USD" },
+            undefined,
+            () => current,
+        );
+        await vi.waitFor(() => expect(inferOnDeviceMock).toHaveBeenCalledOnce());
+        current = false;
+        inference.resolve({ kind: "ok", text: JSON.stringify({ amount: 20, currency: "USD" }) });
+        await expect(running).resolves.toEqual({
+            kind: "error",
+            error: "proposal context changed",
+        });
+        expect(calls.createAiAppCardProvenance).not.toHaveBeenCalled();
+        expect(calls.sendMessageWithContent).not.toHaveBeenCalled();
+    });
+});
+
 describe("runProposeFlow", () => {
+    it("returns a retryable outcome on resolver rejection, then succeeds on an exact retry", async () => {
+        const resolveSuggestedCandidate = vi
+            .fn()
+            .mockRejectedValueOnce(new Error("temporary directory failure"))
+            .mockResolvedValueOnce({ kind: "candidate", candidate: CANDIDATE });
+        const deps = flowDeps({ resolveSuggestedCandidate });
+        await expect(runProposeFlow(deps)).resolves.toBe("retryable");
+        expect(deps.toast).toHaveBeenCalledWith("aiApps.autoPropose.failed");
+        expect(deps.proposeCandidate).not.toHaveBeenCalled();
+
+        await expect(runProposeFlow(deps)).resolves.toBe("consumed");
+        expect(deps.proposeCandidate).toHaveBeenCalledWith(CANDIDATE, undefined);
+        expect(deps.propose).not.toHaveBeenCalled();
+    });
+
+    it("runs only the exact re-resolved suggested candidate and never the generic chooser", async () => {
+        const deps = flowDeps({
+            resolveSuggestedCandidate: vi.fn(async () => ({
+                kind: "candidate" as const,
+                candidate: CANDIDATE,
+            })),
+        });
+        await runProposeFlow(deps);
+        expect(deps.proposeCandidate).toHaveBeenCalledWith(CANDIDATE, undefined);
+        expect(deps.propose).not.toHaveBeenCalled();
+        expect(deps.chooseCandidate).not.toHaveBeenCalled();
+    });
+
+    it("fails a stale exact suggestion closed without falling back to any candidate", async () => {
+        const deps = flowDeps({
+            resolveSuggestedCandidate: vi.fn(async () => ({ kind: "stale" as const })),
+        });
+        await runProposeFlow(deps);
+        expect(deps.toast).toHaveBeenCalledWith("aiApps.autoPropose.stale");
+        expect(deps.canInfer).not.toHaveBeenCalled();
+        expect(deps.propose).not.toHaveBeenCalled();
+        expect(deps.proposeCandidate).not.toHaveBeenCalled();
+        expect(deps.chooseCandidate).not.toHaveBeenCalled();
+    });
+
+    it("re-resolves the same exact target after linking instead of selecting another action", async () => {
+        const resolveSuggestedCandidate = vi
+            .fn()
+            .mockResolvedValueOnce({ kind: "link_required", app: APP })
+            .mockResolvedValueOnce({ kind: "candidate", candidate: CANDIDATE });
+        const deps = flowDeps({
+            resolveSuggestedCandidate,
+            linkApp: vi.fn(async () => true),
+        });
+        await runProposeFlow(deps);
+        expect(resolveSuggestedCandidate).toHaveBeenCalledTimes(2);
+        expect(deps.linkApp).toHaveBeenCalledWith(APP);
+        expect(deps.proposeCandidate).toHaveBeenCalledWith(CANDIDATE, undefined);
+        expect(deps.propose).not.toHaveBeenCalled();
+    });
+
+    it("account switch during preflight stops before resolve, inference, proposal, or send", async () => {
+        const phase = deferred<AiActionPreflightBlocker | undefined>();
+        let current = true;
+        const deps = flowDeps({
+            preflight: vi.fn(() => phase.promise),
+            stillCurrent: () => current,
+            resolveSuggestedCandidate: vi.fn(async () => ({
+                kind: "candidate" as const,
+                candidate: CANDIDATE,
+            })),
+        });
+        const running = runProposeFlow(deps);
+        current = false;
+        phase.resolve(undefined);
+        await running;
+        expect(deps.resolveSuggestedCandidate).not.toHaveBeenCalled();
+        expect(deps.canInfer).not.toHaveBeenCalled();
+        expect(deps.proposeCandidate).not.toHaveBeenCalled();
+        expect(deps.propose).not.toHaveBeenCalled();
+    });
+
+    it("account switch during exact re-resolution stops before inference or proposal", async () => {
+        const phase = deferred<SuggestedAiActionResolution>();
+        let current = true;
+        const deps = flowDeps({
+            stillCurrent: () => current,
+            resolveSuggestedCandidate: vi.fn(() => phase.promise),
+        });
+        const running = runProposeFlow(deps);
+        await vi.waitFor(() => expect(deps.resolveSuggestedCandidate).toHaveBeenCalledOnce());
+        current = false;
+        phase.resolve({ kind: "candidate", candidate: CANDIDATE });
+        await running;
+        expect(deps.canInfer).not.toHaveBeenCalled();
+        expect(deps.proposeCandidate).not.toHaveBeenCalled();
+        expect(deps.propose).not.toHaveBeenCalled();
+    });
+
+    it("account switch during readiness stops before candidate inference/proposal", async () => {
+        const phase = deferred<boolean>();
+        let current = true;
+        const deps = flowDeps({
+            stillCurrent: () => current,
+            resolveSuggestedCandidate: vi.fn(async () => ({
+                kind: "candidate" as const,
+                candidate: CANDIDATE,
+            })),
+            canInfer: vi.fn(() => phase.promise),
+        });
+        const running = runProposeFlow(deps);
+        await vi.waitFor(() => expect(deps.canInfer).toHaveBeenCalledOnce());
+        current = false;
+        phase.resolve(true);
+        await running;
+        expect(deps.proposeCandidate).not.toHaveBeenCalled();
+        expect(deps.propose).not.toHaveBeenCalled();
+    });
+
     it("reports an attestation blocker before model checks, prompts, or proposal work", async () => {
         const blocker: ProposeResult = {
             kind: "actions_unavailable",
@@ -1224,6 +1526,19 @@ describe("runProposeFlow", () => {
         const deps = flowDeps({ canInfer: vi.fn(() => false) });
         await runProposeFlow(deps);
         expect(deps.toast).toHaveBeenCalledWith(NO_MODEL_MESSAGE);
+        expect(deps.propose).not.toHaveBeenCalled();
+    });
+
+    it("awaits native readiness and preserves an update-required reason", async () => {
+        const reason =
+            "This OpenChat build does not include on-device inference. Update or reinstall OpenChat, then try again.";
+        const deps = flowDeps({
+            canInfer: vi.fn(async () => ({ available: false, reason })),
+        });
+
+        await runProposeFlow(deps);
+
+        expect(deps.toast).toHaveBeenCalledWith(reason);
         expect(deps.propose).not.toHaveBeenCalled();
     });
 
@@ -1389,12 +1704,42 @@ describe("both ChatMessage trees run the SHARED propose flow", () => {
             expect(src).toContain("const runAiActionHandler = createSingleFlight(");
             expect(src).toContain("parseManualExtractionPrompt(");
             expect(src).toContain("busy={proposing}");
+            expect(src).toContain("resolveSuggestedAiAction(");
+            expect(src).toContain("autoProposeSuggestionStillCurrent(suggested)");
+            expect(src).toContain("const outcome = await runAiActionHandler(suggestion)");
+            expect(src).toContain("suggested?: AutoProposeSuggestion");
+            expect(src).toContain("const capturedContext = {");
+            expect(src).toContain("const capturedViewer = $currentUserIdStore");
+            expect(src).toContain("currentAutoProposeSessionEpoch() === capturedSessionEpoch");
+            expect(src.indexOf("await runAiActionHandler(suggestion)")).toBeLessThan(
+                src.indexOf("dismissAutoProposeSuggestion(", src.indexOf("await runAiActionHandler")),
+            );
             // Deciding for itself whether a model exists is how a tree starts owning the flow again.
             expect(src).not.toContain("canInferOnDevice()");
             // A second copy of the message is a second thing to forget to fix.
             expect(src).not.toContain("No on-device model is ready");
         });
     }
+
+    it("propagates exact thread-root wrapper identity through both render trees and previews", () => {
+        for (const relative of [
+            "../components/home/thread/Thread.svelte",
+            "../components_mobile/home/thread/Thread.svelte",
+        ]) {
+            const src = readFileSync(fileURLToPath(new URL(relative, import.meta.url)), "utf8");
+            expect(src).toContain("{@const isThreadRoot = evt === rootEvent}");
+            expect(src).toContain("supportsEdit={!isThreadRoot}");
+            expect(src).toContain("{isThreadRoot}");
+        }
+        for (const relative of [
+            "../components/home/thread/ThreadPreview.svelte",
+            "../components_mobile/home/thread/ThreadPreview.svelte",
+        ]) {
+            const src = readFileSync(fileURLToPath(new URL(relative, import.meta.url)), "utf8");
+            expect(src).toContain("threadRootMessage={thread.rootMessage.event}");
+            expect(src).toContain("isThreadRoot");
+        }
+    });
 
     it("classic renders a real action chooser without requiring the manual-QC query", () => {
         const src = readFileSync(fileURLToPath(new URL(TREES.classic, import.meta.url)), "utf8");

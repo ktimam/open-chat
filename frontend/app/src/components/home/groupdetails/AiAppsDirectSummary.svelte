@@ -34,6 +34,7 @@
     import Translatable from "../../Translatable.svelte";
     import AiAppLinkModal from "../AiAppLinkModal.svelte";
     import AiAppSurfaceModal from "../AiAppSurfaceModal.svelte";
+    import PrivateMatchConsentToggle from "../PrivateMatchConsentToggle.svelte";
 
     const client = getContext<OpenChat>("client");
 
@@ -190,6 +191,11 @@
                         {#if app.manifest.description.length > 0}
                             <div class="desc">{app.manifest.description}</div>
                         {/if}
+                        <PrivateMatchConsentToggle
+                            {app}
+                            {chatId}
+                            available={connected.has(app.id)}
+                        />
                         <div class="app-actions">
                             {#if showPrimary}
                                 <!-- Merged Connect + Open setup: unpaired "Connect" pairs the key

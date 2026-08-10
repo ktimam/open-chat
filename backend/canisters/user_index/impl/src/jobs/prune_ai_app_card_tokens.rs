@@ -25,7 +25,11 @@ fn schedule_if_required(delay: Duration) -> bool {
 fn run() {
     trace!("'prune_ai_app_card_tokens' job running");
     TIMER_ID.set(None);
-    let more = mutate_state(|state| state.data.ai_app_card_tokens.prune_expired_bounded(state.env.now()));
+    let more = mutate_state(|state| {
+        let now = state.env.now();
+        state.data.ai_app_card_tokens.prune_expired_bounded(now)
+            | state.data.ai_app_private_match_tokens.prune_expired_bounded(now)
+    });
     schedule_if_required(next_delay(more));
 }
 

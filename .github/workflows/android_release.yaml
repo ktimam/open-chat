@@ -169,7 +169,7 @@ jobs:
 
             - name: Build Android APK (Full)
               run: |
-                  cargo tauri android build --verbose --target aarch64 armv7
+                  cargo tauri android build --verbose --target aarch64 armv7 --features inference
                   mv src-tauri/gen/android/app/build/outputs/apk/universal/release/openchat-release.apk ./openchat_${{ env.VERSION }}_full.apk
               env:
                   # Ensure these are passed if needed, though the gradle file uses the debug fallback we set up
@@ -182,7 +182,7 @@ jobs:
 
             - name: Build Android APK (Store)
               run: |
-                  cargo tauri android build --verbose --target aarch64 armv7 --features store
+                  cargo tauri android build --verbose --target aarch64 armv7 --features inference,store
                   mv src-tauri/gen/android/app/build/outputs/apk/universal/release/openchat-release.apk ./openchat_${{ env.VERSION }}_store.apk
               env:
                   # Ensure these are passed if needed, though the gradle file uses the debug fallback we set up

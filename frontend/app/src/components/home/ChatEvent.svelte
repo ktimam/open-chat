@@ -64,6 +64,7 @@
         supportsReply: boolean;
         collapsed: boolean;
         threadRootMessage: Message | undefined;
+        isThreadRoot?: boolean;
         onExpandMessage?: (() => void) | undefined;
         onReplyTo: (replyContext: EnhancedReplyContext) => void;
         onCollapseMessage: () => void;
@@ -100,6 +101,7 @@
         supportsReply,
         collapsed,
         threadRootMessage,
+        isThreadRoot = false,
         onExpandMessage = undefined,
         onReplyTo,
         onCollapseMessage,
@@ -128,7 +130,7 @@
     let level = $derived($_(`level.${levelType}`).toLowerCase());
     let messageContext = $derived({
         chatId,
-        threadRootMessageIndex: threadRootMessage?.messageIndex,
+        threadRootMessageIndex: isThreadRoot ? undefined : threadRootMessage?.messageIndex,
     });
     let hidden = $derived(
         event.event.kind === "message" &&
@@ -145,7 +147,7 @@
             client.deleteFailedMessage(
                 chatId,
                 event.event.messageId,
-                threadRootMessage?.messageIndex,
+                isThreadRoot ? undefined : threadRootMessage?.messageIndex,
             );
         }
     }
@@ -196,6 +198,7 @@
             {publicGroup}
             {editing}
             {threadRootMessage}
+            {isThreadRoot}
             {supportsEdit}
             {supportsReply}
             {collapsed}

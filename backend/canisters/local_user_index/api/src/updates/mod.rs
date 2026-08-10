@@ -12,6 +12,7 @@ pub mod c2c_consume_ai_app_card_confirmation_grant;
 pub mod c2c_create_ai_app_card_capability;
 pub mod c2c_create_ai_app_card_confirmation_grant;
 pub mod c2c_create_ai_app_chat_link_token;
+pub mod c2c_create_ai_app_private_match_capability;
 pub mod c2c_create_community;
 pub mod c2c_create_group;
 pub mod c2c_create_user;

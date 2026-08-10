@@ -5,6 +5,8 @@ use types::{CanisterId, ChatId, CommunityId, TimestampMillis};
 
 pub const MAX_OUTSTANDING_AUTHORITIES: usize = 10_000;
 pub const MAX_OUTSTANDING_AUTHORITIES_PER_CHILD: u16 = 64;
+pub const MAX_OUTSTANDING_PRIVATE_MATCH_AUTHORITIES: usize = 2_000;
+pub const MAX_OUTSTANDING_PRIVATE_MATCH_AUTHORITIES_PER_CHILD: u16 = 16;
 pub const MAX_TRACKED_CARD_ROUTES: usize = 1_000_000;
 pub const MAX_EXPIRED_AUTHORITIES_CLEANED_PER_CALL: usize = 64;
 
@@ -35,6 +37,10 @@ pub struct AiAppCardAuthorityStore {
     records: HashMap<[u8; 32], AuthorityRecord>,
     expiry_index: BTreeSet<(TimestampMillis, [u8; 32])>,
     per_child_counts: HashMap<CardRouteKey, u16>,
+    #[serde(default)]
+    private_match_count: usize,
+    #[serde(default)]
+    private_match_per_child_counts: HashMap<CardRouteKey, u16>,
     route_generations: HashMap<CardRouteKey, RouteGeneration>,
     next_route_generation: u64,
 }
@@ -126,6 +132,14 @@ impl AiAppCardAuthorityStore {
         if self.per_child_counts.get(&route).copied().unwrap_or_default() >= MAX_OUTSTANDING_AUTHORITIES_PER_CHILD {
             return Err(InsertError::ChildCapacity);
         }
+        let private_match = is_private_match(&binding);
+        if private_match
+            && (self.private_match_count >= MAX_OUTSTANDING_PRIVATE_MATCH_AUTHORITIES
+                || self.private_match_per_child_counts.get(&route).copied().unwrap_or_default()
+                    >= MAX_OUTSTANDING_PRIVATE_MATCH_AUTHORITIES_PER_CHILD)
+        {
+            return Err(InsertError::ChildCapacity);
+        }
         let token_hash = opaque_hash_v1(OpaqueHashPurposeV1::AuthorityToken, raw_token);
         if self.records.contains_key(&token_hash) {
             return Err(InsertError::TokenCollision);
@@ -141,6 +155,10 @@ impl AiAppCardAuthorityStore {
         );
         self.expiry_index.insert((expires_at, token_hash));
         *self.per_child_counts.entry(route).or_default() += 1;
+        if private_match {
+            self.private_match_count += 1;
+            *self.private_match_per_child_counts.entry(route).or_default() += 1;
+        }
         Ok(())
     }
 
@@ -207,6 +225,7 @@ impl AiAppCardAuthorityStore {
 
     fn remove_record(&mut self, token_hash: &[u8; 32]) {
         if let Some(record) = self.records.remove(token_hash) {
+            let private_match = is_private_match(&record.binding);
             self.expiry_index.remove(&(record.expires_at, *token_hash));
             if let Some(count) = self.per_child_counts.get_mut(&record.route) {
                 *count = count.saturating_sub(1);
@@ -214,8 +233,24 @@ impl AiAppCardAuthorityStore {
                     self.per_child_counts.remove(&record.route);
                 }
             }
+            if private_match {
+                self.private_match_count = self.private_match_count.saturating_sub(1);
+                if let Some(count) = self.private_match_per_child_counts.get_mut(&record.route) {
+                    *count = count.saturating_sub(1);
+                    if *count == 0 {
+                        self.private_match_per_child_counts.remove(&record.route);
+                    }
+                }
+            }
         }
     }
+}
+
+fn is_private_match(binding: &AiAppCardAuthorityBindingV1) -> bool {
+    matches!(
+        &binding.operation,
+        group_index_canister::ai_app_card_authority::AiAppCardAuthorityOperationV1::CreatePrivateMatchCapability { .. }
+    )
 }
 
 #[cfg(test)]
@@ -244,6 +279,17 @@ mod tests {
                 provenance_hash: [4; 32],
             },
         }
+    }
+
+    fn private_match_binding(group: Principal, owner: Principal, user: u8) -> AiAppCardAuthorityBindingV1 {
+        let mut value = binding(group, owner, user);
+        value.content_hash = [0; 32];
+        value.operation = AiAppCardAuthorityOperationV1::CreatePrivateMatchCapability {
+            source_binding: [7; 32],
+            recipient_key_scheme: "p256".to_string(),
+            recipient_public_key_hash: [8; 32],
+        };
+        value
     }
 
     #[test]
@@ -399,6 +445,35 @@ mod tests {
     }
 
     #[test]
+    fn private_match_subcap_reserves_authority_capacity_for_card_operations() {
+        let owner = Principal::from_slice(&[8]);
+        let group = Principal::from_slice(&[1]);
+        let route = CardRouteKey::Group(group.into());
+        let mut store = AiAppCardAuthorityStore::default();
+        for index in 0..MAX_OUTSTANDING_PRIVATE_MATCH_AUTHORITIES_PER_CHILD {
+            store
+                .insert(
+                    &(index as u64).to_be_bytes(),
+                    private_match_binding(group, owner, 10),
+                    route,
+                    owner,
+                    100,
+                    1,
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            store.insert(&[250; 32], private_match_binding(group, owner, 10), route, owner, 100, 1,),
+            Err(InsertError::ChildCapacity)
+        );
+        assert!(
+            store
+                .insert(&[251; 32], binding(group, owner, 10), route, owner, 100, 1)
+                .is_ok()
+        );
+    }
+
+    #[test]
     fn serialization_round_trip_keeps_hash_only_and_replay_state() {
         let group = Principal::from_slice(&[7]);
         let owner = Principal::from_slice(&[8]);
@@ -450,6 +525,8 @@ mod tests {
         assert!(store.records.is_empty());
         assert!(store.expiry_index.is_empty());
         assert!(store.per_child_counts.is_empty());
+        assert_eq!(store.private_match_count, 0);
+        assert!(store.private_match_per_child_counts.is_empty());
         assert!(store.route_generations.is_empty());
         assert_eq!(store.next_route_generation, 0);
     }
