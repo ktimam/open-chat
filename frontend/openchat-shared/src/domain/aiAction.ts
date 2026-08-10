@@ -664,6 +664,50 @@ function isStrictCalendarDate(value: string): boolean {
     return day <= daysInMonth[month - 1];
 }
 
+const ENGLISH_MONTH_NUMBER: Readonly<Record<string, string>> = Object.freeze({
+    jan: "01",
+    january: "01",
+    feb: "02",
+    february: "02",
+    mar: "03",
+    march: "03",
+    apr: "04",
+    april: "04",
+    may: "05",
+    jun: "06",
+    june: "06",
+    jul: "07",
+    july: "07",
+    aug: "08",
+    august: "08",
+    sep: "09",
+    sept: "09",
+    september: "09",
+    oct: "10",
+    october: "10",
+    nov: "11",
+    november: "11",
+    dec: "12",
+    december: "12",
+});
+
+// Models commonly preserve a visibly labelled receipt date while also preserving its display
+// format and time. Apps must opt in per field. Only ISO dates and unambiguous English month-name
+// dates are accepted; numeric day/month strings such as 04/07/2026 deliberately remain invalid.
+function normalizeUnambiguousCalendarDate(value: string): string | undefined {
+    if (value.length > 96) return undefined;
+    const trimmed = value.trim().replace(/^date\s*:\s*/iu, "");
+    if (isStrictCalendarDate(trimmed)) return trimmed;
+    const match = /^(\d{1,2})\s+([a-z]{3,9})\s+(\d{4})(?:\s+\d{1,2}:\d{2}(?::\d{2})?\s*(?:am|pm)?)?$/iu.exec(
+        trimmed,
+    );
+    if (match === null) return undefined;
+    const month = ENGLISH_MONTH_NUMBER[match[2].toLowerCase()];
+    if (month === undefined) return undefined;
+    const normalized = `${match[3]}-${month}-${match[1].padStart(2, "0")}`;
+    return isStrictCalendarDate(normalized) ? normalized : undefined;
+}
+
 function conformsToSafeStringFormat(format: unknown, value: string): boolean {
     switch (format) {
         case "date":
@@ -699,11 +743,96 @@ function conformsToSafeStringFormat(format: unknown, value: string): boolean {
     }
 }
 
+const INVALID_SCHEMA_VALUE = Symbol("invalid-schema-value");
+
+type SafePropertySchema = {
+    type?: unknown;
+    enum?: unknown;
+    pattern?: unknown;
+    minimum?: unknown;
+    exclusiveMinimum?: unknown;
+    maximum?: unknown;
+    minLength?: unknown;
+    maxLength?: unknown;
+    format?: unknown;
+    default?: unknown;
+    "x-openchat-normalize-date"?: unknown;
+};
+
+function conformPropertyValue(value: unknown, p: SafePropertySchema): unknown {
+    let conformed = value;
+    if (
+        p["x-openchat-normalize-date"] === true &&
+        p.format === "date" &&
+        typeof conformed === "string"
+    ) {
+        const normalized = normalizeUnambiguousCalendarDate(conformed);
+        if (normalized === undefined) return INVALID_SCHEMA_VALUE;
+        conformed = normalized;
+    }
+    if (p.type === "number" && typeof conformed !== "number") return INVALID_SCHEMA_VALUE;
+    if (p.type === "string" && typeof conformed !== "string") return INVALID_SCHEMA_VALUE;
+    if (Array.isArray(p.enum) && !p.enum.some((entry) => entry === conformed)) {
+        return INVALID_SCHEMA_VALUE;
+    }
+    // Numeric lower bounds constrain number values only, exactly like JSON schema. A model can
+    // emit a degenerate value that IS the declared type (e.g. amount 0 against exclusiveMinimum
+    // 0, live-reproduced from the message "hi") — deleting it here lets the required-fields
+    // check refuse the whole extraction instead of posting an unusable card.
+    if (
+        typeof p.minimum === "number" &&
+        typeof conformed === "number" &&
+        conformed < p.minimum
+    ) {
+        return INVALID_SCHEMA_VALUE;
+    }
+    if (
+        typeof p.exclusiveMinimum === "number" &&
+        typeof conformed === "number" &&
+        conformed <= p.exclusiveMinimum
+    ) {
+        return INVALID_SCHEMA_VALUE;
+    }
+    if (
+        typeof p.maximum === "number" &&
+        typeof conformed === "number" &&
+        conformed > p.maximum
+    ) {
+        return INVALID_SCHEMA_VALUE;
+    }
+    if (typeof conformed === "string") {
+        const length = [...conformed].length;
+        if (
+            typeof p.minLength === "number" &&
+            Number.isSafeInteger(p.minLength) &&
+            p.minLength >= 0 &&
+            length < p.minLength
+        ) {
+            return INVALID_SCHEMA_VALUE;
+        }
+        if (
+            typeof p.maxLength === "number" &&
+            Number.isSafeInteger(p.maxLength) &&
+            p.maxLength >= 0 &&
+            length > p.maxLength
+        ) {
+            return INVALID_SCHEMA_VALUE;
+        }
+        if (!conformsToSafeStringFormat(p.format, conformed)) return INVALID_SCHEMA_VALUE;
+    }
+    // Manifest patterns are untrusted and JavaScript's backtracking RegExp engine has no timeout.
+    // Fail closed for any patterned field rather than execute a potential ReDoS expression such
+    // as `(a+)+$`. A future implementation may re-enable patterns through a bounded RE2 engine.
+    if (typeof p.pattern === "string") return INVALID_SCHEMA_VALUE;
+    return conformed;
+}
+
 // Tiny local schema conformance pass (type/enum/numeric bounds, bounded string lengths, standard
-// format: "date", and deterministic allowlisted string formats only — deliberately not a full
-// JSON-schema validator and no added dependency). utf8-no-nul additionally keeps exact payloads
-// representable at Rust/Candid app boundaries. Drops keys the schema doesn't declare and DELETES
-// fields that violate their declared constraint: visible omission beats silent wrongness.
+// format: "date", deterministic allowlisted string formats, opt-in labelled-date normalization,
+// and validated scalar defaults only — deliberately not a full JSON-schema validator and no added
+// dependency). utf8-no-nul additionally keeps exact payloads representable at Rust/Candid app
+// boundaries. Drops keys the schema doesn't declare and DELETES fields that violate their declared
+// constraint: visible omission beats silent wrongness.
 function conformToSchema(
     extracted: Record<string, unknown>,
     schema: object | undefined,
@@ -722,62 +851,30 @@ function conformToSchema(
             out[key] = value;
             continue;
         }
-        const p = propSchema as {
-            type?: unknown;
-            enum?: unknown;
-            pattern?: unknown;
-            minimum?: unknown;
-            exclusiveMinimum?: unknown;
-            maximum?: unknown;
-            minLength?: unknown;
-            maxLength?: unknown;
-            format?: unknown;
-        };
-        if (p.type === "number" && typeof value !== "number") continue;
-        if (p.type === "string" && typeof value !== "string") continue;
-        if (Array.isArray(p.enum) && !p.enum.some((e) => e === value)) continue;
-        // Numeric lower bounds constrain number values only, exactly like JSON schema. A model can
-        // emit a degenerate value that IS the declared type (e.g. amount 0 against exclusiveMinimum
-        // 0, live-reproduced from the message "hi") — deleting it here lets the required-fields
-        // check refuse the whole extraction instead of posting an unusable card.
-        if (typeof p.minimum === "number" && typeof value === "number" && value < p.minimum) {
-            continue;
-        }
+        const conformed = conformPropertyValue(value, propSchema as SafePropertySchema);
+        if (conformed !== INVALID_SCHEMA_VALUE) out[key] = conformed;
+    }
+    for (const [key, propSchema] of Object.entries(properties)) {
         if (
-            typeof p.exclusiveMinimum === "number" &&
-            typeof value === "number" &&
-            value <= p.exclusiveMinimum
+            !isSafeAiActionFieldName(key) ||
+            Object.hasOwn(extracted, key) ||
+            propSchema === null ||
+            typeof propSchema !== "object" ||
+            Array.isArray(propSchema)
         ) {
             continue;
         }
-        if (typeof p.maximum === "number" && typeof value === "number" && value > p.maximum) {
-            continue;
-        }
-        if (typeof value === "string") {
-            const length = [...value].length;
-            if (
-                typeof p.minLength === "number" &&
-                Number.isSafeInteger(p.minLength) &&
-                p.minLength >= 0 &&
-                length < p.minLength
-            ) {
-                continue;
-            }
-            if (
-                typeof p.maxLength === "number" &&
-                Number.isSafeInteger(p.maxLength) &&
-                p.maxLength >= 0 &&
-                length > p.maxLength
-            ) {
-                continue;
-            }
-            if (!conformsToSafeStringFormat(p.format, value)) continue;
-        }
-        // Manifest patterns are untrusted and JavaScript's backtracking RegExp engine has no timeout.
-        // Fail closed for any patterned field rather than execute a potential ReDoS expression such
-        // as `(a+)+$`. A future implementation may re-enable patterns through a bounded RE2 engine.
-        if (typeof p.pattern === "string") continue;
-        out[key] = value;
+        const p = propSchema as SafePropertySchema;
+        if (!Object.hasOwn(p, "default")) continue;
+        const declaredDefault = p.default;
+        const scalarDefault =
+            (p.type === "string" && typeof declaredDefault === "string") ||
+            (p.type === "number" &&
+                typeof declaredDefault === "number" &&
+                Number.isFinite(declaredDefault));
+        if (!scalarDefault) continue;
+        const conformed = conformPropertyValue(declaredDefault, p);
+        if (conformed !== INVALID_SCHEMA_VALUE) out[key] = conformed;
     }
     return out;
 }

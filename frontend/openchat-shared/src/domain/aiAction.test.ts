@@ -1432,6 +1432,63 @@ describe("applyRulesPostPass", () => {
             amount: 0.01,
         });
     });
+    it("applies a valid app-declared scalar default without overriding an extracted value", () => {
+        const schema = {
+            type: "object",
+            properties: {
+                amount: { type: "number", minimum: 1 },
+                direction: {
+                    type: "string",
+                    enum: ["credit", "debt"],
+                    default: "debt",
+                },
+            },
+            required: ["amount", "direction"],
+        };
+
+        const defaulted = applyRulesPostPass([], { amount: 800 }, undefined, schema);
+        expect(defaulted).toEqual({ amount: 800, direction: "debt" });
+        expect(missingRequired(defaulted, schema)).toEqual([]);
+        expect(
+            applyRulesPostPass([], { amount: 800, direction: "credit" }, undefined, schema),
+        ).toEqual({ amount: 800, direction: "credit" });
+    });
+    it("rejects an invalid schema default instead of satisfying a required field", () => {
+        const schema = {
+            type: "object",
+            properties: {
+                direction: {
+                    type: "string",
+                    enum: ["credit", "debt"],
+                    default: "sideways",
+                },
+            },
+            required: ["direction"],
+        };
+        const conformed = applyRulesPostPass([], {}, undefined, schema);
+        expect(conformed).toEqual({});
+        expect(missingRequired(conformed, schema)).toEqual(["direction"]);
+    });
+    it("normalizes an opted-in unambiguous labelled image date before schema validation", () => {
+        const schema = {
+            type: "object",
+            properties: {
+                date: {
+                    type: "string",
+                    format: "date",
+                    "x-openchat-normalize-date": true,
+                },
+            },
+        };
+
+        expect(
+            applyRulesPostPass([], { date: "Date: 04 Jul 2026 03:19 PM" }, undefined, schema),
+        ).toEqual({ date: "2026-07-04" });
+        expect(applyRulesPostPass([], { date: "2026-07-04" }, undefined, schema)).toEqual({
+            date: "2026-07-04",
+        });
+        expect(applyRulesPostPass([], { date: "04/07/2026" }, undefined, schema)).toEqual({});
+    });
     it("minimum never applies to non-number values", () => {
         // An untyped field carrying a (nonsensical) numeric bound: a string value is untouched —
         // the bound constrains numbers only, exactly like JSON schema.
