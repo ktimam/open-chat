@@ -27,7 +27,9 @@ describe("action-card trust presentation", () => {
         expect(source).toContain(
             'response === "confirm" && (!cardContentAttested || !finalConfirmationAvailable)',
         );
-        expect(source).toContain("disabled={!pending || readonly || !cardContentAttested}");
+        expect(source).toContain(
+            "disabled={!pending || readonly || !cardContentAttested || submitted}",
+        );
         expect(source).toContain("Directory binding only; card content is untrusted");
         expect(source).toContain("Untrusted card text");
     });
