@@ -882,6 +882,28 @@ function conformToSchema(
     return out;
 }
 
+function isWholeKeywordAt(text: string, index: number, length: number): boolean {
+    let before = "";
+    if (index > 0) {
+        let beforeStart = index - 1;
+        const last = text.charCodeAt(beforeStart);
+        if (
+            last >= 0xdc00 &&
+            last <= 0xdfff &&
+            beforeStart > 0 &&
+            text.charCodeAt(beforeStart - 1) >= 0xd800 &&
+            text.charCodeAt(beforeStart - 1) <= 0xdbff
+        ) {
+            beforeStart--;
+        }
+        before = text.slice(beforeStart, index);
+    }
+    const afterIndex = index + length;
+    const after =
+        afterIndex >= text.length ? "" : String.fromCodePoint(text.codePointAt(afterIndex) ?? 0);
+    return !AI_ACTION_WORD_CHAR.test(before) && !AI_ACTION_WORD_CHAR.test(after);
+}
+
 // Does the message mention this keyword as a WHOLE WORD? Case-insensitive.
 //
 // Raw `text.includes(keyword)` fired INSIDE other words, which made short keywords unusable: an app
@@ -905,27 +927,7 @@ export function matchesKeyword(text: string, keyword: string): boolean {
     while (from <= haystack.length - needle.length) {
         const index = haystack.indexOf(needle, from);
         if (index < 0) return false;
-        let before = "";
-        if (index > 0) {
-            let beforeStart = index - 1;
-            const last = haystack.charCodeAt(beforeStart);
-            if (
-                last >= 0xdc00 &&
-                last <= 0xdfff &&
-                beforeStart > 0 &&
-                haystack.charCodeAt(beforeStart - 1) >= 0xd800 &&
-                haystack.charCodeAt(beforeStart - 1) <= 0xdbff
-            ) {
-                beforeStart--;
-            }
-            before = haystack.slice(beforeStart, index);
-        }
-        const afterIndex = index + needle.length;
-        const after =
-            afterIndex >= haystack.length
-                ? ""
-                : String.fromCodePoint(haystack.codePointAt(afterIndex) ?? 0);
-        if (!AI_ACTION_WORD_CHAR.test(before) && !AI_ACTION_WORD_CHAR.test(after)) return true;
+        if (isWholeKeywordAt(haystack, index, needle.length)) return true;
         from = index + Math.max(needle.length, 1);
     }
     return false;
@@ -1359,6 +1361,262 @@ export function formatLocalCalendarDate(
     return `${year}-${month}-${day}`;
 }
 
+type DeclaredTextSequence = {
+    numberField: string;
+    labelField: string;
+    minimumItems: number;
+    anchors: string[];
+    numberSchema: SafePropertySchema;
+    labelSchema: SafePropertySchema;
+};
+
+type ParsedTextSequence =
+    | { kind: "none" }
+    | { kind: "overflow" }
+    | { kind: "candidates"; candidates: Record<string, unknown>[] };
+
+const TEXT_SEQUENCE_EXTENSION = "x-openchat-text-sequence";
+const TEXT_SEQUENCE_OPTION_KEYS = ["anchors", "labelField", "minimumItems", "numberField"];
+const MAX_TEXT_SEQUENCE_ANCHORS = 16;
+const TEXT_SEQUENCE_AMOUNT =
+    /(^|[^\p{L}\p{N}.,])((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)(?=$|[^\p{L}\p{N}.,])/gu;
+const TEXT_SEQUENCE_LABEL = /^[\p{L}\p{M}]+(?:[ '\u2019-]+[\p{L}\p{M}]+)*$/u;
+const TEXT_SEQUENCE_ANCHOR = /^[A-Za-z]+(?:[ '-]+[A-Za-z]+)*$/;
+const TEXT_SEQUENCE_MONTH =
+    "(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)";
+const TEXT_SEQUENCE_MONTH_DATE = new RegExp(
+    `(?:\\b\\d{1,2}(?:st|nd|rd|th)?\\s+${TEXT_SEQUENCE_MONTH}\\b|\\b${TEXT_SEQUENCE_MONTH}\\s+\\d{1,2}(?:st|nd|rd|th)?\\b)`,
+    "iu",
+);
+const TEXT_SEQUENCE_ISO_CURRENCY_CODES = new Set(
+    (
+        "AED AFN ALL AMD ANG AOA ARS AUD AWG AZN BAM BBD BDT BGN BHD BIF BMD BND " +
+        "BOB BOV BRL BSD BTN BWP BYN BZD CAD CDF CHE CHF CHW CLF CLP CNY COP COU " +
+        "CRC CUC CUP CVE CZK DJF DKK DOP DZD EGP ERN ETB EUR FJD FKP GBP GEL GHS " +
+        "GIP GMD GNF GTQ GYD HKD HNL HRK HTG HUF IDR ILS INR IQD IRR ISK JMD JOD " +
+        "JPY KES KGS KHR KMF KPW KRW KWD KYD KZT LAK LBP LKR LRD LSL LYD MAD MDL " +
+        "MGA MKD MMK MNT MOP MRU MUR MVR MWK MXN MXV MYR MZN NAD NGN NIO NOK NPR " +
+        "NZD OMR PAB PEN PGK PHP PKR PLN PYG QAR RON RSD RUB RWF SAR SBD SCR SDG SEK " +
+        "SGD SHP SLE SLL SOS SRD SSP STN SVC SYP SZL THB TJS TMT TND TOP TRY TTD TWD " +
+        "TZS UAH UGX USD USN UYI UYU UYW UZS VED VES VND VUV WST XAF XAG XAU XBA " +
+        "XBB XBC XBD XCD XDR XOF XPD XPF XPT XSU XTS XUA XXX YER ZAR ZMW ZWG ZWL"
+    ).split(" "),
+);
+const TEXT_SEQUENCE_CURRENCY_WORD =
+    /\b(?:currenc(?:y|ies)|dinars?|dirhams?|dollars?|euros?|francs?|pounds?|pesos?|riyals?|rupees?|sterling|yen|yuan)\b/iu;
+const TEXT_SEQUENCE_ID_CONTEXT =
+    /\b(?:account|booking|confirmation|invoice|inv|receipt|reference|ref|transaction)\s*(?:(?:id|no|number)\b|[#:]|\d)/iu;
+const TEXT_SEQUENCE_QUANTITY_CONTEXT =
+    /\b(?:days?|grams?|hours?|items?|kgs?|kilograms?|lbs?|liters?|litres?|milliliters?|nights?|pcs|pieces?|quantit(?:y|ies)|qty|rides?|tickets?|units?)\b/iu;
+
+function declaredTextSequence(schema: object | undefined): DeclaredTextSequence | undefined {
+    if (!isRecord(schema)) return undefined;
+    const extension = schema[TEXT_SEQUENCE_EXTENSION];
+    if (!isRecord(extension)) return undefined;
+    if (Object.keys(extension).sort().join("\0") !== TEXT_SEQUENCE_OPTION_KEYS.join("\0")) {
+        return undefined;
+    }
+    const { numberField, labelField, minimumItems, anchors } = extension;
+    if (
+        typeof numberField !== "string" ||
+        typeof labelField !== "string" ||
+        !isSafeAiActionFieldName(numberField) ||
+        !isSafeAiActionFieldName(labelField) ||
+        numberField === labelField ||
+        typeof minimumItems !== "number" ||
+        !Number.isInteger(minimumItems) ||
+        minimumItems < 2 ||
+        minimumItems > MAX_AI_ACTION_CANDIDATES ||
+        !Array.isArray(anchors) ||
+        anchors.length === 0 ||
+        anchors.length > MAX_TEXT_SEQUENCE_ANCHORS
+    ) {
+        return undefined;
+    }
+    const safeAnchors: string[] = [];
+    const seenAnchors = new Set<string>();
+    for (const anchor of anchors) {
+        if (
+            typeof anchor !== "string" ||
+            anchor !== anchor.trim() ||
+            !isBoundedRuleString(anchor) ||
+            !TEXT_SEQUENCE_ANCHOR.test(anchor) ||
+            seenAnchors.has(anchor.toLowerCase())
+        ) {
+            return undefined;
+        }
+        seenAnchors.add(anchor.toLowerCase());
+        safeAnchors.push(anchor);
+    }
+    const properties = schema.properties;
+    const required = schema.required;
+    if (!isRecord(properties) || !Array.isArray(required) || !required.includes(numberField)) {
+        return undefined;
+    }
+    const numberSchema = properties[numberField];
+    const labelSchema = properties[labelField];
+    if (
+        !isRecord(numberSchema) ||
+        numberSchema.type !== "number" ||
+        !isRecord(labelSchema) ||
+        labelSchema.type !== "string"
+    ) {
+        return undefined;
+    }
+    return {
+        numberField,
+        labelField,
+        minimumItems,
+        anchors: safeAnchors,
+        numberSchema,
+        labelSchema,
+    };
+}
+
+function textSequenceContainsCurrencyCode(text: string, anchors: readonly string[]): boolean {
+    const anchorWords = new Set(
+        anchors.flatMap((anchor) => anchor.toLowerCase().match(/[a-z]+/g) ?? []),
+    );
+    for (const match of text.matchAll(/\b[A-Za-z]{3}\b/gu)) {
+        const token = match[0];
+        if (
+            TEXT_SEQUENCE_ISO_CURRENCY_CODES.has(token.toUpperCase()) ||
+            (token === token.toUpperCase() && !anchorWords.has(token.toLowerCase()))
+        ) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function textSequenceHasDisallowedNumericContext(
+    text: string,
+    anchors: readonly string[],
+): boolean {
+    return (
+        /[\p{Sc}%]/u.test(text) ||
+        /\b(?:percent|percentage)\b/iu.test(text) ||
+        /\b\d{1,4}\s*[\/-]\s*\d{1,2}(?:\s*[\/-]\s*\d{1,4})?\b/u.test(text) ||
+        /\b\d{1,2}\s*:\s*\d{2}\b/u.test(text) ||
+        /\b\d{1,2}\s*(?:am|pm)\b/iu.test(text) ||
+        /(^|[\s([{:;,])[+-]\s*\d/u.test(text) ||
+        TEXT_SEQUENCE_MONTH_DATE.test(text) ||
+        textSequenceContainsCurrencyCode(text, anchors) ||
+        TEXT_SEQUENCE_CURRENCY_WORD.test(text) ||
+        TEXT_SEQUENCE_ID_CONTEXT.test(text) ||
+        TEXT_SEQUENCE_QUANTITY_CONTEXT.test(text)
+    );
+}
+
+function hasDeclaredTextSequenceAnchor(
+    text: string,
+    anchors: readonly string[],
+    firstAmountStart: number,
+): boolean {
+    const haystack = text.slice(0, MAX_AI_ACTION_MESSAGE_SCAN_CHARS);
+    let validAnchor = false;
+    let anchorAfterAmount = false;
+    for (const declaredAnchor of anchors) {
+        const anchor = declaredAnchor.toLowerCase();
+        let from = 0;
+        while (from <= haystack.length - anchor.length) {
+            let start = -1;
+            candidateStart: for (
+                let index = from;
+                index <= haystack.length - anchor.length;
+                index++
+            ) {
+                for (let offset = 0; offset < anchor.length; offset++) {
+                    let code = haystack.charCodeAt(index + offset);
+                    if (code >= 65 && code <= 90) code += 32;
+                    if (code !== anchor.charCodeAt(offset)) continue candidateStart;
+                }
+                start = index;
+                break;
+            }
+            if (start < 0) break;
+            const end = start + anchor.length;
+            if (isWholeKeywordAt(haystack, start, anchor.length)) {
+                if (start >= firstAmountStart) {
+                    anchorAfterAmount = true;
+                } else if (
+                    !/\p{N}/u.test(text.slice(0, start)) &&
+                    /^[^\p{L}\p{N}]*$/u.test(text.slice(end, firstAmountStart))
+                ) {
+                    validAnchor = true;
+                }
+            }
+            from = start + Math.max(anchor.length, 1);
+        }
+    }
+    return validAnchor && !anchorAfterAmount;
+}
+
+// A manifest may explicitly opt a TEXT action into a narrow, deterministic fallback for the common
+// `command amount label amount label ...` shorthand. The manifest must declare the whole-word command
+// anchors explicitly; free words or numbers between an anchor and the first amount make the source
+// ambiguous. This parser never repairs model prose, guesses fields, supplies categorical values, or
+// handles images. Everything it emits still passes through ordinary rules/defaults/schema validation.
+function parseDeclaredTextSequence(schema: object | undefined, text: string): ParsedTextSequence {
+    const declaration = declaredTextSequence(schema);
+    if (
+        declaration === undefined ||
+        text.length === 0 ||
+        text.length > MAX_AI_ACTION_MESSAGE_SCAN_CHARS ||
+        textSequenceHasDisallowedNumericContext(text, declaration.anchors)
+    ) {
+        return { kind: "none" };
+    }
+
+    const spans: { start: number; end: number; raw: string }[] = [];
+    for (const match of text.matchAll(TEXT_SEQUENCE_AMOUNT)) {
+        const prefix = match[1] ?? "";
+        const raw = match[2];
+        if (raw === undefined || match.index === undefined) return { kind: "none" };
+        const start = match.index + prefix.length;
+        spans.push({ start, end: start + raw.length, raw });
+    }
+    if (spans.length < declaration.minimumItems) return { kind: "none" };
+    if (!hasDeclaredTextSequenceAnchor(text, declaration.anchors, spans[0].start)) {
+        return { kind: "none" };
+    }
+    if (spans.length > MAX_AI_ACTION_CANDIDATES) return { kind: "overflow" };
+
+    // Every source digit must belong to one recognized amount token. This rejects malformed,
+    // embedded, stray and otherwise unaccounted-for numbers instead of silently discarding them.
+    const covered = new Uint8Array(text.length);
+    for (const span of spans) covered.fill(1, span.start, span.end);
+    for (const numeric of text.matchAll(/\p{N}/gu)) {
+        if (numeric.index === undefined || covered[numeric.index] !== 1) return { kind: "none" };
+    }
+
+    const candidates: Record<string, unknown>[] = [];
+    for (let index = 0; index < spans.length; index++) {
+        const span = spans[index];
+        const nextStart = spans[index + 1]?.start ?? text.length;
+        const label = text.slice(span.end, nextStart).replace(/^[\s,;:|]+|[\s,;:|.!?]+$/gu, "");
+        if (!TEXT_SEQUENCE_LABEL.test(label)) return { kind: "none" };
+
+        const amount = Number(span.raw.replaceAll(",", ""));
+        if (!Number.isFinite(amount) || amount <= 0) return { kind: "none" };
+        const conformedAmount = conformPropertyValue(amount, declaration.numberSchema);
+        const conformedLabel = conformPropertyValue(label, declaration.labelSchema);
+        if (
+            conformedAmount === INVALID_SCHEMA_VALUE ||
+            conformedAmount !== amount ||
+            conformedLabel === INVALID_SCHEMA_VALUE ||
+            conformedLabel !== label
+        ) {
+            return { kind: "none" };
+        }
+        candidates.push({
+            [declaration.numberField]: amount,
+            [declaration.labelField]: label,
+        });
+    }
+    return { kind: "candidates", candidates };
+}
+
 // Orchestrates the full proposal: run the on-device model against the declared prompt, parse, and build the
 // card. `infer` is the on-device inference facade (injected so this is unit-testable without a native runtime).
 export async function runAiAction(
@@ -1385,6 +1643,18 @@ export async function runAiAction(
     // sole source evidence. Declared model-guidance rules compile into a "Rules:" block first.
     const rules = def.rules ?? [];
     const hasTextInput = input.text !== undefined && input.text.trim().length > 0;
+    const sourceSequence =
+        input.image === undefined && hasTextInput
+            ? parseDeclaredTextSequence(def.responseSchema, input.text!)
+            : ({ kind: "none" } as const);
+    if (sourceSequence.kind === "overflow") {
+        return {
+            kind: "error",
+            error: `The source text contains more than ${MAX_AI_ACTION_CANDIDATES} action candidates.`,
+        };
+    }
+    let candidates = sourceSequence.kind === "candidates" ? sourceSequence.candidates : undefined;
+    let extractionRaw = sourceSequence.kind === "candidates" ? input.text! : "";
     const ruleLines = compileRules(rules, { hasMessageText: hasTextInput });
     const providesTodayContext = boundedRules(rules).some(
         (rule) => rule.kind === "context" && rule.provide.includes("today"),
@@ -1414,37 +1684,40 @@ export async function runAiAction(
     // passing both sent the model the SAME message twice, and it duly extracted some transactions
     // twice: "owe me 300 uber 150 food" came back with 300 repeated. Native never saw it, which is
     // why this read like small-model flakiness rather than a bug in our own prompt assembly.
-    let result = await infer({
-        modelId: input.modelId,
-        prompt,
-        image: input.image,
-    });
-
-    if (result.kind === "unavailable") return { kind: "unavailable", reason: result.reason };
-    if (result.kind === "error") return { kind: "error", error: result.error };
-
-    // The model text is accepted as a single OBJECT or an ARRAY of objects (several transactions in
-    // one message). Normalize to a list of candidate objects.
-    let candidates = parseExtractionList(result.text);
-    // Small local models occasionally describe the right actions in prose or emit `[]` despite a
-    // text message containing explicit amounts. Give TEXT input one bounded format-repair attempt;
-    // it reuses the original evidence/prompt, stays unconstrained (schema grammars corrupt numeric
-    // values on these models), and caps output so a failed repair cannot turn into another 512-token
-    // runaway. Image inference is intentionally not doubled here.
-    if (candidates === undefined && hasTextInput) {
-        const repair = await infer({
+    if (candidates === undefined) {
+        const result = await infer({
             modelId: input.modelId,
-            prompt: `${prompt}\n\nJSON FORMAT CORRECTION:\nYour previous response did not contain a parseable action. Return ONLY valid JSON: one object for one action, or an array with one object per action. Follow every original extraction rule, include only fields supported by the message, and include every required field that the message supports. Do not include analysis, prose, markdown fences, or an empty array.`,
-            maxTokens: 256,
+            prompt,
+            image: input.image,
         });
-        if (repair.kind === "unavailable") {
-            return { kind: "unavailable", reason: repair.reason };
+
+        if (result.kind === "unavailable") return { kind: "unavailable", reason: result.reason };
+        if (result.kind === "error") return { kind: "error", error: result.error };
+        extractionRaw = result.text;
+
+        // The model text is accepted as a single OBJECT or an ARRAY of objects (several transactions in
+        // one message). Normalize to a list of candidate objects.
+        candidates = parseExtractionList(result.text);
+        // Small local models occasionally describe the right actions in prose or emit `[]` despite a
+        // text message containing explicit amounts. Give TEXT input one bounded format-repair attempt;
+        // it reuses the original evidence/prompt, stays unconstrained (schema grammars corrupt numeric
+        // values on these models), and caps output so a failed repair cannot turn into another 512-token
+        // runaway. Image inference is intentionally not doubled here.
+        if (candidates === undefined && hasTextInput) {
+            const repair = await infer({
+                modelId: input.modelId,
+                prompt: `${prompt}\n\nJSON FORMAT CORRECTION:\nYour previous response did not contain a parseable action. Return ONLY valid JSON: one object for one action, or an array with one object per action. Follow every original extraction rule, include only fields supported by the message, and include every required field that the message supports. Do not include analysis, prose, markdown fences, or an empty array.`,
+                maxTokens: 256,
+            });
+            if (repair.kind === "unavailable") {
+                return { kind: "unavailable", reason: repair.reason };
+            }
+            if (repair.kind === "error") return { kind: "error", error: repair.error };
+            extractionRaw = repair.text;
+            candidates = parseExtractionList(repair.text);
         }
-        if (repair.kind === "error") return { kind: "error", error: repair.error };
-        result = repair;
-        candidates = parseExtractionList(repair.text);
     }
-    if (candidates === undefined) return { kind: "no_extraction", raw: result.text };
+    if (candidates === undefined) return { kind: "no_extraction", raw: extractionRaw };
     if (candidates.length > MAX_AI_ACTION_CANDIDATES) {
         return {
             kind: "error",
@@ -1475,7 +1748,7 @@ export async function runAiAction(
     if (missingFields.size > 0) {
         return {
             kind: "incomplete_extraction",
-            raw: result.text,
+            raw: extractionRaw,
             missingFields: [...missingFields].sort(),
             candidateCount: candidates.length,
             validCandidateCount: valid.length,

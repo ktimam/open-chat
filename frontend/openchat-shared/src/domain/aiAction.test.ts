@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
     type AiActionDefinition,
     type AiActionDefinitionWire,
@@ -61,6 +61,48 @@ const MULTI_DEF: AiActionDefinition = {
         },
         required: ["amount"],
     },
+};
+
+const SOURCE_SEQUENCE_DEF: AiActionDefinition = {
+    ...DEF,
+    responseSchema: {
+        type: "object",
+        properties: {
+            kind: { type: "string", enum: ["settlement", "iou"] },
+            amount: { type: "number", minimum: 0.005, maximum: 90_071_992_547_409.9 },
+            direction: { type: "string", enum: ["credit", "debt"], default: "debt" },
+            note: { type: "string", maxLength: 4_096, format: "utf8-no-nul" },
+            message: { type: "string", minLength: 1, maxLength: 200, format: "utf8-no-nul" },
+        },
+        required: ["amount", "kind", "direction"],
+        "x-openchat-text-sequence": {
+            numberField: "amount",
+            labelField: "note",
+            minimumItems: 2,
+            anchors: ["owe me", "owe"],
+        },
+    },
+    rules: [
+        {
+            kind: "keyword_map",
+            field: "kind",
+            mode: "override",
+            map: [
+                { value: "iou", keywords: ["owe", "owed", "due"] },
+                { value: "settlement", keywords: ["paid", "sent"] },
+            ],
+        },
+        {
+            kind: "keyword_map",
+            field: "direction",
+            mode: "override",
+            map: [
+                { value: "credit", keywords: ["owe me", "you owe"] },
+                { value: "debt", keywords: ["i owe", "owe you", "owe"] },
+            ],
+        },
+        { kind: "from_message", field: "message", maxLength: 200 },
+    ],
 };
 
 describe("parseExtractionList", () => {
@@ -346,6 +388,357 @@ describe("runAiAction", () => {
         expect(seen[1].prompt).toContain("owe me 200 uber 400 food 250 order");
         expect(seen[1].text).toBeUndefined();
         expect(seen[1].maxTokens).toBe(256);
+    });
+
+    describe("manifest-authorized deterministic text sequences", () => {
+        const noJsonInfer = () =>
+            vi.fn(async (): Promise<InferenceResult> => ({ kind: "ok", text: "no json" }));
+
+        it("extracts the exact Manager amount/label sequence before inference", async () => {
+            const infer = noJsonInfer();
+            const text = "manager owe me 200 uber 400 food 250 order";
+            const result = await runAiAction(SOURCE_SEQUENCE_DEF, { text }, RECIPIENT, infer);
+
+            expect(infer).not.toHaveBeenCalled();
+            expect(result.kind).toBe("ready_multi");
+            if (result.kind === "ready_multi") {
+                expect(result.extracted).toEqual([
+                    {
+                        amount: 200,
+                        note: "uber",
+                        message: text,
+                        kind: "iou",
+                        direction: "credit",
+                    },
+                    {
+                        amount: 400,
+                        note: "food",
+                        message: text,
+                        kind: "iou",
+                        direction: "credit",
+                    },
+                    {
+                        amount: 250,
+                        note: "order",
+                        message: text,
+                        kind: "iou",
+                        direction: "credit",
+                    },
+                ]);
+                for (const entry of result.extracted) {
+                    expect(Object.keys(entry).sort()).toEqual(
+                        ["amount", "direction", "kind", "message", "note"].sort(),
+                    );
+                    expect(entry).not.toHaveProperty("currency");
+                    expect(entry).not.toHaveProperty("date");
+                }
+            }
+        });
+
+        it("accepts unambiguous newline and semicolon separators", async () => {
+            const infer = noJsonInfer();
+            const text = "manager OWE ME 200 uber;\n400 food,\n250 order";
+            const result = await runAiAction(SOURCE_SEQUENCE_DEF, { text }, RECIPIENT, infer);
+
+            expect(infer).not.toHaveBeenCalled();
+            expect(result.kind).toBe("ready_multi");
+            if (result.kind === "ready_multi") {
+                expect(result.extracted.map(({ amount, note }) => ({ amount, note }))).toEqual([
+                    { amount: 200, note: "uber" },
+                    { amount: 400, note: "food" },
+                    { amount: 250, note: "order" },
+                ]);
+            }
+        });
+
+        it("uses registered mapping priority and the schema default after source parsing", async () => {
+            const bare = await runAiAction(
+                SOURCE_SEQUENCE_DEF,
+                { text: "owe 200 uber 400 food" },
+                RECIPIENT,
+                noJsonInfer(),
+            );
+            expect(bare.kind).toBe("ready_multi");
+            if (bare.kind === "ready_multi") {
+                expect(bare.extracted.map((entry) => entry.direction)).toEqual(["debt", "debt"]);
+                expect(bare.extracted.map((entry) => entry.kind)).toEqual(["iou", "iou"]);
+            }
+
+            const defaultOnly: AiActionDefinition = {
+                ...SOURCE_SEQUENCE_DEF,
+                rules: SOURCE_SEQUENCE_DEF.rules?.filter(
+                    (rule) => !(rule.kind === "keyword_map" && rule.field === "direction"),
+                ),
+            };
+            const withDefault = await runAiAction(
+                defaultOnly,
+                { text: "owe 200 uber 400 food" },
+                RECIPIENT,
+                noJsonInfer(),
+            );
+            expect(withDefault.kind).toBe("ready_multi");
+            if (withDefault.kind === "ready_multi") {
+                expect(withDefault.extracted.map((entry) => entry.direction)).toEqual([
+                    "debt",
+                    "debt",
+                ]);
+            }
+        });
+
+        it("fails closed after source parsing when rules cannot supply a required field", async () => {
+            const infer = noJsonInfer();
+            const withoutKindRule: AiActionDefinition = {
+                ...SOURCE_SEQUENCE_DEF,
+                rules: SOURCE_SEQUENCE_DEF.rules?.filter(
+                    (rule) => !(rule.kind === "keyword_map" && rule.field === "kind"),
+                ),
+            };
+            const text = "manager owe me 200 uber 400 food 250 order";
+            const result = await runAiAction(withoutKindRule, { text }, RECIPIENT, infer);
+
+            expect(infer).not.toHaveBeenCalled();
+            expect(result).toEqual({
+                kind: "incomplete_extraction",
+                raw: text,
+                missingFields: ["kind"],
+                candidateCount: 3,
+                validCandidateCount: 0,
+            });
+        });
+
+        it.each([
+            ["one item", "owe me 200 uber"],
+            ["unlabelled number", "owe me 200 400 food"],
+            ["stray number", "owe me ref 99; 200 uber 400 food"],
+            ["zero amount", "owe me 0 uber 400 food"],
+            ["negative amount", "owe me -200 uber 400 food"],
+            ["date", "owe me 200 uber due 1 June"],
+            ["date range", "owe me 3-8 booking 200 uber"],
+            ["time", "owe me 200 uber 8:30 meeting"],
+            ["percentage", "owe me 200 uber 10% tip"],
+            ["currency symbol", "owe me $200 uber 400 food"],
+            ["currency code", "owe me 200 USD uber 400 food"],
+            ["complete ISO currency code", "manager owe me 200 zar uber 400 food 250 order"],
+            ["unknown uppercase currency-like code", "manager owe me 200 XYZ uber 400 food"],
+            ["invoice number before the command", "invoice 99 manager owe me 200 uber 400 food"],
+            ["quantity before the command", "2 tickets manager owe me 200 uber 400 food"],
+            ["quantity after the command", "manager owe me 2 tickets 200 uber 400 food"],
+            ["free words after the command", "manager owe me about 200 uber 400 food"],
+            ["missing command anchor", "manager 200 uber 400 food"],
+            ["command substring", "power 200 uber 400 food"],
+            ["command word after an amount", "manager owe me 200 uber 400 food owe"],
+            ["non-letter label", "owe me 200 #uber 400 food"],
+        ])("refuses an ambiguous or unsupported %s sequence", async (_label, text) => {
+            const infer = noJsonInfer();
+            const result = await runAiAction(SOURCE_SEQUENCE_DEF, { text }, RECIPIENT, infer);
+
+            expect(result.kind).toBe("no_extraction");
+            expect(infer).toHaveBeenCalledTimes(2);
+        });
+
+        it("does not run the text fallback for an image-bearing invocation", async () => {
+            const infer = vi.fn(
+                async (): Promise<InferenceResult> => ({
+                    kind: "ok",
+                    text: '[{"amount":9,"kind":"iou","direction":"debt"},{"amount":10,"kind":"iou","direction":"debt"}]',
+                }),
+            );
+            const result = await runAiAction(
+                { ...SOURCE_SEQUENCE_DEF, acceptsImage: true },
+                {
+                    image: new Uint8Array([1, 2, 3]),
+                    text: "manager owe me 200 uber 400 food 250 order",
+                },
+                RECIPIENT,
+                infer,
+            );
+
+            expect(infer).toHaveBeenCalledOnce();
+            expect(result.kind).toBe("ready_multi");
+            if (result.kind === "ready_multi") {
+                expect(result.extracted.map((entry) => entry.amount)).toEqual([9, 10]);
+            }
+        });
+
+        it.each([
+            ["missing extension", undefined],
+            [
+                "missing number field",
+                {
+                    numberField: "missing",
+                    labelField: "note",
+                    minimumItems: 2,
+                    anchors: ["owe"],
+                },
+            ],
+            [
+                "missing label field",
+                {
+                    numberField: "amount",
+                    labelField: "missing",
+                    minimumItems: 2,
+                    anchors: ["owe"],
+                },
+            ],
+            [
+                "same fields",
+                {
+                    numberField: "amount",
+                    labelField: "amount",
+                    minimumItems: 2,
+                    anchors: ["owe"],
+                },
+            ],
+            [
+                "invalid minimum",
+                {
+                    numberField: "amount",
+                    labelField: "note",
+                    minimumItems: 1,
+                    anchors: ["owe"],
+                },
+            ],
+            [
+                "missing anchors",
+                { numberField: "amount", labelField: "note", minimumItems: 2 },
+            ],
+            [
+                "empty anchors",
+                { numberField: "amount", labelField: "note", minimumItems: 2, anchors: [] },
+            ],
+            [
+                "numeric anchor",
+                {
+                    numberField: "amount",
+                    labelField: "note",
+                    minimumItems: 2,
+                    anchors: ["owe 2"],
+                },
+            ],
+            [
+                "duplicate anchors",
+                {
+                    numberField: "amount",
+                    labelField: "note",
+                    minimumItems: 2,
+                    anchors: ["owe", "OWE"],
+                },
+            ],
+            [
+                "unexpected option",
+                {
+                    numberField: "amount",
+                    labelField: "note",
+                    minimumItems: 2,
+                    anchors: ["owe"],
+                    extra: true,
+                },
+            ],
+        ])("ignores an invalid schema opt-in: %s", async (_label, extension) => {
+            const base = SOURCE_SEQUENCE_DEF.responseSchema as Record<string, unknown>;
+            const schema = { ...base };
+            if (extension === undefined) delete schema["x-openchat-text-sequence"];
+            else schema["x-openchat-text-sequence"] = extension;
+            const infer = vi.fn(
+                async (): Promise<InferenceResult> => ({
+                    kind: "ok",
+                    text: '{"amount":9,"kind":"iou","direction":"debt","note":"model"}',
+                }),
+            );
+            const result = await runAiAction(
+                { ...SOURCE_SEQUENCE_DEF, responseSchema: schema },
+                { text: "owe me 200 uber 400 food" },
+                RECIPIENT,
+                infer,
+            );
+
+            expect(infer).toHaveBeenCalledOnce();
+            expect(result.kind).toBe("ready");
+            if (result.kind === "ready") expect(result.extracted.amount).toBe(9);
+        });
+
+        it.each([
+            ["wrong number type", "amount", { type: "string" }],
+            ["wrong label type", "note", { type: "number" }],
+        ])("ignores an opt-in with a %s", async (_label, field, property) => {
+            const base = SOURCE_SEQUENCE_DEF.responseSchema as {
+                properties: Record<string, unknown>;
+            };
+            const infer = vi.fn(
+                async (): Promise<InferenceResult> => ({
+                    kind: "ok",
+                    text: '{"amount":9,"kind":"iou","direction":"debt","note":"model"}',
+                }),
+            );
+            await runAiAction(
+                {
+                    ...SOURCE_SEQUENCE_DEF,
+                    responseSchema: {
+                        ...(SOURCE_SEQUENCE_DEF.responseSchema as Record<string, unknown>),
+                        properties: { ...base.properties, [field]: property },
+                    },
+                },
+                { text: "owe me 200 uber 400 food" },
+                RECIPIENT,
+                infer,
+            );
+            expect(infer).toHaveBeenCalledOnce();
+        });
+
+        it("ignores an opt-in whose number field is not required by the schema", async () => {
+            const infer = vi.fn(
+                async (): Promise<InferenceResult> => ({
+                    kind: "ok",
+                    text: '{"amount":9,"kind":"iou","direction":"debt","note":"model"}',
+                }),
+            );
+            await runAiAction(
+                {
+                    ...SOURCE_SEQUENCE_DEF,
+                    responseSchema: {
+                        ...(SOURCE_SEQUENCE_DEF.responseSchema as Record<string, unknown>),
+                        required: ["kind", "direction"],
+                    },
+                },
+                { text: "owe me 200 uber 400 food" },
+                RECIPIENT,
+                infer,
+            );
+            expect(infer).toHaveBeenCalledOnce();
+        });
+
+        it("rejects a sequence above the candidate bound without invoking inference", async () => {
+            const infer = noJsonInfer();
+            const text = `owe me ${Array.from(
+                { length: MAX_AI_ACTION_CANDIDATES + 1 },
+                (_, index) => `${index + 1} charge`,
+            ).join(" ")}`;
+            const result = await runAiAction(SOURCE_SEQUENCE_DEF, { text }, RECIPIENT, infer);
+
+            expect(infer).not.toHaveBeenCalled();
+            expect(result).toEqual({
+                kind: "error",
+                error: `The source text contains more than ${MAX_AI_ACTION_CANDIDATES} action candidates.`,
+            });
+        });
+
+        it("does not scan source text beyond the bounded message window", async () => {
+            const infer = vi.fn(
+                async (): Promise<InferenceResult> => ({
+                    kind: "ok",
+                    text: '{"amount":9,"kind":"iou","direction":"debt","note":"model"}',
+                }),
+            );
+            const result = await runAiAction(
+                SOURCE_SEQUENCE_DEF,
+                { text: `${"x".repeat(10_001)} owe me 200 uber 400 food` },
+                RECIPIENT,
+                infer,
+            );
+
+            expect(infer).toHaveBeenCalledOnce();
+            expect(result.kind).toBe("ready");
+        });
     });
     it("passes the declared prompt + image to the model, but NOT the response schema", async () => {
         let seen: InferenceRequest | undefined;
