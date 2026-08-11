@@ -334,6 +334,11 @@
         onChatSelected(chatSummary);
     }
 
+    function selectChatFromRow(event?: MouseEvent) {
+        event?.stopPropagation();
+        selectChat();
+    }
+
     function addToFavourites() {
         client.addToFavourites(chatSummary.id);
     }
@@ -479,7 +484,7 @@
             {longpressCooldown}
             {menuItems}>
             <Container
-                onClick={selectChat}
+                onClick={selectChatFromRow}
                 supplementalClass={"chat_summary"}
                 padding={["lg", "sm"]}
                 mainAxisAlignment={"spaceBetween"}
