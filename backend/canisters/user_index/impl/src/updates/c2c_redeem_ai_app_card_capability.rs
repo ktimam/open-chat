@@ -366,6 +366,7 @@ mod tests {
                         },
                         endpoint: String::new(),
                         consumer_public_key: None,
+                        recipient_scope: None,
                         rules: Vec::new(),
                         accepts_image: false,
                     }],

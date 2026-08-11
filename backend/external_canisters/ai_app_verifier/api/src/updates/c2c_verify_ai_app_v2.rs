@@ -1,8 +1,8 @@
 use candid::{CandidType, Principal};
 use serde::{Deserialize, Serialize};
 use types::{
-    AiActionCardTemplate, AiActionRule, AiAppId, AiAppManifest, ContextItem, NormalizeOp, RuleMode, SurfaceDisplay,
-    TimestampMillis,
+    AiActionCardTemplate, AiActionRecipientScope, AiActionRule, AiAppId, AiAppManifest, ContextItem, NormalizeOp, RuleMode,
+    SurfaceDisplay, TimestampMillis,
 };
 
 /// Domain separator for the V2 commitment. It is deliberately outside the Candid value so a
@@ -11,6 +11,9 @@ pub const MANIFEST_COMMITMENT_DOMAIN_V2: &[u8] = b"openchat.ai-app-manifest.v2\0
 /// Language-neutral encoding marker. Raw Candid bytes are deliberately not used: semantically
 /// equivalent Candid values may have different type-table byte ordering across implementations.
 pub const MANIFEST_COMMITMENT_ENCODING_V2: &[u8] = b"OC-MANIFEST\x02";
+/// Optional append-only extension. It is omitted entirely for legacy/default confirmer-only
+/// actions so their V2 manifest commitments remain byte-for-byte stable across this upgrade.
+pub const RECIPIENT_SCOPE_EXTENSION_V1: &[u8] = b"OC-RECIPIENT-SCOPE\x01";
 
 /// The value encoded with the explicit language-neutral format below and hashed for a V2
 /// publication challenge.
@@ -166,6 +169,22 @@ fn encode_manifest(out: &mut CommitmentEncoder, manifest: &AiAppManifest) -> Res
             SurfaceDisplay::External => 1,
         });
     }
+    let app_authorized: Vec<_> = manifest
+        .actions
+        .iter()
+        .enumerate()
+        .filter(|(_, action)| matches!(action.recipient_scope, Some(AiActionRecipientScope::AppAuthorized)))
+        .collect();
+    if !app_authorized.is_empty() {
+        out.raw(RECIPIENT_SCOPE_EXTENSION_V1);
+        out.len(app_authorized.len())?;
+        for (action_index, _action) in app_authorized {
+            out.u32(u32::try_from(action_index).map_err(|_| "action index is too large".to_string())?);
+            // Extension v1 defines tag 1 as app_authorized. Confirmer (tag 0) is canonicalized to
+            // an absent policy and therefore never appears in the trailer.
+            out.u8(1);
+        }
+    }
     Ok(())
 }
 
@@ -275,7 +294,10 @@ pub struct Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use types::{AiActionCardRowTemplate, AiActionCardTemplate, AiActionDefinition, AiAppSurface, SurfaceDisplay, UserId};
+    use types::{
+        AiActionCardRowTemplate, AiActionCardTemplate, AiActionDefinition, AiActionRecipientScope, AiAppSurface,
+        SurfaceDisplay, UserId,
+    };
 
     fn principal(value: u8) -> Principal {
         Principal::from_slice(&[value])
@@ -313,6 +335,7 @@ mod tests {
                     },
                     endpoint: "https://app.example/confirm".to_string(),
                     consumer_public_key: None,
+                    recipient_scope: None,
                     rules: vec![],
                     accepts_image: false,
                 }],
@@ -381,6 +404,29 @@ mod tests {
         let mut changed = original;
         changed.user_index_canister_id = principal(8);
         assert_ne!(expected, manifest_hash_v2(&changed).unwrap());
+    }
+
+    #[test]
+    fn recipient_scope_extension_preserves_legacy_and_commits_only_app_authorized_actions() {
+        let legacy = commitment();
+        let legacy_bytes = manifest_commitment_bytes_v2(&legacy).unwrap();
+        let legacy_hash = manifest_hash_v2(&legacy).unwrap();
+
+        let mut explicit_confirmer = legacy.clone();
+        explicit_confirmer.manifest.actions[0].recipient_scope = Some(AiActionRecipientScope::Confirmer);
+        assert_eq!(manifest_commitment_bytes_v2(&explicit_confirmer).unwrap(), legacy_bytes);
+        assert_eq!(manifest_hash_v2(&explicit_confirmer).unwrap(), legacy_hash);
+
+        let mut app_authorized = legacy;
+        app_authorized.manifest.actions[0].recipient_scope = Some(AiActionRecipientScope::AppAuthorized);
+        let extended = manifest_commitment_bytes_v2(&app_authorized).unwrap();
+        assert_eq!(&extended[..legacy_bytes.len()], legacy_bytes.as_slice());
+        let mut expected_trailer = RECIPIENT_SCOPE_EXTENSION_V1.to_vec();
+        expected_trailer.extend_from_slice(&1u32.to_be_bytes());
+        expected_trailer.extend_from_slice(&0u32.to_be_bytes());
+        expected_trailer.push(1);
+        assert_eq!(&extended[legacy_bytes.len()..], expected_trailer);
+        assert_ne!(manifest_hash_v2(&app_authorized).unwrap(), legacy_hash);
     }
 
     #[test]

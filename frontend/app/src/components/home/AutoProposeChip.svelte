@@ -17,12 +17,22 @@
         // The propose flow is running (the on-device model is loading/inferring) — show a spinner and
         // swallow taps so the chip reads as "working" instead of silently doing nothing.
         busy?: boolean;
+        // Another suggestion for this message is active. Keep this chip visible but inert.
+        disabled?: boolean;
         onPropose: () => void;
         onDismiss: () => void;
         onMute: () => void;
     }
 
-    let { me, title, busy = false, onPropose, onDismiss, onMute }: Props = $props();
+    let {
+        me,
+        title,
+        busy = false,
+        disabled = false,
+        onPropose,
+        onDismiss,
+        onMute,
+    }: Props = $props();
 
     const LONG_PRESS_MS = 600;
     let pressTimer: number | undefined = undefined;
@@ -56,7 +66,11 @@
 <div class="auto-propose" class:me>
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="chip" class:busy onclick={() => !busy && onPropose()}>
+    <div
+        class="chip"
+        class:busy
+        class:disabled
+        onclick={() => !busy && !disabled && onPropose()}>
         {#if busy}
             <Spinner size={"1rem"} foregroundColour={"var(--primary)"} />
         {:else}
@@ -73,6 +87,7 @@
             type="button"
             class="dismiss"
             aria-label={$_("aiApps.autoPropose.mute")}
+            disabled={busy || disabled}
             onpointerdown={pressStart}
             onpointerup={pressEnd}
             onpointerleave={pressEnd}
@@ -111,6 +126,11 @@
 
         &.busy {
             cursor: default;
+        }
+
+        &.disabled:not(.busy) {
+            cursor: default;
+            opacity: 0.65;
         }
     }
 

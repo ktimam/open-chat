@@ -1,3 +1,4 @@
+use crate::c2c_ai_app_confirmed_action_route::RecipientAuthorizationGrant;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use types::{AiAppCardContext, AiAppId, TimestampMillis, UserId};
@@ -47,6 +48,9 @@ pub struct Args {
     pub app_id: AiAppId,
     pub app_revision: TimestampMillis,
     pub action_id: String,
+    /// Route-time app authorization. Missing is the legacy/default confirmer-only rule.
+    #[serde(default)]
+    pub recipient_authorization: Option<RecipientAuthorizationGrant>,
     pub recipient_key_bindings: Vec<RecipientKeyBinding>,
     pub deposits: Vec<UnsignedActionDeposit>,
 }

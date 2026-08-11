@@ -16,6 +16,16 @@ const MAX_CARD_ATTESTATION_IN_FLIGHT_PER_CALLER: usize = 4;
 const MAX_CARD_ATTESTATION_IN_FLIGHT_PER_APP: usize = 32;
 const MAX_CARD_ATTESTATION_IN_FLIGHT_GLOBAL: usize = 128;
 const CARD_ATTESTATION_IN_FLIGHT_LEASE: Milliseconds = 30 * 1000;
+const RECIPIENT_ROUTE_WINDOW: Milliseconds = 60 * 1000;
+const MAX_RECIPIENT_ROUTE_ATTEMPTS_PER_CALLER: usize = 200;
+const MAX_RECIPIENT_ROUTE_ATTEMPTS_PER_CALLER_APP: usize = 40;
+const MAX_RECIPIENT_ROUTE_ATTEMPTS_PER_APP: usize = 200;
+const MAX_RECIPIENT_ROUTE_ATTEMPTS_GLOBAL: usize = 500;
+const MAX_RECIPIENT_ROUTE_IN_FLIGHT_PER_CALLER: usize = 32;
+const MAX_RECIPIENT_ROUTE_IN_FLIGHT_PER_CALLER_APP: usize = 4;
+const MAX_RECIPIENT_ROUTE_IN_FLIGHT_PER_APP: usize = 32;
+const MAX_RECIPIENT_ROUTE_IN_FLIGHT_GLOBAL: usize = 64;
+const RECIPIENT_ROUTE_IN_FLIGHT_LEASE: Milliseconds = 30 * 1000;
 const ACTION_DEPOSIT_WINDOW: Milliseconds = 60 * 1000;
 const MAX_ACTION_DEPOSIT_ATTEMPTS_PER_CALLER: usize = 200;
 const MAX_ACTION_DEPOSIT_ATTEMPTS_PER_CALLER_APP: usize = 100;
@@ -73,6 +83,19 @@ pub struct AiAppCallThrottle {
     /// timeout, so it cannot permanently consume capacity.
     #[serde(default)]
     card_attestation_in_flight: Vec<(Principal, AiAppId, TimestampMillis)>,
+    /// App-authorized recipient selection is a distinct third-party await before deposit
+    /// preparation. Its admission budget is separate so direct-chat retries cannot amplify one
+    /// leased card into unbounded callbacks or starve card attestation/deposit capacity.
+    #[serde(default)]
+    recipient_route_attempts: HashMap<Principal, Vec<TimestampMillis>>,
+    #[serde(default)]
+    recipient_route_attempts_by_caller_app: HashMap<(Principal, AiAppId), Vec<TimestampMillis>>,
+    #[serde(default)]
+    recipient_route_attempts_by_app: HashMap<AiAppId, Vec<TimestampMillis>>,
+    #[serde(default)]
+    recipient_route_attempts_global: Vec<TimestampMillis>,
+    #[serde(default)]
+    recipient_route_in_flight: Vec<(Principal, AiAppId, TimestampMillis)>,
     #[serde(default)]
     action_deposit_attempts: HashMap<Principal, Vec<TimestampMillis>>,
     #[serde(default)]
@@ -119,6 +142,88 @@ impl AiAppCallThrottle {
                 .iter()
                 .filter(|(_, _, started_at)| *started_at > in_flight_cutoff)
                 .count(),
+        }
+    }
+
+    pub fn admit_recipient_route(
+        &mut self,
+        caller: Principal,
+        app_id: AiAppId,
+        now: TimestampMillis,
+    ) -> Result<(), Milliseconds> {
+        self.clear_legacy();
+        Self::prune_with_window(&mut self.recipient_route_attempts, now, RECIPIENT_ROUTE_WINDOW);
+        Self::prune_with_window(&mut self.recipient_route_attempts_by_caller_app, now, RECIPIENT_ROUTE_WINDOW);
+        Self::prune_with_window(&mut self.recipient_route_attempts_by_app, now, RECIPIENT_ROUTE_WINDOW);
+        let cutoff = now.saturating_sub(RECIPIENT_ROUTE_WINDOW);
+        self.recipient_route_attempts_global.retain(|timestamp| *timestamp > cutoff);
+        let in_flight_cutoff = now.saturating_sub(RECIPIENT_ROUTE_IN_FLIGHT_LEASE);
+        self.recipient_route_in_flight
+            .retain(|(_, _, started_at)| *started_at > in_flight_cutoff);
+
+        let caller_app = (caller, app_id);
+        if self
+            .recipient_route_attempts
+            .get(&caller)
+            .is_some_and(|attempts| attempts.len() >= MAX_RECIPIENT_ROUTE_ATTEMPTS_PER_CALLER)
+            || self
+                .recipient_route_attempts_by_caller_app
+                .get(&caller_app)
+                .is_some_and(|attempts| attempts.len() >= MAX_RECIPIENT_ROUTE_ATTEMPTS_PER_CALLER_APP)
+            || self
+                .recipient_route_attempts_by_app
+                .get(&app_id)
+                .is_some_and(|attempts| attempts.len() >= MAX_RECIPIENT_ROUTE_ATTEMPTS_PER_APP)
+            || self.recipient_route_attempts_global.len() >= MAX_RECIPIENT_ROUTE_ATTEMPTS_GLOBAL
+        {
+            return Err(RECIPIENT_ROUTE_WINDOW);
+        }
+        let in_flight_for_caller = self
+            .recipient_route_in_flight
+            .iter()
+            .filter(|(candidate, _, _)| *candidate == caller)
+            .count();
+        let in_flight_for_caller_app = self
+            .recipient_route_in_flight
+            .iter()
+            .filter(|(candidate, candidate_app, _)| *candidate == caller && *candidate_app == app_id)
+            .count();
+        let in_flight_for_app = self
+            .recipient_route_in_flight
+            .iter()
+            .filter(|(_, candidate, _)| *candidate == app_id)
+            .count();
+        if in_flight_for_caller >= MAX_RECIPIENT_ROUTE_IN_FLIGHT_PER_CALLER
+            || in_flight_for_caller_app >= MAX_RECIPIENT_ROUTE_IN_FLIGHT_PER_CALLER_APP
+            || in_flight_for_app >= MAX_RECIPIENT_ROUTE_IN_FLIGHT_PER_APP
+            || self.recipient_route_in_flight.len() >= MAX_RECIPIENT_ROUTE_IN_FLIGHT_GLOBAL
+        {
+            return Err(RECIPIENT_ROUTE_IN_FLIGHT_LEASE);
+        }
+        if !self.recipient_route_attempts.contains_key(&caller)
+            && self.recipient_route_attempts.len() >= MAX_TRACKED_CALLERS_PER_ENDPOINT
+        {
+            return Err(RECIPIENT_ROUTE_WINDOW);
+        }
+
+        self.recipient_route_attempts.entry(caller).or_default().push(now);
+        self.recipient_route_attempts_by_caller_app
+            .entry(caller_app)
+            .or_default()
+            .push(now);
+        self.recipient_route_attempts_by_app.entry(app_id).or_default().push(now);
+        self.recipient_route_attempts_global.push(now);
+        self.recipient_route_in_flight.push((caller, app_id, now));
+        Ok(())
+    }
+
+    pub fn finish_recipient_route(&mut self, caller: Principal, app_id: AiAppId, started_at: TimestampMillis) {
+        if let Some(position) = self
+            .recipient_route_in_flight
+            .iter()
+            .position(|entry| *entry == (caller, app_id, started_at))
+        {
+            self.recipient_route_in_flight.swap_remove(position);
         }
     }
 
@@ -677,6 +782,40 @@ mod tests {
         }
         assert!(throttle.admit_action_deposit(caller, 3, 1).is_err());
         assert!(throttle.admit_action_deposit(caller, 3, ACTION_DEPOSIT_WINDOW + 2).is_ok());
+    }
+
+    #[test]
+    fn recipient_route_admission_bounds_concurrent_hanging_callbacks_and_exact_retries() {
+        let mut throttle = AiAppCallThrottle::default();
+        let caller = principal(79);
+        let app_id = 4;
+        for _ in 0..MAX_RECIPIENT_ROUTE_IN_FLIGHT_PER_CALLER_APP {
+            assert!(throttle.admit_recipient_route(caller, app_id, 1).is_ok());
+        }
+        assert!(
+            throttle.admit_recipient_route(caller, app_id, 1).is_err(),
+            "one direct-chat card must not amplify into unbounded app callbacks"
+        );
+        assert!(
+            throttle.admit_recipient_route(principal(80), app_id, 1).is_ok(),
+            "one user must not consume another user's recipient-route budget on the same LUI"
+        );
+
+        throttle.finish_recipient_route(caller, app_id, 1);
+        assert!(throttle.admit_recipient_route(caller, app_id, 1).is_ok());
+
+        let mut rate_limited = AiAppCallThrottle::default();
+        for _ in 0..MAX_RECIPIENT_ROUTE_ATTEMPTS_PER_CALLER_APP {
+            assert!(rate_limited.admit_recipient_route(caller, app_id, 1).is_ok());
+            rate_limited.finish_recipient_route(caller, app_id, 1);
+        }
+        assert!(rate_limited.admit_recipient_route(caller, app_id, 1).is_err());
+        assert!(
+            rate_limited
+                .admit_recipient_route(caller, app_id, RECIPIENT_ROUTE_WINDOW + 2)
+                .is_ok(),
+            "the bounded rate window must recover"
+        );
     }
 
     #[test]

@@ -14,11 +14,12 @@ use rand::rngs::StdRng;
 use serde::Serialize;
 use serde_bytes::ByteBuf;
 use std::ops::Deref;
+use std::time::Duration;
 use testing::rng::{random_from_u128, random_string};
 use types::{
     ActionCardContentInitial, ActionCardResponse, ActionCardRow, AiActionCardRowTemplate, AiActionCardTemplate,
-    AiActionDefinition, AiAppManifest, AiAppRegistration, AiAppSurface, CanisterId, ChatId, Empty, MessageContentInitial,
-    SurfaceDisplay,
+    AiActionDefinition, AiActionRecipientScope, AiAppManifest, AiAppRegistration, AiAppSurface, CanisterId, Chat, ChatId,
+    Empty, MessageContentInitial, SurfaceDisplay,
 };
 
 const ACTION_ID: &str = "sample.confirm";
@@ -78,6 +79,19 @@ pub(crate) struct GroupSetup {
 }
 
 pub(crate) fn setup(env: &mut PocketIc, canister_ids: &crate::CanisterIds, controller: Principal) -> GroupSetup {
+    setup_with_recipient_scope(env, canister_ids, controller, false)
+}
+
+pub(crate) fn setup_app_authorized(env: &mut PocketIc, canister_ids: &crate::CanisterIds, controller: Principal) -> GroupSetup {
+    setup_with_recipient_scope(env, canister_ids, controller, true)
+}
+
+fn setup_with_recipient_scope(
+    env: &mut PocketIc,
+    canister_ids: &crate::CanisterIds,
+    controller: Principal,
+    app_authorized: bool,
+) -> GroupSetup {
     activate_initial_action_signing_key_for_local_test(env, canister_ids.user_index, controller);
     let user_a = client::register_diamond_user(env, canister_ids, controller);
     let user_b = client::register_diamond_user(env, canister_ids, controller);
@@ -94,7 +108,11 @@ pub(crate) fn setup(env: &mut PocketIc, canister_ids: &crate::CanisterIds, contr
     // Allocate the destination first, register the manifest to obtain its immutable app id, then
     // install the inbox bound to exactly that id before publication verifies the binding.
     let inbox = client::create_canister(env, controller);
-    let draft = register_per_user_app(env, canister_ids.user_index, controller, &user_a, Some(inbox));
+    let draft = if app_authorized {
+        register_app_authorized_per_user_app(env, canister_ids.user_index, controller, &user_a, Some(inbox))
+    } else {
+        register_per_user_app(env, canister_ids.user_index, controller, &user_a, Some(inbox))
+    };
     install_inbox_at(env, controller, canister_ids, inbox, draft.id, canister_ids.user_index);
     let app = publish_registered_app(env, canister_ids.user_index, &user_a, draft.id);
     client::group::happy_path::set_ai_app_enabled(env, user_a.principal, group_id, app.id, true);
@@ -195,6 +213,34 @@ pub(crate) fn register_per_user_app(
     owner: &User,
     inbox: Option<CanisterId>,
 ) -> AiAppRegistration {
+    register_per_user_app_with_scope(env, user_index, controller, owner, inbox, None)
+}
+
+pub(crate) fn register_app_authorized_per_user_app(
+    env: &mut PocketIc,
+    user_index: CanisterId,
+    controller: Principal,
+    owner: &User,
+    inbox: Option<CanisterId>,
+) -> AiAppRegistration {
+    register_per_user_app_with_scope(
+        env,
+        user_index,
+        controller,
+        owner,
+        inbox,
+        Some(AiActionRecipientScope::AppAuthorized),
+    )
+}
+
+fn register_per_user_app_with_scope(
+    env: &mut PocketIc,
+    user_index: CanisterId,
+    controller: Principal,
+    owner: &User,
+    inbox: Option<CanisterId>,
+    recipient_scope: Option<AiActionRecipientScope>,
+) -> AiAppRegistration {
     let name = random_string();
     let verifier = client::create_canister(env, controller);
     let manifest = AiAppManifest {
@@ -222,6 +268,7 @@ pub(crate) fn register_per_user_app(
             },
             endpoint: "https://app.example/confirm".to_string(),
             consumer_public_key: None,
+            recipient_scope,
             rules: vec![],
             accepts_image: false,
         }],
@@ -320,6 +367,59 @@ struct ProxyRevokeUserKeyArgs {
     args: user_index_canister::revoke_ai_app_user_key::Args,
 }
 
+#[derive(CandidType, Serialize)]
+struct ConfigureAuthorizedRecipientsArgs {
+    recipients: Vec<ai_app_verifier_canister::c2c_authorize_ai_action_recipients::AuthorizedRecipient>,
+    subsequent_recipients: Option<Vec<ai_app_verifier_canister::c2c_authorize_ai_action_recipients::AuthorizedRecipient>>,
+}
+
+pub(crate) fn configure_authorized_recipients(
+    env: &mut PocketIc,
+    app_canister: CanisterId,
+    recipients: Vec<ai_app_verifier_canister::c2c_authorize_ai_action_recipients::AuthorizedRecipient>,
+) {
+    configure_authorized_recipient_responses(env, app_canister, recipients, None);
+}
+
+pub(crate) fn configure_authorized_recipient_responses(
+    env: &mut PocketIc,
+    app_canister: CanisterId,
+    recipients: Vec<ai_app_verifier_canister::c2c_authorize_ai_action_recipients::AuthorizedRecipient>,
+    subsequent_recipients: Option<Vec<ai_app_verifier_canister::c2c_authorize_ai_action_recipients::AuthorizedRecipient>>,
+) {
+    let _: () = client::execute_update(
+        env,
+        Principal::anonymous(),
+        app_canister,
+        "configure_authorized_recipients",
+        &ConfigureAuthorizedRecipientsArgs {
+            recipients,
+            subsequent_recipients,
+        },
+    );
+}
+
+pub(crate) fn authorized_recipient_from_claim(
+    claim: &user_index_canister::c2c_claim_ai_app_link_code::SuccessResult,
+    consumer_public_key: String,
+) -> ai_app_verifier_canister::c2c_authorize_ai_action_recipients::AuthorizedRecipient {
+    ai_app_verifier_canister::c2c_authorize_ai_action_recipients::AuthorizedRecipient {
+        app_subject: claim.app_subject.clone(),
+        subject_version: claim.subject_version,
+        consumer_queue_selector: claim.consumer_queue_selector.clone(),
+        consumer_queue_selector_version: claim.consumer_queue_selector_version,
+        consumer_public_key,
+        app_user_key_version: claim.key_version,
+    }
+}
+
+fn ordered_authorized_recipients(
+    mut recipients: Vec<ai_app_verifier_canister::c2c_authorize_ai_action_recipients::AuthorizedRecipient>,
+) -> Vec<ai_app_verifier_canister::c2c_authorize_ai_action_recipients::AuthorizedRecipient> {
+    recipients.sort_by(|left, right| left.app_subject.as_ref().cmp(right.app_subject.as_ref()));
+    recipients
+}
+
 pub(crate) fn claim_link_code_via_app(
     env: &mut PocketIc,
     app_canister: CanisterId,
@@ -363,6 +463,17 @@ pub(crate) fn link_key(
     app: &AiAppRegistration,
     public_key: String,
 ) -> [u8; 32] {
+    let claim = link_key_claim(env, user_index, user, app, public_key);
+    selector_from_claim(&claim)
+}
+
+pub(crate) fn link_key_claim(
+    env: &mut PocketIc,
+    user_index: CanisterId,
+    user: &User,
+    app: &AiAppRegistration,
+    public_key: String,
+) -> user_index_canister::c2c_claim_ai_app_link_code::SuccessResult {
     let code = match client::execute_msgpack_update::<_, user_index_canister::create_ai_app_link_code::Response>(
         env,
         user.principal,
@@ -400,8 +511,12 @@ pub(crate) fn link_key(
     );
     assert_eq!(result.consumer_queue_selector.len(), 32);
     result
+}
+
+pub(crate) fn selector_from_claim(claim: &user_index_canister::c2c_claim_ai_app_link_code::SuccessResult) -> [u8; 32] {
+    claim
         .consumer_queue_selector
-        .into_vec()
+        .as_ref()
         .try_into()
         .expect("v1 consumer queue selector must be 32 bytes")
 }
@@ -493,6 +608,346 @@ pub(crate) fn confirm(env: &mut PocketIc, user: &User, group_id: ChatId, message
         "confirm failed: {response:?}"
     );
     tick_many(env, 10);
+}
+
+#[test]
+fn app_authorized_route_delivers_to_exact_recipients_after_an_old_confirmation_time() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+        ..
+    } = wrapper.env();
+    let setup = setup_app_authorized(env, canister_ids, *controller);
+    let unrelated = client::register_diamond_user(env, canister_ids, *controller);
+    client::local_user_index::happy_path::add_users_to_group(
+        env,
+        &setup.user_a,
+        setup.group_lui,
+        setup.group_id,
+        vec![(unrelated.user_id, unrelated.principal)],
+    );
+    tick_many(env, 3);
+    let mut rng = StdRng::seed_from_u64(4301);
+    let recipient_a = new_recipient(&mut rng);
+    let recipient_b = new_recipient(&mut rng);
+    let unrelated_recipient = new_recipient(&mut rng);
+    let claim_a = link_key_claim(
+        env,
+        canister_ids.user_index,
+        &setup.user_a,
+        &setup.app,
+        recipient_a.pk_pem.clone(),
+    );
+    let claim_b = link_key_claim(
+        env,
+        canister_ids.user_index,
+        &setup.user_b,
+        &setup.app,
+        recipient_b.pk_pem.clone(),
+    );
+    let unrelated_claim = link_key_claim(
+        env,
+        canister_ids.user_index,
+        &unrelated,
+        &setup.app,
+        unrelated_recipient.pk_pem.clone(),
+    );
+    let selector_a = selector_from_claim(&claim_a);
+    let selector_b = selector_from_claim(&claim_b);
+    let unrelated_selector = selector_from_claim(&unrelated_claim);
+    let authorized = ordered_authorized_recipients(vec![
+        authorized_recipient_from_claim(&claim_a, recipient_a.pk_pem.clone()),
+        authorized_recipient_from_claim(&claim_b, recipient_b.pk_pem.clone()),
+    ]);
+    let app_canister = setup.app.manifest.app_canister_id.unwrap();
+    configure_authorized_recipients(env, app_canister, Vec::new());
+    let message_id = post_card(
+        env,
+        canister_ids.user_index,
+        &setup.user_a,
+        setup.group_id,
+        &setup.app,
+        None,
+        vec![],
+        None,
+    );
+
+    // The failed exact attempt reserves one immutable confirmation lease/time. Retrying that same
+    // lease after the old callback TTL must use a fresh route authorization clock without forking
+    // the card/delivery identity.
+    let unavailable = confirm_raw(env, &setup.user_b, setup.group_id, message_id);
+    assert!(
+        matches!(unavailable, group_canister::respond_to_action_card::Response::Error(_)),
+        "an app with no private recipient decision must fail closed: {unavailable:?}"
+    );
+    configure_authorized_recipients(env, app_canister, authorized);
+    env.advance_time(Duration::from_secs(6 * 60));
+    tick_many(env, 3);
+    confirm(env, &setup.user_b, setup.group_id, message_id);
+
+    let actions_a = fetch_actions(env, setup.user_a.principal, setup.inbox, &selector_a);
+    let actions_b = fetch_actions(env, setup.user_b.principal, setup.inbox, &selector_b);
+    assert_eq!(actions_a.len(), 1, "the linked account owner must receive its exact route");
+    assert_eq!(actions_b.len(), 1, "the confirmer must receive its exact route");
+    assert_eq!(
+        fetch_actions(env, unrelated.principal, setup.inbox, &unrelated_selector).len(),
+        0,
+        "an unrelated linked chat member must not be added implicitly"
+    );
+    assert_ne!(
+        actions_a[0].ephemeral_public_key, actions_b[0].ephemeral_public_key,
+        "each distinct recipient key must receive an independently randomized envelope"
+    );
+    let plaintext_a = decrypt(&actions_a[0], &recipient_a.sk_pem).expect("first authorized recipient must decrypt");
+    let plaintext_b = decrypt(&actions_b[0], &recipient_b.sk_pem).expect("second authorized recipient must decrypt");
+    assert!(decrypt(&actions_a[0], &recipient_b.sk_pem).is_err());
+    assert!(decrypt(&actions_b[0], &recipient_a.sk_pem).is_err());
+    for plaintext in [plaintext_a, plaintext_b] {
+        let json: serde_json::Value = serde_json::from_slice(&plaintext).unwrap();
+        assert_eq!(json["context"]["appId"], setup.app.id);
+        assert_eq!(json["context"]["actionId"], ACTION_ID);
+    }
+    let _committed_retry = confirm_raw(env, &setup.user_b, setup.group_id, message_id);
+    tick_many(env, 3);
+    assert_eq!(fetch_actions(env, setup.user_a.principal, setup.inbox, &selector_a).len(), 1);
+    assert_eq!(fetch_actions(env, setup.user_b.principal, setup.inbox, &selector_b).len(), 1);
+}
+
+#[test]
+fn app_authorized_recipient_change_and_stale_key_fail_atomically() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+        ..
+    } = wrapper.env();
+    let setup = setup_app_authorized(env, canister_ids, *controller);
+    let mut rng = StdRng::seed_from_u64(4302);
+    let old_a = new_recipient(&mut rng);
+    let recipient_b = new_recipient(&mut rng);
+    let claim_a = link_key_claim(env, canister_ids.user_index, &setup.user_a, &setup.app, old_a.pk_pem.clone());
+    let claim_b = link_key_claim(
+        env,
+        canister_ids.user_index,
+        &setup.user_b,
+        &setup.app,
+        recipient_b.pk_pem.clone(),
+    );
+    let old_selector_a = selector_from_claim(&claim_a);
+    let selector_b = selector_from_claim(&claim_b);
+    let authorized_a = authorized_recipient_from_claim(&claim_a, old_a.pk_pem.clone());
+    let authorized_b = authorized_recipient_from_claim(&claim_b, recipient_b.pk_pem.clone());
+    let exact = ordered_authorized_recipients(vec![authorized_a.clone(), authorized_b.clone()]);
+    let app_canister = setup.app.manifest.app_canister_id.unwrap();
+
+    // Route authorization returns A+B, but pre-deposit authorization omits A. Even B's already
+    // encrypted envelope must not be stored because recipient fan-out is all-or-none.
+    configure_authorized_recipient_responses(env, app_canister, exact.clone(), Some(vec![authorized_b]));
+    let changed_message = post_card(
+        env,
+        canister_ids.user_index,
+        &setup.user_a,
+        setup.group_id,
+        &setup.app,
+        None,
+        vec![],
+        None,
+    );
+    let changed = confirm_raw(env, &setup.user_b, setup.group_id, changed_message);
+    assert!(
+        matches!(changed, group_canister::respond_to_action_card::Response::Error(_)),
+        "a changed second callback must reject the whole confirmation: {changed:?}"
+    );
+    tick_many(env, 10);
+    assert_eq!(
+        fetch_actions(env, setup.user_a.principal, setup.inbox, &old_selector_a).len(),
+        0
+    );
+    assert_eq!(fetch_actions(env, setup.user_b.principal, setup.inbox, &selector_b).len(), 0);
+
+    // Reconfigure a stable callback, then rotate A's registered app key without updating the app's
+    // private recipient row. The stale public-key/version claim must fail before any envelope lands.
+    configure_authorized_recipients(env, app_canister, exact);
+    let current_a = new_recipient(&mut rng);
+    let current_claim_a = link_key_claim(env, canister_ids.user_index, &setup.user_a, &setup.app, current_a.pk_pem);
+    let current_selector_a = selector_from_claim(&current_claim_a);
+    let stale_message = post_card(
+        env,
+        canister_ids.user_index,
+        &setup.user_a,
+        setup.group_id,
+        &setup.app,
+        None,
+        vec![],
+        None,
+    );
+    let stale = confirm_raw(env, &setup.user_b, setup.group_id, stale_message);
+    assert!(
+        matches!(stale, group_canister::respond_to_action_card::Response::Error(_)),
+        "a rotated recipient key must reject the whole confirmation: {stale:?}"
+    );
+    tick_many(env, 10);
+    assert_eq!(
+        fetch_actions(env, setup.user_a.principal, setup.inbox, &old_selector_a).len(),
+        0
+    );
+    assert_eq!(
+        fetch_actions(env, setup.user_a.principal, setup.inbox, &current_selector_a).len(),
+        0
+    );
+    assert_eq!(fetch_actions(env, setup.user_b.principal, setup.inbox, &selector_b).len(), 0);
+}
+
+#[test]
+fn app_authorized_direct_chat_delivers_exact_independent_envelopes() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+        ..
+    } = wrapper.env();
+    let setup = setup_app_authorized(env, canister_ids, *controller);
+    let unrelated = client::register_diamond_user(env, canister_ids, *controller);
+    let mut rng = StdRng::seed_from_u64(4303);
+    let recipient_a = new_recipient(&mut rng);
+    let recipient_b = new_recipient(&mut rng);
+    let unrelated_recipient = new_recipient(&mut rng);
+    let claim_a = link_key_claim(
+        env,
+        canister_ids.user_index,
+        &setup.user_a,
+        &setup.app,
+        recipient_a.pk_pem.clone(),
+    );
+    let claim_b = link_key_claim(
+        env,
+        canister_ids.user_index,
+        &setup.user_b,
+        &setup.app,
+        recipient_b.pk_pem.clone(),
+    );
+    let unrelated_claim = link_key_claim(
+        env,
+        canister_ids.user_index,
+        &unrelated,
+        &setup.app,
+        unrelated_recipient.pk_pem.clone(),
+    );
+    let selector_a = selector_from_claim(&claim_a);
+    let selector_b = selector_from_claim(&claim_b);
+    let unrelated_selector = selector_from_claim(&unrelated_claim);
+    configure_authorized_recipients(
+        env,
+        setup.app.manifest.app_canister_id.unwrap(),
+        ordered_authorized_recipients(vec![
+            authorized_recipient_from_claim(&claim_a, recipient_a.pk_pem.clone()),
+            authorized_recipient_from_claim(&claim_b, recipient_b.pk_pem.clone()),
+        ]),
+    );
+
+    let message_id = random_from_u128();
+    let fixture = card_content_fixture();
+    let mut card = ActionCardContentInitial {
+        title: fixture.title,
+        rows: fixture.rows,
+        confirm_label: fixture.confirm_label,
+        cancel_label: fixture.cancel_label,
+        action_id: fixture.action_id,
+        app_id: Some(setup.app.id),
+        app_revision: Some(setup.app.updated),
+        app_provenance: None,
+        disclosure: fixture.disclosure,
+        expires_at: fixture.expires_at,
+        recipient_public_key: None,
+        recipient_public_keys: Vec::new(),
+        confirm_payload: fixture.confirm_payload,
+        inbox_canister_id: None,
+    };
+    let provenance: user_index_canister::create_ai_app_card_provenance::Response = client::execute_msgpack_update(
+        env,
+        setup.user_a.principal,
+        canister_ids.user_index,
+        "create_ai_app_card_provenance_msgpack",
+        &user_index_canister::create_ai_app_card_provenance::Args {
+            app_id: setup.app.id,
+            app_revision: setup.app.updated,
+            action_id: ACTION_ID.to_string(),
+            content: (&card).into(),
+            chat: Chat::Direct(setup.user_b.user_id.into()),
+            thread_root_message_index: None,
+            message_id,
+        },
+    );
+    let user_index_canister::create_ai_app_card_provenance::Response::Success(provenance) = provenance else {
+        panic!("exact direct-card fixture must receive provenance: {provenance:?}")
+    };
+    card.app_provenance = Some(provenance.provenance);
+    client::user::happy_path::send_message(
+        env,
+        &setup.user_a,
+        setup.user_b.user_id,
+        None,
+        MessageContentInitial::ActionCard(card),
+        None,
+        Some(message_id),
+    );
+
+    let confirmed: user_canister::respond_to_action_card::Response = client::execute_msgpack_update(
+        env,
+        setup.user_a.principal,
+        setup.user_a.canister(),
+        "respond_to_action_card_msgpack",
+        &user_canister::respond_to_action_card::Args {
+            user_id: setup.user_b.user_id,
+            thread_root_message_index: None,
+            message_id,
+            response: ActionCardResponse::Confirm,
+            confirm_payload_override: None,
+            confirmation_grant: None,
+        },
+    );
+    assert!(
+        matches!(confirmed, user_canister::respond_to_action_card::Response::Success(_)),
+        "direct A-B confirmation must succeed: {confirmed:?}"
+    );
+    tick_many(env, 10);
+
+    let actions_a = fetch_actions(env, setup.user_a.principal, setup.inbox, &selector_a);
+    let actions_b = fetch_actions(env, setup.user_b.principal, setup.inbox, &selector_b);
+    assert_eq!(actions_a.len(), 1);
+    assert_eq!(actions_b.len(), 1);
+    assert_eq!(
+        fetch_actions(env, unrelated.principal, setup.inbox, &unrelated_selector).len(),
+        0,
+        "an unrelated linked user must not receive a direct-chat account action"
+    );
+    assert_ne!(actions_a[0].ephemeral_public_key, actions_b[0].ephemeral_public_key);
+    assert!(decrypt(&actions_a[0], &recipient_a.sk_pem).is_ok());
+    assert!(decrypt(&actions_b[0], &recipient_b.sk_pem).is_ok());
+    assert!(decrypt(&actions_a[0], &recipient_b.sk_pem).is_err());
+    assert!(decrypt(&actions_b[0], &recipient_a.sk_pem).is_err());
+
+    let _exact_retry: user_canister::respond_to_action_card::Response = client::execute_msgpack_update(
+        env,
+        setup.user_a.principal,
+        setup.user_a.canister(),
+        "respond_to_action_card_msgpack",
+        &user_canister::respond_to_action_card::Args {
+            user_id: setup.user_b.user_id,
+            thread_root_message_index: None,
+            message_id,
+            response: ActionCardResponse::Confirm,
+            confirm_payload_override: None,
+            confirmation_grant: None,
+        },
+    );
+    tick_many(env, 3);
+    assert_eq!(fetch_actions(env, setup.user_a.principal, setup.inbox, &selector_a).len(), 1);
+    assert_eq!(fetch_actions(env, setup.user_b.principal, setup.inbox, &selector_b).len(), 1);
 }
 
 #[test]

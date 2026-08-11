@@ -126,11 +126,20 @@ fn validate(manifest: &mut AiAppManifest, allow_loopback_http: bool) -> Result<(
     let mut action_names = HashSet::new();
     let mut total_rules = 0usize;
     let mut total_keywords = 0usize;
+    let app_authorized_recipients_available =
+        manifest.per_user_keys && manifest.app_canister_id.is_some() && manifest.inbox_canister_id.is_some();
     for (index, action) in manifest.actions.iter_mut().enumerate() {
         if !action_names.insert(action.name.clone()) {
             return Err(format!("actions[{index}]: duplicate action name"));
         }
         validate_action_definition(action, allow_loopback_http).map_err(|message| format!("actions[{index}]: {message}"))?;
+        if matches!(action.recipient_scope, Some(types::AiActionRecipientScope::AppAuthorized))
+            && !app_authorized_recipients_available
+        {
+            return Err(format!(
+                "actions[{index}]: app_authorized recipients require per_user_keys plus vouched app and inbox canisters"
+            ));
+        }
         total_rules = total_rules.saturating_add(action.rules.len());
         total_keywords = total_keywords.saturating_add(
             action
@@ -520,6 +529,7 @@ mod tests {
             },
             endpoint: "https://app.example/actions".to_string(),
             consumer_public_key: None,
+            recipient_scope: None,
             rules: Vec::new(),
             accepts_image: false,
         }
@@ -863,6 +873,30 @@ mod tests {
         let mut value = action();
         value.response_schema = r#"{"type":"object","properties":{"constructor":{"type":"string"}}}"#.to_string();
         assert!(validate_action_definition(&mut value, false).is_err());
+    }
+
+    #[test]
+    fn app_authorized_scope_requires_the_complete_per_user_callback_route() {
+        let mut app = manifest();
+        let mut scoped_action = action();
+        scoped_action.recipient_scope = Some(types::AiActionRecipientScope::AppAuthorized);
+        app.actions = vec![scoped_action];
+        assert!(validate(&mut app, false).unwrap_err().contains("app_authorized"));
+
+        app.per_user_keys = true;
+        app.consumer_public_key.clear();
+        assert!(validate(&mut app, false).unwrap_err().contains("app_authorized"));
+
+        app.app_canister_id = Some(candid::Principal::from_slice(&[8]));
+        assert!(validate(&mut app, false).unwrap_err().contains("app_authorized"));
+
+        app.inbox_canister_id = Some(candid::Principal::from_slice(&[9]));
+        assert!(validate(&mut app, false).is_ok());
+
+        app.actions[0].recipient_scope = Some(types::AiActionRecipientScope::Confirmer);
+        app.per_user_keys = false;
+        app.consumer_public_key = VALID_P256_SPKI_PEM.to_string();
+        assert!(validate(&mut app, false).is_ok());
     }
 
     #[test]

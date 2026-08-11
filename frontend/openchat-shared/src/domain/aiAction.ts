@@ -125,6 +125,9 @@ export interface AiActionDefinition {
     endpoint?: string;
     // P-256 SPKI PEM — the recipient OpenChat encrypts confirmed actions to. Required for inbox delivery.
     consumerPublicKey?: string;
+    // Missing/"confirmer" keeps legacy least-privilege delivery. "app_authorized" lets the
+    // vouched app select a bounded current per-user-key recipient set at confirmation time.
+    recipientScope?: "confirmer" | "app_authorized";
     // Optional extraction rules (absent === []).
     rules?: AiActionRule[];
     // True if the action can extract from an IMAGE message; drives the auto-propose image chip
@@ -1513,6 +1516,7 @@ export interface AiActionDefinitionWire {
     response_schema: string;
     endpoint: string;
     consumer_public_key?: string;
+    recipient_scope?: "confirmer" | "app_authorized";
     card: {
         title: string;
         confirm_label: string;
@@ -1678,6 +1682,7 @@ export function aiActionDefinitionFromWire(d: AiActionDefinitionWire): AiActionD
         responseSchema,
         endpoint: d.endpoint,
         consumerPublicKey: d.consumer_public_key,
+        recipientScope: d.recipient_scope,
         card: {
             title: d.card.title,
             confirmLabel: d.card.confirm_label,

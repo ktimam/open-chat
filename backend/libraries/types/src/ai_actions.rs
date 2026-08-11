@@ -398,6 +398,11 @@ pub struct AiActionDefinition {
     pub endpoint: String,
     /// Optional public key (PEM) the consumer advertises so the payload can be verified end-to-end.
     pub consumer_public_key: Option<String>,
+    /// Who may receive a per-user-key action after confirmation. Missing is the legacy, least-
+    /// privilege behaviour: only the authoritative confirmer. `app_authorized` asks the vouched
+    /// app canister to select an exact bounded recipient set using only app-scoped identities.
+    #[serde(default)]
+    pub recipient_scope: Option<AiActionRecipientScope>,
     /// Optional extraction rules that steer the model's prompt and deterministically post-process its
     /// output on the client. Absent means no rules.
     #[serde(default)]
@@ -406,6 +411,57 @@ pub struct AiActionDefinition {
     /// offers it on images. Absent (manifests predating the flag) === false — an app opts in.
     #[serde(default)]
     pub accepts_image: bool,
+}
+
+#[ts_export]
+#[derive(CandidType, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AiActionRecipientScope {
+    #[serde(rename = "confirmer")]
+    Confirmer,
+    #[serde(rename = "app_authorized")]
+    AppAuthorized,
+}
+
+#[cfg(test)]
+mod recipient_scope_compatibility_tests {
+    use super::*;
+
+    #[derive(CandidType, Serialize)]
+    struct LegacyAiActionDefinition {
+        name: String,
+        description: String,
+        prompt_template: String,
+        response_schema: String,
+        card: AiActionCardTemplate,
+        endpoint: String,
+        consumer_public_key: Option<String>,
+        rules: Vec<AiActionRule>,
+        accepts_image: bool,
+    }
+
+    #[test]
+    fn action_without_recipient_scope_decodes_as_confirmer_only() {
+        let encoded = candid::encode_one(LegacyAiActionDefinition {
+            name: "legacy.action".to_string(),
+            description: String::new(),
+            prompt_template: "return json".to_string(),
+            response_schema: "{}".to_string(),
+            card: AiActionCardTemplate {
+                title: "Review".to_string(),
+                confirm_label: "Confirm".to_string(),
+                cancel_label: "Cancel".to_string(),
+                rows: Vec::new(),
+                disclosure: None,
+            },
+            endpoint: "https://app.example/action".to_string(),
+            consumer_public_key: None,
+            rules: Vec::new(),
+            accepts_image: false,
+        })
+        .unwrap();
+        let decoded: AiActionDefinition = candid::decode_one(&encoded).unwrap();
+        assert_eq!(decoded.recipient_scope, None);
+    }
 }
 
 /// A single, generic extraction rule. Rules are declared by whoever registers the action and are

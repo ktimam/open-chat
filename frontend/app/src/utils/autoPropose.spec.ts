@@ -18,9 +18,11 @@ import { autoProposeSuggestions as autoProposeEnabled } from "../stores/settings
 import {
     autoProposeSuggestions,
     autoProposeSuggestionKey,
+    autoProposeSuggestionLabel,
     autoProposeSuggestionStillCurrent,
     autoProposeThreadStreamMessages,
     currentAutoProposeSessionEpoch,
+    dismissAutoProposeSuggestion,
     evaluateForAutoPropose,
     registerAutoProposeEventBoundary,
     revokePrivateAutoProposeRuntime,
@@ -107,16 +109,419 @@ describe("bounded auto-propose vocabulary", () => {
         );
         expect(buildBoundedAutoProposeVocabulary(actions).keywordEntries).toHaveLength(32);
     });
+
+    it("retains every bounded image-capable action in manifest order", () => {
+        const actions = [
+            { ...action("first image", 0), acceptsImage: true },
+            { ...action("text only", 0), acceptsImage: false },
+            { ...action("second image", 0), acceptsImage: true },
+        ];
+
+        expect(buildBoundedAutoProposeVocabulary(actions).imageEntries).toEqual([
+            { title: "first image", actionIndex: 0 },
+            { title: "second image", actionIndex: 2 },
+        ]);
+    });
+});
+
+describe("multi-suggestion labels", () => {
+    it("disambiguates duplicate titles by app, action, then app id", () => {
+        const base = {
+            chatKey: "chat",
+            viewerId: "viewer",
+            sessionEpoch: 1,
+            title: "Add expense",
+            appRevision: 1n,
+        };
+        const suggestions = [
+            { ...base, appName: "IOU", appId: 1, actionId: "iou.first" },
+            { ...base, appName: "IOU", appId: 1, actionId: "iou.second" },
+            { ...base, appName: "Tasks", appId: 2, actionId: "tasks.add" },
+            { ...base, appName: "Clone", appId: 3, actionId: "same.action" },
+            { ...base, appName: "Clone", appId: 4, actionId: "same.action" },
+            {
+                ...base,
+                title: "Unique title",
+                appName: "IOU",
+                appId: 1,
+                actionId: "iou.unique",
+            },
+        ];
+
+        expect(suggestions.map((value) => autoProposeSuggestionLabel(value, suggestions))).toEqual([
+            "Add expense · IOU · iou.first",
+            "Add expense · IOU · iou.second",
+            "Add expense · Tasks",
+            "Add expense · Clone · same.action · #3",
+            "Add expense · Clone · same.action · #4",
+            "Unique title",
+        ]);
+    });
 });
 
 describe("auto-propose evaluation identity", () => {
+    it("unions every public and private match across apps in source order without duplicates", async () => {
+        const originalUser = currentUserStore.value;
+        const originalEnabled = autoProposeEnabled.value;
+        const chat: ChatIdentifier = {
+            kind: "group_chat",
+            groupId: "multi-suggestion-group",
+        };
+        const firstAction = action("First IOU action", 1);
+        const secondAction = action("Second IOU action", 1);
+        const otherAction = action("Other app action", 1);
+        const privateAction = action("Private app action", 0);
+        const firstApp = {
+            id: 101,
+            updated: 7n,
+            manifest: { name: "IOU", actions: [firstAction, secondAction] },
+        };
+        const otherApp = {
+            id: 202,
+            updated: 9n,
+            manifest: { name: "Other app", actions: [otherAction, privateAction] },
+        };
+        const first = { app: firstApp, action: firstAction } as never;
+        const second = { app: firstApp, action: secondAction } as never;
+        const other = { app: otherApp, action: otherAction } as never;
+        const privateOnly = { app: otherApp, action: privateAction } as never;
+        const event = {
+            index: 301,
+            timestamp: 1n,
+            event: {
+                kind: "message",
+                sender: "viewer-multi",
+                messageId: 8001n,
+                messageIndex: 31,
+                content: { kind: "text_content", text: "keyword-0" },
+            },
+        } as unknown as EventWrapper<Message>;
+
+        try {
+            currentUserStore.set({ ...originalUser, userId: "viewer-multi" });
+            autoProposeEnabled.set(true);
+            moduleMocks.resolveCandidates.mockResolvedValue({
+                candidates: [first, first, second, other, privateOnly],
+                linkRequired: [],
+                unavailable: [],
+            });
+            moduleMocks.runPrivateMatchCandidates.mockResolvedValue({
+                kind: "matched",
+                // `first` is already a public match; the exact-coordinate union must dedupe it.
+                candidates: [first, privateOnly],
+            });
+            const registration = registerAutoProposeEventBoundary(chat, undefined, 300);
+            evaluateForAutoPropose(
+                {} as OpenChat,
+                chat,
+                undefined,
+                [event],
+                "sent",
+                registration,
+            );
+            evaluateForAutoPropose(
+                {} as OpenChat,
+                chat,
+                undefined,
+                [event],
+                "sent_confirmed",
+                registration,
+            );
+
+            await vi.waitFor(() =>
+                expect(
+                    get(autoProposeSuggestions).get(
+                        autoProposeSuggestionKey("viewer-multi", chat, undefined, 8001n),
+                    ),
+                ).toMatchObject([
+                    {
+                        appId: 101,
+                        appRevision: 7n,
+                        actionId: "First IOU action",
+                        appName: "IOU",
+                    },
+                    {
+                        appId: 101,
+                        appRevision: 7n,
+                        actionId: "Second IOU action",
+                        appName: "IOU",
+                    },
+                    {
+                        appId: 202,
+                        appRevision: 9n,
+                        actionId: "Other app action",
+                        appName: "Other app",
+                    },
+                    {
+                        appId: 202,
+                        appRevision: 9n,
+                        actionId: "Private app action",
+                        appName: "Other app",
+                    },
+                ]),
+            );
+            expect(moduleMocks.runPrivateMatchCandidates).toHaveBeenCalledOnce();
+            registration.release();
+        } finally {
+            revokePrivateAutoProposeRuntime();
+            moduleMocks.resolveCandidates.mockReset();
+            moduleMocks.runPrivateMatchCandidates.mockReset();
+            autoProposeEnabled.set(originalEnabled);
+            currentUserStore.set(originalUser);
+        }
+    });
+
+    it("publishes public matches before private sandboxes and never resurrects a dismissed coordinate", async () => {
+        const originalUser = currentUserStore.value;
+        const originalEnabled = autoProposeEnabled.value;
+        const chat: ChatIdentifier = {
+            kind: "group_chat",
+            groupId: "public-before-private-group",
+        };
+        const publicAction = action("Immediate public action", 1);
+        const privateAction = action("Delayed private action", 0);
+        const publicCandidate = {
+            app: {
+                id: 301,
+                updated: 11n,
+                manifest: { name: "Public app", actions: [publicAction] },
+            },
+            action: publicAction,
+        } as never;
+        const privateCandidate = {
+            app: {
+                id: 302,
+                updated: 12n,
+                manifest: { name: "Private app", actions: [privateAction] },
+            },
+            action: privateAction,
+        } as never;
+        const event = {
+            index: 401,
+            timestamp: 1n,
+            event: {
+                kind: "message",
+                sender: "viewer-immediate",
+                messageId: 9001n,
+                messageIndex: 41,
+                content: { kind: "text_content", text: "keyword-0" },
+            },
+        } as unknown as EventWrapper<Message>;
+        let settlePrivate: () => void = () => {};
+        const pendingPrivate = new Promise<{
+            kind: "matched";
+            candidates: typeof privateCandidate[];
+        }>((resolve) => {
+            settlePrivate = () =>
+                resolve({
+                    kind: "matched",
+                    candidates: [publicCandidate, privateCandidate],
+                });
+        });
+
+        try {
+            currentUserStore.set({ ...originalUser, userId: "viewer-immediate" });
+            autoProposeEnabled.set(true);
+            moduleMocks.resolveCandidates.mockResolvedValue({
+                candidates: [publicCandidate, privateCandidate],
+                linkRequired: [],
+                unavailable: [],
+            });
+            moduleMocks.runPrivateMatchCandidates.mockReturnValue(pendingPrivate);
+            const registration = registerAutoProposeEventBoundary(chat, undefined, 400);
+            evaluateForAutoPropose({} as OpenChat, chat, undefined, [event], "sent", registration);
+            evaluateForAutoPropose(
+                {} as OpenChat,
+                chat,
+                undefined,
+                [event],
+                "sent_confirmed",
+                registration,
+            );
+
+            const suggestionKey = autoProposeSuggestionKey(
+                "viewer-immediate",
+                chat,
+                undefined,
+                9001n,
+            );
+            await vi.waitFor(() =>
+                expect(get(autoProposeSuggestions).get(suggestionKey)).toMatchObject([
+                    { appId: 301, actionId: "Immediate public action" },
+                ]),
+            );
+
+            dismissAutoProposeSuggestion(
+                "viewer-immediate",
+                chat,
+                undefined,
+                9001n,
+                {
+                    appId: 301,
+                    appRevision: 11n,
+                    actionId: "Immediate public action",
+                },
+            );
+            settlePrivate();
+            await vi.waitFor(() =>
+                expect(get(autoProposeSuggestions).get(suggestionKey)).toMatchObject([
+                    { appId: 302, actionId: "Delayed private action" },
+                ]),
+            );
+            registration.release();
+        } finally {
+            revokePrivateAutoProposeRuntime();
+            moduleMocks.resolveCandidates.mockReset();
+            moduleMocks.runPrivateMatchCandidates.mockReset();
+            autoProposeEnabled.set(originalEnabled);
+            currentUserStore.set(originalUser);
+        }
+    });
+
+    it("offers every deduplicated image-capable action in source order", async () => {
+        const originalUser = currentUserStore.value;
+        const originalEnabled = autoProposeEnabled.value;
+        const chat: ChatIdentifier = {
+            kind: "group_chat",
+            groupId: "multi-image-group",
+        };
+        const firstAction = { ...action("Extract receipt", 0), acceptsImage: true };
+        const textOnlyAction = { ...action("Text only", 0), acceptsImage: false };
+        const otherAction = { ...action("Archive image", 0), acceptsImage: true };
+        const firstApp = {
+            id: 303,
+            updated: 10n,
+            manifest: { name: "IOU", actions: [firstAction, textOnlyAction] },
+        };
+        const otherApp = {
+            id: 404,
+            updated: 11n,
+            manifest: { name: "Archive", actions: [otherAction] },
+        };
+        const first = { app: firstApp, action: firstAction } as never;
+        const textOnly = { app: firstApp, action: textOnlyAction } as never;
+        const other = { app: otherApp, action: otherAction } as never;
+        const event = {
+            index: 401,
+            timestamp: 1n,
+            event: {
+                kind: "message",
+                sender: "viewer-image",
+                messageId: 8101n,
+                messageIndex: 41,
+                content: { kind: "image_content" },
+            },
+        } as unknown as EventWrapper<Message>;
+
+        try {
+            currentUserStore.set({ ...originalUser, userId: "viewer-image" });
+            autoProposeEnabled.set(true);
+            moduleMocks.resolveCandidates.mockResolvedValue({
+                candidates: [first, first, textOnly, other],
+                linkRequired: [],
+                unavailable: [],
+            });
+            const registration = registerAutoProposeEventBoundary(chat, undefined, 400);
+            evaluateForAutoPropose(
+                {} as OpenChat,
+                chat,
+                undefined,
+                [event],
+                "sent",
+                registration,
+            );
+            evaluateForAutoPropose(
+                {} as OpenChat,
+                chat,
+                undefined,
+                [event],
+                "sent_confirmed",
+                registration,
+            );
+
+            await vi.waitFor(() =>
+                expect(
+                    get(autoProposeSuggestions).get(
+                        autoProposeSuggestionKey("viewer-image", chat, undefined, 8101n),
+                    ),
+                ).toMatchObject([
+                    {
+                        appId: 303,
+                        appRevision: 10n,
+                        actionId: "Extract receipt",
+                        appName: "IOU",
+                    },
+                    {
+                        appId: 404,
+                        appRevision: 11n,
+                        actionId: "Archive image",
+                        appName: "Archive",
+                    },
+                ]),
+            );
+            expect(moduleMocks.runPrivateMatchCandidates).not.toHaveBeenCalled();
+            registration.release();
+        } finally {
+            revokePrivateAutoProposeRuntime();
+            moduleMocks.resolveCandidates.mockReset();
+            moduleMocks.runPrivateMatchCandidates.mockReset();
+            autoProposeEnabled.set(originalEnabled);
+            currentUserStore.set(originalUser);
+        }
+    });
+
+    it("dismisses only one exact action from a message's suggestion set", () => {
+        const originalUser = currentUserStore.value;
+        const chat: ChatIdentifier = { kind: "direct_chat", userId: "dismiss-other" };
+        try {
+            currentUserStore.set({ ...originalUser, userId: "viewer-dismiss" });
+            const sessionEpoch = currentAutoProposeSessionEpoch();
+            const shared = {
+                chatKey: "direct_chat:dismiss-other",
+                viewerId: "viewer-dismiss",
+                sessionEpoch,
+                appName: "IOU",
+                title: "Add to IOU",
+                appId: 10,
+                appRevision: 3n,
+            };
+            const first = { ...shared, actionId: "iou.first" };
+            const second = { ...shared, actionId: "iou.second" };
+            const messageKey = autoProposeSuggestionKey(
+                "viewer-dismiss",
+                chat,
+                undefined,
+                9001n,
+            );
+            autoProposeSuggestions.set(new Map([[messageKey, [first, second]]]) as never);
+
+            const dismissExact = dismissAutoProposeSuggestion as unknown as (
+                viewerId: string,
+                chatId: ChatIdentifier,
+                threadRootMessageIndex: number | undefined,
+                messageId: bigint,
+                suggestion: typeof first,
+            ) => void;
+            dismissExact("viewer-dismiss", chat, undefined, 9001n, first);
+
+            expect(get(autoProposeSuggestions).get(messageKey)).toEqual([second]);
+        } finally {
+            revokePrivateAutoProposeRuntime();
+            currentUserStore.set(originalUser);
+        }
+    });
+
     it("waits for canonical send confirmation before one private match and chip", async () => {
         const originalUser = currentUserStore.value;
         const originalEnabled = autoProposeEnabled.value;
         const chat: ChatIdentifier = { kind: "direct_chat", userId: "canonical-other" };
         const privateAction = action("IOU", 0);
         const candidate = {
-            app: { id: 91, updated: 4n },
+            app: {
+                id: 91,
+                updated: 4n,
+                manifest: { name: "IOU", actions: [privateAction] },
+            },
             action: privateAction,
         } as never;
         const event = {
@@ -139,7 +544,7 @@ describe("auto-propose evaluation identity", () => {
             });
             moduleMocks.runPrivateMatchCandidates.mockResolvedValue({
                 kind: "matched",
-                candidate,
+                candidates: [candidate],
             });
             const registration = registerAutoProposeEventBoundary(chat, undefined, 100);
             evaluateForAutoPropose({} as OpenChat, chat, undefined, [event], "sent", registration);
@@ -161,7 +566,7 @@ describe("auto-propose evaluation identity", () => {
                 get(autoProposeSuggestions).get(
                     autoProposeSuggestionKey("viewer-canonical", chat, undefined, 7001n),
                 ),
-            ).toMatchObject({ appId: 91, appRevision: 4n, actionId: "IOU" });
+            ).toMatchObject([{ appId: 91, appRevision: 4n, actionId: "IOU" }]);
             registration.release();
         } finally {
             revokePrivateAutoProposeRuntime();
@@ -176,9 +581,14 @@ describe("auto-propose evaluation identity", () => {
         const originalUser = currentUserStore.value;
         const originalEnabled = autoProposeEnabled.value;
         const chat: ChatIdentifier = { kind: "direct_chat", userId: "activation-aba" };
+        const privateAction = action("IOU ABA", 0);
         const candidate = {
-            app: { id: 92, updated: 1n },
-            action: action("IOU ABA", 0),
+            app: {
+                id: 92,
+                updated: 1n,
+                manifest: { name: "IOU", actions: [privateAction] },
+            },
+            action: privateAction,
         } as never;
         const event = {
             index: 201,
@@ -200,7 +610,7 @@ describe("auto-propose evaluation identity", () => {
             });
             moduleMocks.runPrivateMatchCandidates.mockResolvedValue({
                 kind: "matched",
-                candidate,
+                candidates: [candidate],
             });
             const first = registerAutoProposeEventBoundary(chat, undefined, 200);
             evaluateForAutoPropose({} as OpenChat, chat, undefined, [event], "sent", first);

@@ -6,9 +6,11 @@ import { currentUserStore } from "@client";
 import type { AiActionCandidate } from "./aiActionRunner";
 import {
     boundedPrivateMatchCandidates,
+    collectPrivateMatchCandidates,
     MAX_ACTIVE_PRIVATE_MATCH_OPERATIONS,
     MAX_PRIVATE_MATCH_ATTEMPTS,
     MAX_PRIVATE_MATCH_CANDIDATES,
+    MAX_PRIVATE_MATCH_CONCURRENCY,
     PRIVATE_MATCH_ATTEMPT_TIMEOUT_MS,
     PRIVATE_MATCH_OPERATION_TIMEOUT_MS,
     parsePrivateMatchReady,
@@ -125,6 +127,47 @@ describe("private matcher host protocol", () => {
         expect(calls).toBe(1);
     });
 
+    it("collects every private match in source order with bounded concurrency", async () => {
+        const candidates = [candidate(1), candidate(2), candidate(3), candidate(4)];
+        const outcomes = new Map<number, "matched" | "no_match" | "transient">([
+            [1, "no_match"],
+            [2, "matched"],
+            [3, "transient"],
+            [4, "matched"],
+        ]);
+        let active = 0;
+        let maxActive = 0;
+        const visited: number[] = [];
+
+        const result = await collectPrivateMatchCandidates(candidates, async (value) => {
+            active += 1;
+            maxActive = Math.max(maxActive, active);
+            visited.push(value.app.id);
+            await Promise.resolve();
+            active -= 1;
+            return outcomes.get(value.app.id) ?? "no_match";
+        });
+
+        expect(maxActive).toBe(MAX_PRIVATE_MATCH_CONCURRENCY);
+        expect(visited).toHaveLength(candidates.length);
+        expect(result.matches.map((value) => value.app.id)).toEqual([2, 4]);
+        expect(result.sawTransient).toBe(true);
+    });
+
+    it("isolates an unexpected app-attempt exception and still evaluates sibling apps", async () => {
+        const candidates = [candidate(1), candidate(2), candidate(3)];
+        const visited: number[] = [];
+        const result = await collectPrivateMatchCandidates(candidates, async (value) => {
+            visited.push(value.app.id);
+            if (value.app.id === 1) throw new Error("synthetic app failure");
+            return value.app.id === 3 ? "matched" : "no_match";
+        });
+
+        expect(visited.sort()).toEqual([1, 2, 3]);
+        expect(result.matches.map((value) => value.app.id)).toEqual([3]);
+        expect(result.sawTransient).toBe(true);
+    });
+
     it("uses a realistic attempt timeout and a token-TTL-bounded total operation", () => {
         expect(PRIVATE_MATCH_ATTEMPT_TIMEOUT_MS).toBe(30_000);
         expect(PRIVATE_MATCH_OPERATION_TIMEOUT_MS).toBe(45_000);
@@ -159,6 +202,8 @@ describe("private matcher host protocol", () => {
         expect(source).toContain("MAX_PRIVATE_MATCH_CONCURRENCY = 2");
         expect(source).toContain("MAX_PRIVATE_MATCH_CANDIDATES = 4");
         expect(source).toContain('finish("transient")');
+        expect(source).toContain("collectPrivateMatchCandidates(");
+        expect(source).not.toContain("match = candidate;");
         expect(source).toContain("import.meta.hot?.dispose");
         expect(source).toContain("abortPrivateMatchOperations()");
         expect(source.indexOf("createAiAppPrivateMatchCapability(")).toBeLessThan(
@@ -398,13 +443,10 @@ describe("private matcher host protocol", () => {
             expect(source).not.toContain("PrivateMatchConsentToggle");
         }
         const english = readFileSync(resolve(__dirname, "../i18n/en.json"), "utf8");
-        expect(english).toContain("automatic for chats linked to an IOU sheet");
-        expect(english).toContain("Unlinked chats never send message text to the app");
-        expect(english).toContain("Saved-type name is not automatic");
-        expect(english).toContain("add it as a Trigger word");
-        expect(english).toContain("Keep auto-propose suggestions on");
-        expect(english).toContain("leave this chat unmuted");
-        expect(english).toContain("new text messages observed while this chat is open");
+        expect(english).toContain("AI action suggestions are muted for this chat.");
+        expect(english).toContain("Unmute suggestions");
+        expect(english).not.toContain("Private Saved-type triggers");
+        expect(english).not.toContain("Saved-type name is not automatic");
     });
 
     it("invalidates old async suggestion generations and aborts matchers on HMR disposal", () => {

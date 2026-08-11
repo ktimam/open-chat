@@ -17,12 +17,23 @@
         offset: boolean;
         // The propose flow is running: show progress and swallow duplicate taps.
         busy?: boolean;
+        // Another suggestion for this message is active. Keep this chip visible but inert.
+        disabled?: boolean;
         onPropose: () => void;
         onDismiss: () => void;
         onMute: () => void;
     }
 
-    let { me, title, offset, busy = false, onPropose, onDismiss, onMute }: Props = $props();
+    let {
+        me,
+        title,
+        offset,
+        busy = false,
+        disabled = false,
+        onPropose,
+        onDismiss,
+        onMute,
+    }: Props = $props();
 
     const LONG_PRESS_MS = 600;
     let pressTimer: number | undefined = undefined;
@@ -62,8 +73,8 @@
     mainAxisAlignment={me ? "end" : "start"}
     crossAxisAlignment={"center"}>
     <Row
-        supplementalClass={`auto-propose-chip${busy ? " busy" : ""}`}
-        onClick={() => !busy && onPropose()}
+        supplementalClass={`auto-propose-chip${busy ? " busy" : ""}${disabled ? " disabled" : ""}`}
+        onClick={() => !busy && !disabled && onPropose()}
         width={"hug"}
         height={"hug"}
         padding={["xxs", "sm"]}
@@ -93,6 +104,7 @@
             type="button"
             class="dismiss"
             aria-label={$_("aiApps.autoPropose.mute")}
+            disabled={busy || disabled}
             onpointerdown={pressStart}
             onpointerup={pressEnd}
             onpointerleave={pressEnd}
@@ -109,6 +121,11 @@
 
     :global(.auto-propose-chip.busy) {
         cursor: default;
+    }
+
+    :global(.auto-propose-chip.disabled:not(.busy)) {
+        cursor: default;
+        opacity: 0.65;
     }
 
     .dismiss {

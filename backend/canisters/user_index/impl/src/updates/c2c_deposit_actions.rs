@@ -157,12 +157,78 @@ async fn c2c_deposit_actions(args: Args) -> Response {
             }
         }
     }
+    // App-authorized fan-out is re-authorized immediately before preparation. The LUI-carried
+    // grant is opaque here: rebuild the exact request from authoritative card state, call the
+    // currently vouched app canister, then compare its result to both the grant and current keys.
+    // Default/confirmer-only actions take no app callback path.
+    let recipient_callback = match read_state(|state| {
+        let authorization_created_at = args
+            .recipient_authorization
+            .as_ref()
+            .map(|grant| grant.authorization_created_at)
+            .unwrap_or_default();
+        crate::updates::c2c_ai_app_confirmed_action_route::recipient_authorization_callback(
+            &authority_binding,
+            &state.data.ai_apps,
+            &state.data.ai_app_scoped_identity_key,
+            state.env.canister_id(),
+            authorization_created_at,
+        )
+    }) {
+        Ok(callback) => callback,
+        Err(error) => {
+            abort_action_delivery_preparation(attempt_id, preparation_epoch);
+            finish_action_deposit_admission(caller, args.app_id, admitted_at);
+            return Error(error);
+        }
+    };
+    let callback_result = match (&args.recipient_authorization, recipient_callback) {
+        (None, None) => None,
+        (Some(expected_grant), Some((app_canister_id, callback_args)))
+            if callback_args.authorization_created_at == expected_grant.authorization_created_at =>
+        {
+            match ai_app_verifier_canister_c2c_client::c2c_authorize_ai_action_recipients(app_canister_id, &callback_args).await
+            {
+                Ok(ai_app_verifier_canister::c2c_authorize_ai_action_recipients::Response::Success(result)) => Some(result),
+                _ => {
+                    abort_action_delivery_preparation(attempt_id, preparation_epoch);
+                    finish_action_deposit_admission(caller, args.app_id, admitted_at);
+                    return Error("app recipient authorization is unavailable or stale".to_string());
+                }
+            }
+        }
+        _ => {
+            abort_action_delivery_preparation(attempt_id, preparation_epoch);
+            finish_action_deposit_admission(caller, args.app_id, admitted_at);
+            return Error("action recipient authorization does not match its manifest scope".to_string());
+        }
+    };
     // Recheck the authoritative shard, app/account keys and exact route after the validation await and
     // immediately before signing.
     if !read_state(|state| {
         let direct_route_is_current = !matches!(args.authority_context.chat, types::Chat::Direct(_))
             || validate_direct_card_lui_route(&args.authority_context, &args.authority, caller, state).is_ok();
+        let callback_is_current = match (&args.recipient_authorization, &callback_result) {
+            (None, None) => true,
+            (Some(grant), Some(result)) => validate_app_authorized_callback_result(
+                &state.data.ai_apps,
+                &state.data.ai_app_user_keys,
+                &state.data.ai_app_scoped_identity_key,
+                state.env.canister_id(),
+                args.app_id,
+                args.app_revision,
+                &args.action_id,
+                args.confirmed_by,
+                result,
+                grant,
+                &args.recipient_key_bindings,
+                state.env.now(),
+            )
+            .is_ok(),
+            _ => false,
+        };
         direct_route_is_current
+            && callback_is_current
             && resolve_current_route(
                 &state.data.ai_apps,
                 &state.data.ai_app_user_keys,
@@ -260,6 +326,7 @@ async fn c2c_deposit_actions(args: Args) -> Response {
                 &action_id,
                 args.confirmed_by,
                 &recipient_key_bindings,
+                args.recipient_authorization.as_ref(),
             ) == Ok(inbox_canister_id)
     });
     response_from_delivery_completion(completion)
@@ -755,6 +822,7 @@ fn resolve_current_route(
         &args.action_id,
         args.confirmed_by,
         &args.recipient_key_bindings,
+        args.recipient_authorization.as_ref(),
     )
 }
 
@@ -768,6 +836,7 @@ fn resolve_current_route_bindings(
     action_id: &str,
     confirmed_by: UserId,
     recipient_key_bindings: &[RecipientKeyBinding],
+    recipient_authorization: Option<&user_index_canister::c2c_ai_app_confirmed_action_route::RecipientAuthorizationGrant>,
 ) -> Result<CanisterId, String> {
     validate_recipient_key_bindings(recipient_key_bindings)?;
     let inbox = resolve_current_inbox(registry, app_id, app_revision)?;
@@ -785,7 +854,28 @@ fn resolve_current_route_bindings(
     let aggregate_user_count = recipient_key_bindings.iter().map(|binding| binding.user_ids.len()).sum();
 
     if app.manifest.per_user_keys {
-        if recipient_key_bindings.len() != 1 || recipient_key_bindings[0].user_ids.as_slice() != [confirmed_by] {
+        let app_authorized = matches!(action.recipient_scope, Some(types::AiActionRecipientScope::AppAuthorized));
+        if app_authorized {
+            let grant =
+                recipient_authorization.ok_or_else(|| "app-authorized deposit is missing its recipient grant".to_string())?;
+            if grant.scope_commitment.len() != 32
+                || grant.expires_at
+                    != grant
+                        .authorization_created_at
+                        .checked_add(
+                            ai_app_verifier_canister::c2c_authorize_ai_action_recipients::RECIPIENT_AUTHORIZATION_TTL_MILLIS,
+                        )
+                        .ok_or_else(|| "recipient authorization expiry overflowed".to_string())?
+                || recipient_key_bindings.is_empty()
+                || !recipient_key_bindings
+                    .iter()
+                    .any(|binding| binding.user_ids.contains(&confirmed_by))
+            {
+                return Err("app-authorized deposit has an invalid recipient grant or set".to_string());
+            }
+        } else if recipient_authorization.is_some() {
+            return Err("confirmer-only action cannot carry an app recipient grant".to_string());
+        } else if recipient_key_bindings.len() != 1 || recipient_key_bindings[0].user_ids.as_slice() != [confirmed_by] {
             return Err("per-user confirmed action must target only the authoritative confirmer".to_string());
         }
         let mut supplied_users = Vec::with_capacity(aggregate_user_count);
@@ -824,6 +914,9 @@ fn resolve_current_route_bindings(
             return Err("a recipient app key was replaced before deposit dispatch".to_string());
         }
     } else {
+        if recipient_authorization.is_some() {
+            return Err("app-level action cannot carry an app recipient grant".to_string());
+        }
         if recipient_key_bindings.len() != 1 || !recipient_key_bindings[0].user_ids.is_empty() {
             return Err("app-level deposit must have exactly one unscoped key binding".to_string());
         }
@@ -842,6 +935,100 @@ fn resolve_current_route_bindings(
         }
     }
     Ok(inbox)
+}
+
+/// Revalidates an app callback result against the exact current registry/key state and the opaque
+/// grant + recipient bindings carried by LocalUserIndex. This is pure; the update entrypoint calls
+/// it only after the bounded app callback returns.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn validate_app_authorized_callback_result(
+    registry: &AiAppRegistry,
+    user_keys: &AiAppUserKeys,
+    scoped_identity_key: &crate::model::ai_app_scoped_identity::AiAppScopedIdentityKey,
+    user_index_canister_id: CanisterId,
+    app_id: AiAppId,
+    app_revision: TimestampMillis,
+    action_id: &str,
+    confirmed_by: UserId,
+    callback_result: &ai_app_verifier_canister::c2c_authorize_ai_action_recipients::SuccessResult,
+    expected_grant: &user_index_canister::c2c_ai_app_confirmed_action_route::RecipientAuthorizationGrant,
+    recipient_key_bindings: &[RecipientKeyBinding],
+    now: TimestampMillis,
+) -> Result<(), String> {
+    let inbox = resolve_current_inbox(registry, app_id, app_revision)?;
+    let app = registry.get(app_id).expect("resolved current inbox has an app");
+    let app_canister_id = app
+        .manifest
+        .app_canister_id
+        .ok_or_else(|| "producing app has no vouched app canister".to_string())?;
+    let action = app
+        .manifest
+        .actions
+        .iter()
+        .find(|action| action.name == action_id)
+        .ok_or_else(|| "action is not declared by the producing app".to_string())?;
+    if !app.manifest.per_user_keys || !matches!(action.recipient_scope, Some(types::AiActionRecipientScope::AppAuthorized)) {
+        return Err("action does not allow app-authorized recipients".to_string());
+    }
+    let (routes, current_grant) = crate::updates::c2c_ai_app_confirmed_action_route::validate_app_authorized_recipients(
+        confirmed_by,
+        callback_result,
+        app_id,
+        app_canister_id,
+        inbox,
+        user_keys,
+        scoped_identity_key,
+        user_index_canister_id,
+        expected_grant.authorization_created_at,
+        now,
+    )?;
+    if &current_grant != expected_grant {
+        return Err("app recipient authorization grant changed before deposit".to_string());
+    }
+    let expected_bindings = canonical_route_recipient_bindings(&routes)?;
+    let supplied_bindings = canonical_deposit_recipient_bindings(recipient_key_bindings)?;
+    if supplied_bindings != expected_bindings {
+        return Err("app-authorized recipients changed before deposit".to_string());
+    }
+    Ok(())
+}
+
+fn canonical_route_recipient_bindings(
+    routes: &[user_index_canister::c2c_ai_app_confirmed_action_route::RecipientRoute],
+) -> Result<BTreeMap<Vec<u8>, Vec<UserId>>, String> {
+    let mut grouped: BTreeMap<Vec<u8>, Vec<UserId>> = BTreeMap::new();
+    for route in routes {
+        if route.consumer_queue_selector_version != 1 || route.consumer_queue_selector.len() != 32 {
+            return Err("app recipient route has an invalid selector".to_string());
+        }
+        grouped
+            .entry(route.consumer_queue_selector.to_vec())
+            .or_default()
+            .push(route.user_id);
+    }
+    if grouped.is_empty() || grouped.len() > MAX_RECIPIENT_KEY_BINDINGS {
+        return Err("app recipient routes have an invalid distinct-key count".to_string());
+    }
+    for users in grouped.values_mut() {
+        users.sort_unstable();
+    }
+    Ok(grouped)
+}
+
+fn canonical_deposit_recipient_bindings(bindings: &[RecipientKeyBinding]) -> Result<BTreeMap<Vec<u8>, Vec<UserId>>, String> {
+    validate_recipient_key_bindings(bindings)?;
+    let mut canonical = BTreeMap::new();
+    for binding in bindings {
+        if binding.user_ids.is_empty() || binding.key_fingerprint.len() != 32 {
+            return Err("app-authorized deposit binding is empty or malformed".to_string());
+        }
+        let mut users = binding.user_ids.clone();
+        users.sort_unstable();
+        if canonical.insert(binding.key_fingerprint.to_vec(), users).is_some() {
+            return Err("one recipient selector occurs in more than one deposit binding".to_string());
+        }
+    }
+    Ok(canonical)
 }
 
 fn pre_authority_validation_readiness(state: &mut crate::RuntimeState) -> Result<(), String> {
@@ -886,22 +1073,23 @@ mod tests {
     use super::{
         AiAppCardAuthorityOperationV1, action_delivery_attempt_identity, action_delivery_identity, authoritative_binding,
         card_context_hash, card_identity_digest, estimated_signed_request_size, resolve_current_inbox, resolve_current_route,
-        serialize_action_inbox_request, validate_deposit_commitments, validate_encoded_deposit_payload,
-        validate_recipient_key_bindings,
+        serialize_action_inbox_request, validate_app_authorized_callback_result, validate_deposit_commitments,
+        validate_encoded_deposit_payload, validate_recipient_key_bindings,
     };
     use crate::model::action_delivery_outbox::{ActionDeliveryOutbox, ActionDeliveryOutboxError, ActionDeliveryStart};
     use crate::model::ai_app_registry::AiAppRegistry;
     use crate::model::ai_app_scoped_identity::AiAppScopedIdentityKey;
     use crate::model::ai_app_user_keys::AiAppUserKeys;
     use action_inbox_canister::c2c_notify_actions::MAX_DEPOSIT_BATCH_ENCODED_BYTES;
+    use ai_app_verifier_canister::c2c_authorize_ai_action_recipients as authorize_recipients;
     use candid::Principal;
     use p256_key_pair::P256KeyPair;
     use rand::SeedableRng;
     use rand::rngs::StdRng;
     use serde_bytes::ByteBuf;
     use types::{
-        AiActionCardTemplate, AiActionDefinition, AiAppCardContext, AiAppManifest, AiAppSurface, Chat, MessageId,
-        SurfaceDisplay, UserId,
+        AiActionCardTemplate, AiActionDefinition, AiActionRecipientScope, AiAppCardContext, AiAppManifest, AiAppSurface, Chat,
+        MessageId, SurfaceDisplay, UserId,
     };
     use user_index_canister::c2c_deposit_actions::{Args, RecipientKeyBinding, UnsignedActionDeposit};
 
@@ -947,6 +1135,7 @@ mod tests {
             },
             endpoint: String::new(),
             consumer_public_key: None,
+            recipient_scope: None,
             rules: Vec::new(),
             accepts_image: false,
         }];
@@ -956,6 +1145,37 @@ mod tests {
             display: SurfaceDisplay::Sheet,
         }];
         value
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn authorized_recipient(
+        user_id: UserId,
+        public_key: String,
+        app_id: u32,
+        app_canister: Principal,
+        inbox: Principal,
+        user_index: Principal,
+        keys: &AiAppUserKeys,
+        scoped: &AiAppScopedIdentityKey,
+    ) -> authorize_recipients::AuthorizedRecipient {
+        authorize_recipients::AuthorizedRecipient {
+            app_subject: ByteBuf::from(
+                scoped
+                    .app_subject(user_index, app_id, app_canister, user_id)
+                    .unwrap()
+                    .to_vec(),
+            ),
+            subject_version: authorize_recipients::APP_SUBJECT_VERSION_V1,
+            consumer_queue_selector: ByteBuf::from(
+                scoped
+                    .consumer_queue_selector(user_index, app_id, app_canister, inbox, &public_key)
+                    .unwrap()
+                    .to_vec(),
+            ),
+            consumer_queue_selector_version: authorize_recipients::CONSUMER_QUEUE_SELECTOR_VERSION_V1,
+            consumer_public_key: public_key,
+            app_user_key_version: keys.binding_version(user_id, app_id).unwrap(),
+        }
     }
 
     fn authority_context(user_id: UserId, app_id: u32, app_revision: u64) -> AiAppCardContext {
@@ -1004,6 +1224,7 @@ mod tests {
             app_id,
             app_revision,
             action_id: "sample.action".to_string(),
+            recipient_authorization: None,
             recipient_key_bindings,
             deposits,
         }
@@ -1025,6 +1246,42 @@ mod tests {
             .to_vec(),
         );
         args
+    }
+
+    #[test]
+    fn legacy_deposit_args_msgpack_defaults_to_no_recipient_authorization() {
+        #[derive(serde::Serialize)]
+        struct LegacyArgs<'a> {
+            authority_context: &'a AiAppCardContext,
+            content_hash: [u8; 32],
+            confirmation_lease_generation: u64,
+            authority: &'a ByteBuf,
+            confirmed_by: UserId,
+            app_id: u32,
+            app_revision: u64,
+            action_id: &'a str,
+            recipient_key_bindings: &'a [RecipientKeyBinding],
+            deposits: &'a [UnsignedActionDeposit],
+        }
+
+        let current = relay_args(owner(1), 1, 2, Vec::new(), vec![deposit(vec![1; 32])]);
+        let encoded = msgpack::serialize_to_vec(&LegacyArgs {
+            authority_context: &current.authority_context,
+            content_hash: current.content_hash,
+            confirmation_lease_generation: current.confirmation_lease_generation,
+            authority: &current.authority,
+            confirmed_by: current.confirmed_by,
+            app_id: current.app_id,
+            app_revision: current.app_revision,
+            action_id: &current.action_id,
+            recipient_key_bindings: &current.recipient_key_bindings,
+            deposits: &current.deposits,
+        })
+        .unwrap();
+        let decoded: Args = msgpack::deserialize(encoded.as_slice()).unwrap();
+        assert!(decoded.recipient_authorization.is_none());
+        assert_eq!(decoded.confirmed_by, current.confirmed_by);
+        assert_eq!(decoded.deposits.len(), 1);
     }
 
     #[test]
@@ -1219,6 +1476,17 @@ mod tests {
             ),
             Ok(ActionDeliveryStart::Prepare { epoch: 1 })
         );
+        let exact_prepared_request = vec![8, 6, 7, 5, 3, 0, 9];
+        let prepared = outbox
+            .store_prepared(
+                baseline.attempt_id,
+                1,
+                Principal::from_slice(&[9]),
+                exact_prepared_request.clone(),
+                baseline.attempt_created_at,
+            )
+            .unwrap();
+        assert_eq!(prepared.request, exact_prepared_request);
         assert_eq!(
             outbox.start_in_slot(
                 exact_retry.slot_id,
@@ -1251,6 +1519,67 @@ mod tests {
         let identity = action_delivery_identity(&authoritative_binding(&args, Principal::from_slice(&[77])).unwrap()).unwrap();
 
         assert_eq!(identity.slot_id, identity.attempt_id);
+    }
+
+    #[test]
+    fn recipient_authorization_clock_cannot_fork_the_delivery_or_outbox_identity() {
+        let caller = Principal::from_slice(&[77]);
+        let mut args = relay_args(owner(1), 1, 2, Vec::new(), vec![deposit(vec![1; 32])]);
+        args.recipient_authorization = Some(
+            user_index_canister::c2c_ai_app_confirmed_action_route::RecipientAuthorizationGrant {
+                scope_commitment: ByteBuf::from(vec![4; 32]),
+                authorization_created_at: 1_000,
+                expires_at: 301_000,
+            },
+        );
+        let baseline = action_delivery_identity(&authoritative_binding(&args, caller).unwrap()).unwrap();
+
+        let grant = args.recipient_authorization.as_mut().unwrap();
+        grant.scope_commitment[0] ^= 1;
+        grant.authorization_created_at = 2_000;
+        grant.expires_at = 302_000;
+        let refreshed = action_delivery_identity(&authoritative_binding(&args, caller).unwrap()).unwrap();
+        assert_eq!(refreshed, baseline);
+
+        let mut outbox = ActionDeliveryOutbox::default();
+        let exact_prepared_request = vec![8, 6, 7, 5, 3, 0, 9];
+        assert_eq!(
+            outbox.start_in_slot(
+                baseline.slot_id,
+                baseline.attempt_id,
+                args.app_id,
+                exact_prepared_request.len(),
+                baseline.attempt_created_at,
+                baseline.attempt_created_at,
+            ),
+            Ok(ActionDeliveryStart::Prepare { epoch: 1 })
+        );
+        let prepared = outbox
+            .store_prepared(
+                baseline.attempt_id,
+                1,
+                Principal::from_slice(&[9]),
+                exact_prepared_request.clone(),
+                baseline.attempt_created_at,
+            )
+            .unwrap();
+        assert_eq!(prepared.request, exact_prepared_request);
+        assert_eq!(
+            outbox.start_in_slot(
+                refreshed.slot_id,
+                refreshed.attempt_id,
+                args.app_id,
+                1,
+                refreshed.attempt_created_at,
+                refreshed.attempt_created_at,
+            ),
+            Ok(ActionDeliveryStart::Pending)
+        );
+        assert_eq!(
+            outbox.dispatch(refreshed.attempt_id).unwrap().request,
+            exact_prepared_request,
+            "a refreshed authorization can never replace an already prepared exact request"
+        );
     }
 
     #[test]
@@ -1546,6 +1875,181 @@ mod tests {
         assert!(resolve_current_route(&registry, &keys, &scoped_identity_key, user_index, &args).is_err());
         keys.remove(recipient, app.id).unwrap();
         assert!(resolve_current_route(&registry, &keys, &scoped_identity_key, user_index, &args).is_err());
+    }
+
+    #[test]
+    fn app_authorized_callback_requires_exact_current_recipients_and_groups_a_shared_key() {
+        let mut registry = AiAppRegistry::default();
+        let inbox = Principal::from_slice(&[10]);
+        let mut manifest = delivery_manifest("account-scoped", inbox, true, String::new());
+        manifest.actions[0].recipient_scope = Some(AiActionRecipientScope::AppAuthorized);
+        let app = registry.register(owner(1), manifest, 1, false).unwrap();
+        assert!(registry.publish(app.id, 2));
+        let current = registry.get(app.id).unwrap();
+        let revision = current.updated;
+        let app_canister = current.manifest.app_canister_id.unwrap();
+        let confirmer = owner(41);
+        let partner = owner(42);
+        let unrelated = owner(43);
+        let shared_key = valid_key(201);
+        let mut keys = AiAppUserKeys::default();
+        keys.set(confirmer, app.id, shared_key.clone()).unwrap();
+        keys.set(partner, app.id, shared_key.clone()).unwrap();
+        keys.set(unrelated, app.id, valid_key(202)).unwrap();
+        let user_index = Principal::from_slice(&[77]);
+        let mut scoped = AiAppScopedIdentityKey::default();
+        scoped.ensure_initialized(&mut StdRng::seed_from_u64(203)).unwrap();
+        let mut recipients = vec![
+            authorized_recipient(
+                confirmer,
+                shared_key.clone(),
+                app.id,
+                app_canister,
+                inbox,
+                user_index,
+                &keys,
+                &scoped,
+            ),
+            authorized_recipient(
+                partner,
+                shared_key.clone(),
+                app.id,
+                app_canister,
+                inbox,
+                user_index,
+                &keys,
+                &scoped,
+            ),
+        ];
+        recipients.sort_unstable_by(|left, right| left.app_subject.as_ref().cmp(right.app_subject.as_ref()));
+        let authorization_created_at = 1_000;
+        let callback_result = authorize_recipients::SuccessResult {
+            recipients,
+            scope_commitment: ByteBuf::from(vec![9; authorize_recipients::SCOPE_COMMITMENT_BYTES]),
+            expires_at: authorization_created_at + authorize_recipients::RECIPIENT_AUTHORIZATION_TTL_MILLIS,
+        };
+        let grant = user_index_canister::c2c_ai_app_confirmed_action_route::RecipientAuthorizationGrant {
+            scope_commitment: callback_result.scope_commitment.clone(),
+            authorization_created_at,
+            expires_at: callback_result.expires_at,
+        };
+        let selector = scoped
+            .consumer_queue_selector(user_index, app.id, app_canister, inbox, &shared_key)
+            .unwrap()
+            .to_vec();
+        let exact_binding = RecipientKeyBinding {
+            user_ids: vec![partner, confirmer],
+            key_fingerprint: ByteBuf::from(selector.clone()),
+        };
+        assert_eq!(
+            validate_app_authorized_callback_result(
+                &registry,
+                &keys,
+                &scoped,
+                user_index,
+                app.id,
+                revision,
+                "sample.action",
+                confirmer,
+                &callback_result,
+                &grant,
+                &[exact_binding.clone()],
+                authorization_created_at,
+            ),
+            Ok(())
+        );
+
+        // A linked but unselected user is not implicitly added. Replacing the exact partner with
+        // that user no longer matches the app's callback decision.
+        let unrelated_selector = scoped
+            .consumer_queue_selector(
+                user_index,
+                app.id,
+                app_canister,
+                inbox,
+                &keys.keys_for_users(app.id, &[unrelated]).unwrap()[0].public_key,
+            )
+            .unwrap()
+            .to_vec();
+        assert!(
+            validate_app_authorized_callback_result(
+                &registry,
+                &keys,
+                &scoped,
+                user_index,
+                app.id,
+                revision,
+                "sample.action",
+                confirmer,
+                &callback_result,
+                &grant,
+                &[RecipientKeyBinding {
+                    user_ids: vec![confirmer, unrelated],
+                    key_fingerprint: ByteBuf::from(unrelated_selector),
+                }],
+                authorization_created_at,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_app_authorized_callback_result(
+                &registry,
+                &keys,
+                &scoped,
+                user_index,
+                app.id,
+                revision,
+                "sample.action",
+                confirmer,
+                &callback_result,
+                &grant,
+                &[RecipientKeyBinding {
+                    user_ids: vec![confirmer],
+                    key_fingerprint: ByteBuf::from(selector),
+                }],
+                authorization_created_at,
+            )
+            .is_err()
+        );
+
+        let mut changed_grant = grant.clone();
+        changed_grant.scope_commitment[0] ^= 1;
+        assert!(
+            validate_app_authorized_callback_result(
+                &registry,
+                &keys,
+                &scoped,
+                user_index,
+                app.id,
+                revision,
+                "sample.action",
+                confirmer,
+                &callback_result,
+                &changed_grant,
+                &[exact_binding.clone()],
+                authorization_created_at,
+            )
+            .is_err()
+        );
+
+        keys.set(partner, app.id, valid_key(204)).unwrap();
+        assert!(
+            validate_app_authorized_callback_result(
+                &registry,
+                &keys,
+                &scoped,
+                user_index,
+                app.id,
+                revision,
+                "sample.action",
+                confirmer,
+                &callback_result,
+                &grant,
+                &[exact_binding],
+                authorization_created_at,
+            )
+            .is_err()
+        );
     }
 
     #[test]

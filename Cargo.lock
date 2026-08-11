@@ -195,6 +195,7 @@ dependencies = [
  "ic-cdk 0.20.2",
  "serde",
  "serde_bytes",
+ "sha256",
  "types",
  "user_index_canister",
  "user_index_canister_c2c_client",

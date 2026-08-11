@@ -233,6 +233,7 @@ fn register_rejects_invalid_manifests() {
         },
         endpoint: "https://example.com/hook".to_string(),
         consumer_public_key: None,
+        recipient_scope: None,
         rules: vec![],
         accepts_image: false,
     };
@@ -497,6 +498,7 @@ fn keyword_map_action() -> AiActionDefinition {
         },
         endpoint: "https://example.com/hook".to_string(),
         consumer_public_key: None,
+        recipient_scope: None,
         rules: vec![AiActionRule::KeywordMap(KeywordMapRule {
             field: "template".to_string(),
             mode: RuleMode::Override,

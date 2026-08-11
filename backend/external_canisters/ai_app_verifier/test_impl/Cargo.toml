@@ -13,6 +13,7 @@ candid = { workspace = true }
 ic-cdk = { workspace = true }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
+sha256 = { path = "../../../libraries/sha256" }
 types = { path = "../../../libraries/types" }
 user_index_canister = { path = "../../../canisters/user_index/api" }
 user_index_canister_c2c_client = { path = "../../../canisters/user_index/c2c_client" }

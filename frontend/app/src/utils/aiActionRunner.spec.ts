@@ -1703,7 +1703,17 @@ describe("both ChatMessage trees run the SHARED propose flow", () => {
             expect(src).toContain("runProposeFlow(");
             expect(src).toContain("const runAiActionHandler = createSingleFlight(");
             expect(src).toContain("parseManualExtractionPrompt(");
-            expect(src).toContain("busy={proposing}");
+            expect(src).toContain("{#each autoProposeSuggestionList as suggestion");
+            expect(src).toContain("autoProposeSuggestionActionKey(suggestion)");
+            expect(src).toContain("disabled={proposing}");
+            expect(src).toContain("busy={");
+            expect(src).toContain("proposing && !activeAutoProposeSuggestionVisible");
+            expect(src).toContain("autoProposeSuggestionList.some(");
+            expect(src).toContain("autoProposeSuggestionLabel(suggestion, autoProposeSuggestionList)");
+            expect(src).toContain(
+                "async function proposeSuggestedAiAction(suggestion: AutoProposeSuggestion)",
+            );
+            expect(src).toContain("onPropose={() => proposeSuggestedAiAction(suggestion)}");
             expect(src).toContain("resolveSuggestedAiAction(");
             expect(src).toContain("autoProposeSuggestionStillCurrent(suggested)");
             expect(src).toContain("const outcome = await runAiActionHandler(suggestion)");
@@ -1720,6 +1730,18 @@ describe("both ChatMessage trees run the SHARED propose flow", () => {
             expect(src).not.toContain("No on-device model is ready");
         });
     }
+
+    it("both chips separate active progress from disabled sibling actions", () => {
+        for (const relative of [
+            "../components/home/AutoProposeChip.svelte",
+            "../components_mobile/home/AutoProposeChip.svelte",
+        ]) {
+            const src = readFileSync(fileURLToPath(new URL(relative, import.meta.url)), "utf8");
+            expect(src).toContain("disabled?: boolean;");
+            expect(src).toContain("!busy && !disabled && onPropose()");
+            expect(src).toContain("disabled={busy || disabled}");
+        }
+    });
 
     it("propagates exact thread-root wrapper identity through both render trees and previews", () => {
         for (const relative of [
@@ -1765,7 +1787,7 @@ describe("both ChatMessage trees run the SHARED propose flow", () => {
 
     it("mobile keeps a visible working surface after the suggestion chip is dismissed", () => {
         const src = readFileSync(fileURLToPath(new URL(TREES.mobile, import.meta.url)), "utf8");
-        expect(src).toContain("{:else if proposing}");
+        expect(src).toContain("proposing && !activeAutoProposeSuggestionVisible");
         expect(src).toContain('i18nKey("aiApps.autoPropose.working")');
     });
 

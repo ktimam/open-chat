@@ -666,6 +666,7 @@ export function apiAiActionDefinition(def: AiActionDefinition): TAiActionDefinit
         response_schema: def.responseSchema !== undefined ? JSON.stringify(def.responseSchema) : "",
         endpoint: def.endpoint ?? "",
         consumer_public_key: def.consumerPublicKey,
+        recipient_scope: def.recipientScope,
         card: {
             title: def.card.title,
             confirm_label: def.card.confirmLabel,

@@ -95,6 +95,7 @@ mod tests {
             },
             endpoint: String::new(),
             consumer_public_key: Some(key.clone()),
+            recipient_scope: None,
             rules: Vec::new(),
             accepts_image: false,
         };

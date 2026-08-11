@@ -418,13 +418,60 @@ function boundedBackoff(signal: AbortSignal): Promise<boolean> {
 }
 
 export type PrivateMatchRunResult =
-    | { kind: "matched"; candidate: AiActionCandidate }
+    | { kind: "matched"; candidates: AiActionCandidate[] }
     | { kind: "no_match" }
     | { kind: "transient" };
 
+export type CollectedPrivateMatches = {
+    matches: AiActionCandidate[];
+    sawTransient: boolean;
+};
+
 /**
- * Run a bounded queue for one exact NEW text message. At most two isolated frames are live and no
- * later candidates start once one app returns true. Every frame is removed on success/failure/TTL.
+ * Evaluate every admitted candidate with a strict worker bound while preserving source order.
+ * The attempt callback owns each candidate's isolated capability/frame lifecycle. A transient app
+ * cannot hide successful matches from other independently-authorized apps.
+ */
+export async function collectPrivateMatchCandidates(
+    queue: readonly AiActionCandidate[],
+    attempt: (candidate: AiActionCandidate) => Promise<PrivateMatchAttemptOutcome>,
+    shouldContinue: () => boolean = () => true,
+): Promise<CollectedPrivateMatches> {
+    let next = 0;
+    let sawTransient = false;
+    const matched = new Array<boolean>(queue.length).fill(false);
+    const worker = async () => {
+        while (shouldContinue()) {
+            const index = next;
+            next += 1;
+            if (index >= queue.length) return;
+            let outcome: PrivateMatchAttemptOutcome;
+            try {
+                outcome = await attempt(queue[index]);
+            } catch {
+                // One app-controlled surface/runtime failure is a transient result for only that
+                // exact candidate; it must not suppress independently authorized sibling apps.
+                outcome = "transient";
+            }
+            if (outcome === "matched") matched[index] = true;
+            if (outcome === "transient") sawTransient = true;
+        }
+    };
+    await Promise.all(
+        Array.from(
+            { length: Math.min(MAX_PRIVATE_MATCH_CONCURRENCY, queue.length) },
+            () => worker(),
+        ),
+    );
+    return {
+        matches: queue.filter((_candidate, index) => matched[index]),
+        sawTransient,
+    };
+}
+
+/**
+ * Run a bounded queue for one exact NEW text message. At most two isolated frames are live, all
+ * admitted apps are evaluated, and every frame is removed on success/failure/TTL.
  */
 export async function runPrivateMatchCandidates(
     client: OpenChat,
@@ -446,9 +493,6 @@ export async function runPrivateMatchCandidates(
     );
     if (queue.length === 0) return { kind: "no_match" };
 
-    let next = 0;
-    let match: AiActionCandidate | undefined;
-    let sawTransient = false;
     let operationTimedOut = false;
     const operation = new AbortController();
     if (!activeOperations.admit(operation)) return { kind: "transient" };
@@ -459,53 +503,45 @@ export async function runPrivateMatchCandidates(
         },
         PRIVATE_MATCH_OPERATION_TIMEOUT_MS,
     );
-    const worker = async () => {
-        while (match === undefined && !operation.signal.aborted) {
-            const index = next;
-            next += 1;
-            if (index >= queue.length) return;
-            const candidate = queue[index];
-            if (!privateMatchRuntimeCurrent(expectedViewerId, stillCurrent)) {
-                continue;
-            }
-            const outcome = await retryTransientPrivateMatch(
-                () =>
-                    matchOne(
-                        client,
-                        chatId,
-                        threadRootMessageIndex,
-                        messageId,
-                        exactMessageText,
-                        candidate,
-                        operation.signal,
-                        expectedViewerId,
-                        stillCurrent,
-                    ),
-                () => boundedBackoff(operation.signal),
-            );
-            if (
-                outcome === "matched" &&
-                privateMatchRuntimeCurrent(expectedViewerId, stillCurrent)
-            ) {
-                match = candidate;
-                operation.abort();
-            } else if (outcome === "transient") {
-                sawTransient = true;
-            }
-        }
-    };
+    let collected: CollectedPrivateMatches = { matches: [], sawTransient: false };
     try {
-        await Promise.all(
-            Array.from(
-                { length: Math.min(MAX_PRIVATE_MATCH_CONCURRENCY, queue.length) },
-                () => worker(),
-            ),
+        collected = await collectPrivateMatchCandidates(
+            queue,
+            async (candidate) => {
+                if (!privateMatchRuntimeCurrent(expectedViewerId, stillCurrent)) {
+                    return "no_match";
+                }
+                const outcome = await retryTransientPrivateMatch(
+                    () =>
+                        matchOne(
+                            client,
+                            chatId,
+                            threadRootMessageIndex,
+                            messageId,
+                            exactMessageText,
+                            candidate,
+                            operation.signal,
+                            expectedViewerId,
+                            stillCurrent,
+                        ),
+                    () => boundedBackoff(operation.signal),
+                );
+                return outcome === "matched" &&
+                    !privateMatchRuntimeCurrent(expectedViewerId, stillCurrent)
+                    ? "no_match"
+                    : outcome;
+            },
+            () => !operation.signal.aborted,
         );
     } finally {
         window.clearTimeout(operationTimer);
         operation.abort();
         activeOperations.release(operation);
     }
-    if (match !== undefined) return { kind: "matched", candidate: match };
-    return sawTransient || operationTimedOut ? { kind: "transient" } : { kind: "no_match" };
+    if (collected.matches.length > 0) {
+        return { kind: "matched", candidates: collected.matches };
+    }
+    return collected.sawTransient || operationTimedOut
+        ? { kind: "transient" }
+        : { kind: "no_match" };
 }

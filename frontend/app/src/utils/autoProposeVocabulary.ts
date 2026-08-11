@@ -1,18 +1,22 @@
 import type { AiActionDefinition } from "@shared";
 
-interface VocabularyEntry {
+export interface VocabularyEntry {
     title: string;
     keywords: string[];
     actionIndex: number;
 }
 
-export interface AutoProposeVocabulary {
-    keywordEntries: VocabularyEntry[];
-    imageTitle?: string;
-    imageActionIndex?: number;
+export interface ImageVocabularyEntry {
+    title: string;
+    actionIndex: number;
 }
 
-const MAX_AUTO_PROPOSE_ACTIONS = 32;
+export interface AutoProposeVocabulary {
+    keywordEntries: VocabularyEntry[];
+    imageEntries: ImageVocabularyEntry[];
+}
+
+export const MAX_AUTO_PROPOSE_ACTIONS = 32;
 export const MAX_AUTO_PROPOSE_KEYWORDS = 500;
 
 export function buildBoundedAutoProposeVocabulary(
@@ -43,10 +47,10 @@ export function buildBoundedAutoProposeVocabulary(
             });
         }
     }
-    const imageActionIndex = actions.findIndex((action) => action.acceptsImage);
     return {
         keywordEntries,
-        imageTitle: imageActionIndex >= 0 ? actions[imageActionIndex].card.title : undefined,
-        imageActionIndex: imageActionIndex >= 0 ? imageActionIndex : undefined,
+        imageEntries: actions.flatMap((action, actionIndex) =>
+            action.acceptsImage ? [{ title: action.card.title, actionIndex }] : [],
+        ),
     };
 }

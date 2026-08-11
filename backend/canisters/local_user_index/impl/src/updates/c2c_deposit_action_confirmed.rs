@@ -58,10 +58,11 @@ async fn c2c_deposit_action_confirmed(args: Args) -> Response {
     if let Err(error) = verify_chat_caller_and_members(&args.context, caller, current_registration.kind) {
         return Error(error);
     }
-    let (deposits, recipient_key_bindings, action_id) = match mutate_state(|state| prepare(args, authoritative_route, state)) {
-        Ok(prepared) => prepared,
-        Err(response) => return response,
-    };
+    let (deposits, recipient_key_bindings, action_id, recipient_authorization) =
+        match mutate_state(|state| prepare(args, authoritative_route, state)) {
+            Ok(prepared) => prepared,
+            Err(response) => return response,
+        };
     let relay_args = user_index_canister::c2c_deposit_actions::Args {
         authority_context,
         content_hash,
@@ -71,6 +72,7 @@ async fn c2c_deposit_action_confirmed(args: Args) -> Response {
         app_id,
         app_revision,
         action_id,
+        recipient_authorization,
         recipient_key_bindings,
         deposits,
     };
@@ -197,6 +199,7 @@ fn validate_pre_await_bounds(payload_bytes: usize, raw_member_count: usize) -> R
 struct ManifestRoute {
     inbox_canister_id: CanisterId,
     recipients: Vec<ManifestRecipient>,
+    recipient_authorization: Option<user_index_canister::c2c_ai_app_confirmed_action_route::RecipientAuthorizationGrant>,
     external_context: user_index_canister::c2c_redeem_ai_app_card_capability::AppScopedCardContext,
 }
 
@@ -204,6 +207,76 @@ struct ManifestRecipient {
     user_ids: Vec<types::UserId>,
     public_key: String,
     consumer_queue_selector: Vec<u8>,
+}
+
+/// Defense-in-depth conversion for an app-authorized route. UserIndex has already recomputed every
+/// subject/key/selector tuple. LocalUserIndex still rejects malformed/duplicate rows and groups
+/// users sharing one exact key+selector so it emits one independently randomized envelope per
+/// distinct decryption key.
+fn app_authorized_manifest_recipients(
+    route: &user_index_canister::c2c_ai_app_confirmed_action_route::SuccessResult,
+    confirmed_by: types::UserId,
+) -> Result<Option<Vec<ManifestRecipient>>, String> {
+    if route.recipients.is_empty() {
+        return if route.recipient_authorization.is_none() {
+            Ok(None)
+        } else {
+            Err("producing app route has a grant but no recipients".to_string())
+        };
+    }
+    if !route.per_user_keys || route.recipient_authorization.is_none() {
+        return Err("app-authorized route requires per-user keys and a grant".to_string());
+    }
+    let grant = route.recipient_authorization.as_ref().unwrap();
+    if grant.scope_commitment.len() != 32
+        || grant.expires_at
+            != grant
+                .authorization_created_at
+                .checked_add(5 * 60 * 1_000)
+                .ok_or_else(|| "recipient authorization expiry overflowed".to_string())?
+    {
+        return Err("app-authorized route has a malformed grant".to_string());
+    }
+    let mut seen_users = std::collections::BTreeSet::new();
+    let mut recipients: Vec<ManifestRecipient> = Vec::new();
+    for route_recipient in &route.recipients {
+        if route_recipient.public_key.is_empty()
+            || route_recipient.consumer_queue_selector_version != 1
+            || route_recipient.consumer_queue_selector.len() != 32
+            || route_recipient.subject_version != 1
+            || route_recipient.app_subject.len() != 32
+            || !seen_users.insert(route_recipient.user_id)
+        {
+            return Err("app-authorized route has a malformed or duplicate recipient".to_string());
+        }
+        if let Some(existing) = recipients
+            .iter_mut()
+            .find(|recipient| recipient.public_key == route_recipient.public_key)
+        {
+            if existing.consumer_queue_selector != route_recipient.consumer_queue_selector.as_ref() {
+                return Err("one recipient key was paired with conflicting queue selectors".to_string());
+            }
+            existing.user_ids.push(route_recipient.user_id);
+        } else {
+            recipients.push(ManifestRecipient {
+                user_ids: vec![route_recipient.user_id],
+                public_key: route_recipient.public_key.clone(),
+                consumer_queue_selector: route_recipient.consumer_queue_selector.to_vec(),
+            });
+        }
+    }
+    if !seen_users.contains(&confirmed_by) {
+        return Err("app-authorized route does not include the confirmer".to_string());
+    }
+    if recipients.len() > MAX_DEPOSIT_RECIPIENTS {
+        return Err(format!(
+            "too many distinct recipient keys; maximum is {MAX_DEPOSIT_RECIPIENTS}"
+        ));
+    }
+    for recipient in &mut recipients {
+        recipient.user_ids.sort_unstable();
+    }
+    Ok(Some(recipients))
 }
 
 async fn resolve_authoritative_route(args: &Args) -> Result<ManifestRoute, Response> {
@@ -254,15 +327,25 @@ fn authoritative_manifest_route(
         return Err("producing app route has an invalid consumer queue selector".to_string());
     }
     let selector = route.consumer_queue_selector.to_vec();
-    let supplied_keys: Vec<(Option<types::UserId>, String, Vec<u8>)> = if route.per_user_keys {
+    let authorized_recipients = app_authorized_manifest_recipients(&route, confirmed_by)?;
+    let supplied_keys: Vec<(Vec<types::UserId>, String, Vec<u8>)> = if let Some(recipients) = authorized_recipients {
+        recipients
+            .into_iter()
+            .map(|recipient| (recipient.user_ids, recipient.public_key, recipient.consumer_queue_selector))
+            .collect()
+    } else if route.per_user_keys {
         let key = route
             .confirmer_key
+            .as_ref()
             .filter(|key| key.user_id == confirmed_by)
             .ok_or_else(|| "confirmer has no registered key for the producing app".to_string())?;
-        vec![(Some(key.user_id), key.public_key, selector)]
+        vec![(vec![key.user_id], key.public_key.clone(), selector)]
     } else {
+        if !route.recipients.is_empty() || route.recipient_authorization.is_some() {
+            return Err("app-level route cannot carry app-authorized recipients".to_string());
+        }
         vec![(
-            None,
+            Vec::new(),
             route
                 .consumer_public_key
                 .clone()
@@ -272,7 +355,7 @@ fn authoritative_manifest_route(
         )]
     };
     let mut recipients: Vec<ManifestRecipient> = Vec::new();
-    for (user_id, public_key, consumer_queue_selector) in supplied_keys {
+    for (user_ids, public_key, consumer_queue_selector) in supplied_keys {
         if public_key.is_empty() {
             continue;
         }
@@ -280,14 +363,14 @@ fn authoritative_manifest_route(
             if existing.consumer_queue_selector != consumer_queue_selector {
                 return Err("one recipient key was paired with conflicting queue selectors".to_string());
             }
-            if let Some(user_id) = user_id
-                && !existing.user_ids.contains(&user_id)
-            {
-                existing.user_ids.push(user_id);
+            for user_id in user_ids {
+                if !existing.user_ids.contains(&user_id) {
+                    existing.user_ids.push(user_id);
+                }
             }
         } else {
             recipients.push(ManifestRecipient {
-                user_ids: user_id.into_iter().collect(),
+                user_ids,
                 public_key,
                 consumer_queue_selector,
             });
@@ -302,6 +385,7 @@ fn authoritative_manifest_route(
     Ok(ManifestRoute {
         inbox_canister_id: route.inbox_canister_id,
         recipients,
+        recipient_authorization: route.recipient_authorization,
         external_context: route.external_context,
     })
 }
@@ -316,12 +400,14 @@ fn prepare(
         Vec<user_index_canister::c2c_deposit_actions::UnsignedActionDeposit>,
         Vec<user_index_canister::c2c_deposit_actions::RecipientKeyBinding>,
         String,
+        Option<user_index_canister::c2c_ai_app_confirmed_action_route::RecipientAuthorizationGrant>,
     ),
     Response,
 > {
     let ManifestRoute {
         inbox_canister_id: target,
         recipients: supplied_recipients,
+        recipient_authorization,
         external_context,
     } = authoritative_route;
     // This local destination is only diagnostic. UserIndex independently resolves the exact current
@@ -420,7 +506,12 @@ fn prepare(
         });
     }
 
-    Ok((deposits, recipient_key_bindings, args.context.action_id))
+    Ok((
+        deposits,
+        recipient_key_bindings,
+        args.context.action_id,
+        recipient_authorization,
+    ))
 }
 
 // Versioned full-width identity for one logical card: canonical chat, optional thread root and
@@ -454,9 +545,9 @@ fn card_identity_digest(
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_ASSERTED_CHAT_MEMBERS, MAX_CONFIRM_PAYLOAD_BYTES, ManifestRecipient, ManifestRoute, authoritative_manifest_route,
-        card_identity_digest, prepare, validate_encoded_deposit_payload, validate_pre_await_bounds, verified_app_binding,
-        verify_chat_caller_and_members,
+        MAX_ASSERTED_CHAT_MEMBERS, MAX_CONFIRM_PAYLOAD_BYTES, ManifestRecipient, ManifestRoute,
+        app_authorized_manifest_recipients, authoritative_manifest_route, card_identity_digest, prepare,
+        validate_encoded_deposit_payload, validate_pre_await_bounds, verified_app_binding, verify_chat_caller_and_members,
     };
     use crate::updates::c2c_create_ai_app_card_capability::AuthoritativeChildKind;
     use crate::{Data, RuntimeState};
@@ -568,6 +659,7 @@ mod tests {
             app_id: u32::MAX,
             app_revision: u64::MAX,
             action_id: "sample.action".to_string(),
+            recipient_authorization: None,
             recipient_key_bindings: Vec::new(),
             deposits,
         }
@@ -705,6 +797,8 @@ mod tests {
                 user_id: confirmer,
                 public_key: "MEMBER_KEY".to_string(),
             }),
+            recipients: Vec::new(),
+            recipient_authorization: None,
             external_context: user_index_canister::c2c_redeem_ai_app_card_capability::AppScopedCardContext {
                 context_version: user_index_canister::c2c_redeem_ai_app_card_capability::APP_SCOPED_CARD_CONTEXT_VERSION_V1,
                 app_subject: ByteBuf::from(vec![1; 32]),
@@ -739,6 +833,51 @@ mod tests {
         let mut missing = route(true, member_b);
         missing.confirmer_key = None;
         assert!(authoritative_manifest_route(missing, member_b).is_err());
+    }
+
+    #[test]
+    fn app_authorized_route_groups_users_sharing_one_exact_decryption_key() {
+        let confirmer: UserId = Principal::from_slice(&[21]).into();
+        let partner: UserId = Principal::from_slice(&[22]).into();
+        let mut authorized = route(true, confirmer);
+        authorized.recipients = vec![
+            user_index_canister::c2c_ai_app_confirmed_action_route::RecipientRoute {
+                user_id: partner,
+                public_key: "SHARED_KEY".to_string(),
+                consumer_queue_selector: ByteBuf::from(vec![8; 32]),
+                consumer_queue_selector_version: 1,
+                app_subject: ByteBuf::from(vec![1; 32]),
+                subject_version: 1,
+                app_user_key_version: 2,
+            },
+            user_index_canister::c2c_ai_app_confirmed_action_route::RecipientRoute {
+                user_id: confirmer,
+                public_key: "SHARED_KEY".to_string(),
+                consumer_queue_selector: ByteBuf::from(vec![8; 32]),
+                consumer_queue_selector_version: 1,
+                app_subject: ByteBuf::from(vec![2; 32]),
+                subject_version: 1,
+                app_user_key_version: 3,
+            },
+        ];
+        authorized.recipient_authorization = Some(
+            user_index_canister::c2c_ai_app_confirmed_action_route::RecipientAuthorizationGrant {
+                scope_commitment: ByteBuf::from(vec![7; 32]),
+                authorization_created_at: 1_000,
+                expires_at: 301_000,
+            },
+        );
+        let recipients = app_authorized_manifest_recipients(&authorized, confirmer).unwrap().unwrap();
+        assert_eq!(recipients.len(), 1);
+        assert_eq!(recipients[0].public_key, "SHARED_KEY");
+        assert_eq!(recipients[0].consumer_queue_selector, vec![8; 32]);
+        assert_eq!(recipients[0].user_ids, vec![confirmer, partner]);
+
+        authorized.recipients[1].consumer_queue_selector[0] ^= 1;
+        assert!(app_authorized_manifest_recipients(&authorized, confirmer).is_err());
+        authorized.recipients[1].consumer_queue_selector[0] ^= 1;
+        authorized.recipients.retain(|recipient| recipient.user_id != confirmer);
+        assert!(app_authorized_manifest_recipients(&authorized, confirmer).is_err());
     }
 
     #[test]
@@ -825,6 +964,7 @@ mod tests {
                 public_key: recipient_public_key.clone(),
                 consumer_queue_selector: vec![4; 32],
             }],
+            recipient_authorization: None,
             external_context: user_index_canister::c2c_redeem_ai_app_card_capability::AppScopedCardContext {
                 context_version: user_index_canister::c2c_redeem_ai_app_card_capability::APP_SCOPED_CARD_CONTEXT_VERSION_V1,
                 app_subject: ByteBuf::from(vec![1; 32]),

@@ -1,9 +1,17 @@
 use ai_app_verifier_canister::{
-    c2c_attest_ai_app_card_confirmation_v1, c2c_attest_ai_app_card_v1, c2c_verify_ai_app, c2c_verify_ai_app_v2,
+    c2c_attest_ai_app_card_confirmation_v1, c2c_attest_ai_app_card_v1, c2c_authorize_ai_action_recipients, c2c_verify_ai_app,
+    c2c_verify_ai_app_v2,
 };
 use candid::{CandidType, Principal};
 use serde::Deserialize;
 use std::cell::RefCell;
+
+#[derive(Default)]
+struct RecipientAuthorizationFixture {
+    recipients: Vec<c2c_authorize_ai_action_recipients::AuthorizedRecipient>,
+    subsequent_recipients: Option<Vec<c2c_authorize_ai_action_recipients::AuthorizedRecipient>>,
+    calls: u64,
+}
 
 #[derive(CandidType, Deserialize, Clone)]
 pub struct InitArgs {
@@ -28,12 +36,15 @@ thread_local! {
     static CONFIG: RefCell<Option<InitArgs>> = const { RefCell::new(None) };
     static LAST_ACCEPTED_CARD: RefCell<Option<c2c_attest_ai_app_card_v1::CardAttestationBindingV1>> =
         const { RefCell::new(None) };
+    static RECIPIENT_AUTHORIZATION_FIXTURE: RefCell<RecipientAuthorizationFixture> =
+        RefCell::new(RecipientAuthorizationFixture::default());
 }
 
 #[ic_cdk::init]
 fn init(args: InitArgs) {
     CONFIG.with_borrow_mut(|config| *config = Some(args));
     LAST_ACCEPTED_CARD.with_borrow_mut(|binding| *binding = None);
+    RECIPIENT_AUTHORIZATION_FIXTURE.with_borrow_mut(|fixture| *fixture = RecipientAuthorizationFixture::default());
 }
 
 #[derive(CandidType, Deserialize)]
@@ -46,6 +57,12 @@ struct ProxyClaimLinkCodeArgs {
 struct ProxyRevokeUserKeyArgs {
     user_index_canister_id: Principal,
     args: user_index_canister::revoke_ai_app_user_key::Args,
+}
+
+#[derive(CandidType, Deserialize)]
+struct ConfigureAuthorizedRecipientsArgs {
+    recipients: Vec<c2c_authorize_ai_action_recipients::AuthorizedRecipient>,
+    subsequent_recipients: Option<Vec<c2c_authorize_ai_action_recipients::AuthorizedRecipient>>,
 }
 
 /// Test-only ingress bridge: PocketIC ingress callers cannot legitimately impersonate this app
@@ -65,6 +82,27 @@ async fn proxy_revoke_ai_app_user_key(args: ProxyRevokeUserKeyArgs) -> user_inde
     user_index_canister_c2c_client::revoke_ai_app_user_key(args.user_index_canister_id, &args.args)
         .await
         .unwrap_or_else(|error| ic_cdk::trap(&format!("revoke user key transport failure: {error:?}")))
+}
+
+/// Test-only fixture configuration. Production apps derive this set from their private account
+/// model; this neutral canister stores only caller-supplied opaque test rows.
+#[ic_cdk::update]
+fn configure_authorized_recipients(args: ConfigureAuthorizedRecipientsArgs) {
+    if args.recipients.len() > c2c_authorize_ai_action_recipients::MAX_AUTHORIZED_RECIPIENTS
+        || args
+            .subsequent_recipients
+            .as_ref()
+            .is_some_and(|recipients| recipients.len() > c2c_authorize_ai_action_recipients::MAX_AUTHORIZED_RECIPIENTS)
+    {
+        ic_cdk::trap("too many authorized recipient fixtures");
+    }
+    RECIPIENT_AUTHORIZATION_FIXTURE.with_borrow_mut(|fixture| {
+        *fixture = RecipientAuthorizationFixture {
+            recipients: args.recipients,
+            subsequent_recipients: args.subsequent_recipients,
+            calls: 0,
+        };
+    });
 }
 
 /// Neutral, repository-built verifier used only by OpenChat integration tests. It deliberately
@@ -96,6 +134,54 @@ fn c2c_verify_ai_app_v2(args: c2c_verify_ai_app_v2::Args) -> c2c_verify_ai_app_v
             binding: expected.expected_v2.clone().unwrap_or(args.binding),
         }
     })
+}
+
+#[ic_cdk::update]
+fn c2c_authorize_ai_action_recipients(
+    args: c2c_authorize_ai_action_recipients::Args,
+) -> c2c_authorize_ai_action_recipients::Response {
+    let caller_is_user_index = CONFIG.with_borrow(|config| {
+        config
+            .as_ref()
+            .and_then(|value| value.expected_v2.as_ref())
+            .is_some_and(|binding| binding.user_index_canister_id == ic_cdk::api::msg_caller())
+    });
+    if !caller_is_user_index {
+        return c2c_authorize_ai_action_recipients::Response::NotAuthorized;
+    }
+    RECIPIENT_AUTHORIZATION_FIXTURE.with_borrow_mut(|fixture| {
+        let recipients = if fixture.calls == 0 {
+            fixture.recipients.clone()
+        } else {
+            fixture.subsequent_recipients.as_ref().unwrap_or(&fixture.recipients).clone()
+        };
+        fixture.calls = fixture.calls.saturating_add(1);
+        if recipients.is_empty() {
+            return c2c_authorize_ai_action_recipients::Response::NotAuthorized;
+        }
+        let expires_at = match args
+            .authorization_created_at
+            .checked_add(c2c_authorize_ai_action_recipients::RECIPIENT_AUTHORIZATION_TTL_MILLIS)
+        {
+            Some(value) => value,
+            None => return c2c_authorize_ai_action_recipients::Response::InvalidRequest("expiry overflowed".to_string()),
+        };
+        c2c_authorize_ai_action_recipients::Response::Success(c2c_authorize_ai_action_recipients::SuccessResult {
+            scope_commitment: serde_bytes::ByteBuf::from(recipient_scope_commitment(&args, &recipients).to_vec()),
+            recipients,
+            expires_at,
+        })
+    })
+}
+
+fn recipient_scope_commitment(
+    args: &c2c_authorize_ai_action_recipients::Args,
+    recipients: &[c2c_authorize_ai_action_recipients::AuthorizedRecipient],
+) -> [u8; 32] {
+    let mut bytes = b"openchat/test-recipient-scope/v1\0".to_vec();
+    bytes.extend(candid::encode_one(args.clone()).expect("bounded callback args must encode"));
+    bytes.extend(candid::encode_one(recipients.to_vec()).expect("bounded recipient fixtures must encode"));
+    sha256::sha256(&bytes)
 }
 
 #[ic_cdk::update]

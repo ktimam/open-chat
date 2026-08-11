@@ -92,7 +92,11 @@ fn method_is_valid(method_name: &str, permissions: CallerPermissions) -> bool {
         | "suspected_bots"
         | "stage_action_signing_key"
         | "activate_action_signing_key" => permissions.governance_principal,
-        "publish_ai_app" => permissions.governance_principal,
+        // Production publication remains governance-only. In test mode the update handler admits
+        // only the exact registered app owner (or governance) after looking up `app_id`; the
+        // inspect hook cannot decode that ownership proof, so let signed-in users reach it.
+        "publish_ai_app" =>
+            permissions.governance_principal || (permissions.test_mode && permissions.openchat_user),
         "award_external_achievement" => true,
         "remove_bot" => permissions.governance_principal || permissions.openchat_user,
         _ => false,
@@ -140,5 +144,35 @@ mod tests {
             ));
             assert!(!method_is_valid(normalized, CallerPermissions::default()));
         }
+    }
+
+    #[test]
+    fn app_publication_ingress_matches_the_test_mode_owner_handler() {
+        let governance = CallerPermissions {
+            governance_principal: true,
+            ..Default::default()
+        };
+        let test_mode_user = CallerPermissions {
+            openchat_user: true,
+            test_mode: true,
+            ..Default::default()
+        };
+
+        assert!(method_is_valid("publish_ai_app", governance));
+        assert!(method_is_valid("publish_ai_app", test_mode_user));
+        assert!(!method_is_valid(
+            "publish_ai_app",
+            CallerPermissions {
+                openchat_user: true,
+                ..Default::default()
+            }
+        ));
+        assert!(!method_is_valid(
+            "publish_ai_app",
+            CallerPermissions {
+                test_mode: true,
+                ..Default::default()
+            }
+        ));
     }
 }

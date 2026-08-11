@@ -15,7 +15,9 @@
     import { createSingleFlight } from "@utils/singleFlight";
     import {
         autoProposeSuggestions,
+        autoProposeSuggestionActionKey,
         autoProposeSuggestionKey,
+        autoProposeSuggestionLabel,
         autoProposeSuggestionStillCurrent,
         currentAutoProposeSessionEpoch,
         dismissAutoProposeSuggestion,
@@ -342,6 +344,7 @@
     // used to keep their own copy of the flow, and this one was left with a chooser branch that
     // returned without a word: two candidates and no model meant a button that did nothing.
     let proposing = $state(false);
+    let activeAutoProposeSuggestionKey = $state<string | undefined>(undefined);
 
     const runAiActionHandler = createSingleFlight(
         (suggested?: AutoProposeSuggestion) => {
@@ -608,34 +611,50 @@
     // Auto-propose: the matcher (utils/autoPropose.ts) flagged this message as matching a
     // registered action's trigger keywords — render the under-bubble chip. Tapping it re-uses the
     // exact same propose path as the message menu.
-    let autoProposeSuggestion = $derived(
+    let autoProposeSuggestionList = $derived(
         $autoProposeEnabled && !inert
-            ? $autoProposeSuggestions.get(
+            ? ($autoProposeSuggestions.get(
                   autoProposeSuggestionKey(
                       $currentUserIdStore,
                       chatId,
                       threadRootMessageIndex,
                       msg.messageId,
                   ),
-              )
-            : undefined,
+              ) ?? [])
+            : [],
+    );
+    let activeAutoProposeSuggestionVisible = $derived(
+        activeAutoProposeSuggestionKey !== undefined &&
+            autoProposeSuggestionList.some(
+                (suggestion) =>
+                    autoProposeSuggestionActionKey(suggestion) ===
+                    activeAutoProposeSuggestionKey,
+            ),
     );
 
-    async function proposeSuggestedAiAction() {
-        const suggestion = autoProposeSuggestion;
-        if (suggestion === undefined) return;
+    async function proposeSuggestedAiAction(suggestion: AutoProposeSuggestion) {
+        if (proposing) return;
+        const suggestionActionKey = autoProposeSuggestionActionKey(suggestion);
+        activeAutoProposeSuggestionKey = suggestionActionKey;
         const capturedViewer = $currentUserIdStore;
         const capturedChatId = chatId;
         const capturedThread = threadRootMessageIndex;
         const capturedMessageId = msg.messageId;
-        const outcome = await runAiActionHandler(suggestion);
-        if (outcome === "consumed" && autoProposeSuggestionStillCurrent(suggestion)) {
-            dismissAutoProposeSuggestion(
-                capturedViewer,
-                capturedChatId,
-                capturedThread,
-                capturedMessageId,
-            );
+        try {
+            const outcome = await runAiActionHandler(suggestion);
+            if (outcome === "consumed" && autoProposeSuggestionStillCurrent(suggestion)) {
+                dismissAutoProposeSuggestion(
+                    capturedViewer,
+                    capturedChatId,
+                    capturedThread,
+                    capturedMessageId,
+                    suggestion,
+                );
+            }
+        } finally {
+            if (activeAutoProposeSuggestionKey === suggestionActionKey) {
+                activeAutoProposeSuggestionKey = undefined;
+            }
         }
     }
 
@@ -1061,23 +1080,32 @@
                             offset={!hasThread}
                         />
                     {/if}
-                    {#if autoProposeSuggestion !== undefined}
-                        <AutoProposeChip
-                            {me}
-                            title={autoProposeSuggestion.title}
-                            offset={!hasThread && !hasReactions && !hasTips}
-                            busy={proposing}
-                            onPropose={proposeSuggestedAiAction}
-                            onDismiss={() =>
-                                dismissAutoProposeSuggestion(
-                                    $currentUserIdStore,
-                                    chatId,
-                                    threadRootMessageIndex,
-                                    msg.messageId,
-                                )}
-                            onMute={muteAutoProposeSuggestions}
-                        />
-                    {:else if proposing}
+                    {#if autoProposeSuggestionList.length > 0}
+                        {#each autoProposeSuggestionList as suggestion, index (autoProposeSuggestionActionKey(suggestion))}
+                            <AutoProposeChip
+                                {me}
+                                title={autoProposeSuggestionLabel(suggestion, autoProposeSuggestionList)}
+                                offset={index === 0 && !hasThread && !hasReactions && !hasTips}
+                                busy={
+                                    proposing &&
+                                    activeAutoProposeSuggestionKey ===
+                                        autoProposeSuggestionActionKey(suggestion)
+                                }
+                                disabled={proposing}
+                                onPropose={() => proposeSuggestedAiAction(suggestion)}
+                                onDismiss={() =>
+                                    dismissAutoProposeSuggestion(
+                                        $currentUserIdStore,
+                                        chatId,
+                                        threadRootMessageIndex,
+                                        msg.messageId,
+                                        suggestion,
+                                    )}
+                                onMute={muteAutoProposeSuggestions}
+                            />
+                        {/each}
+                    {/if}
+                    {#if proposing && !activeAutoProposeSuggestionVisible}
                         <Row
                             supplementalClass={"auto-propose-working"}
                             width={"hug"}

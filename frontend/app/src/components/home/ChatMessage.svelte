@@ -15,7 +15,9 @@
     import { createSingleFlight } from "@utils/singleFlight";
     import {
         autoProposeSuggestions,
+        autoProposeSuggestionActionKey,
         autoProposeSuggestionKey,
+        autoProposeSuggestionLabel,
         autoProposeSuggestionStillCurrent,
         currentAutoProposeSessionEpoch,
         dismissAutoProposeSuggestion,
@@ -385,6 +387,7 @@
     // the on-device model's first call cold-loads the multi-GB GGUF and, with no token streaming,
     // otherwise reads as a frozen UI. Also guards against a double-run.
     let proposing = $state(false);
+    let activeAutoProposeSuggestionKey = $state<string | undefined>(undefined);
 
     // The decisions live in runProposeFlow (utils/aiActionRunner), shared with the mobile tree; this
     // component supplies only the surfaces this tree has — the manual-QC prompt, action chooser, and
@@ -443,21 +446,29 @@
         (busy) => (proposing = busy),
     );
 
-    async function proposeSuggestedAiAction() {
-        const suggestion = autoProposeSuggestion;
-        if (suggestion === undefined) return;
+    async function proposeSuggestedAiAction(suggestion: AutoProposeSuggestion) {
+        if (proposing) return;
+        const suggestionActionKey = autoProposeSuggestionActionKey(suggestion);
+        activeAutoProposeSuggestionKey = suggestionActionKey;
         const capturedViewer = $currentUserIdStore;
         const capturedChatId = chatId;
         const capturedThread = threadRootMessageIndex;
         const capturedMessageId = msg.messageId;
-        const outcome = await runAiActionHandler(suggestion);
-        if (outcome === "consumed" && autoProposeSuggestionStillCurrent(suggestion)) {
-            dismissAutoProposeSuggestion(
-                capturedViewer,
-                capturedChatId,
-                capturedThread,
-                capturedMessageId,
-            );
+        try {
+            const outcome = await runAiActionHandler(suggestion);
+            if (outcome === "consumed" && autoProposeSuggestionStillCurrent(suggestion)) {
+                dismissAutoProposeSuggestion(
+                    capturedViewer,
+                    capturedChatId,
+                    capturedThread,
+                    capturedMessageId,
+                    suggestion,
+                );
+            }
+        } finally {
+            if (activeAutoProposeSuggestionKey === suggestionActionKey) {
+                activeAutoProposeSuggestionKey = undefined;
+            }
         }
     }
 
@@ -611,17 +622,25 @@
     let threadRootMessageIndex = $derived(
         isThreadRoot ? undefined : threadRootMessage?.messageIndex,
     );
-    let autoProposeSuggestion = $derived(
+    let autoProposeSuggestionList = $derived(
         $autoProposeEnabled && !inert
-            ? $autoProposeSuggestions.get(
+            ? ($autoProposeSuggestions.get(
                   autoProposeSuggestionKey(
                       $currentUserIdStore,
                       chatId,
                       threadRootMessageIndex,
                       msg.messageId,
                   ),
-              )
-            : undefined,
+              ) ?? [])
+            : [],
+    );
+    let activeAutoProposeSuggestionVisible = $derived(
+        activeAutoProposeSuggestionKey !== undefined &&
+            autoProposeSuggestionList.some(
+                (suggestion) =>
+                    autoProposeSuggestionActionKey(suggestion) ===
+                    activeAutoProposeSuggestionKey,
+            ),
     );
     let fill = $derived(client.fillMessage(msg));
     let showAvatar = $derived($screenWidth !== ScreenWidth.ExtraExtraSmall);
@@ -1075,29 +1094,36 @@
                     </div>
                 {/if}
 
-                {#if autoProposeSuggestion !== undefined}
-                    <div class:indent={showAvatar}>
-                        <AutoProposeChip
-                            {me}
-                            title={autoProposeSuggestion.title}
-                            busy={proposing}
-                            onPropose={proposeSuggestedAiAction}
-                            onDismiss={() =>
-                                dismissAutoProposeSuggestion(
-                                    $currentUserIdStore,
-                                    chatId,
-                                    threadRootMessageIndex,
-                                    msg.messageId,
-                                )}
-                            onMute={muteAutoProposeSuggestions}
-                        />
+                {#if autoProposeSuggestionList.length > 0}
+                    <div class="auto-propose-list" class:me class:indent={showAvatar}>
+                        {#each autoProposeSuggestionList as suggestion (autoProposeSuggestionActionKey(suggestion))}
+                            <AutoProposeChip
+                                {me}
+                                title={autoProposeSuggestionLabel(suggestion, autoProposeSuggestionList)}
+                                busy={
+                                    proposing &&
+                                    activeAutoProposeSuggestionKey ===
+                                        autoProposeSuggestionActionKey(suggestion)
+                                }
+                                disabled={proposing}
+                                onPropose={() => proposeSuggestedAiAction(suggestion)}
+                                onDismiss={() =>
+                                    dismissAutoProposeSuggestion(
+                                        $currentUserIdStore,
+                                        chatId,
+                                        threadRootMessageIndex,
+                                        msg.messageId,
+                                        suggestion,
+                                    )}
+                                onMute={muteAutoProposeSuggestions}
+                            />
+                        {/each}
                     </div>
                 {/if}
 
-                {#if proposing && autoProposeSuggestion === undefined}
-                    <!-- Menu-triggered propose (no auto-propose chip is shown for this message):
-                         surface the in-flight on-device inference so a cold multi-GB model load
-                         reads as progress instead of a frozen UI. -->
+                {#if proposing && !activeAutoProposeSuggestionVisible}
+                    <!-- Menu-triggered propose has no active chip, even when this message also has
+                         suggestions. Surface the in-flight work instead of leaving only dimmed chips. -->
                     <div class="propose-working" class:me class:indent={showAvatar}>
                         <span class="pill">
                             <Spinner size={"1rem"} foregroundColour={"var(--primary)"} />
@@ -1281,6 +1307,24 @@
         @include font(book, normal, fs-70);
         color: var(--txt-light);
         white-space: normal;
+    }
+
+    .auto-propose-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: $sp1;
+        justify-content: flex-start;
+
+        &.me {
+            justify-content: flex-end;
+        }
+
+        &.indent {
+            margin-left: $avatar-width;
+            @include mobile() {
+                margin-left: $avatar-width-mob;
+            }
+        }
     }
 
     .propose-working {

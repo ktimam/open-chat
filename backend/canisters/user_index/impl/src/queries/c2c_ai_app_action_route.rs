@@ -75,6 +75,7 @@ mod tests {
                 },
                 endpoint: "https://app.example/action".to_string(),
                 consumer_public_key: Some("ACTION_KEY".to_string()),
+                recipient_scope: None,
                 rules: Vec::new(),
                 accepts_image: false,
             }],

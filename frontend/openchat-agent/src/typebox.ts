@@ -6320,6 +6320,7 @@ export const AiActionDefinition = Type.Object({
     card: AiActionCardTemplate,
     endpoint: Type.String(),
     consumer_public_key: Type.Optional(Type.String()),
+    recipient_scope: Type.Optional(Type.Union([Type.Literal("confirmer"), Type.Literal("app_authorized")])),
     rules: Type.Array(AiActionRule),
     accepts_image: Type.Boolean(),
 });
