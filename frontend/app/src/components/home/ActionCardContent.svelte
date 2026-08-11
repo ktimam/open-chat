@@ -716,9 +716,16 @@
     }
 
     function onBridgeMessage(event: MessageEvent) {
+        // Svelte clears a bound iframe to `null` before every surrounding reactive effect has
+        // necessarily removed this window listener. Snapshot the live binding once: a queued event
+        // from a torn-down frame (or one replaced during a remount) is simply stale input. The
+        // existing validator below still requires this exact WindowProxy, opaque origin, and nonce.
+        const frame = iframeEl;
+        const target = frame?.contentWindow;
         if (
-            iframeEl === undefined ||
-            !isCardBridgeEventForFrame(event, iframeEl.contentWindow, "null", frameNonce)
+            target == null ||
+            iframeEl !== frame ||
+            !isCardBridgeEventForFrame(event, target, "null", frameNonce)
         )
             return;
         const msg = event.data;

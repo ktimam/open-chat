@@ -244,6 +244,17 @@ function dispatchFromCardFrame(iframe: HTMLIFrameElement, data: unknown): void {
     );
 }
 
+function latestWindowMessageListener(
+    addEventListener: ReturnType<typeof vi.spyOn>,
+): EventListener {
+    const listener = (addEventListener.mock.calls as unknown[][])
+        .filter(([type, callback]) => type === "message" && typeof callback === "function")
+        .map(([, callback]) => callback as EventListener)
+        .at(-1);
+    if (listener === undefined) throw new Error("card bridge listener is unavailable");
+    return listener;
+}
+
 beforeEach(() => {
     mocks.resolveActionAppForCard.mockReset();
     mocks.resolveActionAppForCard.mockResolvedValue(RESOLVED_APP);
@@ -1328,6 +1339,122 @@ describe("action-card external surface load consent", () => {
             expect(buttonNamed(remounted.target, "Load app card")).toBeUndefined();
         } finally {
             await remounted.cleanup();
+            restore();
+        }
+    });
+
+    it("ignores a late bridge message after iframe teardown and preserves exact frame checks after remount", async () => {
+        const restore = setCredentiallessSupport(true);
+        const addEventListener = vi.spyOn(window, "addEventListener");
+        const first = await mountCard(card(), 1_008n);
+        let firstPostMessage: ReturnType<typeof vi.spyOn> | undefined;
+        let remounted:
+            | Awaited<ReturnType<typeof mountCard>>
+            | undefined;
+        let remountedPostMessage: ReturnType<typeof vi.spyOn> | undefined;
+        try {
+            await waitForResolution();
+            const firstReady = await completeCardReadyHandshake(first.target);
+            firstPostMessage = firstReady.postMessage;
+            const firstFrameWindow = firstReady.iframe.contentWindow;
+            if (firstFrameWindow === null) throw new Error("first card frame is unavailable");
+            const firstListener = latestWindowMessageListener(addEventListener);
+
+            // A terminal transition collapses and removes the iframe while the card component and
+            // its bridge listener are still alive. A queued message from that former WindowProxy is
+            // untrusted noise, not an exception.
+            first.contentStore.set(card({ state: "confirmed" }));
+            await tick();
+            expect(first.target.querySelector("iframe")).toBeNull();
+            expect(() =>
+                firstListener(
+                    new MessageEvent("message", {
+                        data: {
+                            type: "oc:card:resize",
+                            version: 2,
+                            frameNonce: firstReady.frameNonce,
+                            height: 777,
+                        },
+                        origin: "null",
+                        source: firstFrameWindow,
+                    }),
+                ),
+            ).not.toThrow();
+
+            await first.cleanup();
+            firstPostMessage.mockRestore();
+            firstPostMessage = undefined;
+
+            mocks.resolveActionAppForCard.mockClear();
+            remounted = await mountCard(card(), 1_008n);
+            await waitForResolution();
+            const remountedReady = await completeCardReadyHandshake(remounted.target);
+            remountedPostMessage = remountedReady.postMessage;
+            const remountedFrameWindow = remountedReady.iframe.contentWindow;
+            if (remountedFrameWindow === null)
+                throw new Error("remounted card frame is unavailable");
+            const remountedListener = latestWindowMessageListener(addEventListener);
+            const initialHeight = remountedReady.iframe.style.height;
+
+            // Even with the remounted frame's current nonce and required opaque origin, the former
+            // WindowProxy cannot control it.
+            remountedListener(
+                new MessageEvent("message", {
+                    data: {
+                        type: "oc:card:resize",
+                        version: 2,
+                        frameNonce: remountedReady.frameNonce,
+                        height: 777,
+                    },
+                    origin: "null",
+                    source: firstFrameWindow,
+                }),
+            );
+            await tick();
+            expect(remountedReady.iframe.style.height).toBe(initialHeight);
+
+            // The current WindowProxy is still insufficient without the exact opaque origin and
+            // fresh nonce.
+            for (const [origin, frameNonce] of [
+                ["https://app.example", remountedReady.frameNonce],
+                ["null", `${remountedReady.frameNonce}-stale`],
+            ] as const) {
+                remountedListener(
+                    new MessageEvent("message", {
+                        data: {
+                            type: "oc:card:resize",
+                            version: 2,
+                            frameNonce,
+                            height: 777,
+                        },
+                        origin,
+                        source: remountedFrameWindow,
+                    }),
+                );
+            }
+            await tick();
+            expect(remountedReady.iframe.style.height).toBe(initialHeight);
+
+            remountedListener(
+                new MessageEvent("message", {
+                    data: {
+                        type: "oc:card:resize",
+                        version: 2,
+                        frameNonce: remountedReady.frameNonce,
+                        height: 777,
+                    },
+                    origin: "null",
+                    source: remountedFrameWindow,
+                }),
+            );
+            await tick();
+            expect(remountedReady.iframe.style.height).toBe("777px");
+        } finally {
+            remountedPostMessage?.mockRestore();
+            if (remounted !== undefined) await remounted.cleanup();
+            firstPostMessage?.mockRestore();
+            if (first.target.isConnected) await first.cleanup();
+            addEventListener.mockRestore();
             restore();
         }
     });
