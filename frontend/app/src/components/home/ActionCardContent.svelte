@@ -231,6 +231,12 @@
     );
     let pending = $derived(content.state === "pending" && !expired);
     let displayState = $derived(expired && content.state === "pending" ? "expired" : content.state);
+    // A completed/cancelled/expired card is an immutable chat record, not a new request for app
+    // authority. Full backend attestation remains durable even when that exact app revision is no
+    // longer enabled, paired, published, or temporarily reachable in the live directory. Preserve
+    // that historical evidence in the chrome without relaxing current-directory resolution for any
+    // card that can still be acted on.
+    let terminalRecordAttested = $derived(!pending && cardContentAttested);
     // If the consumer required a disclosure, confirm is gated on the human acknowledging it.
     let acknowledged = $state(false);
     let useClassicFallback = $state(false);
@@ -976,7 +982,9 @@
         class="app-identity"
         class:unverified={!optimisticVerificationPending &&
             (!cardContentAttested ||
-                (appResolutionComplete && resolvedAppIdentity === undefined))}
+                (appResolutionComplete &&
+                    resolvedAppIdentity === undefined &&
+                    !terminalRecordAttested))}
         aria-live="polite"
     >
         {#if optimisticVerificationPending}
@@ -992,11 +1000,20 @@
                 <span class="app-name">{resolvedAppIdentity.name}</span>
             </div>
         {:else if appResolutionComplete}
-            <span class="app-verification">Unverified card binding</span>
-            <span class="app-id">Directory coordinates unavailable</span>
+            {#if terminalRecordAttested}
+                <span class="app-verification">Verified terminal card</span>
+                <span class="app-id"
+                    >Original app {content.appId} · revision {content.appRevision}</span
+                >
+            {:else}
+                <span class="app-verification">Unverified card binding</span>
+                <span class="app-id">Directory coordinates unavailable</span>
+            {/if}
             {#if appResolutionLookupAttempted}
                 <button class="retry-verification" onclick={retryAppResolution}
-                    >Retry verification</button
+                    >{terminalRecordAttested
+                        ? "Retry current app details"
+                        : "Retry verification"}</button
                 >
             {/if}
         {:else}

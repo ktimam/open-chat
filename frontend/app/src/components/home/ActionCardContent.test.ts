@@ -1199,6 +1199,76 @@ describe("action-card external surface load consent", () => {
         }
     });
 
+    it.each(["confirmed", "cancelled", "expired"] as const)(
+        "preserves backend-attested terminal evidence when current app details do not resolve: %s",
+        async (state) => {
+            const restore = setCredentiallessSupport(true);
+            mocks.resolveActionAppForCard.mockResolvedValue(undefined);
+            const view = await mountCard(card({ state }), 1_004n);
+            try {
+                await waitForResolution();
+                await vi.waitFor(() =>
+                    expect(view.target.textContent).toContain("Verified terminal card"),
+                );
+
+                expect(view.target.textContent).toContain(
+                    `Original app ${APP_ID} · revision ${APP_REVISION}`,
+                );
+                expect(view.target.textContent).not.toContain("Unverified card binding");
+                expect(view.target.querySelector(".app-identity.unverified")).toBeNull();
+                expect(buttonNamed(view.target, "Retry current app details")).toBeDefined();
+                expect(view.target.querySelector("iframe")).toBeNull();
+                expect(buttonNamed(view.target, "Add")).toBeUndefined();
+            } finally {
+                await view.cleanup();
+                restore();
+            }
+        },
+    );
+
+    it("keeps a pending card fail-closed when current app details do not resolve", async () => {
+        const restore = setCredentiallessSupport(true);
+        mocks.resolveActionAppForCard.mockResolvedValue(undefined);
+        const view = await mountCard(card(), 1_004n);
+        try {
+            await waitForResolution();
+            await vi.waitFor(() =>
+                expect(view.target.textContent).toContain("Unverified card binding"),
+            );
+
+            expect(view.target.textContent).not.toContain("Verified terminal card");
+            expect(view.target.querySelector(".app-identity.unverified")).not.toBeNull();
+            expect(buttonNamed(view.target, "Retry verification")).toBeDefined();
+            expect(view.target.querySelector("iframe")).toBeNull();
+            expect(buttonNamed(view.target, "Add")?.disabled).toBe(true);
+        } finally {
+            await view.cleanup();
+            restore();
+        }
+    });
+
+    it("does not turn an unattested terminal card into verified historical evidence", async () => {
+        const restore = setCredentiallessSupport(true);
+        const view = await mountCard(
+            card({ state: "cancelled", appContentVerified: false }),
+            1_004n,
+        );
+        try {
+            await waitForResolution();
+            await vi.waitFor(() =>
+                expect(view.target.textContent).toContain("Directory binding only"),
+            );
+
+            expect(view.target.textContent).not.toContain("Verified terminal card");
+            expect(view.target.textContent).toContain("Untrusted card text");
+            expect(view.target.querySelector("iframe")).toBeNull();
+            expect(buttonNamed(view.target, "Add")).toBeUndefined();
+        } finally {
+            await view.cleanup();
+            restore();
+        }
+    });
+
     it("does not require the sender-only payload before rendering trusted public rows", async () => {
         const restore = setCredentiallessSupport(true);
         const view = await mountCard(card({ confirmPayload: undefined }), 1_005n);

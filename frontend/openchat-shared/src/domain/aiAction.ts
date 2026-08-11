@@ -1414,7 +1414,7 @@ export async function runAiAction(
     // passing both sent the model the SAME message twice, and it duly extracted some transactions
     // twice: "owe me 300 uber 150 food" came back with 300 repeated. Native never saw it, which is
     // why this read like small-model flakiness rather than a bug in our own prompt assembly.
-    const result = await infer({
+    let result = await infer({
         modelId: input.modelId,
         prompt,
         image: input.image,
@@ -1425,7 +1425,25 @@ export async function runAiAction(
 
     // The model text is accepted as a single OBJECT or an ARRAY of objects (several transactions in
     // one message). Normalize to a list of candidate objects.
-    const candidates = parseExtractionList(result.text);
+    let candidates = parseExtractionList(result.text);
+    // Small local models occasionally describe the right actions in prose or emit `[]` despite a
+    // text message containing explicit amounts. Give TEXT input one bounded format-repair attempt;
+    // it reuses the original evidence/prompt, stays unconstrained (schema grammars corrupt numeric
+    // values on these models), and caps output so a failed repair cannot turn into another 512-token
+    // runaway. Image inference is intentionally not doubled here.
+    if (candidates === undefined && hasTextInput) {
+        const repair = await infer({
+            modelId: input.modelId,
+            prompt: `${prompt}\n\nJSON FORMAT CORRECTION:\nYour previous response did not contain a parseable action. Return ONLY valid JSON: one object for one action, or an array with one object per action. Follow every original extraction rule, include only fields supported by the message, and include every required field that the message supports. Do not include analysis, prose, markdown fences, or an empty array.`,
+            maxTokens: 256,
+        });
+        if (repair.kind === "unavailable") {
+            return { kind: "unavailable", reason: repair.reason };
+        }
+        if (repair.kind === "error") return { kind: "error", error: repair.error };
+        result = repair;
+        candidates = parseExtractionList(repair.text);
+    }
     if (candidates === undefined) return { kind: "no_extraction", raw: result.text };
     if (candidates.length > MAX_AI_ACTION_CANDIDATES) {
         return {

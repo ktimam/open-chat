@@ -319,8 +319,33 @@ describe("runAiAction", () => {
         expect(r.kind).toBe("unavailable");
     });
     it("reports no_extraction when the model returns no JSON", async () => {
-        const r = await runAiAction(DEF, {}, RECIPIENT, okInfer("I couldn't find a transaction."));
+        const infer = vi.fn(okInfer("I couldn't find a transaction."));
+        const r = await runAiAction(DEF, { text: "hello" }, RECIPIENT, infer);
         expect(r.kind).toBe("no_extraction");
+        expect(infer).toHaveBeenCalledTimes(2);
+    });
+    it("repairs one non-JSON response with a bounded JSON-only retry", async () => {
+        const seen: InferenceRequest[] = [];
+        const outputs = [
+            "I found three expenses but cannot format them.",
+            '[{"amount":200,"note":"uber"},{"amount":400,"note":"food"},{"amount":250,"note":"order"}]',
+        ];
+        const r = await runAiAction(
+            DEF,
+            { text: "owe me 200 uber 400 food 250 order" },
+            RECIPIENT,
+            async (request) => {
+                seen.push(request);
+                return { kind: "ok", text: outputs.shift() ?? "" };
+            },
+        );
+
+        expect(r.kind).toBe("ready_multi");
+        expect(seen).toHaveLength(2);
+        expect(seen[1].prompt).toContain("Return ONLY valid JSON");
+        expect(seen[1].prompt).toContain("owe me 200 uber 400 food 250 order");
+        expect(seen[1].text).toBeUndefined();
+        expect(seen[1].maxTokens).toBe(256);
     });
     it("passes the declared prompt + image to the model, but NOT the response schema", async () => {
         let seen: InferenceRequest | undefined;
