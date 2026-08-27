@@ -65,6 +65,58 @@ const workerTargets = [
         : []),
 ] as const;
 
+const LOCAL_EXTRACTOR_ASSET_PREFIX = "/assets/local-extractor/v7.0.0/";
+const localExtractorAssets = new Map<string, { path: string; contentType: string }>([
+    [
+        "worker.min.js",
+        {
+            path: path.resolve(__dirname, "../node_modules/tesseract.js/dist/worker.min.js"),
+            contentType: "text/javascript; charset=utf-8",
+        },
+    ],
+    [
+        "worker.min.js.LICENSE.txt",
+        {
+            path: path.resolve(
+                __dirname,
+                "../node_modules/tesseract.js/dist/worker.min.js.LICENSE.txt",
+            ),
+            contentType: "text/plain; charset=utf-8",
+        },
+    ],
+    ...[
+        "tesseract-core-relaxedsimd-lstm.wasm.js",
+        "tesseract-core-simd-lstm.wasm.js",
+        "tesseract-core-lstm.wasm.js",
+    ].map((fileName): [string, { path: string; contentType: string }] => [
+        `core/${fileName}`,
+        {
+            path: path.resolve(__dirname, `../node_modules/tesseract.js-core/${fileName}`),
+            contentType: "text/javascript; charset=utf-8",
+        },
+    ]),
+    [
+        "lang/eng.traineddata.gz",
+        {
+            path: path.resolve(
+                __dirname,
+                "../node_modules/@tesseract.js-data/eng/4.0.0_best_int/eng.traineddata.gz",
+            ),
+            contentType: "application/gzip",
+        },
+    ],
+    [
+        "lang/ara.traineddata.gz",
+        {
+            path: path.resolve(
+                __dirname,
+                "../node_modules/@tesseract.js-data/ara/4.0.0_best_int/ara.traineddata.gz",
+            ),
+            contentType: "application/gzip",
+        },
+    ],
+]);
+
 const TRANSFORMERS_WEBGPU_ASSET_PREFIX =
     "/assets/transformers-webgpu/ort-1.29.0-dev.20260723-1b1e1db7bc/";
 const transformersWebGpuAssets = new Map<string, { path: string; contentType: string }>([
@@ -117,6 +169,48 @@ const qwen3Vl2bModelOverrides = new Map<string, Qwen3Vl2bModelOverride>([
         },
     ],
 ]);
+
+// Tesseract's worker, selected WASM core and Arabic/English language packs are loaded lazily by URL
+// rather than bundled into the initial OpenChat graph. Serve the exact pinned npm artifacts
+// same-origin in development; the production Rollup build copies the same files to the same paths.
+function localExtractorAssetsPlugin(): Plugin {
+    return {
+        name: "local-extractor-assets",
+        configureServer(server) {
+            server.middlewares.use((req, res, next) => {
+                const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+                if (!pathname.startsWith(LOCAL_EXTRACTOR_ASSET_PREFIX)) {
+                    next();
+                    return;
+                }
+                const relative = pathname.slice(LOCAL_EXTRACTOR_ASSET_PREFIX.length);
+                const asset = localExtractorAssets.get(relative);
+                if (asset === undefined || !fs.existsSync(asset.path)) {
+                    res.statusCode = 404;
+                    res.end("not found");
+                    return;
+                }
+                if (req.method !== "GET" && req.method !== "HEAD") {
+                    res.statusCode = 405;
+                    res.setHeader("Allow", "GET, HEAD");
+                    res.end("method not allowed");
+                    return;
+                }
+                res.setHeader("Content-Type", asset.contentType);
+                res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+                res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+                res.setHeader("Cross-Origin-Embedder-Policy", "credentialless");
+                res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+                if (req.method === "HEAD") {
+                    res.setHeader("Content-Length", fs.statSync(asset.path).size);
+                    res.end();
+                    return;
+                }
+                fs.createReadStream(asset.path).pipe(res);
+            });
+        },
+    };
+}
 
 function transformersWebGpuAssetsPlugin(): Plugin {
     return {
@@ -400,6 +494,7 @@ export default defineConfig({
             preventAssignment: true,
         }) as PluginOption,
         ocWorkerPlugin(),
+        localExtractorAssetsPlugin(),
         transformersWebGpuAssetsPlugin(),
         qwen3Vl2bModelOverridesPlugin(),
         createHtmlPlugin({

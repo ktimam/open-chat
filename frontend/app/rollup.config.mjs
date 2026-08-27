@@ -88,6 +88,43 @@ const localOnlyTransformersWebGpuSpike = JSON.stringify(
 );
 const isNativeApp = process.env.OC_APP_TYPE === "android" || process.env.OC_APP_TYPE === "ios";
 
+// These assets back the browser-only local OCR route. Native clients use the Rust inference
+// runtime, so keeping the OCR worker/core/language payload out of native bundles avoids about
+// 16 MB of unreachable application data. Web builds redistribute the matching license material.
+const localExtractorCopyTargets = isNativeApp
+    ? []
+    : [
+          {
+              src: "../node_modules/tesseract.js/dist/{worker.min.js,worker.min.js.LICENSE.txt}",
+              dest: "build/assets/local-extractor/v7.0.0",
+          },
+          {
+              src: "../node_modules/tesseract.js-core/{tesseract-core-relaxedsimd-lstm.wasm.js,tesseract-core-simd-lstm.wasm.js,tesseract-core-lstm.wasm.js}",
+              dest: "build/assets/local-extractor/v7.0.0/core",
+          },
+          {
+              src: "../node_modules/@tesseract.js-data/eng/4.0.0_best_int/eng.traineddata.gz",
+              dest: "build/assets/local-extractor/v7.0.0/lang",
+          },
+          {
+              src: "../node_modules/@tesseract.js-data/ara/4.0.0_best_int/ara.traineddata.gz",
+              dest: "build/assets/local-extractor/v7.0.0/lang",
+          },
+          {
+              src: "../src-tauri/THIRD_PARTY_NOTICES.md",
+              dest: "build/assets/licenses",
+          },
+          {
+              src: "../src-tauri/THIRD_PARTY_LICENSES/{Apache-2.0.txt,MIT.txt}",
+              dest: "build/assets/licenses/THIRD_PARTY_LICENSES",
+          },
+          {
+              src: "../node_modules/ieee754/LICENSE",
+              dest: "build/assets/licenses/THIRD_PARTY_LICENSES",
+              rename: "ieee754-BSD-3-Clause.txt",
+          },
+      ];
+
 const transformersWebGpuCopyTargets =
     isNativeApp || !transformersWebGpuSpikeEnabled
         ? []
@@ -447,6 +484,7 @@ export default {
                     src: "../openchat-service-worker/lib/*",
                     dest: "build",
                 },
+                ...localExtractorCopyTargets,
                 ...transformersWebGpuCopyTargets,
             ],
             hook: "generateBundle",
