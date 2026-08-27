@@ -6,6 +6,7 @@
     import Close from "svelte-material-icons/Close.svelte";
     import { popHistoryStateWithAction, pushDummyHistoryState } from "../../utils/history";
     import { getProxyAdjustedBlobUrl } from "../../utils/media";
+    import { publicImageDisplayUrl } from "../../utils/publicImageDisplay";
 
     // TODO add reactions, forward, reply and other menu and conversation options to this screen!
 
@@ -18,7 +19,13 @@
 
     let normalisedImage = $derived(imageContent ? normalisedImageContent(imageContent) : undefined);
     let adjustedUrl = $derived(
-        normalisedImage ? getProxyAdjustedBlobUrl(normalisedImage.url) : undefined,
+        normalisedImage
+            ? getProxyAdjustedBlobUrl(
+                  imageContent.kind === "image_content"
+                      ? publicImageDisplayUrl(normalisedImage.url, imageContent.blobReference)
+                      : normalisedImage.url,
+              )
+            : undefined,
     );
 
     let container: HTMLDivElement;

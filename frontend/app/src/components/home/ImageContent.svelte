@@ -7,6 +7,7 @@
     import { lowBandwidth } from "../../stores/settings";
     import { isTouchDevice } from "../../utils/devices";
     import { reservedMediaStyle } from "../../utils/media";
+    import { publicImageDisplayUrl } from "../../utils/publicImageDisplay";
     import Button from "../Button.svelte";
     import ModalContent from "../ModalContent.svelte";
     import Overlay from "../Overlay.svelte";
@@ -108,7 +109,12 @@
         zoomedHeight = imageHeight;
     }
     let normalised = $derived(normaliseContent(content));
-    let hidden = $state(false);
+    let displayUrl = $derived(
+        content.kind === "image_content"
+            ? publicImageDisplayUrl(normalised.url, content.blobReference)
+            : normalised.url,
+    );
+    let hidden = $state($lowBandwidth && !draft);
     $effect(() => {
         hidden = $lowBandwidth && !draft;
     });
@@ -155,7 +161,7 @@
                 : draft || reply || pinned
                   ? undefined
                   : reservedMediaStyle(content.width, content.height)}
-            src={intersecting && !hidden ? normalised.url : normalised.fallback}
+            src={intersecting && !hidden ? displayUrl : normalised.fallback}
             alt={normalised.caption} />
 
         {#if zoomable && !hidden}
@@ -181,7 +187,7 @@
                         onclick={onClick}
                         ondblclick={onDoubleClick}
                         onerror={onError}
-                        src={normalised.url}
+                        src={displayUrl}
                         alt={normalised.caption} />
                     <div
                         class="expand"
@@ -263,6 +269,7 @@
     img.unzoomed {
         width: 100%;
         display: block;
+        object-fit: contain;
 
         &:not(.landscape) {
             min-height: 90px;

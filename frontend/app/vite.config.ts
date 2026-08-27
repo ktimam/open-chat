@@ -2,6 +2,7 @@ import replace from "@rollup/plugin-replace";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 import chokidar from "chokidar";
 import fs from "fs";
+import http from "node:http";
 import path from "path";
 import execute from "rollup-plugin-shell";
 import { build, defineConfig, type Plugin, type PluginOption } from "vite";
@@ -20,6 +21,11 @@ import {
     patchQwen3Vl2bDecoderGraph,
     QWEN3_VL_2B_DECODER_PATCHED_BYTES,
 } from "./transformersWebGpuDecoderGraph.mjs";
+import {
+    LOCAL_REPLICA_IMAGE_ROUTE_PREFIX,
+    MAX_LOCAL_REPLICA_IMAGE_BYTES,
+    parseLocalReplicaImagePath,
+} from "./localReplicaImageProxy";
 import { transformersWebGpuSequentialSessionsPlugin } from "./transformersWebGpuSequentialSessions.mjs";
 
 const version = `1000.0.${Date.now()}`;
@@ -169,6 +175,150 @@ const qwen3Vl2bModelOverrides = new Map<string, Qwen3Vl2bModelOverride>([
         },
     ],
 ]);
+
+/**
+ * Stream local StorageBucket images through the Vite origin used by the phone.
+ *
+ * Chat events correctly contain `http://<canister>.raw.localhost:8080/...` in a local deployment,
+ * but `localhost` is the phone when OpenChat is opened through Tailscale HTTPS. Routing one tightly
+ * validated public-image path through Vite avoids mixed content and avoids copying the whole image
+ * through the OpenChat background worker. The upstream is always the configured local replica;
+ * neither the host nor the path can be supplied arbitrarily by the browser.
+ */
+function localReplicaImageProxyPlugin(): Plugin {
+    const enabled =
+        !isNativeApp &&
+        process.env.OC_BUILD_ENV === "development" &&
+        process.env.OC_DFX_NETWORK === "local";
+    const upstream = new URL(`http://${dfxJson.networks.local.bind}`);
+    const upstreamPort = upstream.port || "80";
+
+    return {
+        name: "local-replica-image-proxy",
+        // vite-plugin-html also runs as `pre` and installs its own history fallback. Keep this
+        // plugin ahead of it (matching the plugins array order below), otherwise navigation-style
+        // Accept headers are rewritten to /index.html before the image route can be handled.
+        enforce: "pre",
+        configureServer(server) {
+            server.middlewares.use((req, res, next) => {
+                const requestUrl = new URL(req.url ?? "/", "http://localhost");
+                if (!requestUrl.pathname.startsWith(`${LOCAL_REPLICA_IMAGE_ROUTE_PREFIX}/`)) {
+                    next();
+                    return;
+                }
+                if (!enabled) {
+                    res.statusCode = 404;
+                    res.end("not found");
+                    return;
+                }
+                if (req.method !== "GET" && req.method !== "HEAD") {
+                    res.statusCode = 405;
+                    res.setHeader("Allow", "GET, HEAD");
+                    res.end("method not allowed");
+                    return;
+                }
+                if (requestUrl.search !== "") {
+                    res.statusCode = 400;
+                    res.end("invalid image route");
+                    return;
+                }
+
+                const route = parseLocalReplicaImagePath(requestUrl.pathname);
+                if (route === undefined) {
+                    res.statusCode = 400;
+                    res.end("invalid image route");
+                    return;
+                }
+
+                const headers: http.OutgoingHttpHeaders = {
+                    Host: `${route.canisterId}.raw.localhost:${upstreamPort}`,
+                    // This endpoint is image-only, so do not let browser navigation content
+                    // negotiation alter the upstream response.
+                    Accept: "image/*",
+                };
+                if (typeof req.headers.range === "string") {
+                    headers.Range = req.headers.range;
+                }
+
+                const upstreamRequest = http.request(
+                    {
+                        protocol: upstream.protocol,
+                        hostname: upstream.hostname,
+                        port: upstreamPort,
+                        method: req.method,
+                        path: route.upstreamPath,
+                        headers,
+                    },
+                    (upstreamResponse) => {
+                        const status = upstreamResponse.statusCode ?? 502;
+                        const contentType = upstreamResponse.headers["content-type"];
+                        const contentLength = upstreamResponse.headers["content-length"];
+                        const contentRange = upstreamResponse.headers["content-range"];
+
+                        if (status === 200 || status === 206) {
+                            const mimeType = contentType?.split(";", 1)[0].trim().toLowerCase();
+                            const totalText =
+                                status === 206
+                                    ? /^bytes \d+-\d+\/(\d+)$/.exec(contentRange ?? "")?.[1]
+                                    : contentLength;
+                            const total = totalText === undefined ? NaN : Number(totalText);
+                            if (!mimeType?.startsWith("image/")) {
+                                upstreamResponse.resume();
+                                res.statusCode = 502;
+                                res.end("replica returned non-image content");
+                                return;
+                            }
+                            if (
+                                !Number.isSafeInteger(total) ||
+                                total < 1 ||
+                                total > MAX_LOCAL_REPLICA_IMAGE_BYTES
+                            ) {
+                                upstreamResponse.resume();
+                                res.statusCode = 413;
+                                res.end("image exceeds local display limit");
+                                return;
+                            }
+                        }
+
+                        res.statusCode = status;
+                        for (const name of [
+                            "content-type",
+                            "content-length",
+                            "content-range",
+                            "accept-ranges",
+                            "etag",
+                            "last-modified",
+                        ] as const) {
+                            const value = upstreamResponse.headers[name];
+                            if (value !== undefined) res.setHeader(name, value);
+                        }
+                        // This route reflects mutable local replica state across development runs.
+                        res.setHeader("Cache-Control", "no-store");
+                        res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+                        res.setHeader("X-Content-Type-Options", "nosniff");
+
+                        if (req.method === "HEAD") {
+                            upstreamResponse.resume();
+                            res.end();
+                        } else {
+                            upstreamResponse.pipe(res);
+                        }
+                    },
+                );
+                upstreamRequest.on("error", () => {
+                    if (!res.headersSent) {
+                        res.statusCode = 502;
+                        res.end("local replica unavailable");
+                    } else {
+                        res.destroy();
+                    }
+                });
+                req.on("aborted", () => upstreamRequest.destroy());
+                upstreamRequest.end();
+            });
+        },
+    };
+}
 
 // Tesseract's worker, selected WASM core and Arabic/English language packs are loaded lazily by URL
 // rather than bundled into the initial OpenChat graph. Serve the exact pinned npm artifacts
@@ -493,6 +643,7 @@ export default defineConfig({
             "process.env": "import.meta.env",
             preventAssignment: true,
         }) as PluginOption,
+        localReplicaImageProxyPlugin(),
         ocWorkerPlugin(),
         localExtractorAssetsPlugin(),
         transformersWebGpuAssetsPlugin(),
