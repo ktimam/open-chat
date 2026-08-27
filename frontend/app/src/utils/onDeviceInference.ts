@@ -11,8 +11,10 @@ import {
     listLocalModels,
 } from "tauri-plugin-oc-api";
 import { selectedModelId } from "../stores/onDeviceModels";
+import { browserOcrAvailable } from "./browserOcr";
 import { defaultModelCatalog } from "./modelCatalog";
 import {
+    ensureWebModelRestored,
     isWebInferenceReady,
     webInfer,
     webModelCatalogId,
@@ -74,7 +76,8 @@ export async function onDeviceInferenceReadiness(): Promise<OnDeviceInferenceRea
             ? { available: true }
             : { available: false, reason: NATIVE_INFERENCE_UPDATE_REQUIRED };
     }
-    return { available: isWebInferenceReady() };
+    await ensureWebModelRestored();
+    return { available: isWebInferenceReady() || browserOcrAvailable() };
 }
 
 export async function canInferOnDevice(): Promise<boolean> {
@@ -89,18 +92,43 @@ export async function canInferOnDevice(): Promise<boolean> {
 let inferenceQueue: Promise<unknown> = Promise.resolve();
 
 export function inferOnDevice(request: InferenceRequest): Promise<InferenceResult> {
-    const run = inferenceQueue.then(() => runInference(request));
+    return enqueueInference(request);
+}
+
+export function inferOnDeviceTextOnlyNoProjector(
+    request: InferenceRequest,
+): Promise<InferenceResult> {
+    if (request.image !== undefined) {
+        return Promise.resolve({
+            kind: "error",
+            error: "projector-free inference accepts text only",
+        });
+    }
+    return enqueueInference(request, { requireProjectorAbsent: true });
+}
+
+function enqueueInference(
+    request: InferenceRequest,
+    options: { requireProjectorAbsent?: boolean } = {},
+): Promise<InferenceResult> {
+    const run = inferenceQueue.then(() => runInference(request, options));
     inferenceQueue = run.catch(() => undefined);
     return run;
 }
 
-async function runInference(request: InferenceRequest): Promise<InferenceResult> {
+async function runInference(
+    request: InferenceRequest,
+    options: { requireProjectorAbsent?: boolean } = {},
+): Promise<InferenceResult> {
     if (!isNativeClient() || SUPPORTED_RUNTIMES.length === 0) {
         // Browser path: a GGUF (from disk or the catalog) runs via llama.cpp-WASM — text, and images
         // too when the attached model has a vision projector. A browser with no model attached still
         // degrades to "unavailable" exactly as before.
+        await ensureWebModelRestored();
         if (isWebInferenceReady()) {
-            return webInfer(request);
+            return webInfer(request, {
+                requireProjectorAbsent: options.requireProjectorAbsent === true,
+            });
         }
         return { kind: "unavailable", reason: "on-device inference requires the native client" };
     }

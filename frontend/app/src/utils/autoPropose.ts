@@ -28,6 +28,7 @@ import {
     resolveCandidates,
     type AiActionCandidate,
     type AiActionCoordinates,
+    type ProposalPhase,
 } from "./aiActionRunner";
 import {
     buildBoundedAutoProposeVocabulary,
@@ -39,10 +40,7 @@ import {
     AutoProposeEvaluationTracker,
     autoProposeIdentityKey,
 } from "./autoProposeEvaluationTracker";
-import {
-    abortPrivateMatchOperations,
-    runPrivateMatchCandidates,
-} from "./privateMatchSurface";
+import { abortPrivateMatchOperations, runPrivateMatchCandidates } from "./privateMatchSurface";
 
 // ---------------------------------------------------------------------------------------------
 // Suggestion store — keyed by messageId, read by ChatMessage to render the chip.
@@ -85,10 +83,39 @@ export function autoProposeSuggestionLabel(
     if (sameAppLabel.length <= 1) return appLabel;
 
     const actionLabel = `${appLabel} · ${suggestion.actionId}`;
-    const sameActionLabel = sameAppLabel.filter(
-        (value) => value.actionId === suggestion.actionId,
-    );
+    const sameActionLabel = sameAppLabel.filter((value) => value.actionId === suggestion.actionId);
     return sameActionLabel.length <= 1 ? actionLabel : `${actionLabel} · #${suggestion.appId}`;
+}
+
+/** Browser-only progress copy for a proposal; native runtimes keep the generic fallback. */
+export function autoProposeBusyI18nKey(
+    status: string,
+    browserRuntime: boolean,
+    proposalPhase?: ProposalPhase,
+    modelProgressRelevant = true,
+): string {
+    if (browserRuntime && modelProgressRelevant) {
+        if (status === "verifying") return "aiApps.autoPropose.verifyingModel";
+        if (status === "loading") return "aiApps.autoPropose.loadingModel";
+    }
+    switch (proposalPhase) {
+        case "reading_text":
+            return "aiApps.autoPropose.readingMessage";
+        case "reading_image":
+            return "aiApps.autoPropose.readingImage";
+        case "generating":
+            return "aiApps.autoPropose.generatingResult";
+        case "validating":
+            return "aiApps.autoPropose.validatingResult";
+        case "attesting":
+            return "aiApps.autoPropose.attestingCard";
+        case "sending":
+            return "aiApps.autoPropose.sendingProposal";
+        default:
+            return browserRuntime && modelProgressRelevant && status === "loaded"
+                ? "aiApps.autoPropose.generatingResult"
+                : "aiApps.autoPropose.working";
+    }
 }
 
 // Session memory: every messageId we have already looked at (matched or not, suggested or
@@ -311,13 +338,10 @@ const unsubscribeViewerChanges = currentUserIdStore.subscribe((viewerId) => {
     invalidateAutoProposeRuntime();
 });
 let previousAutoProposeEnabled = autoProposeEnabled.value;
-const unsubscribeAutoProposeEnabled = autoProposeEnabled.subscribe(
-    (enabled) => {
-        if (previousAutoProposeEnabled && !enabled) revokePrivateAutoProposeRuntime();
-        previousAutoProposeEnabled = enabled;
-    },
-    undefined,
-);
+const unsubscribeAutoProposeEnabled = autoProposeEnabled.subscribe((enabled) => {
+    if (previousAutoProposeEnabled && !enabled) revokePrivateAutoProposeRuntime();
+    previousAutoProposeEnabled = enabled;
+}, undefined);
 
 import.meta.hot?.dispose(() => {
     unsubscribeViewerChanges();
@@ -345,9 +369,7 @@ async function buildVocabulary(
     // make pairing unreachable from the suggestion path.
     const untrustedSources = [
         ...candidates.map((candidate) => ({ app: candidate.app, action: candidate.action })),
-        ...linkRequired.flatMap((app) =>
-            app.manifest.actions.map((action) => ({ app, action })),
-        ),
+        ...linkRequired.flatMap((app) => app.manifest.actions.map((action) => ({ app, action }))),
     ];
     const sourceKeys = new Set<string>();
     const sources: typeof untrustedSources = [];
@@ -496,13 +518,13 @@ export function evaluateForAutoPropose(
                     );
                 })
               : registration?.viewerId === viewerId
-              ? eventWatermarks.observeLoadedNew(
-                    identityChatKey,
-                    threadRootMessageIndex,
-                    messages,
-                    registration.token,
-                )
-              : [];
+                ? eventWatermarks.observeLoadedNew(
+                      identityChatKey,
+                      threadRootMessageIndex,
+                      messages,
+                      registration.token,
+                  )
+                : [];
     if (observation === "sent" && (!suggestionsEnabled || chatMuted)) {
         // A send observed while opted out is part of the closed interval. Record its stream index so
         // enabling before the canonical loaded_new refresh cannot backfill that exact text.
@@ -540,46 +562,117 @@ export function evaluateForAutoPropose(
         autoProposeEnabled.value &&
         !mutedChats.has(viewerChatKey(viewerId, chatId));
 
-    void vocabularyFor(client, chatId, viewerId).then(async ({
-        vocabulary,
-        publicSources,
-        privateCandidates,
-    }) => {
-        if (!stillEligible()) return;
-        const publishedPublicActionKeys = new Map<string, Set<string>>();
-        const immediatePublicMatches: [string, AutoProposeSuggestion[]][] = [];
-        for (const ev of fresh) {
-            const actionKeys = new Set<string>();
-            const content = ev.event.content;
-            if (content.kind === "text_content") {
-                const text = content.text.toLowerCase();
-                for (const entry of vocabulary.keywordEntries) {
-                    if (entry.keywords.some((keyword) => matchesKeyword(text, keyword))) {
+    void vocabularyFor(client, chatId, viewerId)
+        .then(async ({ vocabulary, publicSources, privateCandidates }) => {
+            if (!stillEligible()) return;
+            const publishedPublicActionKeys = new Map<string, Set<string>>();
+            const immediatePublicMatches: [string, AutoProposeSuggestion[]][] = [];
+            for (const ev of fresh) {
+                const actionKeys = new Set<string>();
+                const content = ev.event.content;
+                if (content.kind === "text_content") {
+                    const text = content.text.toLowerCase();
+                    for (const entry of vocabulary.keywordEntries) {
+                        if (entry.keywords.some((keyword) => matchesKeyword(text, keyword))) {
+                            const source = publicSources[entry.actionIndex];
+                            if (source !== undefined) {
+                                actionKeys.add(autoProposeSuggestionActionKey(source));
+                            }
+                        }
+                    }
+                } else if (content.kind === "image_content") {
+                    for (const entry of vocabulary.imageEntries) {
                         const source = publicSources[entry.actionIndex];
                         if (source !== undefined) {
                             actionKeys.add(autoProposeSuggestionActionKey(source));
                         }
                     }
                 }
-            } else if (content.kind === "image_content") {
-                for (const entry of vocabulary.imageEntries) {
-                    const source = publicSources[entry.actionIndex];
-                    if (source !== undefined) {
-                        actionKeys.add(autoProposeSuggestionActionKey(source));
+                if (actionKeys.size === 0) continue;
+                const identity = autoProposeIdentityKey(
+                    identityChatKey,
+                    threadRootMessageIndex,
+                    ev.event.messageId,
+                );
+                publishedPublicActionKeys.set(identity, actionKeys);
+                immediatePublicMatches.push([
+                    identity,
+                    publicSources.flatMap((source) =>
+                        actionKeys.has(autoProposeSuggestionActionKey(source))
+                            ? [
+                                  {
+                                      chatKey,
+                                      viewerId,
+                                      sessionEpoch: generation,
+                                      ...source,
+                                  },
+                              ]
+                            : [],
+                    ),
+                ]);
+            }
+            if (immediatePublicMatches.length > 0) {
+                autoProposeSuggestions.update((map) => {
+                    const next = new Map(map);
+                    for (const [key, suggestions] of immediatePublicMatches) {
+                        next.set(key, suggestions);
+                    }
+                    return next;
+                });
+            }
+
+            const matched: [string, AutoProposeSuggestion[]][] = [];
+            for (const ev of fresh) {
+                const content = ev.event.content;
+                const matchedActionKeys = new Set<string>();
+                if (content.kind === "text_content") {
+                    const text = content.text.toLowerCase();
+                    for (const entry of vocabulary.keywordEntries) {
+                        if (entry.keywords.some((keyword) => matchesKeyword(text, keyword))) {
+                            const source = publicSources[entry.actionIndex];
+                            if (source !== undefined) {
+                                matchedActionKeys.add(autoProposeSuggestionActionKey(source));
+                            }
+                        }
+                    }
+                    // Separately-consented private-match apps are evaluated even when a public rule
+                    // also matched. Every candidate receives its own one-use, exact
+                    // message/app/revision/action/key-bound capability; the returned public action
+                    // coordinates are then unioned and deduplicated below.
+                    const privateResult = await runPrivateMatchCandidates(
+                        client,
+                        chatId,
+                        threadRootMessageIndex,
+                        ev.event.messageId,
+                        content.text,
+                        privateCandidates,
+                        viewerId,
+                        stillEligible,
+                    );
+                    if (!stillEligible()) return;
+                    if (privateResult.kind === "matched") {
+                        for (const candidate of privateResult.candidates) {
+                            matchedActionKeys.add(
+                                autoProposeSuggestionActionKey({
+                                    appId: candidate.app.id,
+                                    appRevision: candidate.app.updated,
+                                    actionId: candidate.action.name,
+                                }),
+                            );
+                        }
+                    }
+                } else if (content.kind === "image_content") {
+                    // An image carries no keywords to match — offer to extract from it whenever the chat
+                    // has any candidate app, mirroring the manual "Propose action" on an image.
+                    for (const entry of vocabulary.imageEntries) {
+                        const source = publicSources[entry.actionIndex];
+                        if (source !== undefined) {
+                            matchedActionKeys.add(autoProposeSuggestionActionKey(source));
+                        }
                     }
                 }
-            }
-            if (actionKeys.size === 0) continue;
-            const identity = autoProposeIdentityKey(
-                identityChatKey,
-                threadRootMessageIndex,
-                ev.event.messageId,
-            );
-            publishedPublicActionKeys.set(identity, actionKeys);
-            immediatePublicMatches.push([
-                identity,
-                publicSources.flatMap((source) =>
-                    actionKeys.has(autoProposeSuggestionActionKey(source))
+                const suggestions = publicSources.flatMap((source) =>
+                    matchedActionKeys.has(autoProposeSuggestionActionKey(source))
                         ? [
                               {
                                   chatKey,
@@ -589,132 +682,55 @@ export function evaluateForAutoPropose(
                               },
                           ]
                         : [],
-                ),
-            ]);
-        }
-        if (immediatePublicMatches.length > 0) {
+                );
+                if (suggestions.length > 0) {
+                    matched.push([
+                        autoProposeIdentityKey(
+                            identityChatKey,
+                            threadRootMessageIndex,
+                            ev.event.messageId,
+                        ),
+                        suggestions,
+                    ]);
+                }
+                // Every event reaching this point is authoritative (confirmed outgoing or loaded
+                // incoming), so its bounded public/private decision is terminal for this activation.
+                evaluationTracker.finish(
+                    identityChatKey,
+                    threadRootMessageIndex,
+                    ev.event.messageId,
+                    true,
+                );
+            }
+            if (matched.length === 0) return;
+            // Re-check the toggles: they may have flipped while the vocabulary was fetched.
+            if (!stillEligible()) return;
             autoProposeSuggestions.update((map) => {
                 const next = new Map(map);
-                for (const [key, suggestions] of immediatePublicMatches) {
-                    next.set(key, suggestions);
+                for (const [key, suggestions] of matched) {
+                    const publicKeys = publishedPublicActionKeys.get(key) ?? new Set<string>();
+                    const retainedKeys = new Set(
+                        (map.get(key) ?? []).map(autoProposeSuggestionActionKey),
+                    );
+                    const retained = suggestions.filter((suggestion) => {
+                        const actionKey = autoProposeSuggestionActionKey(suggestion);
+                        return !publicKeys.has(actionKey) || retainedKeys.has(actionKey);
+                    });
+                    if (retained.length > 0) next.set(key, retained);
                 }
                 return next;
             });
-        }
-
-        const matched: [string, AutoProposeSuggestion[]][] = [];
-        for (const ev of fresh) {
-            const content = ev.event.content;
-            const matchedActionKeys = new Set<string>();
-            if (content.kind === "text_content") {
-                const text = content.text.toLowerCase();
-                for (const entry of vocabulary.keywordEntries) {
-                    if (
-                        entry.keywords.some((keyword) => matchesKeyword(text, keyword))
-                    ) {
-                        const source = publicSources[entry.actionIndex];
-                        if (source !== undefined) {
-                            matchedActionKeys.add(autoProposeSuggestionActionKey(source));
-                        }
-                    }
-                }
-                // Separately-consented private-match apps are evaluated even when a public rule
-                // also matched. Every candidate receives its own one-use, exact
-                // message/app/revision/action/key-bound capability; the returned public action
-                // coordinates are then unioned and deduplicated below.
-                const privateResult = await runPrivateMatchCandidates(
-                    client,
-                    chatId,
+        })
+        .catch(() => {
+            if (generation !== evaluationGeneration || viewerId !== currentUserIdStore.value)
+                return;
+            for (const ev of fresh) {
+                evaluationTracker.finish(
+                    identityChatKey,
                     threadRootMessageIndex,
                     ev.event.messageId,
-                    content.text,
-                    privateCandidates,
-                    viewerId,
-                    stillEligible,
+                    true,
                 );
-                if (!stillEligible()) return;
-                if (privateResult.kind === "matched") {
-                    for (const candidate of privateResult.candidates) {
-                        matchedActionKeys.add(
-                            autoProposeSuggestionActionKey({
-                                appId: candidate.app.id,
-                                appRevision: candidate.app.updated,
-                                actionId: candidate.action.name,
-                            }),
-                        );
-                    }
-                }
-            } else if (content.kind === "image_content") {
-                // An image carries no keywords to match — offer to extract from it whenever the chat
-                // has any candidate app, mirroring the manual "Propose action" on an image.
-                for (const entry of vocabulary.imageEntries) {
-                    const source = publicSources[entry.actionIndex];
-                    if (source !== undefined) {
-                        matchedActionKeys.add(autoProposeSuggestionActionKey(source));
-                    }
-                }
             }
-            const suggestions = publicSources.flatMap((source) =>
-                matchedActionKeys.has(autoProposeSuggestionActionKey(source))
-                    ? [
-                          {
-                              chatKey,
-                              viewerId,
-                              sessionEpoch: generation,
-                              ...source,
-                          },
-                      ]
-                    : [],
-            );
-            if (suggestions.length > 0) {
-                matched.push([
-                    autoProposeIdentityKey(
-                        identityChatKey,
-                        threadRootMessageIndex,
-                        ev.event.messageId,
-                    ),
-                    suggestions,
-                ]);
-            }
-            // Every event reaching this point is authoritative (confirmed outgoing or loaded
-            // incoming), so its bounded public/private decision is terminal for this activation.
-            evaluationTracker.finish(
-                identityChatKey,
-                threadRootMessageIndex,
-                ev.event.messageId,
-                true,
-            );
-        }
-        if (matched.length === 0) return;
-        // Re-check the toggles: they may have flipped while the vocabulary was fetched.
-        if (
-            !stillEligible()
-        )
-            return;
-        autoProposeSuggestions.update((map) => {
-            const next = new Map(map);
-            for (const [key, suggestions] of matched) {
-                const publicKeys = publishedPublicActionKeys.get(key) ?? new Set<string>();
-                const retainedKeys = new Set(
-                    (map.get(key) ?? []).map(autoProposeSuggestionActionKey),
-                );
-                const retained = suggestions.filter((suggestion) => {
-                    const actionKey = autoProposeSuggestionActionKey(suggestion);
-                    return !publicKeys.has(actionKey) || retainedKeys.has(actionKey);
-                });
-                if (retained.length > 0) next.set(key, retained);
-            }
-            return next;
         });
-    }).catch(() => {
-        if (generation !== evaluationGeneration || viewerId !== currentUserIdStore.value) return;
-        for (const ev of fresh) {
-            evaluationTracker.finish(
-                identityChatKey,
-                threadRootMessageIndex,
-                ev.event.messageId,
-                true,
-            );
-        }
-    });
 }

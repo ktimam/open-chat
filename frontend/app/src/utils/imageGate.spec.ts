@@ -31,6 +31,8 @@ const facade = vi.hoisted(() => ({
 
 vi.mock("./onDeviceInference", () => ({
     inferOnDevice: vi.fn(async () => ({ kind: "ok", text: '{"amount":20}' })),
+    inferOnDeviceTextOnlyNoProjector: vi.fn(async () => ({ kind: "ok", text: '{"amount":20}' })),
+    isNativeClient: () => true,
     onDeviceInferenceCapability: () => facade.capability,
 }));
 

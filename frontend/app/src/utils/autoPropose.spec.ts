@@ -16,6 +16,7 @@ import { currentUserStore, type EventWrapper, type Message, type OpenChat } from
 import { get } from "svelte/store";
 import { autoProposeSuggestions as autoProposeEnabled } from "../stores/settings";
 import {
+    autoProposeBusyI18nKey,
     autoProposeSuggestions,
     autoProposeSuggestionKey,
     autoProposeSuggestionLabel,
@@ -28,6 +29,32 @@ import {
     revokePrivateAutoProposeRuntime,
     retryAutoProposeVocabularyLookup,
 } from "./autoPropose";
+
+describe("proposal progress copy", () => {
+    it.each([
+        ["verifying", "aiApps.autoPropose.verifyingModel"],
+        ["loading", "aiApps.autoPropose.loadingModel"],
+        ["loaded", "aiApps.autoPropose.generatingResult"],
+    ])("maps browser model status %s", (status, expected) => {
+        expect(autoProposeBusyI18nKey(status, true)).toBe(expected);
+    });
+
+    it.each([
+        ["reading_image", "aiApps.autoPropose.readingImage"],
+        ["generating", "aiApps.autoPropose.generatingResult"],
+        ["validating", "aiApps.autoPropose.validatingResult"],
+        ["attesting", "aiApps.autoPropose.attestingCard"],
+        ["sending", "aiApps.autoPropose.sendingProposal"],
+    ] as const)("maps proposal phase %s", (phase, expected) => {
+        expect(autoProposeBusyI18nKey("loaded", true, phase)).toBe(expected);
+    });
+
+    it("ignores stale model status for OCR-only image work", () => {
+        expect(autoProposeBusyI18nKey("loading", true, "reading_image", false)).toBe(
+            "aiApps.autoPropose.readingImage",
+        );
+    });
+});
 
 vi.mock("./privateMatchSurface", () => ({
     abortPrivateMatchOperations: vi.fn(),
@@ -211,14 +238,7 @@ describe("auto-propose evaluation identity", () => {
                 candidates: [first, privateOnly],
             });
             const registration = registerAutoProposeEventBoundary(chat, undefined, 300);
-            evaluateForAutoPropose(
-                {} as OpenChat,
-                chat,
-                undefined,
-                [event],
-                "sent",
-                registration,
-            );
+            evaluateForAutoPropose({} as OpenChat, chat, undefined, [event], "sent", registration);
             evaluateForAutoPropose(
                 {} as OpenChat,
                 chat,
@@ -310,7 +330,7 @@ describe("auto-propose evaluation identity", () => {
         let settlePrivate: () => void = () => {};
         const pendingPrivate = new Promise<{
             kind: "matched";
-            candidates: typeof privateCandidate[];
+            candidates: (typeof privateCandidate)[];
         }>((resolve) => {
             settlePrivate = () =>
                 resolve({
@@ -351,17 +371,11 @@ describe("auto-propose evaluation identity", () => {
                 ]),
             );
 
-            dismissAutoProposeSuggestion(
-                "viewer-immediate",
-                chat,
-                undefined,
-                9001n,
-                {
-                    appId: 301,
-                    appRevision: 11n,
-                    actionId: "Immediate public action",
-                },
-            );
+            dismissAutoProposeSuggestion("viewer-immediate", chat, undefined, 9001n, {
+                appId: 301,
+                appRevision: 11n,
+                actionId: "Immediate public action",
+            });
             settlePrivate();
             await vi.waitFor(() =>
                 expect(get(autoProposeSuggestions).get(suggestionKey)).toMatchObject([
@@ -422,14 +436,7 @@ describe("auto-propose evaluation identity", () => {
                 unavailable: [],
             });
             const registration = registerAutoProposeEventBoundary(chat, undefined, 400);
-            evaluateForAutoPropose(
-                {} as OpenChat,
-                chat,
-                undefined,
-                [event],
-                "sent",
-                registration,
-            );
+            evaluateForAutoPropose({} as OpenChat, chat, undefined, [event], "sent", registration);
             evaluateForAutoPropose(
                 {} as OpenChat,
                 chat,
@@ -487,12 +494,7 @@ describe("auto-propose evaluation identity", () => {
             };
             const first = { ...shared, actionId: "iou.first" };
             const second = { ...shared, actionId: "iou.second" };
-            const messageKey = autoProposeSuggestionKey(
-                "viewer-dismiss",
-                chat,
-                undefined,
-                9001n,
-            );
+            const messageKey = autoProposeSuggestionKey("viewer-dismiss", chat, undefined, 9001n);
             autoProposeSuggestions.set(new Map([[messageKey, [first, second]]]) as never);
 
             const dismissExact = dismissAutoProposeSuggestion as unknown as (
@@ -713,12 +715,7 @@ describe("auto-propose event-stream boundary", () => {
         const watermarks = new AutoProposeEventWatermarks();
         const registration = watermarks.registerBoundary("group-a", undefined, 100);
         expect(
-            watermarks.observeLoadedNew(
-                "group-a",
-                undefined,
-                events(1, 100, 101),
-                registration,
-            ),
+            watermarks.observeLoadedNew("group-a", undefined, events(1, 100, 101), registration),
         ).toEqual([{ index: 101 }]);
         expect(
             watermarks.observeLoadedNew("group-a", undefined, events(99, 101), registration),
@@ -730,9 +727,9 @@ describe("auto-propose event-stream boundary", () => {
 
     it("fails closed without an exact active registration, including after release/HMR", () => {
         const watermarks = new AutoProposeEventWatermarks();
-        expect(watermarks.observeLoadedNew("group-a", undefined, events(50, 51), undefined)).toEqual(
-            [],
-        );
+        expect(
+            watermarks.observeLoadedNew("group-a", undefined, events(50, 51), undefined),
+        ).toEqual([]);
         const first = watermarks.registerBoundary("group-a", undefined, 51);
         watermarks.unregisterBoundary("group-a", undefined, first);
         expect(watermarks.observeLoadedNew("group-a", undefined, events(52), first)).toEqual([]);
@@ -745,9 +742,7 @@ describe("auto-propose event-stream boundary", () => {
         const main = watermarks.registerBoundary("group-a", undefined, 10);
         const thread = watermarks.registerBoundary("group-a", 7, 3);
         watermarks.observeSent("group-a", undefined, 11, main);
-        expect(watermarks.observeLoadedNew("group-a", undefined, events(1, 11), main)).toEqual(
-            [],
-        );
+        expect(watermarks.observeLoadedNew("group-a", undefined, events(1, 11), main)).toEqual([]);
         expect(watermarks.observeLoadedNew("group-a", 7, events(3, 4), thread)).toEqual([
             { index: 4 },
         ]);
@@ -804,10 +799,7 @@ describe("auto-propose event-stream boundary", () => {
         const root = wrapper(500, 2, 77n);
         const existingReply = wrapper(5, 2, 77n);
         const newReply = wrapper(6, 3, 78n);
-        const replies = autoProposeThreadStreamMessages(
-            [root, existingReply, newReply],
-            root,
-        );
+        const replies = autoProposeThreadStreamMessages([root, existingReply, newReply], root);
         expect(replies).toEqual([existingReply, newReply]);
         const watermarks = new AutoProposeEventWatermarks();
         const registration = watermarks.registerBoundary("group-a", 2, 5);

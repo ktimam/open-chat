@@ -46,6 +46,7 @@
         type SystemResources,
     } from "tauri-plugin-oc-api";
     import Translatable from "../../Translatable.svelte";
+    import BrowserImageActionModeSettings from "../../../components_shared/BrowserImageActionModeSettings.svelte";
     import WebInferenceRuntimeSettings from "../../../components_shared/WebInferenceRuntimeSettings.svelte";
     import SlidingPageContent from "../SlidingPageContent.svelte";
 
@@ -378,6 +379,7 @@
                     )}
                 ></Translatable>
             </BodySmall>
+            <BrowserImageActionModeSettings />
             {#if $webModelStatus.status === "downloading"}
                 <BodySmall>
                     <Translatable

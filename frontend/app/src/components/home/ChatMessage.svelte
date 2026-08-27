@@ -10,10 +10,14 @@
         runProposeFlow,
         type AiActionCandidate,
         type ManualExtractionPromptResult,
+        type ProposalPhase,
     } from "@utils/aiActionRunner";
-    import { onDeviceInferenceReadiness } from "@utils/onDeviceInference";
+    import { isNativeClient, onDeviceInferenceReadiness } from "@utils/onDeviceInference";
+    import { browserImageProposalRequiresModelReadiness } from "@src/stores/browserImageActionMode";
     import { createSingleFlight } from "@utils/singleFlight";
+    import { webModelStatus } from "@utils/webInference";
     import {
+        autoProposeBusyI18nKey,
         autoProposeSuggestions,
         autoProposeSuggestionActionKey,
         autoProposeSuggestionKey,
@@ -39,6 +43,7 @@
         iconSize,
         localUpdates,
         type Message,
+        type MessageContent,
         type MessageReminderCreatedContent,
         mobileWidth,
         OpenChat,
@@ -333,9 +338,7 @@
             "{}",
         );
         return parseManualExtractionPrompt(raw, () =>
-            toastStore.showFailureToast(
-                i18nKey("Enter a JSON object or an array of JSON objects"),
-            ),
+            toastStore.showFailureToast(i18nKey("Enter a JSON object or an array of JSON objects")),
         );
     }
 
@@ -387,14 +390,34 @@
     // the on-device model's first call cold-loads the multi-GB GGUF and, with no token streaming,
     // otherwise reads as a frozen UI. Also guards against a double-run.
     let proposing = $state(false);
+    let proposalPhase = $state<ProposalPhase | undefined>(undefined);
+    let proposalRequiresModelReadiness = $state(true);
     let activeAutoProposeSuggestionKey = $state<string | undefined>(undefined);
+    let autoProposeBusyResourceKey = $derived(
+        i18nKey(
+            autoProposeBusyI18nKey(
+                $webModelStatus.status,
+                !isNativeClient(),
+                proposalPhase,
+                proposalRequiresModelReadiness,
+            ),
+        ),
+    );
 
     // The decisions live in runProposeFlow (utils/aiActionRunner), shared with the mobile tree; this
     // component supplies only the surfaces this tree has — the manual-QC prompt, action chooser, and
     // link modal. The two trees each kept their own copy of the flow until one was fixed and the other
     // was not, and the propose button on the forgotten tree quietly did nothing.
-    const runAiActionHandler = createSingleFlight(
-        (suggested?: AutoProposeSuggestion) => {
+    const runAiActionSingleFlight = createSingleFlight(
+        ({
+            suggested,
+            capturedContent,
+            requiresModelReadiness,
+        }: {
+            suggested?: AutoProposeSuggestion;
+            capturedContent: MessageContent;
+            requiresModelReadiness: boolean;
+        }) => {
             const capturedContext = {
                 chatId,
                 threadRootMessageIndex,
@@ -403,7 +426,6 @@
             const capturedViewer = $currentUserIdStore;
             const capturedSessionEpoch = currentAutoProposeSessionEpoch();
             const capturedMessageId = msg.messageId;
-            const capturedContent = msg.content;
             const stillCurrent = () =>
                 componentMounted &&
                 $currentUserIdStore === capturedViewer &&
@@ -413,12 +435,23 @@
                 threadRootMessageIndex === capturedContext.threadRootMessageIndex &&
                 msg.messageId === capturedMessageId &&
                 msg.content === capturedContent;
+            const onPhase = (phase: ProposalPhase) => {
+                if (stillCurrent()) proposalPhase = phase;
+            };
             return runProposeFlow({
                 preflight: () => preflightAiActionForMessage(client, capturedContext.chatId),
                 canInfer: onDeviceInferenceReadiness,
+                requiresModelReadiness: () => requiresModelReadiness,
                 promptForExtraction,
                 propose: (extraction) =>
-                    proposeAndPost(client, capturedContext, capturedContent, extraction, stillCurrent),
+                    proposeAndPost(
+                        client,
+                        capturedContext,
+                        capturedContent,
+                        extraction,
+                        stillCurrent,
+                        onPhase,
+                    ),
                 proposeCandidate: (candidate, extraction) =>
                     proposeAndPostCandidate(
                         client,
@@ -427,24 +460,33 @@
                         candidate,
                         extraction,
                         stillCurrent,
+                        onPhase,
                     ),
                 resolveSuggestedCandidate:
                     suggested === undefined
                         ? undefined
-                        : () =>
-                              resolveSuggestedAiAction(
-                                  client,
-                                  capturedContext.chatId,
-                                  suggested,
-                              ),
+                        : () => resolveSuggestedAiAction(client, capturedContext.chatId, suggested),
                 stillCurrent,
                 chooseCandidate,
                 linkApp,
                 toast: (message) => toastStore.showFailureToast(i18nKey(message)),
             });
         },
-        (busy) => (proposing = busy),
+        (busy) => {
+            proposing = busy;
+            proposalPhase = busy ? "preparing" : undefined;
+        },
     );
+
+    function runAiActionHandler(suggested?: AutoProposeSuggestion) {
+        const capturedContent = msg.content;
+        const requiresModelReadiness = browserImageProposalRequiresModelReadiness(
+            capturedContent.kind === "image_content",
+            isNativeClient(),
+        );
+        if (!proposing) proposalRequiresModelReadiness = requiresModelReadiness;
+        return runAiActionSingleFlight({ suggested, capturedContent, requiresModelReadiness });
+    }
 
     async function proposeSuggestedAiAction(suggestion: AutoProposeSuggestion) {
         if (proposing) return;
@@ -638,8 +680,7 @@
         activeAutoProposeSuggestionKey !== undefined &&
             autoProposeSuggestionList.some(
                 (suggestion) =>
-                    autoProposeSuggestionActionKey(suggestion) ===
-                    activeAutoProposeSuggestionKey,
+                    autoProposeSuggestionActionKey(suggestion) === activeAutoProposeSuggestionKey,
             ),
     );
     let fill = $derived(client.fillMessage(msg));
@@ -1099,13 +1140,15 @@
                         {#each autoProposeSuggestionList as suggestion (autoProposeSuggestionActionKey(suggestion))}
                             <AutoProposeChip
                                 {me}
-                                title={autoProposeSuggestionLabel(suggestion, autoProposeSuggestionList)}
-                                busy={
-                                    proposing &&
+                                title={autoProposeSuggestionLabel(
+                                    suggestion,
+                                    autoProposeSuggestionList,
+                                )}
+                                busy={proposing &&
                                     activeAutoProposeSuggestionKey ===
-                                        autoProposeSuggestionActionKey(suggestion)
-                                }
+                                        autoProposeSuggestionActionKey(suggestion)}
                                 disabled={proposing}
+                                busyResourceKey={autoProposeBusyResourceKey}
                                 onPropose={() => proposeSuggestedAiAction(suggestion)}
                                 onDismiss={() =>
                                     dismissAutoProposeSuggestion(
@@ -1127,7 +1170,7 @@
                     <div class="propose-working" class:me class:indent={showAvatar}>
                         <span class="pill">
                             <Spinner size={"1rem"} foregroundColour={"var(--primary)"} />
-                            <Translatable resourceKey={i18nKey("aiApps.autoPropose.working")} />
+                            <Translatable resourceKey={autoProposeBusyResourceKey} />
                         </span>
                     </div>
                 {/if}

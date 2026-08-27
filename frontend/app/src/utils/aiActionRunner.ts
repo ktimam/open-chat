@@ -12,6 +12,7 @@
 // an unpaired published app may request the one-time link flow.
 
 import {
+    browserImageStrategy,
     buildActionCardContent,
     buildMultiActionCardContent,
     MAX_AI_ACTION_CANDIDATES,
@@ -24,15 +25,105 @@ import {
     type AiAppCardContentV1,
     type AiAppRegistration,
     type ModelModality,
+    type PrivateImageEvidence,
     type RunAiActionResult,
 } from "@shared";
 import type { ChatIdentifier, MessageContent, MessageContext, OpenChat } from "@client";
+import {
+    browserUsesLocalReaderOnly,
+    browserUsesModelWithLocalVerification,
+} from "../stores/browserImageActionMode";
 import { appContentAttestationAvailable } from "./aiActionAvailability";
 import { isDirectChatCardApp, loadDirectChatAiApps } from "./aiAppDirectChat";
 import { cardSurfaceOpening } from "./aiAppSurfaces";
-import { inferOnDevice, onDeviceInferenceCapability } from "./onDeviceInference";
+import {
+    extractLocalAction,
+    extractLocalActionForPrivateVerification,
+    localActionExtractorSupports,
+    type LocalActionExtractorResult,
+} from "./localActionExtractor";
+import {
+    inferOnDevice,
+    inferOnDeviceTextOnlyNoProjector,
+    isNativeClient,
+    onDeviceInferenceCapability,
+} from "./onDeviceInference";
+import { localImageBytes, type ImagePageLocation } from "./localImageInput";
+import {
+    browserImageModelFirstReadiness,
+    webImageInferenceEvidence,
+    webModelCatalogId,
+} from "./webInference";
+import {
+    isSemanticDuplicateBrowserImageResult,
+    type BrowserModelImageEvidence,
+} from "./imageSemanticDuplicateGuard";
 
 const MAX_AI_ACTION_ENABLED_APPS = 32;
+const GPU_ONLY_IMAGE_UNAVAILABLE_MESSAGE =
+    "Accelerated image inference is unavailable for the selected model in this browser. The local reader is disabled.";
+const LOCAL_VERIFICATION_FAILED_MESSAGE =
+    "The model result could not be verified against the image. No action was created.";
+const REQUIRED_VERIFIED_IMAGE_FIELDS = ["amount", "currency", "kind", "direction"] as const;
+const PRIVATE_VERIFICATION_MODEL_ID = "qwen3-vl-2b-instruct-q4";
+
+function readyCandidates(
+    result: RunAiActionResult | ProposeResult | undefined,
+): Record<string, unknown>[] | undefined {
+    if (result?.kind === "ready") return [result.extracted];
+    if (result?.kind === "ready_multi") return result.extracted;
+    return undefined;
+}
+
+function verifiedImageCandidateMatches(
+    model: Record<string, unknown>,
+    local: Record<string, unknown>,
+): boolean {
+    for (const field of REQUIRED_VERIFIED_IMAGE_FIELDS) {
+        if (!Object.hasOwn(model, field) || !Object.hasOwn(local, field)) return false;
+        if (model[field] !== local[field]) return false;
+    }
+    return (
+        !Object.hasOwn(model, "date") || (Object.hasOwn(local, "date") && model.date === local.date)
+    );
+}
+
+function reconcileModelWithLocalResult(
+    model: RunAiActionResult,
+    local: ProposeResult | undefined,
+): ProposeResult {
+    const localCandidates = readyCandidates(local);
+    if (localCandidates === undefined) {
+        return { kind: "error", error: LOCAL_VERIFICATION_FAILED_MESSAGE };
+    }
+
+    if (model.kind !== "ready" && model.kind !== "ready_multi") {
+        switch (model.kind) {
+            case "unavailable":
+            case "no_extraction":
+            case "incomplete_extraction":
+            case "error":
+                return local!;
+            case "image_not_accepted":
+                return { kind: "error", error: LOCAL_VERIFICATION_FAILED_MESSAGE };
+            default: {
+                const unhandled: never = model;
+                return unhandled;
+            }
+        }
+    }
+
+    const modelCandidates = readyCandidates(model)!;
+    if (
+        modelCandidates.length !== localCandidates.length ||
+        !modelCandidates.every((candidate, index) =>
+            verifiedImageCandidateMatches(candidate, localCandidates[index]),
+        )
+    ) {
+        return { kind: "error", error: LOCAL_VERIFICATION_FAILED_MESSAGE };
+    }
+    return local!;
+}
 
 // A directory app's action offered in a chat, with the delivery key already resolved. For a
 // per-user-keys app this is the proposing user's own registered key (from my_ai_app_keys);
@@ -76,6 +167,12 @@ export type ProposeResult =
     | { kind: "no_actions" }
     // The message content isn't something the runner can extract from.
     | { kind: "unsupported_content" }
+    // A schema-opted source reader ran without a generative model but could not safely produce a
+    // complete action. Keep this distinct from model no_extraction.
+    | {
+          kind: "local_no_extraction";
+          reason: "missing_direction" | "ambiguous" | "none";
+      }
     // The message IS an image but the SELECTED MODEL has no image modality. The remedy is the same
     // in every client — pick an image-capable model — so this carries only the model that refused.
     | { kind: "image_unsupported"; modelId?: string }
@@ -89,6 +186,18 @@ export type ProposeResult =
     // Enabled apps exist, but starting a proposal would create a card that cannot safely complete.
     // This is decided before local inference, provenance minting, or posting.
     | { kind: "actions_unavailable"; unavailable: AiActionUnavailable[] };
+
+// Caller-local progress for one proposal. It is intentionally not a global store because several
+// message components may be alive concurrently.
+export type ProposalPhase =
+    | "preparing"
+    | "reading_text"
+    | "reading_image"
+    | "generating"
+    | "validating"
+    | "attesting"
+    | "sending";
+export type ProposalPhaseListener = (phase: ProposalPhase) => void;
 
 export interface ResolvedCandidates {
     candidates: AiActionCandidate[];
@@ -259,28 +368,23 @@ export async function preflightAiActionForMessage(
 
 // Turn a message's content into runner input. Text is used directly; an image's bytes are fetched from the
 // (already-decrypted, displayable) blob URL so the on-device vision model can read it (the receipt case).
-async function contentToInput(
+export async function contentToInput(
     content: MessageContent,
+    client?: Pick<OpenChat, "downloadPublicBlob">,
+    page?: ImagePageLocation,
 ): Promise<{ text?: string; image?: Uint8Array } | undefined> {
     if (content.kind === "text_content") {
         return { text: content.text };
     }
     if (content.kind === "image_content") {
-        // Prefer the raw bytes when present: a just-sent image carries `blobData` but often has no
-        // `blobUrl` yet (that object URL is populated lazily when the blob is loaded for display).
-        // Reading ONLY blobUrl made propose fail with "unsupported_content" on freshly-sent images
-        // even though their bytes were already in hand. Fall back to fetching the display URL.
-        if (content.blobData !== undefined && content.blobData.length > 0) {
-            return { image: content.blobData };
-        }
-        if (content.blobUrl !== undefined) {
-            try {
-                const resp = await fetch(content.blobUrl);
-                if (resp.ok) return { image: new Uint8Array(await resp.arrayBuffer()) };
-            } catch {
-                /* fall through — nothing usable */
-            }
-        }
+        const image = await localImageBytes(
+            content,
+            client === undefined
+                ? undefined
+                : (ref, maxBytes) => client.downloadPublicBlob(ref, maxBytes),
+            page,
+        );
+        if (image !== undefined) return { image, text: content.caption };
     }
     return undefined;
 }
@@ -291,6 +395,7 @@ export type ManualExtraction = Record<string, unknown> | Record<string, unknown>
 export interface ManualExtractionSource {
     modality: ModelModality;
     text?: string;
+    rulesAlreadyResolved?: boolean;
 }
 export const MANUAL_EXTRACTION_CANCELLED = Symbol("manual_extraction_cancelled");
 export type ManualExtractionPromptResult =
@@ -360,6 +465,7 @@ export function buildManualCard(
         const finalExtraction = postProcessAiActionCandidate(def, candidate, {
             hasImage: source.modality === "image",
             text: source.text,
+            rulesAlreadyResolved: source.rulesAlreadyResolved,
         });
         const missing = missingRequired(finalExtraction, def.responseSchema);
         if (missing.length === 0) {
@@ -426,12 +532,14 @@ async function runDefinition(
     def: AiActionDefinition,
     recipientKey: string,
     content: MessageContent,
+    client: OpenChat,
     manualExtraction?: ManualExtraction,
     inboxCanisterId?: string,
     additionalRecipientKeys?: string[],
     // The id of the app that owns this action, baked onto the built card (see ActionCardContent.appId).
     appId?: number,
     appRevision?: bigint,
+    onPhase?: ProposalPhaseListener,
 ): Promise<ProposeResult> {
     // `acceptsImage` is an explicit app capability, not a menu hint. Enforce it before the manual
     // seam, blob fetching, model-capability checks, or inference so an image can never reach an
@@ -440,6 +548,7 @@ async function runDefinition(
         return { kind: "image_not_accepted" };
     }
     if (manualExtraction !== undefined) {
+        onPhase?.("validating");
         return buildManualCard(
             def,
             manualExtraction,
@@ -454,8 +563,214 @@ async function runDefinition(
         );
     }
 
-    const input = await contentToInput(content);
+    const input = await contentToInput(content, client);
     if (input === undefined) return { kind: "unsupported_content" };
+    const verifyBrowserImageWithLocal =
+        !isNativeClient() && input.image !== undefined && browserUsesModelWithLocalVerification();
+    const privateVerificationModelId = verifyBrowserImageWithLocal
+        ? webModelCatalogId()
+        : undefined;
+
+    let browserModelImageEvidence: BrowserModelImageEvidence | undefined;
+    const inferWithPhase: typeof inferOnDevice = async (request) => {
+        onPhase?.("generating");
+        const inference = await inferOnDevice(request);
+        browserModelImageEvidence = webImageInferenceEvidence(inference);
+        onPhase?.("validating");
+        return inference;
+    };
+    const inferPrivateEvidenceWithPhase: typeof inferOnDeviceTextOnlyNoProjector = async (
+        request,
+    ) => {
+        onPhase?.("generating");
+        const inference = await inferOnDeviceTextOnlyNoProjector(request);
+        onPhase?.("validating");
+        return inference;
+    };
+    const runSelectedModel = async (): Promise<RunAiActionResult> => {
+        browserModelImageEvidence = undefined;
+        const result = await runAiAction(
+            def,
+            input,
+            recipientKey,
+            inferWithPhase,
+            inboxCanisterId,
+            additionalRecipientKeys,
+            appId,
+            appRevision,
+        );
+        if (
+            !isNativeClient() &&
+            input.image !== undefined &&
+            browserModelImageEvidence !== undefined &&
+            isSemanticDuplicateBrowserImageResult(
+                { appId, appRevision, actionId: def.name },
+                browserModelImageEvidence,
+                result,
+            )
+        ) {
+            return {
+                kind: "error",
+                error: "A different image produced the same normalized action as the previous model result. This result was discarded; retry the image or choose another model.",
+            };
+        }
+        return result;
+    };
+    const runPrivateEvidenceModel = (
+        privateImageEvidence: PrivateImageEvidence,
+    ): Promise<RunAiActionResult> =>
+        runAiAction(
+            def,
+            { privateImageEvidence, modelId: privateVerificationModelId },
+            recipientKey,
+            inferPrivateEvidenceWithPhase,
+            inboxCanisterId,
+            additionalRecipientKeys,
+            appId,
+            appRevision,
+        );
+
+    const localExtractionOptions = {
+        imageDimensions:
+            content.kind === "image_content"
+                ? { width: content.width, height: content.height }
+                : undefined,
+    };
+    const sourceGroundedResult = (local: LocalActionExtractorResult): ProposeResult | undefined => {
+        switch (local.kind) {
+            case "candidates":
+                return buildManualCard(
+                    def,
+                    local.candidates,
+                    recipientKey,
+                    inboxCanisterId,
+                    additionalRecipientKeys,
+                    appId,
+                    appRevision,
+                    input.image === undefined
+                        ? {
+                              modality: "text",
+                              text: input.text,
+                              rulesAlreadyResolved: true,
+                          }
+                        : { modality: "image", rulesAlreadyResolved: true },
+                );
+            case "unavailable":
+                return { kind: "unavailable", reason: local.reason };
+            case "error":
+                return { kind: "error", error: local.error };
+            case "none":
+                return { kind: "local_no_extraction", reason: "none" };
+            case "ambiguous":
+                return {
+                    kind: "local_no_extraction",
+                    reason:
+                        local.reason === "missing_ocr_direction"
+                            ? "missing_direction"
+                            : "ambiguous",
+                };
+            case "unsupported":
+                return undefined;
+        }
+    };
+    const runSourceGrounded = async (): Promise<ProposeResult | undefined> => {
+        onPhase?.(input.image === undefined ? "reading_text" : "reading_image");
+        const local = await extractLocalAction(
+            def.responseSchema,
+            def.rules ?? [],
+            input,
+            localExtractionOptions,
+        );
+        onPhase?.("validating");
+        return sourceGroundedResult(local);
+    };
+    const runSourceGroundedForPrivateVerification = async (): Promise<{
+        local: ProposeResult | undefined;
+        privateImageEvidence?: PrivateImageEvidence;
+    }> => {
+        onPhase?.("reading_image");
+        const extraction = await extractLocalActionForPrivateVerification(
+            def.responseSchema,
+            def.rules ?? [],
+            input,
+            localExtractionOptions,
+        );
+        onPhase?.("validating");
+        return {
+            local: sourceGroundedResult(extraction.result),
+            privateImageEvidence: extraction.privateImageEvidence,
+        };
+    };
+
+    if (!isNativeClient() && input.image !== undefined && browserUsesLocalReaderOnly()) {
+        const local = await runSourceGrounded();
+        if (local !== undefined) return local;
+        return {
+            kind: "unavailable",
+            reason: "This app does not provide a source-grounded local reader for image actions. Turn off OCR-only mode to use the selected image model.",
+        };
+    }
+
+    if (verifyBrowserImageWithLocal && !localActionExtractorSupports(def.responseSchema)) {
+        return { kind: "error", error: LOCAL_VERIFICATION_FAILED_MESSAGE };
+    }
+
+    if (!isNativeClient() && localActionExtractorSupports(def.responseSchema)) {
+        const strategy =
+            input.image === undefined ? undefined : browserImageStrategy(def.responseSchema);
+        if (strategy !== undefined) {
+            if (verifyBrowserImageWithLocal) {
+                const source = await runSourceGroundedForPrivateVerification();
+                if (
+                    readyCandidates(source.local) === undefined ||
+                    source.privateImageEvidence === undefined ||
+                    privateVerificationModelId !== PRIVATE_VERIFICATION_MODEL_ID ||
+                    webModelCatalogId() !== privateVerificationModelId
+                ) {
+                    return { kind: "error", error: LOCAL_VERIFICATION_FAILED_MESSAGE };
+                }
+                const model = await runPrivateEvidenceModel(source.privateImageEvidence);
+                if (webModelCatalogId() !== privateVerificationModelId) {
+                    return { kind: "error", error: LOCAL_VERIFICATION_FAILED_MESSAGE };
+                }
+                return reconcileModelWithLocalResult(model, source.local);
+            }
+
+            const selectedImageModelReadiness = async (): Promise<{
+                available: boolean;
+                reason?: string;
+            }> => {
+                let readiness: { available: boolean; reason?: string } = { available: false };
+                try {
+                    readiness = await browserImageModelFirstReadiness({
+                        retryAfterRecentFailure: true,
+                    });
+                } catch {
+                    // Treat a failed probe as unavailable.
+                }
+                const imageModelSelected =
+                    imageUnsupportedReason(onDeviceInferenceCapability()) === undefined;
+                return imageModelSelected ? readiness : { available: false };
+            };
+
+            const modelReadiness = await selectedImageModelReadiness();
+            if (modelReadiness.available) return runSelectedModel();
+            const unsupported = imageUnsupportedReason(onDeviceInferenceCapability());
+            if (unsupported !== undefined) return unsupported;
+            return {
+                kind: "unavailable",
+                reason: modelReadiness.reason ?? GPU_ONLY_IMAGE_UNAVAILABLE_MESSAGE,
+            };
+        }
+        if (verifyBrowserImageWithLocal) {
+            return { kind: "error", error: LOCAL_VERIFICATION_FAILED_MESSAGE };
+        }
+        if (input.image !== undefined) {
+            return { kind: "unavailable", reason: GPU_ONLY_IMAGE_UNAVAILABLE_MESSAGE };
+        }
+        const local = await runSourceGrounded();
+        if (local !== undefined) return local;
+    }
 
     // An image needs a model with the "image" modality. Without this the bytes were shipped into a
     // text-only runtime and the propose silently did NOTHING (browser) or failed deep inside the
@@ -466,16 +781,7 @@ async function runDefinition(
         if (blocked !== undefined) return blocked;
     }
 
-    return runAiAction(
-        def,
-        input,
-        recipientKey,
-        inferOnDevice,
-        inboxCanisterId,
-        additionalRecipientKeys,
-        appId,
-        appRevision,
-    );
+    return runSelectedModel();
 }
 
 /**
@@ -510,6 +816,7 @@ export async function proposeAiActionForMessage(
     chatId: ChatIdentifier,
     content: MessageContent,
     manualExtraction?: ManualExtraction,
+    onPhase?: ProposalPhaseListener,
 ): Promise<ProposeResult> {
     const { candidates, linkRequired, unavailable } = await resolveCandidates(client, chatId);
     if (candidates.length === 1) {
@@ -518,11 +825,13 @@ export async function proposeAiActionForMessage(
             c.action,
             c.recipientKey,
             content,
+            client,
             manualExtraction,
             c.inboxCanisterId,
             c.additionalRecipientKeys,
             c.app.id,
             c.app.updated,
+            onPhase,
         );
     }
     if (candidates.length > 1) {
@@ -546,6 +855,7 @@ async function postCard(
     messageContext: MessageContext,
     result: ProposeResult & { kind: "ready" | "ready_multi" },
     stillCurrent?: () => boolean,
+    onPhase?: ProposalPhaseListener,
 ): Promise<ProposeResult> {
     try {
         if (stillCurrent?.() === false) {
@@ -567,6 +877,7 @@ async function postCard(
             expiresAt: result.card.expiresAt,
             confirmPayload: result.card.confirmPayload?.slice(),
         };
+        onPhase?.("attesting");
         const provenance = await client.createAiAppCardProvenance(
             appId,
             appRevision,
@@ -592,6 +903,7 @@ async function postCard(
         if (stillCurrent?.() === false) {
             return { kind: "error", error: "suggestion context changed" };
         }
+        onPhase?.("sending");
         const res = await client.sendMessageWithContent(
             messageContext,
             vouchedCard,
@@ -618,21 +930,24 @@ export async function proposeAndPost(
     content: MessageContent,
     manualExtraction?: ManualExtraction,
     stillCurrent?: () => boolean,
+    onPhase?: ProposalPhaseListener,
 ): Promise<ProposeResult> {
     if (stillCurrent?.() === false) {
         return { kind: "error", error: "proposal context changed" };
     }
+    onPhase?.("preparing");
     const result = await proposeAiActionForMessage(
         client,
         messageContext.chatId,
         content,
         manualExtraction,
+        onPhase,
     );
     if (stillCurrent?.() === false) {
         return { kind: "error", error: "proposal context changed" };
     }
     if (result.kind === "ready" || result.kind === "ready_multi") {
-        return postCard(client, messageContext, result, stillCurrent);
+        return postCard(client, messageContext, result, stillCurrent, onPhase);
     }
     return result;
 }
@@ -646,10 +961,12 @@ export async function proposeAndPostCandidate(
     candidate: AiActionCandidate,
     manualExtraction?: ManualExtraction,
     stillCurrent?: () => boolean,
+    onPhase?: ProposalPhaseListener,
 ): Promise<ProposeResult> {
     if (stillCurrent?.() === false) {
         return { kind: "error", error: "suggestion context changed" };
     }
+    onPhase?.("preparing");
     const unavailableReason = unavailableReasonForApp(candidate.app, messageContext.chatId);
     if (unavailableReason !== undefined) {
         return {
@@ -661,11 +978,13 @@ export async function proposeAndPostCandidate(
         candidate.action,
         candidate.recipientKey,
         content,
+        client,
         manualExtraction,
         candidate.inboxCanisterId,
         candidate.additionalRecipientKeys,
         candidate.app.id,
         candidate.app.updated,
+        onPhase,
     );
     // The model can run for seconds. Recheck before the only external write so switching accounts
     // during inference cannot post A's message-derived card into B's session.
@@ -673,7 +992,7 @@ export async function proposeAndPostCandidate(
         return { kind: "error", error: "suggestion context changed" };
     }
     if (result.kind === "ready" || result.kind === "ready_multi") {
-        return postCard(client, messageContext, result, stillCurrent);
+        return postCard(client, messageContext, result, stillCurrent, onPhase);
     }
     return result;
 }
@@ -682,6 +1001,15 @@ export async function proposeAndPostCandidate(
 // `unavailable` result both land here, so the user gets one answer and one place to go.
 export const NO_MODEL_MESSAGE =
     "No on-device model is ready — pick one in profile → App settings → On-device models.";
+
+const NO_MODEL_UNAVAILABLE_REASONS = new Set([
+    "no model",
+    "no browser model attached",
+    "on-device inference requires the native client",
+    "no on-device model selected",
+    "the selected model is not in the trusted catalog",
+    "the selected model is not downloaded",
+]);
 
 /**
  * What to tell the user about a propose result, or undefined when there is nothing to say — the card
@@ -719,20 +1047,19 @@ export function proposeFailureMessage(result: ProposeResult): string | undefined
             // messages below through untranslated.
             return "aiApps.noneEnabled";
         case "unavailable":
-            // The ordinary unavailable reasons all mean "select/download a model". This one is
-            // different: no model choice can fix a native binary compiled without llama.cpp, so keep
-            // the capability probe's actionable update guidance instead of misdirecting the user.
-            return result.reason.startsWith(
-                "This OpenChat build does not include on-device inference.",
-            )
-                ? result.reason
-                : NO_MODEL_MESSAGE;
+            return NO_MODEL_UNAVAILABLE_REASONS.has(result.reason)
+                ? NO_MODEL_MESSAGE
+                : result.reason;
         case "unsupported_content":
             return "This message can't be turned into an action";
         case "image_unsupported":
             return `${result.modelId ?? "This model"} doesn't support images, only text. Switch to an image-capable model in profile → App settings → On-device models.`;
         case "image_not_accepted":
             return "This app action doesn't accept images. Choose an image-enabled action or send the details as text.";
+        case "local_no_extraction":
+            return result.reason === "missing_direction"
+                ? "The image was read, but it doesn't say who owes whom. Send the amount with “I owe you” or “you owe me” as text."
+                : "The local reader couldn't determine a complete action from this message.";
         case "no_extraction":
             return "The model found no action in this message";
         case "incomplete_extraction": {
@@ -765,6 +1092,9 @@ export interface ProposeFlowDeps {
         | boolean
         | { available: boolean; reason?: string }
         | Promise<boolean | { available: boolean; reason?: string }>;
+    // Browser image + OCR-only must enter the app-declared local reader without probing selected
+    // model readiness. Other modes keep the existing model gate.
+    requiresModelReadiness: () => boolean;
     // The manual-JSON seam is enabled only by this tab's explicit query. Undefined means the seam is
     // disabled; the cancellation sentinel means the user explicitly cancelled and the flow must stop.
     promptForExtraction: () => ManualExtractionPromptResult;
@@ -839,7 +1169,7 @@ async function runProposeFlowInternal(deps: ProposeFlowDeps): Promise<void> {
     if (stale()) return;
     if (prompted === MANUAL_EXTRACTION_CANCELLED) return;
     const extraction = prompted;
-    if (extraction === undefined) {
+    if (extraction === undefined && deps.requiresModelReadiness()) {
         const readiness = await deps.canInfer();
         if (stale()) return;
         const available = typeof readiness === "boolean" ? readiness : readiness.available;

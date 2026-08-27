@@ -48,6 +48,7 @@
     import Input from "../../Input.svelte";
     import Toggle from "../../Toggle.svelte";
     import Translatable from "../../Translatable.svelte";
+    import BrowserImageActionModeSettings from "../../../components_shared/BrowserImageActionModeSettings.svelte";
     import WebInferenceRuntimeSettings from "../../../components_shared/WebInferenceRuntimeSettings.svelte";
 
     // On-device inference runs wherever the Tauri native bridge is present (desktop + mobile); degrade
@@ -384,6 +385,7 @@
         />
     </p>
 
+    <BrowserImageActionModeSettings />
     <div class="web-model">
         {#if $webModelStatus.status === "none" && $webModelStatus.name !== undefined}
             <p class="hint">

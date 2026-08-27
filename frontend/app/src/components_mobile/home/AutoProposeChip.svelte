@@ -3,6 +3,7 @@
     // reactions/tips when the message matched a registered action's trigger keywords
     // (see utils/autoPropose.ts). Tap runs the existing propose flow; the X dismisses
     // the suggestion, and long-pressing the X mutes suggestions for the whole chat.
+    import type { ResourceKey } from "@client";
     import { i18nKey } from "@src/i18n/i18n";
     import { ChatFootnote, ColourVars, Container, Row, Spinner } from "component-lib";
     import { _ } from "svelte-i18n";
@@ -19,6 +20,7 @@
         busy?: boolean;
         // Another suggestion for this message is active. Keep this chip visible but inert.
         disabled?: boolean;
+        busyResourceKey: ResourceKey;
         onPropose: () => void;
         onDismiss: () => void;
         onMute: () => void;
@@ -30,6 +32,7 @@
         offset,
         busy = false,
         disabled = false,
+        busyResourceKey,
         onPropose,
         onDismiss,
         onMute,
@@ -71,7 +74,8 @@
     width={"hug"}
     height={"hug"}
     mainAxisAlignment={me ? "end" : "start"}
-    crossAxisAlignment={"center"}>
+    crossAxisAlignment={"center"}
+>
     <Row
         supplementalClass={`auto-propose-chip${busy ? " busy" : ""}${disabled ? " disabled" : ""}`}
         onClick={() => !busy && !disabled && onPropose()}
@@ -84,18 +88,20 @@
         gap={"xs"}
         borderRadius={"circle"}
         borderWidth={"thick"}
-        borderColour={ColourVars.background0}>
+        borderColour={ColourVars.background0}
+    >
         {#if busy}
             <Spinner
                 size={"1rem"}
                 foregroundColour={"var(--primary)"}
-                backgroundColour={"var(--text-tertiary)"} />
+                backgroundColour={"var(--text-tertiary)"}
+            />
         {:else}
             <Robot size={"1rem"} color={"var(--primary)"} />
         {/if}
         <ChatFootnote>
             {#if busy}
-                <Translatable resourceKey={i18nKey("aiApps.autoPropose.working")} />
+                <Translatable resourceKey={busyResourceKey} />
             {:else}
                 <Translatable resourceKey={i18nKey("aiApps.autoPropose.suggestion", { title })} />
             {/if}
@@ -108,7 +114,8 @@
             onpointerdown={pressStart}
             onpointerup={pressEnd}
             onpointerleave={pressEnd}
-            onclick={dismissClicked}>
+            onclick={dismissClicked}
+        >
             <Close size={"1rem"} color={"var(--text-secondary)"} />
         </button>
     </Row>

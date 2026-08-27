@@ -3,6 +3,7 @@
     // when the message matched a registered action's trigger keywords (see utils/autoPropose.ts).
     // Tap runs the existing propose flow; the X dismisses the suggestion, and long-pressing the X
     // mutes suggestions for the whole chat. v1 port of components_mobile/home/AutoProposeChip.svelte.
+    import type { ResourceKey } from "@client";
     import { i18nKey } from "@src/i18n/i18n";
     import { _ } from "svelte-i18n";
     import Close from "svelte-material-icons/Close.svelte";
@@ -19,6 +20,7 @@
         busy?: boolean;
         // Another suggestion for this message is active. Keep this chip visible but inert.
         disabled?: boolean;
+        busyResourceKey: ResourceKey;
         onPropose: () => void;
         onDismiss: () => void;
         onMute: () => void;
@@ -29,6 +31,7 @@
         title,
         busy = false,
         disabled = false,
+        busyResourceKey,
         onPropose,
         onDismiss,
         onMute,
@@ -66,11 +69,7 @@
 <div class="auto-propose" class:me>
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div
-        class="chip"
-        class:busy
-        class:disabled
-        onclick={() => !busy && !disabled && onPropose()}>
+    <div class="chip" class:busy class:disabled onclick={() => !busy && !disabled && onPropose()}>
         {#if busy}
             <Spinner size={"1rem"} foregroundColour={"var(--primary)"} />
         {:else}
@@ -78,7 +77,7 @@
         {/if}
         <span class="label">
             {#if busy}
-                <Translatable resourceKey={i18nKey("aiApps.autoPropose.working")} />
+                <Translatable resourceKey={busyResourceKey} />
             {:else}
                 <Translatable resourceKey={i18nKey("aiApps.autoPropose.suggestion", { title })} />
             {/if}
@@ -91,7 +90,8 @@
             onpointerdown={pressStart}
             onpointerup={pressEnd}
             onpointerleave={pressEnd}
-            onclick={dismissClicked}>
+            onclick={dismissClicked}
+        >
             <Close size={"1rem"} color={"var(--txt-light)"} />
         </button>
     </div>

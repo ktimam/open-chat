@@ -17,10 +17,14 @@
 // session only (there is no handle to persist) but is fully automatable in tests.
 
 import type { InferenceRequest, InferenceResult, ModelFile, ModelModality } from "@shared";
+import { sha256 } from "@noble/hashes/sha2.js";
 import { writable } from "svelte/store";
 import { resolveTransformersWebGpuMaxOutputTokens } from "../stores/transformersWebGpuSettings";
 import { splitModelFiles, WEB_MODEL_MAX_BYTES } from "./modelCatalog";
-import { TRANSFORMERS_QWEN_ARTIFACT_BYTES } from "./transformersWebGpuProtocol";
+import {
+    PHONE_QWEN3_VL_2B_MODEL_ID,
+    TRANSFORMERS_QWEN_ARTIFACT_BYTES,
+} from "./transformersWebGpuProtocol";
 import {
     disposeTransformersWebGpuInference,
     preloadTransformersWebGpuModel,
@@ -29,7 +33,9 @@ import {
     transformersWebGpuModelDownloaded,
     transformersWebGpuSelectionCanHandle,
     transformersWebGpuSpikeCanHandle,
+    transformersWebGpuRuntimeAvailability,
 } from "./transformersWebGpuInference";
+import type { BrowserModelImageEvidence } from "./imageSemanticDuplicateGuard";
 
 // Vite turns this into a served asset URL. wllama 3.x ships ONE unified wasm (esm/wasm/) and picks
 // thread count itself from crossOriginIsolated + hardware concurrency.
@@ -106,6 +112,35 @@ type WebModelState = {
 };
 
 const state: WebModelState = { status: "none" };
+let modelSelectionGeneration = 0;
+let nextImageInferenceRequestId = 0;
+const imageEvidenceByResult = new WeakMap<InferenceResult, BrowserModelImageEvidence>();
+
+function sha256BytesHex(bytes: Uint8Array): string {
+    return Array.from(sha256(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+export function webImageInferenceEvidence(
+    result: InferenceResult,
+): BrowserModelImageEvidence | undefined {
+    return imageEvidenceByResult.get(result);
+}
+
+function attachImageInferenceEvidence(
+    request: InferenceRequest,
+    selectedModelId: string | undefined,
+    result: InferenceResult,
+): InferenceResult {
+    if (request.image === undefined || result.kind !== "ok") return result;
+    imageEvidenceByResult.set(result, {
+        requestId: ++nextImageInferenceRequestId,
+        selectionGeneration: modelSelectionGeneration,
+        selectedModelId,
+        structuredJsonAction: request.responseMode === "json",
+        effectiveImageSha256: sha256BytesHex(request.image),
+    });
+    return result;
+}
 
 /** UI-facing snapshot: the attached model's catalog id + name + lifecycle status (+ download progress). */
 export const webModelStatus = writable<{
@@ -255,6 +290,7 @@ function parsePersistedCatalogModel(raw: string): PersistedCatalogModel | undefi
 export async function setWebModelFile(file: File): Promise<string | undefined> {
     const err = validate(file);
     if (err) return err;
+    modelSelectionGeneration += 1;
     await unloadWebModel();
     state.file = file;
     state.handle = undefined;
@@ -296,6 +332,7 @@ export async function pickWebModelFromDisk(): Promise<string | undefined> {
     const file = await handle.getFile();
     const err = validate(file);
     if (err) return err;
+    modelSelectionGeneration += 1;
     await unloadWebModel();
     state.file = file;
     state.handle = handle;
@@ -404,6 +441,7 @@ export async function useWebModelFromUrl(entry: {
     if (weights.length !== 1 || mmproj.length > 1) {
         return "this model's file layout isn't supported in the browser — use the desktop app for it";
     }
+    modelSelectionGeneration += 1;
     // The explicit phone experiment owns a separate revision-keyed ONNX cache. Selecting this
     // model downloads that exact manifest in Model Manager; its GGUF/projector catalog pair belongs
     // to the normal Wllama route and must not be downloaded as an accidental fallback.
@@ -549,6 +587,7 @@ export async function restoreWebModel(): Promise<void> {
         if (raw !== null) {
             const saved = parsePersistedCatalogModel(raw);
             if (saved !== undefined) {
+                modelSelectionGeneration += 1;
                 const transformers = transformersWebGpuSelectionCanHandle(saved.id);
                 const downloaded = !transformers || (await transformersWebGpuModelDownloaded());
                 state.file = undefined;
@@ -613,6 +652,7 @@ export async function restoreWebModel(): Promise<void> {
 
 /** Drop the attached model, free the wasm runtime, and forget every persisted choice. */
 export async function clearWebModel(): Promise<void> {
+    modelSelectionGeneration += 1;
     await unloadWebModel();
     state.file = undefined;
     state.handle = undefined;
@@ -668,12 +708,55 @@ export function webModelModalities(): ModelModality[] {
     return state.declaredModalities ?? ["text"];
 }
 
+let restoreInFlight: Promise<void> | undefined;
+
+export async function ensureWebModelRestored(): Promise<void> {
+    if (isWebInferenceReady()) return;
+    restoreInFlight ??= restoreWebModel().finally(() => {
+        restoreInFlight = undefined;
+    });
+    await restoreInFlight;
+}
+
+export type BrowserImageModelFirstReadiness =
+    | { available: true }
+    | { available: false; reason?: string };
+
+export type BrowserImageModelFirstReadinessOptions = {
+    retryAfterRecentFailure?: boolean;
+};
+
+export async function browserImageModelFirstReadiness(
+    _options: BrowserImageModelFirstReadinessOptions = {},
+): Promise<BrowserImageModelFirstReadiness> {
+    await ensureWebModelRestored();
+    const selected = webModelCatalogId();
+    if (
+        transformersWebGpuSpikeCanHandle(
+            { prompt: "image readiness", image: new Uint8Array([0]) },
+            selected,
+        )
+    ) {
+        return transformersWebGpuRuntimeAvailability();
+    }
+    return isWebInferenceReady() && webModelModalities().includes("image")
+        ? { available: true }
+        : { available: false };
+}
+
+export async function prepareBrowserImageModelFirst(
+    options: BrowserImageModelFirstReadinessOptions = {},
+): Promise<boolean> {
+    return (await browserImageModelFirstReadiness(options)).available;
+}
+
 // ── inference ──────────────────────────────────────────────────────────────────────────────────
 
 // Wllama instance is a singleton: loading is the expensive part (GB-scale weights into wasm
 // memory), so keep the model resident between inferences, exactly like the native cache.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let runtime: any | undefined;
+let runtimeHasProjector: boolean | undefined;
 
 /** Exactly the image's bytes as a standalone ArrayBuffer. `.buffer` is not safe here: a Uint8Array
  *  is often a VIEW onto a larger pooled buffer, and wllama copies the whole buffer. */
@@ -690,14 +773,24 @@ async function unloadWebModel(): Promise<void> {
             // freeing best-effort
         }
         runtime = undefined;
+        runtimeHasProjector = undefined;
     }
     if (state.status === "loaded" || state.status === "loading") {
         state.status = state.file !== undefined || state.url !== undefined ? "attached" : "none";
     }
 }
 
-async function ensureLoaded(): Promise<void> {
-    if (runtime !== undefined && state.status === "loaded") return;
+async function ensureLoaded(requireProjectorAbsent = false, needsImage = false): Promise<void> {
+    if (runtime !== undefined && state.status === "loaded") {
+        if (
+            (requireProjectorAbsent && runtimeHasProjector === true) ||
+            (needsImage && runtimeHasProjector !== true)
+        ) {
+            await unloadWebModel();
+        } else {
+            return;
+        }
+    }
     if (state.file === undefined && state.url === undefined)
         throw new Error("no browser model attached");
     state.status = "loading";
@@ -717,8 +810,9 @@ async function ensureLoaded(): Promise<void> {
                     "the browser model has no catalog integrity manifest — remove it and download it again",
                 );
             }
+            const includeProjector = !requireProjectorAbsent;
             const model = await new ModelManager().getModelOrDownload(
-                { url: state.url!, mmprojUrl: state.mmprojUrl },
+                { url: state.url!, mmprojUrl: includeProjector ? state.mmprojUrl : undefined },
                 {},
             );
             // Always verify the exact Model object handed to Wllama. Even a model verified when it
@@ -727,7 +821,10 @@ async function ensureLoaded(): Promise<void> {
             publish();
             let bad: string | undefined;
             try {
-                bad = await verifyCachedFiles(model, manifest);
+                bad = await verifyCachedFiles(
+                    model,
+                    includeProjector ? manifest : splitModelFiles(manifest).weights,
+                );
             } catch (err) {
                 await model.remove().catch(() => undefined);
                 throw err;
@@ -747,10 +844,12 @@ async function ensureLoaded(): Promise<void> {
             // wllama picks threads from crossOriginIsolated + hardwareConcurrency on its own.
             image_max_tokens: WEB_IMAGE_MAX_TOKENS,
         });
+        runtimeHasProjector = !requireProjectorAbsent && state.mmprojUrl !== undefined;
         // Replace the catalog's CLAIM about modalities with the loaded model's own answer. This is
         // what makes onDeviceInferenceCapability truthful in the browser.
         try {
-            state.imageSupported = runtime.supportInputModality("image") === true;
+            state.imageSupported =
+                runtimeHasProjector === true && runtime.supportInputModality("image") === true;
         } catch {
             state.imageSupported = false; // older wllama, or the model declined to answer
         }
@@ -761,6 +860,7 @@ async function ensureLoaded(): Promise<void> {
         if (runtime !== undefined) {
             await runtime.exit().catch(() => undefined);
         }
+        runtimeHasProjector = undefined;
         state.status = "error";
         state.error = err instanceof Error ? err.message : String(err);
         publish();
@@ -769,25 +869,49 @@ async function ensureLoaded(): Promise<void> {
     }
 }
 
+export type WebInferOptions = {
+    /** Private verification boundary: load weights only and reject image bytes. */
+    requireProjectorAbsent?: boolean;
+};
+
 /** Run a text OR image inference against the attached browser model. Mirrors the native contract. */
-export async function webInfer(request: InferenceRequest): Promise<InferenceResult> {
+export async function webInfer(
+    request: InferenceRequest,
+    options: WebInferOptions = {},
+): Promise<InferenceResult> {
+    const requireProjectorAbsent = options.requireProjectorAbsent === true;
+    if (requireProjectorAbsent && request.image !== undefined) {
+        return { kind: "error", error: "projector-free inference accepts text only" };
+    }
+    await ensureWebModelRestored();
     if (!isWebInferenceReady()) {
         return { kind: "unavailable", reason: "no browser model attached" };
     }
-    if (transformersWebGpuSelectionCanHandle(state.id)) {
+    const selected = state.id;
+    if (request.modelId !== undefined && request.modelId !== selected) {
+        return { kind: "error", error: "the selected browser model changed before inference" };
+    }
+    if (requireProjectorAbsent && selected !== PHONE_QWEN3_VL_2B_MODEL_ID) {
+        return { kind: "error", error: "the selected browser model changed before inference" };
+    }
+    if (!requireProjectorAbsent && transformersWebGpuSelectionCanHandle(selected)) {
         if (!transformersWebGpuSpikeCanHandle(request, state.id)) {
             return {
                 kind: "unavailable",
                 reason: "The selected all-WebGPU phone trial accepts image requests only.",
             };
         }
-        return transformersWebGpuInfer({
+        // Wllama and Transformers own independent WebGPU runtimes. Release the text decoder before
+        // allocating the all-WebGPU image worker on a constrained phone.
+        await unloadWebModel();
+        const result = await transformersWebGpuInfer({
             ...request,
             maxTokens: resolveTransformersWebGpuMaxOutputTokens(request.maxTokens),
         });
+        return attachImageInferenceEvidence(request, selected, result);
     }
     try {
-        await ensureLoaded();
+        await ensureLoaded(requireProjectorAbsent, request.image !== undefined);
         // Ask the LOADED model, never the catalog: an image sent to a model with no projector throws
         // "Media marker is undefined" from deep inside wllama, which is not an explanation anybody can
         // act on. `unavailable` is the same shape a browser with no model returns, so callers degrade
@@ -828,7 +952,7 @@ export async function webInfer(request: InferenceRequest): Promise<InferenceResu
         if (typeof text !== "string") {
             return { kind: "error", error: "browser model returned no text" };
         }
-        return { kind: "ok", text };
+        return attachImageInferenceEvidence(request, selected, { kind: "ok", text });
     } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         // An emscripten abort kills the wasm module: every later inference on this runtime fails too,

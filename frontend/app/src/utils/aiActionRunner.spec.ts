@@ -1,9 +1,26 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { InferenceRequest, InferenceResult, OnDeviceInferenceCapability } from "@shared";
+import type { BrowserModelImageEvidence } from "./imageSemanticDuplicateGuard";
 
-const { attestationAvailableMock, inferOnDeviceMock, inferenceCapabilityMock } = vi.hoisted(() => ({
+const {
+    acceleratedImageModelReadyMock,
+    attestationAvailableMock,
+    imageInferenceEvidenceMock,
+    inferOnDeviceMock,
+    inferOnDeviceTextOnlyNoProjectorMock,
+    inferenceCapabilityMock,
+    selectedWebModelIdMock,
+} = vi.hoisted(() => ({
+    acceleratedImageModelReadyMock: vi.fn(async () => false),
     attestationAvailableMock: vi.fn(() => false),
+    imageInferenceEvidenceMock: vi.fn<() => BrowserModelImageEvidence | undefined>(() => undefined),
     inferOnDeviceMock: vi.fn(
+        async (_request: InferenceRequest): Promise<InferenceResult> => ({
+            kind: "unavailable",
+            reason: "not in tests",
+        }),
+    ),
+    inferOnDeviceTextOnlyNoProjectorMock: vi.fn(
         async (_request: InferenceRequest): Promise<InferenceResult> => ({
             kind: "unavailable",
             reason: "not in tests",
@@ -16,6 +33,7 @@ const { attestationAvailableMock, inferOnDeviceMock, inferenceCapabilityMock } =
             selectedModalities: ["text"],
         }),
     ),
+    selectedWebModelIdMock: vi.fn<() => string | undefined>(() => "qwen3-vl-2b-instruct-q4"),
 }));
 
 // These specs pin the MANUAL-extraction gate: the manual path (no on-device runtime — the caller
@@ -31,7 +49,16 @@ vi.mock("./aiActionAvailability", () => ({
 }));
 vi.mock("./onDeviceInference", () => ({
     inferOnDevice: inferOnDeviceMock,
+    inferOnDeviceTextOnlyNoProjector: inferOnDeviceTextOnlyNoProjectorMock,
+    isNativeClient: () => false,
     onDeviceInferenceCapability: inferenceCapabilityMock,
+}));
+vi.mock("./webInference", () => ({
+    browserImageModelFirstReadiness: async () => ({
+        available: await acceleratedImageModelReadyMock(),
+    }),
+    webImageInferenceEvidence: imageInferenceEvidenceMock,
+    webModelCatalogId: selectedWebModelIdMock,
 }));
 
 import type {
@@ -72,6 +99,7 @@ const RECIPIENT = "-----BEGIN PUBLIC KEY-----\nABC\n-----END PUBLIC KEY-----\n";
 beforeEach(() => {
     attestationAvailableMock.mockReturnValue(false);
     inferOnDeviceMock.mockClear();
+    inferOnDeviceTextOnlyNoProjectorMock.mockClear();
     inferenceCapabilityMock.mockReturnValue({
         available: true,
         runtimesSupported: ["llama-cpp"],
@@ -1136,13 +1164,9 @@ describe("provenance before posting", () => {
             sendMessageWithContent,
         } as unknown as OpenChat;
 
-        const result = await proposeAndPostCandidate(
-            client,
-            messageContext,
-            content,
-            CANDIDATE,
-            { amount: 0 },
-        );
+        const result = await proposeAndPostCandidate(client, messageContext, content, CANDIDATE, {
+            amount: 0,
+        });
 
         expect(result).toMatchObject({
             kind: "incomplete_extraction",
@@ -1239,10 +1263,11 @@ const EVERY_RESULT: Record<ProposeResult["kind"], ProposeResult> = {
     unsupported_content: { kind: "unsupported_content" },
     image_unsupported: { kind: "image_unsupported", modelId: "gemma-3-1b-it-q4" },
     image_not_accepted: { kind: "image_not_accepted" },
+    local_no_extraction: { kind: "local_no_extraction", reason: "ambiguous" },
     no_extraction: { kind: "no_extraction", raw: "{}" },
     incomplete_extraction: {
         kind: "incomplete_extraction",
-        raw: '{}',
+        raw: "{}",
         missingFields: ["direction"],
         candidateCount: 1,
         validCandidateCount: 0,
@@ -1354,6 +1379,7 @@ function flowDeps(overrides: Partial<ProposeFlowDeps> = {}): {
     const deps = {
         preflight: vi.fn(async () => undefined),
         canInfer: vi.fn(() => true),
+        requiresModelReadiness: vi.fn(() => true),
         promptForExtraction: vi.fn(() => undefined),
         propose: resolving({ kind: "ready", card: CARD, extracted: {} }),
         proposeCandidate: resolving({ kind: "ready", card: CARD, extracted: {} }),
@@ -1527,6 +1553,22 @@ describe("runProposeFlow", () => {
         await runProposeFlow(deps);
         expect(deps.toast).toHaveBeenCalledWith(NO_MODEL_MESSAGE);
         expect(deps.propose).not.toHaveBeenCalled();
+    });
+
+    it("enters an OCR-only image proposal without probing selected-model readiness", async () => {
+        const deps = flowDeps({
+            canInfer: vi.fn(() => false),
+            requiresModelReadiness: vi.fn(() => false),
+            propose: resolving({ kind: "local_no_extraction", reason: "none" }),
+        });
+
+        await runProposeFlow(deps);
+
+        expect(deps.canInfer).not.toHaveBeenCalled();
+        expect(deps.propose).toHaveBeenCalledOnce();
+        expect(deps.toast).toHaveBeenCalledWith(
+            "The local reader couldn't determine a complete action from this message.",
+        );
     });
 
     it("awaits native readiness and preserves an update-required reason", async () => {
@@ -1709,7 +1751,9 @@ describe("both ChatMessage trees run the SHARED propose flow", () => {
             expect(src).toContain("busy={");
             expect(src).toContain("proposing && !activeAutoProposeSuggestionVisible");
             expect(src).toContain("autoProposeSuggestionList.some(");
-            expect(src).toContain("autoProposeSuggestionLabel(suggestion, autoProposeSuggestionList)");
+            expect(src).toContain(
+                "autoProposeSuggestionLabel(suggestion, autoProposeSuggestionList)",
+            );
             expect(src).toContain(
                 "async function proposeSuggestedAiAction(suggestion: AutoProposeSuggestion)",
             );
@@ -1722,7 +1766,10 @@ describe("both ChatMessage trees run the SHARED propose flow", () => {
             expect(src).toContain("const capturedViewer = $currentUserIdStore");
             expect(src).toContain("currentAutoProposeSessionEpoch() === capturedSessionEpoch");
             expect(src.indexOf("await runAiActionHandler(suggestion)")).toBeLessThan(
-                src.indexOf("dismissAutoProposeSuggestion(", src.indexOf("await runAiActionHandler")),
+                src.indexOf(
+                    "dismissAutoProposeSuggestion(",
+                    src.indexOf("await runAiActionHandler"),
+                ),
             );
             // Deciding for itself whether a model exists is how a tree starts owning the flow again.
             expect(src).not.toContain("canInferOnDevice()");

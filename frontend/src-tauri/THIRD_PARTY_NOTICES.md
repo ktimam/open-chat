@@ -1,7 +1,8 @@
-# Third-party notices: on-device inference
+# Third-party notices: on-device inference and browser OCR
 
-This notice applies to OpenChat native bundles built with the `inference` feature. It supplements
-OpenChat's AGPL-3.0 license; it does not replace it.
+This notice applies to OpenChat native bundles built with the `inference` feature and to the browser
+OCR assets redistributed with OpenChat web builds. It supplements OpenChat's AGPL-3.0 license; it
+does not replace it.
 
 ## Native code and Rust packages included in the bundle
 
@@ -21,6 +22,21 @@ copyright notices for MIT-only code compiled into the application. `bindgen` is 
 so its BSD-3-Clause source and notice are not redistributed in the application bundle; it remains
 recorded in the generated CycloneDX SBOM.
 
+## Browser OCR runtime and assets
+
+| Component                | Version | License                           | Disposition                                                                                                                                       |
+| ------------------------ | ------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tesseract.js`           | 7.0.0   | Apache-2.0                        | Browser OCR controller and worker. The worker is self-hosted and loaded lazily from OpenChat's versioned asset path.                              |
+| `tesseract.js-core`      | 7.0.0   | Apache-2.0                        | Emscripten/WebAssembly Tesseract cores. OpenChat redistributes LSTM relaxed-SIMD, SIMD, and non-SIMD variants and selects one at runtime.         |
+| `@tesseract.js-data/ara` | 1.0.0   | Apache-2.0 data; npm metadata MIT | Arabic `ara.traineddata.gz` from `naptha/tessdata`; package metadata identifies Balearica as author and Balearica and Jerome Wu as contributors.  |
+| `@tesseract.js-data/eng` | 1.0.0   | Apache-2.0 data; npm metadata MIT | English `eng.traineddata.gz` from `naptha/tessdata`; package metadata identifies Balearica as author and Balearica and Jerome Wu as contributors. |
+| `ieee754`                | 1.2.1   | BSD-3-Clause                      | Embedded in the minified OCR worker. The complete license is redistributed as `ieee754-BSD-3-Clause.txt`.                                         |
+
+Web builds place this notice and the complete Apache-2.0, MIT, and ieee754 BSD-3-Clause texts under `assets/licenses`.
+`worker.min.js.LICENSE.txt` is also redistributed beside the minified worker, preserving its
+embedded MIT and BSD-3-Clause attribution notices for Buffer, ieee754, regenerator-runtime, and
+zlib.js support code.
+
 ## Downloadable models and projectors
 
 OpenChat does not bundle or redistribute the catalog's model weights or vision projector. A user who
@@ -34,4 +50,5 @@ The 14 MB TinyLlama GGUF used by CI is MIT-licensed, downloaded only during CI f
 `tensorblock/tinyllama-15M-stories-GGUF@227c5a5ad3c1a830901543cf9959c53572014a68` revision, verified
 by SHA-256, and never bundled with OpenChat.
 
-PR1 introduces no WebAssembly runtime or WebAssembly binary.
+Browser builds redistribute a Tesseract WebAssembly OCR runtime and Arabic/English language data. Android
+and iOS clients do not use or package the browser-only worker, core, or language payloads.
