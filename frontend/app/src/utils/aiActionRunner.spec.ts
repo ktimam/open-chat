@@ -9,6 +9,7 @@ const {
     inferOnDeviceMock,
     inferOnDeviceTextOnlyNoProjectorMock,
     inferenceCapabilityMock,
+    isNativeClientMock,
     selectedWebModelIdMock,
 } = vi.hoisted(() => ({
     acceleratedImageModelReadyMock: vi.fn(async () => false),
@@ -33,6 +34,7 @@ const {
             selectedModalities: ["text"],
         }),
     ),
+    isNativeClientMock: vi.fn(() => false),
     selectedWebModelIdMock: vi.fn<() => string | undefined>(() => "qwen3-vl-2b-instruct-q4"),
 }));
 
@@ -50,7 +52,7 @@ vi.mock("./aiActionAvailability", () => ({
 vi.mock("./onDeviceInference", () => ({
     inferOnDevice: inferOnDeviceMock,
     inferOnDeviceTextOnlyNoProjector: inferOnDeviceTextOnlyNoProjectorMock,
-    isNativeClient: () => false,
+    isNativeClient: isNativeClientMock,
     onDeviceInferenceCapability: inferenceCapabilityMock,
 }));
 vi.mock("./webInference", () => ({
@@ -97,14 +99,29 @@ import {
 const RECIPIENT = "-----BEGIN PUBLIC KEY-----\nABC\n-----END PUBLIC KEY-----\n";
 
 beforeEach(() => {
+    acceleratedImageModelReadyMock.mockReset();
+    acceleratedImageModelReadyMock.mockResolvedValue(false);
+    imageInferenceEvidenceMock.mockReset();
+    imageInferenceEvidenceMock.mockReturnValue(undefined);
+    attestationAvailableMock.mockReset();
     attestationAvailableMock.mockReturnValue(false);
-    inferOnDeviceMock.mockClear();
-    inferOnDeviceTextOnlyNoProjectorMock.mockClear();
+    inferOnDeviceMock.mockReset();
+    inferOnDeviceMock.mockResolvedValue({ kind: "unavailable", reason: "not in tests" });
+    inferOnDeviceTextOnlyNoProjectorMock.mockReset();
+    inferOnDeviceTextOnlyNoProjectorMock.mockResolvedValue({
+        kind: "unavailable",
+        reason: "not in tests",
+    });
+    inferenceCapabilityMock.mockReset();
     inferenceCapabilityMock.mockReturnValue({
         available: true,
         runtimesSupported: ["llama-cpp"],
         selectedModalities: ["text"],
     });
+    isNativeClientMock.mockReset();
+    isNativeClientMock.mockReturnValue(false);
+    selectedWebModelIdMock.mockReset();
+    selectedWebModelIdMock.mockReturnValue("qwen3-vl-2b-instruct-q4");
 });
 
 const DEF: AiActionDefinition = {
@@ -256,7 +273,7 @@ describe("buildManualCard (manual-extraction gate)", () => {
         }
     });
 
-    it("uses image-extracted strings for manual keyword overrides before enum conformance", () => {
+    it("uses authoritative image caption text for keyword overrides, not model-authored fields", () => {
         const def: AiActionDefinition = {
             ...DEF,
             acceptsImage: true,
@@ -284,13 +301,13 @@ describe("buildManualCard (manual-extraction gate)", () => {
 
         const result = buildManualCard(
             def,
-            { amount: 350, direction: "owed to you", message: "Cleaning fee owed to you" },
+            { amount: 350, direction: "you owe", message: "model-authored claim" },
             RECIPIENT,
             undefined,
             undefined,
             undefined,
             undefined,
-            { modality: "image" },
+            { modality: "image", text: "Cleaning fee owed to you" },
         );
 
         expect(result.kind).toBe("ready");
@@ -1024,6 +1041,9 @@ describe("provenance before posting", () => {
             blobData: pixels,
         } as unknown as Parameters<typeof proposeAndPostCandidate>[2];
 
+        // This assertion targets the shared model-output sanitization boundary. Browser mode adds a
+        // separate source-grounded verification contract, which has its own focused coverage.
+        isNativeClientMock.mockReturnValue(true);
         inferenceCapabilityMock.mockReturnValue({
             available: true,
             runtimesSupported: ["llama-cpp"],
@@ -1047,7 +1067,7 @@ describe("provenance before posting", () => {
             imageCandidate,
         );
 
-        expect(result.kind).toBe("ready");
+        expect(result).toMatchObject({ kind: "ready" });
         expect(inferOnDeviceMock).toHaveBeenCalledTimes(1);
         expect(inferOnDeviceMock.mock.calls[0][0].image).toEqual(pixels);
         const provenanceCalls = createAiAppCardProvenance.mock.calls as unknown as unknown[][];
@@ -1743,7 +1763,8 @@ describe("both ChatMessage trees run the SHARED propose flow", () => {
         it(`${tree}: delegates decisions, parsing, and lifecycle to shared utilities`, () => {
             const src = readFileSync(fileURLToPath(new URL(relative, import.meta.url)), "utf8");
             expect(src).toContain("runProposeFlow(");
-            expect(src).toContain("const runAiActionHandler = createSingleFlight(");
+            expect(src).toContain("const runAiActionSingleFlight = createSingleFlight(");
+            expect(src).toContain("function runAiActionHandler(suggested?: AutoProposeSuggestion)");
             expect(src).toContain("parseManualExtractionPrompt(");
             expect(src).toContain("{#each autoProposeSuggestionList as suggestion");
             expect(src).toContain("autoProposeSuggestionActionKey(suggestion)");
@@ -1751,9 +1772,8 @@ describe("both ChatMessage trees run the SHARED propose flow", () => {
             expect(src).toContain("busy={");
             expect(src).toContain("proposing && !activeAutoProposeSuggestionVisible");
             expect(src).toContain("autoProposeSuggestionList.some(");
-            expect(src).toContain(
-                "autoProposeSuggestionLabel(suggestion, autoProposeSuggestionList)",
-            );
+            expect(src).toContain("title={autoProposeSuggestionLabel(");
+            expect(src).toContain("autoProposeSuggestionList,");
             expect(src).toContain(
                 "async function proposeSuggestedAiAction(suggestion: AutoProposeSuggestion)",
             );
@@ -1835,7 +1855,7 @@ describe("both ChatMessage trees run the SHARED propose flow", () => {
     it("mobile keeps a visible working surface after the suggestion chip is dismissed", () => {
         const src = readFileSync(fileURLToPath(new URL(TREES.mobile, import.meta.url)), "utf8");
         expect(src).toContain("proposing && !activeAutoProposeSuggestionVisible");
-        expect(src).toContain('i18nKey("aiApps.autoPropose.working")');
+        expect(src).toContain("resourceKey={autoProposeBusyResourceKey}");
     });
 
     it("mobile icon actions expose their localized menu label to assistive technology", () => {

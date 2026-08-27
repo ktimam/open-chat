@@ -1004,6 +1004,7 @@ export const NO_MODEL_MESSAGE =
 
 const NO_MODEL_UNAVAILABLE_REASONS = new Set([
     "no model",
+    "no runtime",
     "no browser model attached",
     "on-device inference requires the native client",
     "no on-device model selected",

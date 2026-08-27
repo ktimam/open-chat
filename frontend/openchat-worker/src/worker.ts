@@ -1067,6 +1067,9 @@ function getAction(
                 payload.chunkIndex,
             );
 
+        case "downloadPublicBlob":
+            return agent.downloadPublicBlob(payload.ref, payload.maxBytes);
+
         case "updateRegistry":
             return agent.getRegistry();
 

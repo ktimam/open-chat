@@ -6445,6 +6445,10 @@ export class OpenChat {
         return this.#worker.send({ kind: "vaultFileChunk", bucketCanisterId, fileId, chunkIndex });
     }
 
+    downloadPublicBlob(ref: BlobReference, maxBytes: number): Promise<Uint8Array | undefined> {
+        return this.#worker.send({ kind: "downloadPublicBlob", ref, maxBytes });
+    }
+
     setCommunityModerationFlags(communityId: string, flags: number): Promise<boolean> {
         return this.#worker
             .send({ kind: "setCommunityModerationFlags", communityId, flags })

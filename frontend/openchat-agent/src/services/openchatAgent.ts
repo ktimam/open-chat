@@ -2305,6 +2305,26 @@ export class OpenChatAgent extends EventTarget {
         return bucketClient.vaultFileChunk(fileId, chunkIndex);
     }
 
+    async downloadPublicBlob(
+        ref: BlobReference,
+        maxBytes: number,
+    ): Promise<Uint8Array | undefined> {
+        if (offline()) return undefined;
+        try {
+            // Do not retain clients for sender-controlled public blob references. The dedicated
+            // public actor is anonymous and request-bounded; authenticated vault clients keep using
+            // the existing trusted-bucket cache above.
+            const bucketClient = new StorageBucketClient(
+                this.identity,
+                this._agent,
+                ref.canisterId,
+            );
+            return await bucketClient.downloadPublicBlob(ref.blobId, maxBytes);
+        } catch {
+            return undefined;
+        }
+    }
+
     setModerationFlags(flags: number): Promise<boolean> {
         if (offline()) return Promise.resolve(false);
 
