@@ -75,6 +75,9 @@ export interface InferenceRequest {
     // Optional additional text context.
     text?: string;
     maxTokens?: number;
+    // Decoding intent only. JSON mode lets a runtime choose deterministic structured-output sampling
+    // without receiving or enabling a JSON-schema grammar.
+    responseMode?: "json";
     // Best-effort: ask the runtime to constrain output to this JSON schema (not all runtimes support it).
     responseSchema?: object;
 }

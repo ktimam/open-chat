@@ -604,7 +604,7 @@ function currencySpans(
                 // nearby code or rewrites an arbitrary three-letter token.
                 const boundedOcrAlias =
                     /^[A-Za-z]{1,2}$/u.test(keyword) ||
-                    (/^[A-Za-z]{3}$/u.test(keyword) && !ISO_CURRENCIES.has(keyword.toUpperCase()));
+                (/^[A-Za-z]{3}$/u.test(keyword) && !ISO_CURRENCIES.has(keyword.toUpperCase()));
                 if (boundedOcrAlias && options.allowShortOcrAliases !== true) continue;
                 const pairKey = JSON.stringify([value, keyword.toLocaleLowerCase("en-US")]);
                 if (seenKeywordValuePairs.has(pairKey)) continue;
