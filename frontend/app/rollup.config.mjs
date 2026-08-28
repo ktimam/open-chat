@@ -21,6 +21,9 @@ import { sveltePreprocess } from "svelte-preprocess";
 import { sourcemapNewline } from "../sourcemapNewline.mjs";
 import { androidBundlePlugin } from "./rollup-plugin-android-bundle.mjs";
 import { wasmUrlAsset } from "./rollup-plugin-wasm-url.mjs";
+import { transformersWebGpuFeatureEnabled } from "./transformersWebGpuFeatureFlag.mjs";
+import { resolveLocalDevAllowedHost } from "./devAllowedHost.mjs";
+import { publicKeyBuildPlugin } from "./publicKeyBuild.mjs";
 import {
     __dirname,
     copyFile,
@@ -43,6 +46,18 @@ function clean() {
             if (version) {
                 fs.writeFileSync("build/version", JSON.stringify({ version }));
             }
+            // The native protocol handler must decide whether a preserved install-over OTA cache
+            // is eligible before it serves index.html (and therefore before frontend JavaScript can
+            // enforce OC_OTA_UPDATES). Keep the policy as a separate bundled asset so the resolver
+            // can fail closed when it is missing or invalid.
+            fs.writeFileSync(
+                "build/ota-policy.json",
+                JSON.stringify({ strategy: otaUpdateStrategy }),
+            );
+            // Gradle runs after this child build command and cannot inherit environment variables
+            // loaded here from frontend/.env. Give the native Android build the exact RP ID that
+            // was compiled into JavaScript so passkey creation cannot silently use another host.
+            fs.writeFileSync("build/android-rp-id", androidRpId);
             const customDomains = process.env.OC_CUSTOM_DOMAINS;
             if (customDomains !== undefined) {
                 const origins = customDomains.split(",").map((d) => `https://${d}`);
@@ -66,6 +81,23 @@ function clean() {
 
 const { version, production } = initEnv();
 
+const otaUpdateStrategies = new Set(["none", "patch", "minor", "major"]);
+const otaUpdateStrategy = process.env.OC_OTA_UPDATES ?? "none";
+if (!otaUpdateStrategies.has(otaUpdateStrategy)) {
+    throw new Error(
+        `Invalid OC_OTA_UPDATES '${otaUpdateStrategy}': expected none, patch, minor, or major`,
+    );
+}
+
+const androidRpId = (process.env.OC_ANDROID_RP_ID ?? "oc.app").trim().toLowerCase();
+if (
+    !/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(androidRpId) ||
+    !androidRpId.includes(".") ||
+    androidRpId.includes("..")
+) {
+    throw new Error("OC_ANDROID_RP_ID must be one valid HTTPS hostname");
+}
+
 const override = (key, val) => `(window.OC_CONFIG?.${key} ?? ${val})`;
 
 // Never carry experimental app-card activation into production/testnet bundles, even if a caller
@@ -79,11 +111,17 @@ const localOnlyAiAppCardFlag = (name) =>
             ? "true"
             : "false",
     );
-const transformersWebGpuSpikeEnabled =
-    process.env.OC_BUILD_ENV === "development" &&
-    process.env.OC_DFX_NETWORK === "local" &&
-    process.env.OC_TRANSFORMERS_WEBGPU_IMAGE_SPIKE === "true";
-const localOnlyTransformersWebGpuSpike = JSON.stringify(
+const resolvedLocalDevAllowedHost = resolveLocalDevAllowedHost(
+    process.env.OC_BUILD_ENV,
+    process.env.OC_DFX_NETWORK,
+    process.env.OC_DEV_ALLOWED_HOST,
+);
+const localOnlyDevAllowedHost =
+    resolvedLocalDevAllowedHost === undefined
+        ? "undefined"
+        : JSON.stringify(resolvedLocalDevAllowedHost);
+const transformersWebGpuSpikeEnabled = transformersWebGpuFeatureEnabled(process.env);
+const explicitTransformersWebGpuFlag = JSON.stringify(
     transformersWebGpuSpikeEnabled ? "true" : "false",
 );
 const isNativeApp = process.env.OC_APP_TYPE === "android" || process.env.OC_APP_TYPE === "ios";
@@ -227,6 +265,8 @@ export default {
         typescript({
             include: [
                 "./src/**/*",
+                // Imported by src/utils/publicImageDisplay.ts for local-replica image URLs.
+                "./localReplicaImageProxy.ts",
                 "../vite-env.d.ts",
                 "../node_modules/component-lib/src/**/*.ts",
                 // The former sub-packages are now compiled from source.
@@ -255,10 +295,11 @@ export default {
             ),
             "import.meta.env.OC_OTA_UPDATES": override(
                 "OC_OTA_UPDATES",
-                JSON.stringify(process.env.OC_OTA_UPDATES),
+                JSON.stringify(otaUpdateStrategy),
             ),
             "import.meta.env.OC_BUILD_ENV": JSON.stringify(process.env.OC_BUILD_ENV),
             "import.meta.env.OC_WEBAUTHN_ORIGIN": JSON.stringify(process.env.OC_WEBAUTHN_ORIGIN),
+            "import.meta.env.OC_ANDROID_RP_ID": JSON.stringify(androidRpId),
             "import.meta.env.OC_INTERNET_IDENTITY_URL": JSON.stringify(
                 process.env.OC_INTERNET_IDENTITY_URL,
             ),
@@ -266,7 +307,9 @@ export default {
                 process.env.OC_INTERNET_IDENTITY_CANISTER_ID,
             ),
             "import.meta.env.OC_NFID_URL": JSON.stringify(process.env.OC_NFID_URL),
+            "import.meta.env.OC_BUILD_ENV": JSON.stringify(process.env.OC_BUILD_ENV),
             "import.meta.env.OC_DFX_NETWORK": JSON.stringify(process.env.OC_DFX_NETWORK),
+            "import.meta.env.OC_DEV_ALLOWED_HOST": localOnlyDevAllowedHost,
             "import.meta.env.OC_LOCAL_AI_APP_CARDS_ENABLED": localOnlyAiAppCardFlag(
                 "OC_LOCAL_AI_APP_CARDS_ENABLED",
             ),
@@ -279,7 +322,7 @@ export default {
             "import.meta.env.OC_LOCAL_AI_APP_PRIVATE_CONTEXT_ENABLED": localOnlyAiAppCardFlag(
                 "OC_LOCAL_AI_APP_PRIVATE_CONTEXT_ENABLED",
             ),
-            "import.meta.env.OC_TRANSFORMERS_WEBGPU_IMAGE_SPIKE": localOnlyTransformersWebGpuSpike,
+            "import.meta.env.OC_TRANSFORMERS_WEBGPU_IMAGE_SPIKE": explicitTransformersWebGpuFlag,
             "import.meta.env.OC_NODE_ENV": JSON.stringify(process.env.NODE_ENV ?? "production"),
             "import.meta.env.OC_WEBSITE_VERSION": JSON.stringify(process.env.OC_WEBSITE_VERSION),
             "import.meta.env.OC_ROLLBAR_ACCESS_TOKEN": JSON.stringify(
@@ -475,7 +518,7 @@ export default {
         copy({
             targets: [
                 {
-                    // The experimental model worker is copied only by the guarded target below;
+                    // The all-WebGPU model worker is copied only by the explicit feature-flagged target below;
                     // an old local artifact can therefore never leak into a release build.
                     src: "../openchat-worker/lib/worker.js*",
                     dest: "build",
@@ -490,9 +533,12 @@ export default {
             hook: "generateBundle",
         }),
         sourcemapNewline(),
+        publicKeyBuildPlugin({
+            network: process.env.OC_DFX_NETWORK ?? "local",
+            canister: process.env.OC_USER_INDEX_CANISTER,
+        }),
         execute({
             commands: [
-                `../../scripts/get-public-key.sh ${process.env.OC_DFX_NETWORK} > ./public/public-key`,
                 // Build the worker + service worker from source into their lib/
                 // dirs before the copy step above pulls them into build/.
                 `node ./build-workers.mjs`,

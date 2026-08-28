@@ -10,7 +10,7 @@
     // caller so the propose flow that triggered the sheet resumes automatically.
     import { i18nKey } from "@src/i18n/i18n";
     import { connectSurfaceOpening, openSurfaceExternally } from "@utils/aiAppSurfaces";
-    import { cancelAiAppLinkConsent } from "@utils/aiAppLinkConsent";
+    import { aiAppLinkCompleted, cancelAiAppLinkConsent } from "@utils/aiAppLinkConsent";
     import { Body, BodySmall, CommonButton, Container, Sheet, Title } from "component-lib";
     import type { AiAppLinkCode, AiAppRegistration, OpenChat } from "@client";
     import { getContext } from "svelte";
@@ -31,9 +31,28 @@
         // The app has claimed the code (the user's key is now registered) — the caller closes the
         // sheet and resumes the propose that triggered it.
         onLinked: () => void;
+        // Provenance recovery is distinct from first-time Connect even when its presentation says
+        // Connect. It never uses key presence as completion proof or resumes the failed action.
+        purpose?: "connect" | "recovery";
+        previousPublicKey?: string;
+        previousKeyVersion?: bigint;
     }
 
-    let { app, onDismiss, onLinked }: Props = $props();
+    let {
+        app,
+        onDismiss,
+        onLinked,
+        purpose = "connect",
+        previousPublicKey,
+        previousKeyVersion,
+    }: Props = $props();
+
+    let previousConnection = $derived(
+        previousPublicKey !== undefined && previousKeyVersion !== undefined
+            ? { publicKey: previousPublicKey, keyVersion: previousKeyVersion }
+            : undefined,
+    );
+    let recoveryHasExistingKey = $derived((previousPublicKey?.trim().length ?? 0) > 0);
 
     // The app's registered "connect" surface — its pairing-code entry page. When declared, the
     // sheet offers a one-tap "open the right page" shortcut instead of leaving the user to hunt
@@ -46,6 +65,7 @@
     let cancelling = $state(false);
     let completed = $state(false);
     let notLinkedYet = $state(false);
+    let linkCheckFailed = $state(false);
     let linkCode = $state<AiAppLinkCode | undefined>(undefined);
     let pendingCodeRequest: Promise<void> | undefined;
 
@@ -68,6 +88,7 @@
             loadingCode = true;
             codeFailed = false;
             notLinkedYet = false;
+            linkCheckFailed = false;
             try {
                 // Creating a new code for the same (user, app) replaces the old one, so this doubles
                 // as the "get a new code" action once the current one expires.
@@ -87,7 +108,9 @@
         return request;
     }
 
-    void fetchCode();
+    // Connect remains eager. Reconnect is only one possible remedy for ambiguous AppUnavailable,
+    // so opening the advisory must not create/replace a bearer until the user explicitly asks.
+    if (purpose === "connect") void fetchCode();
 
     async function cancelLink() {
         if (completed || cancelling) return;
@@ -110,14 +133,25 @@
     async function checkConnection() {
         checking = true;
         notLinkedYet = false;
-        const keys = await client.myAiAppKeys();
-        checking = false;
-        if (cancelling || completed) return;
-        if (keys.some((k) => k.appId === app.id && k.publicKey.length > 0)) {
-            completed = true;
-            onLinked();
-        } else {
-            notLinkedYet = true;
+        linkCheckFailed = false;
+        try {
+            const keys = await client.myAiAppKeys();
+            if (cancelling || completed) return;
+            const linked =
+                purpose === "connect"
+                    ? aiAppLinkCompleted(keys, app.id)
+                    : previousConnection !== undefined &&
+                      aiAppLinkCompleted(keys, app.id, previousConnection);
+            if (linked) {
+                completed = true;
+                onLinked();
+            } else {
+                notLinkedYet = true;
+            }
+        } catch {
+            if (!cancelling && !completed) linkCheckFailed = true;
+        } finally {
+            checking = false;
         }
     }
 </script>
@@ -125,7 +159,20 @@
 <Sheet onDismiss={cancelLink}>
     <Container height={"hug"} padding={"xl"} gap={"lg"} direction={"vertical"}>
         <Title fontWeight={"bold"}>
-            <Translatable resourceKey={i18nKey("aiApps.linkTitle", { name: app.manifest.name })} />
+            {#if purpose === "recovery"}
+                <Translatable
+                    resourceKey={i18nKey(
+                        recoveryHasExistingKey
+                            ? "aiApps.reconnectTitle"
+                            : "aiApps.reconnectMissingTitle",
+                        { name: app.manifest.name },
+                    )}
+                />
+            {:else}
+                <Translatable
+                    resourceKey={i18nKey("aiApps.linkTitle", { name: app.manifest.name })}
+                />
+            {/if}
         </Title>
 
         {#if app.manifest.description.length > 0}
@@ -133,10 +180,30 @@
         {/if}
 
         <Body>
-            <Translatable
-                resourceKey={i18nKey("aiApps.linkExplain", { name: app.manifest.name })}
-            />
+            {#if purpose === "recovery"}
+                <Translatable
+                    resourceKey={i18nKey(
+                        recoveryHasExistingKey
+                            ? "aiApps.reconnectExplain"
+                            : "aiApps.reconnectMissingExplain",
+                        { name: app.manifest.name },
+                    )}
+                />
+            {:else}
+                <Translatable
+                    resourceKey={i18nKey("aiApps.linkExplain", { name: app.manifest.name })}
+                />
+            {/if}
         </Body>
+        {#if purpose === "recovery"}
+            <Body>
+                <Translatable
+                    resourceKey={i18nKey("aiApps.reconnectRetryExplain", {
+                        name: app.manifest.name,
+                    })}
+                />
+            </Body>
+        {/if}
         <BodySmall colour={"textSecondary"}>
             Only the exact registered app canister can redeem this code. Replacement keys are
             versioned so an old disconnect proof cannot revoke the new connection.
@@ -211,7 +278,15 @@
                 </li>
                 <li>
                     <BodySmall>
-                        <Translatable resourceKey={i18nKey("aiApps.linkStepCheck")} />
+                        {#if purpose === "recovery"}
+                            <Translatable
+                                resourceKey={i18nKey("aiApps.reconnectStepCheck", {
+                                    name: app.manifest.name,
+                                })}
+                            />
+                        {:else}
+                            <Translatable resourceKey={i18nKey("aiApps.linkStepCheck")} />
+                        {/if}
                     </BodySmall>
                 </li>
             </ol>
@@ -219,8 +294,18 @@
             {#if notLinkedYet}
                 <BodySmall colour={"textSecondary"}>
                     <Translatable
-                        resourceKey={i18nKey("aiApps.linkNotYet", { name: app.manifest.name })}
+                        resourceKey={i18nKey(
+                            purpose === "recovery"
+                                ? "aiApps.reconnectNotYet"
+                                : "aiApps.linkNotYet",
+                            { name: app.manifest.name },
+                        )}
                     />
+                </BodySmall>
+            {/if}
+            {#if linkCheckFailed}
+                <BodySmall colour={"textSecondary"}>
+                    <Translatable resourceKey={i18nKey("aiApps.linkCheckFailed")} />
                 </BodySmall>
             {/if}
         {:else if codeFailed}
@@ -238,12 +323,31 @@
                     <Translatable resourceKey={i18nKey("aiApps.linkCodeCopy")} />
                 </CommonButton>
             {/if}
-            {#if codeFailed || expired}
+            {#if (purpose === "recovery" && linkCode === undefined) || codeFailed || expired}
                 <CommonButton loading={loadingCode} onClick={fetchCode} size={"medium"}>
                     {#snippet icon(color, size)}
                         <Refresh {color} {size} />
                     {/snippet}
-                    <Translatable resourceKey={i18nKey("aiApps.linkNewCode")} />
+                    {#if purpose === "recovery"}
+                        <Translatable
+                            resourceKey={i18nKey(
+                                recoveryHasExistingKey
+                                    ? "aiApps.reconnectGenerateCode"
+                                    : "aiApps.reconnectGenerateConnectionCode",
+                            )}
+                        />
+                    {:else}
+                        <Translatable resourceKey={i18nKey("aiApps.linkNewCode")} />
+                    {/if}
+                </CommonButton>
+            {/if}
+            {#if purpose === "recovery"}
+                <CommonButton
+                    disabled={loadingCode || cancelling}
+                    onClick={cancelLink}
+                    size={"medium"}
+                >
+                    <Translatable resourceKey={i18nKey("aiApps.close")} />
                 </CommonButton>
             {/if}
             <CommonButton

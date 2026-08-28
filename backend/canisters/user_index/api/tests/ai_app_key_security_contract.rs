@@ -49,3 +49,12 @@ fn every_delivery_key_ingress_uses_the_p256_canonicalizer() {
     assert!(claim.contains("restore_link_code"));
     assert!(register.matches("canonicalize_p256_public_key").count() >= 3);
 }
+
+#[test]
+fn own_key_query_exports_the_optional_rolling_deploy_epoch() {
+    let types = source("backend/libraries/types/src/ai_actions.rs");
+    let typebox = source("frontend/openchat-agent/src/typebox.ts");
+    assert!(types.contains("pub key_version: u64"));
+    assert!(types.contains("Option::<u64>"));
+    assert!(typebox.contains("key_version: Type.Optional(Type.BigInt())"));
+}

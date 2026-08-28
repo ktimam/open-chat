@@ -57,6 +57,7 @@ describe("Transformers.js WebGPU build isolation", () => {
             "utf8",
         );
         const workers = fs.readFileSync(path.join(APP_DIR, "build-workers.mjs"), "utf8");
+        const appBuild = fs.readFileSync(path.join(APP_DIR, "rollup.config.mjs"), "utf8");
         const modelWorker = fs.readFileSync(
             path.join(APP_DIR, "src/workers/transformersWebGpuInference.worker.ts"),
             "utf8",
@@ -65,6 +66,7 @@ describe("Transformers.js WebGPU build isolation", () => {
             path.join(APP_DIR, "src/utils/transformersWebGpuProtocol.ts"),
             "utf8",
         );
+        const assetPolicy = fs.readFileSync(path.join(APP_DIR, ".ic-assets.json5"), "utf8");
         const sessionPatch = fs.readFileSync(
             path.join(APP_DIR, "transformersWebGpuSequentialSessions.mjs"),
             "utf8",
@@ -104,6 +106,7 @@ describe("Transformers.js WebGPU build isolation", () => {
             ).toBeGreaterThan(0);
         }
         expect(workers).toContain("transformersWebGpuInference.worker.ts");
+        expect(appBuild).toContain('"./localReplicaImageProxy.ts"');
         expect(workers).toContain('fileName: "transformers_webgpu_worker.js"');
         expect(workers).toContain('conditions: ["onnxruntime-web-use-extern-wasm"]');
         expect(workers).toContain('find: "onnxruntime-web/webgpu"');
@@ -111,16 +114,23 @@ describe("Transformers.js WebGPU build isolation", () => {
         expect(workers).toContain("transformersWebGpuSpikeEnabled");
         expect(modelWorker).toContain("device: TRANSFORMERS_QWEN_DEVICE_MAP");
         expect(modelWorker).not.toContain('device: "webgpu"');
+        expect(modelWorker).not.toContain('powerPreference = "high-performance"');
+        expect(modelWorker).toContain("const adapter = await gpu.requestAdapter()");
         expect(modelWorker).toContain("env.allowRemoteModels = true");
         expect(modelWorker).toContain("env.fetch = async () =>");
         expect(modelWorker).toContain("ort-wasm-simd-threaded.jspi.mjs");
         expect(modelWorker).toContain("ort-wasm-simd-threaded.jspi.wasm");
         expect(modelWorker).not.toContain("ort-wasm-simd-threaded.asyncify");
         expect(protocol).toContain("ort-1.29.0-dev.20260723-1b1e1db7bc");
+        expect(assetPolicy).toContain("{*.css,*.js,*.mjs,*.wasm,*.traineddata.gz}");
         expect(modelWorker).toContain("tap Retry download");
         expect(modelWorker).not.toContain("env.allowRemoteModels = false");
-        expect(modelWorker).toContain("INPUT_IMAGE_WIDTH = 256");
-        expect(modelWorker).toContain("INPUT_IMAGE_HEIGHT = 448");
+        expect(modelWorker).toContain(
+            "transformersWebGpuImageLayout(dimensions.width, dimensions.height)",
+        );
+        expect(modelWorker).toContain("TRANSFORMERS_WEBGPU_MAX_RAW_IMAGE_PATCHES");
+        expect(modelWorker).toContain("image_grid_thw");
+        expect(modelWorker).toContain('imageOrientation: "from-image"');
         expect(modelWorker).toContain('getJson("processor_config.json")');
         expect(modelWorker).toContain("transformersWebGpuProcessorConfig(");
         expect(modelWorker).toContain("TRANSFORMERS_WEBGPU_NORMALIZED_PROCESSOR_MARKER");
@@ -128,8 +138,15 @@ describe("Transformers.js WebGPU build isolation", () => {
         expect(modelWorker).toContain("decodeBoundedImage(message.image)");
         expect(modelWorker).toContain("bitmap.close()");
         expect(modelWorker).toContain("await disposeLoadedRuntime()");
+        expect(modelWorker).toContain("releaseAndRetireWebGpuDevice(");
+        expect(modelWorker).toContain('withStagedWebGpuRelease("decoder teardown"');
+        expect(modelWorker).toContain("openchat_with_staged_webgpu_release");
+        expect(modelWorker).toContain("runtimeDisposalPromise");
+        expect(modelWorker).toContain("const lossStage = activeGpuStage");
+        expect(modelWorker).not.toContain("explicit model release failed");
         expect(modelWorker).not.toContain("RawImage.read(");
         expect(modelWorker).toContain("instrumentGpuSessions(runtime, generation)");
+        expect(modelWorker).toContain("embed_tokens cached CPU facade started");
         expect(modelWorker).toContain('name === "decoder_model_merged"');
         const instrumentation = modelWorker.slice(
             modelWorker.indexOf("function instrumentGpuSessions"),
@@ -182,6 +199,10 @@ describe("Transformers.js WebGPU build isolation", () => {
             'initialEmbed = await createSession("embed_tokens", embedExternalData)',
         );
         expect(constructSessions).toContain("await _waitForStagedWebGpuQueue(name)");
+        expect(constructSessions).toContain("_withStagedWebGpuRelease");
+        expect(constructSessions).toContain(
+            'openchat_with_staged_webgpu_release(\n            "prompt-to-decoder transition"',
+        );
         expect(constructSessions).toContain("try { await session.release?.(); } catch {}");
         expect(patched).toContain("await vision.release?.()");
         expect(patched).toContain("await releaseInitialEmbed()");
@@ -270,6 +291,7 @@ describe("Transformers.js WebGPU build isolation", () => {
                     externalData?: FakeExternalData[];
                     openchat_get_staged_external_data?: unknown;
                     openchat_wait_for_staged_webgpu_queue?: unknown;
+                    openchat_with_staged_webgpu_release?: unknown;
                 };
             },
         ): Promise<{
@@ -283,6 +305,9 @@ describe("Transformers.js WebGPU build isolation", () => {
             expect(loadOptions.session_options?.openchat_get_staged_external_data).toBeUndefined();
             expect(
                 loadOptions.session_options?.openchat_wait_for_staged_webgpu_queue,
+            ).toBeUndefined();
+            expect(
+                loadOptions.session_options?.openchat_with_staged_webgpu_release,
             ).toBeUndefined();
             const supplied = loadOptions.session_options?.externalData;
             if (supplied !== undefined) {
@@ -304,11 +329,13 @@ describe("Transformers.js WebGPU build isolation", () => {
                 externalData?: FakeExternalData[];
                 openchat_get_staged_external_data?: unknown;
                 openchat_wait_for_staged_webgpu_queue?: unknown;
+                openchat_with_staged_webgpu_release?: unknown;
             },
             config: { name: string; device: string; dtype: string },
         ): Promise<FakeSession> => {
             expect(sessionOptions.openchat_get_staged_external_data).toBeUndefined();
             expect(sessionOptions.openchat_wait_for_staged_webgpu_queue).toBeUndefined();
+            expect(sessionOptions.openchat_with_staged_webgpu_release).toBeUndefined();
             const externalNames: Record<string, string> = {
                 vision_encoder: "vision_encoder_q4.onnx_data",
                 embed_tokens: "embed_tokens_q4.onnx_data",
@@ -414,6 +441,13 @@ describe("Transformers.js WebGPU build isolation", () => {
         const waitForStagedWebGpuQueue = vi.fn(async (name: string) => {
             events.push(`drain:${name}:active=${activeSessions}`);
         });
+        const withStagedWebGpuRelease = vi.fn(
+            async (stage: string, release: () => Promise<void>) => {
+                events.push(`retire-start:${stage}:active=${activeSessions}`);
+                await release();
+                events.push(`retire-end:${stage}:active=${activeSessions}`);
+            },
+        );
         const sessions = await construct(
             "onnx-community/Qwen3-VL-2B-Instruct-ONNX",
             {
@@ -436,6 +470,7 @@ describe("Transformers.js WebGPU build isolation", () => {
                 session_options: {
                     openchat_get_staged_external_data: getStagedExternalData,
                     openchat_wait_for_staged_webgpu_queue: waitForStagedWebGpuQueue,
+                    openchat_with_staged_webgpu_release: withStagedWebGpuRelease,
                 },
             },
             { decoder_model_merged: true },
@@ -464,8 +499,13 @@ describe("Transformers.js WebGPU build isolation", () => {
         });
         expect(events).toContain("release:embed_tokens:active=1");
         expect(events).toContain("release:vision_encoder:active=0");
+        expect(events).toContain("retire-start:prompt-to-decoder transition:active=1");
+        expect(events).toContain("retire-end:prompt-to-decoder transition:active=0");
         expect(events).toContain("get:decoder_model_merged:active=0");
         expect(events.indexOf("release:vision_encoder:active=0")).toBeLessThan(
+            events.indexOf("get:decoder_model_merged:active=0"),
+        );
+        expect(events.indexOf("retire-end:prompt-to-decoder transition:active=0")).toBeLessThan(
             events.indexOf("get:decoder_model_merged:active=0"),
         );
         expect(events).toContain("decoder-ids:1x0");
@@ -756,9 +796,10 @@ describe("Transformers.js WebGPU build isolation", () => {
         expect(last.byte + 1).toBe(155_582_464);
     });
 
-    it("serves exact same-origin ORT files and keeps routing behind a local-only flag", () => {
+    it("serves exact same-origin ORT files and keeps routing behind an explicit build flag", () => {
         const vite = fs.readFileSync(path.join(APP_DIR, "vite.config.ts"), "utf8");
         const rollup = fs.readFileSync(path.join(APP_DIR, "rollup.config.mjs"), "utf8");
+        const workers = fs.readFileSync(path.join(APP_DIR, "build-workers.mjs"), "utf8");
 
         for (const source of [vite, rollup]) {
             expect(source).toContain("ort-1.29.0-dev.20260723-1b1e1db7bc");
@@ -768,13 +809,26 @@ describe("Transformers.js WebGPU build isolation", () => {
         }
         expect(vite).toContain('find: "onnxruntime-web/webgpu"');
         expect(vite).toContain('replacement: "onnxruntime-web/jspi"');
+        expect(vite).toContain('"./src/utils/transformersWebGpuDeviceRetirement.ts"');
         expect(vite).toContain('"/hf-model"');
         expect(vite).toContain("QWEN3_VL_2B_MODEL_ROUTE_PREFIX");
         expect(vite).toContain("qwen3-vl-2b-adreno-model-overrides");
         expect(vite).toContain("model-overrides/qwen3vl2b/onnx");
+        expect(vite).toContain("devTransformersWebGpuRuntimeVersion.rotate()");
+        expect(vite).toContain("TRANSFORMERS_WEBGPU_DEV_RUNTIME_VERSION_META");
+        expect(vite.indexOf("devTransformersWebGpuRuntimeVersion.rotate()")).toBeLessThan(
+            vite.indexOf('server.ws.send({ type: "full-reload" })'),
+        );
         expect(rollup).toContain("OC_TRANSFORMERS_WEBGPU_IMAGE_SPIKE");
-        expect(rollup).toContain('process.env.OC_BUILD_ENV === "development"');
-        expect(rollup).toContain('process.env.OC_DFX_NETWORK === "local"');
+        for (const source of [vite, rollup, workers]) {
+            expect(source).toContain("transformersWebGpuFeatureEnabled(process.env)");
+        }
+        expect(rollup).not.toMatch(
+            /const transformersWebGpuSpikeEnabled\s*=\s*process\.env\.OC_BUILD_ENV/,
+        );
+        expect(workers).not.toMatch(
+            /const transformersWebGpuSpikeEnabled\s*=\s*process\.env\.OC_BUILD_ENV/,
+        );
         expect(rollup).toContain("isNativeApp || !transformersWebGpuSpikeEnabled");
         expect(rollup).toContain('src: "../openchat-worker/lib/worker.js*"');
     });

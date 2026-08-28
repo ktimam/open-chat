@@ -41,6 +41,10 @@ where
     // Lazily load cached assets into memory on first request
     let cache = memory_cache.get_or_init(|| {
         let um = update_manager::UpdateManager::new(handle.clone());
+        if !um.cached_update_allowed() {
+            return HashMap::new();
+        }
+
         um.get_cache_dir()
             .map(|dir| load_cache_into_memory(&dir))
             .unwrap_or_default()
@@ -107,6 +111,11 @@ fn load_cache_into_memory(cache_dir: &std::path::Path) -> HashMap<String, Cached
                 cache.insert(name, CachedAsset { data, mime_type });
             }
         }
+    }
+    // Never mix a partial OTA payload with bundled files. index.html is the minimum complete-cache
+    // marker in addition to version.json; without it, fail back to the APK as a single unit.
+    if !cache.contains_key("index.html") {
+        return HashMap::new();
     }
     if !cache.is_empty() {
         println!("Loaded {} cached assets into memory", cache.len());

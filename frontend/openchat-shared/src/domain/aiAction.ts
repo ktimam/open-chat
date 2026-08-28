@@ -138,11 +138,34 @@ function privateImageEvidencePrompt(evidence: PrivateImageEvidence): string {
 // remove text-oriented/redundant guidance from expensive vision prefill. A malformed extension is
 // ignored so legacy/cached registrations retain the original prompt and rule guidance.
 export const AI_ACTION_IMAGE_PROMPT_EXTENSION = "x-openchat-image-prompt-template";
+export const AI_ACTION_IMAGE_FOCUSED_PASSES_EXTENSION = "x-openchat-image-focused-passes";
 export const MAX_AI_ACTION_IMAGE_PROMPT_BYTES = 4_096;
 
 export interface AiActionImagePromptTemplateConfig {
     template: string;
     includeRuleGuidance: boolean;
+}
+
+// An additive extension lets an app split expensive image extraction into a few small, disjoint
+// field passes while keeping the backwards-compatible v1 compact primary prompt. Each pass owns
+// exactly the fields it names: model output for every other field is discarded before schema/rule
+// processing. This is both a phone-memory guard and a correctness boundary.
+export const MAX_AI_ACTION_IMAGE_MODEL_PASSES = 3;
+export const MAX_AI_ACTION_IMAGE_PASS_FIELDS = 16;
+export const MAX_AI_ACTION_IMAGE_PASS_TOKENS = 96;
+
+export interface AiActionImageModelPassConfig {
+    template: string;
+    fields: string[];
+    includeRuleGuidance: boolean;
+    includeMessage: boolean;
+    maxTokens: number;
+}
+
+export interface AiActionImageModelPassesConfig {
+    primaryFields: string[];
+    primaryMaxTokens: number;
+    passes: AiActionImageModelPassConfig[];
 }
 
 function containsUnsafePromptCodePoint(value: string): boolean {
@@ -200,6 +223,121 @@ export function imagePromptTemplateConfig(
     return {
         template: extension.template,
         includeRuleGuidance: extension.includeRuleGuidance,
+    };
+}
+
+/** Parse focused passes layered over the backwards-compatible v1 compact primary prompt. */
+export function imageModelPassesConfig(
+    responseSchema: object | undefined,
+): AiActionImageModelPassesConfig | undefined {
+    if (
+        responseSchema === undefined ||
+        !Object.hasOwn(responseSchema, AI_ACTION_IMAGE_FOCUSED_PASSES_EXTENSION)
+    ) {
+        return undefined;
+    }
+    const raw = (responseSchema as Record<string, unknown>)[
+        AI_ACTION_IMAGE_FOCUSED_PASSES_EXTENSION
+    ];
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+    const extension = raw as Record<string, unknown>;
+    const extensionKeys = Object.keys(extension).sort();
+    if (
+        extensionKeys.length !== 4 ||
+        extensionKeys[0] !== "passes" ||
+        extensionKeys[1] !== "primaryFields" ||
+        extensionKeys[2] !== "primaryMaxTokens" ||
+        extensionKeys[3] !== "version" ||
+        extension.version !== 1 ||
+        !Array.isArray(extension.primaryFields) ||
+        extension.primaryFields.length === 0 ||
+        extension.primaryFields.length > MAX_AI_ACTION_IMAGE_PASS_FIELDS ||
+        !Number.isInteger(extension.primaryMaxTokens) ||
+        (extension.primaryMaxTokens as number) < 1 ||
+        (extension.primaryMaxTokens as number) > MAX_AI_ACTION_IMAGE_PASS_TOKENS ||
+        !Array.isArray(extension.passes) ||
+        extension.passes.length === 0 ||
+        extension.passes.length >= MAX_AI_ACTION_IMAGE_MODEL_PASSES
+    ) {
+        return undefined;
+    }
+
+    const properties = (responseSchema as Record<string, unknown>).properties;
+    if (properties === null || typeof properties !== "object" || Array.isArray(properties)) {
+        return undefined;
+    }
+
+    const ownedFields = new Set<string>();
+    const primaryFields: string[] = [];
+    for (const field of extension.primaryFields) {
+        if (
+            typeof field !== "string" ||
+            !isSafeAiActionFieldName(field) ||
+            !Object.hasOwn(properties, field) ||
+            ownedFields.has(field)
+        ) {
+            return undefined;
+        }
+        ownedFields.add(field);
+        primaryFields.push(field);
+    }
+    const passes: AiActionImageModelPassConfig[] = [];
+    let totalPromptBytes = 0;
+    for (const rawPass of extension.passes) {
+        if (rawPass === null || typeof rawPass !== "object" || Array.isArray(rawPass)) {
+            return undefined;
+        }
+        const pass = rawPass as Record<string, unknown>;
+        const passKeys = Object.keys(pass).sort();
+        if (
+            passKeys.length !== 5 ||
+            passKeys[0] !== "fields" ||
+            passKeys[1] !== "includeMessage" ||
+            passKeys[2] !== "includeRuleGuidance" ||
+            passKeys[3] !== "maxTokens" ||
+            passKeys[4] !== "template" ||
+            typeof pass.template !== "string" ||
+            pass.template.trim().length === 0 ||
+            containsUnsafePromptCodePoint(pass.template) ||
+            typeof pass.includeRuleGuidance !== "boolean" ||
+            typeof pass.includeMessage !== "boolean" ||
+            !Number.isInteger(pass.maxTokens) ||
+            (pass.maxTokens as number) < 1 ||
+            (pass.maxTokens as number) > MAX_AI_ACTION_IMAGE_PASS_TOKENS ||
+            !Array.isArray(pass.fields) ||
+            pass.fields.length === 0 ||
+            pass.fields.length > MAX_AI_ACTION_IMAGE_PASS_FIELDS
+        ) {
+            return undefined;
+        }
+        totalPromptBytes += new TextEncoder().encode(pass.template).byteLength;
+        if (totalPromptBytes > MAX_AI_ACTION_IMAGE_PROMPT_BYTES) return undefined;
+
+        const fields: string[] = [];
+        for (const field of pass.fields) {
+            if (
+                typeof field !== "string" ||
+                !isSafeAiActionFieldName(field) ||
+                !Object.hasOwn(properties, field) ||
+                ownedFields.has(field)
+            ) {
+                return undefined;
+            }
+            ownedFields.add(field);
+            fields.push(field);
+        }
+        passes.push({
+            template: pass.template,
+            fields,
+            includeRuleGuidance: pass.includeRuleGuidance,
+            includeMessage: pass.includeMessage,
+            maxTokens: pass.maxTokens as number,
+        });
+    }
+    return {
+        primaryFields,
+        primaryMaxTokens: extension.primaryMaxTokens as number,
+        passes,
     };
 }
 
@@ -393,6 +531,8 @@ export interface AiAppManifest {
     name: string;
     description: string;
     iconUrl?: string;
+    // Canister authorized to redeem per-user link codes and attest app-authored cards.
+    appCanisterId?: string;
     // P-256 SPKI PEM: the app-level delivery key confirmed actions are encrypted to.
     consumerPublicKey: string;
     // When true, each user's confirmed actions are delivered encrypted to THAT user's own registered
@@ -424,6 +564,9 @@ export interface AiAppRegistration {
 export interface AiAppUserKey {
     appId: number;
     publicKey: string;
+    // Monotonic consent epoch for this exact user/app binding. A fresh link-code claim advances it
+    // even when the app deliberately reuses the same durable PEM.
+    keyVersion: bigint;
 }
 
 // One row of the guarded user_index `ai_app_user_keys` C2C lookup: a chat MEMBER's registered
@@ -490,6 +633,19 @@ export interface AiAppCardProvenance {
     provenance: Uint8Array;
     expiresAt: bigint;
 }
+
+// Privacy-safe result for minting provenance over one exact app-authored card. Failure variants
+// deliberately carry no backend message, card content, app/chat coordinates, or bearer material.
+// Transport and offline are added by the client/agent layers; every canister response is mapped to
+// one of the remaining variants so a rejected attestation can never collapse into `undefined`.
+export type AiAppCardProvenanceResult =
+    | ({ kind: "success" } & AiAppCardProvenance)
+    | { kind: "app_unavailable" }
+    | { kind: "invalid_request" }
+    | { kind: "backend_error" }
+    | { kind: "malformed_success" }
+    | { kind: "transport_error" }
+    | { kind: "offline" };
 
 // Exact sender-visible and confirmable V1 content vouched for by the registered app canister before
 // UserIndex mints card provenance. Authenticated viewer/chat/message/app coordinates are supplied by
@@ -2614,14 +2770,31 @@ export async function runAiAction(
     let candidates = sourceSequence.kind === "candidates" ? sourceSequence.candidates : undefined;
     let extractionRaw = sourceSequence.kind === "candidates" ? input.text! : "";
     const imagePrompt = hasImageSource ? imagePromptTemplateConfig(def.responseSchema) : undefined;
-    const ruleLines =
-        imagePrompt?.includeRuleGuidance === false
-            ? []
-            : compileRules(rules, { hasMessageText: hasTextInput });
+    // Focused passes are an additive extension to the v1 compact prompt. Requiring both means an
+    // older client can ignore the new declaration and still use the same safe compact primary.
+    const imageModelPasses =
+        input.image !== undefined && imagePrompt !== undefined
+            ? imageModelPassesConfig(def.responseSchema)
+            : undefined;
+    const compiledRuleLines = compileRules(rules, { hasMessageText: hasTextInput });
+    const ruleLines = imagePrompt?.includeRuleGuidance === false ? [] : compiledRuleLines;
     const providesTodayContext = boundedRules(rules).some(
         (rule) => rule.kind === "context" && rule.provide.includes("today"),
     );
     const calendarAnchor = providesTodayContext && hasTextInput ? new Date() : undefined;
+    const buildImagePassPrompt = (pass: AiActionImageModelPassConfig): string => {
+        let passPrompt = pass.template;
+        if (pass.includeRuleGuidance && compiledRuleLines.length > 0) {
+            passPrompt += `\n\nRules:\n- ${compiledRuleLines.join("\n- ")}`;
+        }
+        if (pass.includeMessage && calendarAnchor !== undefined) {
+            passPrompt += `\n\nToday is ${formatLocalCalendarDate(calendarAnchor)}.`;
+        }
+        if (pass.includeMessage && hasTextInput) {
+            passPrompt += `\n\nMessage:\n${input.text}`;
+        }
+        return passPrompt;
+    };
     // Text keeps the original app prompt byte-for-byte. Only an image-bearing invocation may opt
     // into the compact base. Suppressing model guidance never suppresses post-processing performed
     // by executable rule kinds, schema conformance, defaults, or required-field checks.
@@ -2656,57 +2829,133 @@ export async function runAiAction(
     // twice: "owe me 300 uber 150 food" came back with 300 repeated. Native never saw it, which is
     // why this read like small-model flakiness rather than a bug in our own prompt assembly.
     if (candidates === undefined) {
-        const result = await infer({
-            modelId: input.modelId,
-            prompt,
-            // The private-evidence route is intentionally text-only: image preparation/OCR has
-            // already completed and no vision projector or pixel bytes may cross this seam.
-            image: privateImageEvidence === undefined ? input.image : undefined,
-            // This is structured JSON extraction, so runtimes may decode greedily. Keep this separate
-            // from responseSchema: schema grammar remains deliberately disabled for numeric accuracy.
-            responseMode: "json",
-            // Action cards contain bounded structured JSON, never long-form prose. Keeping the
-            // first pass to the same 256-token envelope as the repair pass prevents a small
-            // single-thread browser model from spending minutes on a runaway response.
-            maxTokens: 256,
-        });
-
-        if (result.kind === "unavailable") {
-            return privateImageEvidence === undefined
-                ? { kind: "unavailable", reason: result.reason }
-                : {
-                      kind: "unavailable",
-                      reason: "The private image verification model is unavailable.",
-                  };
-        }
-        if (result.kind === "error") {
-            return privateImageEvidence === undefined
-                ? { kind: "error", error: result.error }
-                : { kind: "error", error: "Private image verification inference failed." };
-        }
-        extractionRaw = result.text;
-
-        // The model text is accepted as a single OBJECT or an ARRAY of objects (several transactions in
-        // one message). Normalize to a list of candidate objects.
-        candidates = parseExtractionList(result.text);
-        // Small local models occasionally describe the right actions in prose or emit `[]` despite a
-        // text message containing explicit amounts. Give TEXT input one bounded format-repair attempt;
-        // it reuses the original evidence/prompt, stays unconstrained (schema grammars corrupt numeric
-        // values on these models), and caps output so a failed repair cannot turn into another 512-token
-        // runaway. Image inference is intentionally not doubled here.
-        if (candidates === undefined && !hasImageSource && hasTextInput) {
-            const repair = await infer({
+        if (imageModelPasses !== undefined) {
+            // Every pass runs through the same selected vision model and receives the original image;
+            // there is no OCR/text-reader seam here. The backwards-compatible compact prompt owns
+            // primaryFields; focused passes may only fill their own disjoint fields.
+            const primary = await infer({
                 modelId: input.modelId,
-                prompt: `${prompt}\n\nJSON FORMAT CORRECTION:\nYour previous response did not contain a parseable action. Return ONLY valid JSON: one object for one action, or an array with one object per action. Follow every original extraction rule, include only fields supported by the message, and include every required field that the message supports. Do not include analysis, prose, markdown fences, or an empty array.`,
+                prompt,
+                image: input.image,
                 responseMode: "json",
+                maxTokens: imageModelPasses.primaryMaxTokens,
+            });
+            if (primary.kind === "unavailable") {
+                return { kind: "unavailable", reason: primary.reason };
+            }
+            if (primary.kind === "error") return { kind: "error", error: primary.error };
+            extractionRaw = primary.text;
+            const firstCandidates = parseExtractionList(primary.text);
+            if (firstCandidates !== undefined) {
+                if (firstCandidates.length > MAX_AI_ACTION_CANDIDATES) {
+                    return {
+                        kind: "error",
+                        error: `The model returned more than ${MAX_AI_ACTION_CANDIDATES} action candidates.`,
+                    };
+                }
+                const primaryOwned = new Set(imageModelPasses.primaryFields);
+                candidates = firstCandidates.map((candidate) =>
+                    Object.fromEntries(
+                        Object.entries(
+                            applySchemaPropertyAliases(candidate, def.responseSchema),
+                        ).filter(([field]) => primaryOwned.has(field)),
+                    ),
+                );
+            }
+
+            // Index-only merging is safe for one candidate. For a multi-transaction document, keep
+            // the bounded primary result and omit focused fields until a future manifest contract can
+            // declare immutable match keys; never attach a reordered date to the wrong transaction.
+            if (candidates?.length === 1) {
+                for (const pass of imageModelPasses.passes) {
+                    const result = await infer({
+                        modelId: input.modelId,
+                        prompt: buildImagePassPrompt(pass),
+                        image: input.image,
+                        responseMode: "json",
+                        maxTokens: pass.maxTokens,
+                    });
+                    if (result.kind === "unavailable") {
+                        return { kind: "unavailable", reason: result.reason };
+                    }
+                    if (result.kind === "error") return { kind: "error", error: result.error };
+                    const refinement = parseExtractionList(result.text);
+                    if (refinement === undefined) {
+                        return {
+                            kind: "error",
+                            error: "A focused image-model pass returned no parseable JSON object.",
+                        };
+                    }
+                    if (refinement.length !== 1) {
+                        return {
+                            kind: "error",
+                            error: "A focused image-model pass returned a different candidate count.",
+                        };
+                    }
+                    const owned = new Set(pass.fields);
+                    const focusedCandidate = refinement[0]!;
+                    const focusedFields = Object.fromEntries(
+                        Object.entries(
+                            applySchemaPropertyAliases(focusedCandidate, def.responseSchema),
+                        ).filter(([field]) => owned.has(field)),
+                    );
+                    candidates[0] = { ...candidates[0]!, ...focusedFields };
+                }
+            }
+        } else {
+            const result = await infer({
+                modelId: input.modelId,
+                prompt,
+                // The private-evidence route is intentionally text-only: image preparation/OCR has
+                // already completed and no vision projector or pixel bytes may cross this seam.
+                image: privateImageEvidence === undefined ? input.image : undefined,
+                // This is structured JSON extraction, so runtimes may decode greedily. Keep this separate
+                // from responseSchema: schema grammar remains deliberately disabled for numeric accuracy.
+                responseMode: "json",
+                // Action cards contain bounded structured JSON, never long-form prose. Keeping the
+                // first pass to the same 256-token envelope as the repair pass prevents a small
+                // single-thread browser model from spending minutes on a runaway response.
                 maxTokens: 256,
             });
-            if (repair.kind === "unavailable") {
-                return { kind: "unavailable", reason: repair.reason };
+
+            if (result.kind === "unavailable") {
+                return privateImageEvidence === undefined
+                    ? { kind: "unavailable", reason: result.reason }
+                    : {
+                          kind: "unavailable",
+                          reason: "The private image verification model is unavailable.",
+                      };
             }
-            if (repair.kind === "error") return { kind: "error", error: repair.error };
-            extractionRaw = repair.text;
-            candidates = parseExtractionList(repair.text);
+            if (result.kind === "error") {
+                return privateImageEvidence === undefined
+                    ? { kind: "error", error: result.error }
+                    : { kind: "error", error: "Private image verification inference failed." };
+            }
+            extractionRaw = result.text;
+
+            // The model text is accepted as a single OBJECT or an ARRAY of objects (several transactions in
+            // one message). Normalize to a list of candidate objects.
+            candidates = parseExtractionList(result.text);
+            // Small local models occasionally describe the right actions in prose or emit `[]` despite a
+            // text message containing explicit amounts. Give TEXT input one bounded format-repair attempt;
+            // it reuses the original evidence/prompt, stays unconstrained (schema grammars corrupt numeric
+            // values on these models), and caps output so a failed repair cannot turn into another 512-token
+            // runaway. Image inference is intentionally not doubled here unless the app explicitly declared
+            // the bounded field-pass pipeline above.
+            if (candidates === undefined && !hasImageSource && hasTextInput) {
+                const repair = await infer({
+                    modelId: input.modelId,
+                    prompt: `${prompt}\n\nJSON FORMAT CORRECTION:\nYour previous response did not contain a parseable action. Return ONLY valid JSON: one object for one action, or an array with one object per action. Follow every original extraction rule, include only fields supported by the message, and include every required field that the message supports. Do not include analysis, prose, markdown fences, or an empty array.`,
+                    responseMode: "json",
+                    maxTokens: 256,
+                });
+                if (repair.kind === "unavailable") {
+                    return { kind: "unavailable", reason: repair.reason };
+                }
+                if (repair.kind === "error") return { kind: "error", error: repair.error };
+                extractionRaw = repair.text;
+                candidates = parseExtractionList(repair.text);
+            }
         }
     }
     if (candidates === undefined) {
@@ -2854,6 +3103,7 @@ export interface AiAppManifestWire {
     name: string;
     description: string;
     icon_url?: string;
+    app_canister_id?: string;
     consumer_public_key: string;
     // serde(default) on-chain: registrations that predate per-user keys omit it (=== false).
     per_user_keys?: boolean;
@@ -3015,6 +3265,7 @@ export function aiAppManifestFromWire(m: AiAppManifestWire): AiAppManifest {
         name: m.name,
         description: m.description,
         iconUrl: m.icon_url,
+        appCanisterId: m.app_canister_id,
         consumerPublicKey: m.consumer_public_key,
         perUserKeys: m.per_user_keys,
         actions: m.actions.map(aiActionDefinitionFromWire),

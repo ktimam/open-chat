@@ -1,4 +1,5 @@
 import type { BlobReference, MessageContent } from "@client";
+import { isExactConfiguredLocalStorageBlob } from "./configuredLocalBlobUrl";
 
 export const MAX_AI_IMAGE_DOWNLOAD_BYTES = 5 * 1024 * 1024;
 const IMAGE_FETCH_TIMEOUT_MS = 8_000;
@@ -24,32 +25,16 @@ function isLoopback(hostname: string): boolean {
     return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1";
 }
 
-function isExactLocalStorageBlob(url: string, ref: BlobReference | undefined): boolean {
-    if (ref === undefined) return false;
-    try {
-        const parsed = new URL(url);
-        return (
-            parsed.protocol === "http:" &&
-            parsed.port === "8080" &&
-            parsed.hostname.toLowerCase() === `${ref.canisterId.toLowerCase()}.raw.localhost` &&
-            parsed.pathname === `/blobs/${ref.blobId}` &&
-            parsed.search === "" &&
-            parsed.hash === ""
-        );
-    } catch {
-        return false;
-    }
-}
-
 function remoteHttpsCannotFetchLocalBlob(
     url: string,
     page: ImagePageLocation | undefined,
     ref: BlobReference | undefined,
+    blobUrlPattern: string | undefined,
 ): boolean {
     return (
         page?.protocol === "https:" &&
         !isLoopback(page.hostname) &&
-        isExactLocalStorageBlob(url, ref)
+        isExactConfiguredLocalStorageBlob(url, ref, blobUrlPattern)
     );
 }
 
@@ -122,6 +107,7 @@ export async function localImageBytes(
     page: ImagePageLocation | undefined = typeof window === "undefined"
         ? undefined
         : window.location,
+    blobUrlPattern: string | undefined = import.meta.env.OC_BLOB_URL_PATTERN,
 ): Promise<Uint8Array | undefined> {
     if (content.kind !== "image_content") return undefined;
     const inMemory = safeBytes(content.blobData);
@@ -130,7 +116,12 @@ export async function localImageBytes(
     const ref = content.blobReference;
     if (
         content.blobUrl !== undefined &&
-        !remoteHttpsCannotFetchLocalBlob(content.blobUrl, page, content.blobReference)
+        !remoteHttpsCannotFetchLocalBlob(
+            content.blobUrl,
+            page,
+            content.blobReference,
+            blobUrlPattern,
+        )
     ) {
         const fetched = await fetchBoundedImage(content.blobUrl);
         if (fetched !== undefined) return fetched;

@@ -54,6 +54,27 @@ describe("proposal progress copy", () => {
             "aiApps.autoPropose.readingImage",
         );
     });
+
+    it.each([
+        ["image", "aiApps.autoPropose.processingImage"],
+        ["text", "aiApps.autoPropose.processingPrompt"],
+    ] as const)("maps all-WebGPU %s inference progress", (stage, expected) => {
+        expect(
+            autoProposeBusyI18nKey("attached", true, "generating", true, {
+                stage,
+                phase: "inference",
+            }),
+        ).toBe(expected);
+    });
+
+    it("maps all-WebGPU session loading before inference", () => {
+        expect(
+            autoProposeBusyI18nKey("attached", true, "generating", true, {
+                stage: "image",
+                phase: "loading",
+            }),
+        ).toBe("aiApps.autoPropose.loadingModel");
+    });
 });
 
 vi.mock("./privateMatchSurface", () => ({

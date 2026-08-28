@@ -80,3 +80,33 @@ describe("opaque per-chat launch-token client plumbing", () => {
         expect(mapper).not.toContain("sessionStorage");
     });
 });
+
+describe("privacy-safe card-provenance failure plumbing", () => {
+    it("keeps offline and transport failures distinct across the agent and browser client", () => {
+        const shared = source("../openchat-shared/src/domain/worker.ts");
+        const agent = source("../openchat-agent/src/services/openchatAgent.ts");
+        const client = source("../openchat-client/src/openchat.ts");
+
+        expect(shared).toContain(
+            "T extends CreateAiAppCardProvenance ? AiAppCardProvenanceResult",
+        );
+        expect(agent).toContain(
+            'if (offline()) return Promise.resolve({ kind: "offline" });',
+        );
+        expect(client).toContain('.catch(() => ({ kind: "transport_error" }));');
+    });
+
+    it("does not attach private details to any provenance failure category", () => {
+        const domain = source("../openchat-shared/src/domain/aiAction.ts");
+        for (const kind of [
+            "app_unavailable",
+            "invalid_request",
+            "backend_error",
+            "malformed_success",
+            "transport_error",
+            "offline",
+        ]) {
+            expect(domain).toContain(`{ kind: "${kind}" }`);
+        }
+    });
+});

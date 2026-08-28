@@ -54,7 +54,7 @@ describe("embedded app surface isolation", () => {
         }
     });
 
-    it("auto-renders only fully mapped trusted cards with compact registered-URL chrome", () => {
+    it("auto-renders only fully reconstructed trusted cards with compact registered-URL chrome", () => {
         const card = readFileSync(appPath("src/components/home/ActionCardContent.svelte"), "utf8");
         const compact = card.replace(/\s+/g, " ");
         expect(card).not.toContain("Load app card");
@@ -66,8 +66,9 @@ describe("embedded app surface isolation", () => {
         expect(card).toContain("isMultiEntrySummaryRows(content.rows)");
         expect(card).toContain("completelyReverseMapRows(content.rows, opening.labelToField)");
         expect(compact).toContain(
-            "isMultiEntrySummaryRows(content.rows) || completelyReverseMapRows(content.rows, opening.labelToField) === undefined",
+            "const mappedPayload = isMultiEntrySummaryRows(content.rows) ? completelyReverseMapMultiRows(content.rows, opening.labelToField) : completelyReverseMapRows(content.rows, opening.labelToField);",
         );
+        expect(compact).toContain("if (!hasDecodedPayload && mappedPayload === undefined)");
         expect(card).toContain("credentiallessSupported = supportsCredentiallessIframe()");
         expect(compact).toContain(
             "if (credentiallessSupported) { loadRequested = true; resetFrameSession(); }",
@@ -90,8 +91,11 @@ describe("embedded app surface isolation", () => {
         expect(card).toContain('sandbox="allow-scripts"');
         expect(card).toContain('referrerpolicy="no-referrer"');
         expect(card).not.toContain('sandbox="allow-scripts allow-same-origin"');
-        expect(card.replace(/\s+/g, " ")).toContain(
-            'isCardBridgeEventForFrame(event, iframeEl.contentWindow, "null", frameNonce)',
+        const compact = card.replace(/\s+/g, " ");
+        expect(compact).toContain("const frame = iframeEl; const target = frame?.contentWindow;");
+        expect(compact).toContain("iframeEl !== frame ||");
+        expect(compact).toContain(
+            'isCardBridgeEventForFrame(event, target, "null", frameNonce)',
         );
         expect(card).toContain("onload={onIframeLoad}");
         expect(card).toContain("import.meta.env.DEV");
@@ -178,6 +182,8 @@ describe("embedded app surface isolation", () => {
                 new RegExp('localOnlyAiAppCardFlag\\(\\s*"' + flag + '"\\s*,?\\s*\\)'),
             );
         }
+        expect(rollup).toContain("resolveLocalDevAllowedHost(");
+        expect(rollup).toContain('"import.meta.env.OC_DEV_ALLOWED_HOST": localOnlyDevAllowedHost');
     });
 
     it("keeps capabilities/final grants out of URLs, storage, logs, and unrelated frames", () => {

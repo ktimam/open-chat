@@ -11,6 +11,8 @@ const REF: BlobReference = {
     blobId: 42n,
 };
 const LOCAL_URL = `http://${REF.canisterId}.raw.localhost:8080/blobs/${REF.blobId}`;
+const LOCAL_PATTERN = "http://{canisterId}.raw.localhost:8080/{blobType}";
+const NON_DEFAULT_PORT_PATTERN = "http://{canisterId}.raw.localhost:4943/{blobType}";
 
 afterEach(() => {
     vi.useRealTimers();
@@ -55,10 +57,33 @@ describe("localImageBytes", () => {
         const loader = vi.fn(async () => bytes);
 
         await expect(
-            localImageBytes(image({ blobUrl: LOCAL_URL, blobReference: REF }), loader, {
-                protocol: "https:",
-                hostname: "openchat-dev.example.ts.net",
-            }),
+            localImageBytes(
+                image({ blobUrl: LOCAL_URL, blobReference: REF }),
+                loader,
+                {
+                    protocol: "https:",
+                    hostname: "openchat-dev.example.ts.net",
+                },
+                LOCAL_PATTERN,
+            ),
+        ).resolves.toEqual(bytes);
+        expect(fetchSpy).not.toHaveBeenCalled();
+        expect(loader).toHaveBeenCalledWith(REF, MAX_AI_IMAGE_DOWNLOAD_BYTES);
+    });
+
+    it("skips the configured non-default local gateway port on remote HTTPS", async () => {
+        const url = `http://${REF.canisterId}.raw.localhost:4943/blobs/${REF.blobId}`;
+        const bytes = new Uint8Array([14, 15]);
+        const fetchSpy = vi.spyOn(globalThis, "fetch");
+        const loader = vi.fn(async () => bytes);
+
+        await expect(
+            localImageBytes(
+                image({ blobUrl: url, blobReference: REF }),
+                loader,
+                { protocol: "https:", hostname: "openchat-dev.example.ts.net" },
+                NON_DEFAULT_PORT_PATTERN,
+            ),
         ).resolves.toEqual(bytes);
         expect(fetchSpy).not.toHaveBeenCalled();
         expect(loader).toHaveBeenCalledWith(REF, MAX_AI_IMAGE_DOWNLOAD_BYTES);
@@ -82,10 +107,15 @@ describe("localImageBytes", () => {
         vi.useFakeTimers();
         const fetchSpy = vi.spyOn(globalThis, "fetch");
         const loader = vi.fn(() => new Promise<Uint8Array | undefined>(() => undefined));
-        const pending = localImageBytes(image({ blobUrl: LOCAL_URL, blobReference: REF }), loader, {
-            protocol: "https:",
-            hostname: "openchat-dev.example.ts.net",
-        });
+        const pending = localImageBytes(
+            image({ blobUrl: LOCAL_URL, blobReference: REF }),
+            loader,
+            {
+                protocol: "https:",
+                hostname: "openchat-dev.example.ts.net",
+            },
+            LOCAL_PATTERN,
+        );
 
         await vi.advanceTimersByTimeAsync(AGENT_IMAGE_FETCH_TIMEOUT_MS);
         await expect(pending).resolves.toBeUndefined();

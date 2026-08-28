@@ -115,7 +115,7 @@ fn c2c_claim_ai_app_link_code_impl(args: Args, state: &mut RuntimeState) -> Resp
     if let Err(error) = state
         .data
         .ai_app_user_keys
-        .set_canonical(link.user_id, link.app_id, public_key)
+        .claim_canonical(link.user_id, link.app_id, public_key)
     {
         restore_link_code(&args.code, &link, now, state);
         InvalidRequest(error.message())

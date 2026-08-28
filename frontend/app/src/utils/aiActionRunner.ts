@@ -35,6 +35,7 @@ import {
 } from "../stores/browserImageActionMode";
 import { appContentAttestationAvailable } from "./aiActionAvailability";
 import { isDirectChatCardApp, loadDirectChatAiApps } from "./aiAppDirectChat";
+import type { AiAppReconnectCompletion, AiAppReconnectRequest } from "./aiAppReconnect";
 import { cardSurfaceOpening } from "./aiAppSurfaces";
 import {
     extractLocalAction,
@@ -64,6 +65,16 @@ const GPU_ONLY_IMAGE_UNAVAILABLE_MESSAGE =
     "Accelerated image inference is unavailable for the selected model in this browser. The local reader is disabled.";
 const LOCAL_VERIFICATION_FAILED_MESSAGE =
     "The model result could not be verified against the image. No action was created.";
+const PROVENANCE_FAILURE_MESSAGES = {
+    invalid_request:
+        "The app rejected this card's verified content. No action was posted; refresh OpenChat and retry.",
+    backend_error: "The card verification service failed. Please retry in a moment.",
+    malformed_success:
+        "OpenChat received an invalid card verification response. No action was posted; please retry.",
+    transport_error:
+        "OpenChat could not reach the card verification service. Check your connection and retry.",
+    offline: "OpenChat is offline. Reconnect, then retry the action.",
+} as const;
 const REQUIRED_VERIFIED_IMAGE_FIELDS = ["amount", "currency", "kind", "direction"] as const;
 const PRIVATE_VERIFICATION_MODEL_ID = "qwen3-vl-2b-instruct-q4";
 
@@ -133,6 +144,9 @@ export interface AiActionCandidate {
     app: AiAppRegistration;
     action: AiActionDefinition;
     recipientKey: string;
+    // Present for a per-user-key app. It is caller-local proposal metadata only and is never added
+    // to the posted card; recovery uses it to verify that a freshly resolved binding epoch advanced.
+    recipientKeyVersion?: bigint;
     // Legacy sender-routing fields retained for wire compatibility. Current canisters ignore these
     // and resolve recipients/inbox from the vouched manifest and authoritative membership at confirm.
     additionalRecipientKeys?: string[];
@@ -185,7 +199,10 @@ export type ProposeResult =
     | { kind: "link_required"; app: AiAppRegistration }
     // Enabled apps exist, but starting a proposal would create a card that cannot safely complete.
     // This is decided before local inference, provenance minting, or posting.
-    | { kind: "actions_unavailable"; unavailable: AiActionUnavailable[] };
+    | { kind: "actions_unavailable"; unavailable: AiActionUnavailable[] }
+    // The app declined provenance for the exact card. This may be a stale app connection, but the
+    // backend deliberately does not reveal which verification predicate failed.
+    | ({ kind: "app_connection_unavailable" } & AiAppReconnectRequest);
 
 // Caller-local progress for one proposal. It is intentionally not a global store because several
 // message components may be alive concurrently.
@@ -219,8 +236,9 @@ function unavailableReasonForApp(
     // A card with no app inbox can be proposed but can never deliver a confirmed action. Reject it
     // before spending model work or asking the user to confirm a doomed operation.
     if ((app.manifest.inboxCanisterId?.trim().length ?? 0) === 0) return "missing_inbox_route";
-    // Temporary global kill-switch: app_verified currently attests coordinates only. Until the
-    // backend can mint app_content_verified for the full canonical card, no new proposal is usable.
+    // Release brake for builds that have not explicitly enabled the complete app-card attestation
+    // path. Enabled builds still obtain exact app-authored title/rows/payload provenance below;
+    // this preflight only prevents them from spending model work when that path is switched off.
     if (!appContentAttestationAvailable()) return "content_attestation_unavailable";
     return undefined;
 }
@@ -236,11 +254,13 @@ export async function resolveCandidates(
     let enabledApps: AiAppRegistration[];
     let directExactAppIds: ReadonlySet<number> | undefined;
     let myKeys: Map<number, string>;
+    let myKeyVersions: Map<number, bigint>;
 
     if (chatId.kind === "direct_chat") {
         const direct = await loadDirectChatAiApps(client);
         directExactAppIds = direct.exactAppIds;
         myKeys = new Map(direct.connectedKeys);
+        myKeyVersions = new Map(direct.connectedKeyVersions);
         enabledApps = direct.apps
             .filter(
                 (app) =>
@@ -259,6 +279,7 @@ export async function resolveCandidates(
             .filter((app) => enabled.has(app.id))
             .slice(0, MAX_AI_ACTION_ENABLED_APPS);
         myKeys = new Map<number, string>();
+        myKeyVersions = new Map<number, bigint>();
     } else {
         return { candidates: [], linkRequired: [], unavailable: [] };
     }
@@ -282,6 +303,7 @@ export async function resolveCandidates(
     ) {
         for (const key of await client.myAiAppKeys()) {
             myKeys.set(key.appId, key.publicKey);
+            myKeyVersions.set(key.appId, key.keyVersion);
         }
     }
 
@@ -301,6 +323,7 @@ export async function resolveCandidates(
                     app,
                     action,
                     recipientKey: myKey,
+                    recipientKeyVersion: myKeyVersions.get(app.id),
                     inboxCanisterId: app.manifest.inboxCanisterId,
                 });
             }
@@ -372,6 +395,7 @@ export async function contentToInput(
     content: MessageContent,
     client?: Pick<OpenChat, "downloadPublicBlob">,
     page?: ImagePageLocation,
+    blobUrlPattern?: string,
 ): Promise<{ text?: string; image?: Uint8Array } | undefined> {
     if (content.kind === "text_content") {
         return { text: content.text };
@@ -383,6 +407,7 @@ export async function contentToInput(
                 ? undefined
                 : (ref, maxBytes) => client.downloadPublicBlob(ref, maxBytes),
             page,
+            blobUrlPattern,
         );
         if (image !== undefined) return { image, text: content.caption };
     }
@@ -567,8 +592,12 @@ async function runDefinition(
     if (input === undefined) return { kind: "unsupported_content" };
     const verifyBrowserImageWithLocal =
         !isNativeClient() && input.image !== undefined && browserUsesModelWithLocalVerification();
+    // Pin the browser selection once for the complete action. A declarative image action may use
+    // several sequential focused passes; never merge outputs from two models if the user changes
+    // the global selection while those passes are running.
+    const selectedBrowserModelId = !isNativeClient() ? webModelCatalogId() : undefined;
     const privateVerificationModelId = verifyBrowserImageWithLocal
-        ? webModelCatalogId()
+        ? selectedBrowserModelId
         : undefined;
 
     let browserModelImageEvidence: BrowserModelImageEvidence | undefined;
@@ -591,7 +620,7 @@ async function runDefinition(
         browserModelImageEvidence = undefined;
         const result = await runAiAction(
             def,
-            input,
+            { ...input, modelId: selectedBrowserModelId },
             recipientKey,
             inferWithPhase,
             inboxCanisterId,
@@ -878,7 +907,7 @@ async function postCard(
             confirmPayload: result.card.confirmPayload?.slice(),
         };
         onPhase?.("attesting");
-        const provenance = await client.createAiAppCardProvenance(
+        const provenanceResult = await client.createAiAppCardProvenance(
             appId,
             appRevision,
             result.card.actionId,
@@ -890,13 +919,27 @@ async function postCard(
         if (stillCurrent?.() === false) {
             return { kind: "error", error: "suggestion context changed" };
         }
-        if (provenance === undefined || provenance.expiresAt <= BigInt(Date.now())) {
+        if (provenanceResult.kind === "app_unavailable") {
             return {
-                kind: "error",
-                error: "the app is unavailable or the card could not be verified",
+                kind: "app_connection_unavailable",
+                appId,
+                appRevision,
+                actionId: result.card.actionId,
             };
         }
-        const vouchedCard = { ...result.card, appProvenance: provenance.provenance };
+        if (provenanceResult.kind !== "success") {
+            return {
+                kind: "error",
+                error: PROVENANCE_FAILURE_MESSAGES[provenanceResult.kind],
+            };
+        }
+        if (provenanceResult.expiresAt <= BigInt(Date.now())) {
+            return {
+                kind: "error",
+                error: "Card verification expired before the card could be posted. Please retry.",
+            };
+        }
+        const vouchedCard = { ...result.card, appProvenance: provenanceResult.provenance };
         // NB: this does NOT throw on failure — it RESOLVES with a failure response (e.g. the chat is
         // missing from the store, or the send is throttled), which is the other half of why a failed
         // propose was completely silent. Inspect the response, don't just await it.
@@ -1026,7 +1069,9 @@ export function proposeFailureMessage(result: ProposeResult): string | undefined
     switch (result.kind) {
         case "ready":
         case "ready_multi":
+        case "app_connection_unavailable":
             // The card is already in the chat, waiting to be confirmed.
+            // Or the flow is opening a recovery surface for the exact failed app coordinates.
             return undefined;
         case "choose":
         case "link_required":
@@ -1035,7 +1080,7 @@ export function proposeFailureMessage(result: ProposeResult): string | undefined
         case "actions_unavailable": {
             const reasons = new Set(result.unavailable.map((entry) => entry.reason));
             if (reasons.has("content_attestation_unavailable")) {
-                return "New app actions are temporarily unavailable until OpenChat can verify the complete app-authored card content.";
+                return "New app actions are not enabled for this OpenChat build.";
             }
             if (reasons.has("missing_card_surface")) {
                 return "This app action is unavailable because the app has no valid secure in-chat card surface.";
@@ -1116,7 +1161,29 @@ export interface ProposeFlowDeps {
     ) => AiActionCandidate | undefined | Promise<AiActionCandidate | undefined>;
     // Run the one-time pairing surface for a per-user-keys app; true once the key is registered.
     linkApp: (app: AiAppRegistration) => boolean | Promise<boolean>;
+    // Offer an explicit reconnect surface for the exact app revision that declined provenance.
+    // AppUnavailable is ambiguous. Opening/closing this surface returns undefined; only an explicit
+    // code claim followed by Check connection returns a completion proof.
+    promptReconnect: (
+        target: AiAppReconnectRequest,
+    ) => AiAppReconnectCompletion | undefined | Promise<AiAppReconnectCompletion | undefined>;
+    // After explicit completion, re-resolve only the immutable current coordinates captured by the
+    // recovery resolver. This must never fall back to a chooser or a different app/action.
+    resolveReconnectCandidate: (
+        target: AiAppReconnectRequest,
+    ) => Promise<SuggestedAiActionResolution>;
     toast: (message: string) => void;
+}
+
+function candidateHasCoordinates(
+    candidate: AiActionCandidate,
+    coordinates: AiActionCoordinates,
+): boolean {
+    return (
+        candidate.app.id === coordinates.appId &&
+        candidate.app.updated === coordinates.appRevision &&
+        candidate.action.name === coordinates.actionId
+    );
 }
 
 /**
@@ -1132,34 +1199,34 @@ export interface ProposeFlowDeps {
  * `unavailable`, and after an `unavailable` from a CHOSEN candidate (the branch the mobile tree
  * once returned from in silence, leaving a user with two candidates and no model a dead button).
  */
-async function runProposeFlowInternal(deps: ProposeFlowDeps): Promise<void> {
+async function runProposeFlowInternal(deps: ProposeFlowDeps): Promise<ProposeFlowOutcome> {
     const stale = (): boolean => {
         if (deps.stillCurrent?.() !== false) return false;
         deps.toast("aiApps.autoPropose.stale");
         return true;
     };
-    if (stale()) return;
+    if (stale()) return "retryable";
     const blocker = await deps.preflight();
-    if (stale()) return;
+    if (stale()) return "retryable";
     if (blocker !== undefined) {
         const message = proposeFailureMessage(blocker);
         if (message !== undefined) deps.toast(message);
-        return;
+        return "retryable";
     }
 
     let suggestedCandidate: AiActionCandidate | undefined;
     if (deps.resolveSuggestedCandidate !== undefined) {
         let resolved = await deps.resolveSuggestedCandidate();
-        if (stale()) return;
+        if (stale()) return "retryable";
         if (resolved.kind === "link_required") {
-            if (!(await deps.linkApp(resolved.app))) return;
-            if (stale()) return;
+            if (!(await deps.linkApp(resolved.app))) return "retryable";
+            if (stale()) return "retryable";
             resolved = await deps.resolveSuggestedCandidate();
-            if (stale()) return;
+            if (stale()) return "retryable";
         }
         if (resolved.kind !== "candidate") {
             deps.toast("aiApps.autoPropose.stale");
-            return;
+            return "retryable";
         }
         suggestedCandidate = resolved.candidate;
     }
@@ -1167,12 +1234,12 @@ async function runProposeFlowInternal(deps: ProposeFlowDeps): Promise<void> {
     // The prompt dependency is inert for real users. Check it before model availability so an
     // explicitly isolated QC tab can override a model without unloading or mutating model state.
     const prompted = deps.promptForExtraction();
-    if (stale()) return;
-    if (prompted === MANUAL_EXTRACTION_CANCELLED) return;
+    if (stale()) return "retryable";
+    if (prompted === MANUAL_EXTRACTION_CANCELLED) return "retryable";
     const extraction = prompted;
     if (extraction === undefined && deps.requiresModelReadiness()) {
         const readiness = await deps.canInfer();
-        if (stale()) return;
+        if (stale()) return "retryable";
         const available = typeof readiness === "boolean" ? readiness : readiness.available;
         if (!available) {
             deps.toast(
@@ -1180,16 +1247,16 @@ async function runProposeFlowInternal(deps: ProposeFlowDeps): Promise<void> {
                     ? NO_MODEL_MESSAGE
                     : (readiness.reason ?? NO_MODEL_MESSAGE),
             );
-            return;
+            return "retryable";
         }
     }
 
-    if (stale()) return;
+    if (stale()) return "retryable";
     let result =
         suggestedCandidate === undefined
             ? await deps.propose(extraction)
             : await deps.proposeCandidate(suggestedCandidate, extraction);
-    if (stale()) return;
+    if (stale()) return "retryable";
 
     // A candidate-specific run is not allowed to escape into a generic chooser/link flow even if a
     // malformed/runtime implementation returns an impossible union member.
@@ -1198,58 +1265,123 @@ async function runProposeFlowInternal(deps: ProposeFlowDeps): Promise<void> {
         (result.kind === "choose" || result.kind === "link_required")
     ) {
         deps.toast("aiApps.autoPropose.stale");
-        return;
+        return "retryable";
     }
 
     if (result.kind === "link_required") {
         // The pairing surface reports its own outcome, and dismissing it is a deliberate "not now" —
         // the one early exit that is honest without a toast.
-        if (!(await deps.linkApp(result.app))) return;
-        if (stale()) return;
+        if (!(await deps.linkApp(result.app))) return "retryable";
+        if (stale()) return "retryable";
         result = await deps.propose(extraction);
-        if (stale()) return;
+        if (stale()) return "retryable";
     }
 
     if (result.kind === "choose") {
         const candidate = await deps.chooseCandidate(result.candidates);
-        if (stale()) return;
+        if (stale()) return "retryable";
         // Backing out of the chooser is a choice, not a failure.
-        if (candidate === undefined) return;
+        if (candidate === undefined) return "retryable";
         result = await deps.proposeCandidate(candidate, extraction);
-        if (stale()) return;
+        if (stale()) return "retryable";
         if (result.kind === "unavailable") {
             const retry = deps.promptForExtraction();
-            if (retry === MANUAL_EXTRACTION_CANCELLED) return;
+            if (retry === MANUAL_EXTRACTION_CANCELLED) return "retryable";
             // NB: no early return when the seam gives nothing — falling through to the message below
             // IS the fix. Returning here is what left the mobile chooser path mute.
             if (retry !== undefined) {
                 result = await deps.proposeCandidate(candidate, retry);
-                if (stale()) return;
+                if (stale()) return "retryable";
             }
         }
     } else if (result.kind === "unavailable") {
         const retry = deps.promptForExtraction();
-        if (retry === MANUAL_EXTRACTION_CANCELLED) return;
+        if (retry === MANUAL_EXTRACTION_CANCELLED) return "retryable";
         if (retry !== undefined) {
             result =
                 suggestedCandidate === undefined
                     ? await deps.propose(retry)
                     : await deps.proposeCandidate(suggestedCandidate, retry);
-            if (stale()) return;
+            if (stale()) return "retryable";
+        }
+    }
+
+    if (result.kind === "app_connection_unavailable") {
+        const failedCoordinates: AiAppReconnectRequest = {
+            appId: result.appId,
+            appRevision: result.appRevision,
+            actionId: result.actionId,
+        };
+        const completion = await deps.promptReconnect(failedCoordinates);
+        if (stale()) return "retryable";
+        if (completion === undefined) return "retryable";
+
+        const retryCoordinates = completion.retryCoordinates;
+        if (
+            completion.previousKeyVersion < 0n ||
+            retryCoordinates.appId !== failedCoordinates.appId ||
+            retryCoordinates.actionId !== failedCoordinates.actionId ||
+            retryCoordinates.appRevision < failedCoordinates.appRevision ||
+            (suggestedCandidate !== undefined &&
+                !candidateHasCoordinates(suggestedCandidate, retryCoordinates))
+        ) {
+            deps.toast(
+                suggestedCandidate === undefined
+                    ? "aiApps.reconnectChanged"
+                    : "aiApps.autoPropose.stale",
+            );
+            return "retryable";
+        }
+
+        const refreshed = await deps.resolveReconnectCandidate(retryCoordinates);
+        if (stale()) return "retryable";
+        if (
+            refreshed.kind !== "candidate" ||
+            !candidateHasCoordinates(refreshed.candidate, retryCoordinates)
+        ) {
+            deps.toast(
+                suggestedCandidate === undefined
+                    ? "aiApps.reconnectChanged"
+                    : "aiApps.autoPropose.stale",
+            );
+            return "retryable";
+        }
+        if (
+            refreshed.candidate.recipientKeyVersion === undefined ||
+            refreshed.candidate.recipientKeyVersion <= completion.previousKeyVersion
+        ) {
+            deps.toast("aiApps.reconnectNotAdvanced");
+            return "retryable";
+        }
+
+        // Exactly one retry. Another ambiguous AppUnavailable result is reported and never opens a
+        // second modal or loops. The user still confirms the resulting card before any app action.
+        result = await deps.proposeCandidate(refreshed.candidate, extraction);
+        if (stale()) return "retryable";
+        if (result.kind === "app_connection_unavailable") {
+            deps.toast("aiApps.reconnectStillUnavailable");
+            return "retryable";
+        }
+        if (result.kind === "choose" || result.kind === "link_required") {
+            deps.toast("aiApps.reconnectChanged");
+            return "retryable";
         }
     }
 
     const message = proposeFailureMessage(result);
     if (message !== undefined) deps.toast(message);
+    // `ready` and `ready_multi` are returned only after proposeAndPost has successfully sent the
+    // vouched card. Every other handled outcome leaves an auto-propose suggestion available for an
+    // exact retry, including user cancellation and model/provenance/transport failures.
+    return result.kind === "ready" || result.kind === "ready_multi" ? "posted" : "retryable";
 }
 
 /** Failure boundary shared by both render trees so an awaited resolver/model rejection is spoken. */
-export type ProposeFlowOutcome = "consumed" | "retryable";
+export type ProposeFlowOutcome = "posted" | "retryable";
 
 export async function runProposeFlow(deps: ProposeFlowDeps): Promise<ProposeFlowOutcome> {
     try {
-        await runProposeFlowInternal(deps);
-        return "consumed";
+        return await runProposeFlowInternal(deps);
     } catch {
         deps.toast(
             deps.stillCurrent?.() === false

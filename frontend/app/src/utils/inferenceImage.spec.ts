@@ -118,6 +118,7 @@ describe("prepareImageForBrowserInference", () => {
             new Uint8Array([4, 5]),
         );
         expect(createImageBitmap).toHaveBeenCalledWith(expect.any(Blob), {
+            imageOrientation: "from-image",
             resizeWidth: 627,
             resizeHeight: 418,
             resizeQuality: "high",

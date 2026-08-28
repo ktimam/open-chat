@@ -73,6 +73,7 @@ import { MAX_AI_ACTION_CANDIDATES } from "@shared";
 import type { MessageContext, OpenChat } from "@client";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { browserImageActionMode } from "../stores/browserImageActionMode";
 import {
     buildManualCard,
     MANUAL_EXTRACTION_CANCELLED,
@@ -669,7 +670,7 @@ function directChatClient({
 }: {
     directory?: AiAppRegistration[];
     exact?: AiAppRegistration[];
-    keys?: { appId: number; publicKey: string }[];
+    keys?: { appId: number; publicKey: string; keyVersion?: bigint }[];
 } = {}) {
     const calls = {
         exploreAiApps: vi.fn(async () => ({ matches: directory, total: directory.length })),
@@ -689,7 +690,7 @@ describe("direct-chat per-user-key candidate resolution", () => {
         const { client, calls } = directChatClient({
             directory: [],
             exact: [APP],
-            keys: [{ appId: APP.id, publicKey: FATHER_KEY }],
+            keys: [{ appId: APP.id, publicKey: FATHER_KEY, keyVersion: 4n }],
         });
 
         await expect(resolveCandidates(client, DIRECT_CHAT)).resolves.toEqual({
@@ -698,6 +699,7 @@ describe("direct-chat per-user-key candidate resolution", () => {
                     app: APP,
                     action: DEF,
                     recipientKey: FATHER_KEY,
+                    recipientKeyVersion: 4n,
                     inboxCanisterId: APP.manifest.inboxCanisterId,
                 },
             ],
@@ -797,7 +799,12 @@ describe("direct-chat per-user-key candidate resolution", () => {
     });
 });
 
-const CANDIDATE: AiActionCandidate = { app: APP, action: DEF, recipientKey: RECIPIENT };
+const CANDIDATE: AiActionCandidate = {
+    app: APP,
+    action: DEF,
+    recipientKey: RECIPIENT,
+    recipientKeyVersion: 4n,
+};
 
 describe("candidate aggregate bounds", () => {
     it("accepts 31 and 32 actions, and caps a legacy 33-action manifest at 32", async () => {
@@ -935,6 +942,7 @@ describe("provenance before posting", () => {
     it("binds provenance and the send to the same preallocated message id", async () => {
         const provenance = new Uint8Array([1, 2, 3]);
         const createAiAppCardProvenance = vi.fn(async () => ({
+            kind: "success" as const,
             provenance,
             expiresAt: BigInt(Date.now() + 60_000),
         }));
@@ -1027,6 +1035,7 @@ describe("provenance before posting", () => {
         };
         const provenance = new Uint8Array([4, 5, 6]);
         const createAiAppCardProvenance = vi.fn(async () => ({
+            kind: "success" as const,
             provenance,
             expiresAt: BigInt(Date.now() + 60_000),
         }));
@@ -1088,6 +1097,90 @@ describe("provenance before posting", () => {
         expect(sendCalls[0][1]).toMatchObject({ appProvenance: provenance });
     });
 
+    it("pins one browser model id across a compact primary and focused image pass", async () => {
+        const imageDef: AiActionDefinition = {
+            ...DEF,
+            acceptsImage: true,
+            responseSchema: {
+                type: "object",
+                "x-openchat-image-prompt-template": {
+                    version: 1,
+                    template: "Read amount only.",
+                    includeRuleGuidance: false,
+                },
+                "x-openchat-image-focused-passes": {
+                    version: 1,
+                    primaryFields: ["amount"],
+                    primaryMaxTokens: 32,
+                    passes: [
+                        {
+                            template: "Read date only.",
+                            fields: ["date"],
+                            includeRuleGuidance: false,
+                            includeMessage: false,
+                            maxTokens: 24,
+                        },
+                    ],
+                },
+                properties: {
+                    amount: { type: "number", minimum: 0.005 },
+                    date: { type: "string", format: "date" },
+                },
+                required: ["amount"],
+            },
+        };
+        const imageCandidate: AiActionCandidate = {
+            app: { ...APP, manifest: { ...APP.manifest, actions: [imageDef] } },
+            action: imageDef,
+            recipientKey: RECIPIENT,
+        };
+        const client = {
+            createAiAppCardProvenance: vi.fn(async () => ({
+                kind: "success" as const,
+                provenance: new Uint8Array([9]),
+                expiresAt: BigInt(Date.now() + 60_000),
+            })),
+            sendMessageWithContent: vi.fn(async () => ({ kind: "success" })),
+        } as unknown as OpenChat;
+        const imageContent = {
+            kind: "image_content",
+            blobData: new Uint8Array([1, 2, 3]),
+        } as unknown as Parameters<typeof proposeAndPostCandidate>[2];
+        inferenceCapabilityMock.mockReturnValue({
+            available: true,
+            // This shared capability field still describes the native catalog runtime family; the
+            // browser's Transformers/WebGPU backend is asserted through the web-runtime mocks below.
+            runtimesSupported: ["llama-cpp"],
+            selectedModalities: ["image"],
+            selectedModelId: "qwen3-vl-2b-instruct-q4",
+        });
+        let call = 0;
+        inferOnDeviceMock.mockImplementation(async () => {
+            call += 1;
+            if (call === 1) {
+                selectedWebModelIdMock.mockReturnValue("another-model");
+                return { kind: "ok", text: '{"amount":12900}' };
+            }
+            return { kind: "ok", text: '{"date":"2026-08-14"}' };
+        });
+
+        browserImageActionMode.set("model_only");
+        const result = await proposeAndPostCandidate(
+            client,
+            messageContext,
+            imageContent,
+            imageCandidate,
+        );
+        browserImageActionMode.set("model_with_local_verification");
+
+        expect(result.kind).toBe("ready");
+        expect(inferOnDeviceMock).toHaveBeenCalledTimes(2);
+        expect(inferOnDeviceMock.mock.calls.map(([request]) => request.modelId)).toEqual([
+            "qwen3-vl-2b-instruct-q4",
+            "qwen3-vl-2b-instruct-q4",
+        ]);
+    });
+
     it("applies the selected image modality to manual debug extraction before provenance", async () => {
         const imageDef: AiActionDefinition = {
             ...DEF,
@@ -1115,6 +1208,7 @@ describe("provenance before posting", () => {
             recipientKey: RECIPIENT,
         };
         const createAiAppCardProvenance = vi.fn(async () => ({
+            kind: "success" as const,
             provenance: new Uint8Array([7]),
             expiresAt: BigInt(Date.now() + 60_000),
         }));
@@ -1150,6 +1244,7 @@ describe("provenance before posting", () => {
 
     it("binds a thread card to Some(threadRootMessageIndex)", async () => {
         const createAiAppCardProvenance = vi.fn(async () => ({
+            kind: "success" as const,
             provenance: new Uint8Array([9]),
             expiresAt: BigInt(Date.now() + 60_000),
         }));
@@ -1163,16 +1258,79 @@ describe("provenance before posting", () => {
         expect(provenanceCalls[0][6]).toBe(42);
     });
 
-    it("fails closed and never sends when authoritative provenance is unavailable", async () => {
+    it.each([
+        [
+            "invalid request",
+            { kind: "invalid_request" } as const,
+            "rejected this card's verified content",
+        ],
+        [
+            "backend error",
+            { kind: "backend_error" } as const,
+            "card verification service failed",
+        ],
+        [
+            "malformed success",
+            { kind: "malformed_success" } as const,
+            "invalid card verification response",
+        ],
+        [
+            "transport error",
+            { kind: "transport_error" } as const,
+            "could not reach the card verification service",
+        ],
+        ["offline", { kind: "offline" } as const, "OpenChat is offline"],
+    ])("fails closed with an actionable %s category", async (_label, provenanceResult, message) => {
         const sendMessageWithContent = vi.fn();
         const client = {
-            createAiAppCardProvenance: vi.fn(async () => undefined),
+            createAiAppCardProvenance: vi.fn(async () => provenanceResult),
             sendMessageWithContent,
         } as unknown as OpenChat;
         const result = await proposeAndPostCandidate(client, messageContext, content, CANDIDATE, {
             amount: 20,
         });
-        expect(result.kind).toBe("error");
+        expect(result).toMatchObject({ kind: "error" });
+        if (result.kind === "error") expect(result.error).toContain(message);
+        expect(sendMessageWithContent).not.toHaveBeenCalled();
+    });
+
+    it("returns typed app coordinates when provenance reports app_unavailable", async () => {
+        const sendMessageWithContent = vi.fn();
+        const client = {
+            createAiAppCardProvenance: vi.fn(async () => ({
+                kind: "app_unavailable" as const,
+            })),
+            sendMessageWithContent,
+        } as unknown as OpenChat;
+
+        await expect(
+            proposeAndPostCandidate(client, messageContext, content, CANDIDATE, { amount: 20 }),
+        ).resolves.toEqual({
+            kind: "app_connection_unavailable",
+            appId: APP.id,
+            appRevision: APP.updated,
+            actionId: DEF.name,
+        });
+        expect(sendMessageWithContent).not.toHaveBeenCalled();
+    });
+
+    it("fails closed with a distinct retry message when provenance has already expired", async () => {
+        const sendMessageWithContent = vi.fn();
+        const client = {
+            createAiAppCardProvenance: vi.fn(async () => ({
+                kind: "success" as const,
+                provenance: new Uint8Array([9]),
+                expiresAt: BigInt(Date.now()),
+            })),
+            sendMessageWithContent,
+        } as unknown as OpenChat;
+        const result = await proposeAndPostCandidate(client, messageContext, content, CANDIDATE, {
+            amount: 20,
+        });
+        expect(result).toMatchObject({
+            kind: "error",
+            error: "Card verification expired before the card could be posted. Please retry.",
+        });
         expect(sendMessageWithContent).not.toHaveBeenCalled();
     });
 
@@ -1199,6 +1357,7 @@ describe("provenance before posting", () => {
     it("mints one provenance and sends one exact card for a multi-entry extraction", async () => {
         const provenance = new Uint8Array([7, 8, 9]);
         const createAiAppCardProvenance = vi.fn(async () => ({
+            kind: "success" as const,
             provenance,
             expiresAt: BigInt(Date.now() + 60_000),
         }));
@@ -1247,7 +1406,9 @@ describe("provenance before posting", () => {
     });
 
     it("sends no partial multi-entry card when exact provenance is unavailable", async () => {
-        const createAiAppCardProvenance = vi.fn(async () => undefined);
+        const createAiAppCardProvenance = vi.fn(async () => ({
+            kind: "app_unavailable" as const,
+        }));
         const sendMessageWithContent = vi.fn();
         const client = {
             createAiAppCardProvenance,
@@ -1259,7 +1420,12 @@ describe("provenance before posting", () => {
             { amount: 30 },
         ]);
 
-        expect(result.kind).toBe("error");
+        expect(result).toEqual({
+            kind: "app_connection_unavailable",
+            appId: APP.id,
+            appRevision: APP.updated,
+            actionId: DEF.name,
+        });
         expect(createAiAppCardProvenance).toHaveBeenCalledTimes(1);
         expect(sendMessageWithContent).not.toHaveBeenCalled();
     });
@@ -1277,6 +1443,12 @@ const EVERY_RESULT: Record<ProposeResult["kind"], ProposeResult> = {
     actions_unavailable: {
         kind: "actions_unavailable",
         unavailable: [{ app: APP, reason: "content_attestation_unavailable" }],
+    },
+    app_connection_unavailable: {
+        kind: "app_connection_unavailable",
+        appId: APP.id,
+        appRevision: APP.updated,
+        actionId: DEF.name,
     },
     no_actions: { kind: "no_actions" },
     unavailable: { kind: "unavailable", reason: "no model" },
@@ -1297,7 +1469,13 @@ const EVERY_RESULT: Record<ProposeResult["kind"], ProposeResult> = {
 
 // The four kinds the FLOW is still working on (a card was posted, or a chooser/consent surface is
 // up). Everything else is a dead end and must explain itself.
-const SILENT_KINDS = ["ready", "ready_multi", "choose", "link_required"] as const;
+const SILENT_KINDS = [
+    "ready",
+    "ready_multi",
+    "choose",
+    "link_required",
+    "app_connection_unavailable",
+] as const;
 
 describe("proposeFailureMessage", () => {
     for (const [kind, result] of Object.entries(EVERY_RESULT) as [
@@ -1405,6 +1583,11 @@ function flowDeps(overrides: Partial<ProposeFlowDeps> = {}): {
         proposeCandidate: resolving({ kind: "ready", card: CARD, extracted: {} }),
         chooseCandidate: vi.fn(async () => undefined),
         linkApp: vi.fn(async () => false),
+        promptReconnect: vi.fn(async () => undefined),
+        resolveReconnectCandidate: vi.fn(async () => ({
+            kind: "candidate" as const,
+            candidate: CANDIDATE,
+        })),
         toast: vi.fn(),
         ...overrides,
     };
@@ -1448,9 +1631,194 @@ describe("runProposeFlow", () => {
         expect(deps.toast).toHaveBeenCalledWith("aiApps.autoPropose.failed");
         expect(deps.proposeCandidate).not.toHaveBeenCalled();
 
-        await expect(runProposeFlow(deps)).resolves.toBe("consumed");
+        await expect(runProposeFlow(deps)).resolves.toBe("posted");
         expect(deps.proposeCandidate).toHaveBeenCalledWith(CANDIDATE, undefined);
         expect(deps.propose).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        [
+            "card verification",
+            {
+                kind: "error",
+                error: "the app is unavailable or the card could not be verified",
+            } satisfies ProposeResult,
+        ],
+        [
+            "model availability",
+            { kind: "unavailable", reason: "no runtime" } satisfies ProposeResult,
+        ],
+    ])("keeps an exact suggestion retryable after a handled %s failure", async (_label, result) => {
+        const deps = flowDeps({
+            resolveSuggestedCandidate: vi.fn(async () => ({
+                kind: "candidate" as const,
+                candidate: CANDIDATE,
+            })),
+            proposeCandidate: resolving(result),
+        });
+
+        await expect(runProposeFlow(deps)).resolves.toBe("retryable");
+        expect(deps.toast).toHaveBeenCalledOnce();
+    });
+
+    it("does not retry when the reconnect surface is dismissed without explicit completion", async () => {
+        const deps = flowDeps({
+            resolveSuggestedCandidate: vi.fn(async () => ({
+                kind: "candidate" as const,
+                candidate: CANDIDATE,
+            })),
+            proposeCandidate: resolving({
+                kind: "app_connection_unavailable",
+                appId: APP.id,
+                appRevision: APP.updated,
+                actionId: DEF.name,
+            }),
+        });
+
+        await expect(runProposeFlow(deps)).resolves.toBe("retryable");
+        expect(deps.promptReconnect).toHaveBeenCalledOnce();
+        expect(deps.promptReconnect).toHaveBeenCalledWith({
+            appId: APP.id,
+            appRevision: APP.updated,
+            actionId: DEF.name,
+        });
+        expect(deps.proposeCandidate).toHaveBeenCalledOnce();
+        expect(deps.resolveReconnectCandidate).not.toHaveBeenCalled();
+        expect(deps.propose).not.toHaveBeenCalled();
+        expect(deps.toast).not.toHaveBeenCalled();
+    });
+
+    it("re-resolves and retries exactly once after the user explicitly completes reconnect", async () => {
+        const refreshedCandidate = { ...CANDIDATE, recipientKeyVersion: 5n };
+        const proposeCandidate = vi
+            .fn()
+            .mockResolvedValueOnce({
+                kind: "app_connection_unavailable",
+                appId: APP.id,
+                appRevision: APP.updated,
+                actionId: DEF.name,
+            })
+            .mockResolvedValueOnce({ kind: "ready", card: CARD, extracted: { amount: 20 } });
+        const deps = flowDeps({
+            canInfer: vi.fn(() => false),
+            promptForExtraction: vi.fn(() => ({ amount: 20 })),
+            resolveSuggestedCandidate: vi.fn(async () => ({
+                kind: "candidate" as const,
+                candidate: CANDIDATE,
+            })),
+            proposeCandidate,
+            promptReconnect: vi.fn(async () => ({
+                retryCoordinates: {
+                    appId: APP.id,
+                    appRevision: APP.updated,
+                    actionId: DEF.name,
+                },
+                previousKeyVersion: 4n,
+            })),
+            resolveReconnectCandidate: vi.fn(async () => ({
+                kind: "candidate" as const,
+                candidate: refreshedCandidate,
+            })),
+        });
+
+        await expect(runProposeFlow(deps)).resolves.toBe("posted");
+        expect(deps.promptReconnect).toHaveBeenCalledOnce();
+        expect(deps.resolveReconnectCandidate).toHaveBeenCalledOnce();
+        expect(proposeCandidate.mock.calls).toEqual([
+            [CANDIDATE, { amount: 20 }],
+            [refreshedCandidate, { amount: 20 }],
+        ]);
+        expect(deps.toast).not.toHaveBeenCalled();
+    });
+
+    it("never loops or opens a second modal when the one retry remains unavailable", async () => {
+        const reconnectResult = {
+            kind: "app_connection_unavailable" as const,
+            appId: APP.id,
+            appRevision: APP.updated,
+            actionId: DEF.name,
+        };
+        const refreshedCandidate = { ...CANDIDATE, recipientKeyVersion: 5n };
+        const deps = flowDeps({
+            resolveSuggestedCandidate: vi.fn(async () => ({
+                kind: "candidate" as const,
+                candidate: CANDIDATE,
+            })),
+            proposeCandidate: vi.fn(async () => reconnectResult),
+            promptReconnect: vi.fn(async () => ({
+                retryCoordinates: {
+                    appId: APP.id,
+                    appRevision: APP.updated,
+                    actionId: DEF.name,
+                },
+                previousKeyVersion: 4n,
+            })),
+            resolveReconnectCandidate: vi.fn(async () => ({
+                kind: "candidate" as const,
+                candidate: refreshedCandidate,
+            })),
+        });
+
+        await expect(runProposeFlow(deps)).resolves.toBe("retryable");
+        expect(deps.promptReconnect).toHaveBeenCalledOnce();
+        expect(deps.resolveReconnectCandidate).toHaveBeenCalledOnce();
+        expect(deps.proposeCandidate).toHaveBeenCalledTimes(2);
+        expect(deps.toast).toHaveBeenCalledWith("aiApps.reconnectStillUnavailable");
+    });
+
+    it("refuses retry when Check connection did not produce a higher binding epoch", async () => {
+        const deps = flowDeps({
+            resolveSuggestedCandidate: vi.fn(async () => ({
+                kind: "candidate" as const,
+                candidate: CANDIDATE,
+            })),
+            proposeCandidate: resolving({
+                kind: "app_connection_unavailable",
+                appId: APP.id,
+                appRevision: APP.updated,
+                actionId: DEF.name,
+            }),
+            promptReconnect: vi.fn(async () => ({
+                retryCoordinates: {
+                    appId: APP.id,
+                    appRevision: APP.updated,
+                    actionId: DEF.name,
+                },
+                previousKeyVersion: 4n,
+            })),
+            resolveReconnectCandidate: vi.fn(async () => ({
+                kind: "candidate" as const,
+                candidate: CANDIDATE,
+            })),
+        });
+
+        await expect(runProposeFlow(deps)).resolves.toBe("retryable");
+        expect(deps.proposeCandidate).toHaveBeenCalledOnce();
+        expect(deps.toast).toHaveBeenCalledWith("aiApps.reconnectNotAdvanced");
+    });
+
+    it("keeps the suggestion retryable when the reconnect surface cannot be opened", async () => {
+        const deps = flowDeps({
+            resolveSuggestedCandidate: vi.fn(async () => ({
+                kind: "candidate" as const,
+                candidate: CANDIDATE,
+            })),
+            proposeCandidate: resolving({
+                kind: "app_connection_unavailable",
+                appId: APP.id,
+                appRevision: APP.updated,
+                actionId: DEF.name,
+            }),
+            promptReconnect: vi.fn(async () => {
+                throw new Error("directory lookup failed");
+            }),
+        });
+
+        await expect(runProposeFlow(deps)).resolves.toBe("retryable");
+        expect(deps.promptReconnect).toHaveBeenCalledOnce();
+        expect(deps.proposeCandidate).toHaveBeenCalledOnce();
+        expect(deps.propose).not.toHaveBeenCalled();
+        expect(deps.toast).toHaveBeenCalledWith("aiApps.autoPropose.failed");
     });
 
     it("runs only the exact re-resolved suggested candidate and never the generic chooser", async () => {
@@ -1562,7 +1930,9 @@ describe("runProposeFlow", () => {
             canInfer: vi.fn(() => false),
         });
         await runProposeFlow(deps);
-        expect(deps.toast).toHaveBeenCalledWith(expect.stringContaining("temporarily unavailable"));
+        expect(deps.toast).toHaveBeenCalledWith(
+            "New app actions are not enabled for this OpenChat build.",
+        );
         expect(deps.canInfer).not.toHaveBeenCalled();
         expect(deps.promptForExtraction).not.toHaveBeenCalled();
         expect(deps.propose).not.toHaveBeenCalled();
@@ -1651,7 +2021,7 @@ describe("runProposeFlow", () => {
                 (): ManualExtractionPromptResult => MANUAL_EXTRACTION_CANCELLED,
             ),
         });
-        await runProposeFlow(deps);
+        await expect(runProposeFlow(deps)).resolves.toBe("retryable");
         expect(deps.propose).not.toHaveBeenCalled();
         expect(deps.canInfer).not.toHaveBeenCalled();
         expect(deps.toast).not.toHaveBeenCalled();
@@ -1718,7 +2088,7 @@ describe("runProposeFlow", () => {
             propose: resolving({ kind: "choose", candidates: [CANDIDATE] }),
             chooseCandidate: vi.fn(async () => undefined),
         });
-        await runProposeFlow(deps);
+        await expect(runProposeFlow(deps)).resolves.toBe("retryable");
         expect(deps.proposeCandidate).not.toHaveBeenCalled();
         expect(deps.toast).not.toHaveBeenCalled();
     });
@@ -1768,6 +2138,8 @@ describe("both ChatMessage trees run the SHARED propose flow", () => {
             expect(src).toContain("parseManualExtractionPrompt(");
             expect(src).toContain("{#each autoProposeSuggestionList as suggestion");
             expect(src).toContain("autoProposeSuggestionActionKey(suggestion)");
+            expect(src).toContain('outcome === "posted"');
+            expect(src).not.toContain('outcome === "consumed"');
             expect(src).toContain("disabled={proposing}");
             expect(src).toContain("busy={");
             expect(src).toContain("proposing && !activeAutoProposeSuggestionVisible");

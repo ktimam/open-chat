@@ -1,4 +1,27 @@
-import type { OpenChat } from "@client";
+import type { AiAppUserKey, OpenChat } from "@client";
+
+export interface AiAppConnectionSnapshot {
+    publicKey: string;
+    keyVersion: bigint;
+}
+
+/**
+ * First-time Connect accepts any non-empty key so it remains compatible with a rolling UserIndex
+ * deployment. Recovery is stricter: only a higher authoritative epoch proves that the user asked
+ * the exact app to claim a fresh code. The PEM may remain identical.
+ */
+export function aiAppLinkCompleted(
+    keys: readonly AiAppUserKey[],
+    appId: number,
+    previousConnection?: AiAppConnectionSnapshot,
+): boolean {
+    return keys.some(
+        (key) =>
+            key.appId === appId &&
+            key.publicKey.trim().length > 0 &&
+            (previousConnection === undefined || key.keyVersion > previousConnection.keyVersion),
+    );
+}
 
 /**
  * Cancel an explicit app-link consent attempt. Waiting for an in-flight create request closes the

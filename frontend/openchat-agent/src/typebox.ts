@@ -6362,6 +6362,10 @@ export type AiAppUserKey = Static<typeof AiAppUserKey>;
 export const AiAppUserKey = Type.Object({
     app_id: Type.Number(),
     public_key: Type.String(),
+    // Optional only for a rolling frontend-before-canister deployment. The domain mapper converts
+    // an old response to epoch zero, which can display an existing connection but cannot prove a
+    // provenance-recovery reconnect completed.
+    key_version: Type.Optional(Type.BigInt()),
 });
 
 export type AiAppMemberKey = Static<typeof AiAppMemberKey>;

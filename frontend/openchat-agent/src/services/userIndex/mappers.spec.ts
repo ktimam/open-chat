@@ -4,6 +4,7 @@ import {
     apiAiAppCardContentV1,
     createAiAppCardProvenanceResponse,
     myAiAppsResponse,
+    myAiAppKeysResponse,
 } from "./mappers";
 
 describe("apiAiAppCardContentV1", () => {
@@ -51,7 +52,7 @@ describe("createAiAppCardProvenanceResponse", () => {
             createAiAppCardProvenanceResponse({
                 Success: { provenance, expires_at: 123n },
             }),
-        ).toEqual({ provenance, expiresAt: 123n });
+        ).toEqual({ kind: "success", provenance, expiresAt: 123n });
     });
 
     it.each([31, 33])("fails closed for a %i-byte provenance proof", (size) => {
@@ -59,7 +60,23 @@ describe("createAiAppCardProvenanceResponse", () => {
             createAiAppCardProvenanceResponse({
                 Success: { provenance: new Uint8Array(size), expires_at: 123n },
             }),
-        ).toBeUndefined();
+        ).toEqual({ kind: "malformed_success" });
+    });
+
+    it.each([
+        ["app unavailable", "AppUnavailable", { kind: "app_unavailable" }],
+        ["invalid request", { InvalidRequest: "private backend detail" }, { kind: "invalid_request" }],
+        [
+            "backend error",
+            { Error: [1, "private backend detail"] },
+            { kind: "backend_error" },
+        ],
+    ] as const)("maps %s to a detail-free category", (_label, response, expected) => {
+        expect(
+            createAiAppCardProvenanceResponse(
+                response as Parameters<typeof createAiAppCardProvenanceResponse>[0],
+            ),
+        ).toEqual(expected);
     });
 });
 
@@ -77,5 +94,25 @@ describe("bounded AI-app response failures", () => {
         expect(() => myAiAppsResponse({ ResponseTooLarge: 1_200_000 })).toThrow(
             /1200000 encoded bytes/,
         );
+    });
+});
+
+describe("myAiAppKeysResponse", () => {
+    it("keeps a legacy key visible but marks its reconnect epoch unknown", () => {
+        expect(
+            myAiAppKeysResponse({
+                Success: { keys: [{ app_id: 7, public_key: "legacy-pem" }] },
+            }),
+        ).toEqual([{ appId: 7, publicKey: "legacy-pem", keyVersion: 0n }]);
+    });
+
+    it("maps the authoritative binding epoch from an upgraded UserIndex", () => {
+        expect(
+            myAiAppKeysResponse({
+                Success: {
+                    keys: [{ app_id: 7, public_key: "durable-pem", key_version: 5n }],
+                },
+            }),
+        ).toEqual([{ appId: 7, publicKey: "durable-pem", keyVersion: 5n }]);
     });
 });

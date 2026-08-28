@@ -41,6 +41,7 @@
     import Refresh from "svelte-material-icons/Refresh.svelte";
     import Reply from "svelte-material-icons/Reply.svelte";
     import ReplyOutline from "svelte-material-icons/ReplyOutline.svelte";
+    import Robot from "svelte-material-icons/RobotOutline.svelte";
     import ShareOutline from "svelte-material-icons/ShareOutline.svelte";
     import ShareIcon from "svelte-material-icons/ShareVariant.svelte";
     import SquareEditOutline from "svelte-material-icons/SquareEditOutline.svelte";
@@ -105,6 +106,7 @@
         onDeleteFailedMessage?: () => void;
         onOptionSelected?: () => void;
         onRunAiAction?: () => void;
+        onProcessWithAi?: () => void;
     }
 
     let {
@@ -149,6 +151,7 @@
         onDeleteMessage,
         onOptionSelected,
         onRunAiAction,
+        onProcessWithAi,
     }: Props = $props();
 
     let mediaUrl = $derived(urlForMediaContent(msg.content));
@@ -446,7 +449,8 @@
         | "revealDeletedMessage"
         | "undeleteMessage"
         | "retryMessage"
-        | "proposeAiAction";
+        | "proposeAiAction"
+        | "processWithAi";
 
     function menuItemTitleToKey(menuItemTitle: MenuItemTitle): string {
         switch (menuItemTitle) {
@@ -504,6 +508,8 @@
                 return "retryMessage";
             case "proposeAiAction":
                 return "aiActions.propose";
+            case "processWithAi":
+                return "aiActions.processWithAi";
         }
     }
 
@@ -590,6 +596,9 @@
             case "proposeAiAction":
                 onRunAiAction?.();
                 break;
+            case "processWithAi":
+                onProcessWithAi?.();
+                break;
         }
     }
 </script>
@@ -649,6 +658,8 @@
         <Refresh {color} {size} />
     {:else if title === "proposeAiAction"}
         <AutoFix {color} {size} />
+    {:else if title === "processWithAi"}
+        <Robot {color} {size} />
     {/if}
 {/snippet}
 
@@ -769,6 +780,11 @@
 <!-- Propose an AI action from this message -->
 {#if onRunAiAction !== undefined && confirmed && !inert && !failed}
     {@render renderMenuItem("proposeAiAction")}
+{/if}
+
+<!-- Process this message with the user's selected local AI model. -->
+{#if onProcessWithAi !== undefined && confirmed && !inert && !failed}
+    {@render renderMenuItem("processWithAi")}
 {/if}
 
 <!-- Block sender -->

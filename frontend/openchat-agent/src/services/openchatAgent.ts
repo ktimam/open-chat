@@ -68,7 +68,7 @@ import type {
     AiAppPrivateMatchCapability,
     AiAppCardConfirmationGrant,
     AiAppCardContentV1,
-    AiAppCardProvenance,
+    AiAppCardProvenanceResult,
     ExploreAiAppsResponse,
     AiAppManifest,
     AiAppRegistration,
@@ -3961,8 +3961,8 @@ export class OpenChatAgent extends EventTarget {
         chatId: ChatIdentifier,
         messageId: bigint,
         threadRootMessageIndex: number | undefined,
-    ): Promise<AiAppCardProvenance | undefined> {
-        if (offline()) return Promise.resolve(undefined);
+    ): Promise<AiAppCardProvenanceResult> {
+        if (offline()) return Promise.resolve({ kind: "offline" });
         return this._userIndexClient.createAiAppCardProvenance(
             appId,
             appRevision,

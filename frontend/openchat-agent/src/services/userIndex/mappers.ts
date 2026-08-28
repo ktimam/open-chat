@@ -37,7 +37,7 @@ import type {
     AiActionRule,
     AiAppLinkCode,
     AiAppCardContentV1,
-    AiAppCardProvenance,
+    AiAppCardProvenanceResult,
     AiAppManifest,
     AiAppManifestWire,
     AiAppRegistration,
@@ -681,12 +681,16 @@ export function apiAiActionDefinition(def: AiActionDefinition): TAiActionDefinit
     };
 }
 
-// The manifest's principal-typed fields (inbox_canister_id) arrive as raw bytes off msgpack; decode
+// The manifest's principal-typed fields arrive as raw bytes off msgpack; decode
 // them to a text principal here — mirroring how `owner` is decoded — so the shared
 // aiAppManifestFromWire (which has no principal decoder) receives the AiAppManifestWire string shape.
 function aiAppManifestWithDecodedPrincipals(m: TAiAppManifest): AiAppManifestWire {
     return {
         ...m,
+        app_canister_id:
+            m.app_canister_id !== undefined
+                ? principalBytesToString(m.app_canister_id)
+                : undefined,
         inbox_canister_id:
             m.inbox_canister_id !== undefined
                 ? principalBytesToString(m.inbox_canister_id)
@@ -719,6 +723,9 @@ export function apiAiAppManifest(manifest: AiAppManifest): TAiAppManifest {
         name: manifest.name,
         description: manifest.description,
         icon_url: manifest.iconUrl,
+        app_canister_id: manifest.appCanisterId
+            ? principalStringToBytes(manifest.appCanisterId)
+            : undefined,
         inbox_canister_id: manifest.inboxCanisterId
             ? principalStringToBytes(manifest.inboxCanisterId)
             : undefined,
@@ -742,6 +749,7 @@ export function myAiAppKeysResponse(value: UserIndexMyAiAppKeysResponse): AiAppU
         return value.Success.keys.map((k) => ({
             appId: k.app_id,
             publicKey: k.public_key,
+            keyVersion: k.key_version ?? 0n,
         }));
     }
     throw new UnsupportedValueError("Unexpected MyAiAppKeysResponse type received", value);
@@ -887,11 +895,14 @@ export function apiAiAppCardContentV1(content: AiAppCardContentV1): {
 
 export function createAiAppCardProvenanceResponse(
     value: UserIndexCreateAiAppCardProvenanceResponse,
-): AiAppCardProvenance | undefined {
-    if (typeof value !== "object" || !("Success" in value)) return undefined;
+): AiAppCardProvenanceResult {
+    if (value === "AppUnavailable") return { kind: "app_unavailable" };
+    if ("InvalidRequest" in value) return { kind: "invalid_request" };
+    if ("Error" in value) return { kind: "backend_error" };
+
     const provenance = Uint8Array.from(value.Success.provenance);
-    if (provenance.byteLength !== 32) return undefined;
-    return { provenance, expiresAt: value.Success.expires_at };
+    if (provenance.byteLength !== 32) return { kind: "malformed_success" };
+    return { kind: "success", provenance, expiresAt: value.Success.expires_at };
 }
 
 // True only on Success — publishing the app succeeded. NotFound/NotAuthorised/Error -> false.

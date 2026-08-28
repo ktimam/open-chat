@@ -112,6 +112,7 @@ pub enum SetAiAppUserKeyError {
     GlobalByteLimitReached,
     MigrationInProgress,
     AppDeletionInProgress,
+    BindingVersionExhausted,
 }
 
 impl SetAiAppUserKeyError {
@@ -133,6 +134,9 @@ impl SetAiAppUserKeyError {
             }
             Self::MigrationInProgress => "AI-app key storage migration is in progress; retry shortly".to_string(),
             Self::AppDeletionInProgress => "AI-app key deletion is in progress".to_string(),
+            Self::BindingVersionExhausted => {
+                "AI-app key binding version is exhausted; the connection cannot be renewed".to_string()
+            }
         }
     }
 }
@@ -155,6 +159,31 @@ impl AiAppUserKeys {
         self.ensure_ready()?;
         if self.pending_app_deletions.contains(&app_id) {
             return Err(SetAiAppUserKeyError::AppDeletionInProgress);
+        }
+        self.insert_canonical(user_id, app_id, public_key)
+    }
+
+    /// Claiming a fresh app-authenticated link code is a new consent event, even if the app keeps
+    /// the same durable PEM. Advance the tuple's authoritative epoch so the client can distinguish
+    /// an explicitly completed reconnect from the already-present binding without timing guesses.
+    pub(crate) fn claim_canonical(
+        &mut self,
+        user_id: UserId,
+        app_id: AiAppId,
+        public_key: String,
+    ) -> Result<(), SetAiAppUserKeyError> {
+        self.ensure_ready()?;
+        if self.pending_app_deletions.contains(&app_id) {
+            return Err(SetAiAppUserKeyError::AppDeletionInProgress);
+        }
+        let location = (user_id, app_id);
+        let current_version = self.binding_versions.get(&location).copied().unwrap_or_default();
+        let next_version = current_version
+            .checked_add(1)
+            .ok_or(SetAiAppUserKeyError::BindingVersionExhausted)?;
+        if self.keys.get(&location) == Some(&public_key) {
+            self.binding_versions.insert(location, next_version);
+            return Ok(());
         }
         self.insert_canonical(user_id, app_id, public_key)
     }
@@ -374,6 +403,7 @@ impl AiAppUserKeys {
                 self.keys.get(&(user_id, *app_id)).map(|public_key| AiAppUserKey {
                     app_id: *app_id,
                     public_key: public_key.clone(),
+                    key_version: self.binding_versions.get(&(user_id, *app_id)).copied().unwrap_or_default(),
                 })
             })
             .collect();
@@ -836,6 +866,18 @@ mod tests {
         assert_eq!(restored.metrics().migration_dropped_keys, 1);
         assert_eq!(restored.keys_for_users(1, &[user(1)]).unwrap().len(), 1);
         assert!(restored.keys_for_users(2, &[user(2)]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn app_claim_rebind_advances_the_epoch_even_when_the_public_key_is_reused() {
+        let mut keys = AiAppUserKeys::default();
+        let public_key = key(77);
+        keys.claim_canonical(user(1), 7, public_key.clone()).unwrap();
+        assert_eq!(keys.binding_version(user(1), 7), Some(1));
+
+        keys.claim_canonical(user(1), 7, public_key).unwrap();
+        assert_eq!(keys.binding_version(user(1), 7), Some(2));
+        assert_eq!(keys.keys_for_user(user(1)).unwrap()[0].key_version, 2);
     }
 
     #[test]

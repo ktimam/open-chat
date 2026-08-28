@@ -1,4 +1,4 @@
-import { intrinsicOcrImageDimensions } from "./ocrImage";
+import { intrinsicImageDimensions } from "./imageDimensions";
 
 const MAX_INFERENCE_IMAGE_PIXELS = 256 * 1024;
 const MAX_INFERENCE_IMAGE_EDGE = 768;
@@ -144,6 +144,7 @@ async function encodeBitmap(bitmap: ImageBitmap, request: ResizeRequest): Promis
 async function canvasResize(bytes: Uint8Array, request: ResizeRequest): Promise<Uint8Array> {
     const bitmap = await awaitAbortable(
         createImageBitmap(new Blob([bytes.slice().buffer as ArrayBuffer]), {
+            imageOrientation: "from-image",
             resizeWidth: request.width,
             resizeHeight: request.height,
             resizeQuality: "high",
@@ -179,10 +180,10 @@ export async function prepareImageForBrowserInference(
     if (dimensions !== undefined && !validDimensions(dimensions)) {
         throw new Error("The image dimensions are unavailable for safe browser inference.");
     }
-    const intrinsicDimensions = intrinsicOcrImageDimensions(bytes);
+    const intrinsicDimensions = intrinsicImageDimensions(bytes);
     if (intrinsicDimensions === undefined) {
         throw new Error(
-            "The image dimensions could not be verified for safe browser inference. Try a JPEG or PNG image.",
+            "The image dimensions could not be verified for safe browser inference. Try a supported raster image.",
         );
     }
     if (!sourceDimensionsWithinBounds(intrinsicDimensions)) {

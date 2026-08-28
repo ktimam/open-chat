@@ -83,10 +83,13 @@ function stagedConstructSessionsSource(exported) {
     const {
       openchat_get_staged_external_data: _stagedExternalDataLoader,
       openchat_wait_for_staged_webgpu_queue: _waitForStagedWebGpuQueue,
+      openchat_with_staged_webgpu_release: _withStagedWebGpuRelease,
       ...cleanSessionOptions
     } = configuredSessionOptions;
     const cleanOptions =
-      _stagedExternalDataLoader === undefined && _waitForStagedWebGpuQueue === undefined
+      _stagedExternalDataLoader === undefined &&
+      _waitForStagedWebGpuQueue === undefined &&
+      _withStagedWebGpuRelease === undefined
         ? options
         : { ...options, session_options: cleanSessionOptions };
     const sessionLoadOptions =
@@ -177,7 +180,8 @@ function stagedConstructSessionsSource(exported) {
     nameKeys.every((name) => selected(options.device, name) === "webgpu") &&
     nameKeys.every((name) => selected(options.dtype, name) === "q4") &&
     typeof options.session_options?.openchat_get_staged_external_data === "function" &&
-    typeof options.session_options?.openchat_wait_for_staged_webgpu_queue === "function";
+    typeof options.session_options?.openchat_wait_for_staged_webgpu_queue === "function" &&
+    typeof options.session_options?.openchat_with_staged_webgpu_release === "function";
 
   if (stagedQwen) {
     console.info(${JSON.stringify(TRANSFORMERS_WEBGPU_STAGED_DECODER_MARKER)});
@@ -194,8 +198,14 @@ function stagedConstructSessionsSource(exported) {
         await options.session_options.openchat_get_staged_external_data("embed_tokens");
       initialEmbed = await createSession("embed_tokens", embedExternalData);
     } catch (error) {
-      try { await initialEmbed?.release?.(); } catch {}
-      try { await initialVision?.release?.(); } catch {}
+      try {
+        await options.session_options.openchat_with_staged_webgpu_release(
+          "prompt load failure",
+          async () => {
+            try { await initialEmbed?.release?.(); } finally { await initialVision?.release?.(); }
+          },
+        );
+      } catch {}
       throw error;
     }
 
@@ -353,12 +363,15 @@ function stagedConstructSessionsSource(exported) {
           if (vision === undefined) {
             throw new Error("The staged Qwen vision session is unavailable.");
           }
-          await vision.release?.();
-          delete sessions.vision_encoder;
-          await releaseInitialEmbed();
+          await options.session_options.openchat_with_staged_webgpu_release(
+            "prompt-to-decoder transition",
+            async () => {
+              await vision.release?.();
+              delete sessions.vision_encoder;
+              await releaseInitialEmbed();
+            },
+          );
           console.info(${JSON.stringify(TRANSFORMERS_WEBGPU_STAGED_DECODER_MARKER)});
-          // Give V8 an event-loop boundary after the large buffers become unreachable.
-          await new Promise((resolve) => setTimeout(resolve, 0));
           const decoderExternalData =
             await options.session_options.openchat_get_staged_external_data(
               "decoder_model_merged",

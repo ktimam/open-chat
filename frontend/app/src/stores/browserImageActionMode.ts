@@ -9,7 +9,7 @@ export type BrowserImageActionMode =
 // a user invocation choice, never an app capability grant. In local_reader_only mode image actions
 // may use only an app-declared source-grounded local reader; they never invoke the selected model.
 // model_only is the inverse hard boundary. The default asks the runner to reconcile a selected
-// experimental image model with independent local source reading; the runner owns that policy.
+// all-WebGPU image model with independent local source reading; the runner owns that policy.
 const STORAGE_KEY = "openchat_browser_image_action_mode";
 const LEGACY_LOCAL_READER_FIRST = "local_reader_first";
 

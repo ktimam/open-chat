@@ -34,8 +34,26 @@ import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 
-// TODO should this be a constant in a separate file?
-const val RP_ID = "oc.app"
+private const val DEFAULT_RP_ID = "oc.app"
+
+// Official builds get the default. Local/sideload builds inject a validated string resource from
+// OC_ANDROID_RP_ID so Android Credential Manager verifies the APK against the same private HTTPS
+// origin that serves the local OpenChat environment.
+private fun resolveRpId(activity: Activity): String {
+    val resourceId = activity.resources.getIdentifier(
+        "openchat_rp_id",
+        "string",
+        activity.packageName,
+    )
+    if (resourceId == 0) return DEFAULT_RP_ID
+    val configured = activity.getString(resourceId).trim().lowercase()
+    return if (configured.matches(Regex("^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$")) &&
+        configured.contains('.') && !configured.contains("..")) {
+        configured
+    } else {
+        DEFAULT_RP_ID
+    }
+}
 
  @InvokeArg
  class SignUpArgs {
@@ -49,6 +67,7 @@ class SignInArgs {
 
 class PasskeyAuth(private val activity: Activity) {
     private val credentialManager = CredentialManager.create(activity)
+    private val rpId = resolveRpId(activity)
 
     // Command for creating a passkey; prompts user for authentication, and
     // allows them to store the passkey in the device's secure storage.
@@ -85,7 +104,7 @@ class PasskeyAuth(private val activity: Activity) {
                     put("challenge", encodeBase64Url(challenge))
                     put("rp", JSONObject().apply {
                         put("name", "OpenChat")
-                        put("id", RP_ID)
+                        put("id", rpId)
                     })
                     put("user", JSONObject().apply {
                         put("id", userId)
@@ -220,7 +239,7 @@ class PasskeyAuth(private val activity: Activity) {
                 val requestJson = JSONObject().apply {
                     put("challenge", encodeBase64Url(args.challenge))
                     put("timeout", 60000)
-                    put("rpId", RP_ID)
+                    put("rpId", rpId)
                     put("allowCredentials", JSONArray()) // empty array
                     put("userVerification", "required")
                 }

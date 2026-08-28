@@ -40,6 +40,7 @@
     import Refresh from "svelte-material-icons/Refresh.svelte";
     import Reply from "svelte-material-icons/Reply.svelte";
     import ReplyOutline from "svelte-material-icons/ReplyOutline.svelte";
+    import Robot from "svelte-material-icons/RobotOutline.svelte";
     import ForwardIcon from "svelte-material-icons/Share.svelte";
     import ShareIcon from "svelte-material-icons/ShareVariant.svelte";
     import TranslateIcon from "svelte-material-icons/Translate.svelte";
@@ -105,6 +106,7 @@
         onReplyPrivately: () => void;
         onTipMessage: (ledger: string) => void;
         onRunAiAction?: () => void;
+        onProcessWithAi?: () => void;
     }
 
     let {
@@ -149,6 +151,7 @@
         onReplyPrivately,
         onTipMessage,
         onRunAiAction,
+        onProcessWithAi,
     }: Props = $props();
 
     let menuIconEl: MenuIcon | undefined;
@@ -611,6 +614,16 @@
                         {/snippet}
                         {#snippet text()}
                             <div><Translatable resourceKey={i18nKey("aiActions.propose")} /></div>
+                        {/snippet}
+                    </MenuItem>
+                {/if}
+                {#if onProcessWithAi !== undefined && confirmed && !inert && !failed}
+                    <MenuItem onclick={onProcessWithAi}>
+                        {#snippet icon()}
+                            <Robot size={$iconSize} color={"var(--icon-inverted-txt)"} />
+                        {/snippet}
+                        {#snippet text()}
+                            <div><Translatable resourceKey={i18nKey("aiActions.processWithAi")} /></div>
                         {/snippet}
                     </MenuItem>
                 {/if}

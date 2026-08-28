@@ -175,7 +175,7 @@ import {
     type AiAppPrivateMatchCapability,
     type AiAppCardConfirmationGrant,
     type AiAppCardContentV1,
-    type AiAppCardProvenance,
+    type AiAppCardProvenanceResult,
     type ExploreAiAppsResponse,
     type AiAppRegistration,
     type AiAppMemberKey,
@@ -445,6 +445,7 @@ import {
     setSoftDisabled,
     snsFunctionsStore,
     sortedCommunitiesStore,
+    startupErrorStore,
     storageStore,
     suspendedUserStore,
     swappableTokensStore,
@@ -695,8 +696,8 @@ export class OpenChat {
     currentAirdropChannel: AirdropChannelDetails | undefined = undefined;
 
     constructor(private config: OpenChatConfig) {
-        this.#worker = new WorkerAgent(config);
         this.#logger = config.logger;
+        this.#worker = new WorkerAgent(config, (error) => this.#handleStartupFailure(error));
 
         this.#mobileLayout = config.mobileLayout;
         this.#vapidPublicKey = config.vapidPublicKey;
@@ -723,9 +724,18 @@ export class OpenChat {
 
         this.#authClient
             .then((_) => this.#authIdentityStorage.getKeyAndChain())
-            .then((authIdentity) => this.#loadedAuthenticationIdentity(authIdentity, undefined));
+            .then((authIdentity) => this.#loadedAuthenticationIdentity(authIdentity, undefined))
+            .catch((error) => this.#handleStartupFailure(error));
 
         this.#setMinLogLevel((localStorage.getItem(configKeys.minLogLevel) ?? "warn") as LogLevel);
+    }
+
+    #handleStartupFailure(error: unknown): void {
+        if (startupErrorStore.value !== undefined) return;
+        this.#logger.error("OpenChat background worker failed", error);
+        startupErrorStore.set(
+            "OpenChat could not finish loading its background worker. Reload and try again.",
+        );
     }
 
     public get AuthPrincipal(): string {
@@ -833,6 +843,7 @@ export class OpenChat {
         authProvider: AuthProvider | undefined,
         registering: boolean = false,
     ) {
+        startupErrorStore.set(undefined);
         const anon = identityKeyAndChain === undefined;
         const identity = anon
             ? new AnonymousIdentity()
@@ -937,7 +948,8 @@ export class OpenChat {
                         .getKeyAndChain()
                         .then((identity) =>
                             this.#loadedAuthenticationIdentity(identity, authProvider),
-                        ),
+                        )
+                        .catch((error) => this.#handleStartupFailure(error)),
                 onError: (err) => {
                     this.updateIdentityState({ kind: "anon" });
                     console.warn("Login error from auth client: ", err);
@@ -7448,7 +7460,7 @@ export class OpenChat {
         chatId: ChatIdentifier,
         messageId: bigint,
         threadRootMessageIndex: number | undefined,
-    ): Promise<AiAppCardProvenance | undefined> {
+    ): Promise<AiAppCardProvenanceResult> {
         return this.#worker
             .send({
                 kind: "createAiAppCardProvenance",
@@ -7460,7 +7472,7 @@ export class OpenChat {
                 messageId,
                 threadRootMessageIndex,
             })
-            .catch(() => undefined);
+            .catch(() => ({ kind: "transport_error" }));
     }
 
     createAiAppCardCapability(

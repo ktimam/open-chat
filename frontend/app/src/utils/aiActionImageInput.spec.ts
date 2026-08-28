@@ -26,10 +26,15 @@ it("turns a settled local image reference into model bytes through the OpenChat 
     } as unknown as MessageContent;
 
     await expect(
-        contentToInput(content, { downloadPublicBlob } as never, {
-            protocol: "https:",
-            hostname: "openchat-dev.example.ts.net",
-        }),
+        contentToInput(
+            content,
+            { downloadPublicBlob } as never,
+            {
+                protocol: "https:",
+                hostname: "openchat-dev.example.ts.net",
+            },
+            "http://{canisterId}.raw.localhost:8080/{blobType}",
+        ),
     ).resolves.toEqual({ image: bytes, text: "Reservation receipt" });
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(downloadPublicBlob).toHaveBeenCalledWith({ canisterId, blobId: 55n }, 5 * 1024 * 1024);

@@ -17,13 +17,13 @@
         {
             value: "model_with_local_verification",
             title: "Model + local verification",
-            detail: "Local OCR reads the image first and remains authoritative. After a complete read, the selected Qwen3-VL 2B decoder checks bounded private OCR text with the vision projector omitted. Requires the exact Qwen3-VL 2B model to be selected; Qwen3.5, another model, or no model stops the action before inference. A mismatch or incomplete OCR stops the proposal. If the decoder is unavailable, fails, or returns no complete candidate, only the complete OCR card is returned.",
+            detail: "Local OCR reads the image first and remains authoritative. After a complete read, the selected Qwen3-VL 2B all-WebGPU model checks only bounded private OCR evidence; it does not receive the original image in this mode. A mismatch or incomplete read stops the proposal. If model verification cannot finish, only the complete source-grounded OCR card is returned.",
             recommended: true,
         },
         {
             value: "model_only",
             title: "Model only",
-            detail: "Experimental and unverified: the selected model receives the original image directly and may invent values. The local reader/OCR is never invoked.",
+            detail: "The selected Qwen3-VL 2B all-WebGPU model receives the original image directly. The local reader/OCR is never invoked in this mode.",
         },
         {
             value: "local_reader_only",
@@ -37,7 +37,7 @@
         readinessError = "";
         browserImageActionMode.set(mode);
         // Verification must not pre-load the image runtime: OCR may stop the request before any
-        // model work, and a complete result uses a weights-only decoder without the projector.
+        // model work, and model verification receives only bounded private text evidence.
         if (mode !== "model_only") return;
 
         changing = true;

@@ -3,6 +3,8 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { compileString } from "sass";
 import { describe, expect, test } from "vitest";
+import { resolveDevAllowedHost, resolveLocalDevAllowedHost } from "../devAllowedHost.mjs";
+import { resolveDevHmrConfig } from "../devHmr";
 import { resolveDevPort } from "../devPort";
 
 const appRoot = existsSync(resolve(process.cwd(), "app", "index.html"))
@@ -65,7 +67,67 @@ describe("application bootstrap security", () => {
         }
         expect(viteConfig).toContain("resolveDevPort(process.env.OC_DEV_PORT)");
         expect(viteConfig).toMatch(/server:\s*\{[\s\S]*?\bport,[\s\S]*?strictPort/);
-        expect(viteConfig).toMatch(/hmr:\s*\{[\s\S]*?port,[\s\S]*?clientPort:\s*port/);
+        expect(resolveDevHmrConfig(5003, undefined)).toEqual({
+            protocol: "ws",
+            port: 5003,
+            clientPort: 5003,
+        });
+        expect(resolveDevHmrConfig(5003, "openchat-dev.example.ts.net")).toEqual({
+            protocol: "wss",
+            host: "openchat-dev.example.ts.net",
+            port: 5003,
+            clientPort: 443,
+        });
+        expect(viteConfig).toContain("resolveDevHmrConfig(port, devAllowedHost)");
+        expect(viteConfig).toContain("hmr: devHmr");
         expect(viteConfig).toContain("strictPort: true");
+    });
+
+    test("allows only one explicitly configured development proxy hostname", () => {
+        expect(resolveDevAllowedHost(undefined)).toBeUndefined();
+        expect(resolveDevAllowedHost("openchat-dev.example.ts.net")).toBe(
+            "openchat-dev.example.ts.net",
+        );
+        expect(resolveDevAllowedHost("OPENCHAT-DEV.EXAMPLE.TS.NET")).toBe(
+            "openchat-dev.example.ts.net",
+        );
+        expect(
+            resolveLocalDevAllowedHost("development", "local", "OPENCHAT-DEV.EXAMPLE.TS.NET"),
+        ).toBe("openchat-dev.example.ts.net");
+        expect(
+            resolveLocalDevAllowedHost("production", "local", "openchat-dev.example.ts.net"),
+        ).toBeUndefined();
+        expect(
+            resolveLocalDevAllowedHost("development", "ic", "openchat-dev.example.ts.net"),
+        ).toBeUndefined();
+        for (const invalid of [
+            " openchat-dev.example.ts.net",
+            "https://openchat-dev.example.ts.net",
+            "openchat-dev.example.ts.net:443",
+            "openchat-dev.example.ts.net/path",
+            ".example.ts.net",
+            "example..ts.net",
+        ]) {
+            expect(() => resolveDevAllowedHost(invalid)).toThrow("OC_DEV_ALLOWED_HOST");
+        }
+        expect(viteConfig).toContain("resolveLocalDevAllowedHost(");
+        expect(viteConfig).toContain('"import.meta.env.OC_DEV_ALLOWED_HOST"');
+        expect(viteConfig).toContain('allowedHosts: ["host.docker.internal"');
+        expect(viteConfig).not.toContain("allowedHosts: true");
+    });
+
+    test("keeps mobile icons on the application's initialized Svelte runtime", () => {
+        expect(viteConfig).toMatch(
+            /optimizeDeps:\s*\{[\s\S]*?exclude:\s*\["svelte-material-icons"\]/,
+        );
+    });
+
+    test("rewrites the external development host before proxying replica API calls", () => {
+        expect(viteConfig).toMatch(
+            /"\/api":\s*\{[\s\S]*?target:\s*`http:\/\/\$\{dfxJson\.networks\.local\.bind\}`,[\s\S]*?changeOrigin:\s*true/,
+        );
+        expect(viteConfig).toContain('proxyRequest.removeHeader("x-forwarded-host")');
+        expect(viteConfig).toContain('proxyRequest.removeHeader("x-forwarded-port")');
+        expect(viteConfig).toContain('proxyRequest.removeHeader("forwarded")');
     });
 });

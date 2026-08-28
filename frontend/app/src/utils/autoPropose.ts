@@ -93,8 +93,20 @@ export function autoProposeBusyI18nKey(
     browserRuntime: boolean,
     proposalPhase?: ProposalPhase,
     modelProgressRelevant = true,
+    generation?: {
+        stage: "text" | "image";
+        phase: "loading" | "downloading" | "inference";
+    },
 ): string {
     if (browserRuntime && modelProgressRelevant) {
+        if (generation?.phase === "inference") {
+            return generation.stage === "image"
+                ? "aiApps.autoPropose.processingImage"
+                : "aiApps.autoPropose.processingPrompt";
+        }
+        if (generation?.phase === "loading" || generation?.phase === "downloading") {
+            return "aiApps.autoPropose.loadingModel";
+        }
         if (status === "verifying") return "aiApps.autoPropose.verifyingModel";
         if (status === "loading") return "aiApps.autoPropose.loadingModel";
     }

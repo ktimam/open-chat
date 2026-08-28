@@ -175,7 +175,7 @@ jobs:
                   # Ensure these are passed if needed, though the gradle file uses the debug fallback we set up
                   ANDROID_KEY_STORE_FILE: ${{ env.ANDROID_KEY_STORE_FILE }}
                   OC_APP_STORE: "false"
-                  OC_OTA_UPDATES: "major"
+                  OC_ANDROID_OTA_UPDATES: "major"
 
             - name: Clean Target Directory
               run: rm -rf src-tauri/target
@@ -188,7 +188,7 @@ jobs:
                   # Ensure these are passed if needed, though the gradle file uses the debug fallback we set up
                   ANDROID_KEY_STORE_FILE: ${{ env.ANDROID_KEY_STORE_FILE }}
                   OC_APP_STORE: "true"
-                  OC_OTA_UPDATES: "patch"
+                  OC_ANDROID_OTA_UPDATES: "patch"
 
             - name: Upload APKs
               uses: actions/upload-artifact@v4

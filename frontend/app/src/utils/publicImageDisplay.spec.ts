@@ -1,4 +1,6 @@
 import type { BlobReference } from "@client";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
     MAX_PUBLIC_IMAGE_DISPLAY_BYTES,
@@ -11,6 +13,8 @@ const REF: BlobReference = {
     canisterId: "ucwa4-rx777-77774-qaada-cai",
     blobId: 55n,
 };
+const LOCAL_PATTERN = "http://{canisterId}.raw.localhost:8080/{blobType}";
+const NON_DEFAULT_PORT_PATTERN = "http://{canisterId}.raw.localhost:4943/{blobType}";
 
 function urlApi() {
     return {
@@ -112,25 +116,48 @@ describe("shouldProxyLocalPublicImage", () => {
 
     it("recognises the local PocketIC blob URL that a remote HTTPS phone cannot reach", () => {
         expect(
-            shouldProxyLocalPublicImage(localBlobUrl, REF, {
-                protocol: "https:",
-                hostname: "openchat-dev.example.ts.net",
-            }),
+            shouldProxyLocalPublicImage(
+                localBlobUrl,
+                REF,
+                {
+                    protocol: "https:",
+                    hostname: "openchat-dev.example.ts.net",
+                },
+                LOCAL_PATTERN,
+            ),
         ).toBe(true);
+    });
+
+    it("uses the configured non-default local gateway port", () => {
+        const url = `http://${REF.canisterId}.raw.localhost:4943/blobs/${REF.blobId}`;
+        const page = { protocol: "https:", hostname: "openchat-dev.example.ts.net" };
+
+        expect(shouldProxyLocalPublicImage(url, REF, page, NON_DEFAULT_PORT_PATTERN)).toBe(true);
+        expect(shouldProxyLocalPublicImage(url, REF, page, LOCAL_PATTERN)).toBe(false);
     });
 
     it("keeps the direct URL on the local PC and on normal production blob hosts", () => {
         expect(
-            shouldProxyLocalPublicImage(localBlobUrl, REF, {
-                protocol: "http:",
-                hostname: "localhost",
-            }),
+            shouldProxyLocalPublicImage(
+                localBlobUrl,
+                REF,
+                {
+                    protocol: "http:",
+                    hostname: "localhost",
+                },
+                LOCAL_PATTERN,
+            ),
         ).toBe(false);
         expect(
-            shouldProxyLocalPublicImage("https://storage.example/blobs/55", REF, {
-                protocol: "https:",
-                hostname: "chat.example",
-            }),
+            shouldProxyLocalPublicImage(
+                "https://storage.example/blobs/55",
+                REF,
+                {
+                    protocol: "https:",
+                    hostname: "chat.example",
+                },
+                LOCAL_PATTERN,
+            ),
         ).toBe(false);
     });
 
@@ -140,6 +167,7 @@ describe("shouldProxyLocalPublicImage", () => {
                 `http://${REF.canisterId}.raw.localhost:8080/blobs/56`,
                 REF,
                 { protocol: "https:", hostname: "openchat-dev.example.ts.net" },
+                LOCAL_PATTERN,
             ),
         ).toBe(false);
     });
@@ -150,27 +178,64 @@ describe("publicImageDisplayUrl", () => {
 
     it("uses a same-origin proxy path for the exact local blob on remote HTTPS", () => {
         expect(
-            publicImageDisplayUrl(localBlobUrl, REF, {
-                protocol: "https:",
-                hostname: "openchat-dev.example.ts.net",
-            }),
+            publicImageDisplayUrl(
+                localBlobUrl,
+                REF,
+                {
+                    protocol: "https:",
+                    hostname: "openchat-dev.example.ts.net",
+                },
+                LOCAL_PATTERN,
+            ),
         ).toBe(`/__oc-local-image/${REF.canisterId}/blobs/${REF.blobId}`);
     });
 
     it("leaves loopback and production image URLs unchanged", () => {
         expect(
-            publicImageDisplayUrl(localBlobUrl, REF, {
-                protocol: "http:",
-                hostname: "localhost",
-            }),
+            publicImageDisplayUrl(
+                localBlobUrl,
+                REF,
+                {
+                    protocol: "http:",
+                    hostname: "localhost",
+                },
+                LOCAL_PATTERN,
+            ),
         ).toBe(localBlobUrl);
 
         const production = "https://storage.example/blobs/55";
         expect(
-            publicImageDisplayUrl(production, REF, {
-                protocol: "https:",
-                hostname: "chat.example",
-            }),
+            publicImageDisplayUrl(
+                production,
+                REF,
+                {
+                    protocol: "https:",
+                    hostname: "chat.example",
+                },
+                LOCAL_PATTERN,
+            ),
         ).toBe(production);
+    });
+});
+
+describe("public image display UI parity", () => {
+    it.each([
+        ["classic", "../components/home/ImageContent.svelte"],
+        ["v2", "../components_mobile/home/ImageContent.svelte"],
+    ] as const)("routes the %s inline image through the exact-reference helper", (_tree, path) => {
+        const source = readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8");
+
+        expect(source).toContain("publicImageDisplayUrl(normalised.url, content.blobReference)");
+        expect(source).toContain("displayUrl");
+    });
+
+    it("routes the v2 full-screen image through the same helper", () => {
+        const path = "../components_mobile/home/ZoomedImage.svelte";
+        const source = readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8");
+
+        expect(source).toContain(
+            "publicImageDisplayUrl(normalisedImage.url, imageContent.blobReference)",
+        );
+        expect(source).toContain("adjustedUrl");
     });
 });

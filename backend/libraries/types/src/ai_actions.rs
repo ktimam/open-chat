@@ -348,6 +348,12 @@ pub struct AiAppUserKey {
     pub app_id: AiAppId,
     /// P-256 SPKI PEM public key.
     pub public_key: String,
+    /// Monotonic consent epoch for this exact (user, app) binding. A fresh app-authenticated
+    /// link-code claim advances it even when the app deliberately reuses the same durable key.
+    // Optional in generated TypeScript so a frontend can roll out before UserIndex. The upgraded
+    // Rust canister always serializes this authoritative value.
+    #[ts(as = "Option::<u64>", optional)]
+    pub key_version: u64,
 }
 
 /// One (user, key) row of an `ai_app_user_keys` lookup — a chat MEMBER's registered delivery key

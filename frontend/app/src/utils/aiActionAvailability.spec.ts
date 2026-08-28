@@ -10,6 +10,7 @@ import {
 const LOCAL_ENV = {
     buildEnvironment: "development",
     dfxNetwork: "local",
+    devAllowedHost: "openchat-dev.example.ts.net",
     cardsEnabled: "true",
     contentAttestationEnabled: "true",
     finalConfirmationEnabled: "true",
@@ -44,6 +45,58 @@ describe("new action-card availability", () => {
             finalConfirmation: true,
             privateContext: true,
         });
+    });
+
+    it("allows only the exact configured development proxy hostname", () => {
+        expect(evaluateLocalAiActionAvailability(LOCAL_ENV, "openchat-dev.example.ts.net")).toEqual(
+            {
+                contentAttestation: true,
+                finalConfirmation: true,
+                privateContext: true,
+            },
+        );
+        expect(
+            evaluateLocalAiActionAvailability(
+                { ...LOCAL_ENV, devAllowedHost: "OPENCHAT-DEV.EXAMPLE.TS.NET" },
+                "OpenChat-Dev.Example.Ts.Net",
+            ),
+        ).toEqual({
+            contentAttestation: true,
+            finalConfirmation: true,
+            privateContext: true,
+        });
+    });
+
+    it.each([
+        ["missing configured host", { ...LOCAL_ENV, devAllowedHost: undefined }],
+        ["mismatched host", { ...LOCAL_ENV, devAllowedHost: "other.example.ts.net" }],
+        ["wildcard host", { ...LOCAL_ENV, devAllowedHost: "*.example.ts.net" }],
+        ["suffix-only host", { ...LOCAL_ENV, devAllowedHost: "example.ts.net" }],
+        [
+            "host with a scheme",
+            { ...LOCAL_ENV, devAllowedHost: "https://openchat-dev.example.ts.net" },
+        ],
+    ])("rejects the proxy hostname for %s", (_label, environment) => {
+        expect(
+            evaluateLocalAiActionAvailability(environment, "openchat-dev.example.ts.net"),
+        ).toEqual({
+            contentAttestation: false,
+            finalConfirmation: false,
+            privateContext: false,
+        });
+    });
+
+    it("does not accept a suffix or arbitrary host when a proxy hostname is configured", () => {
+        for (const hostname of [
+            "attacker-openchat-dev.example.ts.net",
+            "sub.openchat-dev.example.ts.net",
+            "openchat-dev.example.ts.net.attacker.example",
+            "192.168.1.50",
+        ]) {
+            expect(evaluateLocalAiActionAvailability(LOCAL_ENV, hostname).contentAttestation).toBe(
+                false,
+            );
+        }
     });
 
     it.each([

@@ -1,5 +1,56 @@
 import { describe, expect, it, vi } from "vitest";
-import { cancelAiAppLinkConsent } from "./aiAppLinkConsent";
+import { aiAppLinkCompleted, cancelAiAppLinkConsent } from "./aiAppLinkConsent";
+
+describe("AI-app link completion", () => {
+    const current = [{ appId: 7, publicKey: "current-key", keyVersion: 4n }];
+
+    it("accepts a non-empty key for first-time Connect, including a rolling legacy response", () => {
+        expect(aiAppLinkCompleted(current, 7)).toBe(true);
+        expect(aiAppLinkCompleted([{ appId: 7, publicKey: "legacy", keyVersion: 0n }], 7)).toBe(
+            true,
+        );
+        expect(aiAppLinkCompleted([{ appId: 7, publicKey: "", keyVersion: 5n }], 7)).toBe(false);
+    });
+
+    it("requires a higher epoch for recovery and accepts reuse of the same PEM", () => {
+        const previous = { publicKey: "current-key", keyVersion: 4n };
+        expect(aiAppLinkCompleted(current, 7, previous)).toBe(false);
+        expect(
+            aiAppLinkCompleted(
+                [{ appId: 7, publicKey: "current-key", keyVersion: 5n }],
+                7,
+                previous,
+            ),
+        ).toBe(true);
+        expect(
+            aiAppLinkCompleted(
+                [{ appId: 7, publicKey: "rotated-key", keyVersion: 4n }],
+                7,
+                previous,
+            ),
+        ).toBe(false);
+    });
+
+    it("requires a first authoritative epoch when recovery began with no key", () => {
+        const absent = { publicKey: "", keyVersion: 0n };
+        expect(
+            aiAppLinkCompleted([{ appId: 7, publicKey: "new-key", keyVersion: 0n }], 7, absent),
+        ).toBe(false);
+        expect(
+            aiAppLinkCompleted([{ appId: 7, publicKey: "new-key", keyVersion: 1n }], 7, absent),
+        ).toBe(true);
+    });
+
+    it("does not accept another app's newer binding", () => {
+        expect(
+            aiAppLinkCompleted(
+                [{ appId: 8, publicKey: "new-key", keyVersion: 5n }],
+                7,
+                { publicKey: "current-key", keyVersion: 4n },
+            ),
+        ).toBe(false);
+    });
+});
 
 describe("explicit AI-app link cancellation", () => {
     it("waits for in-flight code creation, cancels only that token, and never disconnects", async () => {

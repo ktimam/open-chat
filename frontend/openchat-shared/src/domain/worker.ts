@@ -196,7 +196,7 @@ import type {
     AiAppPrivateMatchCapability,
     AiAppCardConfirmationGrant,
     AiAppCardContentV1,
-    AiAppCardProvenance,
+    AiAppCardProvenanceResult,
     AiAppLinkCode,
     AiAppMemberKey,
     AiAppRegistration,
@@ -2036,7 +2036,7 @@ export type WorkerResponseInner =
     | ExploreAiAppsResponse
     | AiAppLinkCode
     | AiAppChatLinkToken
-    | AiAppCardProvenance
+    | AiAppCardProvenanceResult
     | AiAppCardConfirmationGrant
     | AiAppCardCapability
     | number[]
@@ -2841,7 +2841,7 @@ export type WorkerResult<T> = T extends Init
     : T extends CancelAiAppChatLinkToken
     ? boolean
     : T extends CreateAiAppCardProvenance
-    ? AiAppCardProvenance | undefined
+    ? AiAppCardProvenanceResult
     : T extends CreateAiAppCardConfirmationGrant
     ? AiAppCardConfirmationGrant | undefined
     : T extends CreateAiAppCardCapability

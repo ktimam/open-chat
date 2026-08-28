@@ -180,6 +180,7 @@ export type PubSubEvents = {
     userInformation: PublicProfile;
     userProfileShare: undefined;
     userProfileAbout: undefined;
+    userProfileAccountLinking: undefined;
     userProfileCacheManagement: undefined;
     userProfileBotConfig: undefined;
     userProfileMyApps: undefined;

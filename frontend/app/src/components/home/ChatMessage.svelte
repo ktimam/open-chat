@@ -1,6 +1,7 @@
 <script lang="ts">
     import { navigate } from "@utils/navigation";
     import {
+        contentToInput,
         manualExtractEnabled,
         parseManualExtractionPrompt,
         proposeAndPost,
@@ -12,6 +13,12 @@
         type ManualExtractionPromptResult,
         type ProposalPhase,
     } from "@utils/aiActionRunner";
+    import {
+        PROCESS_WITH_AI_IMAGE_PROMPT,
+        PROCESS_WITH_AI_TEXT_PROMPT,
+        runLocalAiCommand,
+    } from "@utils/localAiCommand";
+    import { runLocalAiMessageFlow } from "@utils/localAiMessageFlow";
     import { isNativeClient, onDeviceInferenceReadiness } from "@utils/onDeviceInference";
     import { browserImageProposalRequiresModelReadiness } from "@src/stores/browserImageActionMode";
     import { createSingleFlight } from "@utils/singleFlight";
@@ -28,6 +35,11 @@
         muteAutoProposeInChat,
         type AutoProposeSuggestion,
     } from "@utils/autoPropose";
+    import {
+        resolveAiAppReconnectTarget,
+        type AiAppReconnectCompletion,
+        type AiAppReconnectRequest,
+    } from "@utils/aiAppReconnect";
     import Typing from "@shared_components/Typing.svelte";
     import { trackedEffect } from "@src/utils/effects.svelte";
     import type { ProfileLinkClickedEvent } from "@webcomponents/profileLink";
@@ -223,6 +235,11 @@
     let tipping: string | undefined = $state(undefined);
     let percentageExpired = $state(100);
     let botProfile: BotProfileProps | undefined = $state(undefined);
+    let localAiMessageStatus:
+        | { kind: "processing" | "success" | "error"; message: string }
+        | undefined = $state(undefined);
+    let localAiMessageStatusTimer: number | undefined;
+    let localAiMessageRun = 0;
     let confirmedReadByThem = $derived(client.messageIsReadByThem(chatId, msg.messageIndex));
     let readByThem = $derived(confirmedReadByThem || $unconfirmedReadByThem.has(msg.messageId));
     let streak = $derived(sender?.streak ?? 0);
@@ -265,10 +282,29 @@
 
     onDestroy(() => {
         componentMounted = false;
+        localAiMessageRun++;
         if (msgElement) {
             observer?.unobserve(msgElement);
         }
+        if (localAiMessageStatusTimer !== undefined) {
+            window.clearTimeout(localAiMessageStatusTimer);
+        }
     });
+
+    function setLocalAiMessageStatus(
+        status: { kind: "processing" | "success" | "error"; message: string } | undefined,
+    ) {
+        if (localAiMessageStatusTimer !== undefined) {
+            window.clearTimeout(localAiMessageStatusTimer);
+        }
+        localAiMessageStatus = status;
+        if (status !== undefined && status.kind !== "processing") {
+            localAiMessageStatusTimer = window.setTimeout(
+                () => (localAiMessageStatus = undefined),
+                status.kind === "success" ? 3_500 : 8_000,
+            );
+        }
+    }
 
     function createReplyContext(): EnhancedReplyContext {
         return {
@@ -368,10 +404,16 @@
     // actually shows the key). `linkModalApp` renders it; `linkModalResolve` bridges its async result
     // back to this imperative flow so the propose that triggered it resumes on success.
     let linkModalApp = $state<AiAppRegistration | undefined>(undefined);
+    let linkModalPurpose = $state<"connect" | "recovery">("connect");
+    let linkModalPreviousPublicKey = $state<string | undefined>(undefined);
+    let linkModalPreviousKeyVersion = $state<bigint | undefined>(undefined);
     let linkModalResolve: ((linked: boolean) => void) | undefined;
 
     function closeLinkModal(linked: boolean) {
         linkModalApp = undefined;
+        linkModalPurpose = "connect";
+        linkModalPreviousPublicKey = undefined;
+        linkModalPreviousKeyVersion = undefined;
         const resolve = linkModalResolve;
         linkModalResolve = undefined;
         resolve?.(linked);
@@ -382,12 +424,61 @@
     function linkApp(app: AiAppRegistration): Promise<boolean> {
         return new Promise<boolean>((resolve) => {
             linkModalResolve = resolve;
+            linkModalPurpose = "connect";
+            linkModalPreviousPublicKey = undefined;
+            linkModalPreviousKeyVersion = undefined;
             linkModalApp = app;
         });
     }
 
+    onDestroy(() => {
+        const resolve = linkModalResolve;
+        linkModalResolve = undefined;
+        resolve?.(false);
+    });
+
+    // AppUnavailable is deliberately ambiguous. Authoritative app/action/card absence is reported
+    // with one privacy-safe message, while a thrown lookup gets a distinct temporary-failure
+    // message. An available recovery target never resumes the failed action automatically.
+    async function promptReconnect(
+        request: AiAppReconnectRequest,
+        stillCurrent: () => boolean,
+    ): Promise<AiAppReconnectCompletion | undefined> {
+        const viewer = $currentUserIdStore;
+        try {
+            const resolution = await resolveAiAppReconnectTarget(
+                client,
+                request,
+                chatId,
+                stillCurrent,
+            );
+            if (!stillCurrent() || !componentMounted || viewer !== $currentUserIdStore) return;
+            if (resolution.kind === "stale") return;
+            if (resolution.kind === "app_or_action_unavailable") {
+                toastStore.showFailureToast(i18nKey("aiApps.reconnectUnavailable"));
+                return;
+            }
+            const linked = await new Promise<boolean>((resolve) => {
+                linkModalResolve = resolve;
+                linkModalPurpose = "recovery";
+                linkModalPreviousPublicKey = resolution.previousConnection.publicKey;
+                linkModalPreviousKeyVersion = resolution.previousConnection.keyVersion;
+                linkModalApp = resolution.app;
+            });
+            if (!linked || !stillCurrent() || !componentMounted || viewer !== $currentUserIdStore)
+                return;
+            return {
+                retryCoordinates: resolution.retryCoordinates,
+                previousKeyVersion: resolution.previousConnection.keyVersion,
+            };
+        } catch {
+            if (!stillCurrent() || !componentMounted || viewer !== $currentUserIdStore) return;
+            toastStore.showFailureToast(i18nKey("aiApps.reconnectLookupFailed"));
+        }
+    }
+
     // Busy flag for an in-flight propose, so the trigger (the auto-propose chip) can show progress:
-    // the on-device model's first call cold-loads the multi-GB GGUF and, with no token streaming,
+    // the on-device model's first call cold-loads a multi-GB runtime and, with no token streaming,
     // otherwise reads as a frozen UI. Also guards against a double-run.
     let proposing = $state(false);
     let proposalPhase = $state<ProposalPhase | undefined>(undefined);
@@ -400,6 +491,7 @@
                 !isNativeClient(),
                 proposalPhase,
                 proposalRequiresModelReadiness,
+                $webModelStatus.generation,
             ),
         ),
     );
@@ -469,6 +561,9 @@
                 stillCurrent,
                 chooseCandidate,
                 linkApp,
+                promptReconnect: (request) => promptReconnect(request, stillCurrent),
+                resolveReconnectCandidate: (coordinates) =>
+                    resolveSuggestedAiAction(client, capturedContext.chatId, coordinates),
                 toast: (message) => toastStore.showFailureToast(i18nKey(message)),
             });
         },
@@ -488,6 +583,74 @@
         return runAiActionSingleFlight({ suggested, capturedContent, requiresModelReadiness });
     }
 
+    async function processMessageWithAi() {
+        if (localAiMessageStatus?.kind === "processing") return;
+        const run = ++localAiMessageRun;
+        const capturedViewer = $currentUserIdStore;
+        const capturedChatKey = chatIdentifierToString(chatId);
+        const capturedContext = { chatId, threadRootMessageIndex };
+        const capturedMessageId = msg.messageId;
+        const capturedContent = msg.content;
+        const capturedAuthor = me ? "You" : senderDisplayName || "Unknown member";
+        const stillCurrent = () =>
+            componentMounted &&
+            $currentUserIdStore === capturedViewer &&
+            chatIdentifierToString(chatId) === capturedChatKey &&
+            threadRootMessageIndex === capturedContext.threadRootMessageIndex &&
+            msg.messageId === capturedMessageId &&
+            msg.content === capturedContent;
+        setLocalAiMessageStatus({
+            kind: "processing",
+            message: "AI is processing this message locally…",
+        });
+        let terminalStatusSet = false;
+        try {
+            const result = await runLocalAiMessageFlow({
+                readInput: () => contentToInput(capturedContent, client),
+                unsupportedMessage: () =>
+                    capturedContent.kind === "image_content"
+                        ? "The displayed image could not be read for local AI processing."
+                        : "This message type cannot be processed by the local AI yet.",
+                promptFor: (input) =>
+                    input.image !== undefined
+                        ? PROCESS_WITH_AI_IMAGE_PROMPT
+                        : PROCESS_WITH_AI_TEXT_PROMPT,
+                contextFor: (input) => [
+                    {
+                        author: capturedAuthor,
+                        text: input.text,
+                        hasImage: input.image !== undefined,
+                        imageIncluded: input.image !== undefined,
+                    },
+                ],
+                infer: runLocalAiCommand,
+                sendReply: (text) =>
+                    client.sendMessageWithContent(
+                        capturedContext,
+                        { kind: "text_content", text },
+                        true,
+                        [],
+                        false,
+                    ),
+                stillCurrent,
+            });
+            if (result.kind === "stale") return;
+            setLocalAiMessageStatus(result);
+            terminalStatusSet = true;
+            if (result.kind === "error") toastStore.showFailureToast(i18nKey(result.message));
+        } finally {
+            // Svelte may reuse this component for another message. Every stale early return must
+            // release the single-flight UI or the replacement message can never run local AI.
+            if (
+                componentMounted &&
+                localAiMessageRun === run &&
+                !terminalStatusSet
+            ) {
+                setLocalAiMessageStatus(undefined);
+            }
+        }
+    }
+
     async function proposeSuggestedAiAction(suggestion: AutoProposeSuggestion) {
         if (proposing) return;
         const suggestionActionKey = autoProposeSuggestionActionKey(suggestion);
@@ -498,7 +661,7 @@
         const capturedMessageId = msg.messageId;
         try {
             const outcome = await runAiActionHandler(suggestion);
-            if (outcome === "consumed" && autoProposeSuggestionStillCurrent(suggestion)) {
+            if (outcome === "posted" && autoProposeSuggestionStillCurrent(suggestion)) {
                 dismissAutoProposeSuggestion(
                     capturedViewer,
                     capturedChatId,
@@ -729,6 +892,9 @@
     let canShare = $derived(canShareMessage(msg.content));
     let canForward = $derived(client.canForward(msg.content));
     let canTranslate = $derived((client.getMessageText(msg.content) ?? "").length > 0);
+    let canProcessWithAi = $derived(
+        msg.content.kind === "text_content" || msg.content.kind === "image_content",
+    );
 </script>
 
 {#if botProfile !== undefined}
@@ -771,6 +937,9 @@
 {#if linkModalApp !== undefined}
     <AiAppLinkModal
         app={linkModalApp}
+        purpose={linkModalPurpose}
+        previousPublicKey={linkModalPreviousPublicKey}
+        previousKeyVersion={linkModalPreviousKeyVersion}
         onLinked={() => closeLinkModal(true)}
         onDismiss={() => closeLinkModal(false)}
     />
@@ -1079,6 +1248,7 @@
                                 onReportMessage={reportMessage}
                                 onCancelReminder={cancelReminder}
                                 onRunAiAction={runAiActionHandler}
+                                onProcessWithAi={canProcessWithAi ? processMessageWithAi : undefined}
                                 onRemindMe={remindMe}
                             />
                         {/if}
@@ -1161,6 +1331,24 @@
                                 onMute={muteAutoProposeSuggestions}
                             />
                         {/each}
+                    </div>
+                {/if}
+
+                {#if localAiMessageStatus !== undefined}
+                    <div
+                        class="local-ai-working"
+                        class:me
+                        class:indent={showAvatar}
+                        role="status"
+                        aria-live="polite"
+                        data-testid="message-local-ai-status"
+                    >
+                        <span class={`pill ${localAiMessageStatus.kind}`}>
+                            {#if localAiMessageStatus.kind === "processing"}
+                                <Spinner size="1rem" foregroundColour="var(--primary)" />
+                            {/if}
+                            {localAiMessageStatus.message}
+                        </span>
                     </div>
                 {/if}
 
@@ -1370,7 +1558,8 @@
         }
     }
 
-    .propose-working {
+    .propose-working,
+    .local-ai-working {
         display: flex;
         justify-content: flex-start;
         margin-top: 2px;

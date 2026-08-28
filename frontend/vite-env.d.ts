@@ -2,6 +2,9 @@
 
 interface ImportMetaEnv {
     readonly OC_ACCOUNT_LINKING_CODES_ENABLED: string;
+    readonly OC_ANDROID_LINK_PACKAGE?: string;
+    readonly OC_ANDROID_LINK_CERT_SHA256?: string;
+    readonly OC_ANDROID_RP_ID?: string;
     readonly OC_AIRDROP_BOT_CANISTER: string;
     readonly OC_ALCHEMY_API_KEY: string;
     readonly OC_APP_STORE: string;
@@ -12,6 +15,7 @@ interface ImportMetaEnv {
     readonly OC_BUILD_ENV: string;
     readonly OC_CANISTER_URL_PATH: string;
     readonly OC_DFX_NETWORK: string;
+    readonly OC_DEV_ALLOWED_HOST: string | undefined;
     readonly OC_GROUP_INDEX_CANISTER: string;
     readonly OC_IC_URL: string;
     readonly OC_IDENTITY_CANISTER: string;
@@ -42,6 +46,7 @@ interface ImportMetaEnv {
     readonly OC_LOCAL_AI_APP_FINAL_CONFIRMATION_ENABLED: string | undefined;
     readonly OC_LOCAL_AI_APP_PRIVATE_CONTEXT_ENABLED: string | undefined;
     readonly OC_TRANSLATIONS_CANISTER: string;
+    readonly OC_TRANSFORMERS_WEBGPU_IMAGE_SPIKE: string | undefined;
     readonly OC_USER_INDEX_CANISTER: string;
     readonly OC_USERGEEK_APIKEY: string;
     readonly OC_VIDEO_BRIDGE_URL: string;

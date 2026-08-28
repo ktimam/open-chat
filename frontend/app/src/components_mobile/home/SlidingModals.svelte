@@ -99,6 +99,7 @@
     import ThreadPreviews from "./thread/ThreadPreviews.svelte";
     import Upgrade from "./upgrade/Upgrade.svelte";
     import About from "./user_profile/About.svelte";
+    import AccountLinkingCode from "./user_profile/AccountLinkingCode.svelte";
     import Appearance from "./user_profile/Appearance.svelte";
     import AppSettings from "./user_profile/AppSettings.svelte";
     import BotConfig from "./user_profile/BotConfig.svelte";
@@ -220,6 +221,7 @@
         | { kind: "user_profile_chats_and_video" }
         | { kind: "user_profile_share" }
         | { kind: "user_profile_about" }
+        | { kind: "user_profile_account_linking" }
         | { kind: "user_profile_appearance" }
         | { kind: "user_profile_verify" }
         | { kind: "user_profile_community" }
@@ -572,6 +574,9 @@
             subscribe("userProfileModels", () => push({ kind: "user_profile_models" })),
             subscribe("userProfileMyApps", () => push({ kind: "user_profile_my_apps" })),
             subscribe("userProfileAbout", () => push({ kind: "user_profile_about" })),
+            subscribe("userProfileAccountLinking", () =>
+                push({ kind: "user_profile_account_linking" }),
+            ),
             subscribe("closeModalPage", pop),
             subscribe("closeModalStack", popStack),
             subscribe("userProfileChatsAndVideo", () =>
@@ -609,6 +614,8 @@
             <DeleteAccount />
         {:else if page.kind === "user_profile_about"}
             <About />
+        {:else if page.kind === "user_profile_account_linking"}
+            <AccountLinkingCode />
         {:else if page.kind === "user_profile_appearance"}
             <Appearance />
         {:else if page.kind === "user_profile_cache_management"}

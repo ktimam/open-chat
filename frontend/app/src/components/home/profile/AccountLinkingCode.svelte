@@ -160,10 +160,8 @@
     .header,
     .footer,
     .code-content {
-        @include size-above(sm) {
-            width: 28rem;
-        }
-
+        box-sizing: border-box;
+        width: min(28rem, calc(100vw - 2rem));
         padding-left: $sp4;
         padding-right: $sp4;
     }
@@ -189,15 +187,19 @@
     .code-chars {
         @include font(book, normal, fs-220);
         display: flex;
-        gap: $sp4;
+        width: 100%;
+        gap: clamp(0.25rem, 2vw, 1rem);
         justify-content: center;
 
         .char {
             position: relative;
             display: flex;
+            box-sizing: border-box;
+            flex: 1 1 0;
             justify-content: center;
-            width: 3.5rem;
-            padding: $sp4;
+            min-width: 0;
+            max-width: 3.5rem;
+            padding: clamp(0.5rem, 2vw, 1rem) 0;
             border-radius: 0.5rem;
 
             &:after {

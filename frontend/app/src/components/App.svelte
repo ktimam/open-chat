@@ -42,6 +42,7 @@
         routeForChatIdentifier,
         routeForScope,
         routeStore,
+        startupErrorStore,
         subscribe,
     } from "@client";
     import { eventToError, recordError } from "@utils/errorPostmortem";
@@ -59,6 +60,7 @@
     import Profiler from "./Profiler.svelte";
     import Router from "./Router.svelte";
     import Snow from "@shared_components/Snow.svelte";
+    import StartupFailure from "@shared_components/StartupFailure.svelte";
     import UpgradeBanner from "./UpgradeBanner.svelte";
     import Witch from "@shared_components/Witch.svelte";
     import InstallPrompt from "./home/InstallPrompt.svelte";
@@ -702,7 +704,9 @@
 
     <NotificationsBar />
 
-    {#if $identityStateStore.kind === "anon" || $identityStateStore.kind === "logging_in" || $identityStateStore.kind === "registering" || $identityStateStore.kind === "logged_in" || $identityStateStore.kind === "loading_user"}
+    {#if $startupErrorStore !== undefined}
+        <StartupFailure message={$startupErrorStore} />
+    {:else if $identityStateStore.kind === "anon" || $identityStateStore.kind === "logging_in" || $identityStateStore.kind === "registering" || $identityStateStore.kind === "logged_in" || $identityStateStore.kind === "loading_user"}
         {#if !$isLoading || $reviewingTranslations}
             <Router {showLandingPage} />
         {/if}

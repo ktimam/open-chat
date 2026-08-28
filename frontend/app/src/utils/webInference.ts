@@ -27,13 +27,16 @@ import {
 } from "./transformersWebGpuProtocol";
 import {
     disposeTransformersWebGpuInference,
+    invalidateTransformersWebGpuReadiness,
     preloadTransformersWebGpuModel,
+    subscribeTransformersWebGpuStatus,
     TRANSFORMERS_WEBGPU_MODEL_NOT_DOWNLOADED_MESSAGE,
     transformersWebGpuInfer,
     transformersWebGpuModelDownloaded,
     transformersWebGpuSelectionCanHandle,
     transformersWebGpuSpikeCanHandle,
     transformersWebGpuRuntimeAvailability,
+    type TransformersWebGpuStatus,
 } from "./transformersWebGpuInference";
 import type { BrowserModelImageEvidence } from "./imageSemanticDuplicateGuard";
 
@@ -84,6 +87,12 @@ type PersistedCatalogModel = {
     sizeBytes: number;
 };
 
+type PersistedTransformersWebGpuModel = {
+    runtime: "transformers-webgpu";
+    id: typeof PHONE_QWEN3_VL_2B_MODEL_ID;
+    name: string;
+};
+
 type WebModelState = {
     file?: File;
     handle?: FileSystemFileHandle;
@@ -109,10 +118,39 @@ type WebModelState = {
     status: "none" | "attached" | "downloading" | "verifying" | "loading" | "loaded" | "error";
     error?: string;
     progress?: { received: number; total: number };
+    /** Ephemeral all-WebGPU engine progress. Prompt, image and generated content are never exposed. */
+    generation?: {
+        stage: "text" | "image";
+        phase: "loading" | "downloading" | "inference";
+        progress?: number;
+        file?: string;
+    };
 };
 
 const state: WebModelState = { status: "none" };
 let modelSelectionGeneration = 0;
+const CATALOG_DOWNLOAD_STALL_MS = 90_000;
+
+type CatalogModelSelection = {
+    id: string;
+    name: string;
+    files: ModelFile[];
+    sizeBytes: number;
+    modalities?: ModelModality[];
+};
+
+type CatalogDownloadAttempt = {
+    controller: AbortController;
+    generation: number;
+    selectionGeneration: number;
+    previous: WebModelState;
+    reason?: "cancelled" | "backgrounded" | "stalled";
+    done: Promise<void>;
+    resolveDone(): void;
+};
+
+let activeCatalogDownload: CatalogDownloadAttempt | undefined;
+let catalogDownloadGeneration = 0;
 let nextImageInferenceRequestId = 0;
 const imageEvidenceByResult = new WeakMap<InferenceResult, BrowserModelImageEvidence>();
 
@@ -149,6 +187,7 @@ export const webModelStatus = writable<{
     status: WebModelState["status"];
     error?: string;
     progress?: { received: number; total: number };
+    generation?: WebModelState["generation"];
 }>({ status: "none" });
 
 function publish(): void {
@@ -158,7 +197,77 @@ function publish(): void {
         status: state.status,
         error: state.error,
         progress: state.progress,
+        generation: state.generation,
     });
+}
+
+subscribeTransformersWebGpuStatus((status: TransformersWebGpuStatus) => {
+    state.generation =
+        status.phase === "idle"
+            ? undefined
+            : {
+                  stage: status.stage ?? "image",
+                  phase: status.phase,
+                  progress: status.progress,
+                  file: status.file,
+              };
+    publish();
+});
+
+/** Exact allow-list shared by both browser Model Manager surfaces. The current all-WebGPU engine
+ * has one qualified phone artifact; Qwen3.5 0.8B is intentionally absent until this engine supports
+ * and qualifies its pinned sessions. */
+export function allWebGpuCatalogModelSupported(modelId: string): boolean {
+    return (
+        modelId === PHONE_QWEN3_VL_2B_MODEL_ID &&
+        transformersWebGpuSelectionCanHandle(modelId)
+    );
+}
+
+function cloneWebModelState(value: WebModelState): WebModelState {
+    return {
+        ...value,
+        catalogFiles: value.catalogFiles?.map((file) => ({ ...file })),
+        declaredModalities: value.declaredModalities?.slice(),
+        progress: value.progress === undefined ? undefined : { ...value.progress },
+        generation: value.generation === undefined ? undefined : { ...value.generation },
+    };
+}
+
+function restoreState(snapshot: WebModelState): void {
+    for (const key of Object.keys(state) as (keyof WebModelState)[]) {
+        delete state[key];
+    }
+    Object.assign(state, cloneWebModelState(snapshot));
+}
+
+function stopCatalogDownload(
+    attempt: CatalogDownloadAttempt,
+    reason: CatalogDownloadAttempt["reason"],
+): void {
+    if (attempt.controller.signal.aborted) return;
+    attempt.reason = reason;
+    attempt.controller.abort(new DOMException(reason ?? "cancelled", "AbortError"));
+}
+
+/** Cancel only the currently owned preload attempt. A late completion cannot replace the selection. */
+export function cancelWebModelDownload(): void {
+    if (activeCatalogDownload !== undefined) {
+        stopCatalogDownload(activeCatalogDownload, "cancelled");
+    }
+}
+
+function catalogDownloadFailure(attempt: CatalogDownloadAttempt, error: unknown): string {
+    switch (attempt.reason) {
+        case "cancelled":
+            return "Download cancelled. Tap Retry download when you are ready.";
+        case "backgrounded":
+            return "Download stopped when OpenChat went to the background. Keep it open and tap Retry download.";
+        case "stalled":
+            return "The download stopped making progress. Check the connection and tap Retry download.";
+        default:
+            return error instanceof Error ? error.message : String(error);
+    }
 }
 
 // ── IndexedDB persistence for the picker handle (structured-cloneable) ─────────────────────────
@@ -286,11 +395,32 @@ function parsePersistedCatalogModel(raw: string): PersistedCatalogModel | undefi
     };
 }
 
+function parsePersistedTransformersWebGpuModel(
+    raw: string,
+): PersistedTransformersWebGpuModel | undefined {
+    const saved = JSON.parse(raw) as Partial<PersistedTransformersWebGpuModel>;
+    if (
+        saved.runtime !== "transformers-webgpu" ||
+        saved.id !== PHONE_QWEN3_VL_2B_MODEL_ID ||
+        typeof saved.name !== "string" ||
+        saved.name === ""
+    ) {
+        return undefined;
+    }
+    return {
+        runtime: saved.runtime,
+        id: saved.id,
+        name: saved.name,
+    };
+}
+
 /** Attach a session-scoped File (from `<input type=file>`). */
 export async function setWebModelFile(file: File): Promise<string | undefined> {
     const err = validate(file);
     if (err) return err;
     modelSelectionGeneration += 1;
+    const download = activeCatalogDownload;
+    if (download !== undefined) stopCatalogDownload(download, "cancelled");
     await unloadWebModel();
     state.file = file;
     state.handle = undefined;
@@ -333,6 +463,8 @@ export async function pickWebModelFromDisk(): Promise<string | undefined> {
     const err = validate(file);
     if (err) return err;
     modelSelectionGeneration += 1;
+    const download = activeCatalogDownload;
+    if (download !== undefined) stopCatalogDownload(download, "cancelled");
     await unloadWebModel();
     state.file = file;
     state.handle = handle;
@@ -424,70 +556,139 @@ async function verifyCachedFiles(
  *  and re-attaches instantly on later visits. A vision entry brings a second file — the mmproj
  *  projector — which is downloaded, verified and loaded alongside the weights. Progress is reported
  *  across BOTH (wllama's Model.refresh sums the shards). The choice persists in localStorage. */
-export async function useWebModelFromUrl(entry: {
-    id: string;
-    name: string;
-    files: ModelFile[];
-    sizeBytes: number;
-    modalities?: ModelModality[];
-}): Promise<string | undefined> {
-    const manifestError = catalogManifestError(entry.files, entry.sizeBytes);
-    if (manifestError !== undefined) return manifestError;
-    // The budget is the TOTAL: weights and projector share one wasm heap (see WEB_MODEL_MAX_BYTES).
-    if (entry.sizeBytes > WEB_MODEL_MAX_BYTES) {
-        return "this model exceeds the browser's ~2 GB limit — use the desktop app for it";
+export async function useWebModelFromUrl(
+    entry: CatalogModelSelection,
+): Promise<string | undefined> {
+    if (activeCatalogDownload !== undefined) {
+        return "A model download is already in progress. Cancel it before choosing another model.";
     }
-    const { weights, mmproj } = splitModelFiles(entry.files);
-    if (weights.length !== 1 || mmproj.length > 1) {
+    const allWebGpu = entry.id === PHONE_QWEN3_VL_2B_MODEL_ID;
+    // The pinned Transformers selection is not a GGUF catalog download. Decide that first so stale
+    // GGUF URLs, hashes, files, and prior browser cache entries are completely irrelevant.
+    if (!allWebGpu) {
+        const manifestError = catalogManifestError(entry.files, entry.sizeBytes);
+        if (manifestError !== undefined) return manifestError;
+        if (entry.sizeBytes > WEB_MODEL_MAX_BYTES) {
+            return "this model exceeds the browser's ~2 GB limit — use the desktop app for it";
+        }
+    }
+    const { weights, mmproj } = allWebGpu
+        ? { weights: [] as ModelFile[], mmproj: [] as ModelFile[] }
+        : splitModelFiles(entry.files);
+    if (!allWebGpu && (weights.length !== 1 || mmproj.length > 1)) {
         return "this model's file layout isn't supported in the browser — use the desktop app for it";
     }
-    modelSelectionGeneration += 1;
     // The explicit phone experiment owns a separate revision-keyed ONNX cache. Selecting this
     // model downloads that exact manifest in Model Manager; its GGUF/projector catalog pair belongs
     // to the normal Wllama route and must not be downloaded as an accidental fallback.
-    if (transformersWebGpuSelectionCanHandle(entry.id)) {
-        await unloadWebModel();
+    if (allWebGpu) {
+        if (!transformersWebGpuSelectionCanHandle(entry.id)) {
+            const availability = transformersWebGpuRuntimeAvailability();
+            return availability.available
+                ? "The Qwen3-VL 2B all-WebGPU runtime is not enabled in this browser."
+                : availability.reason;
+        }
+        const previous = cloneWebModelState(state);
+        const selectionGeneration = ++modelSelectionGeneration;
+        let resolveDone: () => void = () => undefined;
+        const done = new Promise<void>((resolve) => {
+            resolveDone = resolve;
+        });
+        const attempt: CatalogDownloadAttempt = {
+            controller: new AbortController(),
+            generation: ++catalogDownloadGeneration,
+            selectionGeneration,
+            previous,
+            done,
+            resolveDone,
+        };
+        activeCatalogDownload = attempt;
+        const isCurrentAttempt = () =>
+            activeCatalogDownload === attempt &&
+            attempt.generation === catalogDownloadGeneration &&
+            attempt.selectionGeneration === modelSelectionGeneration &&
+            !attempt.controller.signal.aborted;
+        let stallTimer: ReturnType<typeof setTimeout> | undefined;
+        const armStallTimer = () => {
+            if (stallTimer !== undefined) clearTimeout(stallTimer);
+            stallTimer = setTimeout(
+                () => stopCatalogDownload(attempt, "stalled"),
+                CATALOG_DOWNLOAD_STALL_MS,
+            );
+        };
+        const onVisibilityChange = () => {
+            if (document.hidden) stopCatalogDownload(attempt, "backgrounded");
+        };
+        const onPageHide = () => stopCatalogDownload(attempt, "backgrounded");
+        document.addEventListener("visibilitychange", onVisibilityChange);
+        window.addEventListener("pagehide", onPageHide);
+
         state.file = undefined;
         state.handle = undefined;
-        state.url = weights[0].url;
-        state.mmprojUrl = mmproj[0]?.url;
-        state.catalogFiles = entry.files.map((file) => ({ ...file }));
+        state.url = undefined;
+        state.mmprojUrl = undefined;
+        state.catalogFiles = undefined;
         state.catalogVerified = false;
         state.id = entry.id;
         state.name = entry.name;
-        state.declaredModalities = entry.modalities;
+        state.declaredModalities = ["text", "image"];
         state.imageSupported = true;
         state.status = "downloading";
         state.error = undefined;
         state.progress = { received: 0, total: TRANSFORMERS_QWEN_ARTIFACT_BYTES };
+        state.generation = undefined;
         publish();
+        armStallTimer();
         try {
             await preloadTransformersWebGpuModel({
+                signal: attempt.controller.signal,
                 onProgress(received, total) {
+                    if (!isCurrentAttempt()) return;
+                    armStallTimer();
                     state.progress = { received, total };
                     publish();
                 },
             });
+            if (!isCurrentAttempt()) throw attempt.controller.signal.reason;
             state.status = "verifying";
             state.progress = undefined;
             publish();
-            if (!(await transformersWebGpuModelDownloaded())) {
+            if (
+                !(await transformersWebGpuModelDownloaded({ signal: attempt.controller.signal }))
+            ) {
                 throw new Error("The completed all-WebGPU model could not be verified.");
             }
+            if (!isCurrentAttempt()) throw attempt.controller.signal.reason;
+
+            // Downloading must not evict a usable resident model. Retire it only after the new
+            // artifact is complete, and keep an already-loaded instance of this exact model.
+            const preserveResident =
+                previous.id === entry.id &&
+                (previous.status === "attached" || previous.status === "loaded");
+            if (!preserveResident) await unloadWebModel();
+            if (!isCurrentAttempt()) throw attempt.controller.signal.reason;
+
+            state.file = undefined;
+            state.handle = undefined;
+            state.url = undefined;
+            state.mmprojUrl = undefined;
+            state.catalogFiles = undefined;
             state.catalogVerified = true;
-            state.status = "attached";
+            state.id = entry.id;
+            state.name = entry.name;
+            state.declaredModalities = ["text", "image"];
+            state.imageSupported = true;
+            state.status = preserveResident ? previous.status : "attached";
+            state.error = undefined;
+            state.progress = undefined;
             publish();
             try {
                 localStorage.setItem(
                     LS_URL_MODEL,
                     JSON.stringify({
+                        runtime: "transformers-webgpu",
                         id: entry.id,
                         name: entry.name,
-                        url: state.url,
-                        mmprojUrl: state.mmprojUrl,
-                        modalities: entry.modalities,
-                        files: state.catalogFiles,
-                        sizeBytes: entry.sizeBytes,
                     }),
                 );
             } catch {
@@ -495,14 +696,24 @@ export async function useWebModelFromUrl(entry: {
             }
             return undefined;
         } catch (err) {
-            state.status = "error";
-            state.catalogVerified = false;
-            state.error = err instanceof Error ? err.message : String(err);
-            state.progress = undefined;
-            publish();
-            return state.error;
+            const failure = catalogDownloadFailure(attempt, err);
+            if (
+                activeCatalogDownload === attempt &&
+                attempt.selectionGeneration === modelSelectionGeneration
+            ) {
+                restoreState(previous);
+                publish();
+            }
+            return failure;
+        } finally {
+            if (stallTimer !== undefined) clearTimeout(stallTimer);
+            document.removeEventListener("visibilitychange", onVisibilityChange);
+            window.removeEventListener("pagehide", onPageHide);
+            if (activeCatalogDownload === attempt) activeCatalogDownload = undefined;
+            attempt.resolveDone();
         }
     }
+    modelSelectionGeneration += 1;
     await unloadWebModel();
     state.file = undefined;
     state.handle = undefined;
@@ -585,26 +796,52 @@ export async function restoreWebModel(): Promise<void> {
     try {
         const raw = localStorage.getItem(LS_URL_MODEL);
         if (raw !== null) {
-            const saved = parsePersistedCatalogModel(raw);
+            const pinned = parsePersistedTransformersWebGpuModel(raw);
+            const legacy = pinned === undefined ? parsePersistedCatalogModel(raw) : undefined;
+            const saved = pinned ?? legacy;
             if (saved !== undefined) {
-                modelSelectionGeneration += 1;
-                const transformers = transformersWebGpuSelectionCanHandle(saved.id);
-                const downloaded = !transformers || (await transformersWebGpuModelDownloaded());
+                const restoreGeneration = ++modelSelectionGeneration;
+                const allWebGpu =
+                    pinned !== undefined || saved.id === PHONE_QWEN3_VL_2B_MODEL_ID;
+                const transformers =
+                    allWebGpu && transformersWebGpuSelectionCanHandle(saved.id);
+                const downloaded = allWebGpu
+                    ? transformers && (await transformersWebGpuModelDownloaded())
+                    : true;
+                if (restoreGeneration !== modelSelectionGeneration) return;
                 state.file = undefined;
                 state.handle = undefined;
-                state.url = saved.url;
-                state.mmprojUrl = saved.mmprojUrl;
-                state.catalogFiles = saved.files;
-                state.catalogVerified = transformers ? downloaded : false;
+                state.url = allWebGpu ? undefined : legacy?.url;
+                state.mmprojUrl = allWebGpu ? undefined : legacy?.mmprojUrl;
+                state.catalogFiles = allWebGpu ? undefined : legacy?.files;
+                state.catalogVerified = allWebGpu ? downloaded : false;
                 state.id = saved.id;
                 state.name = saved.name;
-                state.declaredModalities = saved.modalities;
-                state.imageSupported = transformers ? true : undefined;
+                state.declaredModalities = allWebGpu
+                    ? ["text", "image"]
+                    : legacy?.modalities;
+                state.imageSupported = allWebGpu ? true : undefined;
                 state.status = downloaded ? "attached" : "error";
                 state.error = downloaded
                     ? undefined
-                    : TRANSFORMERS_WEBGPU_MODEL_NOT_DOWNLOADED_MESSAGE;
+                    : transformers
+                      ? TRANSFORMERS_WEBGPU_MODEL_NOT_DOWNLOADED_MESSAGE
+                      : "The Qwen3-VL 2B all-WebGPU runtime is not enabled in this browser.";
                 publish();
+                if (allWebGpu) {
+                    try {
+                        localStorage.setItem(
+                            LS_URL_MODEL,
+                            JSON.stringify({
+                                runtime: "transformers-webgpu",
+                                id: PHONE_QWEN3_VL_2B_MODEL_ID,
+                                name: saved.name,
+                            } satisfies PersistedTransformersWebGpuModel),
+                        );
+                    } catch {
+                        /* persistence best-effort */
+                    }
+                }
                 return;
             }
             localStorage.removeItem(LS_URL_MODEL);
@@ -653,6 +890,12 @@ export async function restoreWebModel(): Promise<void> {
 /** Drop the attached model, free the wasm runtime, and forget every persisted choice. */
 export async function clearWebModel(): Promise<void> {
     modelSelectionGeneration += 1;
+    invalidateTransformersWebGpuReadiness();
+    const download = activeCatalogDownload;
+    if (download !== undefined) {
+        stopCatalogDownload(download, "cancelled");
+        await download.done;
+    }
     await unloadWebModel();
     state.file = undefined;
     state.handle = undefined;
@@ -667,6 +910,7 @@ export async function clearWebModel(): Promise<void> {
     state.status = "none";
     state.error = undefined;
     state.progress = undefined;
+    state.generation = undefined;
     publish();
     await idbDelete().catch(() => undefined);
     try {
@@ -701,7 +945,7 @@ export function webModelCatalogId(): string | undefined {
  *      until its first inference loads it; that costs one text-only propose, never a wrong answer.
  */
 export function webModelModalities(): ModelModality[] {
-    if (transformersWebGpuSelectionCanHandle(state.id)) return ["image"];
+    if (transformersWebGpuSelectionCanHandle(state.id)) return ["text", "image"];
     if (state.imageSupported !== undefined) {
         return state.imageSupported ? ["text", "image"] : ["text"];
     }
@@ -894,15 +1138,24 @@ export async function webInfer(
     if (requireProjectorAbsent && selected !== PHONE_QWEN3_VL_2B_MODEL_ID) {
         return { kind: "error", error: "the selected browser model changed before inference" };
     }
-    if (!requireProjectorAbsent && transformersWebGpuSelectionCanHandle(selected)) {
+    if (
+        selected === PHONE_QWEN3_VL_2B_MODEL_ID &&
+        !transformersWebGpuSelectionCanHandle(selected)
+    ) {
+        return {
+            kind: "unavailable",
+            reason: "The Qwen3-VL 2B all-WebGPU runtime is not enabled in this browser.",
+        };
+    }
+    if (transformersWebGpuSelectionCanHandle(selected)) {
         if (!transformersWebGpuSpikeCanHandle(request, state.id)) {
             return {
                 kind: "unavailable",
-                reason: "The selected all-WebGPU phone trial accepts image requests only.",
+                reason: "The selected all-WebGPU runtime cannot handle this request.",
             };
         }
-        // Wllama and Transformers own independent WebGPU runtimes. Release the text decoder before
-        // allocating the all-WebGPU image worker on a constrained phone.
+        // Wllama and Transformers own independent runtimes. Release any legacy resident decoder
+        // before allocating the one-shot all-WebGPU worker on a constrained phone.
         await unloadWebModel();
         const result = await transformersWebGpuInfer({
             ...request,

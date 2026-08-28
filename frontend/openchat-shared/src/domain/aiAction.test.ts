@@ -11,8 +11,11 @@ import {
     buildActionCardContent,
     buildMultiActionCardContent,
     chatKeyFor,
+    AI_ACTION_IMAGE_FOCUSED_PASSES_EXTENSION,
     AI_ACTION_IMAGE_PROMPT_EXTENSION,
+    imageModelPassesConfig,
     imagePromptTemplateConfig,
+    MAX_AI_ACTION_IMAGE_MODEL_PASSES,
     MAX_AI_ACTION_IMAGE_PROMPT_BYTES,
     MAX_PRIVATE_IMAGE_EVIDENCE_BYTES,
     MAX_AI_ACTION_CARD_ROW_VALUE_CHARS,
@@ -1772,6 +1775,218 @@ describe("runAiAction", () => {
             });
 
             expect(seen?.prompt).toBe(`${compact}\n\nRules:\n- Keep this guidance.`);
+        });
+
+        it("keeps the August 13 mobile regression in a bounded model-only date pass", async () => {
+            const corePrompt = "Read only amount, currency, and transaction status.";
+            const datePrompt = "Read only the printed transaction date.";
+            const responseSchema = {
+                type: "object",
+                [AI_ACTION_IMAGE_PROMPT_EXTENSION]: {
+                    version: 1,
+                    template: corePrompt,
+                    includeRuleGuidance: false,
+                },
+                [AI_ACTION_IMAGE_FOCUSED_PASSES_EXTENSION]: {
+                    version: 1,
+                    primaryFields: ["amount", "currency", "kind"],
+                    primaryMaxTokens: 64,
+                    passes: [
+                        {
+                            template: datePrompt,
+                            fields: ["date"],
+                            includeRuleGuidance: false,
+                            includeMessage: false,
+                            maxTokens: 24,
+                        },
+                    ],
+                },
+                properties: {
+                    amount: { type: "number" },
+                    currency: { type: "string" },
+                    kind: { type: "string", enum: ["iou", "settlement"] },
+                    date: {
+                        type: "string",
+                        format: "date",
+                        "x-openchat-property-aliases": ["due_date"],
+                    },
+                    direction: { type: "string", enum: ["credit", "debt"] },
+                },
+                required: ["amount", "kind"],
+            };
+            const def: AiActionDefinition = { ...DEF, acceptsImage: true, responseSchema };
+            const seen: InferenceRequest[] = [];
+            const responses = [
+                '{"amount":13500,"currency":"EGP","kind":"settlement","date":"2022-06-14","direction":"credit"}',
+                '{"due_date":"2026-08-13","amount":1500}',
+            ];
+
+            const result = await runAiAction(
+                def,
+                { image: new Uint8Array([1, 2, 3]) },
+                RECIPIENT,
+                async (request) => {
+                    seen.push(request);
+                    return { kind: "ok", text: responses[seen.length - 1] };
+                },
+            );
+
+            expect(seen).toHaveLength(2);
+            expect(seen.map(({ prompt, maxTokens }) => ({ prompt, maxTokens }))).toEqual([
+                { prompt: corePrompt, maxTokens: 64 },
+                { prompt: datePrompt, maxTokens: 24 },
+            ]);
+            expect(seen.every((request) => request.image?.byteLength === 3)).toBe(true);
+            expect(result.kind).toBe("ready");
+            if (result.kind === "ready") {
+                expect(result.extracted).toMatchObject({
+                    amount: 13500,
+                    currency: "EGP",
+                    kind: "settlement",
+                    date: "2026-08-13",
+                });
+                expect(result.extracted).not.toHaveProperty("direction");
+            }
+        });
+
+        it("propagates a focused-pass device failure instead of hiding it", async () => {
+            const responseSchema = {
+                type: "object",
+                [AI_ACTION_IMAGE_PROMPT_EXTENSION]: {
+                    version: 1,
+                    template: "Read amount and kind.",
+                    includeRuleGuidance: false,
+                },
+                [AI_ACTION_IMAGE_FOCUSED_PASSES_EXTENSION]: {
+                    version: 1,
+                    primaryFields: ["amount", "kind"],
+                    primaryMaxTokens: 32,
+                    passes: [
+                        {
+                            template: "Read date only.",
+                            fields: ["date"],
+                            includeRuleGuidance: false,
+                            includeMessage: false,
+                            maxTokens: 24,
+                        },
+                    ],
+                },
+                properties: {
+                    amount: { type: "number" },
+                    kind: { type: "string", enum: ["iou", "settlement"] },
+                    date: { type: "string", format: "date" },
+                },
+                required: ["amount", "kind"],
+            };
+            const def: AiActionDefinition = { ...DEF, acceptsImage: true, responseSchema };
+            let call = 0;
+            const result = await runAiAction(
+                def,
+                { image: new Uint8Array([1]) },
+                RECIPIENT,
+                async () =>
+                    ++call === 1
+                        ? {
+                              kind: "ok",
+                              text: '{"amount":12900,"kind":"settlement","date":"2022-06-14"}',
+                          }
+                        : { kind: "error", error: "device lost" },
+            );
+
+            expect(result).toEqual({ kind: "error", error: "device lost" });
+        });
+
+        it("accepts a valid empty focused object and leaves its optional field absent", async () => {
+            const responseSchema = {
+                type: "object",
+                [AI_ACTION_IMAGE_PROMPT_EXTENSION]: {
+                    version: 1,
+                    template: "Read amount and kind.",
+                    includeRuleGuidance: false,
+                },
+                [AI_ACTION_IMAGE_FOCUSED_PASSES_EXTENSION]: {
+                    version: 1,
+                    primaryFields: ["amount", "kind"],
+                    primaryMaxTokens: 32,
+                    passes: [
+                        {
+                            template: "Read date only.",
+                            fields: ["date"],
+                            includeRuleGuidance: false,
+                            includeMessage: false,
+                            maxTokens: 24,
+                        },
+                    ],
+                },
+                properties: {
+                    amount: { type: "number" },
+                    kind: { type: "string", enum: ["iou", "settlement"] },
+                    date: { type: "string", format: "date" },
+                },
+                required: ["amount", "kind"],
+            };
+            const def: AiActionDefinition = { ...DEF, acceptsImage: true, responseSchema };
+            let call = 0;
+            const result = await runAiAction(
+                def,
+                { image: new Uint8Array([1]) },
+                RECIPIENT,
+                async () => ({
+                    kind: "ok",
+                    text:
+                        ++call === 1
+                            ? '{"amount":12900,"kind":"settlement","date":"2022-06-14"}'
+                            : "{}",
+                }),
+            );
+
+            expect(result.kind).toBe("ready");
+            if (result.kind === "ready") expect(result.extracted).not.toHaveProperty("date");
+        });
+
+        it("accepts only disjoint, declared, bounded focused passes", () => {
+            const make = (passes: unknown[]) => ({
+                type: "object",
+                [AI_ACTION_IMAGE_FOCUSED_PASSES_EXTENSION]: {
+                    version: 1,
+                    primaryFields: ["amount"],
+                    primaryMaxTokens: 32,
+                    passes,
+                },
+                properties: {
+                    amount: { type: "number" },
+                    date: { type: "string" },
+                },
+            });
+            const validPass = {
+                template: "Read date.",
+                fields: ["date"],
+                includeRuleGuidance: false,
+                includeMessage: false,
+                maxTokens: 16,
+            };
+            expect(imageModelPassesConfig(make([validPass]))).toEqual({
+                primaryFields: ["amount"],
+                primaryMaxTokens: 32,
+                passes: [validPass],
+            });
+            expect(
+                imageModelPassesConfig(make([{ ...validPass, fields: ["amount"] }])),
+            ).toBeUndefined();
+            expect(
+                imageModelPassesConfig(make([{ ...validPass, fields: ["undeclared"] }])),
+            ).toBeUndefined();
+            expect(
+                imageModelPassesConfig(
+                    make(
+                        Array.from({ length: MAX_AI_ACTION_IMAGE_MODEL_PASSES }, (_, index) => ({
+                            ...validPass,
+                            fields: [index === 0 ? "date" : "amount"],
+                        })),
+                    ),
+                ),
+            ).toBeUndefined();
+            expect(imageModelPassesConfig(make([{ ...validPass, maxTokens: 97 }]))).toBeUndefined();
         });
     });
 
@@ -4029,15 +4244,22 @@ describe("aiActionDefinitionFromWire", () => {
         expect(legacy.surfaces).toEqual([]);
     });
 
-    it("maps the wire inbox_canister_id (already a text principal) and leaves it undefined when absent", () => {
+    it("maps the wire app/inbox canister ids and leaves them undefined when absent", () => {
         const base: AiAppManifestWire = {
             name: "demo",
             description: "Demo app",
             consumer_public_key: "-----BEGIN PUBLIC KEY-----\nABC\n-----END PUBLIC KEY-----\n",
             actions: [WIRE],
+            app_canister_id: "rrkah-fqaaa-aaaaa-aaaaq-cai",
             inbox_canister_id: "aaaaa-aa",
         };
+        expect(aiAppManifestFromWire(base).appCanisterId).toBe(
+            "rrkah-fqaaa-aaaaa-aaaaq-cai",
+        );
         expect(aiAppManifestFromWire(base).inboxCanisterId).toBe("aaaaa-aa");
+        expect(
+            aiAppManifestFromWire({ ...base, app_canister_id: undefined }).appCanisterId,
+        ).toBeUndefined();
         expect(
             aiAppManifestFromWire({ ...base, inbox_canister_id: undefined }).inboxCanisterId,
         ).toBeUndefined();

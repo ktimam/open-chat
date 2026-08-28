@@ -12,7 +12,7 @@
     import { now500 } from "@src/stores/time";
     import { toastStore } from "@src/stores/toast";
     import { connectSurfaceOpening, openSurfaceExternally } from "@utils/aiAppSurfaces";
-    import { cancelAiAppLinkConsent } from "@utils/aiAppLinkConsent";
+    import { aiAppLinkCompleted, cancelAiAppLinkConsent } from "@utils/aiAppLinkConsent";
     import {
         mobileWidth,
         type AiAppLinkCode,
@@ -36,9 +36,28 @@
         // The app has claimed the code (the user's key is now registered) — the caller closes the
         // modal and resumes the propose that triggered it.
         onLinked: () => void;
+        // Provenance recovery is a distinct flow even when no key exists and the presentation says
+        // Connect. It never treats key presence as proof or resumes the failed action automatically.
+        purpose?: "connect" | "recovery";
+        previousPublicKey?: string;
+        previousKeyVersion?: bigint;
     }
 
-    let { app, onDismiss, onLinked }: Props = $props();
+    let {
+        app,
+        onDismiss,
+        onLinked,
+        purpose = "connect",
+        previousPublicKey,
+        previousKeyVersion,
+    }: Props = $props();
+
+    let previousConnection = $derived(
+        previousPublicKey !== undefined && previousKeyVersion !== undefined
+            ? { publicKey: previousPublicKey, keyVersion: previousKeyVersion }
+            : undefined,
+    );
+    let recoveryHasExistingKey = $derived((previousPublicKey?.trim().length ?? 0) > 0);
 
     // The app's registered "connect" surface — its pairing-code entry page. When declared, the
     // modal offers a one-tap "open the right page" shortcut.
@@ -50,6 +69,7 @@
     let cancelling = $state(false);
     let completed = $state(false);
     let notLinkedYet = $state(false);
+    let linkCheckFailed = $state(false);
     let linkCode = $state<AiAppLinkCode | undefined>(undefined);
     let pendingCodeRequest: Promise<void> | undefined;
 
@@ -72,6 +92,7 @@
             loadingCode = true;
             codeFailed = false;
             notLinkedYet = false;
+            linkCheckFailed = false;
             try {
                 // Creating a new code for the same (user, app) replaces the old one, so this doubles
                 // as the "get a new code" action once the current one expires.
@@ -91,7 +112,9 @@
         return request;
     }
 
-    void fetchCode();
+    // First-time Connect keeps its existing one-step flow. Provenance recovery is advisory because
+    // AppUnavailable is ambiguous, so merely opening it must not rotate/replace a live bearer.
+    if (purpose === "connect") void fetchCode();
 
     async function cancelLink() {
         if (completed || cancelling) return;
@@ -114,14 +137,25 @@
     async function checkConnection() {
         checking = true;
         notLinkedYet = false;
-        const keys = await client.myAiAppKeys();
-        checking = false;
-        if (cancelling || completed) return;
-        if (keys.some((k) => k.appId === app.id && k.publicKey.length > 0)) {
-            completed = true;
-            onLinked();
-        } else {
-            notLinkedYet = true;
+        linkCheckFailed = false;
+        try {
+            const keys = await client.myAiAppKeys();
+            if (cancelling || completed) return;
+            const linked =
+                purpose === "connect"
+                    ? aiAppLinkCompleted(keys, app.id)
+                    : previousConnection !== undefined &&
+                      aiAppLinkCompleted(keys, app.id, previousConnection);
+            if (linked) {
+                completed = true;
+                onLinked();
+            } else {
+                notLinkedYet = true;
+            }
+        } catch {
+            if (!cancelling && !completed) linkCheckFailed = true;
+        } finally {
+            checking = false;
         }
     }
 </script>
@@ -130,9 +164,20 @@
     <ModalContent closeIcon onClose={cancelLink}>
         {#snippet header()}
             <div class="hdr">
-                <Translatable
-                    resourceKey={i18nKey("aiApps.linkTitle", { name: app.manifest.name })}
-                />
+                {#if purpose === "recovery"}
+                    <Translatable
+                        resourceKey={i18nKey(
+                            recoveryHasExistingKey
+                                ? "aiApps.reconnectTitle"
+                                : "aiApps.reconnectMissingTitle",
+                            { name: app.manifest.name },
+                        )}
+                    />
+                {:else}
+                    <Translatable
+                        resourceKey={i18nKey("aiApps.linkTitle", { name: app.manifest.name })}
+                    />
+                {/if}
             </div>
         {/snippet}
         {#snippet body()}
@@ -140,11 +185,33 @@
                 {#if app.manifest.description.length > 0}
                     <p class="desc">{app.manifest.description}</p>
                 {/if}
-                <p>
-                    <Translatable
-                        resourceKey={i18nKey("aiApps.linkExplain", { name: app.manifest.name })}
-                    />
-                </p>
+                {#if purpose === "recovery"}
+                    <p>
+                        <Translatable
+                            resourceKey={i18nKey(
+                                recoveryHasExistingKey
+                                    ? "aiApps.reconnectExplain"
+                                    : "aiApps.reconnectMissingExplain",
+                                { name: app.manifest.name },
+                            )}
+                        />
+                    </p>
+                    <p>
+                        <Translatable
+                            resourceKey={i18nKey("aiApps.reconnectRetryExplain", {
+                                name: app.manifest.name,
+                            })}
+                        />
+                    </p>
+                {:else}
+                    <p>
+                        <Translatable
+                            resourceKey={i18nKey("aiApps.linkExplain", {
+                                name: app.manifest.name,
+                            })}
+                        />
+                    </p>
+                {/if}
                 <p class="desc">
                     Only the exact registered app canister can redeem this code. Replacement keys
                     are versioned so an old disconnect proof cannot revoke the new connection.
@@ -205,16 +272,34 @@
                             {/if}
                         </li>
                         <li><Translatable resourceKey={i18nKey("aiApps.linkStepPaste")} /></li>
-                        <li><Translatable resourceKey={i18nKey("aiApps.linkStepCheck")} /></li>
+                        <li>
+                            {#if purpose === "recovery"}
+                                <Translatable
+                                    resourceKey={i18nKey("aiApps.reconnectStepCheck", {
+                                        name: app.manifest.name,
+                                    })}
+                                />
+                            {:else}
+                                <Translatable resourceKey={i18nKey("aiApps.linkStepCheck")} />
+                            {/if}
+                        </li>
                     </ol>
 
                     {#if notLinkedYet}
                         <p class="desc">
                             <Translatable
-                                resourceKey={i18nKey("aiApps.linkNotYet", {
-                                    name: app.manifest.name,
-                                })}
+                                resourceKey={i18nKey(
+                                    purpose === "recovery"
+                                        ? "aiApps.reconnectNotYet"
+                                        : "aiApps.linkNotYet",
+                                    { name: app.manifest.name },
+                                )}
                             />
+                        </p>
+                    {/if}
+                    {#if linkCheckFailed}
+                        <p class="desc">
+                            <Translatable resourceKey={i18nKey("aiApps.linkCheckFailed")} />
                         </p>
                     {/if}
                 {:else if codeFailed}
@@ -231,7 +316,7 @@
                         <Translatable resourceKey={i18nKey("aiApps.linkCodeCopy")} />
                     </Button>
                 {/if}
-                {#if codeFailed || expired}
+                {#if (purpose === "recovery" && linkCode === undefined) || codeFailed || expired}
                     <Button
                         secondary
                         loading={loadingCode}
@@ -239,7 +324,28 @@
                         tiny={$mobileWidth}
                         onClick={fetchCode}
                     >
-                        <Translatable resourceKey={i18nKey("aiApps.linkNewCode")} />
+                        {#if purpose === "recovery"}
+                            <Translatable
+                                resourceKey={i18nKey(
+                                    recoveryHasExistingKey
+                                        ? "aiApps.reconnectGenerateCode"
+                                        : "aiApps.reconnectGenerateConnectionCode",
+                                )}
+                            />
+                        {:else}
+                            <Translatable resourceKey={i18nKey("aiApps.linkNewCode")} />
+                        {/if}
+                    </Button>
+                {/if}
+                {#if purpose === "recovery"}
+                    <Button
+                        secondary
+                        disabled={loadingCode || cancelling}
+                        small={!$mobileWidth}
+                        tiny={$mobileWidth}
+                        onClick={cancelLink}
+                    >
+                        <Translatable resourceKey={i18nKey("aiApps.close")} />
                     </Button>
                 {/if}
                 <Button

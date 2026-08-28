@@ -7,6 +7,7 @@ const MAX_DIRECT_AI_APP_EXACT_LOOKUPS = 32;
 export interface DirectChatAiApps {
     apps: AiAppRegistration[];
     connectedKeys: ReadonlyMap<number, string>;
+    connectedKeyVersions: ReadonlyMap<number, bigint>;
     exactAppIds: ReadonlySet<number>;
 }
 
@@ -15,19 +16,50 @@ export interface ConnectedDirectChatAiApp {
     recipientKey: string;
 }
 
-// The backend stores one row per (user, app), but normalize defensively so malformed duplicate
-// responses cannot make connection state depend on wire order. Empty sorts first and therefore wins
-// a duplicate conflict fail-closed.
-export function directChatAiAppKeys(keys: AiAppUserKey[]): Map<number, string> {
+type AiAppUserKeyInput = Pick<AiAppUserKey, "appId" | "publicKey"> &
+    Partial<Pick<AiAppUserKey, "keyVersion">>;
+
+interface DirectChatAiAppConnection {
+    publicKey: string;
+    keyVersion: bigint;
+}
+
+// The backend stores one row per (user, app), but normalize defensively so malformed duplicates do
+// not make connection state depend on wire order. Empty keys and lower epochs sort first, causing a
+// duplicate conflict to retain the least-authoritative state.
+export function directChatAiAppConnections(
+    keys: readonly AiAppUserKeyInput[],
+): Map<number, DirectChatAiAppConnection> {
     const sorted = [...keys].sort(
-        (left, right) =>
-            left.appId - right.appId || left.publicKey.localeCompare(right.publicKey),
+        (left, right) => {
+            const byId = left.appId - right.appId;
+            if (byId !== 0) return byId;
+            const byKey = left.publicKey.localeCompare(right.publicKey);
+            if (byKey !== 0) return byKey;
+            const leftVersion = left.keyVersion ?? 0n;
+            const rightVersion = right.keyVersion ?? 0n;
+            return leftVersion < rightVersion ? -1 : leftVersion > rightVersion ? 1 : 0;
+        },
     );
-    const byAppId = new Map<number, string>();
+    const byAppId = new Map<number, DirectChatAiAppConnection>();
     for (const key of sorted) {
-        if (!byAppId.has(key.appId)) byAppId.set(key.appId, key.publicKey);
+        if (!byAppId.has(key.appId)) {
+            byAppId.set(key.appId, {
+                publicKey: key.publicKey,
+                keyVersion: key.keyVersion ?? 0n,
+            });
+        }
     }
     return byAppId;
+}
+
+export function directChatAiAppKeys(keys: readonly AiAppUserKeyInput[]): Map<number, string> {
+    return new Map(
+        [...directChatAiAppConnections(keys)].map(([appId, connection]) => [
+            appId,
+            connection.publicKey,
+        ]),
+    );
 }
 
 export function isDirectChatCardApp(app: AiAppRegistration): boolean {
@@ -42,7 +74,10 @@ export async function loadDirectChatAiApps(client: OpenChat): Promise<DirectChat
         client.myAiAppKeys(),
         client.exploreAiApps(undefined, 0, DIRECT_AI_APP_DIRECTORY_PAGE_SIZE),
     ]);
-    const allKeys = directChatAiAppKeys(keys);
+    const allConnections = directChatAiAppConnections(keys);
+    const allKeys = new Map(
+        [...allConnections].map(([appId, connection]) => [appId, connection.publicKey]),
+    );
     const exactIds = [...allKeys.keys()]
         .sort((left, right) => left - right)
         .slice(0, MAX_DIRECT_AI_APP_EXACT_LOOKUPS);
@@ -66,9 +101,15 @@ export async function loadDirectChatAiApps(client: OpenChat): Promise<DirectChat
     const connectedKeys = new Map(
         [...allKeys].filter(([, publicKey]) => publicKey.length > 0),
     );
+    const connectedKeyVersions = new Map(
+        [...allConnections]
+            .filter(([, connection]) => connection.publicKey.length > 0)
+            .map(([appId, connection]) => [appId, connection.keyVersion]),
+    );
     return {
         apps: [...byAppId.values()].sort((left, right) => left.id - right.id),
         connectedKeys,
+        connectedKeyVersions,
         exactAppIds,
     };
 }

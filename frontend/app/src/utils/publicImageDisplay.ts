@@ -1,5 +1,6 @@
 import type { BlobReference } from "@client";
 import { localReplicaImagePath } from "../../localReplicaImageProxy";
+import { isExactConfiguredLocalStorageBlob } from "./configuredLocalBlobUrl";
 
 // OpenChat caps uploaded images at 5 MiB. Keep the worker response bounded to that same value so a
 // malformed storage response cannot make the page allocate an unbounded Blob.
@@ -39,6 +40,7 @@ export function shouldProxyLocalPublicImage(
     page: PublicImagePageLocation | undefined = typeof window === "undefined"
         ? undefined
         : window.location,
+    blobUrlPattern: string | undefined = import.meta.env.OC_BLOB_URL_PATTERN,
 ): boolean {
     if (
         blobUrl === undefined ||
@@ -48,25 +50,13 @@ export function shouldProxyLocalPublicImage(
     ) {
         return false;
     }
-    try {
-        const parsed = new URL(blobUrl);
-        return (
-            parsed.protocol === "http:" &&
-            parsed.port === "8080" &&
-            parsed.hostname.toLowerCase() === `${ref.canisterId.toLowerCase()}.raw.localhost` &&
-            parsed.pathname === `/blobs/${ref.blobId}` &&
-            parsed.search === "" &&
-            parsed.hash === ""
-        );
-    } catch {
-        return false;
-    }
+    return isExactConfiguredLocalStorageBlob(blobUrl, ref, blobUrlPattern);
 }
 
 /**
  * Keep local public images same-origin when the development UI is reached through HTTPS.
  *
- * A phone cannot resolve the PC-only `*.raw.localhost:8080` URL embedded in the chat event. The
+ * A phone cannot resolve the PC-only configured `*.raw.localhost` URL embedded in the chat event. The
  * Vite route streams the original public image from that exact canister and blob id, so display no
  * longer depends on the OpenChat background worker completing an ArrayBuffer round trip first.
  */
@@ -76,8 +66,9 @@ export function publicImageDisplayUrl(
     page: PublicImagePageLocation | undefined = typeof window === "undefined"
         ? undefined
         : window.location,
+    blobUrlPattern: string | undefined = import.meta.env.OC_BLOB_URL_PATTERN,
 ): string | undefined {
-    if (!shouldProxyLocalPublicImage(blobUrl, ref, page) || ref === undefined) {
+    if (!shouldProxyLocalPublicImage(blobUrl, ref, page, blobUrlPattern) || ref === undefined) {
         return blobUrl;
     }
     return localReplicaImagePath(ref.canisterId, ref.blobId) ?? blobUrl;

@@ -1,6 +1,9 @@
+import { resolveDevAllowedHost } from "../../devAllowedHost.mjs";
+
 export interface LocalAiActionAvailabilityEnvironment {
     buildEnvironment?: string;
     dfxNetwork?: string;
+    devAllowedHost?: string;
     cardsEnabled?: string;
     contentAttestationEnabled?: string;
     finalConfirmationEnabled?: string;
@@ -23,11 +26,22 @@ export function evaluateLocalAiActionAvailability(
     environment: LocalAiActionAvailabilityEnvironment,
     hostname: string | undefined,
 ): AiActionAvailability {
+    const normalizedHostname = hostname?.toLowerCase();
+    let devAllowedHost: string | undefined;
+    try {
+        devAllowedHost = resolveDevAllowedHost(environment.devAllowedHost);
+    } catch {
+        // Build configuration validates this value before serving or bundling. Retain a fail-closed
+        // runtime boundary in case this pure evaluator is ever called with an untrusted value.
+        devAllowedHost = undefined;
+    }
+    const hostnameAllowed =
+        normalizedHostname !== undefined &&
+        (LOOPBACK_HOSTNAMES.has(normalizedHostname) || normalizedHostname === devAllowedHost);
     const locallyArmed =
         environment.buildEnvironment === "development" &&
         environment.dfxNetwork === "local" &&
-        hostname !== undefined &&
-        LOOPBACK_HOSTNAMES.has(hostname) &&
+        hostnameAllowed &&
         environment.cardsEnabled === "true";
     const contentAttestation = locallyArmed && environment.contentAttestationEnabled === "true";
 
@@ -44,6 +58,7 @@ function currentAvailability(): AiActionAvailability {
         {
             buildEnvironment: import.meta.env.OC_BUILD_ENV,
             dfxNetwork: import.meta.env.OC_DFX_NETWORK,
+            devAllowedHost: import.meta.env.OC_DEV_ALLOWED_HOST,
             cardsEnabled: import.meta.env.OC_LOCAL_AI_APP_CARDS_ENABLED,
             contentAttestationEnabled: import.meta.env.OC_LOCAL_AI_APP_CONTENT_ATTESTATION_ENABLED,
             finalConfirmationEnabled: import.meta.env.OC_LOCAL_AI_APP_FINAL_CONFIRMATION_ENABLED,

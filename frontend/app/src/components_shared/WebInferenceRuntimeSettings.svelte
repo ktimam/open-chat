@@ -25,7 +25,7 @@
     function saveMaxOutputTokens(event: Event) {
         const input = event.currentTarget as HTMLInputElement;
         updateTransformersWebGpuMaxOutputTokens(input.valueAsNumber);
-        savedMessage = "Max output token cap saved. The next image action uses it.";
+        savedMessage = "Max output token cap saved. The next local model run uses it.";
     }
 
     function reset() {
@@ -36,7 +36,7 @@
 
 {#if active}
     <section class="runtime-settings" aria-label={`${modelName} runtime settings`}>
-        <h4>All-WebGPU image runtime</h4>
+        <h4>All-WebGPU model runtime</h4>
         <p>
             Qwen3-VL 2B runs embeddings, vision, and decoding on WebGPU. This route does not invoke
             OCR and has no CPU/WASM model fallback.
@@ -56,7 +56,7 @@
             </div>
             <div>
                 <dt>Image input</dt>
-                <dd><code>256 × 448 · normalized</code></dd>
+                <dd><code>288 × 512 · normalized</code></dd>
             </div>
             <div>
                 <dt>Decoding</dt>

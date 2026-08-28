@@ -11,7 +11,7 @@ import type {
     DiamondMembershipFees,
     AiAppLinkCode,
     AiAppCardContentV1,
-    AiAppCardProvenance,
+    AiAppCardProvenanceResult,
     ChatIdentifier,
     ExploreAiAppsResponse,
     AiAppManifest,
@@ -928,7 +928,7 @@ export class UserIndexClient extends SingleCanisterMsgpackAgent {
         chatId: ChatIdentifier,
         messageId: bigint,
         threadRootMessageIndex: number | undefined,
-    ): Promise<AiAppCardProvenance | undefined> {
+    ): Promise<AiAppCardProvenanceResult> {
         return this.update(
             "create_ai_app_card_provenance",
             {
