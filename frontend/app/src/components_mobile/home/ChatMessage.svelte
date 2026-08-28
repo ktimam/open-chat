@@ -594,11 +594,7 @@
             terminalStatusSet = true;
             if (result.kind === "error") toastStore.showFailureToast(i18nKey(result.message));
         } finally {
-            if (
-                componentMounted &&
-                localAiMessageRun === run &&
-                !terminalStatusSet
-            ) {
+            if (componentMounted && localAiMessageRun === run && !terminalStatusSet) {
                 setLocalAiMessageStatus(undefined);
             }
         }
@@ -775,6 +771,7 @@
         `${routeForMessage($chatListScopeStore.kind, { chatId }, msg.messageIndex)}?open=true`,
     );
     let isProposal = $derived(msg.content.kind === "proposal_content");
+    let isActionCard = $derived(msg.content.kind === "action_card_content");
     let canEdit = $derived(
         me && supportsEdit && !msg.deleted && client.contentTypeSupportsEdit(msg.content.kind),
     );
@@ -1098,7 +1095,7 @@
                           isScrolling: scrollStatus.isScrolling || scrollStatus.isCooldown,
                       }}
             >
-                {#if showAvatar}
+                {#if showAvatar && !isActionCard}
                     <div class:first class="avatar">
                         <Avatar
                             onClick={openUserProfile}
@@ -1111,13 +1108,17 @@
                 {@const hasReactions = msg.reactions.length > 0}
                 {@const hasTips = tips.length > 0}
                 <Container
-                    supplementalClass={"message_bubble_wrapper"}
+                    supplementalClass={`message_bubble_wrapper${isActionCard ? " action_card_message" : ""}`}
                     overflow={"visible"}
                     crossAxisAlignment={me ? "end" : "start"}
-                    width={"hug"}
-                    maxWidth={chatId.kind === "direct_chat" ? "78vw" : "75vw"}
+                    width={isActionCard ? "fill" : "hug"}
+                    maxWidth={isActionCard
+                        ? "100%"
+                        : chatId.kind === "direct_chat"
+                          ? "78vw"
+                          : "75vw"}
                     gap={"xxs"}
-                    minWidth={"6rem"}
+                    minWidth={isActionCard ? "0" : "6rem"}
                     direction={"vertical"}
                 >
                     {#if panDirection}
@@ -1416,6 +1417,13 @@
 
     :global(.container.message_bubble_wrapper .menu-trigger) {
         width: 100%;
+    }
+
+    :global(.container.message_bubble_wrapper.action_card_message),
+    :global(.container.message_bubble_wrapper.action_card_message .menu-trigger) {
+        box-sizing: border-box;
+        min-width: 0;
+        max-width: 100%;
     }
 
     .avatar:not(.first) {

@@ -1,12 +1,21 @@
 <script lang="ts">
     import Panzoom from "@panzoom/panzoom";
     import { IconButton, doubleTap } from "component-lib";
-    import type { ImageContent, MemeFighterContent } from "@client";
-    import { onMount } from "svelte";
+    import type { ImageContent, MemeFighterContent, OpenChat } from "@client";
+    import { getContext, onMount } from "svelte";
     import Close from "svelte-material-icons/Close.svelte";
     import { popHistoryStateWithAction, pushDummyHistoryState } from "../../utils/history";
     import { getProxyAdjustedBlobUrl } from "../../utils/media";
-    import { publicImageDisplayUrl } from "../../utils/publicImageDisplay";
+    import {
+        PublicImageObjectUrlResolver,
+        publicImageDisplayUrl,
+        shouldLoadNativePublicImageThroughWorker,
+    } from "../../utils/publicImageDisplay";
+
+    const client = getContext<OpenChat>("client");
+    const imageObjectUrlResolver = new PublicImageObjectUrlResolver((ref, maxBytes) =>
+        client.downloadPublicBlob(ref, maxBytes),
+    );
 
     // TODO add reactions, forward, reply and other menu and conversation options to this screen!
 
@@ -18,23 +27,64 @@
     let { imageContent, onClose }: Props = $props();
 
     let normalisedImage = $derived(imageContent ? normalisedImageContent(imageContent) : undefined);
+    let nativeObjectUrl = $state<string>();
     let adjustedUrl = $derived(
         normalisedImage
             ? getProxyAdjustedBlobUrl(
-                  imageContent.kind === "image_content"
-                      ? publicImageDisplayUrl(normalisedImage.url, imageContent.blobReference)
-                      : normalisedImage.url,
+                  nativeObjectUrl ??
+                      (imageContent.kind === "image_content"
+                          ? publicImageDisplayUrl(normalisedImage.url, imageContent.blobReference)
+                          : normalisedImage.url),
               )
             : undefined,
     );
 
+    function loadNativeObjectUrl() {
+        if (
+            !client.isNativeApp() ||
+            imageContent.kind !== "image_content" ||
+            imageContent.blobReference === undefined
+        ) {
+            return;
+        }
+        void imageObjectUrlResolver
+            .resolve(imageContent.blobReference, imageContent.mimeType)
+            .then((url) => {
+                if (url !== undefined) nativeObjectUrl = url;
+            });
+    }
+
+    $effect(() => {
+        nativeObjectUrl = undefined;
+        imageObjectUrlResolver.clear();
+        if (
+            imageContent.kind === "image_content" &&
+            shouldLoadNativePublicImageThroughWorker(
+                imageContent.blobUrl,
+                imageContent.blobReference,
+                client.isNativeApp(),
+            )
+        ) {
+            loadNativeObjectUrl();
+        }
+        return () => imageObjectUrlResolver.clear();
+    });
+
     let container: HTMLDivElement;
+    let imgElement: HTMLImageElement | undefined = $state();
     let imageWidth = $state(0);
     let imageHeight = $state(0);
     let panzoomInstance: ReturnType<typeof Panzoom>;
 
     const DEFAULT_SCALE = 1;
     const SCALE_EPSILON = 0.02;
+
+    function onImageError() {
+        if (imgElement && normalisedImage !== undefined) {
+            imgElement.src = normalisedImage.fallback;
+        }
+        if (nativeObjectUrl === undefined) loadNativeObjectUrl();
+    }
 
     onMount(() => {
         panzoomInstance = Panzoom(container, {
@@ -150,12 +200,15 @@
     <div onclick={onClose} class="bg"></div>
     <div bind:this={container} class="panzoom_frame" use:doubleTap={onDoubleTap}>
         <img
+            bind:this={imgElement}
             class="image"
             src={adjustedUrl}
+            onerror={onImageError}
             alt="zoomable"
             draggable="false"
             bind:clientHeight={imageHeight}
-            bind:clientWidth={imageWidth} />
+            bind:clientWidth={imageWidth}
+        />
     </div>
 
     <div class="close">

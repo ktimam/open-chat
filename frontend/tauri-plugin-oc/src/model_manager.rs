@@ -814,6 +814,7 @@ impl<R: Runtime> ModelManager<R> {
                 model_id,
                 runtime: manifest.runtime,
                 size_bytes: manifest.size_bytes,
+                files: manifest.files,
                 path: entry.path().to_string_lossy().to_string(),
             });
         }
@@ -1055,6 +1056,7 @@ mod cycle_tests {
             model_id: MODEL_ID.to_string(),
             runtime: "llama-cpp".to_string(),
             size_bytes: total,
+            files: Vec::new(),
             path: dir.to_string_lossy().to_string(),
         };
         fs::write(
@@ -1239,6 +1241,12 @@ mod helper_tests {
             model_id: "gemma-4-e2b-it-q4".to_string(),
             runtime: "llama-cpp".to_string(),
             size_bytes: 4_092_392_352,
+            files: vec![ModelFileSpec {
+                url: "https://models.example/gemma.gguf".to_string(),
+                sha256: Some("a".repeat(64)),
+                bytes: 4_092_392_352,
+                filename: None,
+            }],
             path: dir.to_string_lossy().to_string(),
         };
 
@@ -1256,6 +1264,10 @@ mod helper_tests {
         assert_eq!(read_back.model_id, manifest.model_id);
         assert_eq!(read_back.runtime, manifest.runtime);
         assert_eq!(read_back.size_bytes, manifest.size_bytes);
+        assert_eq!(read_back.files.len(), 1);
+        assert_eq!(read_back.files[0].url, manifest.files[0].url);
+        assert_eq!(read_back.files[0].sha256, manifest.files[0].sha256);
+        assert_eq!(read_back.files[0].bytes, manifest.files[0].bytes);
         assert_eq!(read_back.path, manifest.path);
 
         // Serde rename_all = camelCase must be honoured on the wire (TS reads modelId / sizeBytes).

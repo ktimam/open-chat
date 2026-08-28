@@ -10,6 +10,12 @@
 
 export type ModelModality = "text" | "image";
 
+// A bounded, content-agnostic image focus requested by an app-authored extraction pass. The client
+// derives a new in-memory raster from the original pixels before inference; no OCR or text crosses
+// this seam. Keep this a closed enum so untrusted app manifests cannot request arbitrary coordinates
+// or tiny adversarial crops.
+export type InferenceImageRegion = "lower_half";
+
 // Which native backend can load/run a given model. Pluggable — this is a named, extensible union so more
 // backends can be added without changing the catalog or inference contract; a catalog entry declares its
 // runtime so the client can match it against the backends the current build supports. Chosen runtime:
@@ -72,6 +78,8 @@ export interface InferenceRequest {
     prompt: string;
     // Optional image (e.g. extracted from a message) for vision-capable models.
     image?: Uint8Array;
+    // Optional bounded region of `image` to present to this inference call.
+    imageRegion?: InferenceImageRegion;
     // Optional additional text context.
     text?: string;
     maxTokens?: number;

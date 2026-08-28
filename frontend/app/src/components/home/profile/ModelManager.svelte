@@ -12,7 +12,11 @@
         type CustomModelFile,
         type DisplayModel,
     } from "@src/stores/customModels";
-    import { defaultModelCatalog, mergeCatalogs } from "@utils/modelCatalog";
+    import {
+        defaultModelCatalog,
+        mergeCatalogs,
+        nativeModelInstallStatus,
+    } from "@utils/modelCatalog";
     import { isNativeClient } from "@utils/onDeviceInference";
     import { transformersWebGpuSelectionCanHandle } from "@utils/transformersWebGpuInference";
     import {
@@ -57,8 +61,8 @@
     const native = isNativeClient();
 
     // The OpenChat-hosted catalog (owner-curated on the registry, updatable without a client release)
-    // is a per-id OVERLAY on the built-in default — remote entries rank first and win on id conflicts,
-    // builtin leftovers are appended — so a stale/partial remote catalog can never shrink the chooser.
+    // may rank or add entries, but this build's trusted artifact wins for every built-in id. Built-in
+    // leftovers are appended, so a stale/partial remote catalog can never shrink the chooser.
     let catalogSource = $state<ModelCatalogEntry[]>(defaultModelCatalog.models);
 
     async function loadCatalog() {
@@ -155,8 +159,8 @@
         await clearWebModel();
     }
 
-    function isDownloaded(id: string): boolean {
-        return localModels.some((m) => m.modelId === id);
+    function installStatus(entry: DisplayModel) {
+        return nativeModelInstallStatus(entry, localModels);
     }
 
     async function load() {
@@ -541,7 +545,8 @@
     </div>
 
     {#each display as entry (entry.id)}
-        {@const downloaded = isDownloaded(entry.id)}
+        {@const install = installStatus(entry)}
+        {@const downloaded = install === "current"}
         {@const busy = downloading[entry.id] === true}
         <div class="model">
             <div class="name">{entry.name}</div>
@@ -561,6 +566,15 @@
             </div>
             {#if entry.custom && entry.sourceUrl}
                 <div class="source" title={entry.sourceUrl}>{entry.sourceUrl}</div>
+            {/if}
+            {#if install === "update_required"}
+                <div class="error">
+                    <Translatable
+                        resourceKey={i18nKey(
+                            "Update required — this downloaded model does not match the version trusted by this OpenChat build.",
+                        )}
+                    />
+                </div>
             {/if}
 
             {#if downloaded}
@@ -609,8 +623,17 @@
                         onClick={() => download(entry)}
                         small
                     >
-                        <Translatable resourceKey={i18nKey("Download")} />
+                        <Translatable
+                            resourceKey={i18nKey(
+                                install === "update_required" ? "Update" : "Download",
+                            )}
+                        />
                     </Button>
+                    {#if install === "update_required"}
+                        <Button secondary onClick={() => remove(entry)} small>
+                            <Translatable resourceKey={i18nKey("Remove")} />
+                        </Button>
+                    {/if}
                 </div>
                 {#if errors[entry.id]}
                     <div class="error">{errors[entry.id]}</div>

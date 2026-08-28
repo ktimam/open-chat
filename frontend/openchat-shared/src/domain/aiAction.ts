@@ -10,7 +10,7 @@
 
 import { Principal } from "@icp-sdk/core/principal";
 import type { ActionCardContent, ActionCardRow, ChatIdentifier } from "./chat/chat";
-import type { InferenceRequest, InferenceResult } from "./onDeviceModel";
+import type { InferenceImageRegion, InferenceRequest, InferenceResult } from "./onDeviceModel";
 
 // These are defense-in-depth limits at the untrusted manifest/model boundary. The registry enforces
 // compatible per-field bounds, but clients must remain safe when reading legacy, cached, or malformed
@@ -160,6 +160,7 @@ export interface AiActionImageModelPassConfig {
     includeRuleGuidance: boolean;
     includeMessage: boolean;
     maxTokens: number;
+    imageRegion?: InferenceImageRegion;
 }
 
 export interface AiActionImageModelPassesConfig {
@@ -226,7 +227,9 @@ export function imagePromptTemplateConfig(
     };
 }
 
-/** Parse focused passes layered over the backwards-compatible v1 compact primary prompt. */
+/** Parse focused passes layered over the backwards-compatible compact primary prompt. Version 1
+ * receives the original image for every pass. Version 2 requires one bounded, client-authored
+ * pixel region per focused pass; the model still receives pixels only, never OCR text. */
 export function imageModelPassesConfig(
     responseSchema: object | undefined,
 ): AiActionImageModelPassesConfig | undefined {
@@ -242,13 +245,14 @@ export function imageModelPassesConfig(
     if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return undefined;
     const extension = raw as Record<string, unknown>;
     const extensionKeys = Object.keys(extension).sort();
+    const extensionVersion = extension.version as 1 | 2;
     if (
         extensionKeys.length !== 4 ||
         extensionKeys[0] !== "passes" ||
         extensionKeys[1] !== "primaryFields" ||
         extensionKeys[2] !== "primaryMaxTokens" ||
         extensionKeys[3] !== "version" ||
-        extension.version !== 1 ||
+        (extensionVersion !== 1 && extensionVersion !== 2) ||
         !Array.isArray(extension.primaryFields) ||
         extension.primaryFields.length === 0 ||
         extension.primaryFields.length > MAX_AI_ACTION_IMAGE_PASS_FIELDS ||
@@ -289,13 +293,23 @@ export function imageModelPassesConfig(
         }
         const pass = rawPass as Record<string, unknown>;
         const passKeys = Object.keys(pass).sort();
+        const validPassKeys =
+            extensionVersion === 1
+                ? passKeys.length === 5 &&
+                  passKeys[0] === "fields" &&
+                  passKeys[1] === "includeMessage" &&
+                  passKeys[2] === "includeRuleGuidance" &&
+                  passKeys[3] === "maxTokens" &&
+                  passKeys[4] === "template"
+                : passKeys.length === 6 &&
+                  passKeys[0] === "fields" &&
+                  passKeys[1] === "imageRegion" &&
+                  passKeys[2] === "includeMessage" &&
+                  passKeys[3] === "includeRuleGuidance" &&
+                  passKeys[4] === "maxTokens" &&
+                  passKeys[5] === "template";
         if (
-            passKeys.length !== 5 ||
-            passKeys[0] !== "fields" ||
-            passKeys[1] !== "includeMessage" ||
-            passKeys[2] !== "includeRuleGuidance" ||
-            passKeys[3] !== "maxTokens" ||
-            passKeys[4] !== "template" ||
+            !validPassKeys ||
             typeof pass.template !== "string" ||
             pass.template.trim().length === 0 ||
             containsUnsafePromptCodePoint(pass.template) ||
@@ -306,7 +320,8 @@ export function imageModelPassesConfig(
             (pass.maxTokens as number) > MAX_AI_ACTION_IMAGE_PASS_TOKENS ||
             !Array.isArray(pass.fields) ||
             pass.fields.length === 0 ||
-            pass.fields.length > MAX_AI_ACTION_IMAGE_PASS_FIELDS
+            pass.fields.length > MAX_AI_ACTION_IMAGE_PASS_FIELDS ||
+            (extensionVersion === 2 && pass.imageRegion !== "lower_half")
         ) {
             return undefined;
         }
@@ -332,6 +347,8 @@ export function imageModelPassesConfig(
             includeRuleGuidance: pass.includeRuleGuidance,
             includeMessage: pass.includeMessage,
             maxTokens: pass.maxTokens as number,
+            imageRegion:
+                extensionVersion === 2 ? (pass.imageRegion as InferenceImageRegion) : undefined,
         });
     }
     return {
@@ -1267,9 +1284,10 @@ function normalizeUnambiguousCalendarDate(value: string): string | undefined {
     if (value.length > 96) return undefined;
     const trimmed = value.trim().replace(/^date\s*:\s*/iu, "");
     if (isStrictCalendarDate(trimmed)) return trimmed;
-    const match = /^(\d{1,2})\s+([a-z]{3,9})\s+(\d{4})(?:\s+\d{1,2}:\d{2}(?::\d{2})?\s*(?:am|pm)?)?$/iu.exec(
-        trimmed,
-    );
+    const match =
+        /^(\d{1,2})\s+([a-z]{3,9})\s+(\d{4})(?:\s+\d{1,2}:\d{2}(?::\d{2})?\s*(?:am|pm)?)?$/iu.exec(
+            trimmed,
+        );
     if (match === null) return undefined;
     const month = ENGLISH_MONTH_NUMBER[match[2].toLowerCase()];
     if (month === undefined) return undefined;
@@ -1603,11 +1621,7 @@ function conformPropertyValue(value: unknown, p: SafePropertySchema): unknown {
     // emit a degenerate value that IS the declared type (e.g. amount 0 against exclusiveMinimum
     // 0, live-reproduced from the message "hi") — deleting it here lets the required-fields
     // check refuse the whole extraction instead of posting an unusable card.
-    if (
-        typeof p.minimum === "number" &&
-        typeof conformed === "number" &&
-        conformed < p.minimum
-    ) {
+    if (typeof p.minimum === "number" && typeof conformed === "number" && conformed < p.minimum) {
         return INVALID_SCHEMA_VALUE;
     }
     if (
@@ -1617,11 +1631,7 @@ function conformPropertyValue(value: unknown, p: SafePropertySchema): unknown {
     ) {
         return INVALID_SCHEMA_VALUE;
     }
-    if (
-        typeof p.maximum === "number" &&
-        typeof conformed === "number" &&
-        conformed > p.maximum
-    ) {
+    if (typeof p.maximum === "number" && typeof conformed === "number" && conformed > p.maximum) {
         return INVALID_SCHEMA_VALUE;
     }
     if (typeof conformed === "string") {
@@ -2712,6 +2722,21 @@ function parseDeclaredDelimitedTextSequence(
     return { kind: "candidates", candidates };
 }
 
+const MAX_UNEXPECTED_INFERENCE_FAILURE_CHARS = 240;
+
+function boundedInferenceFailure(error: unknown): string {
+    const raw = error instanceof Error ? error.message : String(error ?? "");
+    const safe = raw
+        .replace(/([?&](?:code|key|secret|token)=)[^&\s]*/giu, "$1[redacted]")
+        .replace(/[\u0000-\u001f\u007f-\u009f]+/gu, " ")
+        .replace(/\s+/gu, " ")
+        .trim();
+    if (safe.length === 0) return "model inference stopped unexpectedly";
+    return safe.length <= MAX_UNEXPECTED_INFERENCE_FAILURE_CHARS
+        ? safe
+        : `${safe.slice(0, MAX_UNEXPECTED_INFERENCE_FAILURE_CHARS - 1)}…`;
+}
+
 // Orchestrates the full proposal: run the on-device model against the declared prompt, parse, and build the
 // card. `infer` is the on-device inference facade (injected so this is unit-testable without a native runtime).
 export async function runAiAction(
@@ -2730,6 +2755,23 @@ export async function runAiAction(
     appId?: number,
     appRevision?: bigint,
 ): Promise<RunAiActionResult> {
+    // The inference contract is result-shaped, but a native bridge/worker can still reject when its
+    // runtime execution context is destroyed. Keep that infrastructure failure inside the model
+    // boundary. Letting it escape made the outer proposal flow show the unrelated generic “action
+    // could not be prepared” toast and hid the actual inference failure.
+    const inferSafely = async (request: InferenceRequest): Promise<InferenceResult> => {
+        try {
+            const result = await infer(request);
+            return result.kind === "error"
+                ? { ...result, error: boundedInferenceFailure(result.error) }
+                : result;
+        } catch (error) {
+            return {
+                kind: "error",
+                error: boundedInferenceFailure(error),
+            };
+        }
+    };
     const privateEvidenceSupplied = input.privateImageEvidence !== undefined;
     if (
         privateEvidenceSupplied &&
@@ -2830,10 +2872,11 @@ export async function runAiAction(
     // why this read like small-model flakiness rather than a bug in our own prompt assembly.
     if (candidates === undefined) {
         if (imageModelPasses !== undefined) {
-            // Every pass runs through the same selected vision model and receives the original image;
-            // there is no OCR/text-reader seam here. The backwards-compatible compact prompt owns
-            // primaryFields; focused passes may only fill their own disjoint fields.
-            const primary = await infer({
+            // Every pass runs through the same selected vision model and receives only image pixels;
+            // a v2 focused pass may receive a bounded crop of the original, never OCR/text-reader
+            // output. The compact prompt owns primaryFields; focused passes may only fill their own
+            // disjoint fields.
+            const primary = await inferSafely({
                 modelId: input.modelId,
                 prompt,
                 image: input.image,
@@ -2868,10 +2911,11 @@ export async function runAiAction(
             // declare immutable match keys; never attach a reordered date to the wrong transaction.
             if (candidates?.length === 1) {
                 for (const pass of imageModelPasses.passes) {
-                    const result = await infer({
+                    const result = await inferSafely({
                         modelId: input.modelId,
                         prompt: buildImagePassPrompt(pass),
                         image: input.image,
+                        imageRegion: pass.imageRegion,
                         responseMode: "json",
                         maxTokens: pass.maxTokens,
                     });
@@ -2903,7 +2947,7 @@ export async function runAiAction(
                 }
             }
         } else {
-            const result = await infer({
+            const result = await inferSafely({
                 modelId: input.modelId,
                 prompt,
                 // The private-evidence route is intentionally text-only: image preparation/OCR has
@@ -2943,7 +2987,7 @@ export async function runAiAction(
             // runaway. Image inference is intentionally not doubled here unless the app explicitly declared
             // the bounded field-pass pipeline above.
             if (candidates === undefined && !hasImageSource && hasTextInput) {
-                const repair = await infer({
+                const repair = await inferSafely({
                     modelId: input.modelId,
                     prompt: `${prompt}\n\nJSON FORMAT CORRECTION:\nYour previous response did not contain a parseable action. Return ONLY valid JSON: one object for one action, or an array with one object per action. Follow every original extraction rule, include only fields supported by the message, and include every required field that the message supports. Do not include analysis, prose, markdown fences, or an empty array.`,
                     responseMode: "json",

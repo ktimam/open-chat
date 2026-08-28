@@ -204,11 +204,7 @@
                     confirmPayloadOverride?.slice(),
                     confirmationGrant?.slice(),
                 )) === true;
-            if (
-                response === "confirm" &&
-                succeeded &&
-                cardSubmissionKey === submissionKey
-            ) {
+            if (response === "confirm" && succeeded && cardSubmissionKey === submissionKey) {
                 submittedCardKey = submissionKey;
             }
             return succeeded;
@@ -423,66 +419,66 @@
         void settleCardOperationBeforeTimeout(() =>
             resolveActionAppForCard(client, activeChatId, actionId, appId, appRevision),
         ).then((settlement) => {
-                if (cancelled || resolutionChatKey !== activeChatKey) return;
-                appResolutionComplete = true;
-                if (settlement.status !== "settled") return;
-                const resolution = settlement.value;
-                if (resolution === undefined) return;
-                appResolutionLookupAttempted = false;
-                candidateAppIdentity = resolution.identity;
-                resolvedAppIdentity = resolution.identity;
-                hasPersistentUserPairing = resolution.hasPersistentUserPairing;
-                const opening = resolution.cardSurface;
-                if (opening === undefined) return;
-                if (!contentAttested) {
-                    // appVerified currently proves only registry coordinates. The sender still controls
-                    // title/rows/payload, so do not load trusted app pixels until the backend attests the
-                    // complete canonical card content.
-                    cardContentAttestationBlocked = true;
-                    return;
-                }
-                if (!appCardRenderingAvailable(contentAttested)) {
-                    // Backend attestation is necessary but does not by itself activate an unfinished
-                    // client capability. Keep the iframe closed unless this exact local client release
-                    // has also been explicitly armed.
-                    appCardRenderingBlocked = true;
-                    return;
-                }
-                const origin = deriveCardOrigin(opening.url, {
-                    allowLocalDevelopment: import.meta.env.DEV,
-                });
-                // No parseable origin → decline to embed; stay on the OC-rendered rows rather than talk to
-                // an unknown origin.
-                if (origin === undefined) return;
-                // A successful provenance-backed send retains a defensive in-memory copy of the
-                // exact attested payload for this sender session. That is sufficient to restore the
-                // app's editable multi form (`decodeConfirmPayload` wraps its array as `{entries}`).
-                // Received/reloaded canonical multi cards reconstruct only their manifest-declared
-                // public summary fields. Ambiguous or legacy summaries remain immutable.
-                const decodedPayload = decodeConfirmPayload(content.confirmPayload);
-                const hasDecodedPayload = Object.keys(decodedPayload).length > 0;
-                const mappedPayload = isMultiEntrySummaryRows(content.rows)
-                    ? completelyReverseMapMultiRows(content.rows, opening.labelToField)
-                    : completelyReverseMapRows(content.rows, opening.labelToField);
-                if (!hasDecodedPayload && mappedPayload === undefined) {
-                    cardUrl = opening.url;
-                    useStoredPayloadCard = true;
-                    return;
-                }
-                cardOrigin = origin;
-                cardAppId = opening.app.id;
-                cardLabelToField = opening.labelToField;
-                cardUrl = opening.url;
-                // App enablement/pairing plus complete backend content attestation is the durable
-                // public-rendering boundary. Keep the anonymous iframe requirement fail-closed.
-                credentiallessSupported = supportsCredentiallessIframe();
-                if (credentiallessSupported) {
-                    loadRequested = true;
-                    resetFrameSession();
-                } else {
-                    useClassicFallback = true;
-                }
+            if (cancelled || resolutionChatKey !== activeChatKey) return;
+            appResolutionComplete = true;
+            if (settlement.status !== "settled") return;
+            const resolution = settlement.value;
+            if (resolution === undefined) return;
+            appResolutionLookupAttempted = false;
+            candidateAppIdentity = resolution.identity;
+            resolvedAppIdentity = resolution.identity;
+            hasPersistentUserPairing = resolution.hasPersistentUserPairing;
+            const opening = resolution.cardSurface;
+            if (opening === undefined) return;
+            if (!contentAttested) {
+                // appVerified currently proves only registry coordinates. The sender still controls
+                // title/rows/payload, so do not load trusted app pixels until the backend attests the
+                // complete canonical card content.
+                cardContentAttestationBlocked = true;
+                return;
+            }
+            if (!appCardRenderingAvailable(contentAttested)) {
+                // Backend attestation is necessary but does not by itself activate an unfinished
+                // client capability. Keep the iframe closed unless this exact local client release
+                // has also been explicitly armed.
+                appCardRenderingBlocked = true;
+                return;
+            }
+            const origin = deriveCardOrigin(opening.url, {
+                allowLocalDevelopment: import.meta.env.DEV,
             });
+            // No parseable origin → decline to embed; stay on the OC-rendered rows rather than talk to
+            // an unknown origin.
+            if (origin === undefined) return;
+            // A successful provenance-backed send retains a defensive in-memory copy of the
+            // exact attested payload for this sender session. That is sufficient to restore the
+            // app's editable multi form (`decodeConfirmPayload` wraps its array as `{entries}`).
+            // Received/reloaded canonical multi cards reconstruct only their manifest-declared
+            // public summary fields. Ambiguous or legacy summaries remain immutable.
+            const decodedPayload = decodeConfirmPayload(content.confirmPayload);
+            const hasDecodedPayload = Object.keys(decodedPayload).length > 0;
+            const mappedPayload = isMultiEntrySummaryRows(content.rows)
+                ? completelyReverseMapMultiRows(content.rows, opening.labelToField)
+                : completelyReverseMapRows(content.rows, opening.labelToField);
+            if (!hasDecodedPayload && mappedPayload === undefined) {
+                cardUrl = opening.url;
+                useStoredPayloadCard = true;
+                return;
+            }
+            cardOrigin = origin;
+            cardAppId = opening.app.id;
+            cardLabelToField = opening.labelToField;
+            cardUrl = opening.url;
+            // App enablement/pairing plus complete backend content attestation is the durable
+            // public-rendering boundary. Keep the anonymous iframe requirement fail-closed.
+            credentiallessSupported = supportsCredentiallessIframe();
+            if (credentiallessSupported) {
+                loadRequested = true;
+                resetFrameSession();
+            } else {
+                useClassicFallback = true;
+            }
+        });
         return () => {
             cancelled = true;
         };
@@ -1270,6 +1266,7 @@
     .action-card {
         display: flex;
         flex-direction: column;
+        box-sizing: border-box;
         gap: $sp3;
         padding: $sp4;
         border: var(--bw) solid var(--bd);
@@ -1280,16 +1277,20 @@
         // forcing the received-message background — rendering white-on-light-grey (~1.1:1, unreadable).
         // Every theme defines msg-bg/msg-txt as a readable pair, so this is correct light AND dark.
         color: var(--currentChat-msg-txt);
-        max-width: 360px;
+        width: min(360px, 100%);
+        max-width: 100%;
+        min-width: 0;
 
         // An app-rendered (iframe) card owns its own layout and typically wants more room than the
         // rows do — give it the wider cap while still hugging the bubble.
         &.has-frame:not(.collapsed) {
-            max-width: min(90vw, 420px);
+            width: min(420px, 100%);
+            max-width: 100%;
         }
 
         &.pending-verification:not(.collapsed) {
-            width: min(90vw, 420px);
+            width: min(420px, 100%);
+            max-width: 100%;
             min-height: 140px;
         }
 
@@ -1302,11 +1303,22 @@
         // because .message-bubble sets no overflow — which is the card visibly outside the UI bounds.
         // `min(480px, 100%)` keeps the widening intent but can never exceed the parent.
         &.collapsed {
-            max-width: none;
-            min-width: min(480px, 100%);
+            width: min(480px, 100%);
+            max-width: 100%;
+            min-width: 0;
             gap: 0;
             padding: $sp2 $sp3;
             font-size: 0.8em;
+        }
+
+        @include mobile() {
+            width: 100%;
+
+            &.has-frame:not(.collapsed),
+            &.pending-verification:not(.collapsed),
+            &.collapsed {
+                width: 100%;
+            }
         }
     }
 
@@ -1373,6 +1385,9 @@
 
     .app-id {
         color: var(--currentChat-msg-muted);
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
         white-space: nowrap;
     }
 
@@ -1431,6 +1446,7 @@
         // "too tall when expanded" symptom. Give it the intended width, bounded by the bubble.
         width: 420px;
         max-width: 100%;
+        box-sizing: border-box;
         border: none;
         border-radius: var(--rd);
         display: block;
@@ -1453,6 +1469,9 @@
     .private-context-action {
         display: flex;
         flex-direction: column;
+        box-sizing: border-box;
+        min-width: 0;
+        max-width: 100%;
         gap: $sp2;
         padding: $sp3;
         border: var(--bw) solid var(--bd);
@@ -1480,18 +1499,20 @@
 
     .rows {
         border-collapse: collapse;
+        table-layout: fixed;
         width: 100%;
 
         .label {
             color: var(--currentChat-msg-muted);
             padding-right: $sp4;
-            white-space: nowrap;
+            overflow-wrap: anywhere;
             vertical-align: top;
+            width: 38%;
         }
 
         .value {
             font-weight: 500;
-            word-break: break-word;
+            overflow-wrap: anywhere;
         }
     }
 
@@ -1499,12 +1520,19 @@
         display: flex;
         gap: $sp2;
         align-items: flex-start;
+        min-width: 0;
         font-size: var(--font-size-small, 0.85em);
         color: var(--currentChat-msg-muted);
+
+        span {
+            min-width: 0;
+            overflow-wrap: anywhere;
+        }
     }
 
     .actions {
         display: flex;
+        flex-wrap: wrap;
         gap: $sp3;
         justify-content: flex-end;
 

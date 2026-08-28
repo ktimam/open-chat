@@ -641,11 +641,7 @@
         } finally {
             // Svelte may reuse this component for another message. Every stale early return must
             // release the single-flight UI or the replacement message can never run local AI.
-            if (
-                componentMounted &&
-                localAiMessageRun === run &&
-                !terminalStatusSet
-            ) {
+            if (componentMounted && localAiMessageRun === run && !terminalStatusSet) {
                 setLocalAiMessageStatus(undefined);
             }
         }
@@ -854,6 +850,7 @@
         `${routeForMessage($chatListScopeStore.kind, { chatId }, msg.messageIndex)}?open=true`,
     );
     let isProposal = $derived(msg.content.kind === "proposal_content");
+    let isActionCard = $derived(msg.content.kind === "action_card_content");
     let isPrize = $derived(msg.content.kind === "prize_content");
     let isP2PSwap = $derived(msg.content.kind === "p2p_swap_content");
     let canEdit = $derived(
@@ -1012,7 +1009,7 @@
                     data-id={failed ? "" : msg.messageId}
                     id={failed ? "" : `event-${eventIndex}`}
                 >
-                    {#if showAvatar}
+                    {#if showAvatar && (!isActionCard || !$mobileWidth)}
                         <div class="avatar-col">
                             {#if first}
                                 <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -1034,6 +1031,7 @@
                         style={`--max-width: ${maxWidthFraction * 100}%;` +
                             (mediaWidth !== undefined ? ` --media-width: ${mediaWidth};` : "")}
                         class:clamped={mediaWidth !== undefined}
+                        class:actionCard={isActionCard}
                         class:p2pSwap={isP2PSwap}
                         class:proposal={isProposal && !inert}
                     >
@@ -1248,7 +1246,9 @@
                                 onReportMessage={reportMessage}
                                 onCancelReminder={cancelReminder}
                                 onRunAiAction={runAiActionHandler}
-                                onProcessWithAi={canProcessWithAi ? processMessageWithAi : undefined}
+                                onProcessWithAi={canProcessWithAi
+                                    ? processMessageWithAi
+                                    : undefined}
                                 onRemindMe={remindMe}
                             />
                         {/if}
@@ -1258,7 +1258,11 @@
                         {/if}
                     </div>
 
-                    {#if !collapsed && !msg.deleted && canReact && !failed}
+                    {#if !collapsed &&
+                        !msg.deleted &&
+                        canReact &&
+                        !failed &&
+                        (!isActionCard || !$mobileWidth)}
                         <div class="actions" class:touch={isTouchOnlyDevice}>
                             <div class="reaction" onclick={() => (showEmojiPicker = true)}>
                                 <HoverIcon>
@@ -1641,6 +1645,24 @@
         position: relative;
         max-width: var(--max-width);
         min-width: 90px;
+
+        @include mobile() {
+            &.actionCard {
+                box-sizing: border-box;
+                flex: 1 1 0;
+                width: auto;
+                max-width: 100%;
+                min-width: 0;
+
+                .message-bubble {
+                    box-sizing: border-box;
+                    width: 100%;
+                    max-width: 100%;
+                    min-width: 0;
+                    overflow-x: hidden;
+                }
+            }
+        }
 
         // media messages: hug the image (media width + bubble padding) so
         // captions and reply quotes cannot widen the bubble past it

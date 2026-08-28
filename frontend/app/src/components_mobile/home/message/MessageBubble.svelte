@@ -105,6 +105,7 @@
     let placeholderContent = $derived(msg.deleted || msg.content.kind === "restricted_content");
     let isProposal = $derived(msg.content.kind === "proposal_content");
     let isPrize = $derived(msg.content.kind === "prize_content");
+    let isActionCard = $derived(msg.content.kind === "action_card_content");
     // let hasReactions = $derived(msg.reactions.length > 0);
     let me = $derived(msg.sender === $currentUserIdStore);
     let showHeader = $derived(
@@ -160,6 +161,9 @@
         if (!showHeader) {
             classes.push("no_header");
         }
+        if (isActionCard) {
+            classes.push("action_card_message");
+        }
         return classes.join(" ");
     });
 
@@ -191,12 +195,13 @@
     gap={"xxs"}
     width={"fill"}
     padding={"xs"}
-    overflow={"auto"}
+    overflow={isActionCard ? "hidden" : "auto"}
     direction={"vertical"}
     background={backgroundColour}
     borderWidth={placeholderContent ? "thick" : "zero"}
     {borderRadius}
-    {borderColour}>
+    {borderColour}
+>
     {#if showHeader}
         <Container
             bind:ref={senderContainer}
@@ -208,7 +213,8 @@
             supplementalClass={`message_sender ${fill ? "fill" : ""}`}
             crossAxisAlignment={"center"}
             gap={"xs"}
-            onClick={onOpenUserProfile}>
+            onClick={onOpenUserProfile}
+        >
             <Body fontWeight={"bold"} maxLines={1} colour={"textSecondary"}>
                 {senderDisplayName}
             </Body>
@@ -216,21 +222,25 @@
                 uniquePerson={sender?.isUniquePerson}
                 diamondStatus={sender?.diamondStatus}
                 {streak}
-                {chitEarned} />
+                {chitEarned}
+            />
             <BotBadge
                 bot={senderContext?.kind === "bot"}
-                webhook={senderContext?.kind === "webhook"} />
+                webhook={senderContext?.kind === "webhook"}
+            />
             {#if sender !== undefined && multiUserChat}
                 <WithRole
                     userId={sender.userId}
                     chatMembers={$selectedCommunityMembersStore}
-                    communityMembers={$selectedCommunityMembersStore}>
+                    communityMembers={$selectedCommunityMembersStore}
+                >
                     {#snippet children(communityRole, chatRole)}
                         <RoleIcon level="community" popup role={communityRole} />
                         <RoleIcon
                             level={chatType === "channel" ? "channel" : "group"}
                             popup
-                            role={chatRole} />
+                            role={chatRole}
+                        />
                     {/snippet}
                 </WithRole>
             {/if}
@@ -247,7 +257,8 @@
         <Container
             onClick={reply ? () => zoomToMessage(reply) : undefined}
             supplementalClass={`reply_wrapper ${me ? "me" : ""}`}
-            direction={"vertical"}>
+            direction={"vertical"}
+        >
             {#if msg.repliesTo.kind === "rehydrated_reply_context"}
                 {@render repliesTo(msg.repliesTo)}
             {:else}
@@ -273,7 +284,8 @@
             {percentageExpired}
             {pinned}
             edited={msg.edited}
-            {time} />
+            {time}
+        />
     {/if}
 </Container>
 
@@ -318,6 +330,17 @@
 
         .container.message_bubble:not(.read_by_me) {
             box-shadow: 0 0 0 0.25rem var(--primary-muted);
+        }
+
+        .container.message_bubble.action_card_message {
+            box-sizing: border-box;
+            min-width: 0;
+            max-width: 100%;
+
+            .message_bubble_content {
+                width: 100%;
+                min-width: 0;
+            }
         }
 
         // Removes extra space between sender name and content of the message.

@@ -6,6 +6,7 @@ import {
     MAX_PUBLIC_IMAGE_DISPLAY_BYTES,
     PublicImageObjectUrlResolver,
     publicImageDisplayUrl,
+    shouldLoadNativePublicImageThroughWorker,
     shouldProxyLocalPublicImage,
 } from "./publicImageDisplay";
 
@@ -218,6 +219,33 @@ describe("publicImageDisplayUrl", () => {
     });
 });
 
+describe("shouldLoadNativePublicImageThroughWorker", () => {
+    const localBlobUrl = `http://${REF.canisterId}.raw.localhost:8080/blobs/${REF.blobId}`;
+
+    it("eagerly bridges an exact local replica URL or a reference with no URL in a native app", () => {
+        expect(
+            shouldLoadNativePublicImageThroughWorker(localBlobUrl, REF, true, LOCAL_PATTERN),
+        ).toBe(true);
+        expect(shouldLoadNativePublicImageThroughWorker(undefined, REF, true, LOCAL_PATTERN)).toBe(
+            true,
+        );
+    });
+
+    it("keeps normal native URLs and every browser URL on the direct display path", () => {
+        expect(
+            shouldLoadNativePublicImageThroughWorker(
+                "https://storage.example/blobs/55",
+                REF,
+                true,
+                LOCAL_PATTERN,
+            ),
+        ).toBe(false);
+        expect(
+            shouldLoadNativePublicImageThroughWorker(localBlobUrl, REF, false, LOCAL_PATTERN),
+        ).toBe(false);
+    });
+});
+
 describe("public image display UI parity", () => {
     it.each([
         ["classic", "../components/home/ImageContent.svelte"],
@@ -226,6 +254,12 @@ describe("public image display UI parity", () => {
         const source = readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8");
 
         expect(source).toContain("publicImageDisplayUrl(normalised.url, content.blobReference)");
+        expect(source).toContain("new PublicImageObjectUrlResolver");
+        expect(source).toContain("client.downloadPublicBlob(ref, maxBytes)");
+        expect(source).toContain("client.isNativeApp()");
+        expect(source).toContain("shouldLoadNativePublicImageThroughWorker(");
+        expect(source).toContain(".resolve(content.blobReference, content.mimeType)");
+        expect(source).toContain("{#if displayUrl !== undefined}");
         expect(source).toContain("displayUrl");
     });
 
@@ -236,6 +270,28 @@ describe("public image display UI parity", () => {
         expect(source).toContain(
             "publicImageDisplayUrl(normalisedImage.url, imageContent.blobReference)",
         );
+        expect(source).toContain("new PublicImageObjectUrlResolver");
+        expect(source).toContain("client.downloadPublicBlob(ref, maxBytes)");
+        expect(source).toContain("client.isNativeApp()");
+        expect(source).toContain("shouldLoadNativePublicImageThroughWorker(");
+        expect(source).toContain(".resolve(imageContent.blobReference, imageContent.mimeType)");
         expect(source).toContain("adjustedUrl");
+    });
+
+    it("lets the v2 reply thumbnail report a failed public URL and use the worker fallback", () => {
+        const path = "../components_mobile/home/ImageContent.svelte";
+        const source = readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8");
+        const replyView = source.slice(
+            source.indexOf("{#snippet replyView"),
+            source.indexOf("{#snippet draftView"),
+        );
+
+        expect(replyView).toContain("<img");
+        expect(replyView).toContain('class="reply_image_preview"');
+        expect(replyView).toContain("onerror={onError}");
+        expect(replyView).toContain(
+            "src={intersecting && !hidden ? displayUrl : normalised.fallback}",
+        );
+        expect(replyView).not.toContain("background-image");
     });
 });

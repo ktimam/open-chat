@@ -42,6 +42,8 @@ export type LocalModel = {
     modelId: string;
     runtime: string;
     sizeBytes: number;
+    /** Exact per-file identity recorded after native SHA-256 verification. */
+    files: ModelFileSpec[];
     path: string;
 };
 

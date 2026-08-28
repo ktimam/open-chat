@@ -1,5 +1,6 @@
 <script lang="ts">
-    import type { ImageContent, MemeFighterContent } from "@client";
+    import type { ImageContent, MemeFighterContent, OpenChat } from "@client";
+    import { getContext } from "svelte";
     import ArrowCollapse from "svelte-material-icons/ArrowCollapse.svelte";
     import ArrowExpand from "svelte-material-icons/ArrowExpand.svelte";
     import { i18nKey } from "../../i18n/i18n";
@@ -7,12 +8,21 @@
     import { lowBandwidth } from "../../stores/settings";
     import { isTouchDevice } from "../../utils/devices";
     import { reservedMediaStyle } from "../../utils/media";
-    import { publicImageDisplayUrl } from "../../utils/publicImageDisplay";
+    import {
+        PublicImageObjectUrlResolver,
+        publicImageDisplayUrl,
+        shouldLoadNativePublicImageThroughWorker,
+    } from "../../utils/publicImageDisplay";
     import Button from "../Button.svelte";
     import ModalContent from "../ModalContent.svelte";
     import Overlay from "../Overlay.svelte";
     import Translatable from "../Translatable.svelte";
     import ContentCaption from "./ContentCaption.svelte";
+
+    const client = getContext<OpenChat>("client");
+    const imageObjectUrlResolver = new PublicImageObjectUrlResolver((ref, maxBytes) =>
+        client.downloadPublicBlob(ref, maxBytes),
+    );
 
     interface Props {
         content: ImageContent | MemeFighterContent;
@@ -109,14 +119,47 @@
         zoomedHeight = imageHeight;
     }
     let normalised = $derived(normaliseContent(content));
+    let nativeObjectUrl = $state<string>();
     let displayUrl = $derived(
-        content.kind === "image_content"
-            ? publicImageDisplayUrl(normalised.url, content.blobReference)
-            : normalised.url,
+        nativeObjectUrl ??
+            (content.kind === "image_content"
+                ? publicImageDisplayUrl(normalised.url, content.blobReference)
+                : normalised.url),
     );
     let hidden = $state($lowBandwidth && !draft);
     $effect(() => {
         hidden = $lowBandwidth && !draft;
+    });
+
+    function loadNativeObjectUrl() {
+        if (
+            !client.isNativeApp() ||
+            content.kind !== "image_content" ||
+            content.blobReference === undefined
+        ) {
+            return;
+        }
+        void imageObjectUrlResolver.resolve(content.blobReference, content.mimeType).then((url) => {
+            if (url !== undefined) nativeObjectUrl = url;
+        });
+    }
+
+    $effect(() => {
+        nativeObjectUrl = undefined;
+        imageObjectUrlResolver.clear();
+        if (
+            intersecting &&
+            !hidden &&
+            content.kind === "image_content" &&
+            shouldLoadNativePublicImageThroughWorker(
+                content.blobUrl,
+                content.blobReference,
+                client.isNativeApp(),
+            )
+        ) {
+            loadNativeObjectUrl();
+        }
+        return () => imageObjectUrlResolver.clear();
     });
     let zoomable = $derived(!draft && !reply && !pinned);
 
@@ -124,21 +167,24 @@
         if (imgElement) {
             imgElement.src = normalised.fallback;
         }
+        if (nativeObjectUrl === undefined) loadNativeObjectUrl();
     }
 </script>
 
 <svelte:window
     onresize={recalculateZoomedDimensions}
-    onorientationchange={recalculateZoomedDimensions} />
+    onorientationchange={recalculateZoomedDimensions}
+/>
 
-{#if normalised.url !== undefined}
+{#if displayUrl !== undefined}
     <div class="img-wrapper">
         {#if hidden}
             <div class="mask">
                 {#if !reply && !draft}
                     <div class="reveal">
                         <Button onClick={() => (hidden = false)}
-                            ><Translatable resourceKey={i18nKey(normalised.loadMsg)} /></Button>
+                            ><Translatable resourceKey={i18nKey(normalised.loadMsg)} /></Button
+                        >
                     </div>
                 {/if}
             </div>
@@ -162,7 +208,8 @@
                   ? undefined
                   : reservedMediaStyle(content.width, content.height)}
             src={intersecting && !hidden ? displayUrl : normalised.fallback}
-            alt={normalised.caption} />
+            alt={normalised.caption}
+        />
 
         {#if zoomable && !hidden}
             <div class="expand" class:rtl={$rtlStore} class:zoomed={zoom} onclick={toggleZoom}>
@@ -188,12 +235,14 @@
                         ondblclick={onDoubleClick}
                         onerror={onError}
                         src={displayUrl}
-                        alt={normalised.caption} />
+                        alt={normalised.caption}
+                    />
                     <div
                         class="expand"
                         class:rtl={$rtlStore}
                         class:zoomed={zoom}
-                        onclick={toggleZoom}>
+                        onclick={toggleZoom}
+                    >
                         <ArrowCollapse size={"1em"} color={"#fff"} />
                     </div>
                 </span>

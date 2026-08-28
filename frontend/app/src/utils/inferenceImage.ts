@@ -1,3 +1,4 @@
+import type { InferenceImageRegion } from "@shared";
 import { intrinsicImageDimensions } from "./imageDimensions";
 
 const MAX_INFERENCE_IMAGE_PIXELS = 256 * 1024;
@@ -18,6 +19,18 @@ type ResizeRequest = ImageDimensions & {
 export type InferenceImageResizer = (
     bytes: Uint8Array,
     request: ResizeRequest,
+) => Promise<Uint8Array>;
+
+type RegionCropRequest = ResizeRequest & {
+    sourceX: number;
+    sourceY: number;
+    sourceWidth: number;
+    sourceHeight: number;
+};
+
+export type InferenceImageRegionCropper = (
+    bytes: Uint8Array,
+    request: RegionCropRequest,
 ) => Promise<Uint8Array>;
 
 function validDimensions(dimensions: ImageDimensions | undefined): dimensions is ImageDimensions {
@@ -164,6 +177,112 @@ async function canvasResize(bytes: Uint8Array, request: ResizeRequest): Promise<
     } finally {
         request.signal.removeEventListener("abort", close);
         close();
+    }
+}
+
+async function canvasRegionCrop(
+    bytes: Uint8Array,
+    request: RegionCropRequest,
+): Promise<Uint8Array> {
+    const bitmap = await awaitAbortable(
+        createImageBitmap(
+            new Blob([bytes.slice().buffer as ArrayBuffer]),
+            request.sourceX,
+            request.sourceY,
+            request.sourceWidth,
+            request.sourceHeight,
+            {
+                imageOrientation: "from-image",
+                resizeWidth: request.width,
+                resizeHeight: request.height,
+                resizeQuality: "high",
+            },
+        ),
+        request.signal,
+        (lateBitmap) => lateBitmap.close(),
+    );
+    let closed = false;
+    const close = (): void => {
+        if (closed) return;
+        closed = true;
+        bitmap.close();
+    };
+    request.signal.addEventListener("abort", close, { once: true });
+    try {
+        return await encodeBitmap(bitmap, request);
+    } finally {
+        request.signal.removeEventListener("abort", close);
+        close();
+    }
+}
+
+function lowerHalfCrop(dimensions: ImageDimensions): Omit<RegionCropRequest, keyof ResizeRequest> {
+    const sourceY = Math.floor(dimensions.height / 2);
+    return {
+        sourceX: 0,
+        sourceY,
+        sourceWidth: dimensions.width,
+        sourceHeight: dimensions.height - sourceY,
+    };
+}
+
+/**
+ * Derive a bounded model-only detail raster from the original image pixels. This is deliberately a
+ * closed, content-agnostic transform: it neither locates text nor performs OCR, and the source image
+ * remains unchanged. Cropping before the ordinary pixel cap gives small labelled fields on tall
+ * receipts enough visual resolution for a focused VLM pass.
+ */
+export async function prepareImageRegionForInference(
+    bytes: Uint8Array,
+    region: InferenceImageRegion,
+    crop: InferenceImageRegionCropper = canvasRegionCrop,
+): Promise<Uint8Array> {
+    if (region !== "lower_half") throw new Error("Unsupported inference image region.");
+    const intrinsicDimensions = intrinsicImageDimensions(bytes);
+    if (intrinsicDimensions === undefined) {
+        throw new Error("The image dimensions could not be verified for focused inference.");
+    }
+    if (!sourceDimensionsWithinBounds(intrinsicDimensions)) {
+        throw new Error("The image is too large to focus safely for inference.");
+    }
+    // The lower detail band is useful only when whole-document letterboxing materially shrinks a
+    // tall receipt. Landscape and near-square documents already spend the bounded vision surface on
+    // their full pixels; preserve them so a focused pass can still see a date or item near the top.
+    if (intrinsicDimensions.height * 3 < intrinsicDimensions.width * 4) return bytes;
+    const source = lowerHalfCrop(intrinsicDimensions);
+    const output = inferenceImageDimensions({
+        width: source.sourceWidth,
+        height: source.sourceHeight,
+    });
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let timedOut = false;
+    const request: RegionCropRequest = {
+        ...source,
+        ...output,
+        mimeType: "image/jpeg",
+        quality: INFERENCE_JPEG_QUALITY,
+        signal: controller.signal,
+    };
+    const timeout = new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+            timedOut = true;
+            reject(new Error("Focused image preparation timed out."));
+            controller.abort();
+        }, BROWSER_INFERENCE_IMAGE_PREPARE_TIMEOUT_MS);
+    });
+    try {
+        const prepared = await Promise.race([crop(bytes, request), timeout]);
+        if (prepared.byteLength === 0) throw new Error("image encoding returned no data");
+        return prepared;
+    } catch (error) {
+        if (timedOut) {
+            throw new Error("The image detail did not finish preparing for inference in time.");
+        }
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new Error(`The image detail could not be safely prepared for inference. (${detail})`);
+    } finally {
+        if (timer !== undefined) clearTimeout(timer);
     }
 }
 

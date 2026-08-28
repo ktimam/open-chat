@@ -11,9 +11,11 @@ import { selectedModelId } from "../stores/onDeviceModels";
 import {
     inferOnDevice,
     isNativeClient,
+    NATIVE_MODEL_UPDATE_REQUIRED,
     onDeviceInferenceCapability,
     onDeviceInferenceReadiness,
 } from "./onDeviceInference";
+import { defaultModelCatalog } from "./modelCatalog";
 import { clearWebModel, useWebModelFromUrl, webInfer } from "./webInference";
 
 const webRuntime = vi.hoisted(() => ({
@@ -82,6 +84,7 @@ const mockInferenceRuntimeAvailable = vi.mocked(inferenceRuntimeAvailable);
 const mockListLocalModels = vi.mocked(listLocalModels);
 
 const MODEL_ID = "gemma-4-e2b-it-q4";
+const TRUSTED_MODEL = defaultModelCatalog.models.find((model) => model.id === MODEL_ID)!;
 
 function setNative(native: boolean): void {
     if (native) {
@@ -96,6 +99,7 @@ function localModel(overrides: Partial<LocalModel> = {}): LocalModel {
         modelId: MODEL_ID,
         runtime: "llama-cpp",
         sizeBytes: 4092392352,
+        files: TRUSTED_MODEL.files.map((file) => ({ ...file })),
         path: "/models/gemma-4-e2b-it-q4",
         ...overrides,
     };
@@ -136,6 +140,58 @@ describe("onDeviceInferenceReadiness", () => {
             available: false,
             reason: "This OpenChat build does not include on-device inference. Update or reinstall OpenChat, then try again.",
         });
+    });
+
+    it("is ready only when the selected install matches the trusted built-in metadata", async () => {
+        setNative(true);
+        selectedModelId.set(MODEL_ID);
+        mockListLocalModels.mockResolvedValue([localModel()]);
+
+        await expect(onDeviceInferenceReadiness()).resolves.toEqual({ available: true });
+        expect(onDeviceInferenceCapability().available).toBe(true);
+    });
+
+    it("requires an update for a stale selected install and never advertises it as ready", async () => {
+        setNative(true);
+        selectedModelId.set(MODEL_ID);
+        mockListLocalModels.mockResolvedValue([localModel({ sizeBytes: 4092390336 })]);
+
+        await expect(onDeviceInferenceReadiness()).resolves.toEqual({
+            available: false,
+            reason: NATIVE_MODEL_UPDATE_REQUIRED,
+        });
+        expect(onDeviceInferenceCapability().available).toBe(false);
+        expect(mockInfer).not.toHaveBeenCalled();
+    });
+
+    it("does not make an unselected stale install ready", async () => {
+        setNative(true);
+        selectedModelId.set("");
+        mockListLocalModels.mockResolvedValue([localModel({ sizeBytes: 4092390336 })]);
+
+        await expect(onDeviceInferenceReadiness()).resolves.toEqual({
+            available: false,
+            reason: "no on-device model selected",
+        });
+        expect(onDeviceInferenceCapability().available).toBe(false);
+    });
+});
+
+describe("focused inference image bounds", () => {
+    it("rejects an oversized original before attempting a region decode", async () => {
+        const oversized = new Uint8Array(20 * 1024 * 1024 + 1);
+        oversized.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+        const decode = vi.fn();
+        vi.stubGlobal("createImageBitmap", decode);
+
+        await expect(
+            inferOnDevice({
+                prompt: "read labelled detail",
+                image: oversized,
+                imageRegion: "lower_half",
+            }),
+        ).resolves.toEqual({ kind: "error", error: "inference image region is invalid" });
+        expect(decode).not.toHaveBeenCalled();
     });
 });
 
@@ -364,6 +420,7 @@ describe("onDeviceInferenceCapability", () => {
     it("is available when the native runtime probe passes AND a model is selected", async () => {
         setNative(true);
         selectedModelId.set(MODEL_ID);
+        mockListLocalModels.mockResolvedValue([localModel()]);
         await onDeviceInferenceReadiness();
 
         const cap = onDeviceInferenceCapability();
@@ -471,14 +528,14 @@ describe("onDeviceInferenceCapability", () => {
         expect(mockInfer).not.toHaveBeenCalled();
     });
 
-    it("rejects installed metadata that disagrees with the trusted catalog", async () => {
+    it("fails closed with update guidance when installed metadata disagrees with the trusted catalog", async () => {
         setNative(true);
         selectedModelId.set(MODEL_ID);
         mockListLocalModels.mockResolvedValue([localModel({ sizeBytes: 1 })]);
 
         await expect(inferOnDevice({ prompt: "hi" })).resolves.toEqual({
-            kind: "error",
-            error: "installed model metadata does not match the trusted catalog",
+            kind: "unavailable",
+            reason: NATIVE_MODEL_UPDATE_REQUIRED,
         });
         expect(mockInfer).not.toHaveBeenCalled();
     });

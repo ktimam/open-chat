@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
     BROWSER_INFERENCE_IMAGE_PREPARE_TIMEOUT_MS,
     prepareImageForBrowserInference,
+    prepareImageRegionForInference,
 } from "./inferenceImage";
 
 function pngBytes(width: number, height: number): Uint8Array {
@@ -194,5 +195,84 @@ describe("prepareImageForBrowserInference", () => {
             prepareImageForBrowserInference(pngBytes(9_000, 1_000), undefined, decode),
         ).rejects.toThrow(/too large.*safely/i);
         expect(decode).not.toHaveBeenCalled();
+    });
+});
+
+describe("prepareImageRegionForInference", () => {
+    it("preserves the full raster when the source is not a tall receipt", async () => {
+        const bytes = pngBytes(1200, 900);
+        const crop = vi.fn();
+
+        await expect(prepareImageRegionForInference(bytes, "lower_half", crop)).resolves.toBe(
+            bytes,
+        );
+        expect(crop).not.toHaveBeenCalled();
+    });
+
+    it("crops the lower half before applying the bounded model pixel budget", async () => {
+        const bytes = pngBytes(909, 1600);
+        const crop = vi.fn().mockResolvedValue(new Uint8Array([9, 8, 7]));
+
+        await expect(prepareImageRegionForInference(bytes, "lower_half", crop)).resolves.toEqual(
+            new Uint8Array([9, 8, 7]),
+        );
+        expect(crop).toHaveBeenCalledWith(
+            bytes,
+            expect.objectContaining({
+                sourceX: 0,
+                sourceY: 800,
+                sourceWidth: 909,
+                sourceHeight: 800,
+                width: 545,
+                height: 480,
+                mimeType: "image/jpeg",
+                quality: 0.85,
+                signal: expect.any(AbortSignal),
+            }),
+        );
+    });
+
+    it("uses the browser crop overload and closes its bounded bitmap", async () => {
+        const bytes = pngBytes(909, 1600);
+        const close = vi.fn();
+        const bitmap = { width: 545, height: 480, close };
+        const canvas = {
+            width: 0,
+            height: 0,
+            getContext: vi.fn().mockReturnValue({ drawImage: vi.fn() }),
+            toBlob: vi.fn((callback: (blob: Blob | null) => void) => {
+                const encoded = new Blob([], { type: "image/jpeg" });
+                Object.defineProperty(encoded, "arrayBuffer", {
+                    value: async () => new Uint8Array([4, 5]).buffer,
+                });
+                callback(encoded);
+            }),
+        };
+        vi.stubGlobal("createImageBitmap", vi.fn().mockResolvedValue(bitmap));
+        vi.spyOn(document, "createElement").mockReturnValue(canvas as unknown as HTMLCanvasElement);
+
+        await expect(prepareImageRegionForInference(bytes, "lower_half")).resolves.toEqual(
+            new Uint8Array([4, 5]),
+        );
+        expect(createImageBitmap).toHaveBeenCalledWith(expect.any(Blob), 0, 800, 909, 800, {
+            imageOrientation: "from-image",
+            resizeWidth: 545,
+            resizeHeight: 480,
+            resizeQuality: "high",
+        });
+        expect(canvas.width).toBe(545);
+        expect(canvas.height).toBe(480);
+        expect(close).toHaveBeenCalledOnce();
+    });
+
+    it("rejects unsupported regions and oversized source rasters before decoding", async () => {
+        const crop = vi.fn();
+        await expect(
+            prepareImageRegionForInference(pngBytes(909, 1600), "upper_half" as never, crop),
+        ).rejects.toThrow(/unsupported inference image region/i);
+        await expect(
+            prepareImageRegionForInference(pngBytes(9_000, 1_000), "lower_half", crop),
+        ).rejects.toThrow(/too large to focus safely/i);
+        expect(crop).not.toHaveBeenCalled();
     });
 });

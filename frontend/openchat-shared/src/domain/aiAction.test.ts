@@ -656,6 +656,44 @@ describe("runAiAction", () => {
             expect(ArrayBuffer.isView(r.card.confirmPayload)).toBe(true);
         }
     });
+
+    it("turns a destroyed native inference context into a bounded sanitized model error", async () => {
+        const infer = vi.fn(async (): Promise<InferenceResult> => {
+            throw new Error(`device\u0000lost?token=do-not-show&mode=test ${"x".repeat(400)}`);
+        });
+
+        const result = await runAiAction(DEF, { text: "I paid 20 USD" }, RECIPIENT, infer);
+
+        expect(result.kind).toBe("error");
+        if (result.kind === "error") {
+            expect(result.error).toContain("device lost?token=[redacted]&mode=test");
+            expect(result.error).not.toContain("do-not-show");
+            expect(result.error).not.toContain("\u0000");
+            expect(result.error.endsWith("…")).toBe(true);
+            expect(result.error.length).toBeLessThanOrEqual(240);
+        }
+        expect(infer).toHaveBeenCalledOnce();
+    });
+
+    it("bounds an error-shaped native bridge result before returning it to the UI", async () => {
+        const infer = vi.fn(
+            async (): Promise<InferenceResult> => ({
+                kind: "error",
+                error: `load failed?key=do-not-show&stage=model ${"y".repeat(400)}`,
+            }),
+        );
+
+        const result = await runAiAction(DEF, { text: "I paid 20 USD" }, RECIPIENT, infer);
+
+        expect(result.kind).toBe("error");
+        if (result.kind === "error") {
+            expect(result.error).toContain("load failed?key=[redacted]&stage=model");
+            expect(result.error).not.toContain("do-not-show");
+            expect(result.error.endsWith("…")).toBe(true);
+            expect(result.error.length).toBeLessThanOrEqual(240);
+        }
+    });
+
     it("builds an image card from Qwen's exact duplicated truncated reply without a second inference", async () => {
         const receiptDef: AiActionDefinition = {
             ...DEF,
@@ -1788,7 +1826,7 @@ describe("runAiAction", () => {
                     includeRuleGuidance: false,
                 },
                 [AI_ACTION_IMAGE_FOCUSED_PASSES_EXTENSION]: {
-                    version: 1,
+                    version: 2,
                     primaryFields: ["amount", "currency", "kind"],
                     primaryMaxTokens: 64,
                     passes: [
@@ -1798,6 +1836,7 @@ describe("runAiAction", () => {
                             includeRuleGuidance: false,
                             includeMessage: false,
                             maxTokens: 24,
+                            imageRegion: "lower_half",
                         },
                     ],
                 },
@@ -1832,9 +1871,15 @@ describe("runAiAction", () => {
             );
 
             expect(seen).toHaveLength(2);
-            expect(seen.map(({ prompt, maxTokens }) => ({ prompt, maxTokens }))).toEqual([
-                { prompt: corePrompt, maxTokens: 64 },
-                { prompt: datePrompt, maxTokens: 24 },
+            expect(
+                seen.map(({ prompt, maxTokens, imageRegion }) => ({
+                    prompt,
+                    maxTokens,
+                    imageRegion,
+                })),
+            ).toEqual([
+                { prompt: corePrompt, maxTokens: 64, imageRegion: undefined },
+                { prompt: datePrompt, maxTokens: 24, imageRegion: "lower_half" },
             ]);
             expect(seen.every((request) => request.image?.byteLength === 3)).toBe(true);
             expect(result.kind).toBe("ready");
@@ -1987,6 +2032,29 @@ describe("runAiAction", () => {
                 ),
             ).toBeUndefined();
             expect(imageModelPassesConfig(make([{ ...validPass, maxTokens: 97 }]))).toBeUndefined();
+
+            const makeV2 = (passes: unknown[]) => ({
+                ...make(passes),
+                [AI_ACTION_IMAGE_FOCUSED_PASSES_EXTENSION]: {
+                    version: 2,
+                    primaryFields: ["amount"],
+                    primaryMaxTokens: 32,
+                    passes,
+                },
+            });
+            const regionPass = { ...validPass, imageRegion: "lower_half" };
+            expect(imageModelPassesConfig(makeV2([regionPass]))).toEqual({
+                primaryFields: ["amount"],
+                primaryMaxTokens: 32,
+                passes: [regionPass],
+            });
+            expect(imageModelPassesConfig(makeV2([validPass]))).toBeUndefined();
+            expect(
+                imageModelPassesConfig(makeV2([{ ...regionPass, imageRegion: "tiny_box" }])),
+            ).toBeUndefined();
+            expect(
+                imageModelPassesConfig(make([{ ...validPass, imageRegion: "lower_half" }])),
+            ).toBeUndefined();
         });
     });
 
@@ -4253,9 +4321,7 @@ describe("aiActionDefinitionFromWire", () => {
             app_canister_id: "rrkah-fqaaa-aaaaa-aaaaq-cai",
             inbox_canister_id: "aaaaa-aa",
         };
-        expect(aiAppManifestFromWire(base).appCanisterId).toBe(
-            "rrkah-fqaaa-aaaaa-aaaaq-cai",
-        );
+        expect(aiAppManifestFromWire(base).appCanisterId).toBe("rrkah-fqaaa-aaaaa-aaaaq-cai");
         expect(aiAppManifestFromWire(base).inboxCanisterId).toBe("aaaaa-aa");
         expect(
             aiAppManifestFromWire({ ...base, app_canister_id: undefined }).appCanisterId,

@@ -95,6 +95,7 @@ import {
     type ProposeFlowDeps,
     type ProposeResult,
     type SuggestedAiActionResolution,
+    unexpectedProposalFailureMessage,
 } from "./aiActionRunner";
 
 const RECIPIENT = "-----BEGIN PUBLIC KEY-----\nABC\n-----END PUBLIC KEY-----\n";
@@ -1621,6 +1622,20 @@ describe("generic proposal context guard", () => {
 });
 
 describe("runProposeFlow", () => {
+    it("bounds and sanitizes an unexpected proposal rejection before showing it", () => {
+        const message = unexpectedProposalFailureMessage(
+            new Error(`device\u0000lost?token=do-not-show&mode=test ${"x".repeat(400)}`),
+        );
+
+        expect(message).toContain("device lost?token=[redacted]&mode=test");
+        expect(message).not.toContain("do-not-show");
+        expect(message).not.toContain("\u0000");
+        expect(message.endsWith("…")).toBe(true);
+        expect(message.length).toBeLessThanOrEqual(
+            "Action failed while preparing the action: ".length + 240,
+        );
+    });
+
     it("returns a retryable outcome on resolver rejection, then succeeds on an exact retry", async () => {
         const resolveSuggestedCandidate = vi
             .fn()
@@ -1628,7 +1643,9 @@ describe("runProposeFlow", () => {
             .mockResolvedValueOnce({ kind: "candidate", candidate: CANDIDATE });
         const deps = flowDeps({ resolveSuggestedCandidate });
         await expect(runProposeFlow(deps)).resolves.toBe("retryable");
-        expect(deps.toast).toHaveBeenCalledWith("aiApps.autoPropose.failed");
+        expect(deps.toast).toHaveBeenCalledWith(
+            "Action failed while preparing the action: temporary directory failure",
+        );
         expect(deps.proposeCandidate).not.toHaveBeenCalled();
 
         await expect(runProposeFlow(deps)).resolves.toBe("posted");
@@ -1818,7 +1835,9 @@ describe("runProposeFlow", () => {
         expect(deps.promptReconnect).toHaveBeenCalledOnce();
         expect(deps.proposeCandidate).toHaveBeenCalledOnce();
         expect(deps.propose).not.toHaveBeenCalled();
-        expect(deps.toast).toHaveBeenCalledWith("aiApps.autoPropose.failed");
+        expect(deps.toast).toHaveBeenCalledWith(
+            "Action failed while preparing the action: directory lookup failed",
+        );
     });
 
     it("runs only the exact re-resolved suggested candidate and never the generic chooser", async () => {

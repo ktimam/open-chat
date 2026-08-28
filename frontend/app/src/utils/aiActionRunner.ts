@@ -1379,14 +1379,36 @@ async function runProposeFlowInternal(deps: ProposeFlowDeps): Promise<ProposeFlo
 /** Failure boundary shared by both render trees so an awaited resolver/model rejection is spoken. */
 export type ProposeFlowOutcome = "posted" | "retryable";
 
+const MAX_UNEXPECTED_PROPOSAL_FAILURE_CHARS = 240;
+
+/**
+ * Preserve a useful local/runtime rejection without allowing an unbounded or control-character
+ * bearing exception to become UI content. Query values are redacted because bridge/network errors
+ * sometimes include request URLs.
+ */
+export function unexpectedProposalFailureMessage(error: unknown): string {
+    const raw = error instanceof Error ? error.message : String(error ?? "");
+    const safe = raw
+        .replace(/([?&](?:code|key|secret|token)=)[^&\s]*/giu, "$1[redacted]")
+        .replace(/[\u0000-\u001f\u007f-\u009f]+/gu, " ")
+        .replace(/\s+/gu, " ")
+        .trim();
+    if (safe.length === 0) return "aiApps.autoPropose.failed";
+    const bounded =
+        safe.length <= MAX_UNEXPECTED_PROPOSAL_FAILURE_CHARS
+            ? safe
+            : `${safe.slice(0, MAX_UNEXPECTED_PROPOSAL_FAILURE_CHARS - 1)}…`;
+    return `Action failed while preparing the action: ${bounded}`;
+}
+
 export async function runProposeFlow(deps: ProposeFlowDeps): Promise<ProposeFlowOutcome> {
     try {
         return await runProposeFlowInternal(deps);
-    } catch {
+    } catch (error) {
         deps.toast(
             deps.stillCurrent?.() === false
                 ? "aiApps.autoPropose.stale"
-                : "aiApps.autoPropose.failed",
+                : unexpectedProposalFailureMessage(error),
         );
         return "retryable";
     }

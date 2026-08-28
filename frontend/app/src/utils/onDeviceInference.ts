@@ -12,7 +12,12 @@ import {
 } from "tauri-plugin-oc-api";
 import { selectedModelId } from "../stores/onDeviceModels";
 import { browserOcrAvailable } from "./browserOcr";
-import { defaultModelCatalog } from "./modelCatalog";
+import { prepareImageRegionForInference } from "./inferenceImage";
+import {
+    defaultModelCatalog,
+    nativeModelInstallStatus,
+    selectedNativeModelStatus,
+} from "./modelCatalog";
 import {
     ensureWebModelRestored,
     isWebInferenceReady,
@@ -37,8 +42,11 @@ const MAX_SCHEMA_BYTES = 64 * 1024;
 const MAX_OUTPUT_TOKENS = 4096;
 export const NATIVE_INFERENCE_UPDATE_REQUIRED =
     "This OpenChat build does not include on-device inference. Update or reinstall OpenChat, then try again.";
+export const NATIVE_MODEL_UPDATE_REQUIRED =
+    "The selected on-device model has an update required. Open On-device models and update it before trying again.";
 const encodedLength = (value: string): number => new TextEncoder().encode(value).byteLength;
 let lastNativeInferenceRuntimeAvailable: boolean | undefined;
+let lastNativeReadyModelId: string | undefined;
 
 // On-device inference runs wherever the Tauri native bridge is present (Android, iOS and desktop) — not
 // just the mobile OS targets that `OpenChat.isNativeApp()` reports. Detect the bridge directly so the UI
@@ -72,9 +80,35 @@ export type OnDeviceInferenceReadiness = {
 // during the gap before the actual infer command runs.
 export async function onDeviceInferenceReadiness(): Promise<OnDeviceInferenceReadiness> {
     if (isNativeClient()) {
-        return (await probeNativeInferenceRuntime())
-            ? { available: true }
-            : { available: false, reason: NATIVE_INFERENCE_UPDATE_REQUIRED };
+        lastNativeReadyModelId = undefined;
+        if (!(await probeNativeInferenceRuntime())) {
+            return { available: false, reason: NATIVE_INFERENCE_UPDATE_REQUIRED };
+        }
+        try {
+            const selected = selectedNativeModelStatus(
+                get(selectedModelId),
+                await listLocalModels(),
+            );
+            if (selected.kind === "none") {
+                return { available: false, reason: "no on-device model selected" };
+            }
+            if (selected.kind === "untrusted") {
+                return {
+                    available: false,
+                    reason: "the selected model is not in the trusted catalog",
+                };
+            }
+            if (selected.kind === "missing") {
+                return { available: false, reason: "the selected model is not downloaded" };
+            }
+            if (selected.kind === "update_required") {
+                return { available: false, reason: NATIVE_MODEL_UPDATE_REQUIRED };
+            }
+            lastNativeReadyModelId = selected.entry.id;
+            return { available: true };
+        } catch {
+            return { available: false, reason: "could not read installed on-device models" };
+        }
     }
     await ensureWebModelRestored();
     return { available: isWebInferenceReady() || browserOcrAvailable() };
@@ -120,6 +154,29 @@ async function runInference(
     request: InferenceRequest,
     options: { requireProjectorAbsent?: boolean } = {},
 ): Promise<InferenceResult> {
+    if (request.imageRegion !== undefined) {
+        if (
+            request.image === undefined ||
+            request.image.byteLength === 0 ||
+            request.image.byteLength > MAX_IMAGE_BYTES ||
+            request.imageRegion !== "lower_half"
+        ) {
+            return { kind: "error", error: "inference image region is invalid" };
+        }
+        try {
+            const focusedImage = await prepareImageRegionForInference(
+                request.image,
+                request.imageRegion,
+            );
+            const { imageRegion: _imageRegion, ...withoutRegion } = request;
+            request = { ...withoutRegion, image: focusedImage };
+        } catch (error) {
+            return {
+                kind: "error",
+                error: error instanceof Error ? error.message : String(error),
+            };
+        }
+    }
     if (!isNativeClient() || SUPPORTED_RUNTIMES.length === 0) {
         // Browser path: a GGUF (from disk or the catalog) runs via llama.cpp-WASM — text, and images
         // too when the attached model has a vision projector. A browser with no model attached still
@@ -175,16 +232,18 @@ async function runInference(
     }
 
     try {
-        const local = (await listLocalModels()).find((m) => m.modelId === modelId);
-        if (local === undefined) {
+        const localModels = await listLocalModels();
+        const installStatus = nativeModelInstallStatus(catalogEntry, localModels);
+        if (installStatus === "missing") {
             return { kind: "unavailable", reason: "the selected model is not downloaded" };
         }
-        if (local.runtime !== catalogEntry.runtime || local.sizeBytes !== catalogEntry.sizeBytes) {
+        if (installStatus === "update_required") {
             return {
-                kind: "error",
-                error: "installed model metadata does not match the trusted catalog",
+                kind: "unavailable",
+                reason: NATIVE_MODEL_UPDATE_REQUIRED,
             };
         }
+        const local = localModels.find((model) => model.modelId === modelId)!;
         const res = await nativeInfer({
             modelId,
             runtime: local.runtime,
@@ -219,6 +278,7 @@ export function onDeviceInferenceCapability(): OnDeviceInferenceCapability {
         available:
             isNativeClient() &&
             lastNativeInferenceRuntimeAvailable === true &&
+            lastNativeReadyModelId === selected &&
             entry !== undefined &&
             SUPPORTED_RUNTIMES.includes(entry.runtime),
         runtimesSupported: SUPPORTED_RUNTIMES,

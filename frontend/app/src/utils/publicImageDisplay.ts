@@ -75,6 +75,25 @@ export function publicImageDisplayUrl(
 }
 
 /**
+ * Native WebViews should normally keep using the public URL so the browser cache does the work.
+ * The worker bridge is needed eagerly only when the event has no URL or when that URL is the exact
+ * PC-local PocketIC address embedded by the development replica. Other failed native requests can
+ * still fall back to the bridge from the image element's error handler.
+ */
+export function shouldLoadNativePublicImageThroughWorker(
+    blobUrl: string | undefined,
+    ref: BlobReference | undefined,
+    native: boolean,
+    blobUrlPattern: string | undefined = import.meta.env.OC_BLOB_URL_PATTERN,
+): boolean {
+    return (
+        native &&
+        ref !== undefined &&
+        (blobUrl === undefined || isExactConfiguredLocalStorageBlob(blobUrl, ref, blobUrlPattern))
+    );
+}
+
+/**
  * Owns at most one object URL. Repeated calls for the same message share the in-flight worker read;
  * changing messages or disposing the component invalidates stale reads and revokes the old URL.
  */
