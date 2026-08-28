@@ -8,6 +8,7 @@ import {
 } from "../stores/transformersWebGpuSettings";
 import {
     allWebGpuCatalogModelSupported,
+    browserImageModelFirstReadiness,
     clearWebModel,
     cancelWebModelDownload,
     restoreWebModel,
@@ -865,7 +866,11 @@ describe("pinned Qwen3-VL all-WebGPU integration", () => {
         expect(get(webModelStatus)).toMatchObject({
             id: entry.id,
             status: "error",
-            error: expect.stringContaining("not completely downloaded"),
+            error: expect.stringContaining("needs an update"),
+        });
+        await expect(browserImageModelFirstReadiness()).resolves.toEqual({
+            available: false,
+            reason: expect.stringContaining("needs an update"),
         });
     });
 });

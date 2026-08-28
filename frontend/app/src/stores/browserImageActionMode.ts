@@ -8,8 +8,9 @@ export type BrowserImageActionMode =
 // localStorage is scoped to the current origin, matching the browser model cache/selection. This is
 // a user invocation choice, never an app capability grant. In local_reader_only mode image actions
 // may use only an app-declared source-grounded local reader; they never invoke the selected model.
-// model_only is the inverse hard boundary. The default asks the runner to reconcile a selected
-// all-WebGPU image model with independent local source reading; the runner owns that policy.
+// model_only is the inverse hard boundary and the default: a fresh browser follows the selected
+// all-WebGPU image-model path without silently introducing OCR. The two local-reader modes remain
+// explicit, persisted user choices; the runner owns those policies once selected.
 const STORAGE_KEY = "openchat_browser_image_action_mode";
 const LEGACY_LOCAL_READER_FIRST = "local_reader_first";
 
@@ -28,9 +29,9 @@ function storedMode(): BrowserImageActionMode {
             localStorage.setItem(STORAGE_KEY, "local_reader_only");
             return "local_reader_only";
         }
-        return "model_with_local_verification";
+        return "model_only";
     } catch {
-        return "model_with_local_verification";
+        return "model_only";
     }
 }
 
@@ -51,6 +52,10 @@ export const browserImageActionMode = {
 
 export function browserUsesLocalReaderOnly(): boolean {
     return get(value) === "local_reader_only";
+}
+
+export function browserUsesModelOnly(): boolean {
+    return get(value) === "model_only";
 }
 
 export function browserUsesModelWithLocalVerification(): boolean {

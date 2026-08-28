@@ -186,6 +186,16 @@ describe("embedded app surface isolation", () => {
         expect(rollup).toContain('"import.meta.env.OC_DEV_ALLOWED_HOST": localOnlyDevAllowedHost');
     });
 
+    it("replaces Vite's development builtin in native bundles and rejects future leaks", () => {
+        const rollup = readFileSync(appPath("rollup.config.mjs"), "utf8");
+
+        expect(rollup).toContain("const { version, production, development } = initEnv();");
+        expect(rollup).toContain('"import.meta.env.DEV": JSON.stringify(development)');
+        expect(rollup).toContain("rejectUnresolvedViteEnv()");
+        expect(rollup).toContain('artifact.code.includes("import.meta.env")');
+        expect(rollup).not.toContain('artifact.code.includes("import.meta.env.DEV")');
+    });
+
     it("keeps capabilities/final grants out of URLs, storage, logs, and unrelated frames", () => {
         const card = readFileSync(appPath("src/components/home/ActionCardContent.svelte"), "utf8");
         const bridge = readFileSync(appPath("src/utils/cardBridge.ts"), "utf8");

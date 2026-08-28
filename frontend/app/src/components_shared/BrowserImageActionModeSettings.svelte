@@ -15,15 +15,15 @@
         recommended?: boolean;
     }[] = [
         {
-            value: "model_with_local_verification",
-            title: "Model + local verification",
-            detail: "Local OCR reads the image first and remains authoritative. After a complete read, the selected Qwen3-VL 2B all-WebGPU model checks only bounded private OCR evidence; it does not receive the original image in this mode. A mismatch or incomplete read stops the proposal. If model verification cannot finish, only the complete source-grounded OCR card is returned.",
-            recommended: true,
-        },
-        {
             value: "model_only",
             title: "Model only",
             detail: "The selected Qwen3-VL 2B all-WebGPU model receives the original image directly. The local reader/OCR is never invoked in this mode.",
+            recommended: true,
+        },
+        {
+            value: "model_with_local_verification",
+            title: "Model + local verification",
+            detail: "Local OCR reads the image first and remains authoritative. After a complete read, the selected Qwen3-VL 2B all-WebGPU model checks only bounded private OCR evidence; it does not receive the original image in this mode. A mismatch or incomplete read stops the proposal. If model verification cannot finish, only the complete source-grounded OCR card is returned.",
         },
         {
             value: "local_reader_only",

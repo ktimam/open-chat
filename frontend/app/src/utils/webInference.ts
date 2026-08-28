@@ -975,6 +975,23 @@ export async function browserImageModelFirstReadiness(
 ): Promise<BrowserImageModelFirstReadiness> {
     await ensureWebModelRestored();
     const selected = webModelCatalogId();
+
+    // A persisted all-WebGPU selection can survive a client/model revision update while its old
+    // Cache API entries no longer satisfy the new pinned manifest. Keep that as a MODEL-UPDATE
+    // failure. Falling through to the modality probe here made the error-state selection look like
+    // an unselected/text-only model, so Propose incorrectly said that Qwen did not support images.
+    // The Model Manager already owns the repair (Retry download); preserve its exact actionable
+    // reason for the proposal flow instead of replacing it with an unrelated modality verdict.
+    if (!isWebInferenceReady()) {
+        return {
+            available: false,
+            reason:
+                state.error ??
+                (selected === PHONE_QWEN3_VL_2B_MODEL_ID
+                    ? TRANSFORMERS_WEBGPU_MODEL_NOT_DOWNLOADED_MESSAGE
+                    : undefined),
+        };
+    }
     if (
         transformersWebGpuSpikeCanHandle(
             { prompt: "image readiness", image: new Uint8Array([0]) },

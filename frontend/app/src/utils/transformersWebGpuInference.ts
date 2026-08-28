@@ -59,7 +59,7 @@ let defaultCacheVerification: Promise<boolean> | undefined;
 let defaultRuntimeOfflineVerification: Promise<boolean> | undefined;
 
 export const TRANSFORMERS_WEBGPU_MODEL_NOT_DOWNLOADED_MESSAGE =
-    "Qwen3-VL 2B is selected but its all-WebGPU model or runtime files are not completely downloaded. Open On-device models and tap Retry download before running an image.";
+    "The selected Qwen3-VL 2B model needs an update or its all-WebGPU download is incomplete. Open On-device models and tap Retry download before running an image.";
 
 export type TransformersWebGpuArtifactCache = Pick<Cache, "match" | "put" | "delete">;
 export type TransformersWebGpuArtifactCacheStorage = {

@@ -4,6 +4,7 @@ import type { BrowserModelImageEvidence } from "./imageSemanticDuplicateGuard";
 
 const {
     acceleratedImageModelReadyMock,
+    acceleratedImageModelFailureReasonMock,
     attestationAvailableMock,
     imageInferenceEvidenceMock,
     inferOnDeviceMock,
@@ -13,6 +14,7 @@ const {
     selectedWebModelIdMock,
 } = vi.hoisted(() => ({
     acceleratedImageModelReadyMock: vi.fn(async () => false),
+    acceleratedImageModelFailureReasonMock: vi.fn<() => string | undefined>(() => undefined),
     attestationAvailableMock: vi.fn(() => false),
     imageInferenceEvidenceMock: vi.fn<() => BrowserModelImageEvidence | undefined>(() => undefined),
     inferOnDeviceMock: vi.fn(
@@ -56,9 +58,12 @@ vi.mock("./onDeviceInference", () => ({
     onDeviceInferenceCapability: inferenceCapabilityMock,
 }));
 vi.mock("./webInference", () => ({
-    browserImageModelFirstReadiness: async () => ({
-        available: await acceleratedImageModelReadyMock(),
-    }),
+    browserImageModelFirstReadiness: async () => {
+        const available = await acceleratedImageModelReadyMock();
+        return available
+            ? { available: true }
+            : { available: false, reason: acceleratedImageModelFailureReasonMock() };
+    },
     webImageInferenceEvidence: imageInferenceEvidenceMock,
     webModelCatalogId: selectedWebModelIdMock,
 }));
@@ -85,6 +90,7 @@ import {
     proposeAndPostCandidate,
     proposeAiActionForMessage,
     preflightAiActionForMessage,
+    reconcileModelWithLocalResult,
     resolveCandidates,
     resolveSuggestedAiAction,
     runProposeFlow,
@@ -101,8 +107,12 @@ import {
 const RECIPIENT = "-----BEGIN PUBLIC KEY-----\nABC\n-----END PUBLIC KEY-----\n";
 
 beforeEach(() => {
+    // Match a fresh browser. Tests for either local-reader policy opt into it explicitly.
+    browserImageActionMode.set("model_only");
     acceleratedImageModelReadyMock.mockReset();
     acceleratedImageModelReadyMock.mockResolvedValue(false);
+    acceleratedImageModelFailureReasonMock.mockReset();
+    acceleratedImageModelFailureReasonMock.mockReturnValue(undefined);
     imageInferenceEvidenceMock.mockReset();
     imageInferenceEvidenceMock.mockReturnValue(undefined);
     attestationAvailableMock.mockReset();
@@ -1099,6 +1109,7 @@ describe("provenance before posting", () => {
     });
 
     it("pins one browser model id across a compact primary and focused image pass", async () => {
+        acceleratedImageModelReadyMock.mockResolvedValue(true);
         const imageDef: AiActionDefinition = {
             ...DEF,
             acceptsImage: true,
@@ -1165,14 +1176,12 @@ describe("provenance before posting", () => {
             return { kind: "ok", text: '{"date":"2026-08-14"}' };
         });
 
-        browserImageActionMode.set("model_only");
         const result = await proposeAndPostCandidate(
             client,
             messageContext,
             imageContent,
             imageCandidate,
         );
-        browserImageActionMode.set("model_with_local_verification");
 
         expect(result.kind).toBe("ready");
         expect(inferOnDeviceMock).toHaveBeenCalledTimes(2);
@@ -1180,6 +1189,221 @@ describe("provenance before posting", () => {
             "qwen3-vl-2b-instruct-q4",
             "qwen3-vl-2b-instruct-q4",
         ]);
+    });
+
+    it("uses the fresh-browser model-only default for original image pixels without OCR", async () => {
+        acceleratedImageModelReadyMock.mockResolvedValue(true);
+        const imageDef: AiActionDefinition = {
+            ...DEF,
+            acceptsImage: true,
+            responseSchema: {
+                type: "object",
+                "x-openchat-source-grounded-transactions": {
+                    version: 1,
+                    amountField: "amount",
+                    currencyField: "currency",
+                    kindField: "kind",
+                    directionField: "direction",
+                    dateField: "date",
+                    noteField: "note",
+                    sourceField: "message",
+                    fallbackKind: "iou",
+                    ocrDefaultDirection: "credit",
+                    maximumItems: 1,
+                    authoritativeAmountLabels: ["total"],
+                    dateLabels: ["date"],
+                    noteLabels: ["note"],
+                    ignoredLineLabels: ["reference"],
+                    titleLineKeywords: ["receipt"],
+                    relationshipLabelPrefixes: ["direction"],
+                },
+                "x-openchat-browser-image-strategy": {
+                    version: 1,
+                    primary: "selected_model",
+                    requireAcceleration: true,
+                    fallback: "source_grounded",
+                },
+                properties: {
+                    amount: { type: "number", minimum: 0.005 },
+                    currency: { type: "string" },
+                    kind: { type: "string", enum: ["iou", "settlement"] },
+                    direction: { type: "string", enum: ["credit", "debt"] },
+                    date: { type: "string", format: "date" },
+                    note: { type: "string" },
+                    message: { type: "string" },
+                },
+                required: ["amount", "currency", "kind", "direction"],
+            },
+        };
+        const imageCandidate: AiActionCandidate = {
+            app: { ...APP, manifest: { ...APP.manifest, actions: [imageDef] } },
+            action: imageDef,
+            recipientKey: RECIPIENT,
+        };
+        const client = {
+            createAiAppCardProvenance: vi.fn(async () => ({
+                kind: "success" as const,
+                provenance: new Uint8Array([9]),
+                expiresAt: BigInt(Date.now() + 60_000),
+            })),
+            sendMessageWithContent: vi.fn(async () => ({ kind: "success" })),
+        } as unknown as OpenChat;
+        const pixels = new Uint8Array([11, 22, 33, 44]);
+        const phases: string[] = [];
+        inferenceCapabilityMock.mockReturnValue({
+            available: true,
+            runtimesSupported: ["llama-cpp"],
+            selectedModalities: ["image"],
+            selectedModelId: "qwen3-vl-2b-instruct-q4",
+        });
+        inferOnDeviceMock.mockResolvedValueOnce({
+            kind: "ok",
+            text: '{"amount":12900,"currency":"EGP","kind":"settlement","direction":"credit","date":"2026-08-13"}',
+        });
+
+        const result = await proposeAndPostCandidate(
+            client,
+            messageContext,
+            { kind: "image_content", blobData: pixels } as unknown as Parameters<
+                typeof proposeAndPostCandidate
+            >[2],
+            imageCandidate,
+            undefined,
+            undefined,
+            (phase) => phases.push(phase),
+        );
+
+        expect(result).toMatchObject({
+            kind: "ready",
+            extracted: { date: "2026-08-13" },
+        });
+        expect(inferOnDeviceMock).toHaveBeenCalledOnce();
+        expect(inferOnDeviceMock.mock.calls[0][0]).toMatchObject({
+            modelId: "qwen3-vl-2b-instruct-q4",
+            image: pixels,
+        });
+        expect(inferOnDeviceTextOnlyNoProjectorMock).not.toHaveBeenCalled();
+        expect(phases).not.toContain("reading_image");
+        expect(phases).not.toContain("reading_text");
+    });
+
+    it("preserves a selected browser image model's update reason instead of calling it text-only", async () => {
+        const updateReason =
+            "Qwen3-VL 2B is selected but its all-WebGPU model files need an update. Open On-device models and tap Retry download.";
+        acceleratedImageModelFailureReasonMock.mockReturnValue(updateReason);
+        // This is the exact state after restore detects stale pinned cache entries: the selection is
+        // retained, but it is not advertised as a live inference capability until it is updated.
+        inferenceCapabilityMock.mockReturnValue({
+            available: false,
+            runtimesSupported: ["llama-cpp"],
+            selectedModalities: [],
+        });
+        const imageDef: AiActionDefinition = {
+            ...DEF,
+            acceptsImage: true,
+            responseSchema: {
+                type: "object",
+                "x-openchat-source-grounded-transactions": {
+                    version: 1,
+                    amountField: "amount",
+                    currencyField: "currency",
+                    kindField: "kind",
+                    directionField: "direction",
+                    dateField: "date",
+                    noteField: "note",
+                    sourceField: "message",
+                    fallbackKind: "iou",
+                    ocrDefaultDirection: "credit",
+                    maximumItems: 1,
+                    authoritativeAmountLabels: ["total"],
+                    dateLabels: ["date"],
+                    noteLabels: ["note"],
+                    ignoredLineLabels: ["reference"],
+                    titleLineKeywords: ["receipt"],
+                    relationshipLabelPrefixes: ["direction"],
+                },
+                "x-openchat-browser-image-strategy": {
+                    version: 1,
+                    primary: "selected_model",
+                    requireAcceleration: true,
+                    fallback: "source_grounded",
+                },
+                properties: {
+                    amount: { type: "number", minimum: 0.005 },
+                    currency: { type: "string" },
+                    kind: { type: "string", enum: ["iou", "settlement"] },
+                    direction: { type: "string", enum: ["credit", "debt"] },
+                    date: { type: "string" },
+                    note: { type: "string" },
+                    message: { type: "string" },
+                },
+                required: ["amount", "kind", "direction"],
+            },
+        };
+        const candidate: AiActionCandidate = {
+            app: { ...APP, manifest: { ...APP.manifest, actions: [imageDef] } },
+            action: imageDef,
+            recipientKey: RECIPIENT,
+        };
+
+        browserImageActionMode.set("model_only");
+        try {
+            await expect(
+                proposeAndPostCandidate(
+                    {} as OpenChat,
+                    { chatId: { kind: "group_chat", groupId: "aaaaa-aa" } },
+                    {
+                        kind: "image_content",
+                        blobData: new Uint8Array([1, 2, 3]),
+                    } as unknown as Parameters<typeof proposeAndPostCandidate>[2],
+                    candidate,
+                ),
+            ).resolves.toEqual({ kind: "unavailable", reason: updateReason });
+        } finally {
+            browserImageActionMode.set("model_only");
+        }
+        expect(inferOnDeviceMock).not.toHaveBeenCalled();
+    });
+
+    it("verification mode returns a complete local card when its private text model is unavailable", () => {
+        const local: ProposeResult = {
+            kind: "ready",
+            card: CARD,
+            extracted: {
+                amount: 12_900,
+                currency: "EGP",
+                kind: "settlement",
+                direction: "credit",
+                date: "2026-08-14",
+            },
+        };
+
+        expect(
+            reconcileModelWithLocalResult(
+                { kind: "unavailable", reason: "private verifier unavailable" },
+                local,
+            ),
+        ).toBe(local);
+    });
+
+    it("verification mode never falls back to an incomplete local extraction", () => {
+        const local: ProposeResult = {
+            kind: "incomplete_extraction",
+            raw: '{"amount":12900}',
+            missingFields: ["direction"],
+            candidateCount: 1,
+            validCandidateCount: 0,
+        };
+
+        expect(
+            reconcileModelWithLocalResult(
+                { kind: "unavailable", reason: "private verifier unavailable" },
+                local,
+            ),
+        ).toEqual({
+            kind: "error",
+            error: "The model result could not be verified against the image. No action was created.",
+        });
     });
 
     it("applies the selected image modality to manual debug extraction before provenance", async () => {
@@ -1920,7 +2144,7 @@ describe("runProposeFlow", () => {
         try {
             await expect(runProposeFlow(deps)).resolves.toBe("posted");
         } finally {
-            browserImageActionMode.set("model_with_local_verification");
+            browserImageActionMode.set("model_only");
         }
 
         expect(inferOnDeviceMock).toHaveBeenCalledTimes(2);
@@ -2209,6 +2433,20 @@ describe("runProposeFlow", () => {
         expect(deps.propose).not.toHaveBeenCalled();
     });
 
+    it("browser model-only image preflight preserves stale-Qwen update guidance", async () => {
+        const reason =
+            "The selected Qwen3-VL 2B model needs an update. Open On-device models and tap Retry download.";
+        const deps = flowDeps({
+            canInfer: vi.fn(async () => ({ available: false, reason })),
+            requiresModelReadiness: vi.fn(() => true),
+        });
+
+        await runProposeFlow(deps);
+
+        expect(deps.toast).toHaveBeenCalledWith(reason);
+        expect(deps.propose).not.toHaveBeenCalled();
+    });
+
     it("explains the missing model when the manual seam is inactive", async () => {
         // Undefined means the query-only seam is inactive. An explicit Cancel has its own sentinel
         // and is tested separately as a quiet user decision.
@@ -2402,6 +2640,9 @@ describe("both ChatMessage trees run the SHARED propose flow", () => {
             );
             // Deciding for itself whether a model exists is how a tree starts owning the flow again.
             expect(src).not.toContain("canInferOnDevice()");
+            expect(src).toContain("aiActionProposalReadiness(");
+            expect(src).toContain('capturedContent.kind === "image_content"');
+            expect(src).not.toContain("canInfer: onDeviceInferenceReadiness");
             // A second copy of the message is a second thing to forget to fix.
             expect(src).not.toContain("No on-device model is ready");
         });

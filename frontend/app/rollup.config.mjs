@@ -79,7 +79,30 @@ function clean() {
     };
 }
 
-const { version, production } = initEnv();
+const { version, production, development } = initEnv();
+
+// Vite substitutes import.meta.env built-ins while serving the browser app. Native packages use
+// this Rollup build instead, so every built-in consumed by shared UI code must be replaced here as
+// well. Leaving `import.meta.env.DEV` in an Android bundle makes the first app-surface lookup throw
+// because a plain WebView module exposes `import.meta`, but not Vite's synthetic `env` object.
+function rejectUnresolvedViteEnv() {
+    return {
+        name: "reject-unresolved-vite-env",
+        generateBundle(_options, bundle) {
+            const unresolvedChunks = Object.values(bundle)
+                .filter(
+                    (artifact) =>
+                        artifact.type === "chunk" && artifact.code.includes("import.meta.env"),
+                )
+                .map((artifact) => artifact.fileName);
+            if (unresolvedChunks.length > 0) {
+                this.error(
+                    `Unresolved import.meta.env reference in ${unresolvedChunks.join(", ")}`,
+                );
+            }
+        },
+    };
+}
 
 const otaUpdateStrategies = new Set(["none", "patch", "minor", "major"]);
 const otaUpdateStrategy = process.env.OC_OTA_UPDATES ?? "none";
@@ -285,6 +308,7 @@ export default {
 
         replace({
             preventAssignment: true,
+            "import.meta.env.DEV": JSON.stringify(development),
             "import.meta.env.OC_APP_STORE": override(
                 "OC_APP_STORE",
                 JSON.stringify(process.env.OC_APP_STORE),
@@ -409,6 +433,7 @@ export default {
             "import.meta.env.OC_ALCHEMY_API_KEY": JSON.stringify(process.env.OC_ALCHEMY_API_KEY),
             "import.meta.env.OC_BASE_ORIGIN": JSON.stringify(process.env.OC_BASE_ORIGIN),
         }),
+        rejectUnresolvedViteEnv(),
 
         html({
             template: ({ files }) => {

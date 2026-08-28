@@ -31,6 +31,7 @@ import {
 import type { ChatIdentifier, MessageContent, MessageContext, OpenChat } from "@client";
 import {
     browserUsesLocalReaderOnly,
+    browserUsesModelOnly,
     browserUsesModelWithLocalVerification,
 } from "../stores/browserImageActionMode";
 import { appContentAttestationAvailable } from "./aiActionAvailability";
@@ -99,7 +100,7 @@ function verifiedImageCandidateMatches(
     );
 }
 
-function reconcileModelWithLocalResult(
+export function reconcileModelWithLocalResult(
     model: RunAiActionResult,
     local: ProposeResult | undefined,
 ): ProposeResult {
@@ -752,6 +753,28 @@ async function runDefinition(
         };
     };
 
+    const selectedBrowserImageModelReadiness = async (): Promise<{
+        available: boolean;
+        reason?: string;
+    }> => {
+        let readiness: { available: boolean; reason?: string } = { available: false };
+        try {
+            readiness = await browserImageModelFirstReadiness({
+                retryAfterRecentFailure: true,
+            });
+        } catch {
+            // Treat a failed probe as unavailable.
+        }
+        // Preserve an actionable readiness failure (notably an incomplete/stale pinned browser
+        // download). An error-state selection is intentionally not advertised as inference-capable,
+        // so consulting only its live modality would erase this reason and misreport the image model
+        // as text-only.
+        if (!readiness.available && readiness.reason !== undefined) return readiness;
+        const imageModelSelected =
+            imageUnsupportedReason(onDeviceInferenceCapability()) === undefined;
+        return imageModelSelected ? readiness : { available: false };
+    };
+
     if (!isNativeClient() && input.image !== undefined && browserUsesLocalReaderOnly()) {
         const local = await runSourceGrounded();
         if (local !== undefined) return local;
@@ -759,6 +782,22 @@ async function runDefinition(
             kind: "unavailable",
             reason: "This app does not provide a source-grounded local reader for image actions. Turn off OCR-only mode to use the selected image model.",
         };
+    }
+
+    // Model-only sends the original image to the selected runtime, so it must stop on a stale model
+    // before inference. The two explicit local-reader modes keep their separate contract below:
+    // verification is local-first and may return only a complete source-grounded local card when
+    // its private text check is unavailable, while local-reader-only never probes a model at all.
+    if (!isNativeClient() && input.image !== undefined && browserUsesModelOnly()) {
+        const modelReadiness = await selectedBrowserImageModelReadiness();
+        if (!modelReadiness.available) {
+            if (modelReadiness.reason !== undefined) {
+                return { kind: "unavailable", reason: modelReadiness.reason };
+            }
+            const unsupported = imageUnsupportedReason(onDeviceInferenceCapability());
+            if (unsupported !== undefined) return unsupported;
+            return { kind: "unavailable", reason: GPU_ONLY_IMAGE_UNAVAILABLE_MESSAGE };
+        }
     }
 
     if (verifyBrowserImageWithLocal && !localActionExtractorSupports(def.responseSchema)) {
@@ -786,31 +825,7 @@ async function runDefinition(
                 return reconcileModelWithLocalResult(model, source.local);
             }
 
-            const selectedImageModelReadiness = async (): Promise<{
-                available: boolean;
-                reason?: string;
-            }> => {
-                let readiness: { available: boolean; reason?: string } = { available: false };
-                try {
-                    readiness = await browserImageModelFirstReadiness({
-                        retryAfterRecentFailure: true,
-                    });
-                } catch {
-                    // Treat a failed probe as unavailable.
-                }
-                const imageModelSelected =
-                    imageUnsupportedReason(onDeviceInferenceCapability()) === undefined;
-                return imageModelSelected ? readiness : { available: false };
-            };
-
-            const modelReadiness = await selectedImageModelReadiness();
-            if (modelReadiness.available) return runSelectedModel();
-            const unsupported = imageUnsupportedReason(onDeviceInferenceCapability());
-            if (unsupported !== undefined) return unsupported;
-            return {
-                kind: "unavailable",
-                reason: modelReadiness.reason ?? GPU_ONLY_IMAGE_UNAVAILABLE_MESSAGE,
-            };
+            return runSelectedModel();
         }
         if (verifyBrowserImageWithLocal) {
             return { kind: "error", error: LOCAL_VERIFICATION_FAILED_MESSAGE };

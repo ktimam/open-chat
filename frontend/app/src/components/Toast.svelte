@@ -73,9 +73,14 @@
                         {/snippet}
                     </Tooltip>
                 {/if}
-                <div class="close" onclick={toastStore.hideToast}>
+                <button
+                    type="button"
+                    class="close"
+                    aria-label="Dismiss notification"
+                    onclick={toastStore.hideToast}
+                >
                     <Close size={$iconSize} color={"var(--button-txt)"} />
-                </div>
+                </button>
             {/if}
         </div>
     </div>
@@ -89,16 +94,20 @@
         display: flex;
         justify-content: center;
         align-items: center;
+        box-sizing: border-box;
+        padding: 0 $sp4;
         @include z-index("toast");
     }
 
     .message {
+        box-sizing: border-box;
         transition: background 200ms ease-in-out;
         background: var(--button-bg);
         padding: $sp4;
         width: 75%;
         max-width: 800px;
-        margin: 0 $sp4;
+        margin: 0;
+        min-width: 0;
         display: flex;
         gap: $sp4;
         justify-content: center;
@@ -122,6 +131,8 @@
         .text {
             text-align: center;
             flex: auto;
+            min-width: 0;
+            overflow-wrap: anywhere;
         }
 
         &.success {
@@ -133,6 +144,16 @@
         .report {
             flex: 0 0 30px;
             cursor: pointer;
+        }
+
+        .close {
+            appearance: none;
+            border: 0;
+            padding: 0;
+            background: transparent;
+            color: inherit;
+            line-height: 0;
+            touch-action: manipulation;
         }
     }
 </style>

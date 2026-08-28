@@ -19,7 +19,8 @@
         runLocalAiCommand,
     } from "@utils/localAiCommand";
     import { runLocalAiMessageFlow } from "@utils/localAiMessageFlow";
-    import { isNativeClient, onDeviceInferenceReadiness } from "@utils/onDeviceInference";
+    import { aiActionProposalReadiness } from "@utils/aiActionProposalReadiness";
+    import { isNativeClient } from "@utils/onDeviceInference";
     import { browserImageProposalRequiresModelReadiness } from "@src/stores/browserImageActionMode";
     import { createSingleFlight } from "@utils/singleFlight";
     import { webModelStatus } from "@utils/webInference";
@@ -485,7 +486,8 @@
             };
             return runProposeFlow({
                 preflight: () => preflightAiActionForMessage(client, capturedContext.chatId),
-                canInfer: onDeviceInferenceReadiness,
+                canInfer: () =>
+                    aiActionProposalReadiness(capturedContent.kind === "image_content"),
                 requiresModelReadiness: () => requiresModelReadiness,
                 promptForExtraction,
                 propose: (extraction) =>

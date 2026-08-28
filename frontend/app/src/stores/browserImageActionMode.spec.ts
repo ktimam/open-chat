@@ -8,18 +8,31 @@ describe("browser image action mode", () => {
         vi.resetModules();
     });
 
-    it("defaults fresh browsers to model extraction with independent local verification", async () => {
+    it("defaults fresh browsers to the selected image model without invoking OCR", async () => {
         const {
             browserImageActionMode,
             browserUsesLocalReaderOnly,
+            browserUsesModelOnly,
             browserUsesModelWithLocalVerification,
         } = await import("./browserImageActionMode");
         let selected: string | undefined;
         const unsubscribe = browserImageActionMode.subscribe((mode) => (selected = mode));
 
-        expect(selected).toBe("model_with_local_verification");
-        expect(browserUsesModelWithLocalVerification()).toBe(true);
+        expect(selected).toBe("model_only");
+        expect(browserUsesModelOnly()).toBe(true);
+        expect(browserUsesModelWithLocalVerification()).toBe(false);
         expect(browserUsesLocalReaderOnly()).toBe(false);
+        unsubscribe();
+    });
+
+    it("treats an unknown persisted value as model-only", async () => {
+        localStorage.setItem(STORAGE_KEY, "retired_mode");
+
+        const { browserImageActionMode } = await import("./browserImageActionMode");
+        let selected: string | undefined;
+        const unsubscribe = browserImageActionMode.subscribe((mode) => (selected = mode));
+
+        expect(selected).toBe("model_only");
         unsubscribe();
     });
 
@@ -51,14 +64,17 @@ describe("browser image action mode", () => {
         const {
             browserImageActionMode,
             browserUsesLocalReaderOnly,
+            browserUsesModelOnly,
             browserUsesModelWithLocalVerification,
         } = await import("./browserImageActionMode");
 
         browserImageActionMode.set("model_with_local_verification");
+        expect(browserUsesModelOnly()).toBe(false);
         expect(browserUsesModelWithLocalVerification()).toBe(true);
         expect(localStorage.getItem(STORAGE_KEY)).toBe("model_with_local_verification");
 
         browserImageActionMode.set("model_only");
+        expect(browserUsesModelOnly()).toBe(true);
         expect(browserUsesModelWithLocalVerification()).toBe(false);
         expect(browserUsesLocalReaderOnly()).toBe(false);
         expect(localStorage.getItem(STORAGE_KEY)).toBe("model_only");
