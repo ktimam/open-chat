@@ -7,7 +7,9 @@ import {
     updateTransformersWebGpuMaxOutputTokens,
 } from "../stores/transformersWebGpuSettings";
 import {
+    allWebGpuCatalogModelSupported,
     clearWebModel,
+    cancelWebModelDownload,
     restoreWebModel,
     setWebModelFile,
     useWebModelFromUrl,
@@ -50,6 +52,21 @@ const transformers = vi.hoisted(() => ({
     preloadCalls: 0,
     disposeCalls: 0,
     requests: [] as { prompt: string; image?: Uint8Array; maxTokens?: number }[],
+    preloadSignals: [] as AbortSignal[],
+    preloadImpl: undefined as
+        | ((options: {
+              signal?: AbortSignal;
+              onProgress?: (received: number, total: number) => void;
+          }) => Promise<void>)
+        | undefined,
+    statusListener: undefined as
+        | ((status: {
+              phase: "idle" | "loading" | "downloading" | "inference";
+              stage?: "text" | "image";
+              progress?: number;
+              file?: string;
+          }) => void)
+        | undefined,
 }));
 
 vi.mock("./transformersWebGpuInference", async (importOriginal) => {
@@ -60,17 +77,34 @@ vi.mock("./transformersWebGpuInference", async (importOriginal) => {
         ...actual,
         transformersWebGpuSelectionCanHandle: selected,
         transformersWebGpuSpikeCanHandle: (
-            request: { image?: Uint8Array },
+            _request: { image?: Uint8Array },
             id: string | undefined,
-        ) => selected(id) && request.image !== undefined,
+        ) => selected(id),
         transformersWebGpuModelDownloaded: vi.fn(async () => transformers.downloaded),
         preloadTransformersWebGpuModel: vi.fn(
-            async (options?: { onProgress?: (received: number, total: number) => void }) => {
+            async (options: {
+                signal?: AbortSignal;
+                onProgress?: (received: number, total: number) => void;
+            } = {}) => {
                 transformers.preloadCalls += 1;
+                if (options.signal !== undefined) transformers.preloadSignals.push(options.signal);
+                if (transformers.preloadImpl !== undefined) {
+                    await transformers.preloadImpl(options);
+                    return;
+                }
                 transformers.downloaded = true;
                 options?.onProgress?.(1_534_532_835, 1_534_532_835);
             },
         ),
+        subscribeTransformersWebGpuStatus: vi.fn((listener) => {
+            transformers.statusListener = listener;
+            listener({ phase: "idle" });
+            return () => {
+                if (transformers.statusListener === listener) {
+                    transformers.statusListener = undefined;
+                }
+            };
+        }),
         transformersWebGpuInfer: vi.fn(async (request) => {
             transformers.requests.push(request);
             return { kind: "ok", text: "all-webgpu result" };
@@ -571,6 +605,8 @@ describe("pinned Qwen3-VL all-WebGPU integration", () => {
         transformers.enabled = true;
         transformers.downloaded = false;
         transformers.preloadCalls = 0;
+        transformers.preloadSignals = [];
+        transformers.preloadImpl = undefined;
         transformers.disposeCalls = 0;
         transformers.requests = [];
         resetWllama();
@@ -602,15 +638,222 @@ describe("pinned Qwen3-VL all-WebGPU integration", () => {
         expect(wl.loadCount).toBe(0);
     });
 
-    it("fails closed for text instead of downloading or replaying the catalog GGUF", async () => {
+    it("routes normal text through the all-WebGPU worker instead of replaying the catalog GGUF", async () => {
         await useWebModelFromUrl(entry);
 
         await expect(webInfer({ prompt: "text only" })).resolves.toEqual({
-            kind: "unavailable",
-            reason: "The selected all-WebGPU phone trial accepts image requests only.",
+            kind: "ok",
+            text: "all-webgpu result",
         });
-        expect(transformers.requests).toEqual([]);
+        expect(transformers.requests).toEqual([expect.objectContaining({ prompt: "text only" })]);
+        expect(transformers.requests[0].image).toBeUndefined();
         expect(wl.loadCount).toBe(0);
+    });
+
+    it("ignores obsolete GGUF metadata and persists only the pinned Transformers runtime", async () => {
+        await expect(
+            useWebModelFromUrl({
+                ...entry,
+                files: [],
+                sizeBytes: 0,
+            }),
+        ).resolves.toBeUndefined();
+
+        expect(wl.modelSource).toBeUndefined();
+        expect(transformers.preloadCalls).toBe(1);
+        expect(JSON.parse(localStorage.getItem(LS_URL_MODEL)!)).toEqual({
+            runtime: "transformers-webgpu",
+            id: entry.id,
+            name: entry.name,
+        });
+    });
+
+    it("migrates the previous GGUF-shaped Qwen selection after exact ONNX cache verification", async () => {
+        transformers.downloaded = true;
+        localStorage.setItem(
+            LS_URL_MODEL,
+            JSON.stringify({
+                id: entry.id,
+                name: entry.name,
+                url: weightsUrl,
+                mmprojUrl: projectorUrl,
+                modalities: entry.modalities,
+                files: entry.files,
+                sizeBytes: entry.sizeBytes,
+            }),
+        );
+
+        await restoreWebModel();
+
+        expect(get(webModelStatus)).toMatchObject({ id: entry.id, status: "attached" });
+        expect(JSON.parse(localStorage.getItem(LS_URL_MODEL)!)).toEqual({
+            runtime: "transformers-webgpu",
+            id: entry.id,
+            name: entry.name,
+        });
+        expect(wl.modelSource).toBeUndefined();
+    });
+
+    it("allow-lists only the pinned 2B phone artifact supported by the current engine", () => {
+        expect(allWebGpuCatalogModelSupported(entry.id)).toBe(true);
+        expect(allWebGpuCatalogModelSupported("qwen3.5-0.8b-instruct-q4")).toBe(false);
+        expect(allWebGpuCatalogModelSupported("smolvlm-256m-instruct-q8")).toBe(false);
+    });
+
+    it("never downloads the Qwen GGUF when the all-WebGPU trial is unavailable", async () => {
+        transformers.enabled = false;
+
+        await expect(useWebModelFromUrl(entry)).resolves.toMatch(
+            /all-WebGPU phone trial|WebGPU|accelerated image inference/i,
+        );
+        expect(transformers.preloadCalls).toBe(0);
+        expect(wl.modelSource).toBeUndefined();
+        expect(wl.loadCount).toBe(0);
+    });
+
+    it("routes projector-absent verification through all-WebGPU with no caller image bytes", async () => {
+        await useWebModelFromUrl(entry);
+
+        await expect(
+            webInfer({ prompt: "verify bounded OCR text" }, { requireProjectorAbsent: true }),
+        ).resolves.toEqual({ kind: "ok", text: "all-webgpu result" });
+        expect(transformers.requests).toEqual([
+            expect.objectContaining({
+                prompt: "verify bounded OCR text",
+            }),
+        ]);
+        expect(transformers.requests[0].image).toBeUndefined();
+        expect(wl.loadCount).toBe(0);
+    });
+
+    it("keeps the projector-absent boundary closed to supplied image bytes", async () => {
+        await useWebModelFromUrl(entry);
+
+        await expect(
+            webInfer(
+                { prompt: "must reject", image: new Uint8Array([1]) },
+                { requireProjectorAbsent: true },
+            ),
+        ).resolves.toEqual({ kind: "error", error: "projector-free inference accepts text only" });
+        expect(transformers.requests).toEqual([]);
+    });
+
+    it("owns each preload with an AbortSignal and restores the prior state after cancellation", async () => {
+        transformers.preloadImpl = ({ signal }) =>
+            new Promise<void>((_resolve, reject) => {
+                signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+            });
+        const pending = useWebModelFromUrl(entry);
+        await vi.waitFor(() => expect(transformers.preloadSignals).toHaveLength(1));
+        expect(get(webModelStatus).status).toBe("downloading");
+
+        cancelWebModelDownload();
+
+        await expect(pending).resolves.toMatch(/cancelled|Retry download/i);
+        expect(transformers.preloadSignals[0].aborted).toBe(true);
+        expect(get(webModelStatus)).toMatchObject({ status: "none", id: undefined });
+    });
+
+    it("rejects a concurrent selection while the first owner is unresolved", async () => {
+        transformers.preloadImpl = ({ signal }) =>
+            new Promise<void>((_resolve, reject) => {
+                signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+            });
+        const first = useWebModelFromUrl(entry);
+        await vi.waitFor(() => expect(get(webModelStatus).status).toBe("downloading"));
+
+        await expect(useWebModelFromUrl(entry)).resolves.toMatch(/already in progress/i);
+        cancelWebModelDownload();
+        await first;
+    });
+
+    it("cannot commit a late preload after clear invalidates its owner generation", async () => {
+        let finishPreload: () => void = () => undefined;
+        transformers.preloadImpl = ({ signal }) =>
+            new Promise<void>((resolve) => {
+                finishPreload = () => {
+                    transformers.downloaded = true;
+                    resolve();
+                };
+                // Deliberately ignore abort to exercise the generation check after a stale provider
+                // resolves. The real preloader observes this signal while streaming every chunk.
+                expect(signal).toBeDefined();
+            });
+        const selection = useWebModelFromUrl(entry);
+        await vi.waitFor(() => expect(transformers.preloadSignals).toHaveLength(1));
+
+        const clearing = clearWebModel();
+        finishPreload();
+
+        await expect(selection).resolves.toMatch(/cancelled|Retry download/i);
+        await clearing;
+        expect(get(webModelStatus)).toMatchObject({ status: "none", id: undefined });
+        expect(localStorage.getItem(LS_URL_MODEL)).toBeNull();
+    });
+
+    it("cancels a preload when the page is backgrounded and leaves Retry available", async () => {
+        transformers.preloadImpl = ({ signal }) =>
+            new Promise<void>((_resolve, reject) => {
+                signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+            });
+        const pending = useWebModelFromUrl(entry);
+        await vi.waitFor(() => expect(transformers.preloadSignals).toHaveLength(1));
+        Object.defineProperty(document, "hidden", { configurable: true, value: true });
+        document.dispatchEvent(new Event("visibilitychange"));
+
+        await expect(pending).resolves.toMatch(/background|Retry download/i);
+        expect(get(webModelStatus).status).toBe("none");
+        Object.defineProperty(document, "hidden", { configurable: true, value: false });
+    });
+
+    it("cancels a stalled preload and reports a retryable connection error", async () => {
+        vi.useFakeTimers();
+        try {
+            transformers.preloadImpl = ({ signal }) =>
+                new Promise<void>((_resolve, reject) => {
+                    signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+                });
+            const pending = useWebModelFromUrl(entry);
+            await Promise.resolve();
+            expect(transformers.preloadSignals).toHaveLength(1);
+
+            await vi.advanceTimersByTimeAsync(90_000);
+
+            await expect(pending).resolves.toMatch(/stopped making progress|Retry download/i);
+            expect(transformers.preloadSignals[0].aborted).toBe(true);
+            expect(get(webModelStatus).status).toBe("none");
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("does not evict an already-attached exact runtime when its cached preload is rechecked", async () => {
+        await useWebModelFromUrl(entry);
+        const disposals = transformers.disposeCalls;
+
+        await useWebModelFromUrl(entry);
+
+        expect(transformers.disposeCalls).toBe(disposals);
+        expect(get(webModelStatus)).toMatchObject({ id: entry.id, status: "attached" });
+    });
+
+    it("publishes content-free all-WebGPU engine progress for message status labels", async () => {
+        await useWebModelFromUrl(entry);
+        transformers.statusListener?.({
+            phase: "loading",
+            stage: "text",
+            progress: 0.25,
+            file: "decoder_model_merged",
+        });
+        expect(get(webModelStatus).generation).toEqual({
+            phase: "loading",
+            stage: "text",
+            progress: 0.25,
+            file: "decoder_model_merged",
+        });
+
+        transformers.statusListener?.({ phase: "idle" });
+        expect(get(webModelStatus).generation).toBeUndefined();
     });
 
     it("reports a persisted selection as unavailable when its pinned ONNX cache is incomplete", async () => {

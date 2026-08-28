@@ -2,6 +2,10 @@ import type { HttpAgent, Identity } from "@icp-sdk/core/agent";
 import type {
     AcceptP2PSwapResponse,
     AccessGateConfig,
+    AiAppChatLinkToken,
+    AiAppCardCapability,
+    AiAppPrivateMatchCapability,
+    AiAppCardConfirmationGrant,
     AddRemoveReactionResponse,
     BlockUserResponse,
     CancelP2PSwapResponse,
@@ -33,6 +37,7 @@ import type {
     PublicGroupSummaryResponse,
     RegisterPollVoteResponse,
     RegisterProposalVoteResponse,
+    RespondToActionCardResponse,
     RemoveMemberResponse,
     ResetInviteCodeResponse,
     Rules,
@@ -89,6 +94,16 @@ import {
     GroupRegenerateWebhookResponse,
     GroupRegisterPollVoteArgs,
     GroupRegisterPollVoteResponse,
+    GroupRespondToActionCardArgs,
+    GroupRespondToActionCardResponse,
+    GroupCreateAiAppCardCapabilityArgs,
+    GroupCreateAiAppCardCapabilityResponse,
+    GroupCreateAiAppPrivateMatchCapabilityArgs,
+    GroupCreateAiAppPrivateMatchCapabilityResponse,
+    GroupCreateAiAppChatLinkTokenArgs,
+    GroupCreateAiAppChatLinkTokenResponse,
+    GroupCreateAiAppCardConfirmationGrantArgs,
+    GroupCreateAiAppCardConfirmationGrantResponse,
     GroupRegisterProposalVoteArgs,
     GroupRegisterProposalVoteV2Args,
     GroupRegisterWebhookArgs,
@@ -103,6 +118,9 @@ import {
     GroupSelectedUpdatesResponse,
     GroupSendMessageArgs,
     GroupSendMessageResponse,
+    GroupSetAiAppEnabledArgs,
+    GroupSetAiAppEnabledResponse,
+    GroupEnabledAiAppsResponse,
     GroupSetVideoCallPresenceArgs,
     GroupThreadPreviewsArgs,
     GroupThreadPreviewsResponse,
@@ -134,6 +152,9 @@ import {
 } from "../../utils/mapping";
 import { MultiCanisterMsgpackAgent } from "../canisterAgent/msgpack";
 import type { IChatEventsReader } from "../common/chatEvents";
+import { createAiAppCardCapabilityResponse } from "../common/aiAppCardCapability";
+import { createAiAppChatLinkTokenResponse } from "../common/aiAppChatLinkToken";
+import { createAiAppCardConfirmationGrantResponse } from "../common/aiAppCardConfirmationGrant";
 import {
     acceptP2PSwapSuccess,
     apiAccessGateConfig,
@@ -338,6 +359,10 @@ export class GroupClient
                     unitResult,
                     GroupEditMessageArgs,
                     UnitResult,
+                    undefined,
+                    message.content.kind === "action_card_content"
+                        ? { sensitive: true }
+                        : undefined,
                 );
             });
     }
@@ -393,6 +418,10 @@ export class GroupClient
                 GroupSendMessageArgs,
                 GroupSendMessageResponse,
                 onRequestAccepted,
+                newEvent.event.content.kind === "action_card_content" &&
+                    newEvent.event.content.appProvenance !== undefined
+                    ? { sensitive: true }
+                    : undefined,
             )
                 .then((resp) => {
                     const retVal: [SendMessageResponse, Message] = [resp, newEvent.event];
@@ -741,6 +770,151 @@ export class GroupClient
             unitResult,
             GroupRegisterPollVoteArgs,
             GroupRegisterPollVoteResponse,
+        );
+    }
+
+    // Toggles an AI app's enabled state for this group (owner/admin gated on the canister side).
+    setAiAppEnabled(groupId: string, appId: number, enabled: boolean): Promise<boolean> {
+        return this.update(
+            groupId,
+            "set_ai_app_enabled",
+            {
+                app_id: appId,
+                enabled,
+            },
+            (resp) => resp === "Success",
+            GroupSetAiAppEnabledArgs,
+            GroupSetAiAppEnabledResponse,
+        );
+    }
+
+    enabledAiApps(groupId: string): Promise<number[]> {
+        return this.query(
+            groupId,
+            "enabled_ai_apps",
+            {},
+            (resp) => ("Success" in resp ? resp.Success.app_ids : []),
+            TEmpty,
+            GroupEnabledAiAppsResponse,
+        );
+    }
+
+    respondToActionCard(
+        groupId: string,
+        messageId: bigint,
+        threadRootMessageIndex: number | undefined,
+        response: "confirm" | "cancel",
+        confirmPayloadOverride?: Uint8Array,
+        confirmationGrant?: Uint8Array,
+    ): Promise<RespondToActionCardResponse> {
+        return this.update(
+            groupId,
+            "respond_to_action_card",
+            {
+                thread_root_message_index: threadRootMessageIndex,
+                message_id: messageId,
+                response: response === "confirm" ? "Confirm" : "Cancel",
+                confirm_payload_override: confirmPayloadOverride?.slice(),
+                confirmation_grant: confirmationGrant?.slice(),
+            },
+            unitResult,
+            GroupRespondToActionCardArgs,
+            GroupRespondToActionCardResponse,
+            undefined,
+            { sensitive: true },
+        );
+    }
+
+    createAiAppCardCapability(
+        groupId: string,
+        messageId: bigint,
+        threadRootMessageIndex: number | undefined,
+        recipientKeyScheme: string,
+        recipientPublicKey: Uint8Array,
+    ): Promise<AiAppCardCapability | undefined> {
+        return this.update(
+            groupId,
+            "create_ai_app_card_capability",
+            {
+                thread_root_message_index: threadRootMessageIndex,
+                message_id: messageId,
+                recipient_key_scheme: recipientKeyScheme,
+                recipient_public_key: recipientPublicKey,
+            },
+            createAiAppCardCapabilityResponse,
+            GroupCreateAiAppCardCapabilityArgs,
+            GroupCreateAiAppCardCapabilityResponse,
+            undefined,
+            { sensitive: true },
+        );
+    }
+
+    createAiAppPrivateMatchCapability(
+        groupId: string,
+        messageId: bigint,
+        threadRootMessageIndex: number | undefined,
+        appId: number,
+        appRevision: bigint,
+        actionId: string,
+        recipientKeyScheme: string,
+        recipientPublicKey: Uint8Array,
+    ): Promise<AiAppPrivateMatchCapability | undefined> {
+        return this.update(
+            groupId,
+            "create_ai_app_private_match_capability",
+            {
+                thread_root_message_index: threadRootMessageIndex,
+                message_id: messageId,
+                app_id: appId,
+                app_revision: appRevision,
+                action_id: actionId,
+                recipient_key_scheme: recipientKeyScheme,
+                recipient_public_key: recipientPublicKey.slice(),
+            },
+            createAiAppCardCapabilityResponse,
+            GroupCreateAiAppPrivateMatchCapabilityArgs,
+            GroupCreateAiAppPrivateMatchCapabilityResponse,
+            undefined,
+            { sensitive: true },
+        );
+    }
+
+    createAiAppChatLinkToken(
+        groupId: string,
+        appId: number,
+        appRevision: bigint,
+    ): Promise<AiAppChatLinkToken | undefined> {
+        return this.update(
+            groupId,
+            "create_ai_app_chat_link_token",
+            { app_id: appId, app_revision: appRevision },
+            createAiAppChatLinkTokenResponse,
+            GroupCreateAiAppChatLinkTokenArgs,
+            GroupCreateAiAppChatLinkTokenResponse,
+            undefined,
+            { sensitive: true },
+        );
+    }
+
+    createAiAppCardConfirmationGrant(
+        groupId: string,
+        messageId: bigint,
+        threadRootMessageIndex: number | undefined,
+        confirmPayload: Uint8Array,
+    ): Promise<AiAppCardConfirmationGrant | undefined> {
+        return this.update(
+            groupId,
+            "create_ai_app_card_confirmation_grant",
+            {
+                thread_root_message_index: threadRootMessageIndex,
+                message_id: messageId,
+                confirm_payload: confirmPayload.slice(),
+            },
+            createAiAppCardConfirmationGrantResponse,
+            GroupCreateAiAppCardConfirmationGrantArgs,
+            GroupCreateAiAppCardConfirmationGrantResponse,
+            undefined,
+            { sensitive: true },
         );
     }
 

@@ -23,6 +23,11 @@ pub struct UserMap {
     bots: HashMap<UserId, Bot>,
     suspected_bots: BTreeSet<UserId>,
     deleted_users: HashMap<UserId, TimestampMillis>,
+    /// Monotonic deletion generation for stable user ids. A value survives account removal and
+    /// recreation, so an async operation admitted for an earlier account incarnation cannot mint
+    /// private app/card authority for the replacement account.
+    #[serde(default)]
+    account_lifecycle_epochs: HashMap<UserId, u64>,
     bot_updates: BTreeSet<(TimestampMillis, BotUpdate)>,
     suspended_or_unsuspended_users: BTreeSet<(TimestampMillis, UserId)>,
     unique_person_proofs_submitted: u32,
@@ -477,7 +482,23 @@ impl UserMap {
             self.username_to_user_id.remove(&user.username);
         }
         self.deleted_users.insert(user_id, now);
+        let next_epoch = self
+            .account_lifecycle_epochs
+            .get(&user_id)
+            .copied()
+            .unwrap_or_default()
+            .saturating_add(1);
+        self.account_lifecycle_epochs.insert(user_id, next_epoch);
         Some(user)
+    }
+
+    /// Returns the lifecycle epoch only while the account currently exists. Legacy accounts begin
+    /// at epoch zero; every successful deletion advances the durable tombstone before the same id
+    /// can be registered again.
+    pub fn account_lifecycle_epoch(&self, user_id: &UserId) -> Option<u64> {
+        self.users
+            .contains_key(user_id)
+            .then(|| self.account_lifecycle_epochs.get(user_id).copied().unwrap_or_default())
     }
 
     #[expect(clippy::too_many_arguments)]
@@ -959,6 +980,8 @@ struct UserMapTrimmed {
     bots: HashMap<UserId, Bot>,
     suspected_bots: BTreeSet<UserId>,
     deleted_users: HashMap<UserId, TimestampMillis>,
+    #[serde(default)]
+    account_lifecycle_epochs: HashMap<UserId, u64>,
     bot_updates: BTreeSet<(TimestampMillis, BotUpdate)>,
     suspended_or_unsuspended_users: BTreeSet<(TimestampMillis, UserId)>,
     unique_person_proofs_submitted: u32,
@@ -970,6 +993,7 @@ impl From<UserMapTrimmed> for UserMap {
             users: value.users,
             suspected_bots: value.suspected_bots,
             deleted_users: value.deleted_users,
+            account_lifecycle_epochs: value.account_lifecycle_epochs,
             bot_updates: value.bot_updates,
             suspended_or_unsuspended_users: value.suspended_or_unsuspended_users,
             unique_person_proofs_submitted: value.unique_person_proofs_submitted,
@@ -1033,6 +1057,72 @@ pub enum ContestUploadSanctionResult {
 mod tests {
     use super::*;
     use itertools::Itertools;
+
+    #[test]
+    fn account_lifecycle_epoch_survives_deletion_recreation_and_stable_roundtrip() {
+        let principal = Principal::from_slice(&[42]);
+        let user_id: UserId = principal.into();
+        let mut user_map = UserMap::default();
+        user_map.add_test_user(User {
+            principal,
+            user_id,
+            username: "first-account".to_string(),
+            ..Default::default()
+        });
+        assert_eq!(user_map.account_lifecycle_epoch(&user_id), Some(0));
+
+        assert!(user_map.delete_user(user_id, 10).is_some());
+        assert_eq!(user_map.account_lifecycle_epoch(&user_id), None);
+        user_map.add_test_user(User {
+            principal,
+            user_id,
+            username: "replacement-account".to_string(),
+            ..Default::default()
+        });
+        assert_eq!(user_map.account_lifecycle_epoch(&user_id), Some(1));
+
+        let bytes = msgpack::serialize_to_vec(&user_map).unwrap();
+        let restored: UserMap = msgpack::deserialize_then_unwrap(&bytes);
+        assert_eq!(restored.account_lifecycle_epoch(&user_id), Some(1));
+    }
+
+    #[test]
+    fn legacy_user_map_without_lifecycle_epochs_starts_live_accounts_at_zero() {
+        #[derive(Serialize)]
+        struct LegacyUserMap {
+            users: HashMap<UserId, User>,
+            bots: HashMap<UserId, Bot>,
+            suspected_bots: BTreeSet<UserId>,
+            deleted_users: HashMap<UserId, TimestampMillis>,
+            bot_updates: BTreeSet<(TimestampMillis, BotUpdate)>,
+            suspended_or_unsuspended_users: BTreeSet<(TimestampMillis, UserId)>,
+            unique_person_proofs_submitted: u32,
+        }
+
+        let principal = Principal::from_slice(&[43]);
+        let user_id: UserId = principal.into();
+        let bytes = msgpack::serialize_to_vec(&LegacyUserMap {
+            users: HashMap::from([(
+                user_id,
+                User {
+                    principal,
+                    user_id,
+                    username: "legacy-account".to_string(),
+                    ..Default::default()
+                },
+            )]),
+            bots: HashMap::new(),
+            suspected_bots: BTreeSet::new(),
+            deleted_users: HashMap::new(),
+            bot_updates: BTreeSet::new(),
+            suspended_or_unsuspended_users: BTreeSet::new(),
+            unique_person_proofs_submitted: 0,
+        })
+        .unwrap();
+        let restored: UserMap = msgpack::deserialize_then_unwrap(&bytes);
+
+        assert_eq!(restored.account_lifecycle_epoch(&user_id), Some(0));
+    }
 
     #[test]
     fn register_with_no_clashes() {

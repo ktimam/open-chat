@@ -1,12 +1,80 @@
 use candid::CandidType;
-use canister_agent_utils::{CanisterName, build_ic_agent, get_canister_wasm};
+use canister_agent_utils::{CanisterName, build_ic_agent, get_canister_wasm as load_canister_wasm};
 use ic_agent::Identity;
 use ic_utils::call::AsyncCall;
 use ic_utils::interfaces::ManagementCanister;
 use ic_utils::interfaces::management_canister::CanisterStatusType;
 use ic_utils::interfaces::management_canister::builders::CanisterInstallMode;
 use sha256::sha256;
+use std::sync::OnceLock;
 use types::{BuildVersion, CanisterId, CanisterWasm, UpgradeCanisterWasmArgs, UpgradeChunkedCanisterWasmArgs};
+
+static EXPECTED_WASM_SHA256: OnceLock<[u8; 32]> = OnceLock::new();
+
+pub fn set_expected_wasm_sha256(value: &str) -> Result<(), String> {
+    let expected = decode_sha256(value)?;
+    EXPECTED_WASM_SHA256
+        .set(expected)
+        .map_err(|_| "Expected Wasm SHA-256 was already set".to_string())
+}
+
+fn decode_sha256(value: &str) -> Result<[u8; 32], String> {
+    if value.len() != 64 || !value.is_ascii() {
+        return Err("Expected exactly 64 ASCII hexadecimal characters".to_string());
+    }
+
+    let mut decoded = [0u8; 32];
+    for (index, byte) in decoded.iter_mut().enumerate() {
+        let offset = index * 2;
+        *byte = u8::from_str_radix(&value[offset..offset + 2], 16)
+            .map_err(|_| "Expected exactly 64 ASCII hexadecimal characters".to_string())?;
+    }
+    Ok(decoded)
+}
+
+fn get_canister_wasm(canister_name: impl ToString, version: BuildVersion) -> CanisterWasm {
+    let canister_name = canister_name.to_string();
+    let wasm = load_canister_wasm(&canister_name, version);
+    let expected = EXPECTED_WASM_SHA256
+        .get()
+        .expect("--expected-wasm-sha256 must be set before loading Wasm");
+    verify_wasm_sha256(&wasm.module, expected).unwrap_or_else(|error| panic!("{error} for {canister_name}"));
+    wasm
+}
+
+fn verify_wasm_sha256(wasm: &[u8], expected: &[u8; 32]) -> Result<(), String> {
+    let actual = sha256(wasm);
+    if &actual == expected {
+        Ok(())
+    } else {
+        Err("Loaded Wasm SHA-256 does not match --expected-wasm-sha256".to_string())
+    }
+}
+
+#[cfg(test)]
+mod deployment_hash_tests {
+    use super::{decode_sha256, verify_wasm_sha256};
+    use sha256::sha256;
+
+    #[test]
+    fn accepts_exact_sha256_hex_case_insensitively() {
+        let lower = "9cc556105da92d7c32c7f4891cc0c45e8f543825259ca3424260b07023d3f10b";
+        assert_eq!(decode_sha256(lower).unwrap(), decode_sha256(&lower.to_uppercase()).unwrap());
+    }
+
+    #[test]
+    fn rejects_malformed_sha256() {
+        assert!(decode_sha256("00").is_err());
+        assert!(decode_sha256(&"g".repeat(64)).is_err());
+    }
+
+    #[test]
+    fn refuses_wasm_bytes_that_do_not_match_the_expected_hash() {
+        let expected = sha256(b"expected wasm");
+        assert!(verify_wasm_sha256(b"expected wasm", &expected).is_ok());
+        assert!(verify_wasm_sha256(b"different wasm", &expected).is_err());
+    }
+}
 
 pub async fn upgrade_openchat_installer_canister(
     identity: Box<dyn Identity>,

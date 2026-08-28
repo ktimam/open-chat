@@ -43,12 +43,15 @@ use utils::env::Environment;
 use utils::idempotency_checker::IdempotencyChecker;
 use utils::time::MonthKey;
 
+mod ai_app_card_authority;
+mod ai_app_chat_link_authority;
 mod guards;
 mod jobs;
 mod lifecycle;
 mod memory;
 mod model;
 mod no_inline_anchor;
+mod pr2_entropy;
 mod queries;
 mod timer_job_types;
 mod updates;
@@ -168,6 +171,7 @@ impl RuntimeState {
     pub fn delete_user(&mut self, user_id: UserId, triggered_by_user: bool) -> bool {
         let now = self.env.now();
         if let Some(user) = self.data.users.delete_user(user_id, now) {
+            self.delete_ai_app_user_state(user_id, now);
             self.data.local_index_map.remove_user(&user_id);
             self.data.empty_users.remove(&user_id);
 
@@ -198,6 +202,31 @@ impl RuntimeState {
         } else {
             false
         }
+    }
+
+    fn delete_ai_app_user_state(&mut self, user_id: UserId, now: TimestampMillis) {
+        // Account deletion is the consent/lifecycle boundary for every private AI-app
+        // credential. Clean exact per-user indexes synchronously so recreating the same
+        // `UserId` cannot inherit bearer authority, bindings, or app-owner control. Ambiguous
+        // action-delivery outbox attempts deliberately remain for reconciliation.
+        self.data.ai_app_user_keys.remove_user(user_id);
+        self.data.ai_app_link_codes.remove_user(user_id, now);
+        self.data.ai_app_card_tokens.remove_user(user_id);
+        self.data.ai_app_private_match_tokens.remove_user(user_id);
+        self.data.ai_app_chat_link_tokens.remove_user(user_id);
+        let quarantined_app_ids = self.data.ai_apps.quarantine_owner(user_id, now);
+        for app_id in quarantined_app_ids {
+            // Make every other user's binding unreadable immediately and let the existing bounded,
+            // upgrade-safe maintenance job remove the physical rows. A legacy migration drops
+            // quarantined app rows rather than resurrecting them.
+            self.data.ai_app_user_keys.queue_quarantined_app_cleanup(app_id);
+            self.data.ai_app_link_codes.remove_app(app_id, now);
+            self.data.ai_app_card_tokens.remove_app(app_id);
+            self.data.ai_app_private_match_tokens.remove_app(app_id);
+            self.data.ai_app_chat_link_tokens.remove_app(app_id);
+        }
+        #[cfg(target_arch = "wasm32")]
+        crate::jobs::migrate_ai_app_user_keys::start_job_if_required(self);
     }
 
     pub fn user_metrics(&self, user_id: UserId) -> Option<UserMetrics> {
@@ -281,6 +310,9 @@ impl RuntimeState {
                 .moderation_referral_config
                 .as_ref()
                 .map_or(0, |c| c.categories.len() as u32),
+            ai_app_user_key_metrics: self.data.ai_app_user_keys.metrics(),
+            ai_app_card_attestation_metrics: self.data.ai_app_call_throttle.card_attestation_metrics(now),
+            action_delivery_outbox_metrics: self.data.action_delivery_outbox.metrics(),
             oc_public_key: self.data.oc_key_pair.public_key_pem().to_string(),
             empty_users: self.data.empty_users.len(),
             deleted_users: self.data.deleted_users.len(),
@@ -419,6 +451,34 @@ struct Data {
     pub moderation_referral_config: Option<ModerationReferralConfig>,
     #[serde(default)]
     pub internal_moderation_channel: Option<(CommunityId, ChannelId)>,
+    // Retained for stable-state compatibility while AI actions move into the app directory.
+    #[serde(default)]
+    pub ai_actions: crate::model::ai_action_registry::AiActionRegistry,
+    #[serde(default)]
+    pub ai_apps: crate::model::ai_app_registry::AiAppRegistry,
+    #[serde(default)]
+    pub ai_app_user_keys: crate::model::ai_app_user_keys::AiAppUserKeys,
+    #[serde(default)]
+    pub ai_app_link_codes: crate::model::ai_app_link_codes::AiAppLinkCodes,
+    // Failure throttle for the bearer AI-app endpoints (claim/revoke) — see the model docs.
+    #[serde(default)]
+    pub ai_app_call_throttle: crate::model::ai_app_call_throttle::AiAppCallThrottle,
+    #[serde(default)]
+    pub ai_app_card_tokens: crate::model::ai_app_card_tokens::AiAppCardTokens,
+    #[serde(default)]
+    pub ai_app_private_match_tokens: crate::model::ai_app_private_match_tokens::AiAppPrivateMatchTokens,
+    #[serde(default)]
+    pub ai_app_chat_link_tokens: crate::model::ai_app_chat_link_tokens::AiAppChatLinkTokens,
+    #[serde(default)]
+    pub action_signing_keyring: crate::model::action_signing_keyring::ActionSigningKeyring,
+    #[serde(default)]
+    pub ai_app_scoped_identity_key: crate::model::ai_app_scoped_identity::AiAppScopedIdentityKey,
+    #[serde(default)]
+    pub action_delivery_outbox: crate::model::action_delivery_outbox::ActionDeliveryOutbox,
+    #[serde(default)]
+    pub pr2_entropy: types::Pr2EntropyGate,
+    #[serde(default)]
+    pub pr2_bearer_canister_version: Option<u64>,
 }
 
 impl Data {
@@ -507,6 +567,19 @@ impl Data {
             openai_api_key: None,
             moderation_referral_config: None,
             internal_moderation_channel: None,
+            ai_actions: crate::model::ai_action_registry::AiActionRegistry::default(),
+            ai_apps: crate::model::ai_app_registry::AiAppRegistry::default(),
+            ai_app_user_keys: crate::model::ai_app_user_keys::AiAppUserKeys::default(),
+            ai_app_link_codes: crate::model::ai_app_link_codes::AiAppLinkCodes::default(),
+            ai_app_call_throttle: crate::model::ai_app_call_throttle::AiAppCallThrottle::default(),
+            ai_app_card_tokens: crate::model::ai_app_card_tokens::AiAppCardTokens::default(),
+            ai_app_private_match_tokens: crate::model::ai_app_private_match_tokens::AiAppPrivateMatchTokens::default(),
+            ai_app_chat_link_tokens: crate::model::ai_app_chat_link_tokens::AiAppChatLinkTokens::default(),
+            action_signing_keyring: crate::model::action_signing_keyring::ActionSigningKeyring::default(),
+            ai_app_scoped_identity_key: crate::model::ai_app_scoped_identity::AiAppScopedIdentityKey::default(),
+            action_delivery_outbox: crate::model::action_delivery_outbox::ActionDeliveryOutbox::default(),
+            pr2_entropy: types::Pr2EntropyGate::default(),
+            pr2_bearer_canister_version: None,
         };
 
         // Register the ProposalsBot
@@ -565,6 +638,20 @@ impl Data {
 #[cfg(test)]
 impl Default for Data {
     fn default() -> Data {
+        let mut pr2_entropy = types::Pr2EntropyGate::default();
+        pr2_entropy
+            .advance_lifecycle(crate::pr2_entropy::TEST_CANISTER_VERSION)
+            .unwrap();
+        let types::Pr2EntropyReseedAdmission::Started(ticket) = pr2_entropy.begin_reseed(0) else {
+            unreachable!()
+        };
+        assert!(pr2_entropy.finish_reseed(
+            ticket,
+            Principal::from_slice(&[1, 2, 3]),
+            types::Pr2EntropyCommitmentMode::TestMode,
+            &[0x51; 32],
+            0,
+        ));
         Data {
             users: UserMap::default(),
             governance_principals: HashSet::new(),
@@ -625,6 +712,19 @@ impl Default for Data {
             openai_api_key: None,
             moderation_referral_config: None,
             internal_moderation_channel: None,
+            ai_actions: crate::model::ai_action_registry::AiActionRegistry::default(),
+            ai_apps: crate::model::ai_app_registry::AiAppRegistry::default(),
+            ai_app_user_keys: crate::model::ai_app_user_keys::AiAppUserKeys::default(),
+            ai_app_link_codes: crate::model::ai_app_link_codes::AiAppLinkCodes::default(),
+            ai_app_call_throttle: crate::model::ai_app_call_throttle::AiAppCallThrottle::default(),
+            ai_app_card_tokens: crate::model::ai_app_card_tokens::AiAppCardTokens::default(),
+            ai_app_private_match_tokens: crate::model::ai_app_private_match_tokens::AiAppPrivateMatchTokens::default(),
+            ai_app_chat_link_tokens: crate::model::ai_app_chat_link_tokens::AiAppChatLinkTokens::default(),
+            action_signing_keyring: crate::model::action_signing_keyring::ActionSigningKeyring::default(),
+            ai_app_scoped_identity_key: crate::model::ai_app_scoped_identity::AiAppScopedIdentityKey::default(),
+            action_delivery_outbox: crate::model::action_delivery_outbox::ActionDeliveryOutbox::default(),
+            pr2_entropy,
+            pr2_bearer_canister_version: Some(crate::pr2_entropy::TEST_CANISTER_VERSION),
         }
     }
 }
@@ -665,6 +765,9 @@ pub struct Metrics {
     pub internal_moderation_channel_set: bool,
     pub moderation_referral_config_set: bool,
     pub moderation_referral_categories: u32,
+    pub ai_app_user_key_metrics: crate::model::ai_app_user_keys::AiAppUserKeyMetrics,
+    pub ai_app_card_attestation_metrics: crate::model::ai_app_call_throttle::AiAppCardAttestationMetrics,
+    pub action_delivery_outbox_metrics: crate::model::action_delivery_outbox::ActionDeliveryOutboxMetrics,
     pub oc_public_key: String,
     pub empty_users: usize,
     pub deleted_users: usize,
@@ -865,5 +968,315 @@ mod moderation_referral_config_compat_tests {
         let bytes = msgpack::serialize_then_unwrap(OldHolder { config: None });
         let holder: Holder = msgpack::deserialize(bytes.as_slice()).unwrap();
         assert!(holder.config.is_none());
+    }
+}
+
+#[cfg(test)]
+mod ai_app_user_deletion_tests {
+    use super::*;
+    use crate::model::action_delivery_outbox::{ActionDeliveryRemoteResult, ActionDeliveryStart};
+    use crate::model::ai_app_card_tokens::{
+        Capability, ConfirmationGrant, ConsumeProvenanceResult, LookupCapabilityResult, LookupConfirmationGrantResult,
+        Provenance, ProvenanceStatus,
+    };
+    use crate::model::ai_app_chat_link_tokens::{AiAppChatLinkToken, LookupResult, RedeemResult};
+    use crate::model::user::User;
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
+    use serde_bytes::ByteBuf;
+    use types::{AiAppCardCapabilityScope, AiAppCardContext, AiAppManifest, Chat, MessageId};
+    use utils::env::test::TestEnv;
+
+    fn raw(seed: u64) -> [u8; 32] {
+        let mut value = [0; 32];
+        value[..8].copy_from_slice(&seed.to_be_bytes());
+        value
+    }
+
+    fn manifest(name: &str, app_canister_id: CanisterId) -> AiAppManifest {
+        AiAppManifest {
+            name: name.to_string(),
+            description: String::new(),
+            icon_url: None,
+            app_canister_id: Some(app_canister_id),
+            inbox_canister_id: None,
+            consumer_public_key: String::new(),
+            per_user_keys: true,
+            actions: Vec::new(),
+            surfaces: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn deleting_and_recreating_an_account_clears_private_ai_app_state_but_preserves_ambiguous_outbox() {
+        let env = TestEnv::default();
+        let now = env.now;
+        let this_canister_id = env.canister_id;
+        let principal = env.caller;
+        let user_id: UserId = principal.into();
+        let app_canister_id = Principal::from_slice(&[88]);
+        let mut data = Data::default();
+        data.users.add_test_user(User {
+            principal,
+            user_id,
+            username: "deleted-account".to_string(),
+            ..Default::default()
+        });
+
+        let app_manifest = manifest("owned-before-deletion", app_canister_id);
+        let app = data.ai_apps.register(user_id, app_manifest.clone(), now, true).unwrap();
+        assert!(data.ai_apps.publish(app.id, now));
+        let public_key = P256KeyPair::new(&mut StdRng::seed_from_u64(77)).public_key_pem().to_string();
+        data.ai_app_user_keys.set(user_id, app.id, public_key).unwrap();
+        let other_user: UserId = Principal::from_slice(&[87]).into();
+        let other_public_key = P256KeyPair::new(&mut StdRng::seed_from_u64(78)).public_key_pem().to_string();
+        data.ai_app_user_keys.set(other_user, app.id, other_public_key).unwrap();
+        let epoch_before_delete = data.ai_app_user_keys.binding_epoch(user_id, app.id);
+
+        let code = "a".repeat(64);
+        data.ai_app_link_codes
+            .insert(code.clone(), user_id, app.id, now + 100_000, now)
+            .unwrap();
+
+        let chat = Chat::Group(Principal::from_slice(&[44]).into());
+        let context = AiAppCardContext {
+            user_id,
+            chat,
+            chat_key: "group:deletion-test".to_string(),
+            thread_root_message_index: None,
+            message_id: MessageId::from(5u64),
+            app_id: app.id,
+            app_revision: app.updated,
+            action_id: "generic.action".to_string(),
+        };
+        let provenance = Provenance {
+            context: context.clone(),
+            content_hash: [6; 32],
+            app_user_key_fingerprint: None,
+            app_user_key_version: None,
+            expires_at: now + 100_000,
+        };
+        let active_provenance = raw(1);
+        let consumed_provenance = raw(2);
+        data.ai_app_card_tokens
+            .insert_provenance(this_canister_id, &active_provenance, provenance.clone(), now)
+            .unwrap();
+        data.ai_app_card_tokens
+            .insert_provenance(this_canister_id, &consumed_provenance, provenance.clone(), now)
+            .unwrap();
+        assert_eq!(
+            data.ai_app_card_tokens.consume_provenance(
+                this_canister_id,
+                &consumed_provenance,
+                &context,
+                &provenance.content_hash,
+                now,
+            ),
+            ConsumeProvenanceResult::Valid
+        );
+
+        let capability = Capability {
+            context: context.clone(),
+            content_hash: [7; 32],
+            app_canister_id,
+            recipient_key_scheme: "opaque-v1".to_string(),
+            recipient_public_key: ByteBuf::from(vec![9; 48]),
+            app_user_key_fingerprint: None,
+            app_user_key_version: None,
+            scope: AiAppCardCapabilityScope::PrivateContext,
+            expires_at: now + 100_000,
+        };
+        let active_capability = raw(100);
+        for index in 0..30 {
+            let token = raw(100 + index);
+            data.ai_app_card_tokens
+                .insert_capability(this_canister_id, &token, capability.clone(), now)
+                .unwrap();
+            if index != 0 {
+                assert!(data.ai_app_card_tokens.consume_capability(this_canister_id, &token));
+            }
+        }
+        let confirmation_grant = raw(200);
+        data.ai_app_card_tokens
+            .insert_confirmation_grant(
+                this_canister_id,
+                &confirmation_grant,
+                ConfirmationGrant {
+                    context: context.clone(),
+                    content_hash: [8; 32],
+                    confirm_payload_hash: [9; 32],
+                    app_canister_id,
+                    app_user_key_fingerprint: None,
+                    app_user_key_version: None,
+                    expires_at: now + 100_000,
+                },
+                now,
+            )
+            .unwrap();
+
+        let mut active_chat_link = [0; 32];
+        let mut redeemed_chat_link = [0; 32];
+        for index in 0..20 {
+            let token = raw(300 + index);
+            data.ai_app_chat_link_tokens
+                .insert(
+                    this_canister_id,
+                    &token,
+                    AiAppChatLinkToken {
+                        user_id,
+                        chat,
+                        chat_name: "Household".to_string(),
+                        app_id: app.id,
+                        app_revision: app.updated,
+                        app_canister_id,
+                        issuer_local_user_index_canister_id: Principal::from_slice(&[89]),
+                        app_user_key_fingerprint: [10; 32],
+                        app_user_key_version: epoch_before_delete,
+                        app_subject: [11; 32],
+                        chat_handle: [12; 32],
+                        expires_at: now + 100_000,
+                    },
+                    now,
+                )
+                .unwrap();
+            match index {
+                0 => {
+                    redeemed_chat_link = token;
+                    assert!(matches!(
+                        data.ai_app_chat_link_tokens.redeem(this_canister_id, &token, now),
+                        RedeemResult::Success(_)
+                    ));
+                }
+                1 => active_chat_link = token,
+                _ => assert!(data.ai_app_chat_link_tokens.cancel(this_canister_id, &token, user_id, now)),
+            }
+        }
+
+        let attempt_id = [0xEE; 32];
+        assert_eq!(
+            data.action_delivery_outbox.start(attempt_id, app.id, 8, now, now).unwrap(),
+            ActionDeliveryStart::Prepare { epoch: 1 }
+        );
+        data.action_delivery_outbox
+            .store_prepared(attempt_id, 1, Principal::from_slice(&[90]), vec![1; 8], now)
+            .unwrap();
+        data.action_delivery_outbox
+            .complete(attempt_id, 1, ActionDeliveryRemoteResult::OutcomeUnknown, now + 1)
+            .unwrap();
+        let outbox_before = data.action_delivery_outbox.metrics();
+
+        let mut state = RuntimeState::new(Box::new(env), data);
+        assert!(state.data.users.delete_user(user_id, now).is_some());
+        state.delete_ai_app_user_state(user_id, now);
+
+        assert!(state.data.ai_app_user_keys.keys_for_user(user_id).unwrap().is_empty());
+        assert!(
+            state
+                .data
+                .ai_app_user_keys
+                .keys_for_users(app.id, &[other_user])
+                .unwrap()
+                .is_empty(),
+            "owner deletion must make every user's key for the quarantined app unreadable immediately"
+        );
+        state
+            .data
+            .ai_app_user_keys
+            .process_app_cleanup_batch(crate::model::ai_app_user_keys::MIGRATION_BATCH_SIZE);
+        assert!(state.data.ai_app_user_keys.keys_for_user(other_user).unwrap().is_empty());
+        assert_eq!(state.data.ai_app_user_keys.metrics().pending_app_deletions, 0);
+        assert_eq!(
+            state.data.ai_app_user_keys.binding_epoch(user_id, app.id),
+            epoch_before_delete + 1,
+            "normal key removal must retain an advanced consent tombstone"
+        );
+        assert!(!state.data.ai_app_link_codes.contains(&code));
+        assert_eq!(
+            state.data.ai_app_card_tokens.provenance_status(
+                this_canister_id,
+                &active_provenance,
+                &context,
+                &provenance.content_hash,
+                now,
+            ),
+            ProvenanceStatus::NotFound
+        );
+        assert_eq!(
+            state.data.ai_app_card_tokens.provenance_status(
+                this_canister_id,
+                &consumed_provenance,
+                &context,
+                &provenance.content_hash,
+                now,
+            ),
+            ProvenanceStatus::NotFound
+        );
+        assert_eq!(
+            state
+                .data
+                .ai_app_card_tokens
+                .lookup_capability(this_canister_id, &active_capability, now),
+            LookupCapabilityResult::NotFound
+        );
+        assert_eq!(
+            state
+                .data
+                .ai_app_card_tokens
+                .lookup_confirmation_grant(this_canister_id, &confirmation_grant, now),
+            LookupConfirmationGrantResult::NotFound
+        );
+        assert!(matches!(
+            state
+                .data
+                .ai_app_chat_link_tokens
+                .lookup(this_canister_id, &active_chat_link, now),
+            LookupResult::NotFound
+        ));
+        assert!(matches!(
+            state
+                .data
+                .ai_app_chat_link_tokens
+                .lookup(this_canister_id, &redeemed_chat_link, now),
+            LookupResult::NotFound
+        ));
+        assert!(
+            state
+                .data
+                .ai_app_chat_link_tokens
+                .check_admission(user_id, app.id, now)
+                .is_ok()
+        );
+        assert!(
+            state
+                .data
+                .ai_app_card_tokens
+                .insert_capability(this_canister_id, &raw(999), capability, now)
+                .is_ok(),
+            "account recreation must not inherit capability issuance history"
+        );
+
+        assert!(
+            state.data.ai_apps.get(app.id).is_none(),
+            "deleted owner app must be quarantined"
+        );
+        assert!(state.data.ai_apps.owned_app_id(user_id, &app_manifest.name).is_none());
+        state.data.users.add_test_user(User {
+            principal,
+            user_id,
+            username: "recreated-account".to_string(),
+            ..Default::default()
+        });
+        assert!(state.data.ai_app_user_keys.keys_for_user(user_id).unwrap().is_empty());
+        let recreated_app = state
+            .data
+            .ai_apps
+            .register(user_id, app_manifest, now + 2, true)
+            .expect("recreated account may create a new app, but never control the quarantined id");
+        assert_ne!(recreated_app.id, app.id);
+
+        let outbox_after = state.data.action_delivery_outbox.metrics();
+        assert_eq!(outbox_after.total_attempts, outbox_before.total_attempts);
+        assert_eq!(outbox_after.outcome_unknown, outbox_before.outcome_unknown);
+        assert_eq!(outbox_after.pending_entries, outbox_before.pending_entries);
     }
 }

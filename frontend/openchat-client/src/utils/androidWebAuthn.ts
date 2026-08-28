@@ -18,7 +18,9 @@ import {
     type SignInCredential,
 } from "tauri-plugin-oc-api";
 
-const OC_APP_ORIGIN = "oc.app";
+// The official app uses oc.app. A local sideload build supplies the private HTTPS host used as its
+// Android relying party so the stored key metadata matches Credential Manager's RP-ID.
+const OC_APP_ORIGIN = import.meta.env.OC_ANDROID_RP_ID ?? "oc.app";
 
 /**
  * Pops up a create passkey dialog for an Android user!

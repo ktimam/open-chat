@@ -35,6 +35,7 @@
         requiresLogout,
         routeForChatIdentifier,
         routeForScope,
+        startupErrorStore,
         subscribe,
     } from "@client";
     import { eventToError, recordError } from "@utils/errorPostmortem";
@@ -56,6 +57,7 @@
     import VideoCallAccessRequests from "./home/video/VideoCallAccessRequests.svelte";
     import Router from "./Router.svelte";
     import Snow from "@shared_components/Snow.svelte";
+    import StartupFailure from "@shared_components/StartupFailure.svelte";
     import UpgradeBanner from "./UpgradeBanner.svelte";
     import { keyboard } from "@src/stores/keyboard.svelte";
 
@@ -372,7 +374,9 @@
     <NotificationsBar />
 
     <!-- should we perhaps just _always_ render the router -->
-    {#if $identityStateStore.kind === "anon" || $identityStateStore.kind === "logging_in" || $identityStateStore.kind === "registering" || $identityStateStore.kind === "logged_in" || $identityStateStore.kind === "loading_user"}
+    {#if $startupErrorStore !== undefined}
+        <StartupFailure message={$startupErrorStore} />
+    {:else if $identityStateStore.kind === "anon" || $identityStateStore.kind === "logging_in" || $identityStateStore.kind === "registering" || $identityStateStore.kind === "logged_in" || $identityStateStore.kind === "loading_user"}
         {#if !$isLoading}
             <Router />
         {/if}

@@ -1,10 +1,18 @@
 version: 2
 updates:
   - package-ecosystem: "npm"
-    directory: "/frontend/app"
+    directory: "/frontend"
     schedule:
       interval: "daily"
     allow:
       - dependency-name: "dompurify"
       - dependency-name: "@types/dompurify"
       - dependency-name: "marked"
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "daily"
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

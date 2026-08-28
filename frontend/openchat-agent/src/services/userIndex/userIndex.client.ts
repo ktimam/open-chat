@@ -9,6 +9,15 @@ import type {
     CurrentUserResponse,
     DiamondMembershipDuration,
     DiamondMembershipFees,
+    AiAppLinkCode,
+    AiAppCardContentV1,
+    AiAppCardProvenanceResult,
+    ChatIdentifier,
+    ExploreAiAppsResponse,
+    AiAppManifest,
+    AiAppRegistration,
+    AiAppMemberKey,
+    AiAppUserKey,
     ExploreBotsResponse,
     ExternalAchievementsResponse,
     ExternalBot,
@@ -45,6 +54,29 @@ import {
     UserIndexChitLeaderboardResponse,
     UserIndexCurrentUserResponse,
     UserIndexDiamondMembershipFeesResponse,
+    UserIndexAiAppsByIdsArgs,
+    UserIndexAiAppsByIdsResponse,
+    UserIndexMyAiAppsArgs,
+    UserIndexMyAiAppsResponse,
+    UserIndexRegisterAiAppArgs,
+    UserIndexRegisterAiAppResponse,
+    UserIndexAiAppUserKeysArgs,
+    UserIndexAiAppUserKeysResponse,
+    UserIndexMyAiAppKeysResponse,
+    UserIndexCancelAiAppLinkCodeArgs,
+    UserIndexCancelAiAppLinkCodeResponse,
+    UserIndexCancelAiAppChatLinkTokenArgs,
+    UserIndexCancelAiAppChatLinkTokenResponse,
+    UserIndexCreateAiAppLinkCodeArgs,
+    UserIndexCreateAiAppLinkCodeResponse,
+    UserIndexCreateAiAppCardProvenanceArgs,
+    UserIndexCreateAiAppCardProvenanceResponse,
+    UserIndexRemoveMyAiAppKeyArgs,
+    UserIndexRemoveMyAiAppKeyResponse,
+    UserIndexExploreAiAppsArgs,
+    UserIndexExploreAiAppsResponse,
+    UserIndexPublishAiAppArgs,
+    UserIndexPublishAiAppResponse,
     UserIndexExploreBotsArgs,
     UserIndexExploreBotsResponse,
     UserIndexExternalAchievementsArgs,
@@ -114,6 +146,20 @@ import {
     chitLeaderboardResponse,
     currentUserResponse,
     diamondMembershipFeesResponse,
+    aiAppsByIdsResponse,
+    myAiAppsResponse,
+    apiAiAppManifest,
+    registerAiAppResponse,
+    aiAppUserKeysResponse,
+    myAiAppKeysResponse,
+    cancelAiAppLinkCodeResponse,
+    cancelAiAppChatLinkTokenResponse,
+    createAiAppLinkCodeResponse,
+    apiAiAppCardContentV1,
+    createAiAppCardProvenanceResponse,
+    removeMyAiAppKeyResponse,
+    exploreAiAppsResponse,
+    publishAiAppResponse,
     exploreBotsResponse,
     externalAchievementsResponse,
     payForDiamondMembershipResponse,
@@ -126,6 +172,7 @@ import {
     usersApiResponse,
     userSearchResponse,
 } from "./mappers";
+import { apiChatIdentifier } from "../common/chatMappersV2";
 
 export class UserIndexClient extends SingleCanisterMsgpackAgent {
     constructor(
@@ -164,7 +211,10 @@ export class UserIndexClient extends SingleCanisterMsgpackAgent {
                         // blocking terms notice and, offline, lock the user out entirely
                         const latest = await this.chatsDb.getCachedCurrentUser();
                         const accepted = latest?.acceptedTermsVersion;
-                        if (accepted !== undefined && (liveUser.acceptedTermsVersion ?? 0) < accepted) {
+                        if (
+                            accepted !== undefined &&
+                            (liveUser.acceptedTermsVersion ?? 0) < accepted
+                        ) {
                             liveUser = { ...liveUser, acceptedTermsVersion: accepted };
                         }
                         this.chatsDb.setCachedCurrentUser(liveUser);
@@ -216,7 +266,11 @@ export class UserIndexClient extends SingleCanisterMsgpackAgent {
         );
     }
 
-    setVaultLegalHold(reportIndex: bigint, legalHold: boolean, reference: string): Promise<boolean> {
+    setVaultLegalHold(
+        reportIndex: bigint,
+        legalHold: boolean,
+        reference: string,
+    ): Promise<boolean> {
         return this.update(
             "set_vault_legal_hold",
             { report_index: reportIndex, legal_hold: legalHold, reference },
@@ -762,6 +816,176 @@ export class UserIndexClient extends SingleCanisterMsgpackAgent {
         );
     }
 
+    async aiApps(lookups: { appId: number; revision?: bigint }[]): Promise<AiAppRegistration[]> {
+        const chunks = boundedAiAppLookupBatches(lookups);
+        const pages = await Promise.all(
+            chunks.map((chunk) =>
+                this.query(
+                    "ai_apps_by_ids",
+                    {
+                        lookups: chunk.map((lookup) => ({
+                            app_id: lookup.appId,
+                            revision: lookup.revision,
+                        })),
+                    },
+                    aiAppsByIdsResponse,
+                    UserIndexAiAppsByIdsArgs,
+                    UserIndexAiAppsByIdsResponse,
+                ),
+            ),
+        );
+        return pages.flat();
+    }
+
+    myAiAppsPage(
+        pageIndex: number,
+        pageSize: number,
+    ): Promise<{ apps: AiAppRegistration[]; total: number }> {
+        return this.query(
+            "my_ai_apps",
+            { page_index: pageIndex, page_size: pageSize },
+            myAiAppsResponse,
+            UserIndexMyAiAppsArgs,
+            UserIndexMyAiAppsResponse,
+        );
+    }
+
+    registerAiApp(manifest: AiAppManifest): Promise<boolean> {
+        return this.update(
+            "register_ai_app",
+            { manifest: apiAiAppManifest(manifest) },
+            registerAiAppResponse,
+            UserIndexRegisterAiAppArgs,
+            UserIndexRegisterAiAppResponse,
+        );
+    }
+
+    // The calling user's own registered per-app delivery keys.
+    myAiAppKeys(): Promise<AiAppUserKey[]> {
+        return this.query(
+            "my_ai_app_keys",
+            {},
+            myAiAppKeysResponse,
+            Empty,
+            UserIndexMyAiAppKeysResponse,
+        );
+    }
+
+    // Fan-out lookup: the registered delivery keys of the REQUESTED users for one app (public key
+    // material only; users with no key are absent). Lets a proposer address a confirm card to every
+    // chat member with a key.
+    aiAppUserKeys(appId: number, userIds: string[]): Promise<AiAppMemberKey[]> {
+        return this.query(
+            "ai_app_user_keys",
+            { app_id: appId, user_ids: userIds.map(principalStringToBytes) },
+            aiAppUserKeysResponse,
+            UserIndexAiAppUserKeysArgs,
+            UserIndexAiAppUserKeysResponse,
+        );
+    }
+
+    cancelAiAppLinkCode(code: string): Promise<boolean> {
+        return this.update(
+            "cancel_ai_app_link_code",
+            { code },
+            cancelAiAppLinkCodeResponse,
+            UserIndexCancelAiAppLinkCodeArgs,
+            UserIndexCancelAiAppLinkCodeResponse,
+            undefined,
+            { sensitive: true },
+        );
+    }
+
+    cancelAiAppChatLinkToken(token: Uint8Array): Promise<boolean> {
+        return this.update(
+            "cancel_ai_app_chat_link_token",
+            { token: token.slice() },
+            cancelAiAppChatLinkTokenResponse,
+            UserIndexCancelAiAppChatLinkTokenArgs,
+            UserIndexCancelAiAppChatLinkTokenResponse,
+            undefined,
+            { sensitive: true },
+        );
+    }
+
+    createAiAppLinkCode(appId: number): Promise<AiAppLinkCode | undefined> {
+        return this.update(
+            "create_ai_app_link_code",
+            { app_id: appId },
+            createAiAppLinkCodeResponse,
+            UserIndexCreateAiAppLinkCodeArgs,
+            UserIndexCreateAiAppLinkCodeResponse,
+            undefined,
+            { sensitive: true },
+        );
+    }
+
+    createAiAppCardProvenance(
+        appId: number,
+        appRevision: bigint,
+        actionId: string,
+        content: AiAppCardContentV1,
+        chatId: ChatIdentifier,
+        messageId: bigint,
+        threadRootMessageIndex: number | undefined,
+    ): Promise<AiAppCardProvenanceResult> {
+        return this.update(
+            "create_ai_app_card_provenance",
+            {
+                app_id: appId,
+                app_revision: appRevision,
+                action_id: actionId,
+                content: apiAiAppCardContentV1(content),
+                chat: apiChatIdentifier(chatId),
+                message_id: messageId,
+                thread_root_message_index: threadRootMessageIndex,
+            },
+            createAiAppCardProvenanceResponse,
+            UserIndexCreateAiAppCardProvenanceArgs,
+            UserIndexCreateAiAppCardProvenanceResponse,
+            undefined,
+            { sensitive: true },
+        );
+    }
+
+    // Paginated, scored search over the PUBLISHED app directory.
+    exploreAiApps(
+        searchTerm: string | undefined,
+        pageIndex: number,
+        pageSize: number,
+    ): Promise<ExploreAiAppsResponse> {
+        return this.query(
+            "explore_ai_apps",
+            { search_term: searchTerm, page_index: pageIndex, page_size: pageSize },
+            exploreAiAppsResponse,
+            UserIndexExploreAiAppsArgs,
+            UserIndexExploreAiAppsResponse,
+        );
+    }
+
+    // Publishes one of the caller's registered apps into the directory (owner + governance/test_mode
+    // gated in the canister). true on success.
+    publishAiApp(appId: number): Promise<boolean> {
+        return this.update(
+            "publish_ai_app",
+            { app_id: appId },
+            publishAiAppResponse,
+            UserIndexPublishAiAppArgs,
+            UserIndexPublishAiAppResponse,
+        );
+    }
+
+    // Removes the caller's own per-app delivery key (a user disconnecting an app). true on success.
+    removeMyAiAppKey(appId: number): Promise<boolean> {
+        return this.update(
+            "remove_my_ai_app_key",
+            { app_id: appId },
+            removeMyAiAppKeyResponse,
+            UserIndexRemoveMyAiAppKeyArgs,
+            UserIndexRemoveMyAiAppKeyResponse,
+        );
+    }
+
     setDiamondMembershipFees(fees: DiamondMembershipFees[]): Promise<boolean> {
         const chatFees = fees.find((f) => f.token === "CHAT");
         const icpFees = fees.find((f) => f.token === "ICP");
@@ -983,4 +1207,28 @@ function apiModerationVerdict(verdict: ModerationVerdict): "Upheld" | "UpheldAsC
         case "dismissed":
             return "Dismissed";
     }
+}
+
+const AI_APP_LOOKUP_BATCH_SIZE = 8;
+export const MAX_AI_APP_LOOKUPS_PER_CLIENT_CALL = 32;
+
+export function boundedAiAppLookupBatches(
+    lookups: { appId: number; revision?: bigint }[],
+): { appId: number; revision?: bigint }[][] {
+    if (lookups.length > MAX_AI_APP_LOOKUPS_PER_CLIENT_CALL) {
+        throw new Error(
+            `AI-app lookup is limited to ${MAX_AI_APP_LOOKUPS_PER_CLIENT_CALL} ids per client call`,
+        );
+    }
+    const seen = new Set<number>();
+    const unique = lookups.filter((lookup) => {
+        if (seen.has(lookup.appId)) return false;
+        seen.add(lookup.appId);
+        return true;
+    });
+    const chunks: { appId: number; revision?: bigint }[][] = [];
+    for (let index = 0; index < unique.length; index += AI_APP_LOOKUP_BATCH_SIZE) {
+        chunks.push(unique.slice(index, index + AI_APP_LOOKUP_BATCH_SIZE));
+    }
+    return chunks;
 }

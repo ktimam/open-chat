@@ -5,6 +5,8 @@ use std::io::Read;
 use types::{BuildVersion, CanisterWasm};
 
 lazy_static! {
+    pub static ref ACTION_INBOX: CanisterWasm = get_canister_wasm("action_inbox");
+    pub static ref AI_APP_VERIFIER_TEST: CanisterWasm = get_canister_wasm("ai_app_verifier_test");
     pub static ref AIRDROP_BOT: CanisterWasm = get_canister_wasm("airdrop_bot");
     pub static ref COMMUNITY: CanisterWasm = get_canister_wasm("community");
     pub static ref CYCLES_DISPENSER: CanisterWasm = get_canister_wasm("cycles_dispenser");

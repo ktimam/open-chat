@@ -14,23 +14,41 @@ import { messagesRead, storageStore } from "./state";
 import { userStore } from "./state/users/state";
 import { withPausedStores } from "./utils/stores";
 
+export const WORKER_STARTUP_REQUEST_TIMEOUT_MS = 30_000;
+
+const STARTUP_REQUEST_KINDS = new Set<WorkerRequest["kind"]>([
+    "init",
+    "setAuthIdentity",
+    "createOpenChatIdentity",
+]);
+
 export class WorkerAgent {
-    readonly #worker: Worker;
+    readonly #worker: Worker | undefined;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     readonly #inflightRequests: Map<number, PromiseResolver<any>> = new Map();
     readonly #logger: Logger;
+    readonly #onFatalError: ((error: Error) => void) | undefined;
+    #fatalError: Error | undefined;
     nextCorrelationId: number = 0;
 
-    constructor(config: OpenChatConfig) {
+    constructor(config: OpenChatConfig, onFatalError?: (error: Error) => void) {
         console.debug("WORKER_CLIENT: loading worker with version: ", config.websiteVersion);
+        this.#logger = config.logger;
+        this.#onFatalError = onFatalError;
 
         const workerUrl = `/worker.js?v=${config.websiteVersion}`;
-        this.#worker = new Worker(new URL(workerUrl, import.meta.url), {
-            type: "module",
-        });
-        this.#logger = config.logger;
+        let worker: Worker;
+        try {
+            worker = new Worker(new URL(workerUrl, import.meta.url), {
+                type: "module",
+            });
+            this.#worker = worker;
+        } catch (error) {
+            this.#failWorker(workerFailure(error, "OpenChat worker could not be created"));
+            return;
+        }
 
-        this.#worker.onmessage = (ev: MessageEvent<FromWorker>) => {
+        worker.onmessage = (ev: MessageEvent<FromWorker>) => {
             if (!ev.data) {
                 console.debug("WORKER_CLIENT: event message with no data received");
                 return;
@@ -57,14 +75,29 @@ export class WorkerAgent {
                     userStore.addMany(data.event.users);
                 }
             } else if (data.kind === "worker_response") {
-                console.debug("WORKER_CLIENT: response: ", ev);
+                // Responses can contain short-lived app-card grants/capabilities. Log only routing
+                // metadata; never serialize the event or response body into developer/remote logs.
+                console.debug("WORKER_CLIENT: response", data.requestKind, data.correlationId);
                 this.#resolveResponse(data);
             } else if (data.kind === "worker_error") {
-                console.debug("WORKER_CLIENT: error: ", ev);
+                console.debug("WORKER_CLIENT: error", data.requestKind, data.correlationId);
                 this.#resolveError(data);
             } else {
-                console.debug("WORKER_CLIENT: unknown message: ", ev);
+                // Never serialize an unexpected worker event: a malformed response could still carry
+                // an app-card capability/grant in its data. The category is sufficient diagnostics.
+                console.debug("WORKER_CLIENT: unknown message");
             }
+        };
+
+        worker.onerror = (event) => {
+            const error =
+                event.error instanceof Error
+                    ? event.error
+                    : new Error(event.message || "OpenChat worker failed to start");
+            this.#failWorker(error);
+        };
+        worker.onmessageerror = () => {
+            this.#failWorker(new Error("OpenChat worker returned an unreadable startup response"));
         };
 
         const initArgs: Init = {
@@ -100,7 +133,9 @@ export class WorkerAgent {
             accountLinkingCodesEnabled: config.accountLinkingCodesEnabled,
         };
 
-        this.send(initArgs);
+        // The init request owns a startup watchdog. Its rejection is consumed here because the
+        // first application request receives the same fatal error and surfaces it through boot.
+        void this.send(initArgs).catch(() => undefined);
 
         window.setInterval(() => this.#monitorPendingRequests(), ONE_MINUTE_MILLIS);
     }
@@ -119,11 +154,23 @@ export class WorkerAgent {
 
     responseHandler<T>(
         correlationId: number,
+        requestKind?: WorkerRequest["kind"],
     ): (resolve: (val: T, final: boolean) => void, reject: (reason?: unknown) => void) => void {
         return (resolve, reject) => {
+            const timeoutId =
+                requestKind !== undefined && STARTUP_REQUEST_KINDS.has(requestKind)
+                    ? window.setTimeout(() => {
+                          this.#failWorker(
+                              new Error(
+                                  `OpenChat worker ${requestKind} request did not respond within ${WORKER_STARTUP_REQUEST_TIMEOUT_MS}ms`,
+                              ),
+                          );
+                      }, WORKER_STARTUP_REQUEST_TIMEOUT_MS)
+                    : undefined;
             this.#inflightRequests.set(correlationId, {
                 resolve,
                 reject,
+                timeoutId,
             });
         };
     }
@@ -132,16 +179,49 @@ export class WorkerAgent {
         req: Req,
     ): (resolve: (val: T, final: boolean) => void, reject: (reason?: unknown) => void) => void {
         const correlationId = this.nextCorrelationId++;
-        try {
-            this.#worker.postMessage({
-                ...snapshot(req),
-                correlationId,
-            });
-        } catch (err) {
-            console.error("Error sending postMessage to worker", err);
-            throw err;
+        return (resolve, reject) => {
+            if (this.#fatalError !== undefined) {
+                reject(this.#fatalError);
+                return;
+            }
+            const worker = this.#worker;
+            if (worker === undefined) {
+                const error = new Error("OpenChat worker is unavailable");
+                this.#failWorker(error);
+                reject(error);
+                return;
+            }
+
+            // Register before postMessage so a synchronous cloning/send failure rejects this request
+            // through the same fatal path as an asynchronous worker startup error.
+            this.responseHandler<T>(correlationId, req.kind)(resolve, reject);
+            try {
+                worker.postMessage({
+                    ...snapshot(req),
+                    correlationId,
+                });
+            } catch (error) {
+                const failure = workerFailure(error, "OpenChat worker request could not be sent");
+                console.error("Error sending postMessage to worker", failure);
+                this.#failWorker(failure);
+            }
+        };
+    }
+
+    #failWorker(error: Error): void {
+        if (this.#fatalError !== undefined) return;
+        this.#fatalError = error;
+        for (const pending of this.#inflightRequests.values()) {
+            if (pending.timeoutId !== undefined) window.clearTimeout(pending.timeoutId);
+            pending.reject(error);
         }
-        return this.responseHandler(correlationId);
+        this.#inflightRequests.clear();
+        this.#worker?.terminate();
+        try {
+            this.#onFatalError?.(error);
+        } catch (callbackError) {
+            this.#logger.error("Failed to surface a fatal OpenChat worker error", callbackError);
+        }
     }
 
     #monitorPendingRequests() {
@@ -156,6 +236,7 @@ export class WorkerAgent {
         if (promise !== undefined) {
             promise.resolve(data.response, data.final);
             if (data.final) {
+                if (promise.timeoutId !== undefined) window.clearTimeout(promise.timeoutId);
                 this.#inflightRequests.delete(data.correlationId);
             }
         } else {
@@ -166,6 +247,7 @@ export class WorkerAgent {
     #resolveError(data: WorkerError): void {
         const promise = this.#inflightRequests.get(data.correlationId);
         if (promise !== undefined) {
+            if (promise.timeoutId !== undefined) window.clearTimeout(promise.timeoutId);
             promise.reject(JSON.parse(data.error));
             this.#inflightRequests.delete(data.correlationId);
         } else {
@@ -182,4 +264,9 @@ type PromiseResolver<T> = {
     resolve: (val: T | PromiseLike<T>, final: boolean) => void;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     reject: (reason?: any) => void;
+    timeoutId?: number;
 };
+
+function workerFailure(error: unknown, fallback: string): Error {
+    return error instanceof Error ? error : new Error(`${fallback}: ${String(error)}`);
+}

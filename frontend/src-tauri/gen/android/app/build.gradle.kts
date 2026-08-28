@@ -16,6 +16,19 @@ val tauriProperties = Properties().apply {
     }
 }
 
+val bundledOpenChatRpIdFile = projectDir.resolve("../../../../app/build/android-rp-id").normalize()
+val bundledOpenChatRpId = bundledOpenChatRpIdFile.takeIf { it.isFile }?.readText()?.trim()?.lowercase()
+val environmentOpenChatRpId = System.getenv("OC_ANDROID_RP_ID")?.trim()?.lowercase()
+require(environmentOpenChatRpId == null || bundledOpenChatRpId == null || environmentOpenChatRpId == bundledOpenChatRpId) {
+    "OC_ANDROID_RP_ID differs between the outer Android build and the bundled frontend"
+}
+val openChatRpId = (environmentOpenChatRpId ?: bundledOpenChatRpId ?: "oc.app").also {
+    require(Regex("^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$").matches(it) &&
+        it.contains('.') && !it.contains("..")) {
+        "OC_ANDROID_RP_ID must be one valid HTTPS hostname"
+    }
+}
+
 android {
     compileSdk = 36
     namespace = "com.oc.app"
@@ -26,6 +39,12 @@ android {
         targetSdk = 36
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
+        resValue("string", "openchat_rp_id", openChatRpId)
+        resValue(
+            "string",
+            "asset_statements",
+            "[{\\\"include\\\":\\\"https://$openChatRpId/.well-known/assetlinks.json\\\"}]",
+        )
     }
     
     signingConfigs {

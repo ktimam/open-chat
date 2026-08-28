@@ -65,6 +65,8 @@ import type {
     NumberArray32,
     OCError,
     OgPreview,
+    ActionCardContent,
+    ActionCardState,
     P2PSwapContent,
     P2PSwapContentInitial,
     P2PSwapStatus,
@@ -227,6 +229,8 @@ import type {
     MultiUserChat as TMultiUserChat,
     OCError as TOCError,
     OgPreview as TOgPreview,
+    ActionCardContent as TActionCardContent,
+    ActionCardState as TActionCardState,
     P2PSwapContent as TP2PSwapContent,
     P2PSwapContentInitial as TP2PSwapContentInitial,
     P2PSwapStatus as TP2PSwapStatus,
@@ -724,6 +728,9 @@ export function messageContent(value: TMessageContent, sender: string): MessageC
             kind: "encrypted_content",
         };
     }
+    if ("ActionCard" in value) {
+        return actionCardContent(value.ActionCard);
+    }
     throw new UnsupportedValueError("Unexpected ApiMessageContent type received", value);
 }
 
@@ -917,6 +924,42 @@ function p2pSwapContent(value: TP2PSwapContent): P2PSwapContent {
         swapId: value.swap_id,
         token0TxnIn: value.token0_txn_in,
     };
+}
+
+function actionCardContent(value: TActionCardContent): ActionCardContent {
+    return {
+        kind: "action_card_content",
+        title: value.title,
+        rows: value.rows.map((r) => ({ label: r.label, value: r.value })),
+        confirmLabel: value.confirm_label,
+        cancelLabel: value.cancel_label,
+        actionId: value.action_id,
+        appId: value.app_id,
+        appRevision: value.app_revision,
+        appVerified: value.app_verified,
+        appContentVerified: value.app_content_verified,
+        disclosure: value.disclosure,
+        state: actionCardState(value.state),
+        respondedBy:
+            value.responded_by !== undefined
+                ? principalBytesToString(value.responded_by)
+                : undefined,
+        respondedAt: value.responded_at,
+        expiresAt: value.expires_at,
+    };
+}
+
+function actionCardState(value: TActionCardState): ActionCardState {
+    switch (value) {
+        case "Pending":
+            return "pending";
+        case "Confirmed":
+            return "confirmed";
+        case "Cancelled":
+            return "cancelled";
+        case "Expired":
+            return "expired";
+    }
 }
 
 function tokenInfo(value: TTokenInfo): TokenInfo {
@@ -1639,6 +1682,28 @@ export function apiMessageContent(domain: MessageContent): TMessageContentInitia
                 },
             };
 
+        case "action_card_content":
+            return {
+                ActionCard: {
+                    title: domain.title,
+                    rows: domain.rows.map((r) => ({ label: r.label, value: r.value })),
+                    confirm_label: domain.confirmLabel,
+                    cancel_label: domain.cancelLabel,
+                    action_id: domain.actionId,
+                    app_id: domain.appId,
+                    app_revision: domain.appRevision,
+                    app_provenance: domain.appProvenance,
+                    disclosure: domain.disclosure,
+                    expires_at: domain.expiresAt,
+                    recipient_public_key: domain.recipientPublicKey,
+                    recipient_public_keys: domain.recipientPublicKeys,
+                    confirm_payload: domain.confirmPayload,
+                    inbox_canister_id: domain.inboxCanisterId
+                        ? principalStringToBytes(domain.inboxCanisterId)
+                        : undefined,
+                },
+            };
+
         case "video_call_content":
         case "deleted_content":
         case "blocked_content":
@@ -1654,7 +1719,7 @@ export function apiMessageContent(domain: MessageContent): TMessageContentInitia
         case "p2p_swap_content":
         case "encrypted_content":
         case "restricted_content":
-            throw new Error(`Incorrectly attempting to send {domain.kind} content to the server`);
+            throw new Error(`Incorrectly attempting to send ${domain.kind} content to the server`);
     }
 }
 

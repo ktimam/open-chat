@@ -67,6 +67,7 @@ import type {
     PublicGroupSummaryResponse,
     RegisterPollVoteResponse,
     RegisterProposalVoteResponse,
+    RespondToActionCardResponse,
     RemoveHotGroupExclusionResponse,
     RemoveMemberResponse,
     ResetInviteCodeResponse,
@@ -189,6 +190,19 @@ import type {
     MemberRole,
     OptionalChatPermissions,
 } from "./permission";
+import type {
+    AiAppChatLinkToken,
+    AiAppCardCapability,
+    AiAppPrivateMatchCapability,
+    AiAppCardConfirmationGrant,
+    AiAppCardContentV1,
+    AiAppCardProvenanceResult,
+    AiAppLinkCode,
+    AiAppMemberKey,
+    AiAppRegistration,
+    AiAppUserKey,
+    ExploreAiAppsResponse,
+} from "./aiAction";
 import type { CandidateProposal } from "./proposals";
 import type {
     StakeNeuronForSubmittingProposalsResponse,
@@ -274,6 +288,7 @@ export type WorkerRequest =
     | DeleteMessage
     | UndeleteMessage
     | RegisterPollVote
+    | RespondToActionCard
     | UpdateGroup
     | JoinGroup
     | JoinCommunity
@@ -403,6 +418,7 @@ export type WorkerRequest =
     | ResolveModerationReport
     | ContestModerationSanction
     | VaultFileChunk
+    | DownloadPublicBlob
     | ChangeCommunityRole
     | SetCommunityIndexes
     | UpdateRegistry
@@ -424,6 +440,23 @@ export type WorkerRequest =
     | ApproveTransfer
     | DeleteDirectChat
     | GetDiamondMembershipFees
+    | AiApps
+    | MyAiApps
+    | SetAiAppEnabled
+    | EnabledAiApps
+    | MyAiAppKeys
+    | AiAppUserKeysLookup
+    | CreateAiAppLinkCode
+    | CancelAiAppLinkCode
+    | CreateAiAppChatLinkToken
+    | CancelAiAppChatLinkToken
+    | CreateAiAppCardProvenance
+    | CreateAiAppCardConfirmationGrant
+    | CreateAiAppCardCapability
+    | CreateAiAppPrivateMatchCapability
+    | RemoveMyAiAppKey
+    | PublishAiApp
+    | ExploreAiApps
     | GetReportedMessages
     | GetExchangeRates
     | AcceptP2PSwap
@@ -916,6 +949,12 @@ type VaultFileChunk = {
     chunkIndex: number;
 };
 
+type DownloadPublicBlob = {
+    kind: "downloadPublicBlob";
+    ref: BlobReference;
+    maxBytes: number;
+};
+
 type ImportGroupToCommunity = {
     kind: "importGroupToCommunity";
     groupId: GroupChatIdentifier;
@@ -1311,6 +1350,18 @@ type RegisterPollVote = {
     threadRootMessageIndex: number | undefined;
     newAchievement: boolean;
     kind: "registerPollVote";
+};
+
+type RespondToActionCard = {
+    chatId: ChatIdentifier;
+    threadRootMessageIndex: number | undefined;
+    messageId: bigint;
+    response: "confirm" | "cancel";
+    // App-rendered cards carry the exact final encoded bytes and their matching one-time server grant.
+    // Both are absent for classic OC-rendered cards, which use the stored attested payload.
+    confirmPayloadOverride?: Uint8Array;
+    confirmationGrant?: Uint8Array;
+    kind: "respondToActionCard";
 };
 
 type UpdateGroup = {
@@ -1893,6 +1944,7 @@ export type WorkerResponseInner =
     | DeleteMessageResponse
     | UndeleteMessageResponse
     | RegisterPollVoteResponse
+    | RespondToActionCardResponse
     | UpdateGroupResponse
     | JoinGroupResponse
     | DeleteGroupResponse
@@ -1977,6 +2029,17 @@ export type WorkerResponseInner =
     | SwapTokensResponse
     | TokenSwapStatusResponse
     | DiamondMembershipFees[]
+    | AiAppRegistration[]
+    | { apps: AiAppRegistration[]; total: number }
+    | AiAppUserKey[]
+    | AiAppMemberKey[]
+    | ExploreAiAppsResponse
+    | AiAppLinkCode
+    | AiAppChatLinkToken
+    | AiAppCardProvenanceResult
+    | AiAppCardConfirmationGrant
+    | AiAppCardCapability
+    | number[]
     | TranslationCorrections
     | AcceptP2PSwapResponse
     | CancelP2PSwapResponse
@@ -2229,6 +2292,119 @@ type GetDiamondMembershipFees = {
     kind: "diamondMembershipFees";
 };
 
+type AiApps = {
+    kind: "aiApps";
+    lookups: { appId: number; revision?: bigint }[];
+};
+
+type MyAiApps = {
+    kind: "myAiApps";
+    pageIndex: number;
+    pageSize: number;
+};
+
+type SetAiAppEnabled = {
+    kind: "setAiAppEnabled";
+    chatId: ChatIdentifier;
+    appId: number;
+    enabled: boolean;
+};
+
+type EnabledAiApps = {
+    kind: "enabledAiApps";
+    chatId: ChatIdentifier;
+};
+
+type MyAiAppKeys = {
+    kind: "myAiAppKeys";
+};
+
+type AiAppUserKeysLookup = {
+    kind: "aiAppUserKeys";
+    appId: number;
+    userIds: string[];
+};
+
+type CreateAiAppLinkCode = {
+    kind: "createAiAppLinkCode";
+    appId: number;
+};
+
+type CancelAiAppLinkCode = {
+    kind: "cancelAiAppLinkCode";
+    code: string;
+};
+
+type CreateAiAppChatLinkToken = {
+    kind: "createAiAppChatLinkToken";
+    chatId: ChatIdentifier;
+    chatName: string;
+    appId: number;
+    appRevision: bigint;
+};
+
+type CancelAiAppChatLinkToken = {
+    kind: "cancelAiAppChatLinkToken";
+    token: Uint8Array;
+};
+
+type CreateAiAppCardProvenance = {
+    kind: "createAiAppCardProvenance";
+    appId: number;
+    appRevision: bigint;
+    actionId: string;
+    content: AiAppCardContentV1;
+    chatId: ChatIdentifier;
+    messageId: bigint;
+    threadRootMessageIndex: number | undefined;
+};
+
+type CreateAiAppCardCapability = {
+    kind: "createAiAppCardCapability";
+    chatId: ChatIdentifier;
+    threadRootMessageIndex: number | undefined;
+    messageId: bigint;
+    recipientKeyScheme: string;
+    recipientPublicKey: Uint8Array;
+};
+
+type CreateAiAppPrivateMatchCapability = {
+    kind: "createAiAppPrivateMatchCapability";
+    chatId: ChatIdentifier;
+    threadRootMessageIndex: number | undefined;
+    messageId: bigint;
+    appId: number;
+    appRevision: bigint;
+    actionId: string;
+    recipientKeyScheme: string;
+    recipientPublicKey: Uint8Array;
+};
+
+type CreateAiAppCardConfirmationGrant = {
+    kind: "createAiAppCardConfirmationGrant";
+    chatId: ChatIdentifier;
+    threadRootMessageIndex: number | undefined;
+    messageId: bigint;
+    confirmPayload: Uint8Array;
+};
+
+type RemoveMyAiAppKey = {
+    kind: "removeMyAiAppKey";
+    appId: number;
+};
+
+type PublishAiApp = {
+    kind: "publishAiApp";
+    appId: number;
+};
+
+type ExploreAiApps = {
+    kind: "exploreAiApps";
+    searchTerm: string | undefined;
+    pageIndex: number;
+    pageSize: number;
+};
+
 type GetExchangeRates = {
     kind: "exchangeRates";
 };
@@ -2376,6 +2552,8 @@ export type WorkerResult<T> = T extends Init
     ? UpdateGroupResponse
     : T extends RegisterPollVote
     ? RegisterPollVoteResponse
+    : T extends RespondToActionCard
+    ? RespondToActionCardResponse
     : T extends DeleteMessage
     ? DeleteMessageResponse
     : T extends UndeleteMessage
@@ -2614,6 +2792,8 @@ export type WorkerResult<T> = T extends Init
     ? boolean
     : T extends VaultFileChunk
     ? VaultFileChunkResponse
+    : T extends DownloadPublicBlob
+    ? Uint8Array | undefined
     : T extends CreateUserGroup
     ? CreateUserGroupResponse
     : T extends UpdateUserGroup
@@ -2640,6 +2820,40 @@ export type WorkerResult<T> = T extends Init
     ? boolean
     : T extends GetDiamondMembershipFees
     ? DiamondMembershipFees[]
+    : T extends AiApps
+    ? AiAppRegistration[]
+    : T extends MyAiApps
+    ? { apps: AiAppRegistration[]; total: number }
+    : T extends SetAiAppEnabled
+    ? boolean
+    : T extends EnabledAiApps
+    ? number[]
+    : T extends MyAiAppKeys
+    ? AiAppUserKey[]
+    : T extends AiAppUserKeysLookup
+    ? AiAppMemberKey[]
+    : T extends CreateAiAppLinkCode
+    ? AiAppLinkCode | undefined
+    : T extends CancelAiAppLinkCode
+    ? boolean
+    : T extends CreateAiAppChatLinkToken
+    ? AiAppChatLinkToken | undefined
+    : T extends CancelAiAppChatLinkToken
+    ? boolean
+    : T extends CreateAiAppCardProvenance
+    ? AiAppCardProvenanceResult
+    : T extends CreateAiAppCardConfirmationGrant
+    ? AiAppCardConfirmationGrant | undefined
+    : T extends CreateAiAppCardCapability
+    ? AiAppCardCapability | undefined
+    : T extends CreateAiAppPrivateMatchCapability
+    ? AiAppPrivateMatchCapability | undefined
+    : T extends RemoveMyAiAppKey
+    ? boolean
+    : T extends PublishAiApp
+    ? boolean
+    : T extends ExploreAiApps
+    ? ExploreAiAppsResponse
     : T extends GetReportedMessages
     ? string
     : T extends GetExchangeRates

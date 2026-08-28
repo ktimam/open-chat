@@ -55,6 +55,7 @@
     import MembersSummary from "../membership/MembersSummary.svelte";
     import Separator from "../Separator.svelte";
     import Stats from "../Stats.svelte";
+    import AiAppsSummary from "./AiAppsSummary.svelte";
     import DisappearingMessagesSummary from "./DisappearingMessagesSummary.svelte";
     import PermissionsSummary from "./PermissionsSummary.svelte";
 
@@ -328,6 +329,8 @@
         <MembersSummary collection={chat} />
 
         <BotsSummary collection={chat} />
+
+        <AiAppsSummary {chat} />
 
         <PermissionsSummary
             permissions={chat.permissions}

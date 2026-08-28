@@ -19,6 +19,8 @@ fn accept_if_valid(state: &RuntimeState) {
     }
 
     let caller = state.env.caller();
+    // Any ingress method is accepted when the caller is a group member. This also covers
+    // `set_ai_app_enabled` (owner/admin gated in the handler itself).
     let is_valid = state.data.get_member(caller).is_some()
         || method_name == "http_request_update"
         || state.data.get_invitation(caller).is_some() && method_name == "decline_invitation"

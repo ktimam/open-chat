@@ -12,4 +12,16 @@ describe("pubsub", () => {
 
         expect(received).toEqual(1);
     });
+
+    test("publishes the generic registered-apps navigation event without a payload", () => {
+        let received = 0;
+        const unsubscribe = subscribe("userProfileMyApps", () => {
+            received += 1;
+        });
+
+        publish("userProfileMyApps");
+        unsubscribe();
+
+        expect(received).toEqual(1);
+    });
 });

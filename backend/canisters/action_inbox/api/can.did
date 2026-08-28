@@ -1,0 +1,96 @@
+type ActionDeposit = record {
+  action_id : text;
+  signing_key_id : blob;
+  ciphertext : blob;
+  ephemeral_public_key : blob;
+  // Privacy-preserving commitment to the consumed authoritative chat/card confirmation context.
+  card_context_hash : blob;
+  consumer_key_fingerprint : blob;
+  created_at : nat64;
+  app_revision : nat64;
+  acknowledgement_secret_hash : blob;
+  oc_signature : blob;
+  signature_version : nat16;
+  // Full collision-resistant card identity and primary durable tombstone key.
+  idempotency_key : blob;
+  // Exact final confirm-payload digest.
+  payload_hash : blob;
+};
+type Args = record {
+  // Raw 64-byte P-256 ECDSA/SHA-256 signature over `acknowledgement_preimage`.
+  // Deprecated compatibility field. It is ignored by the update endpoint.
+  signature : blob;
+  // Deprecated compatibility field. Live acknowledgements no longer parse this in replicated
+  // execution; possession of the per-action ECIES-encrypted secret is required instead.
+  consumer_public_key_pem : text;
+  consumer_key_fingerprint : blob;
+  // Delete only the exact retained action with this id. The legacy `through_id` field label is
+  // retained for Candid wire compatibility; it no longer has cursor/range semantics. This is
+  // deliberately not a cursor: possession of a later action's secret must never
+  // authorize deletion of an earlier action.
+  through_id : nat64;
+  // Raw 32-byte bearer secret recovered from the exact action's ECIES plaintext.
+  // Optional keeps pre-capability Candid records decodable; None fails closed for a live action.
+  acknowledgement_secret : opt blob;
+};
+type Args_1 = record {
+  max_results : nat32;
+  consumer_key_fingerprint : blob;
+  since_id : nat64;
+};
+type Args_2 = record { app_id : nat32; deposits : vec ActionDeposit };
+type Response = variant {
+  NotAuthorized;
+  Success : SuccessResult;
+  InvalidRequest : text;
+};
+type Response_1 = variant {
+  Error : record { nat16; opt text };
+  Success : SuccessResult_1;
+};
+type Response_2 = variant { Error : record { nat16; opt text }; Success };
+type Response_3 = variant { Success : SuccessResult_2 };
+type StoredAction = record {
+  id : nat64;
+  action_id : text;
+  signing_key_id : blob;
+  ciphertext : blob;
+  ephemeral_public_key : blob;
+  card_context_hash : blob;
+  consumer_key_fingerprint : blob;
+  created_at : nat64;
+  app_revision : nat64;
+  app_id : nat32;
+  acknowledgement_secret_hash : blob;
+  oc_signature : blob;
+  signature_version : nat16;
+  idempotency_key : blob;
+  payload_hash : blob;
+};
+type SuccessResult = record { acknowledged : nat32; remaining : nat32 };
+type SuccessResult_1 = record { actions : vec StoredAction };
+type SuccessResult_2 = record {
+  max_expired_tombstones_pruned_per_call : nat32;
+  max_idempotency_tombstones : nat32;
+  max_total_actions : nat32;
+  max_expired_actions_pruned_per_call : nat32;
+  max_ciphertext_bytes : nat32;
+  app_id : nat32;
+  max_query_response_encoded_bytes : nat32;
+  max_total_bytes : nat64;
+  max_actions_per_key : nat32;
+  action_retention_millis : nat64;
+  user_index_canister_id : principal;
+  action_capacity_fail_closed : bool;
+  max_bytes_per_key : nat64;
+  max_deposit_batch_encoded_bytes : nat32;
+  max_migration_items_per_step : nat32;
+  authorized_depositors : vec principal;
+  max_query_results : nat32;
+};
+service : {
+  acknowledge_actions : (Args) -> (Response);
+  actions : (Args_1) -> (Response_1);
+  c2c_notify_actions : (Args_2) -> (Response_2);
+  configuration : (record {}) -> (Response_3) query;
+}

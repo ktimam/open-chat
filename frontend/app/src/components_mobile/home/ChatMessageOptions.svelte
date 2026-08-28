@@ -23,6 +23,7 @@
     import { getContext } from "svelte";
     import { _, locale } from "svelte-i18n";
     import CollapseIcon from "svelte-material-icons/ArrowCollapseUp.svelte";
+    import AutoFix from "svelte-material-icons/AutoFix.svelte";
     import Cancel from "svelte-material-icons/Cancel.svelte";
     import ChatPlusOutline from "svelte-material-icons/ChatPlusOutline.svelte";
     import ClockPlusOutline from "svelte-material-icons/ClockPlusOutline.svelte";
@@ -40,6 +41,7 @@
     import Refresh from "svelte-material-icons/Refresh.svelte";
     import Reply from "svelte-material-icons/Reply.svelte";
     import ReplyOutline from "svelte-material-icons/ReplyOutline.svelte";
+    import Robot from "svelte-material-icons/RobotOutline.svelte";
     import ShareOutline from "svelte-material-icons/ShareOutline.svelte";
     import ShareIcon from "svelte-material-icons/ShareVariant.svelte";
     import SquareEditOutline from "svelte-material-icons/SquareEditOutline.svelte";
@@ -88,6 +90,7 @@
         translated: boolean;
         msg: Message;
         threadRootMessage: Message | undefined;
+        isThreadRoot?: boolean;
         iconButtonSize?: "xs" | "sm" | "md" | "lg";
         onCollapseMessage?: () => void;
         onRemindMe: () => void;
@@ -102,6 +105,8 @@
         // TODO figure out how and where this is used ???
         onDeleteFailedMessage?: () => void;
         onOptionSelected?: () => void;
+        onRunAiAction?: () => void;
+        onProcessWithAi?: () => void;
     }
 
     let {
@@ -131,6 +136,7 @@
         translated,
         msg,
         threadRootMessage,
+        isThreadRoot = false,
         canTip,
         iconButtonSize,
         onCollapseMessage,
@@ -144,6 +150,8 @@
         onTipMessage,
         onDeleteMessage,
         onOptionSelected,
+        onRunAiAction,
+        onProcessWithAi,
     }: Props = $props();
 
     let mediaUrl = $derived(urlForMediaContent(msg.content));
@@ -161,9 +169,7 @@
     );
     let inThread = $derived(threadRootMessage !== undefined);
     let threadRootMessageIndex = $derived(
-        msg.messageId === threadRootMessage?.messageId
-            ? undefined
-            : threadRootMessage?.messageIndex,
+        isThreadRoot ? undefined : threadRootMessage?.messageIndex,
     );
     let isFollowedByMe = $derived(
         threadRootMessage !== undefined &&
@@ -442,7 +448,9 @@
         | "reportMenu"
         | "revealDeletedMessage"
         | "undeleteMessage"
-        | "retryMessage";
+        | "retryMessage"
+        | "proposeAiAction"
+        | "processWithAi";
 
     function menuItemTitleToKey(menuItemTitle: MenuItemTitle): string {
         switch (menuItemTitle) {
@@ -498,6 +506,10 @@
                 return "undeleteMessage";
             case "retryMessage":
                 return "retryMessage";
+            case "proposeAiAction":
+                return "aiActions.propose";
+            case "processWithAi":
+                return "aiActions.processWithAi";
         }
     }
 
@@ -581,6 +593,12 @@
             case "retryMessage":
                 onRetrySend?.();
                 break;
+            case "proposeAiAction":
+                onRunAiAction?.();
+                break;
+            case "processWithAi":
+                onProcessWithAi?.();
+                break;
         }
     }
 </script>
@@ -638,6 +656,10 @@
         <DeleteOffOutline {color} {size} />
     {:else if title === "retryMessage"}
         <Refresh {color} {size} />
+    {:else if title === "proposeAiAction"}
+        <AutoFix {color} {size} />
+    {:else if title === "processWithAi"}
+        <Robot {color} {size} />
     {/if}
 {/snippet}
 
@@ -645,7 +667,12 @@
     {@const danger = ["deleteMessage", "deleteMessageForMe", "reportMenu"].indexOf(title) > -1}
     {#if menuType === "icon_buttons"}
         {@const padding: Padding = ["sm", "sm"]}
-        <IconButton size={iconButtonSize} {padding} onclick={() => menuItemOnClickHandler(title)}>
+        <IconButton
+            size={iconButtonSize}
+            {padding}
+            ariaLabel={$_(menuItemTitleToKey(title))}
+            onclick={() => menuItemOnClickHandler(title)}
+        >
             {#snippet icon(color)}
                 {@render chooseIcon(title, danger ? ColourVars.error : color)}
             {/snippet}
@@ -748,6 +775,16 @@
 <!-- Tip sender -->
 {#if canTip && !disableTipsFeature}
     {@render renderMenuItem("tipMenu")}
+{/if}
+
+<!-- Propose an AI action from this message -->
+{#if onRunAiAction !== undefined && confirmed && !inert && !failed}
+    {@render renderMenuItem("proposeAiAction")}
+{/if}
+
+<!-- Process this message with the user's selected local AI model. -->
+{#if onProcessWithAi !== undefined && confirmed && !inert && !failed}
+    {@render renderMenuItem("processWithAi")}
 {/if}
 
 <!-- Block sender -->

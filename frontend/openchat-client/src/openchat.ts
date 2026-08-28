@@ -169,6 +169,17 @@ import {
     type DexId,
     type DiamondMembershipDuration,
     type DiamondMembershipFees,
+    type AiAppLinkCode,
+    type AiAppChatLinkToken,
+    type AiAppCardCapability,
+    type AiAppPrivateMatchCapability,
+    type AiAppCardConfirmationGrant,
+    type AiAppCardContentV1,
+    type AiAppCardProvenanceResult,
+    type ExploreAiAppsResponse,
+    type AiAppRegistration,
+    type AiAppMemberKey,
+    type AiAppUserKey,
     type DiamondMembershipStatus,
     type DiamondRoute,
     type Dimensions,
@@ -434,6 +445,7 @@ import {
     setSoftDisabled,
     snsFunctionsStore,
     sortedCommunitiesStore,
+    startupErrorStore,
     storageStore,
     suspendedUserStore,
     swappableTokensStore,
@@ -666,7 +678,10 @@ export class OpenChat {
     #recentlyActiveUsersTracker: RecentlyActiveUsersTracker = new RecentlyActiveUsersTracker();
     #inflightMessagePromises: Map<
         bigint,
-        (response: SendMessageSuccess | TransferSuccess) => void
+        {
+            resolve: (response: SendMessageSuccess | TransferSuccess) => void;
+            confirmed: (event: EventWrapper<Message>) => void;
+        }
     > = new Map();
     #refreshBalanceSemaphore: Semaphore = new Semaphore(10);
     #inflightBalanceRefreshPromises: Map<string, Promise<bigint>> = new Map();
@@ -681,8 +696,8 @@ export class OpenChat {
     currentAirdropChannel: AirdropChannelDetails | undefined = undefined;
 
     constructor(private config: OpenChatConfig) {
-        this.#worker = new WorkerAgent(config);
         this.#logger = config.logger;
+        this.#worker = new WorkerAgent(config, (error) => this.#handleStartupFailure(error));
 
         this.#mobileLayout = config.mobileLayout;
         this.#vapidPublicKey = config.vapidPublicKey;
@@ -709,9 +724,18 @@ export class OpenChat {
 
         this.#authClient
             .then((_) => this.#authIdentityStorage.getKeyAndChain())
-            .then((authIdentity) => this.#loadedAuthenticationIdentity(authIdentity, undefined));
+            .then((authIdentity) => this.#loadedAuthenticationIdentity(authIdentity, undefined))
+            .catch((error) => this.#handleStartupFailure(error));
 
         this.#setMinLogLevel((localStorage.getItem(configKeys.minLogLevel) ?? "warn") as LogLevel);
+    }
+
+    #handleStartupFailure(error: unknown): void {
+        if (startupErrorStore.value !== undefined) return;
+        this.#logger.error("OpenChat background worker failed", error);
+        startupErrorStore.set(
+            "OpenChat could not finish loading its background worker. Reload and try again.",
+        );
     }
 
     public get AuthPrincipal(): string {
@@ -819,6 +843,7 @@ export class OpenChat {
         authProvider: AuthProvider | undefined,
         registering: boolean = false,
     ) {
+        startupErrorStore.set(undefined);
         const anon = identityKeyAndChain === undefined;
         const identity = anon
             ? new AnonymousIdentity()
@@ -923,7 +948,8 @@ export class OpenChat {
                         .getKeyAndChain()
                         .then((identity) =>
                             this.#loadedAuthenticationIdentity(identity, authProvider),
-                        ),
+                        )
+                        .catch((error) => this.#handleStartupFailure(error)),
                 onError: (err) => {
                     this.updateIdentityState({ kind: "anon" });
                     console.warn("Login error from auth client: ", err);
@@ -2404,6 +2430,35 @@ export class OpenChat {
                 voteType: type,
                 threadRootMessageIndex,
                 newAchievement,
+            })
+            .then((resp) => resp.kind === "success")
+            .catch(() => false);
+    }
+
+    respondToActionCard(
+        chatId: ChatIdentifier,
+        threadRootMessageIndex: number | undefined,
+        messageId: bigint,
+        response: "confirm" | "cancel",
+        // App-rendered cards carry the exact final encoded bytes and their matching one-time grant.
+        // Both are absent for classic OC-rendered cards, which use the stored attested payload.
+        confirmPayloadOverride?: Uint8Array,
+        confirmationGrant?: Uint8Array,
+    ): Promise<boolean> {
+        return this.#worker
+            .send({
+                kind: "respondToActionCard",
+                chatId,
+                threadRootMessageIndex,
+                messageId,
+                response,
+                // Edited app-card values ride onward: worker `respondToActionCard` → agent →
+                // group/community/user client → `respond_to_action_card`'s canister Args (as the
+                // bounded `confirm_payload_override`, JSON-encoded at the client layer), so the
+                // on-chain deposit uses these edited values in place of the frozen confirm_payload.
+                // Classic OC-rendered cards pass nothing here — behaviour is unchanged for them.
+                confirmPayloadOverride: confirmPayloadOverride?.slice(),
+                confirmationGrant: confirmationGrant?.slice(),
             })
             .then((resp) => resp.kind === "success")
             .catch(() => false);
@@ -3981,8 +4036,8 @@ export class OpenChat {
                             threadRootMessageIndex,
                         });
                     }
-                    const inflightMessagePromise = this.#inflightMessagePromises.get(messageId);
-                    if (inflightMessagePromise !== undefined) {
+                    const inflightMessage = this.#inflightMessagePromises.get(messageId);
+                    if (inflightMessage !== undefined) {
                         // If we reach here, then a message is currently being sent but the update call is yet to complete.
                         // So given that we have received the message from the backend we know that the message has
                         // successfully been sent, so we resolve the promise early.
@@ -4002,7 +4057,8 @@ export class OpenChat {
                                 transfer: content.transfer as CompletedCryptocurrencyTransfer,
                             };
                         }
-                        inflightMessagePromise(result);
+                        inflightMessage.confirmed(event as EventWrapper<Message>);
+                        inflightMessage.resolve(result);
                     }
                     if (localUpdates.deleteUnconfirmed(context, messageId)) {
                         messagesRead.confirmMessage(context, messageIndex, messageId);
@@ -4208,8 +4264,12 @@ export class OpenChat {
 
         const messageRecipients = this.#rtcMessageRecipients(chat.id);
 
+        let confirmedMessageEvent: EventWrapper<Message> | undefined;
         const sendMessagePromise: Promise<SendMessageResponse> = new Promise((resolve) => {
-            this.#inflightMessagePromises.set(messageId, resolve);
+            this.#inflightMessagePromises.set(messageId, {
+                resolve,
+                confirmed: (event) => (confirmedMessageEvent = event),
+            });
             this.#worker
                 .stream({
                     kind: "sendMessage",
@@ -4243,6 +4303,7 @@ export class OpenChat {
                         const [resp, msg] = response;
                         if (resp.kind === "success" || resp.kind === "transfer_success") {
                             const event = mergeSendMessageResponse(msg, resp);
+                            confirmedMessageEvent = event;
                             this.#addServerEventsToStores(
                                 chat.id,
                                 [event],
@@ -4291,6 +4352,14 @@ export class OpenChat {
         // if the message is found when reading new events
         return sendMessagePromise.then((resp) => {
             if (resp.kind === "success" || resp.kind === "transfer_success") {
+                // The optimistic sentMessage event is deliberately not authoritative enough for
+                // privacy-sensitive matching. Emit the exact canister-confirmed wrapper only after
+                // success (including the early success resolved by a loaded server event).
+                publish("sentMessageConfirmed", {
+                    context: messageContext,
+                    event:
+                        confirmedMessageEvent ?? mergeSendMessageResponse(messageEvent.event, resp),
+                });
                 if (ledger !== undefined) {
                     lastCryptoSent.set(ledger);
                     this.refreshAccountBalance(ledger);
@@ -6388,6 +6457,10 @@ export class OpenChat {
         return this.#worker.send({ kind: "vaultFileChunk", bucketCanisterId, fileId, chunkIndex });
     }
 
+    downloadPublicBlob(ref: BlobReference, maxBytes: number): Promise<Uint8Array | undefined> {
+        return this.#worker.send({ kind: "downloadPublicBlob", ref, maxBytes });
+    }
+
     setCommunityModerationFlags(communityId: string, flags: number): Promise<boolean> {
         return this.#worker
             .send({ kind: "setCommunityModerationFlags", communityId, flags })
@@ -7268,6 +7341,240 @@ export class OpenChat {
         return this.#worker
             .send({
                 kind: "diamondMembershipFees",
+            })
+            .catch(() => []);
+    }
+
+    aiApps(lookups: { appId: number; revision?: bigint }[]): Promise<AiAppRegistration[]> {
+        return this.#worker
+            .send({
+                kind: "aiApps",
+                lookups,
+            })
+            .catch(() => []);
+    }
+
+    myAiAppsPage(
+        pageIndex: number,
+        pageSize = 8,
+    ): Promise<{ apps: AiAppRegistration[]; total: number }> {
+        return this.#worker
+            .send({
+                kind: "myAiApps",
+                pageIndex,
+                pageSize,
+            })
+            .catch(() => ({ apps: [], total: 0 }));
+    }
+
+    // Paginated, scored search over the PUBLISHED app directory (the explorer surface).
+    // Rejection -> an empty page.
+    exploreAiApps(
+        searchTerm: string | undefined,
+        pageIndex: number,
+        pageSize: number,
+    ): Promise<ExploreAiAppsResponse> {
+        return this.#worker
+            .send({
+                kind: "exploreAiApps",
+                searchTerm,
+                pageIndex,
+                pageSize,
+            })
+            .catch(() => ({ matches: [], total: 0 }));
+    }
+
+    // The signed-in user's own registered per-app delivery keys (per-user-keys apps encrypt that
+    // user's confirmed actions to these rather than the manifest key). Rejection -> [].
+    myAiAppKeys(): Promise<AiAppUserKey[]> {
+        return this.#worker
+            .send({
+                kind: "myAiAppKeys",
+            })
+            .catch(() => []);
+    }
+
+    // Fan-out lookup: the registered delivery keys of the given users for one app (public keys
+    // only; users with no key are absent). Rejection -> [] (fan-out then degrades to self-only).
+    aiAppUserKeys(appId: number, userIds: string[]): Promise<AiAppMemberKey[]> {
+        return this.#worker
+            .send({
+                kind: "aiAppUserKeys",
+                appId,
+                userIds,
+            })
+            .catch(() => []);
+    }
+
+    // A one-time 256-bit claim token the user enters in the app to push their public key to
+    // OpenChat. Undefined when the app is unknown or the call fails.
+    createAiAppLinkCode(appId: number): Promise<AiAppLinkCode | undefined> {
+        return this.#worker
+            .send({
+                kind: "createAiAppLinkCode",
+                appId,
+            })
+            .catch(() => undefined);
+    }
+
+    // Cancel only this pending bearer. This never disconnects an already-installed app key.
+    cancelAiAppLinkCode(code: string): Promise<boolean> {
+        return this.#worker
+            .send({
+                kind: "cancelAiAppLinkCode",
+                code,
+            })
+            .catch(() => false);
+    }
+
+    // Mint a one-time bearer scoped by the authoritative chat canister to this exact
+    // app/revision/chat. The caller must cancel it if the user dismisses before handing it off.
+    createAiAppChatLinkToken(
+        chatId: ChatIdentifier,
+        chatName: string,
+        appId: number,
+        appRevision: bigint,
+    ): Promise<AiAppChatLinkToken | undefined> {
+        return this.#worker
+            .send({
+                kind: "createAiAppChatLinkToken",
+                chatId,
+                chatName,
+                appId,
+                appRevision,
+            })
+            .catch(() => undefined);
+    }
+
+    cancelAiAppChatLinkToken(token: Uint8Array): Promise<boolean> {
+        return this.#worker
+            .send({ kind: "cancelAiAppChatLinkToken", token: token.slice() })
+            .catch(() => false);
+    }
+
+    createAiAppCardProvenance(
+        appId: number,
+        appRevision: bigint,
+        actionId: string,
+        content: AiAppCardContentV1,
+        chatId: ChatIdentifier,
+        messageId: bigint,
+        threadRootMessageIndex: number | undefined,
+    ): Promise<AiAppCardProvenanceResult> {
+        return this.#worker
+            .send({
+                kind: "createAiAppCardProvenance",
+                appId,
+                appRevision,
+                actionId,
+                content,
+                chatId,
+                messageId,
+                threadRootMessageIndex,
+            })
+            .catch(() => ({ kind: "transport_error" }));
+    }
+
+    createAiAppCardCapability(
+        chatId: ChatIdentifier,
+        threadRootMessageIndex: number | undefined,
+        messageId: bigint,
+        recipientKeyScheme: string,
+        recipientPublicKey: Uint8Array,
+    ): Promise<AiAppCardCapability | undefined> {
+        return this.#worker
+            .send({
+                kind: "createAiAppCardCapability",
+                chatId,
+                threadRootMessageIndex,
+                messageId,
+                recipientKeyScheme,
+                recipientPublicKey,
+            })
+            .catch(() => undefined);
+    }
+
+    createAiAppPrivateMatchCapability(
+        chatId: ChatIdentifier,
+        threadRootMessageIndex: number | undefined,
+        messageId: bigint,
+        appId: number,
+        appRevision: bigint,
+        actionId: string,
+        recipientKeyScheme: string,
+        recipientPublicKey: Uint8Array,
+    ): Promise<AiAppPrivateMatchCapability | undefined> {
+        return this.#worker
+            .send({
+                kind: "createAiAppPrivateMatchCapability",
+                chatId,
+                threadRootMessageIndex,
+                messageId,
+                appId,
+                appRevision,
+                actionId,
+                recipientKeyScheme,
+                recipientPublicKey: recipientPublicKey.slice(),
+            })
+            .catch(() => undefined);
+    }
+
+    createAiAppCardConfirmationGrant(
+        chatId: ChatIdentifier,
+        threadRootMessageIndex: number | undefined,
+        messageId: bigint,
+        confirmPayload: Uint8Array,
+    ): Promise<AiAppCardConfirmationGrant | undefined> {
+        return this.#worker
+            .send({
+                kind: "createAiAppCardConfirmationGrant",
+                chatId,
+                threadRootMessageIndex,
+                messageId,
+                confirmPayload: confirmPayload.slice(),
+            })
+            .catch(() => undefined);
+    }
+
+    // Disconnect this user from an app: remove their own per-app delivery key so OpenChat stops
+    // delivering their confirmed actions to it (the app's registration and other users are
+    // unaffected). One-sided — needs no code from the app. false on failure.
+    removeMyAiAppKey(appId: number): Promise<boolean> {
+        return this.#worker
+            .send({
+                kind: "removeMyAiAppKey",
+                appId,
+            })
+            .catch(() => false);
+    }
+
+    // Publish one of the caller's own registered apps into the directory. false on failure.
+    publishAiApp(appId: number): Promise<boolean> {
+        return this.#worker
+            .send({
+                kind: "publishAiApp",
+                appId,
+            })
+            .catch(() => false);
+    }
+
+    // Phase A: AI apps are group-scoped only; non-group chat ids resolve to false / empty.
+    setAiAppEnabled(chatId: ChatIdentifier, appId: number, enabled: boolean): Promise<boolean> {
+        return this.#worker
+            .send({
+                kind: "setAiAppEnabled",
+                chatId,
+                appId,
+                enabled,
+            })
+            .catch(() => false);
+    }
+
+    enabledAiApps(chatId: ChatIdentifier): Promise<number[]> {
+        return this.#worker
+            .send({
+                kind: "enabledAiApps",
+                chatId,
             })
             .catch(() => []);
     }

@@ -43,6 +43,7 @@
         accountsSectionOpen,
         advancedSectionOpen,
         appearanceSectionOpen,
+        autoProposeSuggestions,
         chatsSectionOpen,
         dclickReply,
         deleteAccountSectionOpen,
@@ -87,6 +88,7 @@
     import FontSize from "./FontSize.svelte";
     import LinkedAuthAccounts from "./LinkedAuthAccounts.svelte";
     import ModelManager from "./ModelManager.svelte";
+    import MyApps from "./MyApps.svelte";
     import ReferredUsersList from "./ReferredUsersList.svelte";
     import ReferUsers from "./ReferUsers.svelte";
     import ThemeSelector from "./ThemeSelector.svelte";
@@ -585,6 +587,12 @@
                         label={i18nKey("hideBlocked")}
                         checked={$hideMessagesFromDirectBlocked}
                     />
+                    <Toggle
+                        id={"auto-propose"}
+                        small
+                        onChange={() => autoProposeSuggestions.toggle()}
+                        label={i18nKey("aiApps.autoPropose.setting")}
+                        checked={$autoProposeSuggestions} />
                 </CollapsibleCard>
             </div>
             <div class="video">
@@ -604,6 +612,9 @@
                 >
                     <ModelManager />
                 </CollapsibleCard>
+            </div>
+            <div class="my-apps">
+                <MyApps />
             </div>
             <div class="restricted">
                 <CollapsibleCard

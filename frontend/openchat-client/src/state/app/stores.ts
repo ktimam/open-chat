@@ -1398,6 +1398,10 @@ export const identityStateStore = writable<IdentityState>(
     notEq,
 );
 
+// Set only when the background worker cannot complete startup. Keeping this separate from the
+// identity union lets both layouts replace their otherwise-unbounded loading screen with recovery.
+export const startupErrorStore = writable<string | undefined>(undefined);
+
 export const failedMessagesStore = localUpdates.failedMessages;
 export const unconfirmedStore = localUpdates.unconfirmed;
 export const latestSuccessfulUpdatesLoop = writable(0);

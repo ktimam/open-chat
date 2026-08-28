@@ -1,0 +1,13 @@
+[package]
+name = "action_inbox_canister_c2c_client"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+action_inbox_canister = { path = "../api" }
+candid = { workspace = true }
+canister_client = { path = "../../../libraries/canister_client" }
+ic-cdk = { workspace = true }
+msgpack = { path = "../../../libraries/msgpack" }
+tracing = { workspace = true }
+types = { path = "../../../libraries/types" }

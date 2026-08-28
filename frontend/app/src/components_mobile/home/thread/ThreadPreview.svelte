@@ -201,6 +201,7 @@
                         last
                         readonly
                         threadRootMessage={thread.rootMessage.event}
+                        isThreadRoot
                         pinned={false}
                         supportsEdit={false}
                         supportsReply={false}

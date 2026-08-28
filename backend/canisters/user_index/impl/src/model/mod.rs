@@ -1,4 +1,15 @@
 pub mod account_billing;
+pub mod action_delivery_outbox;
+pub mod action_signing_keyring;
+pub mod ai_action_registry;
+pub mod ai_app_call_throttle;
+pub mod ai_app_card_tokens;
+pub mod ai_app_chat_link_tokens;
+pub mod ai_app_link_codes;
+pub mod ai_app_private_match_tokens;
+pub mod ai_app_registry;
+pub mod ai_app_scoped_identity;
+pub mod ai_app_user_keys;
 pub mod authority_reports;
 pub mod chit_leaderboard;
 pub mod diamond_membership_details;

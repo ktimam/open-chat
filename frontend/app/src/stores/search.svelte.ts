@@ -1,4 +1,4 @@
-import type { BotMatch, CommunityMatch, GroupMatch } from "@client";
+import type { AiAppRegistration, BotMatch, CommunityMatch, GroupMatch } from "@client";
 import { type Subscriber, writable } from "svelte/store";
 
 type Search<T> = {
@@ -106,3 +106,5 @@ export class SearchState<T> {
 export const communitySearchState = createSearchState<CommunityMatch>();
 export const groupSearchState = createSearchState<GroupMatch>();
 export const botSearchState = createSearchState<BotMatch>();
+
+export const aiAppSearchState = createSearchState<AiAppRegistration>();

@@ -19,7 +19,13 @@ runtime remain at the version compiled into the APK.
 
 The strategy is set at build time via the `OC_OTA_UPDATES` environment variable
 and controls **which version bumps** the frontend is allowed to apply over the
-air. The check is performed in the frontend before any download begins.
+air. Rollup also writes it to the bundled `ota-policy.json`, so the native asset
+resolver can enforce the policy before any cached JavaScript runs. Missing or
+invalid native policy fails closed to `"none"`.
+
+`build_android.sh` defaults sideload APKs to `"none"` without inheriting a
+generic `OC_OTA_UPDATES` from the caller. Store/CI builds that intentionally use
+OTA must opt in with `OC_ANDROID_OTA_UPDATES=patch|minor|major`.
 
 | Strategy | Allowed OTA updates | Example (from 2.0.1973) |
 |----------|--------------------|-----------------------|
@@ -36,8 +42,10 @@ setting the strategy to `"minor"` or `"patch"`, the app will refuse to OTA
 across a major boundary and instead wait for an APK update from the store.
 
 The strategy is evaluated by `Version.canUpdateTo(server, strategy)` in the
-frontend. The Rust side always downloads if `server > current` — the gating
-happens in JS before `download_update` is ever called.
+frontend and is also embedded as `ota-policy.json` for the native resolver.
+Rust independently rejects incompatible downloads and cached bundles. This
+second gate is required because an install-over preserves native OTA files and
+because native commands must not rely on frontend JavaScript for authorization.
 
 The `VersionChecker` is only active when `OC_APP_TYPE === "android"` and
 `OC_OTA_UPDATES !== "none"`.
@@ -173,8 +181,11 @@ must intercept the `tauri://` scheme.
 
 ### Asset resolution order
 
-1. **In-memory cache** — populated once via `OnceLock` from the disk cache on
-   first request. If `version.json` doesn't exist, the cache is empty.
+1. **Eligible in-memory cache** — populated once via `OnceLock` from the disk
+   cache on first request, but only when the bundled native policy permits it
+   and the cached version is a compatible, strictly newer update over the
+   bundled version. If policy is disabled/invalid or the cache is stale,
+   malformed, or lacks `index.html`, the cache is empty.
 2. **SPA fallback (cache)** — requests without a file extension get
    `index.html` from cache.
 3. **Bundled assets** — via `asset_resolver().get()` (Tauri's compiled-in
@@ -207,8 +218,10 @@ Selected at compile time via the `store` cargo feature flag.
    Manager rejects WebAuthn assertions when the origin header is a wildcard.
    Always use the specific origin `https://tauri.localhost`.
 
-3. **Stale cached files persist across installs of the same package.** If you're
-   testing OTA, clear app data (`adb shell pm clear com.oc.app`) to reset.
+3. **Cached files persist across installs of the same package.** The native
+   resolver now ignores them when the newly installed APK has OTA disabled, or
+   when they are not a compatible upgrade over the newly bundled frontend. To
+   test a fresh OTA flow itself, clear app data (`adb shell pm clear com.oc.app`).
    Uninstalling also clears the data.
 
 4. **The scheme handler cannot be `"oc"` or any other custom scheme.** Using a
@@ -229,8 +242,8 @@ Selected at compile time via the `store` cargo feature flag.
    `startActivity(mainIntent)`. This fully kills the process so the `OnceLock`
    is reset and the new cached files are loaded on the next launch.
 
-8. **The OTA strategy is a frontend-only gate.** The Rust `check_for_updates`
-   always downloads if `server > current`. The strategy check in
-   `canUpdateTo()` prevents the frontend from ever calling `download_update`
-   when the version delta is too large. This means the Rust side doesn't need
-   to know about the strategy.
+8. **The OTA strategy is enforced twice.** The frontend's `canUpdateTo()`
+   avoids offering incompatible updates. Rust reads the bundled
+   `ota-policy.json`, independently rejects incompatible downloads, and refuses
+   to serve an incompatible or incomplete preserved cache. Missing or invalid
+   policy fails closed to the APK's bundled frontend.

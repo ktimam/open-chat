@@ -40,6 +40,7 @@ fn init(args: Args) {
     );
 
     init_state(env, data, args.wasm_version);
+    crate::pr2_entropy::start_after_lifecycle();
 
     crate::no_inline_anchor::anchor();
     info!(version = %args.wasm_version, "Initialization complete");

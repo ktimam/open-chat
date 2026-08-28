@@ -1,9 +1,11 @@
 <script lang="ts">
     import { i18nKey } from "@src/i18n/i18n";
     import { BodySmall, Container, MenuItem } from "component-lib";
-    import { publish } from "@client";
+    import { anonUserStore, OpenChat, publish } from "@client";
     import { navigate } from "@utils/navigation";
     import AccountMultiple from "svelte-material-icons/AccountMultiple.svelte";
+    import AutoFix from "svelte-material-icons/AutoFix.svelte";
+    import CellphoneLink from "svelte-material-icons/CellphoneLink.svelte";
     import Cog from "svelte-material-icons/Cog.svelte";
     import Delete from "svelte-material-icons/DeleteForeverOutline.svelte";
     import Eye from "svelte-material-icons/EyeOutline.svelte";
@@ -13,6 +15,9 @@
     import LinkedCard from "../../LinkedCard.svelte";
     import Translatable from "../../Translatable.svelte";
     import SlidingPageContent from "../SlidingPageContent.svelte";
+    import { getContext } from "svelte";
+
+    const client = getContext<OpenChat>("client");
 
     function help() {
         publish("closeModalStack");
@@ -66,6 +71,15 @@
                 )}
             />
 
+            {#if !$anonUserStore && client.accountLinkingCodeEnabled()}
+                <LinkedCard
+                    onClick={() => publish("userProfileAccountLinking")}
+                    Icon={CellphoneLink}
+                    title={i18nKey("accountLinkingCode.settingsMenu.title")}
+                    info={i18nKey("accountLinkingCode.settingsMenu.disclaimer")}
+                />
+            {/if}
+
             <LinkedCard
                 onClick={() => publish("userProfileChitRewards")}
                 Icon={FlashOutline}
@@ -96,6 +110,14 @@
                     "In some circumstances, clearing the app's cached data can resolve issues. You should not normally need to use this.",
                 )}
             />
+
+            <LinkedCard
+                onClick={() => publish("userProfileMyApps")}
+                Icon={AutoFix}
+                title={i18nKey("aiApps.myApps")}
+                info={i18nKey(
+                    "View the AI apps you have registered and publish them to the app directory.",
+                )} />
 
             <LinkedCard
                 onClick={() => publish("userProfileBotConfig")}

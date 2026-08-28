@@ -779,9 +779,18 @@ export class ChatsDb {
                 return [resp, message];
             }
 
+            const reconciled = reconcileSuccessfulActionCard(message);
+            // Group/channel send clients historically return their original tuple after invoking
+            // this hook, whereas the direct client returns this hook's tuple. Update the shared
+            // Message reference so every chat kind observes the same canonical confirmed content.
+            // The live sender event may retain its exact attested payload for iframe prefill, while
+            // the separate cache event must contain only the same public fields a later server
+            // hydration would return.
+            message.content = reconciled.live.content;
             const event = messageToEvent(message, resp);
+            const cachedEvent = messageToEvent(reconciled.cached, resp);
 
-            this.setCachedMessageIfNotExists(chatId, event, threadRootMessageIndex);
+            this.setCachedMessageIfNotExists(chatId, cachedEvent, threadRootMessageIndex);
 
             return [resp, event.event];
         };
@@ -1120,6 +1129,51 @@ function rebuildBlobUrls(content: MessageContent): MessageContent {
         }
     }
     return content;
+}
+
+function reconcileSuccessfulActionCard(message: Message): { live: Message; cached: Message } {
+    if (message.content.kind !== "action_card_content") {
+        return { live: message, cached: message };
+    }
+
+    // A successful response means the authoritative chat canister accepted and stored this exact
+    // request. For a nonempty provenance-backed card, every supported chat canister first consumes
+    // and validates that proof and marks both verification bits atomically; invalid proofs are
+    // rejected rather than returning success. Mirror only that server-established result locally.
+    const content = { ...message.content };
+    const provenanceBacked =
+        content.appProvenance !== undefined && content.appProvenance.byteLength > 0;
+    // The exact payload can contain app-defined fields that are intentionally absent from public
+    // rows. A successful provenance-backed send proves the server accepted this exact content, so
+    // retain a defensive copy in the current sender session for app-card prefill. It is never put in
+    // IndexedDB, sent over RTC, or hydrated to other readers.
+    const liveConfirmPayload = provenanceBacked ? content.confirmPayload?.slice() : undefined;
+
+    // Verification booleans and routing/payload material on the outbound object are client-authored.
+    // The one-use proof and routing fields may not survive into either confirmed view. Payload is
+    // restored only to the provenance-backed live sender copy below and never to IndexedDB.
+    delete content.appVerified;
+    delete content.appContentVerified;
+    delete content.appProvenance;
+    delete content.confirmPayload;
+    delete content.recipientPublicKey;
+    delete content.recipientPublicKeys;
+    delete content.inboxCanisterId;
+
+    if (provenanceBacked) {
+        content.appVerified = true;
+        content.appContentVerified = true;
+    }
+
+    const cached = { ...message, content };
+    const live =
+        liveConfirmPayload === undefined
+            ? cached
+            : {
+                  ...message,
+                  content: { ...content, confirmPayload: liveConfirmPayload },
+              };
+    return { live, cached };
 }
 
 function messageToEvent(

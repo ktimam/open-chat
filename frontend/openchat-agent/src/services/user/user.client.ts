@@ -8,6 +8,10 @@ import {
     Stream,
     toBigInt32,
     type AcceptP2PSwapResponse,
+    type AiAppChatLinkToken,
+    type AiAppCardCapability,
+    type AiAppPrivateMatchCapability,
+    type AiAppCardConfirmationGrant,
     type AddRemoveReactionResponse,
     type ApproveTransferResponse,
     type ArchiveChatResponse,
@@ -34,6 +38,7 @@ import {
     type DeleteMessageResponse,
     type DirectChatIdentifier,
     type EditMessageResponse,
+    type RespondToActionCardResponse,
     type EventsResponse,
     type EventWrapper,
     type EvmChain,
@@ -112,6 +117,16 @@ import {
     UserDeleteGroupArgs,
     UserDeleteMessagesArgs,
     UserEditMessageArgs,
+    UserRespondToActionCardArgs,
+    UserRespondToActionCardResponse,
+    UserCreateAiAppCardCapabilityArgs,
+    UserCreateAiAppCardCapabilityResponse,
+    UserCreateAiAppPrivateMatchCapabilityArgs,
+    UserCreateAiAppPrivateMatchCapabilityResponse,
+    UserCreateAiAppCardConfirmationGrantArgs,
+    UserCreateAiAppCardConfirmationGrantResponse,
+    UserCreateAiAppChatLinkTokenArgs,
+    UserCreateAiAppChatLinkTokenResponse,
     UserEventsArgs,
     UserEventsByIndexArgs,
     UserEventsResponse,
@@ -188,6 +203,9 @@ import {
 import type { UserDb } from "../../utils/userCache";
 import { SingleCanisterMsgpackAgent } from "../canisterAgent/msgpack";
 import type { IChatEventsReader } from "../common/chatEvents";
+import { createAiAppCardCapabilityResponse } from "../common/aiAppCardCapability";
+import { createAiAppCardConfirmationGrantResponse } from "../common/aiAppCardConfirmationGrant";
+import { createAiAppChatLinkTokenResponse } from "../common/aiAppChatLinkToken";
 import {
     acceptP2PSwapSuccess,
     apiChatIdentifier,
@@ -527,6 +545,132 @@ export class UserClient
         });
     }
 
+    // The direct-chat confirm path: the responder's OWN canister runs the transition + deposit
+    // and mirrors the outcome to the other participant (see the user canister endpoint).
+    respondToActionCard(
+        userId: string,
+        messageId: bigint,
+        threadRootMessageIndex: number | undefined,
+        response: "confirm" | "cancel",
+        confirmPayloadOverride?: Uint8Array,
+        confirmationGrant?: Uint8Array,
+    ): Promise<RespondToActionCardResponse> {
+        return this.update(
+            "respond_to_action_card",
+            {
+                user_id: principalStringToBytes(userId),
+                thread_root_message_index: threadRootMessageIndex,
+                message_id: messageId,
+                response: response === "confirm" ? "Confirm" : "Cancel",
+                confirm_payload_override: confirmPayloadOverride?.slice(),
+                confirmation_grant: confirmationGrant?.slice(),
+            },
+            unitResult,
+            UserRespondToActionCardArgs,
+            UserRespondToActionCardResponse,
+            undefined,
+            { sensitive: true },
+        );
+    }
+
+    createAiAppCardCapability(
+        userId: string,
+        messageId: bigint,
+        threadRootMessageIndex: number | undefined,
+        recipientKeyScheme: string,
+        recipientPublicKey: Uint8Array,
+    ): Promise<AiAppCardCapability | undefined> {
+        return this.update(
+            "create_ai_app_card_capability",
+            {
+                user_id: principalStringToBytes(userId),
+                thread_root_message_index: threadRootMessageIndex,
+                message_id: messageId,
+                recipient_key_scheme: recipientKeyScheme,
+                recipient_public_key: recipientPublicKey,
+            },
+            createAiAppCardCapabilityResponse,
+            UserCreateAiAppCardCapabilityArgs,
+            UserCreateAiAppCardCapabilityResponse,
+            undefined,
+            { sensitive: true },
+        );
+    }
+
+    createAiAppPrivateMatchCapability(
+        userId: string,
+        messageId: bigint,
+        threadRootMessageIndex: number | undefined,
+        appId: number,
+        appRevision: bigint,
+        actionId: string,
+        recipientKeyScheme: string,
+        recipientPublicKey: Uint8Array,
+    ): Promise<AiAppPrivateMatchCapability | undefined> {
+        return this.update(
+            "create_ai_app_private_match_capability",
+            {
+                user_id: principalStringToBytes(userId),
+                thread_root_message_index: threadRootMessageIndex,
+                message_id: messageId,
+                app_id: appId,
+                app_revision: appRevision,
+                action_id: actionId,
+                recipient_key_scheme: recipientKeyScheme,
+                recipient_public_key: recipientPublicKey.slice(),
+            },
+            createAiAppCardCapabilityResponse,
+            UserCreateAiAppPrivateMatchCapabilityArgs,
+            UserCreateAiAppPrivateMatchCapabilityResponse,
+            undefined,
+            { sensitive: true },
+        );
+    }
+
+    createAiAppCardConfirmationGrant(
+        userId: string,
+        messageId: bigint,
+        threadRootMessageIndex: number | undefined,
+        confirmPayload: Uint8Array,
+    ): Promise<AiAppCardConfirmationGrant | undefined> {
+        return this.update(
+            "create_ai_app_card_confirmation_grant",
+            {
+                user_id: principalStringToBytes(userId),
+                thread_root_message_index: threadRootMessageIndex,
+                message_id: messageId,
+                confirm_payload: confirmPayload.slice(),
+            },
+            createAiAppCardConfirmationGrantResponse,
+            UserCreateAiAppCardConfirmationGrantArgs,
+            UserCreateAiAppCardConfirmationGrantResponse,
+            undefined,
+            { sensitive: true },
+        );
+    }
+
+    createAiAppChatLinkToken(
+        userId: string,
+        chatName: string,
+        appId: number,
+        appRevision: bigint,
+    ): Promise<AiAppChatLinkToken | undefined> {
+        return this.update(
+            "create_ai_app_chat_link_token",
+            {
+                user_id: principalStringToBytes(userId),
+                chat_name: chatName,
+                app_id: appId,
+                app_revision: appRevision,
+            },
+            createAiAppChatLinkTokenResponse,
+            UserCreateAiAppChatLinkTokenArgs,
+            UserCreateAiAppChatLinkTokenResponse,
+            undefined,
+            { sensitive: true },
+        );
+    }
+
     editMessage(
         recipientId: string,
         message: Message,
@@ -550,6 +694,10 @@ export class UserClient
                     unitResult,
                     UserEditMessageArgs,
                     UnitResult,
+                    undefined,
+                    message.content.kind === "action_card_content"
+                        ? { sensitive: true }
+                        : undefined,
                 );
             });
     }
@@ -593,6 +741,10 @@ export class UserClient
                 UserSendMessageArgs,
                 UserSendMessageResponse,
                 onRequestAccepted,
+                newEvent.event.content.kind === "action_card_content" &&
+                    newEvent.event.content.appProvenance !== undefined
+                    ? { sensitive: true }
+                    : undefined,
             )
                 .then((resp) =>
                     this.chatsDb.setCachedMessageFromSendResponse(

@@ -14,6 +14,7 @@ fn main() {
     generate_ts_method!(community, events_by_index);
     generate_ts_method!(community, events_window);
     generate_ts_method!(community, events);
+    generate_ts_method!(community, enabled_ai_apps);
     generate_ts_method!(community, explore_channels);
     generate_ts_method!(community, invite_code);
     generate_ts_method!(community, local_user_index);
@@ -57,6 +58,12 @@ fn main() {
     generate_ts_method!(community, regenerate_webhook);
     generate_ts_method!(community, register_poll_vote);
     generate_ts_method!(community, register_proposal_vote);
+    generate_ts_method!(community, respond_to_action_card);
+    generate_ts_method!(community, create_ai_app_card_confirmation_grant);
+    generate_ts_method!(community, create_ai_app_card_capability);
+    generate_ts_method!(community, create_ai_app_private_match_capability);
+    generate_ts_method!(community, create_ai_app_chat_link_token);
+    generate_ts_method!(community, set_ai_app_enabled);
     generate_ts_method!(community, register_proposal_vote_v2);
     generate_ts_method!(community, register_webhook);
     generate_ts_method!(community, remove_member_from_channel);

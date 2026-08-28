@@ -17,6 +17,7 @@ generate_msgpack_query_call!(selected_updates_v2);
 generate_msgpack_query_call!(summary);
 generate_msgpack_query_call!(summary_updates);
 generate_msgpack_query_call!(webhook);
+generate_msgpack_query_call!(enabled_ai_apps);
 
 // Updates
 generate_msgpack_update_call!(accept_p2p_swap);
@@ -42,6 +43,7 @@ generate_msgpack_update_call!(remove_member);
 generate_msgpack_update_call!(remove_member_from_channel);
 generate_msgpack_update_call!(remove_reaction);
 generate_msgpack_update_call!(send_message);
+generate_msgpack_update_call!(set_ai_app_enabled);
 generate_msgpack_update_call!(unblock_user);
 generate_msgpack_update_call!(undelete_messages);
 generate_msgpack_update_call!(update_bot);
@@ -619,6 +621,24 @@ pub mod happy_path {
         match response {
             community_canister::import_group::Response::Success(r) => r,
             response => panic!("'import_group' error: {response:?}"),
+        }
+    }
+
+    pub fn enabled_ai_apps(
+        env: &PocketIc,
+        sender: Principal,
+        community_id: CommunityId,
+        channel_id: ChannelId,
+    ) -> Vec<types::AiAppId> {
+        let response = super::enabled_ai_apps(
+            env,
+            sender,
+            community_id.into(),
+            &community_canister::enabled_ai_apps::Args { channel_id },
+        );
+        match response {
+            community_canister::enabled_ai_apps::Response::Success(result) => result.app_ids,
+            response => panic!("'enabled_ai_apps' error: {response:?}"),
         }
     }
 

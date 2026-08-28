@@ -2,9 +2,18 @@ import type { InferenceRequest } from "@shared";
 import { webcrypto } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { InferResponse, LocalModel } from "tauri-plugin-oc-api";
-import { infer as nativeInfer, listLocalModels } from "tauri-plugin-oc-api";
+import {
+    infer as nativeInfer,
+    inferenceRuntimeAvailable,
+    listLocalModels,
+} from "tauri-plugin-oc-api";
 import { selectedModelId } from "../stores/onDeviceModels";
-import { inferOnDevice, isNativeClient, onDeviceInferenceCapability } from "./onDeviceInference";
+import {
+    inferOnDevice,
+    isNativeClient,
+    onDeviceInferenceCapability,
+    onDeviceInferenceReadiness,
+} from "./onDeviceInference";
 import { clearWebModel, useWebModelFromUrl, webInfer } from "./webInference";
 
 const webRuntime = vi.hoisted(() => ({
@@ -64,10 +73,12 @@ async function hashOf(bytes: Uint8Array): Promise<string> {
 // network / model load) is ever touched — every test is deterministic.
 vi.mock("tauri-plugin-oc-api", () => ({
     infer: vi.fn(),
+    inferenceRuntimeAvailable: vi.fn(),
     listLocalModels: vi.fn(),
 }));
 
 const mockInfer = vi.mocked(nativeInfer);
+const mockInferenceRuntimeAvailable = vi.mocked(inferenceRuntimeAvailable);
 const mockListLocalModels = vi.mocked(listLocalModels);
 
 const MODEL_ID = "gemma-4-e2b-it-q4";
@@ -92,7 +103,9 @@ function localModel(overrides: Partial<LocalModel> = {}): LocalModel {
 
 beforeEach(() => {
     mockInfer.mockReset();
+    mockInferenceRuntimeAvailable.mockReset();
     mockListLocalModels.mockReset();
+    mockInferenceRuntimeAvailable.mockResolvedValue(true);
     // Default: no model downloaded and none selected — each test opts into what it needs.
     mockListLocalModels.mockResolvedValue([]);
     selectedModelId.set("");
@@ -114,7 +127,50 @@ describe("isNativeClient", () => {
     });
 });
 
+describe("onDeviceInferenceReadiness", () => {
+    it("does not treat a Tauri bridge as proof that the runtime was compiled in", async () => {
+        setNative(true);
+        mockInferenceRuntimeAvailable.mockResolvedValue(false);
+
+        await expect(onDeviceInferenceReadiness()).resolves.toEqual({
+            available: false,
+            reason: "This OpenChat build does not include on-device inference. Update or reinstall OpenChat, then try again.",
+        });
+    });
+});
+
 describe("inferOnDevice — unavailable branches", () => {
+    it("requires an update before touching models when this native build omitted inference", async () => {
+        setNative(true);
+        selectedModelId.set(MODEL_ID);
+        mockInferenceRuntimeAvailable.mockResolvedValue(false);
+        mockListLocalModels.mockResolvedValue([localModel()]);
+
+        const res = await inferOnDevice({ prompt: "hi" });
+
+        expect(res).toEqual({
+            kind: "unavailable",
+            reason: "This OpenChat build does not include on-device inference. Update or reinstall OpenChat, then try again.",
+        });
+        expect(mockListLocalModels).not.toHaveBeenCalled();
+        expect(mockInfer).not.toHaveBeenCalled();
+    });
+
+    it("treats a missing runtime probe command as an old build that requires an update", async () => {
+        setNative(true);
+        selectedModelId.set(MODEL_ID);
+        mockInferenceRuntimeAvailable.mockRejectedValue(new Error("command not found"));
+
+        const res = await inferOnDevice({ prompt: "hi" });
+
+        expect(res).toEqual({
+            kind: "unavailable",
+            reason: "This OpenChat build does not include on-device inference. Update or reinstall OpenChat, then try again.",
+        });
+        expect(mockListLocalModels).not.toHaveBeenCalled();
+        expect(mockInfer).not.toHaveBeenCalled();
+    });
+
     it("is unavailable (not the native client) when the bridge is absent", async () => {
         setNative(false);
         selectedModelId.set(MODEL_ID);
@@ -305,9 +361,10 @@ describe("inferOnDevice — error path (thrown -> error, NOT unavailable)", () =
 });
 
 describe("onDeviceInferenceCapability", () => {
-    it("is available when native AND a model is selected, and reports catalog modalities", () => {
+    it("is available when the native runtime probe passes AND a model is selected", async () => {
         setNative(true);
         selectedModelId.set(MODEL_ID);
+        await onDeviceInferenceReadiness();
 
         const cap = onDeviceInferenceCapability();
 
@@ -316,6 +373,15 @@ describe("onDeviceInferenceCapability", () => {
         expect(cap.selectedModelId).toBe(MODEL_ID);
         // Modalities come from the catalog entry for the selected model.
         expect(cap.selectedModalities).toEqual(["text", "image"]);
+    });
+
+    it("is NOT available when a native shell omitted the inference runtime", async () => {
+        setNative(true);
+        selectedModelId.set(MODEL_ID);
+        mockInferenceRuntimeAvailable.mockResolvedValue(false);
+        await onDeviceInferenceReadiness();
+
+        expect(onDeviceInferenceCapability().available).toBe(false);
     });
 
     it("is NOT available when not the native client (even with a model selected)", () => {

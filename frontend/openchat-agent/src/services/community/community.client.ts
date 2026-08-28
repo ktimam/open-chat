@@ -2,6 +2,10 @@ import type { HttpAgent, Identity } from "@icp-sdk/core/agent";
 import type {
     AcceptP2PSwapResponse,
     AccessGateConfig,
+    AiAppChatLinkToken,
+    AiAppCardCapability,
+    AiAppPrivateMatchCapability,
+    AiAppCardConfirmationGrant,
     AddMembersToChannelResponse,
     AddRemoveReactionResponse,
     BlockCommunityUserResponse,
@@ -48,6 +52,7 @@ import type {
     OptionalChatPermissions,
     PinMessageResponse,
     RegisterPollVoteResponse,
+    RespondToActionCardResponse,
     RegisterProposalVoteResponse,
     RemoveMemberResponse,
     ResetInviteCodeResponse,
@@ -127,6 +132,20 @@ import {
     CommunityRegenerateWebhookResponse,
     CommunityRegisterPollVoteArgs,
     CommunityRegisterPollVoteResponse,
+    CommunityRespondToActionCardArgs,
+    CommunityRespondToActionCardResponse,
+    CommunityCreateAiAppCardCapabilityArgs,
+    CommunityCreateAiAppCardCapabilityResponse,
+    CommunityCreateAiAppPrivateMatchCapabilityArgs,
+    CommunityCreateAiAppPrivateMatchCapabilityResponse,
+    CommunityCreateAiAppChatLinkTokenArgs,
+    CommunityCreateAiAppChatLinkTokenResponse,
+    CommunityCreateAiAppCardConfirmationGrantArgs,
+    CommunityCreateAiAppCardConfirmationGrantResponse,
+    CommunitySetAiAppEnabledArgs,
+    CommunitySetAiAppEnabledResponse,
+    CommunityEnabledAiAppsArgs,
+    CommunityEnabledAiAppsResponse,
     CommunityRegisterProposalVoteArgs,
     CommunityRegisterWebhookArgs,
     CommunityRegisterWebhookResponse,
@@ -183,6 +202,9 @@ import {
 } from "../../utils/mapping";
 import { MultiCanisterMsgpackAgent } from "../canisterAgent/msgpack";
 import type { IChatEventsReader } from "../common/chatEvents";
+import { createAiAppCardCapabilityResponse } from "../common/aiAppCardCapability";
+import { createAiAppChatLinkTokenResponse } from "../common/aiAppChatLinkToken";
+import { createAiAppCardConfirmationGrantResponse } from "../common/aiAppCardConfirmationGrant";
 import {
     acceptP2PSwapSuccess,
     apiAccessGateConfig,
@@ -484,6 +506,10 @@ export class CommunityClient
                     unitResult,
                     CommunityEditMessageArgs,
                     UnitResult,
+                    undefined,
+                    message.content.kind === "action_card_content"
+                        ? { sensitive: true }
+                        : undefined,
                 );
             });
     }
@@ -963,6 +989,10 @@ export class CommunityClient
                 CommunitySendMessageArgs,
                 CommunitySendMessageResponse,
                 onRequestAccepted,
+                newEvent.event.content.kind === "action_card_content" &&
+                    newEvent.event.content.appProvenance !== undefined
+                    ? { sensitive: true }
+                    : undefined,
             )
                 .then((resp) => {
                     const retVal: [SendMessageResponse, Message] = [resp, newEvent.event];
@@ -1002,6 +1032,160 @@ export class CommunityClient
             unitResult,
             CommunityRegisterPollVoteArgs,
             CommunityRegisterPollVoteResponse,
+        );
+    }
+
+    respondToActionCard(
+        chatId: ChannelIdentifier,
+        messageId: bigint,
+        threadRootMessageIndex: number | undefined,
+        response: "confirm" | "cancel",
+        confirmPayloadOverride?: Uint8Array,
+        confirmationGrant?: Uint8Array,
+    ): Promise<RespondToActionCardResponse> {
+        return this.update(
+            chatId.communityId,
+            "respond_to_action_card",
+            {
+                channel_id: toBigInt32(chatId.channelId),
+                thread_root_message_index: threadRootMessageIndex,
+                message_id: messageId,
+                response: response === "confirm" ? "Confirm" : "Cancel",
+                confirm_payload_override: confirmPayloadOverride?.slice(),
+                confirmation_grant: confirmationGrant?.slice(),
+            },
+            unitResult,
+            CommunityRespondToActionCardArgs,
+            CommunityRespondToActionCardResponse,
+            undefined,
+            { sensitive: true },
+        );
+    }
+
+    createAiAppCardCapability(
+        chatId: ChannelIdentifier,
+        messageId: bigint,
+        threadRootMessageIndex: number | undefined,
+        recipientKeyScheme: string,
+        recipientPublicKey: Uint8Array,
+    ): Promise<AiAppCardCapability | undefined> {
+        return this.update(
+            chatId.communityId,
+            "create_ai_app_card_capability",
+            {
+                channel_id: toBigInt32(chatId.channelId),
+                thread_root_message_index: threadRootMessageIndex,
+                message_id: messageId,
+                recipient_key_scheme: recipientKeyScheme,
+                recipient_public_key: recipientPublicKey,
+            },
+            createAiAppCardCapabilityResponse,
+            CommunityCreateAiAppCardCapabilityArgs,
+            CommunityCreateAiAppCardCapabilityResponse,
+            undefined,
+            { sensitive: true },
+        );
+    }
+
+    createAiAppPrivateMatchCapability(
+        chatId: ChannelIdentifier,
+        messageId: bigint,
+        threadRootMessageIndex: number | undefined,
+        appId: number,
+        appRevision: bigint,
+        actionId: string,
+        recipientKeyScheme: string,
+        recipientPublicKey: Uint8Array,
+    ): Promise<AiAppPrivateMatchCapability | undefined> {
+        return this.update(
+            chatId.communityId,
+            "create_ai_app_private_match_capability",
+            {
+                channel_id: toBigInt32(chatId.channelId),
+                thread_root_message_index: threadRootMessageIndex,
+                message_id: messageId,
+                app_id: appId,
+                app_revision: appRevision,
+                action_id: actionId,
+                recipient_key_scheme: recipientKeyScheme,
+                recipient_public_key: recipientPublicKey.slice(),
+            },
+            createAiAppCardCapabilityResponse,
+            CommunityCreateAiAppPrivateMatchCapabilityArgs,
+            CommunityCreateAiAppPrivateMatchCapabilityResponse,
+            undefined,
+            { sensitive: true },
+        );
+    }
+
+    createAiAppChatLinkToken(
+        chatId: ChannelIdentifier,
+        appId: number,
+        appRevision: bigint,
+    ): Promise<AiAppChatLinkToken | undefined> {
+        return this.update(
+            chatId.communityId,
+            "create_ai_app_chat_link_token",
+            {
+                channel_id: toBigInt32(chatId.channelId),
+                app_id: appId,
+                app_revision: appRevision,
+            },
+            createAiAppChatLinkTokenResponse,
+            CommunityCreateAiAppChatLinkTokenArgs,
+            CommunityCreateAiAppChatLinkTokenResponse,
+            undefined,
+            { sensitive: true },
+        );
+    }
+
+    createAiAppCardConfirmationGrant(
+        chatId: ChannelIdentifier,
+        messageId: bigint,
+        threadRootMessageIndex: number | undefined,
+        confirmPayload: Uint8Array,
+    ): Promise<AiAppCardConfirmationGrant | undefined> {
+        return this.update(
+            chatId.communityId,
+            "create_ai_app_card_confirmation_grant",
+            {
+                channel_id: toBigInt32(chatId.channelId),
+                thread_root_message_index: threadRootMessageIndex,
+                message_id: messageId,
+                confirm_payload: confirmPayload.slice(),
+            },
+            createAiAppCardConfirmationGrantResponse,
+            CommunityCreateAiAppCardConfirmationGrantArgs,
+            CommunityCreateAiAppCardConfirmationGrantResponse,
+            undefined,
+            { sensitive: true },
+        );
+    }
+
+    // Per-CHANNEL AI-app enablement (mirrors the group canister's endpoints one level down).
+    setAiAppEnabled(chatId: ChannelIdentifier, appId: number, enabled: boolean): Promise<boolean> {
+        return this.update(
+            chatId.communityId,
+            "set_ai_app_enabled",
+            {
+                channel_id: toBigInt32(chatId.channelId),
+                app_id: appId,
+                enabled,
+            },
+            (resp) => resp === "Success",
+            CommunitySetAiAppEnabledArgs,
+            CommunitySetAiAppEnabledResponse,
+        );
+    }
+
+    enabledAiApps(chatId: ChannelIdentifier): Promise<number[]> {
+        return this.query(
+            chatId.communityId,
+            "enabled_ai_apps",
+            { channel_id: toBigInt32(chatId.channelId) },
+            (resp) => (typeof resp === "object" && "Success" in resp ? resp.Success.app_ids : []),
+            CommunityEnabledAiAppsArgs,
+            CommunityEnabledAiAppsResponse,
         );
     }
 

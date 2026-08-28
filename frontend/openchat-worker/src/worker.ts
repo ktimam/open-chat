@@ -150,12 +150,16 @@ function handleAgentEvent(ev: Event): void {
     }
 }
 
-const sendError = (kind: string, correlationId: number, payload?: unknown) => {
+function coarseErrorClass(error: unknown): string {
+    return error instanceof Error ? error.name : typeof error;
+}
+
+const sendError = (kind: string, correlationId: number) => {
     return (error: unknown) => {
         if (shouldReportWorkerError(kind, error)) {
-            logger.error("WORKER: error caused by payload: ", kind, error, payload);
+            logger.error("WORKER: request failed", kind, coarseErrorClass(error));
         } else {
-            logger.debug("WORKER: expected request failure (not reported): ", kind, error);
+            logger.debug("WORKER: expected request failure", kind, coarseErrorClass(error));
         }
         postMessage({
             kind: "worker_error",
@@ -167,7 +171,6 @@ const sendError = (kind: string, correlationId: number, payload?: unknown) => {
 };
 
 function streamReplies(
-    payload: WorkerRequest,
     kind: string,
     correlationId: number,
     chain: Stream<WorkerResponseInner>,
@@ -178,25 +181,23 @@ function streamReplies(
             console.debug(
                 `WORKER: sending streamed reply ${Date.now() - start}ms after subscribing`,
                 correlationId,
-                value,
                 Date.now(),
                 final,
             );
             sendResponse(kind, correlationId, value, final);
         },
-        onError: sendError(kind, correlationId, payload),
+        onError: sendError(kind, correlationId),
     });
 }
 
 function executeThenReply(
-    payload: WorkerRequest,
     kind: string,
     correlationId: number,
     promise: Promise<WorkerResponseInner>,
 ) {
     promise
         .then((response) => sendResponse(kind, correlationId, response))
-        .catch(sendError(kind, correlationId, payload));
+        .catch(sendError(kind, correlationId));
 }
 
 function sendResponse(
@@ -223,11 +224,11 @@ function sendEvent(msg: Omit<WorkerEvent, "kind">): void {
 }
 
 self.addEventListener("error", (err: ErrorEvent) => {
-    logger.error("WORKER: unhandled error: ", err);
+    logger.error("WORKER: unhandled error", coarseErrorClass(err.error));
 });
 
 self.addEventListener("unhandledrejection", (err: PromiseRejectionEvent) => {
-    logger.error("WORKER: unhandled promise rejection: ", err);
+    logger.error("WORKER: unhandled promise rejection", coarseErrorClass(err.reason));
 });
 
 self.addEventListener("message", (msg: MessageEvent<CorrelatedWorkerRequest>) => {
@@ -254,7 +255,6 @@ self.addEventListener("message", (msg: MessageEvent<CorrelatedWorkerRequest>) =>
 
         if (kind === "setAuthIdentity") {
             executeThenReply(
-                payload,
                 kind,
                 correlationId,
                 initializeAuthIdentity(
@@ -288,7 +288,6 @@ self.addEventListener("message", (msg: MessageEvent<CorrelatedWorkerRequest>) =>
 
         if (kind === "createOpenChatIdentity") {
             executeThenReply(
-                payload,
                 kind,
                 correlationId,
                 createOpenChatIdentity(payload.webAuthnCredentialId).then((resp) => {
@@ -309,7 +308,6 @@ self.addEventListener("message", (msg: MessageEvent<CorrelatedWorkerRequest>) =>
 
         if (kind === "logout") {
             executeThenReply(
-                payload,
                 kind,
                 correlationId,
                 ocIdentityStorage.remove().then((_) => (agent = undefined)),
@@ -324,19 +322,18 @@ self.addEventListener("message", (msg: MessageEvent<CorrelatedWorkerRequest>) =>
         }
 
         if (!agent) {
-            logger.debug("WORKER: agent does not exist: ", msg.data);
+            logger.debug("WORKER: agent does not exist", kind, correlationId);
             return;
         }
 
         const action = getAction(payload, agent, config);
 
         if (action instanceof Promise) {
-            executeThenReply(payload, kind, correlationId, action);
+            executeThenReply(kind, correlationId, action);
         } else {
-            streamReplies(payload, kind, correlationId, action);
+            streamReplies(kind, correlationId, action);
         }
     } catch (err) {
-        logger.debug("WORKER: unhandled error: ", err, kind);
         sendError(kind, correlationId)(err);
     }
 });
@@ -509,6 +506,16 @@ function getAction(
                 payload.voteType,
                 payload.threadRootMessageIndex,
                 payload.newAchievement,
+            );
+
+        case "respondToActionCard":
+            return agent.respondToActionCard(
+                payload.chatId,
+                payload.threadRootMessageIndex,
+                payload.messageId,
+                payload.response,
+                payload.confirmPayloadOverride,
+                payload.confirmationGrant,
             );
 
         case "deleteMessage":
@@ -1060,6 +1067,9 @@ function getAction(
                 payload.chunkIndex,
             );
 
+        case "downloadPublicBlob":
+            return agent.downloadPublicBlob(payload.ref, payload.maxBytes);
+
         case "updateRegistry":
             return agent.getRegistry();
 
@@ -1157,6 +1167,89 @@ function getAction(
 
         case "diamondMembershipFees":
             return agent.diamondMembershipFees();
+
+        case "aiApps":
+            return agent.aiApps(payload.lookups);
+
+        case "myAiApps":
+            return agent.myAiAppsPage(payload.pageIndex, payload.pageSize);
+
+        case "setAiAppEnabled":
+            return agent.setAiAppEnabled(payload.chatId, payload.appId, payload.enabled);
+
+        case "enabledAiApps":
+            return agent.enabledAiApps(payload.chatId);
+
+        case "myAiAppKeys":
+            return agent.myAiAppKeys();
+        case "aiAppUserKeys":
+            return agent.aiAppUserKeys(payload.appId, payload.userIds);
+
+        case "createAiAppLinkCode":
+            return agent.createAiAppLinkCode(payload.appId);
+
+        case "cancelAiAppLinkCode":
+            return agent.cancelAiAppLinkCode(payload.code);
+
+        case "createAiAppChatLinkToken":
+            return agent.createAiAppChatLinkToken(
+                payload.chatId,
+                payload.chatName,
+                payload.appId,
+                payload.appRevision,
+            );
+
+        case "cancelAiAppChatLinkToken":
+            return agent.cancelAiAppChatLinkToken(payload.token);
+
+        case "createAiAppCardProvenance":
+            return agent.createAiAppCardProvenance(
+                payload.appId,
+                payload.appRevision,
+                payload.actionId,
+                payload.content,
+                payload.chatId,
+                payload.messageId,
+                payload.threadRootMessageIndex,
+            );
+
+        case "createAiAppCardCapability":
+            return agent.createAiAppCardCapability(
+                payload.chatId,
+                payload.threadRootMessageIndex,
+                payload.messageId,
+                payload.recipientKeyScheme,
+                payload.recipientPublicKey,
+            );
+
+        case "createAiAppPrivateMatchCapability":
+            return agent.createAiAppPrivateMatchCapability(
+                payload.chatId,
+                payload.threadRootMessageIndex,
+                payload.messageId,
+                payload.appId,
+                payload.appRevision,
+                payload.actionId,
+                payload.recipientKeyScheme,
+                payload.recipientPublicKey,
+            );
+
+        case "createAiAppCardConfirmationGrant":
+            return agent.createAiAppCardConfirmationGrant(
+                payload.chatId,
+                payload.threadRootMessageIndex,
+                payload.messageId,
+                payload.confirmPayload,
+            );
+
+        case "removeMyAiAppKey":
+            return agent.removeMyAiAppKey(payload.appId);
+
+        case "publishAiApp":
+            return agent.publishAiApp(payload.appId);
+
+        case "exploreAiApps":
+            return agent.exploreAiApps(payload.searchTerm, payload.pageIndex, payload.pageSize);
 
         case "reportedMessages":
             return agent.reportedMessages(payload.userId);

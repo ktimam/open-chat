@@ -1,3 +1,5 @@
+pub mod ai_app_card_authority;
+pub mod ai_app_chat_link_authority;
 pub mod cached_hot_groups;
 pub mod deleted_communities;
 pub mod deleted_groups;

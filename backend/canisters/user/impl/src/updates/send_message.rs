@@ -8,7 +8,7 @@ use canister_api_macros::update;
 use canister_tracing_macros::trace;
 use chat_events::{
     EditMessageArgs, EditMessageSuccess, MessageContentInternal, PushMessageArgs, Reader, ReplyContextInternal,
-    TextContentInternal, ValidateNewMessageContentResult,
+    TextContentInternal, ValidateNewMessageContentResult, ai_app_card_content_hash_from_initial,
 };
 use constants::{MEMO_MESSAGE, OPENCHAT_BOT_USER_ID};
 use ic_principal::Principal;
@@ -25,7 +25,7 @@ use user_canister::send_message_v2::{Response::*, *};
 use user_canister::{C2CReplyContext, SendMessageArgs, SendMessagesArgs, UserCanisterEvent, c2c_bot_send_message};
 
 #[update(guard = "caller_is_owner", msgpack = true)]
-#[trace]
+// Do not trace: an app ActionCard carries a live one-time provenance proof in its ingress args.
 async fn send_message_v2(args: Args) -> Response {
     execute_update_async(|| send_message_v2_impl(args)).await
 }
@@ -36,6 +36,8 @@ async fn send_message_v2_impl(mut args: Args) -> Response {
         now,
         local_user_index_canister_id,
         maybe_recipient_type,
+        provenance,
+        app_card,
     } = match read_state(|state| prepare(&args, false, state)) {
         Ok(ok) => ok,
         Err(error) => return Error(error),
@@ -55,6 +57,42 @@ async fn send_message_v2_impl(mut args: Args) -> Response {
             Err(error) => return Error(error.into()),
         }
     };
+
+    if let Some(expected) = app_card {
+        let Some(relay) = provenance else {
+            return Error(OCErrorCode::Impossible.with_message("missing prepared AI-app provenance"));
+        };
+        if !matches!(recipient_type, RecipientType::Other(UserType::User)) {
+            return Error(OCErrorCode::InitiatorNotAuthorized.with_message("AI-app cards require a human direct chat"));
+        }
+        if let Err(error) =
+            read_state(|state| revalidate_app_card_post(&args, local_user_index_canister_id, &relay, &expected, state))
+        {
+            return Error(error);
+        }
+        match local_user_index_canister_c2c_client::c2c_validate_ai_app_card_provenance(local_user_index_canister_id, &relay)
+            .await
+        {
+            Ok(local_user_index_canister::c2c_validate_ai_app_card_provenance::Response::Success) => {}
+            Ok(local_user_index_canister::c2c_validate_ai_app_card_provenance::Response::InvalidProvenance) => {
+                return Error(OCErrorCode::InvalidRequest.with_message("invalid AI-app card provenance"));
+            }
+            Ok(local_user_index_canister::c2c_validate_ai_app_card_provenance::Response::AppUnavailable) => {
+                return Error(OCErrorCode::InvalidRequest.with_message("AI app is unavailable"));
+            }
+            Ok(
+                local_user_index_canister::c2c_validate_ai_app_card_provenance::Response::InvalidRequest(error)
+                | local_user_index_canister::c2c_validate_ai_app_card_provenance::Response::Error(error),
+            ) => return Error(OCErrorCode::InvalidRequest.with_message(error)),
+            Err(error) => return Error(OCErrorCode::C2CError.with_message(format!("{error:?}"))),
+        }
+        // The provenance relay yielded through LocalUserIndex and UserIndex. Validate the exact
+        // owner, route, peer type, coordinates and raw card again in the final state mutation, then
+        // run bounds/expiry validation using the current time before setting server-only trust bits.
+        return mutate_state(|state| commit_verified_app_card(args, recipient_type, relay, expected, state));
+    } else if provenance.is_some() {
+        return Error(OCErrorCode::Impossible.with_message("missing prepared AI-app card context"));
+    }
 
     let (content, completed_transfer) =
         match MessageContentInternal::validate_new_message(args.content, true, UserType::User, args.forwarding, now) {
@@ -382,6 +420,22 @@ struct PrepareOk {
     now: TimestampMillis,
     local_user_index_canister_id: CanisterId,
     maybe_recipient_type: Option<RecipientType>,
+    provenance: Option<local_user_index_canister::c2c_validate_ai_app_card_provenance::Args>,
+    app_card: Option<VerifiedAppCardPost>,
+}
+
+#[derive(Clone)]
+struct VerifiedAppCardPost {
+    ingress_owner: Principal,
+    local_user_index_canister_id: CanisterId,
+    user_id: UserId,
+    recipient: UserId,
+    app_id: types::AiAppId,
+    app_revision: TimestampMillis,
+    action_id: String,
+    content_hash: [u8; 32],
+    thread_root_message_index: Option<MessageIndex>,
+    message_id: MessageId,
 }
 
 fn prepare(args: &Args, is_v2_bot: bool, state: &RuntimeState) -> OCResult<PrepareOk> {
@@ -411,13 +465,198 @@ fn prepare(args: &Args, is_v2_bot: bool, state: &RuntimeState) -> OCResult<Prepa
     } else {
         None
     };
+    let (provenance, app_card) = prepare_app_card_post(args, is_v2_bot, my_user_id, maybe_recipient_type, state)?;
 
     Ok(PrepareOk {
         my_user_id,
         now: state.env.now(),
         local_user_index_canister_id: state.data.local_user_index_canister_id,
         maybe_recipient_type,
+        provenance,
+        app_card,
     })
+}
+
+fn prepare_app_card_post(
+    args: &Args,
+    is_v2_bot: bool,
+    user_id: UserId,
+    maybe_recipient_type: Option<RecipientType>,
+    state: &RuntimeState,
+) -> OCResult<(
+    Option<local_user_index_canister::c2c_validate_ai_app_card_provenance::Args>,
+    Option<VerifiedAppCardPost>,
+)> {
+    let MessageContentInitial::ActionCard(card) = &args.content else {
+        return Ok((None, None));
+    };
+    let has_app_tuple = card.app_id.is_some() || card.app_revision.is_some() || card.app_provenance.is_some();
+    if !has_app_tuple {
+        return Ok((None, None));
+    }
+    let (Some(app_id), Some(app_revision), Some(provenance)) = (card.app_id, card.app_revision, card.app_provenance.clone())
+    else {
+        return Err(OCErrorCode::InvalidRequest.with_message("incomplete AI-app card provenance"));
+    };
+    if is_v2_bot || !state.is_caller_owner() {
+        return Err(OCErrorCode::InitiatorNotAuthorized.with_message("only a human chat owner may post an AI-app card"));
+    }
+    if provenance.len() != types::AI_APP_CARD_TOKEN_BYTES {
+        return Err(OCErrorCode::InvalidRequest.with_message("invalid AI-app card provenance"));
+    }
+    if args.recipient == user_id || args.recipient == OPENCHAT_BOT_USER_ID {
+        return Err(OCErrorCode::InitiatorNotAuthorized.with_message("AI-app cards require a distinct human recipient"));
+    }
+    if maybe_recipient_type.is_some_and(|recipient_type| !matches!(recipient_type, RecipientType::Other(UserType::User))) {
+        return Err(OCErrorCode::InitiatorNotAuthorized.with_message("AI-app cards require a human direct chat"));
+    }
+    let chat = Chat::Direct(args.recipient.into());
+    let content_hash = ai_app_card_content_hash_from_initial(
+        user_id,
+        chat,
+        args.thread_root_message_index,
+        args.message_id,
+        app_id,
+        app_revision,
+        card,
+    )
+    .map_err(|error| OCErrorCode::InvalidRequest.with_message(error))?;
+    let relay = local_user_index_canister::c2c_validate_ai_app_card_provenance::Args {
+        user_id,
+        chat,
+        thread_root_message_index: args.thread_root_message_index,
+        message_id: args.message_id,
+        app_id,
+        app_revision,
+        action_id: card.action_id.clone(),
+        content_hash,
+        member_user_ids: vec![user_id, args.recipient],
+        provenance,
+        // A direct User child is authorized by its exact LUI registration and current home route;
+        // it must never mint or forward GroupIndex authority.
+        authority: serde_bytes::ByteBuf::new(),
+    };
+    let expected = VerifiedAppCardPost {
+        ingress_owner: state.data.owner,
+        local_user_index_canister_id: state.data.local_user_index_canister_id,
+        user_id,
+        recipient: args.recipient,
+        app_id,
+        app_revision,
+        action_id: card.action_id.clone(),
+        content_hash,
+        thread_root_message_index: args.thread_root_message_index,
+        message_id: args.message_id,
+    };
+    Ok((Some(relay), Some(expected)))
+}
+
+fn revalidate_app_card_post(
+    args: &Args,
+    local_user_index_canister_id: CanisterId,
+    relay: &local_user_index_canister::c2c_validate_ai_app_card_provenance::Args,
+    expected: &VerifiedAppCardPost,
+    state: &RuntimeState,
+) -> OCResult {
+    state.data.verify_not_suspended()?;
+    let current_user_id: UserId = state.env.canister_id().into();
+    if state.data.owner != expected.ingress_owner
+        || current_user_id != expected.user_id
+        || local_user_index_canister_id != expected.local_user_index_canister_id
+        || state.data.local_user_index_canister_id != expected.local_user_index_canister_id
+        || args.recipient != expected.recipient
+        || args.recipient == current_user_id
+        || args.recipient == OPENCHAT_BOT_USER_ID
+        || state.data.blocked_users.contains(&args.recipient)
+    {
+        return Err(OCErrorCode::InitiatorNotAuthorized.with_message("direct-card authorization changed while validating"));
+    }
+    if let Some(chat) = state.data.direct_chats.get(&args.recipient.into()) {
+        if chat.user_type != UserType::User {
+            return Err(OCErrorCode::InitiatorNotAuthorized.with_message("AI-app cards require a human direct chat"));
+        }
+        if chat
+            .events
+            .message_already_finalised(args.thread_root_message_index, args.message_id, false)
+        {
+            return Err(OCErrorCode::MessageIdAlreadyExists.into());
+        }
+    }
+    let MessageContentInitial::ActionCard(card) = &args.content else {
+        return Err(OCErrorCode::InvalidRequest.with_message("AI-app card changed while validating"));
+    };
+    if card.app_id != Some(expected.app_id)
+        || card.app_revision != Some(expected.app_revision)
+        || card.app_provenance.as_ref() != Some(&relay.provenance)
+        || card.action_id != expected.action_id
+        || args.thread_root_message_index != expected.thread_root_message_index
+        || args.message_id != expected.message_id
+        || relay.user_id != expected.user_id
+        || relay.chat != Chat::Direct(expected.recipient.into())
+        || relay.thread_root_message_index != expected.thread_root_message_index
+        || relay.message_id != expected.message_id
+        || relay.app_id != expected.app_id
+        || relay.app_revision != expected.app_revision
+        || relay.action_id != expected.action_id
+        || relay.content_hash != expected.content_hash
+        || relay.member_user_ids != [expected.user_id, expected.recipient]
+        || !relay.authority.is_empty()
+        || !ai_app_card_content_hash_from_initial(
+            expected.user_id,
+            Chat::Direct(expected.recipient.into()),
+            args.thread_root_message_index,
+            args.message_id,
+            expected.app_id,
+            expected.app_revision,
+            card,
+        )
+        .is_ok_and(|hash| hash == expected.content_hash)
+    {
+        return Err(OCErrorCode::InvalidRequest.with_message("AI-app card changed while validating"));
+    }
+    Ok(())
+}
+
+fn commit_verified_app_card(
+    args: Args,
+    recipient_type: RecipientType,
+    relay: local_user_index_canister::c2c_validate_ai_app_card_provenance::Args,
+    expected: VerifiedAppCardPost,
+    state: &mut RuntimeState,
+) -> Response {
+    if !matches!(recipient_type, RecipientType::Other(UserType::User)) {
+        return Error(OCErrorCode::InitiatorNotAuthorized.with_message("AI-app cards require a human direct chat"));
+    }
+    if let Err(error) = revalidate_app_card_post(&args, state.data.local_user_index_canister_id, &relay, &expected, state) {
+        return Error(error);
+    }
+    let now = state.env.now();
+    let mut content =
+        match MessageContentInternal::validate_new_message(args.content, true, UserType::User, args.forwarding, now) {
+            ValidateNewMessageContentResult::Success(content) => content,
+            ValidateNewMessageContentResult::Error(error) => {
+                return Error(OCErrorCode::InvalidMessageContent.with_json(&error));
+            }
+            _ => return Error(OCErrorCode::InvalidRequest.with_message("AI-app card content is not supported")),
+        };
+    if !content.mark_ai_app_card_verified(expected.content_hash) {
+        return Error(OCErrorCode::InvalidRequest.with_message("provenance was supplied for a non-card message"));
+    }
+    send_message_impl(
+        expected.user_id,
+        args.recipient,
+        args.thread_root_message_index,
+        args.message_id,
+        content,
+        args.replies_to,
+        args.forwarding,
+        args.block_level_markdown,
+        args.message_filter_failed,
+        recipient_type,
+        None,
+        args.og_previews,
+        state,
+    )
 }
 
 #[expect(clippy::too_many_arguments)]

@@ -15,6 +15,7 @@
     import { rtlStore } from "../../stores/rtl";
     import { lowBandwidth } from "../../stores/settings";
     import { getProxyAdjustedBlobUrl, reservedMediaStyle } from "../../utils/media";
+    import { publicImageDisplayUrl } from "../../utils/publicImageDisplay";
     import Translatable from "../Translatable.svelte";
     import MessageRenderer from "./MessageRenderer.svelte";
 
@@ -63,7 +64,12 @@
     let imageWidth = $state(0);
     let landscape = $derived(content.height < content.width);
     let normalised = $derived(normaliseContent(content));
-    let hidden = $state(false);
+    let displayUrl = $derived(
+        content.kind === "image_content"
+            ? publicImageDisplayUrl(normalised.url, content.blobReference)
+            : normalised.url,
+    );
+    let hidden = $state($lowBandwidth && !draft);
     let zoomable = $derived(!draft && !reply && !pinned);
     let textContent = $derived<TextContentType | undefined>(
         normalised ? { kind: "text_content", text: normalised.caption ?? "" } : undefined,
@@ -79,7 +85,6 @@
     $effect(() => {
         hidden = $lowBandwidth && !draft;
     });
-
     function normaliseContent(content: ImageContent | MemeFighterContent) {
         switch (content.kind) {
             case "image_content":
@@ -132,7 +137,7 @@
         <div
             class="reply_image_preview"
             style="background-image:url({intersecting && !hidden
-                ? normalised.url
+                ? displayUrl
                 : normalised.fallback});">
         </div>
     </Row>
@@ -167,7 +172,7 @@
                     class:zoomable={zoomable && !hidden}
                     class:rtl={$rtlStore}
                     style={height === undefined ? undefined : `height: ${height}px`}
-                    src={intersecting && !hidden ? normalised.url : normalised.fallback}
+                    src={intersecting && !hidden ? displayUrl : normalised.fallback}
                     alt={normalised.caption} />
             </div>
         </div>
@@ -215,7 +220,7 @@
                         : draft || reply || pinned
                           ? undefined
                           : reservedMediaStyle(content.width, content.height)}
-                    src={intersecting && !hidden ? normalised.url : normalised.fallback}
+                    src={intersecting && !hidden ? displayUrl : normalised.fallback}
                     alt={normalised.caption} />
             {:else}
                 <!-- TODO generic image preview -->
@@ -312,6 +317,7 @@
             .image {
                 width: 100%;
                 display: block;
+                object-fit: contain;
 
                 &:not(.landscape) {
                     min-height: 6rem;

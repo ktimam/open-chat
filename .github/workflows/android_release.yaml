@@ -169,26 +169,26 @@ jobs:
 
             - name: Build Android APK (Full)
               run: |
-                  cargo tauri android build --verbose --target aarch64 armv7
+                  cargo tauri android build --verbose --target aarch64 armv7 --features inference
                   mv src-tauri/gen/android/app/build/outputs/apk/universal/release/openchat-release.apk ./openchat_${{ env.VERSION }}_full.apk
               env:
                   # Ensure these are passed if needed, though the gradle file uses the debug fallback we set up
                   ANDROID_KEY_STORE_FILE: ${{ env.ANDROID_KEY_STORE_FILE }}
                   OC_APP_STORE: "false"
-                  OC_OTA_UPDATES: "major"
+                  OC_ANDROID_OTA_UPDATES: "major"
 
             - name: Clean Target Directory
               run: rm -rf src-tauri/target
 
             - name: Build Android APK (Store)
               run: |
-                  cargo tauri android build --verbose --target aarch64 armv7 --features store
+                  cargo tauri android build --verbose --target aarch64 armv7 --features inference,store
                   mv src-tauri/gen/android/app/build/outputs/apk/universal/release/openchat-release.apk ./openchat_${{ env.VERSION }}_store.apk
               env:
                   # Ensure these are passed if needed, though the gradle file uses the debug fallback we set up
                   ANDROID_KEY_STORE_FILE: ${{ env.ANDROID_KEY_STORE_FILE }}
                   OC_APP_STORE: "true"
-                  OC_OTA_UPDATES: "patch"
+                  OC_ANDROID_OTA_UPDATES: "patch"
 
             - name: Upload APKs
               uses: actions/upload-artifact@v4

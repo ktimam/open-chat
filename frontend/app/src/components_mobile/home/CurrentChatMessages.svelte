@@ -283,7 +283,10 @@
         ),
     );
     let items = $derived.by<FlatChatItem[]>(() => {
-        const flat: FlatChatItem[] = flattenTimeline(timeline);
+        const flat: FlatChatItem[] = flattenTimeline(
+            timeline,
+            () => `${$currentUserIdStore}:${chatIdentifierToString(chat.id)}:main`,
+        );
         if (showAvatar) {
             // rendered at the oldest end of the list (the visual top)
             flat.push(chatStartItem(chatIdentifierToString(chat.id)));

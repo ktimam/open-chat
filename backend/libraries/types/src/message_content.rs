@@ -1,8 +1,8 @@
 use crate::polls::{InvalidPollReason, PollConfig, PollVotes};
 use crate::{
-    Achievement, CanisterId, Chat, CompletedCryptoTransaction, CryptoTransaction, CryptoTransferDetails, EncryptionKey,
-    MessageId, MessageIndex, MessagePermission, Milliseconds, ModerationInput, P2PSwapStatus, PendingCryptoTransaction,
-    ProposalContent, TimestampMillis, TokenInfo, TotalVotes, User, UserId, VideoCallType,
+    Achievement, AiAppId, CanisterId, Chat, CompletedCryptoTransaction, CryptoTransaction, CryptoTransferDetails,
+    EncryptionKey, MessageId, MessageIndex, MessagePermission, Milliseconds, ModerationInput, P2PSwapStatus,
+    PendingCryptoTransaction, ProposalContent, TimestampMillis, TokenInfo, TotalVotes, User, UserId, VideoCallType,
 };
 use candid::CandidType;
 use oc_error_codes::{OCError, OCErrorCode};
@@ -34,6 +34,7 @@ pub enum MessageContentInitial {
     P2PSwap(P2PSwapContentInitial),
     Encrypted(EncryptedContent),
     Custom(CustomContent),
+    ActionCard(ActionCardContentInitial),
 }
 
 #[ts_export]
@@ -59,6 +60,7 @@ pub enum MessageContent {
     VideoCall(VideoCallContent),
     Encrypted(EncryptedContent),
     Custom(CustomContent),
+    ActionCard(ActionCardContent),
 }
 
 #[ts_export]
@@ -82,6 +84,7 @@ pub enum MessageContentType {
     ModerationReport,
     P2PSwap,
     VideoCall,
+    ActionCard,
     Custom(String),
 }
 
@@ -175,7 +178,8 @@ impl MessageContent {
             | MessageContent::P2PSwap(_)
             | MessageContent::VideoCall(_)
             | MessageContent::Encrypted(_)
-            | MessageContent::Custom(_) => {}
+            | MessageContent::Custom(_)
+            | MessageContent::ActionCard(_) => {}
         }
 
         references
@@ -194,6 +198,7 @@ impl MessageContent {
             MessageContent::GovernanceProposal(gp) => Some(gp.proposal.title()),
             MessageContent::Prize(p) => p.caption.as_deref(),
             MessageContent::P2PSwap(p) => p.caption.as_deref(),
+            MessageContent::ActionCard(a) => Some(a.title.as_str()),
             MessageContent::Deleted(_)
             | MessageContent::PrizeWinner(_)
             | MessageContent::MessageReminderCreated(_)
@@ -265,6 +270,7 @@ impl MessageContent {
         match self {
             MessageContent::Image(i) => i.blob_reference.as_ref().map(|b| b.url()),
             MessageContent::Video(v) => v.image_blob_reference.as_ref().map(|b| b.url()),
+            MessageContent::ActionCard(_) => None,
             MessageContent::Text(_)
             | MessageContent::Audio(_)
             | MessageContent::File(_)
@@ -289,6 +295,7 @@ impl MessageContent {
     pub fn notification_file_name(&self) -> Option<String> {
         match self {
             MessageContent::File(f) => Some(f.name.clone()),
+            MessageContent::ActionCard(_) => None,
             MessageContent::Image(_)
             | MessageContent::Video(_)
             | MessageContent::Text(_)
@@ -353,6 +360,7 @@ impl MessageContentInitial {
             MessageContentInitial::MessageReminderCreated(r) => r.notes.as_deref(),
             MessageContentInitial::MessageReminder(r) => r.notes.as_deref(),
             MessageContentInitial::P2PSwap(p) => p.caption.as_deref(),
+            MessageContentInitial::ActionCard(a) => Some(a.title.as_str()),
             MessageContentInitial::Encrypted(_) | MessageContentInitial::Deleted(_) | MessageContentInitial::Custom(_) => None,
         }
     }
@@ -388,6 +396,7 @@ impl From<&MessageContentInitial> for MessagePermission {
             MessageContentInitial::Giphy(_) => MessagePermission::Giphy,
             MessageContentInitial::Prize(_) => MessagePermission::Prize,
             MessageContentInitial::P2PSwap(_) => MessagePermission::P2pSwap,
+            MessageContentInitial::ActionCard(_) => MessagePermission::ActionCard,
             _ => unreachable!(),
         }
     }
@@ -415,6 +424,24 @@ impl From<MessageContent> for MessageContentInitial {
             MessageContent::ModerationReport(_) => panic!("Cannot send a 'moderation report' message"),
             MessageContent::Encrypted(e) => MessageContentInitial::Encrypted(e),
             MessageContent::Custom(c) => MessageContentInitial::Custom(c),
+            MessageContent::ActionCard(c) => MessageContentInitial::ActionCard(ActionCardContentInitial {
+                title: c.title,
+                rows: c.rows,
+                confirm_label: c.confirm_label,
+                cancel_label: c.cancel_label,
+                action_id: c.action_id,
+                // app_id IS present on the hydrated content (unlike the routing fields below).
+                app_id: c.app_id,
+                app_revision: c.app_revision,
+                app_provenance: None,
+                disclosure: c.disclosure,
+                expires_at: c.expires_at,
+                // Server-only routing fields are not present on the hydrated content.
+                recipient_public_key: None,
+                recipient_public_keys: Vec::new(),
+                confirm_payload: None,
+                inbox_canister_id: None,
+            }),
             MessageContent::P2PSwap(_) | MessageContent::VideoCall(_) => unimplemented!(),
         }
     }
@@ -456,6 +483,22 @@ impl From<MessageContentInitial> for MessageContent {
             MessageContentInitial::MessageReminder(r) => MessageContent::MessageReminder(r),
             MessageContentInitial::Encrypted(e) => MessageContent::Encrypted(e),
             MessageContentInitial::Custom(c) => MessageContent::Custom(c),
+            MessageContentInitial::ActionCard(c) => MessageContent::ActionCard(ActionCardContent {
+                title: c.title,
+                rows: c.rows,
+                confirm_label: c.confirm_label,
+                cancel_label: c.cancel_label,
+                action_id: c.action_id,
+                app_id: c.app_id,
+                app_revision: c.app_revision,
+                app_verified: false,
+                app_content_verified: false,
+                disclosure: c.disclosure,
+                state: ActionCardState::Pending,
+                responded_by: None,
+                responded_at: None,
+                expires_at: c.expires_at,
+            }),
             MessageContentInitial::P2PSwap(_) => unimplemented!(),
         }
     }
@@ -482,6 +525,7 @@ impl MessageContentType {
             MessageContentType::ModerationReport => None,
             MessageContentType::P2PSwap => Some(Achievement::SentP2PSwapOffer),
             MessageContentType::VideoCall => Some(Achievement::StartedCall),
+            MessageContentType::ActionCard => None,
             MessageContentType::Custom(c) => {
                 if c == "meme_fighter" {
                     Some(Achievement::SentMeme)
@@ -514,6 +558,7 @@ impl Display for MessageContentType {
             MessageContentType::ModerationReport => "ModerationReport",
             MessageContentType::P2PSwap => "P2PSwap",
             MessageContentType::VideoCall => "VideoCall",
+            MessageContentType::ActionCard => "ActionCard",
             MessageContentType::Custom(c) => c,
         };
 
@@ -542,6 +587,7 @@ impl From<&MessageContent> for MessageContentType {
             MessageContent::ModerationReport(_) => MessageContentType::ModerationReport,
             MessageContent::P2PSwap(_) => MessageContentType::P2PSwap,
             MessageContent::VideoCall(_) => MessageContentType::VideoCall,
+            MessageContent::ActionCard(_) => MessageContentType::ActionCard,
             MessageContent::Encrypted(e) => e.content_type.clone().into(),
             MessageContent::Custom(c) => MessageContentType::Custom(c.kind.clone()),
         }
@@ -837,6 +883,110 @@ pub struct P2PSwapContent {
     pub caption: Option<String>,
     pub token0_txn_in: u64,
     pub status: P2PSwapStatus,
+}
+
+// A generic, interactive "confirm card": caller-provided plain-language rows + Confirm/Cancel.
+// On Confirm, `payload` (an opaque, verbatim encoding of the displayed rows) is forwarded to the
+// registered action's endpoint. OpenChat never interprets `confirm_payload` or `action_id`; the
+// consumer app supplies them. Rows are the human-visible review surface, while an optional opaque
+// confirmation payload is separately bound by the exact full-card commitment before delivery. This
+// type carries no app-specific concepts.
+#[ts_export]
+#[derive(CandidType, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct ActionCardRow {
+    pub label: String,
+    pub value: String,
+}
+
+#[ts_export]
+#[derive(CandidType, Serialize, Deserialize, Clone, Debug)]
+pub struct ActionCardContentInitial {
+    pub title: String,
+    pub rows: Vec<ActionCardRow>,
+    pub confirm_label: String,
+    pub cancel_label: String,
+    pub action_id: String,
+    // The directory app that OWNS (posts) this card. Set at propose/post time and hydrated back to
+    // clients (see ActionCardContent), so a recipient can bind card-surface resolution to the exact
+    // producing app instead of guessing by the non-namespaced `action_id`. Absent on legacy cards.
+    #[serde(default)]
+    pub app_id: Option<AiAppId>,
+    // Immutable directory revision the user reviewed. Confirmation and app-rendered surfaces must
+    // resolve this exact published revision; a re-published manifest makes old cards stale.
+    #[serde(default)]
+    pub app_revision: Option<TimestampMillis>,
+    /// One-time UserIndex-issued proof that the app/revision/action and complete canonical card
+    /// commitment were current when the card was proposed. The chat ingress consumes it while
+    /// storing the exact card and never hydrates it back to participants. Later capability/grant
+    /// issuance relies on that stored attested context; arbitrary raw-posted cards cannot obtain app
+    /// private context merely by copying public manifest identifiers.
+    #[serde(default)]
+    #[ts(as = "Option::<ts_export::TSBytes>")]
+    pub app_provenance: Option<ByteBuf>,
+    pub disclosure: Option<String>,
+    pub expires_at: Option<TimestampMillis>,
+    // Legacy sender-carried routing fields retained for wire/storage compatibility. Current confirm
+    // paths ignore these values and resolve keys/inbox from exact app provenance plus membership.
+    #[serde(default)]
+    pub recipient_public_key: Option<String>,
+    // Legacy fan-out routing data; ignored by current confirmation code.
+    #[serde(default)]
+    pub recipient_public_keys: Vec<String>,
+    #[serde(default)]
+    #[ts(as = "Option::<ts_export::TSBytes>")]
+    pub confirm_payload: Option<ByteBuf>,
+    // Legacy inbox routing data; ignored by current confirmation code.
+    #[serde(default)]
+    #[ts(as = "Option::<ts_export::TSPrincipal>", optional)]
+    pub inbox_canister_id: Option<CanisterId>,
+}
+
+#[ts_export]
+#[derive(CandidType, Serialize, Deserialize, Clone, Debug)]
+pub struct ActionCardContent {
+    pub title: String,
+    pub rows: Vec<ActionCardRow>,
+    pub confirm_label: String,
+    pub cancel_label: String,
+    pub action_id: String,
+    // The directory app that owns this card, hydrated so recipients bind the card surface to the exact
+    // producing app (see ActionCardContentInitial). Absent on legacy cards posted before this field.
+    #[serde(default)]
+    pub app_id: Option<AiAppId>,
+    #[serde(default)]
+    pub app_revision: Option<TimestampMillis>,
+    /// True only when the chat canister validated a one-time proposal provenance that binds these
+    /// app coordinates to the directory entry before storing the message. This does not attest that
+    /// the app canister authored the card rows or payload. Clients may use it to resolve the exact
+    /// sandboxed app surface, but must not label the card content itself as app-authored/verified.
+    #[serde(default)]
+    pub app_verified: bool,
+    /// True only after the chat canister validates one-use proposal provenance over the complete
+    /// canonical app-card content (including rows and confirmation payload). App-bound confirmation
+    /// must fail closed while this remains false.
+    #[serde(default)]
+    pub app_content_verified: bool,
+    pub disclosure: Option<String>,
+    pub state: ActionCardState,
+    pub responded_by: Option<UserId>,
+    pub responded_at: Option<TimestampMillis>,
+    pub expires_at: Option<TimestampMillis>,
+}
+
+#[ts_export]
+#[derive(CandidType, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub enum ActionCardState {
+    Pending,
+    Confirmed,
+    Cancelled,
+    Expired,
+}
+
+#[ts_export]
+#[derive(CandidType, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ActionCardResponse {
+    Confirm,
+    Cancel,
 }
 
 #[ts_export]

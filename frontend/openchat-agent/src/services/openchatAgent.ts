@@ -62,6 +62,18 @@ import type {
     DexId,
     DiamondMembershipDuration,
     DiamondMembershipFees,
+    AiAppLinkCode,
+    AiAppChatLinkToken,
+    AiAppCardCapability,
+    AiAppPrivateMatchCapability,
+    AiAppCardConfirmationGrant,
+    AiAppCardContentV1,
+    AiAppCardProvenanceResult,
+    ExploreAiAppsResponse,
+    AiAppManifest,
+    AiAppRegistration,
+    AiAppMemberKey,
+    AiAppUserKey,
     DirectChatIdentifier,
     DirectChatSummary,
     DirectChatSummaryUpdates,
@@ -132,6 +144,7 @@ import type {
     Referral,
     RehydratedMessagePreview,
     RegisterPollVoteResponse,
+    RespondToActionCardResponse,
     RegisterProposalVoteResponse,
     RegisterUserResponse,
     RegistryValue,
@@ -209,6 +222,7 @@ import {
     ChatMap,
     CommonResponses,
     DestinationInvalidError,
+    ErrorCode,
     Lazy,
     MAX_ACTIVITY_EVENTS,
     ONE_MINUTE_MILLIS,
@@ -516,6 +530,14 @@ export class OpenChatAgent extends EventTarget {
         newAchievement: boolean,
     ): Promise<EditMessageResponse> {
         if (offline()) return Promise.resolve(CommonResponses.offline());
+
+        if (msg.content.kind === "action_card_content") {
+            return Promise.resolve<EditMessageResponse>({
+                kind: "error",
+                code: ErrorCode.InvalidRequest,
+                message: "Action cards cannot be edited",
+            });
+        }
 
         switch (chatId.kind) {
             case "direct_chat":
@@ -2283,6 +2305,26 @@ export class OpenChatAgent extends EventTarget {
         return bucketClient.vaultFileChunk(fileId, chunkIndex);
     }
 
+    async downloadPublicBlob(
+        ref: BlobReference,
+        maxBytes: number,
+    ): Promise<Uint8Array | undefined> {
+        if (offline()) return undefined;
+        try {
+            // Do not retain clients for sender-controlled public blob references. The dedicated
+            // public actor is anonymous and request-bounded; authenticated vault clients keep using
+            // the existing trusted-bucket cache above.
+            const bucketClient = new StorageBucketClient(
+                this.identity,
+                this._agent,
+                ref.canisterId,
+            );
+            return await bucketClient.downloadPublicBlob(ref.blobId, maxBytes);
+        } catch {
+            return undefined;
+        }
+    }
+
     setModerationFlags(flags: number): Promise<boolean> {
         if (offline()) return Promise.resolve(false);
 
@@ -2975,6 +3017,47 @@ export class OpenChatAgent extends EventTarget {
                     voteType,
                     threadRootMessageIndex,
                     newAchievement,
+                );
+        }
+    }
+
+    respondToActionCard(
+        chatId: ChatIdentifier,
+        threadRootMessageIndex: number | undefined,
+        messageId: bigint,
+        response: "confirm" | "cancel",
+        confirmPayloadOverride?: Uint8Array,
+        confirmationGrant?: Uint8Array,
+    ): Promise<RespondToActionCardResponse> {
+        if (offline()) return Promise.resolve(CommonResponses.offline());
+
+        switch (chatId.kind) {
+            case "group_chat":
+                return this._groupClient.respondToActionCard(
+                    chatId.groupId,
+                    messageId,
+                    threadRootMessageIndex,
+                    response,
+                    confirmPayloadOverride,
+                    confirmationGrant,
+                );
+            case "channel":
+                return this._communityClient.respondToActionCard(
+                    chatId,
+                    messageId,
+                    threadRootMessageIndex,
+                    response,
+                    confirmPayloadOverride,
+                    confirmationGrant,
+                );
+            case "direct_chat":
+                return this.userClient.respondToActionCard(
+                    chatId.userId,
+                    messageId,
+                    threadRootMessageIndex,
+                    response,
+                    confirmPayloadOverride,
+                    confirmationGrant,
                 );
         }
     }
@@ -3797,6 +3880,255 @@ export class OpenChatAgent extends EventTarget {
 
     diamondMembershipFees(): Promise<DiamondMembershipFees[]> {
         return this._userIndexClient.diamondMembershipFees();
+    }
+
+    aiApps(lookups: { appId: number; revision?: bigint }[]): Promise<AiAppRegistration[]> {
+        return this._userIndexClient.aiApps(lookups);
+    }
+
+    myAiAppsPage(
+        pageIndex: number,
+        pageSize: number,
+    ): Promise<{ apps: AiAppRegistration[]; total: number }> {
+        return this._userIndexClient.myAiAppsPage(pageIndex, pageSize);
+    }
+
+    registerAiApp(manifest: AiAppManifest): Promise<boolean> {
+        return this._userIndexClient.registerAiApp(manifest);
+    }
+
+    exploreAiApps(
+        searchTerm: string | undefined,
+        pageIndex: number,
+        pageSize: number,
+    ): Promise<ExploreAiAppsResponse> {
+        return this._userIndexClient.exploreAiApps(searchTerm, pageIndex, pageSize);
+    }
+
+    myAiAppKeys(): Promise<AiAppUserKey[]> {
+        return this._userIndexClient.myAiAppKeys();
+    }
+
+    aiAppUserKeys(appId: number, userIds: string[]): Promise<AiAppMemberKey[]> {
+        return this._userIndexClient.aiAppUserKeys(appId, userIds);
+    }
+
+    createAiAppLinkCode(appId: number): Promise<AiAppLinkCode | undefined> {
+        return this._userIndexClient.createAiAppLinkCode(appId);
+    }
+
+    cancelAiAppLinkCode(code: string): Promise<boolean> {
+        return this._userIndexClient.cancelAiAppLinkCode(code);
+    }
+
+    createAiAppChatLinkToken(
+        chatId: ChatIdentifier,
+        chatName: string,
+        appId: number,
+        appRevision: bigint,
+    ): Promise<AiAppChatLinkToken | undefined> {
+        if (offline()) return Promise.resolve(undefined);
+        switch (chatId.kind) {
+            case "group_chat":
+                return this._groupClient.createAiAppChatLinkToken(
+                    chatId.groupId,
+                    appId,
+                    appRevision,
+                );
+            case "channel":
+                return this._communityClient.createAiAppChatLinkToken(chatId, appId, appRevision);
+            case "direct_chat":
+                return this._userClient instanceof UserClient
+                    ? this._userClient.createAiAppChatLinkToken(
+                          chatId.userId,
+                          chatName,
+                          appId,
+                          appRevision,
+                      )
+                    : Promise.resolve(undefined);
+        }
+    }
+
+    cancelAiAppChatLinkToken(token: Uint8Array): Promise<boolean> {
+        return this._userIndexClient.cancelAiAppChatLinkToken(token);
+    }
+
+    createAiAppCardProvenance(
+        appId: number,
+        appRevision: bigint,
+        actionId: string,
+        content: AiAppCardContentV1,
+        chatId: ChatIdentifier,
+        messageId: bigint,
+        threadRootMessageIndex: number | undefined,
+    ): Promise<AiAppCardProvenanceResult> {
+        if (offline()) return Promise.resolve({ kind: "offline" });
+        return this._userIndexClient.createAiAppCardProvenance(
+            appId,
+            appRevision,
+            actionId,
+            content,
+            chatId,
+            messageId,
+            threadRootMessageIndex,
+        );
+    }
+
+    createAiAppCardCapability(
+        chatId: ChatIdentifier,
+        threadRootMessageIndex: number | undefined,
+        messageId: bigint,
+        recipientKeyScheme: string,
+        recipientPublicKey: Uint8Array,
+    ): Promise<AiAppCardCapability | undefined> {
+        if (offline()) return Promise.resolve(undefined);
+        switch (chatId.kind) {
+            case "group_chat":
+                return this._groupClient.createAiAppCardCapability(
+                    chatId.groupId,
+                    messageId,
+                    threadRootMessageIndex,
+                    recipientKeyScheme,
+                    recipientPublicKey,
+                );
+            case "channel":
+                return this._communityClient.createAiAppCardCapability(
+                    chatId,
+                    messageId,
+                    threadRootMessageIndex,
+                    recipientKeyScheme,
+                    recipientPublicKey,
+                );
+            case "direct_chat":
+                return this._userClient instanceof UserClient
+                    ? this._userClient.createAiAppCardCapability(
+                          chatId.userId,
+                          messageId,
+                          threadRootMessageIndex,
+                          recipientKeyScheme,
+                          recipientPublicKey,
+                      )
+                    : Promise.resolve(undefined);
+        }
+    }
+
+    createAiAppPrivateMatchCapability(
+        chatId: ChatIdentifier,
+        threadRootMessageIndex: number | undefined,
+        messageId: bigint,
+        appId: number,
+        appRevision: bigint,
+        actionId: string,
+        recipientKeyScheme: string,
+        recipientPublicKey: Uint8Array,
+    ): Promise<AiAppPrivateMatchCapability | undefined> {
+        if (offline()) return Promise.resolve(undefined);
+        switch (chatId.kind) {
+            case "group_chat":
+                return this._groupClient.createAiAppPrivateMatchCapability(
+                    chatId.groupId,
+                    messageId,
+                    threadRootMessageIndex,
+                    appId,
+                    appRevision,
+                    actionId,
+                    recipientKeyScheme,
+                    recipientPublicKey,
+                );
+            case "channel":
+                return this._communityClient.createAiAppPrivateMatchCapability(
+                    chatId,
+                    messageId,
+                    threadRootMessageIndex,
+                    appId,
+                    appRevision,
+                    actionId,
+                    recipientKeyScheme,
+                    recipientPublicKey,
+                );
+            case "direct_chat":
+                return this._userClient instanceof UserClient
+                    ? this._userClient.createAiAppPrivateMatchCapability(
+                          chatId.userId,
+                          messageId,
+                          threadRootMessageIndex,
+                          appId,
+                          appRevision,
+                          actionId,
+                          recipientKeyScheme,
+                          recipientPublicKey,
+                      )
+                    : Promise.resolve(undefined);
+        }
+    }
+
+    createAiAppCardConfirmationGrant(
+        chatId: ChatIdentifier,
+        threadRootMessageIndex: number | undefined,
+        messageId: bigint,
+        confirmPayload: Uint8Array,
+    ): Promise<AiAppCardConfirmationGrant | undefined> {
+        if (offline()) return Promise.resolve(undefined);
+        switch (chatId.kind) {
+            case "group_chat":
+                return this._groupClient.createAiAppCardConfirmationGrant(
+                    chatId.groupId,
+                    messageId,
+                    threadRootMessageIndex,
+                    confirmPayload,
+                );
+            case "channel":
+                return this._communityClient.createAiAppCardConfirmationGrant(
+                    chatId,
+                    messageId,
+                    threadRootMessageIndex,
+                    confirmPayload,
+                );
+            case "direct_chat":
+                return this._userClient instanceof UserClient
+                    ? this._userClient.createAiAppCardConfirmationGrant(
+                          chatId.userId,
+                          messageId,
+                          threadRootMessageIndex,
+                          confirmPayload,
+                      )
+                    : Promise.resolve(undefined);
+        }
+    }
+
+    removeMyAiAppKey(appId: number): Promise<boolean> {
+        return this._userIndexClient.removeMyAiAppKey(appId);
+    }
+
+    publishAiApp(appId: number): Promise<boolean> {
+        return this._userIndexClient.publishAiApp(appId);
+    }
+
+    // Per-chat enablement lives on the chat's own canister: groups on the group canister,
+    // channels on the community canister (per channel). Direct chats have no admin-curated set
+    // (the client treats the user's connected apps as enabled there), so they resolve to none.
+    setAiAppEnabled(chatId: ChatIdentifier, appId: number, enabled: boolean): Promise<boolean> {
+        if (offline()) return Promise.resolve(false);
+
+        switch (chatId.kind) {
+            case "group_chat":
+                return this._groupClient.setAiAppEnabled(chatId.groupId, appId, enabled);
+            case "channel":
+                return this._communityClient.setAiAppEnabled(chatId, appId, enabled);
+            default:
+                return Promise.resolve(false);
+        }
+    }
+
+    enabledAiApps(chatId: ChatIdentifier): Promise<number[]> {
+        switch (chatId.kind) {
+            case "group_chat":
+                return this._groupClient.enabledAiApps(chatId.groupId);
+            case "channel":
+                return this._communityClient.enabledAiApps(chatId);
+            default:
+                return Promise.resolve([]);
+        }
     }
 
     setDiamondMembershipFees(fees: DiamondMembershipFees[]): Promise<boolean> {

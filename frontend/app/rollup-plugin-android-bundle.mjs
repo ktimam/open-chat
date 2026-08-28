@@ -47,6 +47,9 @@ export function androidBundlePlugin({ version }) {
                 // TODO - we can and will revisit whether we need these assets in the bundle _at all_
                 await fs.remove(path.join(distBundleDir, "assets", "screenshots")); // these are all used in the blog section
                 await fs.remove(path.join(distBundleDir, "assets", "blog")); // the app doesn't render the blog
+                // Browser OCR is never selected by a native client. Keep its worker, WASM cores,
+                // and language data in the web deployment without duplicating them in OTA zips.
+                await fs.remove(path.join(distBundleDir, "assets", "local-extractor"));
                 await fs.remove(path.join(distBundleDir, "out")); // this is just ts definitions
 
                 // Remove source maps

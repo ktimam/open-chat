@@ -2,9 +2,12 @@ use candid::{CandidType, Deserialize};
 use serde::Serialize;
 use types::{CanisterId, UserId};
 
+pub mod ai_app_chat_link_authority;
 mod lifecycle;
 mod queries;
 mod updates;
+
+pub mod ai_app_card_authority;
 
 pub use lifecycle::*;
 pub use queries::*;

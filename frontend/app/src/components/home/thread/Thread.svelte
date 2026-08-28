@@ -15,6 +15,7 @@
     } from "@client";
     import {
         allUsersStore,
+        chatIdentifierToString,
         currentUserIdStore,
         currentUserStore,
         failedMessagesStore,
@@ -100,7 +101,13 @@
             $selectedChatExpandedDeletedMessageStore,
         ) as TimelineItem<Message>[],
     );
-    let items = $derived(flattenTimeline(timeline));
+    let items = $derived(
+        flattenTimeline(
+            timeline,
+            (event) =>
+                `${$currentUserIdStore}:${chatIdentifierToString(chat.id)}:${event === rootEvent ? "thread_root" : `thread_reply:${threadRootMessageIndex}`}`,
+        ),
+    );
     let readonly = $derived(client.isChatReadOnly(chat.id));
     let thread = $derived(rootEvent.event.thread);
     let loading = $derived(!initialised && $threadEventsStore.length === 0 && thread !== undefined);
@@ -372,6 +379,7 @@
                     <TimelineDate timestamp={item.timestamp} />
                 {:else if item.kind === "event"}
                     {@const evt = item.event as EventWrapper<Message>}
+                    {@const isThreadRoot = evt === rootEvent}
                     <ChatEvent
                         chatId={chat.id}
                         chatType={chat.kind}
@@ -382,7 +390,7 @@
                         accepted={isAccepted($unconfirmedStore, evt)}
                         confirmed={isConfirmed($unconfirmedStore, evt)}
                         failed={isFailed($failedMessagesStore, evt)}
-                        readByMe={evt.event.messageId === rootEvent.event.messageId ||
+                        readByMe={isThreadRoot ||
                             !isFollowedByMe ||
                             isReadByMe($messagesRead, evt)}
                         observer={messageObserver}
@@ -390,9 +398,10 @@
                             focusIndex === evt.event.messageIndex}
                         {readonly}
                         {threadRootMessage}
+                        {isThreadRoot}
                         pinned={false}
-                        supportsEdit={evt.event.messageId !== rootEvent.event.messageId}
-                        supportsReply={evt.event.messageId !== rootEvent.event.messageId}
+                        supportsEdit={!isThreadRoot}
+                        supportsReply={!isThreadRoot}
                         canPin={client.canPinMessages(chat.id)}
                         canBlockUsers={client.canBlockUsers(chat.id)}
                         canDelete={client.canDeleteOtherUsersMessages(chat.id)}

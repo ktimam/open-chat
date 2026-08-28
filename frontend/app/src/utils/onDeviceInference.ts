@@ -5,10 +5,16 @@ import type {
     OnDeviceInferenceCapability,
 } from "@shared";
 import { get } from "svelte/store";
-import { infer as nativeInfer, listLocalModels } from "tauri-plugin-oc-api";
+import {
+    infer as nativeInfer,
+    inferenceRuntimeAvailable,
+    listLocalModels,
+} from "tauri-plugin-oc-api";
 import { selectedModelId } from "../stores/onDeviceModels";
+import { browserOcrAvailable } from "./browserOcr";
 import { defaultModelCatalog } from "./modelCatalog";
 import {
+    ensureWebModelRestored,
     isWebInferenceReady,
     webInfer,
     webModelCatalogId,
@@ -29,7 +35,10 @@ const MAX_TEXT_BYTES = 1024 * 1024;
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_SCHEMA_BYTES = 64 * 1024;
 const MAX_OUTPUT_TOKENS = 4096;
+export const NATIVE_INFERENCE_UPDATE_REQUIRED =
+    "This OpenChat build does not include on-device inference. Update or reinstall OpenChat, then try again.";
 const encodedLength = (value: string): number => new TextEncoder().encode(value).byteLength;
+let lastNativeInferenceRuntimeAvailable: boolean | undefined;
 
 // On-device inference runs wherever the Tauri native bridge is present (Android, iOS and desktop) — not
 // just the mobile OS targets that `OpenChat.isNativeApp()` reports. Detect the bridge directly so the UI
@@ -42,8 +51,37 @@ export function isNativeClient(): boolean {
 // BROWSER (llama.cpp-WASM over a GGUF the user attached from disk; see webInference.ts)? This is
 // the gate propose flows should use: a browser with a model attached runs the model exactly like
 // the native app, and only clients with NEITHER degrade to the manual-extraction fallback.
-export function canInferOnDevice(): boolean {
-    return isNativeClient() || isWebInferenceReady();
+async function probeNativeInferenceRuntime(): Promise<boolean> {
+    let available = false;
+    try {
+        available = await inferenceRuntimeAvailable();
+    } catch {
+        // A shell without the command predates the capability contract and must fail closed.
+    }
+    lastNativeInferenceRuntimeAvailable = available;
+    return available;
+}
+
+export type OnDeviceInferenceReadiness = {
+    available: boolean;
+    reason?: string;
+};
+
+// Unlike the old synchronous bridge check, this asks the exact native binary whether its optional
+// runtime exists. Proposal entry points await it, so an old/dev shell cannot advertise inference
+// during the gap before the actual infer command runs.
+export async function onDeviceInferenceReadiness(): Promise<OnDeviceInferenceReadiness> {
+    if (isNativeClient()) {
+        return (await probeNativeInferenceRuntime())
+            ? { available: true }
+            : { available: false, reason: NATIVE_INFERENCE_UPDATE_REQUIRED };
+    }
+    await ensureWebModelRestored();
+    return { available: isWebInferenceReady() || browserOcrAvailable() };
+}
+
+export async function canInferOnDevice(): Promise<boolean> {
+    return (await onDeviceInferenceReadiness()).available;
 }
 
 // The native llama.cpp backend is a single process-global (`LlamaBackend::init()` at the top of every
@@ -54,20 +92,53 @@ export function canInferOnDevice(): boolean {
 let inferenceQueue: Promise<unknown> = Promise.resolve();
 
 export function inferOnDevice(request: InferenceRequest): Promise<InferenceResult> {
-    const run = inferenceQueue.then(() => runInference(request));
+    return enqueueInference(request);
+}
+
+export function inferOnDeviceTextOnlyNoProjector(
+    request: InferenceRequest,
+): Promise<InferenceResult> {
+    if (request.image !== undefined) {
+        return Promise.resolve({
+            kind: "error",
+            error: "projector-free inference accepts text only",
+        });
+    }
+    return enqueueInference(request, { requireProjectorAbsent: true });
+}
+
+function enqueueInference(
+    request: InferenceRequest,
+    options: { requireProjectorAbsent?: boolean } = {},
+): Promise<InferenceResult> {
+    const run = inferenceQueue.then(() => runInference(request, options));
     inferenceQueue = run.catch(() => undefined);
     return run;
 }
 
-async function runInference(request: InferenceRequest): Promise<InferenceResult> {
+async function runInference(
+    request: InferenceRequest,
+    options: { requireProjectorAbsent?: boolean } = {},
+): Promise<InferenceResult> {
     if (!isNativeClient() || SUPPORTED_RUNTIMES.length === 0) {
         // Browser path: a GGUF (from disk or the catalog) runs via llama.cpp-WASM — text, and images
         // too when the attached model has a vision projector. A browser with no model attached still
         // degrades to "unavailable" exactly as before.
+        await ensureWebModelRestored();
         if (isWebInferenceReady()) {
-            return webInfer(request);
+            return webInfer(request, {
+                requireProjectorAbsent: options.requireProjectorAbsent === true,
+            });
         }
         return { kind: "unavailable", reason: "on-device inference requires the native client" };
+    }
+
+    // A native bridge proves only that this is a Tauri shell, not that its optional llama.cpp feature
+    // was compiled in. Probe before reading model metadata so old/dev shells fail with an actionable
+    // update message and never enter an inference command they cannot execute. A missing command means
+    // the shell predates this probe and therefore also needs an update.
+    if (!(await probeNativeInferenceRuntime())) {
+        return { kind: "unavailable", reason: NATIVE_INFERENCE_UPDATE_REQUIRED };
     }
 
     const modelId = request.modelId ?? get(selectedModelId);
@@ -146,7 +217,10 @@ export function onDeviceInferenceCapability(): OnDeviceInferenceCapability {
     }
     return {
         available:
-            isNativeClient() && entry !== undefined && SUPPORTED_RUNTIMES.includes(entry.runtime),
+            isNativeClient() &&
+            lastNativeInferenceRuntimeAvailable === true &&
+            entry !== undefined &&
+            SUPPORTED_RUNTIMES.includes(entry.runtime),
         runtimesSupported: SUPPORTED_RUNTIMES,
         selectedModelId: selected === "" ? undefined : selected,
         selectedModalities: entry?.modalities ?? [],

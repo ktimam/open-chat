@@ -1,0 +1,35 @@
+[package]
+name = "action_inbox_canister_impl"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+action_inbox_canister = { path = "../api" }
+candid = { workspace = true }
+canister_api_macros = { path = "../../../libraries/canister_api_macros" }
+canister_logger = { path = "../../../libraries/canister_logger" }
+canister_state_macros = { path = "../../../libraries/canister_state_macros" }
+canister_tracing_macros = { path = "../../../libraries/canister_tracing_macros" }
+ecies_payload = { path = "../../../libraries/ecies_payload" }
+http_request = { path = "../../../libraries/http_request" }
+ic-cdk = { workspace = true }
+ic-cdk-timers = { workspace = true }
+ic-stable-structures = { workspace = true }
+msgpack = { path = "../../../libraries/msgpack" }
+oc_error_codes = { path = "../../../libraries/error_codes" }
+rand = { workspace = true }
+serde = { workspace = true }
+serde_bytes = { workspace = true }
+serde_json = { workspace = true }
+stable_memory = { path = "../../../libraries/stable_memory" }
+subtle = { workspace = true }
+tracing = { workspace = true }
+types = { path = "../../../libraries/types" }
+utils = { path = "../../../libraries/utils" }
+
+[dev-dependencies]
+p256 = { workspace = true, features = ["ecdsa", "pem", "pkcs8"] }

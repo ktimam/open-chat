@@ -33,8 +33,23 @@ import type {
     UsersApiResponse,
     UserSummary,
     UserSummaryUpdate,
+    AiActionDefinition,
+    AiActionRule,
+    AiAppLinkCode,
+    AiAppCardContentV1,
+    AiAppCardProvenanceResult,
+    AiAppManifest,
+    AiAppManifestWire,
+    AiAppRegistration,
+    AiAppMemberKey,
+    AiAppUserKey,
+    ExploreAiAppsResponse,
 } from "@shared";
-import { CommonResponses, UnsupportedValueError } from "@shared";
+import {
+    aiAppFromRegistration,
+    CommonResponses,
+    UnsupportedValueError,
+} from "@shared";
 import type {
     BotDefinition as ApiBotDefinition,
     BotInstallationLocation as ApiBotInstallationLocation,
@@ -75,6 +90,22 @@ import type {
     UserIndexUnsuspendUserResponse,
     UserIndexUserRegistrationCanisterResponse,
     UserIndexUsersResponse,
+    AiActionDefinition as TAiActionDefinition,
+    AiActionRule as TAiActionRule,
+    AiAppManifest as TAiAppManifest,
+    UserIndexAiAppsResponse,
+    UserIndexAiAppsByIdsResponse,
+    UserIndexMyAiAppsResponse,
+    UserIndexRegisterAiAppResponse,
+    UserIndexAiAppUserKeysResponse,
+    UserIndexMyAiAppKeysResponse,
+    UserIndexCancelAiAppLinkCodeResponse,
+    UserIndexCancelAiAppChatLinkTokenResponse,
+    UserIndexCreateAiAppLinkCodeResponse,
+    UserIndexCreateAiAppCardProvenanceResponse,
+    UserIndexExploreAiAppsResponse,
+    UserIndexRemoveMyAiAppKeyResponse,
+    UserIndexPublishAiAppResponse,
 } from "../../typebox";
 import { toRecord } from "../../utils/list";
 import {
@@ -598,6 +629,291 @@ export function diamondMembershipFeesResponse(
         "Unexpected DiamondMembershipFeesResponse type received",
         value,
     );
+}
+
+// Maps a domain rule (flat, camelCase discriminated union) into the wire shape serde expects for the
+// externally tagged Rust AiActionRule enum: a single-key map { variant_name: payload } with snake_case
+// field names, unit enum values (mode/ops/provide items) travelling as plain snake_case strings.
+function apiAiActionRule(rule: AiActionRule): TAiActionRule {
+    switch (rule.kind) {
+        case "keyword_map":
+            return {
+                keyword_map: {
+                    field: rule.field,
+                    mode: rule.mode,
+                    map: rule.map.map((m) => ({ value: m.value, keywords: m.keywords })),
+                },
+            };
+        case "from_message":
+            return { from_message: { field: rule.field, max_length: rule.maxLength } };
+        case "normalize":
+            return { normalize: { field: rule.field, ops: rule.ops } };
+        case "instruction":
+            return { instruction: { text: rule.text } };
+        case "context":
+            return { context: { provide: rule.provide } };
+    }
+}
+
+// The inverse of aiActionDefinitionFromWire: maps the runner's camelCase AiActionDefinition into the on-chain
+// snake_case wire shape (response_schema as a JSON string, card rows keyed by `field`, endpoint required).
+// Absent rules are sent as [] (the backend field also has serde(default), but sending [] is explicit).
+export function apiAiActionDefinition(def: AiActionDefinition): TAiActionDefinition {
+    return {
+        name: def.name,
+        description: def.description,
+        prompt_template: def.promptTemplate,
+        response_schema: def.responseSchema !== undefined ? JSON.stringify(def.responseSchema) : "",
+        endpoint: def.endpoint ?? "",
+        consumer_public_key: def.consumerPublicKey,
+        recipient_scope: def.recipientScope,
+        card: {
+            title: def.card.title,
+            confirm_label: def.card.confirmLabel,
+            cancel_label: def.card.cancelLabel,
+            disclosure: def.card.disclosure,
+            rows: def.card.rows.map((r) => ({ field: r.valueKey, label: r.label })),
+        },
+        rules: (def.rules ?? []).map(apiAiActionRule),
+        // Regen made accepts_image a required wire field (bare ts-rs export of a serde(default) bool);
+        // the domain flag is optional (absent === false), matching aiActionDefinitionFromWire's default.
+        accepts_image: def.acceptsImage ?? false,
+    };
+}
+
+// The manifest's principal-typed fields arrive as raw bytes off msgpack; decode
+// them to a text principal here — mirroring how `owner` is decoded — so the shared
+// aiAppManifestFromWire (which has no principal decoder) receives the AiAppManifestWire string shape.
+function aiAppManifestWithDecodedPrincipals(m: TAiAppManifest): AiAppManifestWire {
+    return {
+        ...m,
+        app_canister_id:
+            m.app_canister_id !== undefined
+                ? principalBytesToString(m.app_canister_id)
+                : undefined,
+        inbox_canister_id:
+            m.inbox_canister_id !== undefined
+                ? principalBytesToString(m.inbox_canister_id)
+                : undefined,
+    };
+}
+
+export function aiAppsResponse(value: UserIndexAiAppsResponse): AiAppRegistration[] {
+    if ("Success" in value) {
+        return value.Success.apps.map((a) =>
+            aiAppFromRegistration({
+                id: a.id,
+                owner: principalBytesToString(a.owner),
+                manifest: aiAppManifestWithDecodedPrincipals(a.manifest),
+                created: a.created,
+                updated: a.updated,
+                published: a.published,
+            }),
+        );
+    }
+    throw new UnsupportedValueError("Unexpected AiAppsResponse type received", value);
+}
+
+// Maps the camelCase AiAppManifest into the on-chain snake_case wire shape; nested actions use the
+// per-action mapping above. Absent surfaces are sent as [] (the backend field also has
+// serde(default), but sending [] is explicit); the surface fields and the display strings
+// ("sheet" / "external") already match the wire shape byte-for-byte.
+export function apiAiAppManifest(manifest: AiAppManifest): TAiAppManifest {
+    return {
+        name: manifest.name,
+        description: manifest.description,
+        icon_url: manifest.iconUrl,
+        app_canister_id: manifest.appCanisterId
+            ? principalStringToBytes(manifest.appCanisterId)
+            : undefined,
+        inbox_canister_id: manifest.inboxCanisterId
+            ? principalStringToBytes(manifest.inboxCanisterId)
+            : undefined,
+        consumer_public_key: manifest.consumerPublicKey,
+        per_user_keys: manifest.perUserKeys ?? false,
+        actions: manifest.actions.map(apiAiActionDefinition),
+        surfaces: (manifest.surfaces ?? []).map((s) => ({
+            kind: s.kind,
+            url: s.url,
+            display: s.display,
+        })),
+    };
+}
+
+export function registerAiAppResponse(value: UserIndexRegisterAiAppResponse): boolean {
+    return "Success" in value;
+}
+
+export function myAiAppKeysResponse(value: UserIndexMyAiAppKeysResponse): AiAppUserKey[] {
+    if ("Success" in value) {
+        return value.Success.keys.map((k) => ({
+            appId: k.app_id,
+            publicKey: k.public_key,
+            keyVersion: k.key_version ?? 0n,
+        }));
+    }
+    throw new UnsupportedValueError("Unexpected MyAiAppKeysResponse type received", value);
+}
+
+export function aiAppUserKeysResponse(value: UserIndexAiAppUserKeysResponse): AiAppMemberKey[] {
+    if ("Success" in value) {
+        return value.Success.keys.map((k) => ({
+            userId: principalBytesToString(k.user_id),
+            publicKey: k.public_key,
+        }));
+    }
+    throw new UnsupportedValueError("Unexpected AiAppUserKeysResponse type received", value);
+}
+
+// AppNotFound / Error both resolve to undefined — the caller has no code to display either way.
+// One explorer page. Term-length failures / errors degrade to an empty page — the explorer UI
+// treats that the same as "no matches".
+export function exploreAiAppsResponse(
+    value: UserIndexExploreAiAppsResponse,
+): ExploreAiAppsResponse {
+    if (typeof value === "object" && "Success" in value) {
+        return {
+            matches: value.Success.matches.map((a) =>
+                aiAppFromRegistration({
+                    id: a.id,
+                    owner: principalBytesToString(a.owner),
+                    manifest: aiAppManifestWithDecodedPrincipals(a.manifest),
+                    created: a.created,
+                    updated: a.updated,
+                    published: a.published,
+                }),
+            ),
+            total: value.Success.total,
+        };
+    }
+    return { matches: [], total: 0 };
+}
+
+export function createAiAppLinkCodeResponse(
+    value: UserIndexCreateAiAppLinkCodeResponse,
+): AiAppLinkCode | undefined {
+    if (typeof value === "object" && "Success" in value) {
+        return {
+            code: value.Success.code,
+            expiresAt: value.Success.expires_at,
+        };
+    }
+    return undefined;
+}
+
+export function cancelAiAppLinkCodeResponse(value: UserIndexCancelAiAppLinkCodeResponse): boolean {
+    return value === "Success";
+}
+
+export function cancelAiAppChatLinkTokenResponse(
+    value: UserIndexCancelAiAppChatLinkTokenResponse,
+): boolean {
+    return value === "Success";
+}
+
+export function aiAppsByIdsResponse(value: UserIndexAiAppsByIdsResponse): AiAppRegistration[] {
+    if ("Success" in value) {
+        return value.Success.apps.map((a) =>
+            aiAppFromRegistration({
+                id: a.id,
+                owner: principalBytesToString(a.owner),
+                manifest: aiAppManifestWithDecodedPrincipals(a.manifest),
+                created: a.created,
+                updated: a.updated,
+                published: a.published,
+            }),
+        );
+    }
+    if ("TooManyApps" in value) {
+        throw new Error(`Bounded AI-app lookup accepts at most ${value.TooManyApps} ids`);
+    }
+    if ("ResponseTooLarge" in value) {
+        throw new Error(`Bounded AI-app lookup exceeded ${value.ResponseTooLarge} encoded bytes`);
+    }
+    const unsupported: never = value;
+    throw new UnsupportedValueError("Bounded AI-app lookup was rejected", unsupported);
+}
+
+export function myAiAppsResponse(value: UserIndexMyAiAppsResponse): {
+    apps: AiAppRegistration[];
+    total: number;
+} {
+    if (typeof value === "object" && "Success" in value) {
+        return {
+            apps: value.Success.apps.map((a) =>
+                aiAppFromRegistration({
+                    id: a.id,
+                    owner: principalBytesToString(a.owner),
+                    manifest: aiAppManifestWithDecodedPrincipals(a.manifest),
+                    created: a.created,
+                    updated: a.updated,
+                    published: a.published,
+                }),
+            ),
+            total: value.Success.total,
+        };
+    }
+    if (value === "UserNotFound") {
+        throw new Error("Caller-owned AI-app page requires a registered user");
+    }
+    if ("InvalidPageSize" in value) {
+        throw new Error(`Caller-owned AI-app pages accept at most ${value.InvalidPageSize} items`);
+    }
+    if ("ResponseTooLarge" in value) {
+        throw new Error(
+            `Caller-owned AI-app page exceeded ${value.ResponseTooLarge} encoded bytes`,
+        );
+    }
+    const unsupported: never = value;
+    throw new UnsupportedValueError("Caller-owned AI-app page was rejected", unsupported);
+}
+
+// Candid uses snake_case while the domain object mirrors the public action-card model. Keep this
+// conversion explicit so provenance is always requested over exactly the fields the destination
+// chat canister later hashes, with no routing, viewer-private context, or bearer data appended.
+export function apiAiAppCardContentV1(content: AiAppCardContentV1): {
+    title: string;
+    rows: { label: string; value: string }[];
+    confirm_label: string;
+    cancel_label: string;
+    action_id: string;
+    disclosure?: string;
+    expires_at?: bigint;
+    confirm_payload?: Uint8Array;
+} {
+    return {
+        title: content.title,
+        rows: content.rows.map((row) => ({ label: row.label, value: row.value })),
+        confirm_label: content.confirmLabel,
+        cancel_label: content.cancelLabel,
+        action_id: content.actionId,
+        disclosure: content.disclosure,
+        expires_at: content.expiresAt,
+        confirm_payload: content.confirmPayload?.slice(),
+    };
+}
+
+export function createAiAppCardProvenanceResponse(
+    value: UserIndexCreateAiAppCardProvenanceResponse,
+): AiAppCardProvenanceResult {
+    if (value === "AppUnavailable") return { kind: "app_unavailable" };
+    if ("InvalidRequest" in value) return { kind: "invalid_request" };
+    if ("Error" in value) return { kind: "backend_error" };
+
+    const provenance = Uint8Array.from(value.Success.provenance);
+    if (provenance.byteLength !== 32) return { kind: "malformed_success" };
+    return { kind: "success", provenance, expiresAt: value.Success.expires_at };
+}
+
+// True only on Success — publishing the app succeeded. NotFound/NotAuthorised/Error -> false.
+export function publishAiAppResponse(value: UserIndexPublishAiAppResponse): boolean {
+    return value === "Success";
+}
+
+// The user's own delivery key was removed (or there was none) — a disconnect. Anything else
+// (InvalidRequest / Error) is a failure the caller reports as "couldn't disconnect".
+export function removeMyAiAppKeyResponse(value: UserIndexRemoveMyAiAppKeyResponse): boolean {
+    return value === "Success";
 }
 
 export function chitLeaderboardResponse(

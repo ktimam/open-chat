@@ -6,6 +6,8 @@ mod delete_channel_tests;
 mod delete_community_tests;
 mod delete_history_tests;
 mod disappearing_message_tests;
+mod enabled_ai_apps_capacity_tests;
+mod enabled_ai_apps_import_tests;
 mod import_group_tests;
 mod join_channel_tests;
 mod join_community_tests;

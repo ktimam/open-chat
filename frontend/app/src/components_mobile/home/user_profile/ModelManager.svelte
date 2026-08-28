@@ -13,14 +13,14 @@
         type CustomModelFile,
         type DisplayModel,
     } from "@src/stores/customModels";
-    import { defaultModelCatalog, mergeCatalogs, webEligibleModels } from "@utils/modelCatalog";
+    import { defaultModelCatalog, mergeCatalogs } from "@utils/modelCatalog";
     import { isNativeClient } from "@utils/onDeviceInference";
     import { transformersWebGpuSelectionCanHandle } from "@utils/transformersWebGpuInference";
     import {
+        allWebGpuCatalogModelSupported,
+        cancelWebModelDownload,
         clearWebModel,
-        pickWebModelFromDisk,
         restoreWebModel,
-        setWebModelFile,
         useWebModelFromUrl,
         webModelStatus,
     } from "@utils/webInference";
@@ -46,6 +46,7 @@
         type SystemResources,
     } from "tauri-plugin-oc-api";
     import Translatable from "../../Translatable.svelte";
+    import BrowserImageActionModeSettings from "../../../components_shared/BrowserImageActionModeSettings.svelte";
     import WebInferenceRuntimeSettings from "../../../components_shared/WebInferenceRuntimeSettings.svelte";
     import SlidingPageContent from "../SlidingPageContent.svelte";
 
@@ -54,21 +55,8 @@
     const client = getContext<OpenChat>("client");
     const native = isNativeClient();
 
-    // Browser model-from-disk (llama.cpp-WASM over a GGUF read in place from disk — webInference.ts).
     let webError = $state("");
-    const hasPicker = typeof window !== "undefined" && "showOpenFilePicker" in window;
-    async function attachWebFile(e: Event) {
-        webError = "";
-        const input = e.target as HTMLInputElement;
-        const file = input.files?.[0];
-        if (file === undefined) return;
-        webError = (await setWebModelFile(file)) ?? "";
-        input.value = "";
-    }
-    async function attachWebPicker() {
-        webError = "";
-        webError = (await pickWebModelFromDisk()) ?? "";
-    }
+    let webChoiceGeneration = 0;
     async function detachWebModel() {
         webError = "";
         await clearWebModel();
@@ -79,23 +67,20 @@
     // builtin leftovers are appended — so a stale/partial remote catalog can never shrink the chooser.
     let catalogSource = $state<ModelCatalogEntry[]>(defaultModelCatalog.models);
 
-    // Catalog models a BROWSER can run: one GGUF, plus an mmproj projector for the vision entries,
-    // within the ~2 GB total envelope. Catalog order IS the recommendation order — index 0 is the
-    // default suggestion (rendered below as the primary "Download & use (default)" button), and it
-    // is a vision model because that one measured best at text as well. Nothing here hardcodes an
-    // id: reordering the catalog moves the default.
-    let webChoices = $derived(webEligibleModels(catalogSource));
+    // Only catalog ids backed by this build's pinned, qualified all-WebGPU sessions are shown.
+    // Catalog order remains the recommendation order if more qualified runtimes are added later.
+    let webChoices = $derived(
+        catalogSource.filter((entry) => allWebGpuCatalogModelSupported(entry.id)),
+    );
 
-    // The chooser list ALWAYS renders (except mid-download); when a model is active the current one
-    // is marked "Current" (matched by catalog id — disk-picked files have no id and render as an
-    // extra current row above the list instead).
+    // The chooser list always renders except while its owned preload is active; an exact catalog id
+    // marks the already-selected pinned runtime as Current.
     let webActive = $derived(
         $webModelStatus.status === "attached" ||
             $webModelStatus.status === "loading" ||
             $webModelStatus.status === "loaded",
     );
     let currentWebId = $derived(webActive ? $webModelStatus.id : undefined);
-    let webDiskAttached = $derived(webActive && $webModelStatus.id === undefined);
     let webRuntimeSettingsBusy = $derived(
         $webModelStatus.status === "downloading" ||
             $webModelStatus.status === "verifying" ||
@@ -109,18 +94,18 @@
               : "attached — loads on first use",
     );
 
-    // The whole entry goes down: webInference splits weights from the mmproj projector, downloads
-    // both (one progress bar over the pair) and checks each against its catalog SHA-256.
+    // Selection owns the complete pinned ONNX preload and verifies every artifact before activation.
     async function chooseWebModel(entry: ModelCatalogEntry) {
+        const generation = ++webChoiceGeneration;
         webError = "";
-        webError =
-            (await useWebModelFromUrl({
-                id: entry.id,
-                name: entry.name,
-                files: entry.files,
-                sizeBytes: entry.sizeBytes,
-                modalities: entry.modalities,
-            })) ?? "";
+        const error = await useWebModelFromUrl({
+            id: entry.id,
+            name: entry.name,
+            files: entry.files,
+            sizeBytes: entry.sizeBytes,
+            modalities: entry.modalities,
+        });
+        if (generation === webChoiceGeneration) webError = error ?? "";
     }
 
     async function loadCatalog() {
@@ -362,7 +347,11 @@
         }
     });
 
-    onDestroy(() => unlisten?.());
+    onDestroy(() => {
+        webChoiceGeneration += 1;
+        cancelWebModelDownload();
+        unlisten?.();
+    });
 </script>
 
 <SlidingPageContent
@@ -374,10 +363,11 @@
             <BodySmall>
                 <Translatable
                     resourceKey={i18nKey(
-                        "Run a local model in this browser: download one below, or pick a .gguf file from your disk (up to ~2 GB — a ≤2B parameter model at Q4 works well). A disk file is read in place — nothing is uploaded or copied. One model is active at a time; choosing another replaces it. Only a model marked “reads images” can extract from a photo or a receipt.",
+                        "Choose the approved all-WebGPU phone model below. Its complete pinned download happens on this page; running a message never downloads a GGUF fallback. Keep OpenChat visible until the download finishes.",
                     )}
                 ></Translatable>
             </BodySmall>
+            <BrowserImageActionModeSettings />
             {#if $webModelStatus.status === "downloading"}
                 <BodySmall>
                     <Translatable
@@ -389,6 +379,9 @@
                         )}
                     ></Translatable>
                 </BodySmall>
+                <Button width={"hug"} secondary onClick={cancelWebModelDownload}>
+                    <Translatable resourceKey={i18nKey("Cancel download")}></Translatable>
+                </Button>
             {:else if $webModelStatus.status === "verifying"}
                 <BodySmall>
                     <Translatable
@@ -398,20 +391,6 @@
                     ></Translatable>
                 </BodySmall>
             {:else}
-                {#if webDiskAttached}
-                    <Container gap={"xs"} direction={"vertical"}>
-                        <BodySmall fontWeight={"bold"}>
-                            <Translatable
-                                resourceKey={i18nKey(
-                                    `Model: ${$webModelStatus.name} (${webStatusText})`,
-                                )}
-                            ></Translatable>
-                        </BodySmall>
-                        <Button width={"hug"} secondary onClick={detachWebModel}>
-                            <Translatable resourceKey={i18nKey("Remove model")}></Translatable>
-                        </Button>
-                    </Container>
-                {/if}
                 {#each webChoices as entry, i (entry.id)}
                     <Container gap={"xs"} direction={"vertical"}>
                         <Container
@@ -461,6 +440,8 @@
                                     resourceKey={i18nKey(
                                         webActive
                                             ? "Use this model"
+                                            : webError !== "" || $webModelStatus.status === "error"
+                                              ? "Retry download"
                                             : i === 0
                                               ? "Download & use (default)"
                                               : "Download & use",
@@ -470,13 +451,6 @@
                         {/if}
                     </Container>
                 {/each}
-                {#if hasPicker}
-                    <Button width={"hug"} secondary onClick={attachWebPicker}>
-                        <Translatable resourceKey={i18nKey("Pick a .gguf from disk (remembered)")}
-                        ></Translatable>
-                    </Button>
-                {/if}
-                <input class="web-model-file" type="file" accept=".gguf" onchange={attachWebFile} />
             {/if}
             {#if $webModelStatus.status === "error"}
                 <BodySmall>

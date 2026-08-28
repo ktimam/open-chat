@@ -14,6 +14,12 @@ export const stylesDir = path.join(__dirname, "src", "styles").replace(/\\/g, "/
 export const mixins = `${stylesDir}/mixins.scss`;
 export const sassModulesAndMixins = "@use 'sass:math'; @use 'sass:map'; @use 'mixins' as *;";
 
+function setEnvironmentDefault(name, value) {
+    if (process.env[name] === undefined && value !== undefined) {
+        process.env[name] = value;
+    }
+}
+
 // Generates content security policy (CSP) hash for the provided entry
 function generateCspHashValue(text) {
     const hash = sha256.update(text).arrayBuffer();
@@ -59,23 +65,46 @@ export function initEnv() {
 
         if (fs.existsSync(canisterPath)) {
             const canisters = JSON.parse(fs.readFileSync(canisterPath));
-            process.env.OC_TRANSLATIONS_CANISTER = canisters.translations[dfxNetwork];
-            process.env.OC_USER_INDEX_CANISTER = canisters.user_index[dfxNetwork];
-            process.env.OC_GROUP_INDEX_CANISTER = canisters.group_index[dfxNetwork];
-            process.env.OC_NOTIFICATIONS_CANISTER = canisters.notifications_index[dfxNetwork];
-            process.env.OC_IDENTITY_CANISTER = canisters.identity[dfxNetwork];
-            process.env.OC_ONLINE_CANISTER = canisters.online_users[dfxNetwork];
-            process.env.OC_PROPOSALS_BOT_CANISTER = canisters.proposals_bot[dfxNetwork];
-            process.env.OC_AIRDROP_BOT_CANISTER = canisters.airdrop_bot[dfxNetwork];
-            process.env.OC_STORAGE_INDEX_CANISTER = canisters.storage_index[dfxNetwork];
-            process.env.OC_REGISTRY_CANISTER = canisters.registry[dfxNetwork];
-            process.env.OC_MARKET_MAKER_CANISTER = canisters.market_maker[dfxNetwork];
-            process.env.OC_SIGN_IN_WITH_EMAIL_CANISTER = canisters.sign_in_with_email[dfxNetwork];
-            process.env.OC_SIGN_IN_WITH_ETHEREUM_CANISTER =
-                canisters.sign_in_with_ethereum[dfxNetwork];
-            process.env.OC_SIGN_IN_WITH_SOLANA_CANISTER = canisters.sign_in_with_solana[dfxNetwork];
-            process.env.OC_ONESEC_FORWARDER_CANISTER = "lsoct-pyaaa-aaaar-boahq-cai";
-            process.env.OC_ONESEC_MINTER_CANISTER = "5okwm-giaaa-aaaar-qbn6a-cai";
+            setEnvironmentDefault(
+                "OC_TRANSLATIONS_CANISTER",
+                canisters.translations[dfxNetwork],
+            );
+            setEnvironmentDefault("OC_USER_INDEX_CANISTER", canisters.user_index[dfxNetwork]);
+            setEnvironmentDefault("OC_GROUP_INDEX_CANISTER", canisters.group_index[dfxNetwork]);
+            setEnvironmentDefault(
+                "OC_NOTIFICATIONS_CANISTER",
+                canisters.notifications_index[dfxNetwork],
+            );
+            setEnvironmentDefault("OC_IDENTITY_CANISTER", canisters.identity[dfxNetwork]);
+            setEnvironmentDefault("OC_ONLINE_CANISTER", canisters.online_users[dfxNetwork]);
+            setEnvironmentDefault(
+                "OC_PROPOSALS_BOT_CANISTER",
+                canisters.proposals_bot[dfxNetwork],
+            );
+            setEnvironmentDefault("OC_AIRDROP_BOT_CANISTER", canisters.airdrop_bot[dfxNetwork]);
+            setEnvironmentDefault(
+                "OC_STORAGE_INDEX_CANISTER",
+                canisters.storage_index[dfxNetwork],
+            );
+            setEnvironmentDefault("OC_REGISTRY_CANISTER", canisters.registry[dfxNetwork]);
+            setEnvironmentDefault(
+                "OC_MARKET_MAKER_CANISTER",
+                canisters.market_maker[dfxNetwork],
+            );
+            setEnvironmentDefault(
+                "OC_SIGN_IN_WITH_EMAIL_CANISTER",
+                canisters.sign_in_with_email[dfxNetwork],
+            );
+            setEnvironmentDefault(
+                "OC_SIGN_IN_WITH_ETHEREUM_CANISTER",
+                canisters.sign_in_with_ethereum[dfxNetwork],
+            );
+            setEnvironmentDefault(
+                "OC_SIGN_IN_WITH_SOLANA_CANISTER",
+                canisters.sign_in_with_solana[dfxNetwork],
+            );
+            setEnvironmentDefault("OC_ONESEC_FORWARDER_CANISTER", "lsoct-pyaaa-aaaar-boahq-cai");
+            setEnvironmentDefault("OC_ONESEC_MINTER_CANISTER", "5okwm-giaaa-aaaar-qbn6a-cai");
 
             console.log("TranslationsCanisterId: ", process.env.OC_TRANSLATIONS_CANISTER);
             console.log("UserIndexCanisterId: ", process.env.OC_USER_INDEX_CANISTER);

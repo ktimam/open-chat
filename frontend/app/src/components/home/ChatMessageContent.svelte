@@ -1,6 +1,13 @@
 <script lang="ts">
-    import type { MessageContent, MessageContext, OgPreview, RehydratedMessagePreview } from "@client";
+    import {
+        currentUserIdStore,
+        type MessageContent,
+        type MessageContext,
+        type OgPreview,
+        type RehydratedMessagePreview,
+    } from "@client";
     import { i18nKey } from "../../i18n/i18n";
+    import ActionCardContent from "./ActionCardContent.svelte";
     import AudioContent from "./AudioContent.svelte";
     import BlockedContent from "./BlockedContent.svelte";
     import BotPlaceholderContent from "./BotPlaceholderContent.svelte";
@@ -44,11 +51,17 @@
         undeleting?: boolean;
         intersecting: boolean;
         failed: boolean;
+        reconciliationTrigger?: boolean;
         timestamp?: bigint | undefined;
         blockLevelMarkdown: boolean;
         onExpandMessage?: (() => void) | undefined;
         onRemovePreview?: (url: string) => void;
         onRegisterVote?: (vote: { type: "delete" | "register"; answerIndex: number }) => void;
+        onRespondToActionCard?: (
+            response: "confirm" | "cancel",
+            confirmPayloadOverride?: Uint8Array,
+            confirmationGrant?: Uint8Array,
+        ) => boolean | Promise<boolean>;
         ogPreviews?: OgPreview[];
         messagePreviews?: RehydratedMessagePreview[];
     }
@@ -71,11 +84,13 @@
         undeleting = false,
         intersecting,
         failed,
+        reconciliationTrigger = false,
         timestamp = undefined,
         blockLevelMarkdown,
         onExpandMessage = undefined,
         onRemovePreview,
         onRegisterVote,
+        onRespondToActionCard,
         ogPreviews = [],
         messagePreviews = [],
     }: Props = $props();
@@ -137,6 +152,16 @@
     <PrizeWinnerContent {content} />
 {:else if content.kind === "poll_content"}
     <PollContent {readonly} {me} {content} {senderId} {onRegisterVote} />
+{:else if content.kind === "action_card_content"}
+    <ActionCardContent
+        {content}
+        {readonly}
+        chatId={messageContext.chatId}
+        {messageId}
+        threadRootMessageIndex={messageContext.threadRootMessageIndex}
+        viewerId={$currentUserIdStore}
+        {reconciliationTrigger}
+        onRespond={onRespondToActionCard} />
 {:else if content.kind === "giphy_content"}
     <GiphyContent {edited} {intersecting} {fill} {content} {reply} {height} {blockLevelMarkdown} />
 {:else if content.kind === "proposal_content"}

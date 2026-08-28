@@ -23,6 +23,17 @@ import {
     TRANSFORMERS_WEBGPU_NORMALIZED_PROCESSOR_MARKER,
     transformersWebGpuProcessorConfig,
 } from "../utils/transformersWebGpuProcessorConfig";
+import {
+    TRANSFORMERS_WEBGPU_FALLBACK_IMAGE_LAYOUT,
+    TRANSFORMERS_WEBGPU_MAX_RAW_IMAGE_PATCHES,
+    transformersWebGpuImageGridPatchCount,
+    transformersWebGpuImageLayout,
+} from "../utils/transformersWebGpuImageLayout";
+import { intrinsicImageDimensions } from "../utils/imageDimensions";
+import {
+    releaseAndRetireWebGpuDevice,
+    type RetirableWebGpuDevice,
+} from "../utils/transformersWebGpuDeviceRetirement";
 
 type LoadedRuntime = {
     processor: Qwen3VLProcessor;
@@ -37,11 +48,7 @@ type OnnxEnvironment = {
     };
     webgpu?: {
         adapter?: unknown;
-        device?: {
-            lost?: Promise<{ message?: string; reason?: string }>;
-            queue?: { onSubmittedWorkDone(): Promise<void> };
-        };
-        powerPreference?: "high-performance" | "low-power";
+        device?: RetirableWebGpuDevice;
     };
 };
 
@@ -51,16 +58,12 @@ type RunnableSession = {
 
 type WorkerNavigator = Navigator & {
     gpu?: {
-        requestAdapter(options?: {
-            powerPreference?: "high-performance" | "low-power";
-        }): Promise<unknown | null>;
+        requestAdapter(): Promise<unknown | null>;
     };
 };
 
 class AdapterUnavailableError extends Error {}
 
-const INPUT_IMAGE_WIDTH = 256;
-const INPUT_IMAGE_HEIGHT = 448;
 const CACHE_DIGEST_HEADER = "x-content-sha256";
 const STAGED_EXTERNAL_DATA = {
     decoder_model_merged: {
@@ -81,6 +84,7 @@ const workerScope = globalThis as unknown as DedicatedWorkerGlobalScope;
 const onnx = env.backends.onnx as OnnxEnvironment;
 let loadedRuntime: LoadedRuntime | undefined;
 let runtimePromise: Promise<LoadedRuntime> | undefined;
+let runtimeDisposalPromise: Promise<void> | undefined;
 let runtimeGeneration = 0;
 let busy = false;
 let activeGpuStage = "runtime initialization";
@@ -120,7 +124,6 @@ function configureRuntimeAssets(): void {
     // below assigns all three Qwen3-VL sessions to WebGPU and does not permit a decoder fallback.
     onnx.wasm.numThreads = 1;
     onnx.wasm.proxy = false;
-    onnx.webgpu.powerPreference = "high-performance";
 }
 
 function progressFor(requestId: number): (update: unknown) => void {
@@ -145,7 +148,9 @@ function progressFor(requestId: number): (update: unknown) => void {
 async function requestAdapter(): Promise<unknown> {
     const gpu = (navigator as WorkerNavigator).gpu;
     if (gpu === undefined) throw new AdapterUnavailableError();
-    const adapter = await gpu.requestAdapter({ powerPreference: "high-performance" });
+    // Use the browser's default adapter policy. WebGPU warns that forcing the high-performance
+    // preference on portable devices makes power-switch device loss more likely.
+    const adapter = await gpu.requestAdapter();
     if (adapter === null) throw new AdapterUnavailableError();
     return adapter;
 }
@@ -159,28 +164,74 @@ async function waitForStagedWebGpuQueue(sessionName: string): Promise<void> {
     await queue.onSubmittedWorkDone();
 }
 
+async function withStagedWebGpuRelease(
+    stage: string,
+    release: () => Promise<unknown>,
+): Promise<void> {
+    const device = onnx.webgpu?.device;
+    if (device === undefined) {
+        await release();
+        throw new Error(`The WebGPU device is unavailable before ${stage}.`);
+    }
+    console.info(`[qwen-webgpu] ${stage} retirement started`);
+    await releaseAndRetireWebGpuDevice(device, release, {
+        stage,
+        currentDevice: () => onnx.webgpu?.device,
+        clearCurrentDevice: (retired) => {
+            if (onnx.webgpu?.device === retired) delete onnx.webgpu.device;
+        },
+        onPhase: (phase) => {
+            activeGpuStage = `${stage} ${phase}`;
+        },
+    });
+    console.info(`[qwen-webgpu] ${stage} retirement completed`);
+}
+
 async function disposeLoadedRuntime(expected = loadedRuntime): Promise<void> {
+    if (runtimeDisposalPromise !== undefined) {
+        await runtimeDisposalPromise;
+        return;
+    }
     if (expected === undefined || loadedRuntime !== expected) return;
     loadedRuntime = undefined;
     runtimePromise = undefined;
     runtimeGeneration++;
-    await expected.model.dispose();
+    const disposal = withStagedWebGpuRelease("decoder teardown", () => expected.model.dispose());
+    runtimeDisposalPromise = disposal;
+    try {
+        await disposal;
+    } finally {
+        if (runtimeDisposalPromise === disposal) runtimeDisposalPromise = undefined;
+    }
 }
 
 function watchDeviceLoss(runtime: LoadedRuntime, generation: number): void {
     const lost = onnx.webgpu?.device?.lost;
     if (lost === undefined) return;
-    void lost.then((info) => {
+    void lost.then(async (info) => {
         if (generation !== runtimeGeneration || loadedRuntime !== runtime) return;
-        const disposing = disposeLoadedRuntime(runtime);
+        const lossStage = activeGpuStage;
+        let cleanupFailure: unknown;
+        try {
+            // Do not let the main thread terminate this worker until the bounded retirement path
+            // has released the sessions and acknowledged device loss.
+            await disposeLoadedRuntime(runtime);
+        } catch (error) {
+            cleanupFailure = error;
+        }
         const reason = info.reason === undefined ? "" : ` (${info.reason})`;
+        const cleanup =
+            cleanupFailure === undefined
+                ? ""
+                : ` Cleanup did not complete: ${
+                      cleanupFailure instanceof Error ? cleanupFailure.message : String(cleanupFailure)
+                  }`;
         post({
             kind: "runtime_error",
-            error: `The WebGPU device was lost during ${activeGpuStage}${reason}${
-                info.message ? `: ${info.message}` : "."
-            }`,
+            error: `The WebGPU device was lost during ${lossStage}${reason}${
+                info.message ? `: ${info.message}.` : "."
+            }${cleanup}`,
         });
-        void disposing.catch(() => undefined);
     });
 }
 
@@ -195,13 +246,19 @@ function instrumentGpuSessions(runtime: LoadedRuntime, generation: number): void
     let decoderDeviceWatcherArmed = false;
     for (const [name, session] of Object.entries(sessions)) {
         const run = session.run.bind(session);
+        let invocation = 0;
         session.run = async (...args) => {
             const started = performance.now();
-            activeGpuStage = `${name} execution`;
-            console.info(`[qwen-webgpu] ${name} started`);
+            const cachedEmbeddingFacade = name === "embed_tokens" && invocation++ > 0;
+            if (cachedEmbeddingFacade) {
+                console.info("[qwen-webgpu] embed_tokens cached CPU facade started");
+            } else {
+                activeGpuStage = `${name} execution`;
+                console.info(`[qwen-webgpu] ${name} started`);
+            }
             try {
                 const result = await run(...args);
-                activeGpuStage = `${name} completed`;
+                if (!cachedEmbeddingFacade) activeGpuStage = `${name} completed`;
                 if (name === "decoder_model_merged" && !decoderDeviceWatcherArmed) {
                     decoderDeviceWatcherArmed = true;
                     // The staged loader deliberately releases the last prompt session before it
@@ -212,11 +269,13 @@ function instrumentGpuSessions(runtime: LoadedRuntime, generation: number): void
                     watchDeviceLoss(runtime, generation);
                 }
                 console.info(
-                    `[qwen-webgpu] ${name} completed in ${Math.round(performance.now() - started)} ms`,
+                    cachedEmbeddingFacade
+                        ? `[qwen-webgpu] embed_tokens cached CPU facade completed in ${Math.round(performance.now() - started)} ms`
+                        : `[qwen-webgpu] ${name} completed in ${Math.round(performance.now() - started)} ms`,
                 );
                 return result;
             } catch (error) {
-                activeGpuStage = `${name} failed`;
+                if (!cachedEmbeddingFacade) activeGpuStage = `${name} failed`;
                 throw error;
             }
         };
@@ -329,6 +388,7 @@ async function loadRuntime(requestId: number): Promise<LoadedRuntime> {
             session_options: {
                 openchat_get_staged_external_data: getStagedExternalData,
                 openchat_wait_for_staged_webgpu_queue: waitForStagedWebGpuQueue,
+                openchat_with_staged_webgpu_release: withStagedWebGpuRelease,
             } as never,
         } as const;
         const model = await Qwen3VLForConditionalGeneration.from_pretrained(
@@ -364,33 +424,66 @@ function disposeTensors(values: Iterable<unknown>): void {
     }
 }
 
-/** Decode directly into the fixed inference surface and close the browser ImageBitmap. The
+/** Decode directly into an aspect-preserving, patch-bounded inference surface and close the
+ * browser ImageBitmap. Common raster dimensions are read without decoding a full-size RGBA copy;
+ * unknown formats fail closed instead of being silently stretched.
+ *
  * Transformers.js RawImage Blob reader first retains a full-resolution RGBA copy and does not close
  * its ImageBitmap, which raises the phone's transient memory peak before the model even runs. */
 async function decodeBoundedImage(bytes: ArrayBuffer): Promise<RawImage> {
     const blob = new Blob([bytes]);
+    const dimensions = intrinsicImageDimensions(bytes);
+    if (dimensions === undefined) {
+        throw new Error("The browser model could not verify this image's encoded dimensions.");
+    }
+    const layout = transformersWebGpuImageLayout(dimensions.width, dimensions.height);
     let bitmap: ImageBitmap;
     try {
         bitmap = await createImageBitmap(blob, {
-            resizeWidth: INPUT_IMAGE_WIDTH,
-            resizeHeight: INPUT_IMAGE_HEIGHT,
+            imageOrientation: "from-image",
+            resizeWidth: layout.drawWidth,
+            resizeHeight: layout.drawHeight,
             resizeQuality: "high",
         });
     } catch {
         // Older WebGPU-capable browsers may not implement decode-time resize. Drawing a regular
         // bitmap into the bounded canvas still avoids the full-resolution RGBA RawImage copy.
-        bitmap = await createImageBitmap(blob);
+        bitmap = await createImageBitmap(blob, { imageOrientation: "from-image" });
     }
     try {
-        const canvas = new OffscreenCanvas(INPUT_IMAGE_WIDTH, INPUT_IMAGE_HEIGHT);
+        const canvas = new OffscreenCanvas(layout.frameWidth, layout.frameHeight);
         const context = canvas.getContext("2d");
         if (context === null) throw new Error("The image worker could not create a 2D canvas.");
-        context.drawImage(bitmap, 0, 0, INPUT_IMAGE_WIDTH, INPUT_IMAGE_HEIGHT);
-        const pixels = context.getImageData(0, 0, INPUT_IMAGE_WIDTH, INPUT_IMAGE_HEIGHT).data;
-        return new RawImage(pixels, INPUT_IMAGE_WIDTH, INPUT_IMAGE_HEIGHT, 4);
+        // Neutral opaque padding avoids introducing black/transparent edges as artificial visual
+        // evidence while preserving the source aspect ratio.
+        context.fillStyle = "rgb(127, 127, 127)";
+        context.fillRect(0, 0, layout.frameWidth, layout.frameHeight);
+        context.drawImage(
+            bitmap,
+            layout.drawX,
+            layout.drawY,
+            layout.drawWidth,
+            layout.drawHeight,
+        );
+        const pixels = context.getImageData(0, 0, layout.frameWidth, layout.frameHeight).data;
+        return new RawImage(pixels, layout.frameWidth, layout.frameHeight, 4);
     } finally {
         bitmap.close();
     }
+}
+
+/** Qwen's staged all-WebGPU decoder is exercised through the same one-vision-pass graph for text
+ * verification. This frame is worker-authored and contains no caller pixels. */
+function syntheticNeutralImage(): RawImage {
+    const { frameWidth, frameHeight } = TRANSFORMERS_WEBGPU_FALLBACK_IMAGE_LAYOUT;
+    const pixels = new Uint8ClampedArray(frameWidth * frameHeight * 4);
+    for (let index = 0; index < pixels.length; index += 4) {
+        pixels[index] = 127;
+        pixels[index + 1] = 127;
+        pixels[index + 2] = 127;
+        pixels[index + 3] = 255;
+    }
+    return new RawImage(pixels, frameWidth, frameHeight, 4);
 }
 
 async function infer(message: TransformersWebGpuToWorker): Promise<string> {
@@ -399,9 +492,10 @@ async function infer(message: TransformersWebGpuToWorker): Promise<string> {
 
     const prompt =
         message.text === undefined ? message.prompt : `${message.prompt}\n\n${message.text}`;
-    // Keep the portrait legible at the known-stable 448 raw patches. The 720-patch dispatch is
-    // known to reset the SM8650 Adreno Vulkan queue on the physical phone.
-    const image = await decodeBoundedImage(message.image);
+    // Keep small receipt text legible in an aspect-preserving frame of at most 640 raw patches while
+    // staying below the 720-patch dispatch known to reset the SM8650 Adreno Vulkan queue.
+    const image =
+        message.image === undefined ? syntheticNeutralImage() : await decodeBoundedImage(message.image);
     const conversation = [
         {
             role: "user" as const,
@@ -425,6 +519,19 @@ async function infer(message: TransformersWebGpuToWorker): Promise<string> {
     try {
         const inputIds = inputs.input_ids;
         if (!(inputIds instanceof Tensor)) throw new Error("Qwen processor returned no input IDs.");
+        const imageGrid = inputs.image_grid_thw;
+        if (!(imageGrid instanceof Tensor)) {
+            throw new Error("Qwen processor returned no image patch grid.");
+        }
+        const patchCount = transformersWebGpuImageGridPatchCount(
+            imageGrid.data as Iterable<number | bigint>,
+        );
+        if (
+            patchCount === undefined ||
+            patchCount > TRANSFORMERS_WEBGPU_MAX_RAW_IMAGE_PATCHES
+        ) {
+            throw new Error("Qwen image preprocessing exceeded the mobile WebGPU patch limit.");
+        }
         const generated = await model.generate({
             ...inputs,
             max_new_tokens: Math.min(message.maxTokens ?? 96, 96),
@@ -459,13 +566,9 @@ workerScope.addEventListener("message", (event: MessageEvent<TransformersWebGpuT
     void (async () => {
         try {
             const text = await infer(message);
-            try {
-                await disposeLoadedRuntime();
-            } catch (error) {
-                // The main thread terminates this one-shot worker after receiving the result, so a
-                // failed explicit release must not discard a completed extraction.
-                console.warn("[qwen-webgpu] explicit model release failed", error);
-            }
+            // A completed decoder result is not ready for handoff until the GPU retirement barrier
+            // succeeds. Otherwise a hidden teardown failure can poison the next one-shot worker.
+            await disposeLoadedRuntime();
             post({ kind: "result", requestId: message.requestId, text });
         } catch (error) {
             try {

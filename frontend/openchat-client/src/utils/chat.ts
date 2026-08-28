@@ -856,7 +856,17 @@ function sortByTimestampThenEventIndex(
 }
 
 export function serialiseMessageForRtc(message: NewUnconfirmedMessage): NewUnconfirmedMessage {
-    if (isAttachmentContent(message.content)) {
+    const content = message.content;
+    const sensitiveActionCard =
+        content.kind === "action_card_content" &&
+        (content.appVerified !== undefined ||
+            content.appContentVerified !== undefined ||
+            content.appProvenance !== undefined ||
+            content.confirmPayload !== undefined ||
+            content.recipientPublicKey !== undefined ||
+            content.recipientPublicKeys !== undefined ||
+            content.inboxCanisterId !== undefined);
+    if (isAttachmentContent(content) || sensitiveActionCard) {
         return {
             ...message,
             content: {

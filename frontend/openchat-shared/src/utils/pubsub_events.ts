@@ -115,6 +115,10 @@ export type PubSubEvents = {
         context: MessageContext;
         event: EventWrapper<Message>;
     };
+    sentMessageConfirmed: {
+        context: MessageContext;
+        event: EventWrapper<Message>;
+    };
     userLoggedIn: string;
     reactionSelected: { messageId: bigint; kind: "add" | "remove" };
     userSuspensionChanged: undefined;
@@ -176,8 +180,10 @@ export type PubSubEvents = {
     userInformation: PublicProfile;
     userProfileShare: undefined;
     userProfileAbout: undefined;
+    userProfileAccountLinking: undefined;
     userProfileCacheManagement: undefined;
     userProfileBotConfig: undefined;
+    userProfileMyApps: undefined;
     userProfileDeleteAccount: undefined;
     userProfileAppearance: undefined;
     userProfileChitRewards: undefined;
