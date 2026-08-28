@@ -199,17 +199,18 @@ describe("prepareImageForBrowserInference", () => {
 });
 
 describe("prepareImageRegionForInference", () => {
-    it("preserves the full raster when the source is not a tall receipt", async () => {
-        const bytes = pngBytes(1200, 900);
-        const crop = vi.fn();
+    it.each(["lower_half", "detail_card"] as const)(
+        "preserves the full raster for %s when the source is not a tall receipt",
+        async (region) => {
+            const bytes = pngBytes(1200, 900);
+            const crop = vi.fn();
 
-        await expect(prepareImageRegionForInference(bytes, "lower_half", crop)).resolves.toBe(
-            bytes,
-        );
-        expect(crop).not.toHaveBeenCalled();
-    });
+            await expect(prepareImageRegionForInference(bytes, region, crop)).resolves.toBe(bytes);
+            expect(crop).not.toHaveBeenCalled();
+        },
+    );
 
-    it("crops the lower half before applying the bounded model pixel budget", async () => {
+    it("preserves the exact version-2 lower-half region", async () => {
         const bytes = pngBytes(909, 1600);
         const crop = vi.fn().mockResolvedValue(new Uint8Array([9, 8, 7]));
 
@@ -232,10 +233,53 @@ describe("prepareImageRegionForInference", () => {
         );
     });
 
+    it("focuses the reported 13-Aug detail card with the version-3 closed region", async () => {
+        const bytes = pngBytes(809, 1280);
+        const crop = vi.fn().mockResolvedValue(new Uint8Array([1, 3, 8]));
+
+        await expect(prepareImageRegionForInference(bytes, "detail_card", crop)).resolves.toEqual(
+            new Uint8Array([1, 3, 8]),
+        );
+        expect(crop).toHaveBeenCalledWith(
+            bytes,
+            expect.objectContaining({
+                sourceX: 0,
+                sourceY: 742,
+                sourceWidth: 809,
+                sourceHeight: 359,
+                width: 768,
+                height: 340,
+                mimeType: "image/jpeg",
+                quality: 0.85,
+                signal: expect.any(AbortSignal),
+            }),
+        );
+    });
+
+    it("keeps the existing 14-Aug detail card inside the same closed region", async () => {
+        const bytes = pngBytes(909, 1600);
+        const crop = vi.fn().mockResolvedValue(new Uint8Array([1, 4, 8]));
+
+        await expect(prepareImageRegionForInference(bytes, "detail_card", crop)).resolves.toEqual(
+            new Uint8Array([1, 4, 8]),
+        );
+        expect(crop).toHaveBeenCalledWith(
+            bytes,
+            expect.objectContaining({
+                sourceX: 0,
+                sourceY: 928,
+                sourceWidth: 909,
+                sourceHeight: 448,
+                width: 729,
+                height: 359,
+            }),
+        );
+    });
+
     it("uses the browser crop overload and closes its bounded bitmap", async () => {
         const bytes = pngBytes(909, 1600);
         const close = vi.fn();
-        const bitmap = { width: 545, height: 480, close };
+        const bitmap = { width: 729, height: 359, close };
         const canvas = {
             width: 0,
             height: 0,
@@ -251,17 +295,17 @@ describe("prepareImageRegionForInference", () => {
         vi.stubGlobal("createImageBitmap", vi.fn().mockResolvedValue(bitmap));
         vi.spyOn(document, "createElement").mockReturnValue(canvas as unknown as HTMLCanvasElement);
 
-        await expect(prepareImageRegionForInference(bytes, "lower_half")).resolves.toEqual(
+        await expect(prepareImageRegionForInference(bytes, "detail_card")).resolves.toEqual(
             new Uint8Array([4, 5]),
         );
-        expect(createImageBitmap).toHaveBeenCalledWith(expect.any(Blob), 0, 800, 909, 800, {
+        expect(createImageBitmap).toHaveBeenCalledWith(expect.any(Blob), 0, 928, 909, 448, {
             imageOrientation: "from-image",
-            resizeWidth: 545,
-            resizeHeight: 480,
+            resizeWidth: 729,
+            resizeHeight: 359,
             resizeQuality: "high",
         });
-        expect(canvas.width).toBe(545);
-        expect(canvas.height).toBe(480);
+        expect(canvas.width).toBe(729);
+        expect(canvas.height).toBe(359);
         expect(close).toHaveBeenCalledOnce();
     });
 

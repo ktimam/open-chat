@@ -178,20 +178,33 @@ describe("onDeviceInferenceReadiness", () => {
 });
 
 describe("focused inference image bounds", () => {
-    it("rejects an oversized original before attempting a region decode", async () => {
-        const oversized = new Uint8Array(20 * 1024 * 1024 + 1);
-        oversized.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-        const decode = vi.fn();
-        vi.stubGlobal("createImageBitmap", decode);
+    it.each(["lower_half", "detail_card"] as const)(
+        "rejects an oversized original for %s before attempting a region decode",
+        async (imageRegion) => {
+            const oversized = new Uint8Array(20 * 1024 * 1024 + 1);
+            oversized.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+            const decode = vi.fn();
+            vi.stubGlobal("createImageBitmap", decode);
 
+            await expect(
+                inferOnDevice({
+                    prompt: "read labelled detail",
+                    image: oversized,
+                    imageRegion,
+                }),
+            ).resolves.toEqual({ kind: "error", error: "inference image region is invalid" });
+            expect(decode).not.toHaveBeenCalled();
+        },
+    );
+
+    it("rejects an image region outside the closed shared enum", async () => {
         await expect(
             inferOnDevice({
                 prompt: "read labelled detail",
-                image: oversized,
-                imageRegion: "lower_half",
+                image: new Uint8Array([1]),
+                imageRegion: "arbitrary_box" as never,
             }),
         ).resolves.toEqual({ kind: "error", error: "inference image region is invalid" });
-        expect(decode).not.toHaveBeenCalled();
     });
 });
 

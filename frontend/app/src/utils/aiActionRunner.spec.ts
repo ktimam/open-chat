@@ -1311,6 +1311,8 @@ describe("provenance before posting", () => {
             appId: APP.id,
             appRevision: APP.updated,
             actionId: DEF.name,
+            preparedExtraction: { amount: 20 },
+            preparedSource: { modality: "text", text: content.text, rulesAlreadyResolved: true },
         });
         expect(sendMessageWithContent).not.toHaveBeenCalled();
     });
@@ -1426,6 +1428,8 @@ describe("provenance before posting", () => {
             appId: APP.id,
             appRevision: APP.updated,
             actionId: DEF.name,
+            preparedExtraction: [{ amount: 20 }, { amount: 30 }],
+            preparedSource: { modality: "text", text: content.text, rulesAlreadyResolved: true },
         });
         expect(createAiAppCardProvenance).toHaveBeenCalledTimes(1);
         expect(sendMessageWithContent).not.toHaveBeenCalled();
@@ -1450,6 +1454,8 @@ const EVERY_RESULT: Record<ProposeResult["kind"], ProposeResult> = {
         appId: APP.id,
         appRevision: APP.updated,
         actionId: DEF.name,
+        preparedExtraction: { amount: 20 },
+        preparedSource: { modality: "text", text: "paid 20", rulesAlreadyResolved: true },
     },
     no_actions: { kind: "no_actions" },
     unavailable: { kind: "unavailable", reason: "no model" },
@@ -1689,6 +1695,12 @@ describe("runProposeFlow", () => {
                 appId: APP.id,
                 appRevision: APP.updated,
                 actionId: DEF.name,
+                preparedExtraction: { amount: 20 },
+                preparedSource: {
+                    modality: "image",
+                    text: "receipt caption",
+                    rulesAlreadyResolved: true,
+                },
             }),
         });
 
@@ -1705,7 +1717,7 @@ describe("runProposeFlow", () => {
         expect(deps.toast).not.toHaveBeenCalled();
     });
 
-    it("re-resolves and retries exactly once after the user explicitly completes reconnect", async () => {
+    it("reconnect reuses the first model result and never processes the source a second time", async () => {
         const refreshedCandidate = { ...CANDIDATE, recipientKeyVersion: 5n };
         const proposeCandidate = vi
             .fn()
@@ -1714,11 +1726,17 @@ describe("runProposeFlow", () => {
                 appId: APP.id,
                 appRevision: APP.updated,
                 actionId: DEF.name,
+                preparedExtraction: { amount: 20 },
+                preparedSource: {
+                    modality: "image",
+                    text: "receipt caption",
+                    rulesAlreadyResolved: true,
+                },
             })
             .mockResolvedValueOnce({ kind: "ready", card: CARD, extracted: { amount: 20 } });
         const deps = flowDeps({
-            canInfer: vi.fn(() => false),
-            promptForExtraction: vi.fn(() => ({ amount: 20 })),
+            canInfer: vi.fn(() => true),
+            promptForExtraction: vi.fn(() => undefined),
             resolveSuggestedCandidate: vi.fn(async () => ({
                 kind: "candidate" as const,
                 candidate: CANDIDATE,
@@ -1742,9 +1760,189 @@ describe("runProposeFlow", () => {
         expect(deps.promptReconnect).toHaveBeenCalledOnce();
         expect(deps.resolveReconnectCandidate).toHaveBeenCalledOnce();
         expect(proposeCandidate.mock.calls).toEqual([
-            [CANDIDATE, { amount: 20 }],
-            [refreshedCandidate, { amount: 20 }],
+            [CANDIDATE, undefined],
+            [
+                refreshedCandidate,
+                { amount: 20 },
+                {
+                    modality: "image",
+                    text: "receipt caption",
+                    rulesAlreadyResolved: true,
+                },
+            ],
         ]);
+        expect(deps.toast).not.toHaveBeenCalled();
+    });
+
+    it("rejects a newer app revision instead of replaying an extraction under changed semantics", async () => {
+        const deps = flowDeps({
+            propose: resolving({
+                kind: "app_connection_unavailable",
+                appId: APP.id,
+                appRevision: APP.updated,
+                actionId: DEF.name,
+                preparedExtraction: { amount: 20 },
+                preparedSource: {
+                    modality: "image",
+                    text: "receipt caption",
+                    rulesAlreadyResolved: true,
+                },
+            }),
+            promptReconnect: vi.fn(async () => ({
+                retryCoordinates: {
+                    appId: APP.id,
+                    appRevision: APP.updated + 1n,
+                    actionId: DEF.name,
+                },
+                previousKeyVersion: 4n,
+            })),
+        });
+
+        await expect(runProposeFlow(deps)).resolves.toBe("retryable");
+        expect(deps.propose).toHaveBeenCalledOnce();
+        expect(deps.resolveReconnectCandidate).not.toHaveBeenCalled();
+        expect(deps.proposeCandidate).not.toHaveBeenCalled();
+        expect(deps.toast).toHaveBeenCalledWith("aiApps.reconnectChanged");
+    });
+
+    it("runs a two-pass image model only once across an app reconnect", async () => {
+        attestationAvailableMock.mockReturnValue(true);
+        acceleratedImageModelReadyMock.mockResolvedValue(true);
+        inferenceCapabilityMock.mockReturnValue({
+            available: true,
+            runtimesSupported: ["llama-cpp"],
+            selectedModalities: ["image"],
+            selectedModelId: "qwen3-vl-2b-instruct-q4",
+        });
+        inferOnDeviceMock
+            .mockResolvedValueOnce({ kind: "ok", text: '{"amount":12900}' })
+            .mockResolvedValueOnce({ kind: "ok", text: '{"date":"2026-08-14"}' });
+
+        const imageDef: AiActionDefinition = {
+            ...DEF,
+            acceptsImage: true,
+            rules: [{ kind: "from_message", field: "note", maxLength: 200 }],
+            responseSchema: {
+                type: "object",
+                "x-openchat-image-prompt-template": {
+                    version: 1,
+                    template: "Read amount only.",
+                    includeRuleGuidance: false,
+                },
+                "x-openchat-image-focused-passes": {
+                    version: 1,
+                    primaryFields: ["amount"],
+                    primaryMaxTokens: 32,
+                    passes: [
+                        {
+                            template: "Read date only.",
+                            fields: ["date"],
+                            includeRuleGuidance: false,
+                            includeMessage: false,
+                            maxTokens: 24,
+                        },
+                    ],
+                },
+                properties: {
+                    amount: { type: "number", minimum: 0.005 },
+                    date: { type: "string", format: "date" },
+                    note: { type: "string", maxLength: 200 },
+                },
+                required: ["amount"],
+            },
+        };
+        const imageApp = { ...APP, manifest: { ...APP.manifest, actions: [imageDef] } };
+        const imageCandidate: AiActionCandidate = {
+            app: imageApp,
+            action: imageDef,
+            recipientKey: RECIPIENT,
+            recipientKeyVersion: 4n,
+        };
+        const refreshedCandidate: AiActionCandidate = {
+            ...imageCandidate,
+            recipientKey: `${RECIPIENT}refreshed`,
+            recipientKeyVersion: 5n,
+        };
+        const createAiAppCardProvenance = vi
+            .fn()
+            .mockResolvedValueOnce({ kind: "app_unavailable" as const })
+            .mockResolvedValueOnce({
+                kind: "success" as const,
+                provenance: new Uint8Array([7]),
+                expiresAt: BigInt(Date.now() + 60_000),
+            });
+        const sendMessageWithContent = vi.fn(async () => ({ kind: "success" }));
+        const client = {
+            createAiAppCardProvenance,
+            sendMessageWithContent,
+        } as unknown as OpenChat;
+        const messageContext: MessageContext = {
+            chatId: { kind: "group_chat", groupId: "aaaaa-aa" },
+        };
+        const imageContent = {
+            kind: "image_content",
+            blobData: new Uint8Array([1, 2, 3]),
+            caption: "authoritative receipt caption",
+        } as unknown as Parameters<typeof proposeAndPostCandidate>[2];
+        const proposeCandidate = vi.fn((candidate, extraction, source) =>
+            proposeAndPostCandidate(
+                client,
+                messageContext,
+                imageContent,
+                candidate,
+                extraction,
+                undefined,
+                undefined,
+                source,
+            ),
+        );
+        const deps = flowDeps({
+            resolveSuggestedCandidate: vi.fn(async () => ({
+                kind: "candidate" as const,
+                candidate: imageCandidate,
+            })),
+            proposeCandidate,
+            promptReconnect: vi.fn(async () => ({
+                retryCoordinates: {
+                    appId: imageApp.id,
+                    appRevision: imageApp.updated,
+                    actionId: imageDef.name,
+                },
+                previousKeyVersion: 4n,
+            })),
+            resolveReconnectCandidate: vi.fn(async () => ({
+                kind: "candidate" as const,
+                candidate: refreshedCandidate,
+            })),
+        });
+
+        browserImageActionMode.set("model_only");
+        try {
+            await expect(runProposeFlow(deps)).resolves.toBe("posted");
+        } finally {
+            browserImageActionMode.set("model_with_local_verification");
+        }
+
+        expect(inferOnDeviceMock).toHaveBeenCalledTimes(2);
+        expect(proposeCandidate.mock.calls).toEqual([
+            [imageCandidate, undefined],
+            [
+                refreshedCandidate,
+                {
+                    amount: 12900,
+                    date: "2026-08-14",
+                    note: "authoritative receipt caption",
+                },
+                {
+                    modality: "image",
+                    text: "authoritative receipt caption",
+                    rulesAlreadyResolved: true,
+                },
+            ],
+        ]);
+        expect(createAiAppCardProvenance).toHaveBeenCalledTimes(2);
+        expect(sendMessageWithContent).toHaveBeenCalledOnce();
+        expect(deps.promptReconnect).toHaveBeenCalledOnce();
         expect(deps.toast).not.toHaveBeenCalled();
     });
 
@@ -1754,7 +1952,13 @@ describe("runProposeFlow", () => {
             appId: APP.id,
             appRevision: APP.updated,
             actionId: DEF.name,
-        };
+            preparedExtraction: { amount: 20 },
+            preparedSource: {
+                modality: "image",
+                text: "receipt caption",
+                rulesAlreadyResolved: true,
+            },
+        } satisfies ProposeResult;
         const refreshedCandidate = { ...CANDIDATE, recipientKeyVersion: 5n };
         const deps = flowDeps({
             resolveSuggestedCandidate: vi.fn(async () => ({
@@ -1794,6 +1998,12 @@ describe("runProposeFlow", () => {
                 appId: APP.id,
                 appRevision: APP.updated,
                 actionId: DEF.name,
+                preparedExtraction: { amount: 20 },
+                preparedSource: {
+                    modality: "image",
+                    text: "receipt caption",
+                    rulesAlreadyResolved: true,
+                },
             }),
             promptReconnect: vi.fn(async () => ({
                 retryCoordinates: {
@@ -1825,6 +2035,12 @@ describe("runProposeFlow", () => {
                 appId: APP.id,
                 appRevision: APP.updated,
                 actionId: DEF.name,
+                preparedExtraction: { amount: 20 },
+                preparedSource: {
+                    modality: "image",
+                    text: "receipt caption",
+                    rulesAlreadyResolved: true,
+                },
             }),
             promptReconnect: vi.fn(async () => {
                 throw new Error("directory lookup failed");
@@ -2152,6 +2368,8 @@ describe("both ChatMessage trees run the SHARED propose flow", () => {
         it(`${tree}: delegates decisions, parsing, and lifecycle to shared utilities`, () => {
             const src = readFileSync(fileURLToPath(new URL(relative, import.meta.url)), "utf8");
             expect(src).toContain("runProposeFlow(");
+            expect(src).toContain("proposeCandidate: (candidate, extraction, source)");
+            expect(src).toMatch(/onPhase,\s+source,\s+\),/u);
             expect(src).toContain("const runAiActionSingleFlight = createSingleFlight(");
             expect(src).toContain("function runAiActionHandler(suggested?: AutoProposeSuggestion)");
             expect(src).toContain("parseManualExtractionPrompt(");

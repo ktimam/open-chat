@@ -159,7 +159,7 @@ async function runInference(
             request.image === undefined ||
             request.image.byteLength === 0 ||
             request.image.byteLength > MAX_IMAGE_BYTES ||
-            request.imageRegion !== "lower_half"
+            (request.imageRegion !== "lower_half" && request.imageRegion !== "detail_card")
         ) {
             return { kind: "error", error: "inference image region is invalid" };
         }

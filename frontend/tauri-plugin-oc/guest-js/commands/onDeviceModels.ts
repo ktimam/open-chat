@@ -7,9 +7,9 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 export type ModelFileSpec = {
     url: string;
-    sha256?: string;
+    sha256?: string | null;
     bytes: number;
-    filename?: string;
+    filename?: string | null;
 };
 
 export type DownloadModelRequest = {

@@ -1280,8 +1280,50 @@ mod helper_tests {
             json.contains("\"sizeBytes\""),
             "manifest must use camelCase sizeBytes, got {json}"
         );
+        assert!(
+            !json.contains("\"filename\":null"),
+            "an absent optional filename must be omitted so native list output matches the catalog identity, got {json}"
+        );
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn manifest_and_list_output_canonicalize_absent_optional_file_identity() {
+        let manifest = ModelManifestV1 {
+            version: 1,
+            model_id: "gemma-4-e2b-it-q4".to_string(),
+            runtime: "llama-cpp".to_string(),
+            size_bytes: 42,
+            files: vec![ModelFileSpec {
+                url: "https://models.example/gemma.gguf".to_string(),
+                sha256: Some("a".repeat(64)),
+                bytes: 42,
+                filename: None,
+            }],
+        };
+
+        // download_model persists ModelManifestV1. New manifests omit an absent filename instead of
+        // encoding it as null, but old manifests containing null must remain readable after upgrade.
+        let manifest_json = serde_json::to_value(&manifest).expect("serialize manifest");
+        assert!(manifest_json["files"][0].get("filename").is_none());
+        let mut legacy_json = manifest_json.clone();
+        legacy_json["files"][0]["filename"] = serde_json::Value::Null;
+        let legacy: ModelManifestV1 =
+            serde_json::from_value(legacy_json).expect("read legacy null filename");
+        assert_eq!(legacy.files[0].filename, None);
+
+        // list_local_models returns the same file specs inside LocalModel. Its wire JSON must use the
+        // same canonical identity, so the frontend cannot see null after reading a legacy manifest.
+        let listed = LocalModel {
+            model_id: legacy.model_id,
+            runtime: legacy.runtime,
+            size_bytes: legacy.size_bytes,
+            files: legacy.files,
+            path: "models/gemma-4-e2b-it-q4".to_string(),
+        };
+        let listed_json = serde_json::to_value(listed).expect("serialize listed model");
+        assert!(listed_json["files"][0].get("filename").is_none());
     }
 }
 

@@ -226,6 +226,19 @@ function lowerHalfCrop(dimensions: ImageDimensions): Omit<RegionCropRequest, key
     };
 }
 
+function detailCardCrop(dimensions: ImageDimensions): Omit<RegionCropRequest, keyof ResizeRequest> {
+    // Stable version-3 contract: a content-agnostic band that enlarges the labelled detail card on
+    // tall phone receipts without allowing app-provided coordinates or locating text.
+    const sourceY = Math.floor((dimensions.height * 58) / 100);
+    const sourceBottom = Math.ceil((dimensions.height * 86) / 100);
+    return {
+        sourceX: 0,
+        sourceY,
+        sourceWidth: dimensions.width,
+        sourceHeight: sourceBottom - sourceY,
+    };
+}
+
 /**
  * Derive a bounded model-only detail raster from the original image pixels. This is deliberately a
  * closed, content-agnostic transform: it neither locates text nor performs OCR, and the source image
@@ -237,7 +250,9 @@ export async function prepareImageRegionForInference(
     region: InferenceImageRegion,
     crop: InferenceImageRegionCropper = canvasRegionCrop,
 ): Promise<Uint8Array> {
-    if (region !== "lower_half") throw new Error("Unsupported inference image region.");
+    if (region !== "lower_half" && region !== "detail_card") {
+        throw new Error("Unsupported inference image region.");
+    }
     const intrinsicDimensions = intrinsicImageDimensions(bytes);
     if (intrinsicDimensions === undefined) {
         throw new Error("The image dimensions could not be verified for focused inference.");
@@ -249,7 +264,10 @@ export async function prepareImageRegionForInference(
     // tall receipt. Landscape and near-square documents already spend the bounded vision surface on
     // their full pixels; preserve them so a focused pass can still see a date or item near the top.
     if (intrinsicDimensions.height * 3 < intrinsicDimensions.width * 4) return bytes;
-    const source = lowerHalfCrop(intrinsicDimensions);
+    const source =
+        region === "detail_card"
+            ? detailCardCrop(intrinsicDimensions)
+            : lowerHalfCrop(intrinsicDimensions);
     const output = inferenceImageDimensions({
         width: source.sourceWidth,
         height: source.sourceHeight,

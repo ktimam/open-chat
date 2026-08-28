@@ -1826,7 +1826,7 @@ describe("runAiAction", () => {
                     includeRuleGuidance: false,
                 },
                 [AI_ACTION_IMAGE_FOCUSED_PASSES_EXTENSION]: {
-                    version: 2,
+                    version: 3,
                     primaryFields: ["amount", "currency", "kind"],
                     primaryMaxTokens: 64,
                     passes: [
@@ -1836,7 +1836,7 @@ describe("runAiAction", () => {
                             includeRuleGuidance: false,
                             includeMessage: false,
                             maxTokens: 24,
-                            imageRegion: "lower_half",
+                            imageRegion: "detail_card",
                         },
                     ],
                 },
@@ -1879,7 +1879,7 @@ describe("runAiAction", () => {
                 })),
             ).toEqual([
                 { prompt: corePrompt, maxTokens: 64, imageRegion: undefined },
-                { prompt: datePrompt, maxTokens: 24, imageRegion: "lower_half" },
+                { prompt: datePrompt, maxTokens: 24, imageRegion: "detail_card" },
             ]);
             expect(seen.every((request) => request.image?.byteLength === 3)).toBe(true);
             expect(result.kind).toBe("ready");
@@ -2051,6 +2051,33 @@ describe("runAiAction", () => {
             expect(imageModelPassesConfig(makeV2([validPass]))).toBeUndefined();
             expect(
                 imageModelPassesConfig(makeV2([{ ...regionPass, imageRegion: "tiny_box" }])),
+            ).toBeUndefined();
+            expect(
+                imageModelPassesConfig(makeV2([{ ...regionPass, imageRegion: "detail_card" }])),
+            ).toBeUndefined();
+
+            const makeV3 = (passes: unknown[]) => ({
+                ...make(passes),
+                [AI_ACTION_IMAGE_FOCUSED_PASSES_EXTENSION]: {
+                    version: 3,
+                    primaryFields: ["amount"],
+                    primaryMaxTokens: 32,
+                    passes,
+                },
+            });
+            const detailCardPass = { ...validPass, imageRegion: "detail_card" };
+            expect(imageModelPassesConfig(makeV3([detailCardPass]))).toEqual({
+                primaryFields: ["amount"],
+                primaryMaxTokens: 32,
+                passes: [detailCardPass],
+            });
+            expect(imageModelPassesConfig(makeV3([regionPass]))).toEqual({
+                primaryFields: ["amount"],
+                primaryMaxTokens: 32,
+                passes: [regionPass],
+            });
+            expect(
+                imageModelPassesConfig(makeV3([{ ...regionPass, imageRegion: "tiny_box" }])),
             ).toBeUndefined();
             expect(
                 imageModelPassesConfig(make([{ ...validPass, imageRegion: "lower_half" }])),

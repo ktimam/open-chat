@@ -332,6 +332,22 @@ describe("native model install status", () => {
         });
     });
 
+    it("treats native null and catalog omission as the same absent filename", () => {
+        // serde historically emitted Option::None as JSON null from list_local_models, whereas the
+        // built-in catalog omits filename. A successful update must become Current across that wire
+        // representation difference instead of offering Update forever.
+        const nativeRoundTrip = {
+            ...current,
+            files: current.files.map((file) => ({ ...file, filename: null })),
+        };
+
+        expect(nativeModelInstallStatus(trusted, [nativeRoundTrip])).toBe("current");
+        expect(selectedNativeModelStatus(trusted.id, [nativeRoundTrip])).toEqual({
+            kind: "current",
+            entry: trusted,
+        });
+    });
+
     it("marks the same-id stale install update-required whether selected or not", () => {
         expect(nativeModelInstallStatus(trusted, [stale])).toBe("update_required");
         expect(selectedNativeModelStatus(trusted.id, [stale])).toEqual({

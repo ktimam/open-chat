@@ -120,10 +120,10 @@ pub struct UpdateChatShortcutsResponse {
 #[serde(rename_all = "camelCase")]
 pub struct ModelFileSpec {
     pub url: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
     pub bytes: u64,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filename: Option<String>,
 }
 

@@ -13,8 +13,9 @@ export type ModelModality = "text" | "image";
 // A bounded, content-agnostic image focus requested by an app-authored extraction pass. The client
 // derives a new in-memory raster from the original pixels before inference; no OCR or text crosses
 // this seam. Keep this a closed enum so untrusted app manifests cannot request arbitrary coordinates
-// or tiny adversarial crops.
-export type InferenceImageRegion = "lower_half";
+// or tiny adversarial crops. `lower_half` is the full-width bottom 50%; `detail_card` is the
+// full-width band from 58% through 86% of height.
+export type InferenceImageRegion = "lower_half" | "detail_card";
 
 // Which native backend can load/run a given model. Pluggable — this is a named, extensible union so more
 // backends can be added without changing the catalog or inference contract; a catalog entry declares its

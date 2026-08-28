@@ -497,7 +497,7 @@
                         stillCurrent,
                         onPhase,
                     ),
-                proposeCandidate: (candidate, extraction) =>
+                proposeCandidate: (candidate, extraction, source) =>
                     proposeAndPostCandidate(
                         client,
                         capturedContext,
@@ -506,6 +506,7 @@
                         extraction,
                         stillCurrent,
                         onPhase,
+                        source,
                     ),
                 resolveSuggestedCandidate:
                     suggested === undefined

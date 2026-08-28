@@ -244,9 +244,9 @@ export type InstalledModelMetadata = {
 
 export type InstalledModelFileMetadata = {
     url: string;
-    sha256?: string;
+    sha256?: string | null;
     bytes: number;
-    filename?: string;
+    filename?: string | null;
 };
 
 export type TrustedModelMetadata = Pick<ModelCatalogEntry, "id" | "runtime" | "sizeBytes"> & {
@@ -269,7 +269,10 @@ function sameModelFiles(
                 /^[0-9a-f]{64}$/u.test(actualDigest ?? "") &&
                 actual.url === expected.url &&
                 actual.bytes === expected.bytes &&
-                actual.filename === expected.filename &&
+                // Rust's Option<String> historically crossed the Tauri boundary as null while the
+                // catalog expresses the same absent filename by omitting it. They are one identity:
+                // only a concrete destination filename may distinguish two otherwise equal files.
+                (actual.filename ?? undefined) === (expected.filename ?? undefined) &&
                 (expectedDigest === undefined || actualDigest === expectedDigest)
             );
         });

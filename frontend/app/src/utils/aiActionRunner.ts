@@ -201,8 +201,14 @@ export type ProposeResult =
     // This is decided before local inference, provenance minting, or posting.
     | { kind: "actions_unavailable"; unavailable: AiActionUnavailable[] }
     // The app declined provenance for the exact card. This may be a stale app connection, but the
-    // backend deliberately does not reveal which verification predicate failed.
-    | ({ kind: "app_connection_unavailable" } & AiAppReconnectRequest);
+    // backend deliberately does not reveal which verification predicate failed. Retain only the
+    // already validated structured extraction so an explicit reconnect can rebuild the card for
+    // the newly bound recipient key without reading the source image or running the model again.
+    | ({
+          kind: "app_connection_unavailable";
+          preparedExtraction: ManualExtraction;
+          preparedSource: ManualExtractionSource;
+      } & AiAppReconnectRequest);
 
 // Caller-local progress for one proposal. It is intentionally not a global store because several
 // message components may be alive concurrently.
@@ -422,6 +428,16 @@ export interface ManualExtractionSource {
     text?: string;
     rulesAlreadyResolved?: boolean;
 }
+
+function preparedSourceForContent(content: MessageContent): ManualExtractionSource {
+    return content.kind === "text_content"
+        ? { modality: "text", text: content.text, rulesAlreadyResolved: true }
+        : {
+              modality: "image",
+              text: content.kind === "image_content" ? content.caption : undefined,
+              rulesAlreadyResolved: true,
+          };
+}
 export const MANUAL_EXTRACTION_CANCELLED = Symbol("manual_extraction_cancelled");
 export type ManualExtractionPromptResult =
     | ManualExtraction
@@ -565,6 +581,7 @@ async function runDefinition(
     appId?: number,
     appRevision?: bigint,
     onPhase?: ProposalPhaseListener,
+    manualExtractionSource?: ManualExtractionSource,
 ): Promise<ProposeResult> {
     // `acceptsImage` is an explicit app capability, not a menu hint. Enforce it before the manual
     // seam, blob fetching, model-capability checks, or inference so an image can never reach an
@@ -582,9 +599,13 @@ async function runDefinition(
             additionalRecipientKeys,
             appId,
             appRevision,
-            content.kind === "text_content"
-                ? { modality: "text", text: content.text }
-                : { modality: "image" },
+            manualExtractionSource ??
+                (content.kind === "text_content"
+                    ? { modality: "text", text: content.text }
+                    : {
+                          modality: "image",
+                          text: content.kind === "image_content" ? content.caption : undefined,
+                      }),
         );
     }
 
@@ -883,6 +904,7 @@ async function postCard(
     client: OpenChat,
     messageContext: MessageContext,
     result: ProposeResult & { kind: "ready" | "ready_multi" },
+    preparedSource: ManualExtractionSource,
     stillCurrent?: () => boolean,
     onPhase?: ProposalPhaseListener,
 ): Promise<ProposeResult> {
@@ -925,6 +947,8 @@ async function postCard(
                 appId,
                 appRevision,
                 actionId: result.card.actionId,
+                preparedExtraction: result.extracted,
+                preparedSource,
             };
         }
         if (provenanceResult.kind !== "success") {
@@ -990,7 +1014,14 @@ export async function proposeAndPost(
         return { kind: "error", error: "proposal context changed" };
     }
     if (result.kind === "ready" || result.kind === "ready_multi") {
-        return postCard(client, messageContext, result, stillCurrent, onPhase);
+        return postCard(
+            client,
+            messageContext,
+            result,
+            preparedSourceForContent(content),
+            stillCurrent,
+            onPhase,
+        );
     }
     return result;
 }
@@ -1005,6 +1036,7 @@ export async function proposeAndPostCandidate(
     manualExtraction?: ManualExtraction,
     stillCurrent?: () => boolean,
     onPhase?: ProposalPhaseListener,
+    manualExtractionSource?: ManualExtractionSource,
 ): Promise<ProposeResult> {
     if (stillCurrent?.() === false) {
         return { kind: "error", error: "suggestion context changed" };
@@ -1028,6 +1060,7 @@ export async function proposeAndPostCandidate(
         candidate.app.id,
         candidate.app.updated,
         onPhase,
+        manualExtractionSource,
     );
     // The model can run for seconds. Recheck before the only external write so switching accounts
     // during inference cannot post A's message-derived card into B's session.
@@ -1035,7 +1068,14 @@ export async function proposeAndPostCandidate(
         return { kind: "error", error: "suggestion context changed" };
     }
     if (result.kind === "ready" || result.kind === "ready_multi") {
-        return postCard(client, messageContext, result, stillCurrent, onPhase);
+        return postCard(
+            client,
+            messageContext,
+            result,
+            preparedSourceForContent(content),
+            stillCurrent,
+            onPhase,
+        );
     }
     return result;
 }
@@ -1148,6 +1188,7 @@ export interface ProposeFlowDeps {
     proposeCandidate: (
         candidate: AiActionCandidate,
         extraction?: ManualExtraction,
+        source?: ManualExtractionSource,
     ) => Promise<ProposeResult>;
     // When a private/public trigger created the chip, re-resolve only those immutable coordinates.
     // Stale registrations must never fall back to the generic chooser or a different candidate.
@@ -1307,6 +1348,12 @@ async function runProposeFlowInternal(deps: ProposeFlowDeps): Promise<ProposeFlo
     }
 
     if (result.kind === "app_connection_unavailable") {
+        // The first run already fetched/read the message and validated this exact extraction. Keep
+        // it in this caller-local flow while reconnect is open. Replaying it through buildManualCard
+        // revalidates against the freshly resolved app revision and rebinds the card to the new
+        // recipient key, but deliberately cannot invoke image decoding or model inference.
+        const preparedExtraction = result.preparedExtraction;
+        const preparedSource = result.preparedSource;
         const failedCoordinates: AiAppReconnectRequest = {
             appId: result.appId,
             appRevision: result.appRevision,
@@ -1321,7 +1368,7 @@ async function runProposeFlowInternal(deps: ProposeFlowDeps): Promise<ProposeFlo
             completion.previousKeyVersion < 0n ||
             retryCoordinates.appId !== failedCoordinates.appId ||
             retryCoordinates.actionId !== failedCoordinates.actionId ||
-            retryCoordinates.appRevision < failedCoordinates.appRevision ||
+            retryCoordinates.appRevision !== failedCoordinates.appRevision ||
             (suggestedCandidate !== undefined &&
                 !candidateHasCoordinates(suggestedCandidate, retryCoordinates))
         ) {
@@ -1356,7 +1403,11 @@ async function runProposeFlowInternal(deps: ProposeFlowDeps): Promise<ProposeFlo
 
         // Exactly one retry. Another ambiguous AppUnavailable result is reported and never opens a
         // second modal or loops. The user still confirms the resulting card before any app action.
-        result = await deps.proposeCandidate(refreshed.candidate, extraction);
+        result = await deps.proposeCandidate(
+            refreshed.candidate,
+            preparedExtraction,
+            preparedSource,
+        );
         if (stale()) return "retryable";
         if (result.kind === "app_connection_unavailable") {
             deps.toast("aiApps.reconnectStillUnavailable");
