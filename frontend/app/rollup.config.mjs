@@ -79,7 +79,7 @@ function clean() {
     };
 }
 
-const { version, production, development } = initEnv();
+const { version, production, development, env } = initEnv();
 
 // Vite substitutes import.meta.env built-ins while serving the browser app. Native packages use
 // this Rollup build instead, so every built-in consumed by shared UI code must be replaced here as
@@ -308,7 +308,16 @@ export default {
 
         replace({
             preventAssignment: true,
+            // @rollup/plugin-replace matches longer keys first and its default trailing delimiter
+            // prevents this bare fallback from consuming a dotted property access. Define Vite's
+            // complete builtin set explicitly, keep the app-specific OC_* keys below, then erase
+            // any remaining bare object guard so native bundles contain no synthetic Vite env.
+            "import.meta.env.MODE": JSON.stringify(env),
             "import.meta.env.DEV": JSON.stringify(development),
+            "import.meta.env.PROD": JSON.stringify(!development),
+            "import.meta.env.SSR": "false",
+            "import.meta.env.BASE_URL": JSON.stringify("/"),
+            "import.meta.env": "{}",
             "import.meta.env.OC_APP_STORE": override(
                 "OC_APP_STORE",
                 JSON.stringify(process.env.OC_APP_STORE),

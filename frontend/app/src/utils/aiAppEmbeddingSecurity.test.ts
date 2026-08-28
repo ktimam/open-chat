@@ -189,8 +189,17 @@ describe("embedded app surface isolation", () => {
     it("replaces Vite's development builtin in native bundles and rejects future leaks", () => {
         const rollup = readFileSync(appPath("rollup.config.mjs"), "utf8");
 
-        expect(rollup).toContain("const { version, production, development } = initEnv();");
-        expect(rollup).toContain('"import.meta.env.DEV": JSON.stringify(development)');
+        expect(rollup).toContain("const { version, production, development, env } = initEnv();");
+        for (const replacement of [
+            '"import.meta.env.MODE": JSON.stringify(env)',
+            '"import.meta.env.DEV": JSON.stringify(development)',
+            '"import.meta.env.PROD": JSON.stringify(!development)',
+            '"import.meta.env.SSR": "false"',
+            '"import.meta.env.BASE_URL": JSON.stringify("/")',
+            '"import.meta.env": "{}"',
+        ]) {
+            expect(rollup).toContain(replacement);
+        }
         expect(rollup).toContain("rejectUnresolvedViteEnv()");
         expect(rollup).toContain('artifact.code.includes("import.meta.env")');
         expect(rollup).not.toContain('artifact.code.includes("import.meta.env.DEV")');
