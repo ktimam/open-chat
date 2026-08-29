@@ -228,9 +228,9 @@ export function imagePromptTemplateConfig(
 }
 
 /** Parse focused passes layered over the backwards-compatible compact primary prompt. Version 1
- * receives the original image for every pass. Version 2 permits only the original lower-half
- * region. Version 3 permits the expanded closed set of client-authored pixel regions; the model
- * still receives pixels only, never OCR text. */
+ * receives the original image for every pass. Version 2 permits only lower_half. Version 3 permits
+ * lower_half/detail_card. Version 4 adds lower_detail_rows without broadening v3; older clients
+ * ignore the unknown optional extension and safely keep the compact primary pass. */
 export function imageModelPassesConfig(
     responseSchema: object | undefined,
 ): AiActionImageModelPassesConfig | undefined {
@@ -246,14 +246,17 @@ export function imageModelPassesConfig(
     if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return undefined;
     const extension = raw as Record<string, unknown>;
     const extensionKeys = Object.keys(extension).sort();
-    const extensionVersion = extension.version as 1 | 2 | 3;
+    const extensionVersion = extension.version as 1 | 2 | 3 | 4;
     if (
         extensionKeys.length !== 4 ||
         extensionKeys[0] !== "passes" ||
         extensionKeys[1] !== "primaryFields" ||
         extensionKeys[2] !== "primaryMaxTokens" ||
         extensionKeys[3] !== "version" ||
-        (extensionVersion !== 1 && extensionVersion !== 2 && extensionVersion !== 3) ||
+        (extensionVersion !== 1 &&
+            extensionVersion !== 2 &&
+            extensionVersion !== 3 &&
+            extensionVersion !== 4) ||
         !Array.isArray(extension.primaryFields) ||
         extension.primaryFields.length === 0 ||
         extension.primaryFields.length > MAX_AI_ACTION_IMAGE_PASS_FIELDS ||
@@ -325,7 +328,11 @@ export function imageModelPassesConfig(
             (extensionVersion === 2 && pass.imageRegion !== "lower_half") ||
             (extensionVersion === 3 &&
                 pass.imageRegion !== "lower_half" &&
-                pass.imageRegion !== "detail_card")
+                pass.imageRegion !== "detail_card") ||
+            (extensionVersion === 4 &&
+                pass.imageRegion !== "lower_half" &&
+                pass.imageRegion !== "detail_card" &&
+                pass.imageRegion !== "lower_detail_rows")
         ) {
             return undefined;
         }

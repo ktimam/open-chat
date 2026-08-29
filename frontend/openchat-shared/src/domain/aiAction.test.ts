@@ -1894,6 +1894,59 @@ describe("runAiAction", () => {
             }
         });
 
+        it("forwards the version-4 lower detail rows only to its focused pass", async () => {
+            const responseSchema = {
+                type: "object",
+                [AI_ACTION_IMAGE_PROMPT_EXTENSION]: {
+                    version: 1,
+                    template: "Read amount only.",
+                    includeRuleGuidance: false,
+                },
+                [AI_ACTION_IMAGE_FOCUSED_PASSES_EXTENSION]: {
+                    version: 4,
+                    primaryFields: ["amount"],
+                    primaryMaxTokens: 32,
+                    passes: [
+                        {
+                            template: "Read the printed date only.",
+                            fields: ["date"],
+                            includeRuleGuidance: false,
+                            includeMessage: false,
+                            maxTokens: 24,
+                            imageRegion: "lower_detail_rows",
+                        },
+                    ],
+                },
+                properties: {
+                    amount: { type: "number" },
+                    date: { type: "string", format: "date" },
+                },
+                required: ["amount"],
+            };
+            const requests: InferenceRequest[] = [];
+            const result = await runAiAction(
+                { ...DEF, acceptsImage: true, responseSchema },
+                { image: new Uint8Array([1, 2, 3]) },
+                RECIPIENT,
+                async (request) => {
+                    requests.push(request);
+                    return {
+                        kind: "ok",
+                        text: requests.length === 1 ? '{"amount":12900}' : '{"date":"2026-08-14"}',
+                    };
+                },
+            );
+
+            expect(requests.map(({ imageRegion }) => imageRegion)).toEqual([
+                undefined,
+                "lower_detail_rows",
+            ]);
+            expect(result.kind).toBe("ready");
+            if (result.kind === "ready") {
+                expect(result.extracted).toMatchObject({ amount: 12900, date: "2026-08-14" });
+            }
+        });
+
         it("propagates a focused-pass device failure instead of hiding it", async () => {
             const responseSchema = {
                 type: "object",
@@ -2078,6 +2131,41 @@ describe("runAiAction", () => {
             });
             expect(
                 imageModelPassesConfig(makeV3([{ ...regionPass, imageRegion: "tiny_box" }])),
+            ).toBeUndefined();
+            // Version 3 stays frozen: the new lower rows band is accepted only by version 4.
+            expect(
+                imageModelPassesConfig(
+                    makeV3([{ ...regionPass, imageRegion: "lower_detail_rows" }]),
+                ),
+            ).toBeUndefined();
+
+            const makeV4 = (passes: unknown[]) => ({
+                ...make(passes),
+                [AI_ACTION_IMAGE_FOCUSED_PASSES_EXTENSION]: {
+                    version: 4,
+                    primaryFields: ["amount"],
+                    primaryMaxTokens: 32,
+                    passes,
+                },
+            });
+            const lowerDetailRowsPass = {
+                ...validPass,
+                imageRegion: "lower_detail_rows",
+            };
+            expect(imageModelPassesConfig(makeV4([lowerDetailRowsPass]))).toEqual({
+                primaryFields: ["amount"],
+                primaryMaxTokens: 32,
+                passes: [lowerDetailRowsPass],
+            });
+            expect(imageModelPassesConfig(makeV4([detailCardPass]))).toEqual({
+                primaryFields: ["amount"],
+                primaryMaxTokens: 32,
+                passes: [detailCardPass],
+            });
+            expect(
+                imageModelPassesConfig(
+                    makeV4([{ ...lowerDetailRowsPass, imageRegion: "tiny_box" }]),
+                ),
             ).toBeUndefined();
             expect(
                 imageModelPassesConfig(make([{ ...validPass, imageRegion: "lower_half" }])),

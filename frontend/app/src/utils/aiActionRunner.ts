@@ -49,7 +49,9 @@ import {
     inferOnDeviceTextOnlyNoProjector,
     isNativeClient,
     onDeviceInferenceCapability,
+    usesWebInferenceRuntime,
 } from "./onDeviceInference";
+import { localAudioInput } from "./localAudioInput";
 import { localImageBytes, type ImagePageLocation } from "./localImageInput";
 import {
     browserImageModelFirstReadiness,
@@ -63,7 +65,7 @@ import {
 
 const MAX_AI_ACTION_ENABLED_APPS = 32;
 const GPU_ONLY_IMAGE_UNAVAILABLE_MESSAGE =
-    "Accelerated image inference is unavailable for the selected model in this browser. The local reader is disabled.";
+    "Accelerated image inference is unavailable for the selected model on this device. The local reader is disabled.";
 const LOCAL_VERIFICATION_FAILED_MESSAGE =
     "The model result could not be verified against the image. No action was created.";
 const PROVENANCE_FAILURE_MESSAGES = {
@@ -396,14 +398,19 @@ export async function preflightAiActionForMessage(
         : { kind: "no_actions" };
 }
 
-// Turn a message's content into runner input. Text is used directly; an image's bytes are fetched from the
-// (already-decrypted, displayable) blob URL so the on-device vision model can read it (the receipt case).
+// Turn a message's content into runner input. Text is used directly; media bytes are loaded through
+// bounded local helpers so a selected on-device image/audio model sees the same attachment the user
+// can display or play, without an unbounded fetch. Audio is explicit opt-in so the existing app-action
+// proposal path (whose schemas support only text/image) cannot silently consume a voice attachment.
 export async function contentToInput(
     content: MessageContent,
     client?: Pick<OpenChat, "downloadPublicBlob">,
     page?: ImagePageLocation,
     blobUrlPattern?: string,
-): Promise<{ text?: string; image?: Uint8Array } | undefined> {
+    options: { includeAudio?: boolean } = {},
+): Promise<
+    { text?: string; image?: Uint8Array; audio?: Uint8Array; audioMimeType?: string } | undefined
+> {
     if (content.kind === "text_content") {
         return { text: content.text };
     }
@@ -417,6 +424,17 @@ export async function contentToInput(
             blobUrlPattern,
         );
         if (image !== undefined) return { image, text: content.caption };
+    }
+    if (options.includeAudio && content.kind === "audio_content") {
+        const input = await localAudioInput(
+            content,
+            client === undefined
+                ? undefined
+                : (ref, maxBytes) => client.downloadPublicBlob(ref, maxBytes),
+            page,
+            blobUrlPattern,
+        );
+        if (input !== undefined) return { ...input, text: content.caption };
     }
     return undefined;
 }
@@ -612,12 +630,19 @@ async function runDefinition(
 
     const input = await contentToInput(content, client);
     if (input === undefined) return { kind: "unsupported_content" };
+    const webInference = usesWebInferenceRuntime();
+    // The feature-flagged Android APK intentionally packages no OCR runtime. Even if an older app
+    // version left a browser image-mode preference in this origin's storage, its WebGPU route must
+    // remain model-only instead of trying to load browser OCR assets that do not exist in the APK.
+    const browserLocalReaderModesAllowed = webInference && !isNativeClient();
     const verifyBrowserImageWithLocal =
-        !isNativeClient() && input.image !== undefined && browserUsesModelWithLocalVerification();
+        browserLocalReaderModesAllowed &&
+        input.image !== undefined &&
+        browserUsesModelWithLocalVerification();
     // Pin the browser selection once for the complete action. A declarative image action may use
     // several sequential focused passes; never merge outputs from two models if the user changes
     // the global selection while those passes are running.
-    const selectedBrowserModelId = !isNativeClient() ? webModelCatalogId() : undefined;
+    const selectedBrowserModelId = webInference ? webModelCatalogId() : undefined;
     const privateVerificationModelId = verifyBrowserImageWithLocal
         ? selectedBrowserModelId
         : undefined;
@@ -651,7 +676,7 @@ async function runDefinition(
             appRevision,
         );
         if (
-            !isNativeClient() &&
+            webInference &&
             input.image !== undefined &&
             browserModelImageEvidence !== undefined &&
             isSemanticDuplicateBrowserImageResult(
@@ -775,7 +800,11 @@ async function runDefinition(
         return imageModelSelected ? readiness : { available: false };
     };
 
-    if (!isNativeClient() && input.image !== undefined && browserUsesLocalReaderOnly()) {
+    if (
+        browserLocalReaderModesAllowed &&
+        input.image !== undefined &&
+        browserUsesLocalReaderOnly()
+    ) {
         const local = await runSourceGrounded();
         if (local !== undefined) return local;
         return {
@@ -788,7 +817,11 @@ async function runDefinition(
     // before inference. The two explicit local-reader modes keep their separate contract below:
     // verification is local-first and may return only a complete source-grounded local card when
     // its private text check is unavailable, while local-reader-only never probes a model at all.
-    if (!isNativeClient() && input.image !== undefined && browserUsesModelOnly()) {
+    if (
+        webInference &&
+        input.image !== undefined &&
+        (!browserLocalReaderModesAllowed || browserUsesModelOnly())
+    ) {
         const modelReadiness = await selectedBrowserImageModelReadiness();
         if (!modelReadiness.available) {
             if (modelReadiness.reason !== undefined) {
@@ -804,7 +837,7 @@ async function runDefinition(
         return { kind: "error", error: LOCAL_VERIFICATION_FAILED_MESSAGE };
     }
 
-    if (!isNativeClient() && localActionExtractorSupports(def.responseSchema)) {
+    if (webInference && localActionExtractorSupports(def.responseSchema)) {
         const strategy =
             input.image === undefined ? undefined : browserImageStrategy(def.responseSchema);
         if (strategy !== undefined) {

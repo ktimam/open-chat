@@ -18,10 +18,13 @@
         mergeCatalogs,
         nativeModelInstallStatus,
     } from "@utils/modelCatalog";
-    import { isNativeClient } from "@utils/onDeviceInference";
+    import { isNativeClient, usesWebInferenceRuntime } from "@utils/onDeviceInference";
     import { transformersWebGpuSelectionCanHandle } from "@utils/transformersWebGpuInference";
     import {
-        allWebGpuCatalogModelSupported,
+        TRANSFORMERS_WEBGPU_MODEL_SPECS,
+        transformersWebGpuModelSpec,
+    } from "@utils/transformersWebGpuProtocol";
+    import {
         cancelWebModelDownload,
         clearWebModel,
         restoreWebModel,
@@ -57,7 +60,10 @@
     // On-device inference runs wherever the Tauri native bridge is present (desktop + mobile); degrade
     // gracefully in the plain web/PWA build.
     const client = getContext<OpenChat>("client");
-    const native = isNativeClient();
+    // A feature-flagged local Android APK deliberately uses the same pinned all-WebGPU chooser as
+    // mobile Chrome. Other Tauri clients retain the native llama.cpp manager.
+    const nativeClient = isNativeClient();
+    const native = nativeClient && !usesWebInferenceRuntime();
 
     let webError = $state("");
     let webChoiceGeneration = 0;
@@ -71,10 +77,25 @@
     // leftovers are appended, so a stale/partial remote catalog can never shrink the chooser.
     let catalogSource = $state<ModelCatalogEntry[]>(defaultModelCatalog.models);
 
-    // Only catalog ids backed by this build's pinned, qualified all-WebGPU sessions are shown.
-    // Catalog order remains the recommendation order if more qualified runtimes are added later.
+    // The immutable all-WebGPU registry is authoritative for identity, size and capabilities. Catalog
+    // metadata contributes licence links only; a stale remote catalog cannot hide a pinned runtime.
     let webChoices = $derived(
-        catalogSource.filter((entry) => allWebGpuCatalogModelSupported(entry.id)),
+        Object.values(TRANSFORMERS_WEBGPU_MODEL_SPECS)
+            .filter((spec) => transformersWebGpuSelectionCanHandle(spec.id))
+            .map((spec) => {
+                const metadata = catalogSource.find((entry) => entry.id === spec.id);
+                return {
+                    id: spec.id,
+                    name: spec.name,
+                    description: spec.description,
+                    modalities: [...spec.modalities],
+                    runtime: "transformers-webgpu" as const,
+                    files: [],
+                    license: metadata?.license ?? "Pinned model repository terms",
+                    licenseUrl: metadata?.licenseUrl,
+                    sizeBytes: spec.artifactBytes,
+                } satisfies ModelCatalogEntry;
+            }),
     );
 
     // The chooser list always renders except while its owned preload is active; an exact catalog id
@@ -371,7 +392,9 @@
                     )}
                 ></Translatable>
             </BodySmall>
-            <BrowserImageActionModeSettings />
+            {#if !nativeClient}
+                <BrowserImageActionModeSettings />
+            {/if}
             {#if $webModelStatus.status === "downloading"}
                 <BodySmall>
                     <Translatable
@@ -412,6 +435,12 @@
                             {#if entry.modalities.includes("image")}
                                 <Chip>
                                     <Translatable resourceKey={i18nKey("reads images")}
+                                    ></Translatable>
+                                </Chip>
+                            {/if}
+                            {#if transformersWebGpuModelSpec(entry.id)?.optionalAudio !== undefined}
+                                <Chip>
+                                    <Translatable resourceKey={i18nKey("voice add-on optional")}
                                     ></Translatable>
                                 </Chip>
                             {/if}

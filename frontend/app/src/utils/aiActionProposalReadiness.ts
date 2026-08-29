@@ -1,4 +1,4 @@
-import { isNativeClient, onDeviceInferenceReadiness } from "./onDeviceInference";
+import { onDeviceInferenceReadiness, usesWebInferenceRuntime } from "./onDeviceInference";
 import { browserImageModelFirstReadiness } from "./webInference";
 
 /**
@@ -9,7 +9,7 @@ import { browserImageModelFirstReadiness } from "./webInference";
  * cache. The caller bypasses this helper entirely for both explicit local-reader image modes.
  */
 export function aiActionProposalReadiness(isImage: boolean) {
-    return !isNativeClient() && isImage
+    return usesWebInferenceRuntime() && isImage
         ? browserImageModelFirstReadiness({ retryAfterRecentFailure: true })
         : onDeviceInferenceReadiness();
 }

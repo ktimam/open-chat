@@ -199,7 +199,7 @@ describe("prepareImageForBrowserInference", () => {
 });
 
 describe("prepareImageRegionForInference", () => {
-    it.each(["lower_half", "detail_card"] as const)(
+    it.each(["lower_half", "detail_card", "lower_detail_rows"] as const)(
         "preserves the full raster for %s when the source is not a tall receipt",
         async (region) => {
             const bytes = pngBytes(1200, 900);
@@ -272,6 +272,29 @@ describe("prepareImageRegionForInference", () => {
                 sourceHeight: 448,
                 width: 729,
                 height: 359,
+            }),
+        );
+    });
+
+    it("focuses the version-4 lower detail rows at full width from 68% through 90%", async () => {
+        const bytes = pngBytes(909, 1600);
+        const crop = vi.fn().mockResolvedValue(new Uint8Array([6, 8, 9]));
+
+        await expect(
+            prepareImageRegionForInference(bytes, "lower_detail_rows", crop),
+        ).resolves.toEqual(new Uint8Array([6, 8, 9]));
+        expect(crop).toHaveBeenCalledWith(
+            bytes,
+            expect.objectContaining({
+                sourceX: 0,
+                sourceY: 1088,
+                sourceWidth: 909,
+                sourceHeight: 352,
+                width: 768,
+                height: 297,
+                mimeType: "image/jpeg",
+                quality: 0.85,
+                signal: expect.any(AbortSignal),
             }),
         );
     });

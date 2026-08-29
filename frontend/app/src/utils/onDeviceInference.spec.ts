@@ -14,6 +14,7 @@ import {
     NATIVE_MODEL_UPDATE_REQUIRED,
     onDeviceInferenceCapability,
     onDeviceInferenceReadiness,
+    usesWebInferenceRuntime,
 } from "./onDeviceInference";
 import { defaultModelCatalog } from "./modelCatalog";
 import { clearWebModel, useWebModelFromUrl, webInfer } from "./webInference";
@@ -85,6 +86,7 @@ const mockListLocalModels = vi.mocked(listLocalModels);
 
 const MODEL_ID = "gemma-4-e2b-it-q4";
 const TRUSTED_MODEL = defaultModelCatalog.models.find((model) => model.id === MODEL_ID)!;
+const DEFAULT_USER_AGENT = navigator.userAgent;
 
 function setNative(native: boolean): void {
     if (native) {
@@ -92,6 +94,18 @@ function setNative(native: boolean): void {
     } else {
         delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
     }
+}
+
+function setUserAgent(value: string): void {
+    Object.defineProperty(navigator, "userAgent", { configurable: true, value });
+}
+
+function enableLocalAndroidWebGpu(): void {
+    setNative(true);
+    setUserAgent("Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 Chrome/150 Mobile");
+    vi.stubEnv("OC_BUILD_ENV", "development");
+    vi.stubEnv("OC_DFX_NETWORK", "local");
+    vi.stubEnv("OC_TRANSFORMERS_WEBGPU_IMAGE_SPIKE", "true");
 }
 
 function localModel(overrides: Partial<LocalModel> = {}): LocalModel {
@@ -114,11 +128,14 @@ beforeEach(() => {
     mockListLocalModels.mockResolvedValue([]);
     selectedModelId.set("");
     setNative(false);
+    setUserAgent(DEFAULT_USER_AGENT);
     webRuntime.cached = [];
 });
 
 afterEach(() => {
     setNative(false);
+    setUserAgent(DEFAULT_USER_AGENT);
+    vi.unstubAllEnvs();
     selectedModelId.set("");
 });
 
@@ -132,6 +149,26 @@ describe("isNativeClient", () => {
 });
 
 describe("onDeviceInferenceReadiness", () => {
+    it("requires the accelerated model in a feature-flagged Android WebView without probing llama.cpp", async () => {
+        enableLocalAndroidWebGpu();
+        selectedModelId.set(MODEL_ID);
+        mockListLocalModels.mockResolvedValue([localModel()]);
+
+        expect(usesWebInferenceRuntime()).toBe(true);
+        await expect(onDeviceInferenceReadiness()).resolves.toEqual({
+            available: false,
+            reason: "no accelerated on-device model selected",
+        });
+        expect(mockInferenceRuntimeAvailable).not.toHaveBeenCalled();
+        expect(mockListLocalModels).not.toHaveBeenCalled();
+        expect(onDeviceInferenceCapability()).toEqual({
+            available: false,
+            runtimesSupported: ["transformers-webgpu"],
+            selectedModelId: undefined,
+            selectedModalities: [],
+        });
+    });
+
     it("does not treat a Tauri bridge as proof that the runtime was compiled in", async () => {
         setNative(true);
         mockInferenceRuntimeAvailable.mockResolvedValue(false);
@@ -178,7 +215,7 @@ describe("onDeviceInferenceReadiness", () => {
 });
 
 describe("focused inference image bounds", () => {
-    it.each(["lower_half", "detail_card"] as const)(
+    it.each(["lower_half", "detail_card", "lower_detail_rows"] as const)(
         "rejects an oversized original for %s before attempting a region decode",
         async (imageRegion) => {
             const oversized = new Uint8Array(20 * 1024 * 1024 + 1);
@@ -599,6 +636,27 @@ describe("onDeviceInferenceCapability in a browser", () => {
         expect(cap.available).toBe(true);
         expect(cap.selectedModalities).toEqual(["text", "image"]);
         expect(cap.selectedModelId).toBe("smolvlm-256m-instruct-q8");
+    });
+
+    it("rejects a legacy non-WebGPU browser model in Android and never falls back to native IPC", async () => {
+        enableLocalAndroidWebGpu();
+        await attachWebVisionModel(["text", "image"]);
+
+        await expect(
+            inferOnDevice({ prompt: "read receipt", image: new Uint8Array([1, 2, 3]) }),
+        ).resolves.toEqual({
+            kind: "unavailable",
+            reason: "no accelerated on-device model selected",
+        });
+        expect(mockInferenceRuntimeAvailable).not.toHaveBeenCalled();
+        expect(mockListLocalModels).not.toHaveBeenCalled();
+        expect(mockInfer).not.toHaveBeenCalled();
+        expect(onDeviceInferenceCapability()).toEqual({
+            available: false,
+            runtimesSupported: ["transformers-webgpu"],
+            selectedModelId: "smolvlm-256m-instruct-q8",
+            selectedModalities: [],
+        });
     });
 
     it("still reports text-only for a text model", async () => {

@@ -5,17 +5,27 @@ import { basename, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
     createTransformersWebGpuEngine,
+    deleteTransformersWebGpuAudio,
+    deleteTransformersWebGpuModel,
     invalidateTransformersWebGpuReadiness,
+    preloadTransformersWebGpuAudio,
     preloadTransformersWebGpuModel,
     shouldUseTransformersWebGpuSpike,
+    transformersWebGpuArtifactDownloadUrl,
+    transformersWebGpuAudioDownloaded,
     transformersWebGpuModelDownloaded,
+    transformersWebGpuRuntimeAvailability,
     transformersWebGpuRuntimeAvailableOffline,
     transformersWebGpuRuntimeAssetUrl,
     type TransformersWebGpuArtifactCache,
     type TransformersWebGpuWorker,
 } from "./transformersWebGpuInference";
 import {
+    PHONE_GEMMA4_E2B_MODEL_ID,
     PHONE_QWEN3_VL_2B_MODEL_ID,
+    TRANSFORMERS_GEMMA_ARTIFACTS,
+    TRANSFORMERS_GEMMA_AUDIO_ARTIFACTS,
+    TRANSFORMERS_GEMMA_CACHE_KEY,
     TRANSFORMERS_QWEN_ARTIFACT_BYTES,
     TRANSFORMERS_QWEN_ARTIFACTS,
     TRANSFORMERS_QWEN_DEVICE_MAP,
@@ -23,6 +33,7 @@ import {
     TRANSFORMERS_QWEN_REVISION,
     TRANSFORMERS_WEBGPU_ADAPTER_UNAVAILABLE_REASON,
     TRANSFORMERS_WEBGPU_CACHE_KEY,
+    TRANSFORMERS_WEBGPU_PACKAGED_MODEL_ARTIFACTS,
     TRANSFORMERS_WEBGPU_RUNTIME_ASSETS,
     TRANSFORMERS_WEBGPU_WORKER_PATH,
     type TransformersWebGpuFromWorker,
@@ -63,10 +74,11 @@ function runtimeCacheResponse(
 ): Response {
     const url = new URL(transformersWebGpuRuntimeAssetUrl(asset));
     const digest = createHash("sha256").update(bytes).digest("hex");
-    return new Response(null, {
+    return new Response(bytes.slice().buffer as ArrayBuffer, {
         status: 200,
         headers: {
             "content-length": String(bytes.byteLength),
+            "content-type": asset.path.endsWith(".wasm") ? "application/wasm" : "text/javascript",
             "x-content-sha256": digest,
             "x-openchat-runtime-asset": asset.kind,
             "x-openchat-runtime-version": url.searchParams.get("v") ?? "development",
@@ -95,10 +107,22 @@ const IMAGE_REQUEST: InferenceRequest = {
     prompt: "Return JSON",
     text: "Receipt note",
     image: new Uint8Array([1, 2, 3]),
-    maxTokens: 123,
+    maxTokens: 96,
 };
 
 describe("Transformers.js Qwen WebGPU spike", () => {
+    it("admits the single-threaded ORT WebGPU runtime without page-level isolation", () => {
+        vi.stubGlobal("crossOriginIsolated", false);
+        vi.stubGlobal("SharedArrayBuffer", undefined);
+        vi.stubGlobal("Worker", class TestWorker {});
+        vi.stubGlobal("navigator", { gpu: {} });
+        try {
+            expect(transformersWebGpuRuntimeAvailability(false)).toEqual({ available: true });
+        } finally {
+            vi.unstubAllGlobals();
+        }
+    });
+
     it("pins the optimized model revision and audited q4 artifact footprint", () => {
         expect(TRANSFORMERS_QWEN_MODEL_ID).toBe("onnx-community/Qwen3-VL-2B-Instruct-ONNX");
         expect(TRANSFORMERS_QWEN_REVISION).toBe("3e4136ea66ae6e07c110e64fe07da2e029517ab5");
@@ -120,8 +144,133 @@ describe("Transformers.js Qwen WebGPU spike", () => {
         });
         expect(TRANSFORMERS_WEBGPU_WORKER_PATH).toBe("/transformers_webgpu_worker.js");
         expect(TRANSFORMERS_WEBGPU_ADAPTER_UNAVAILABLE_REASON).toBe(
-            "This browser could not provide a WebGPU adapter for the Qwen3-VL 2B runtime. The model remains selected; embeddings, vision, and decoder all require WebGPU. Retry on an up-to-date, hardware-accelerated Chrome device.",
+            "This device could not provide a WebGPU adapter for the Qwen3-VL 2B runtime. The model remains selected; embeddings, vision, and decoder all require WebGPU. Retry after updating Android System WebView and enabling hardware acceleration.",
         );
+    });
+
+    it("uses packaged Adreno graphs and pinned direct Hub sources in an Android APK", () => {
+        for (const path of TRANSFORMERS_WEBGPU_PACKAGED_MODEL_ARTIFACTS) {
+            expect(
+                transformersWebGpuArtifactDownloadUrl(path, {
+                    baseUrl: "http://tauri.localhost/chats",
+                    packagedAndroid: true,
+                }),
+            ).toBe(`http://tauri.localhost/assets/transformers-webgpu/qwen3vl2b/${path}`);
+        }
+        expect(
+            transformersWebGpuArtifactDownloadUrl("config.json", {
+                baseUrl: "http://tauri.localhost/chats",
+                packagedAndroid: true,
+            }),
+        ).toBe(
+            `https://huggingface.co/${TRANSFORMERS_QWEN_MODEL_ID}/resolve/${TRANSFORMERS_QWEN_REVISION}/config.json`,
+        );
+        expect(
+            transformersWebGpuArtifactDownloadUrl("config.json", {
+                baseUrl: "https://phone.tailnet.test/chats",
+                packagedAndroid: false,
+            }),
+        ).toBe(
+            `https://phone.tailnet.test/hf-model/${TRANSFORMERS_QWEN_MODEL_ID}/resolve/${TRANSFORMERS_QWEN_REVISION}/config.json`,
+        );
+    });
+
+    it("removes the complete pinned cache by its revisioned key", async () => {
+        const remove = vi.fn(async () => true);
+
+        await deleteTransformersWebGpuModel({ delete: remove });
+
+        expect(remove).toHaveBeenCalledWith(TRANSFORMERS_WEBGPU_CACHE_KEY);
+    });
+
+    it("installs, verifies, and removes only Gemma's optional audio cache entries", async () => {
+        const baseUrl = globalThis.location.href;
+        const entries = new Map<string, Response>();
+        const modelUrl = (path: string) =>
+            transformersWebGpuArtifactDownloadUrl(
+                path,
+                { baseUrl, packagedAndroid: false },
+                PHONE_GEMMA4_E2B_MODEL_ID,
+            );
+        const cachedArtifact = (artifact: { bytes: number; sha256: string }) =>
+            new Response(null, {
+                status: 200,
+                headers: {
+                    "content-length": String(artifact.bytes),
+                    "x-content-sha256": artifact.sha256,
+                },
+            });
+        for (const artifact of TRANSFORMERS_GEMMA_ARTIFACTS) {
+            entries.set(modelUrl(artifact.path), cachedArtifact(artifact));
+        }
+        for (const asset of TRANSFORMERS_WEBGPU_RUNTIME_ASSETS) {
+            entries.set(
+                transformersWebGpuRuntimeAssetUrl(asset, baseUrl),
+                runtimeCacheResponse(asset),
+            );
+        }
+        const deleted: string[] = [];
+        const cache: TransformersWebGpuArtifactCache = {
+            match: vi.fn(async (request) => entries.get(String(request))?.clone()),
+            put: vi.fn(async (request, response) => {
+                entries.set(
+                    String(request),
+                    new Response(await response.arrayBuffer(), { headers: response.headers }),
+                );
+            }),
+            delete: vi.fn(async (request) => {
+                deleted.push(String(request));
+                return entries.delete(String(request));
+            }),
+        };
+        const storage = {
+            open: vi.fn(async (name: string) => {
+                expect(name).toBe(TRANSFORMERS_GEMMA_CACHE_KEY);
+                return cache;
+            }),
+        };
+        const fetcher = vi.fn(async () => {
+            throw new Error("the optional-audio cache test must not fetch");
+        });
+        const options = {
+            cacheStorage: storage,
+            baseUrl,
+            fetcher,
+            cacheBodyVerifier: async () => true,
+        };
+
+        await expect(
+            transformersWebGpuModelDownloaded(PHONE_GEMMA4_E2B_MODEL_ID, options),
+        ).resolves.toBe(true);
+        await expect(
+            transformersWebGpuAudioDownloaded(PHONE_GEMMA4_E2B_MODEL_ID, options),
+        ).resolves.toBe(false);
+
+        for (const artifact of TRANSFORMERS_GEMMA_AUDIO_ARTIFACTS) {
+            entries.set(modelUrl(artifact.path), cachedArtifact(artifact));
+        }
+        await expect(
+            preloadTransformersWebGpuAudio(PHONE_GEMMA4_E2B_MODEL_ID, options),
+        ).resolves.toBeUndefined();
+        await expect(
+            transformersWebGpuAudioDownloaded(PHONE_GEMMA4_E2B_MODEL_ID, options),
+        ).resolves.toBe(true);
+        expect(fetcher).not.toHaveBeenCalled();
+
+        await deleteTransformersWebGpuAudio(PHONE_GEMMA4_E2B_MODEL_ID, storage);
+
+        expect(deleted).toEqual(
+            TRANSFORMERS_GEMMA_AUDIO_ARTIFACTS.map((artifact) => modelUrl(artifact.path)),
+        );
+        await expect(
+            transformersWebGpuAudioDownloaded(PHONE_GEMMA4_E2B_MODEL_ID, options),
+        ).resolves.toBe(false);
+        await expect(
+            transformersWebGpuModelDownloaded(PHONE_GEMMA4_E2B_MODEL_ID, options),
+        ).resolves.toBe(true);
+        for (const artifact of TRANSFORMERS_GEMMA_ARTIFACTS) {
+            expect(entries.has(modelUrl(artifact.path))).toBe(true);
+        }
     });
 
     it("uses the current document's rotated development generation for the worker URL", () => {
@@ -481,6 +630,32 @@ describe("Transformers.js Qwen WebGPU spike", () => {
         }
     });
 
+    it("proves packaged runtime assets from CacheStorage without an HTTP-cache fetch", async () => {
+        const runtimeCache: TransformersWebGpuArtifactCache = {
+            match: vi.fn(async (request) => {
+                const asset = TRANSFORMERS_WEBGPU_RUNTIME_ASSETS.find(({ path }) =>
+                    String(request).includes(path),
+                );
+                return asset === undefined ? undefined : runtimeCacheResponse(asset);
+            }),
+            put: vi.fn(async () => undefined),
+            delete: vi.fn(async () => true),
+        };
+        const fetcher = vi.fn(async () => {
+            throw new Error("packaged runtime must not need the network cache");
+        });
+
+        await expect(
+            transformersWebGpuRuntimeAvailableOffline({
+                cacheStorage: { open: async () => runtimeCache },
+                baseUrl: "http://tauri.localhost/",
+                packagedAndroid: true,
+                fetcher,
+            }),
+        ).resolves.toBe(true);
+        expect(fetcher).not.toHaveBeenCalled();
+    });
+
     it("rejects a same-size worker HTTP-cache body that differs from the selection-time digest", async () => {
         const worker = TRANSFORMERS_WEBGPU_RUNTIME_ASSETS[0];
         const selectedWorker = runtimeBytes(worker);
@@ -560,7 +735,7 @@ describe("Transformers.js Qwen WebGPU spike", () => {
             kind: "infer",
             prompt: "Return JSON",
             text: "Receipt note",
-            maxTokens: 123,
+            maxTokens: 96,
         });
         expect(sent.kind === "infer" && [...new Uint8Array(sent.image!)]).toEqual([1, 2, 3]);
         expect(worker.transfers[0]).toEqual([sent.kind === "infer" ? sent.image : undefined]);
@@ -601,6 +776,147 @@ describe("Transformers.js Qwen WebGPU spike", () => {
         });
         worker.respond({ kind: "result", requestId: sent.requestId, text: "verified" });
         await expect(pending).resolves.toEqual({ kind: "ok", text: "verified" });
+    });
+
+    it("decodes Gemma voice bytes once and transfers only exact 16 kHz PCM to the worker", async () => {
+        const worker = new FakeWorker();
+        const decodeAudio = vi.fn(async () => new Float32Array([0.125, -0.25, 0.5]));
+        const encoded = new Uint8Array([9, 8, 7, 6]);
+        const engine = createTransformersWebGpuEngine(() => worker, {
+            available: () => ({ available: true }),
+            timeoutMs: 10_000,
+            decodeAudio,
+        });
+
+        const pending = engine.infer({
+            modelId: PHONE_GEMMA4_E2B_MODEL_ID,
+            prompt: "Transcribe this voice message",
+            audio: encoded,
+            audioMimeType: "audio/webm;codecs=opus",
+            maxTokens: 32,
+        });
+        await vi.waitFor(() => expect(worker.sent).toHaveLength(1));
+
+        expect(decodeAudio).toHaveBeenCalledOnce();
+        expect(decodeAudio).toHaveBeenCalledWith(encoded, "audio/webm;codecs=opus");
+        const sent = worker.sent[0];
+        expect(sent).toMatchObject({
+            kind: "infer",
+            modelId: PHONE_GEMMA4_E2B_MODEL_ID,
+            audioSampleRate: 16_000,
+            image: undefined,
+        });
+        expect("audio" in sent).toBe(false);
+        expect(sent.kind === "infer" && [...new Float32Array(sent.audioSamples!)]).toEqual([
+            0.125, -0.25, 0.5,
+        ]);
+        expect(worker.transfers[0]).toEqual([
+            sent.kind === "infer" ? sent.audioSamples : undefined,
+        ]);
+
+        worker.respond({ kind: "result", requestId: sent.requestId, text: "voice result" });
+        await expect(pending).resolves.toEqual({ kind: "ok", text: "voice result" });
+        expect(worker.terminate).toHaveBeenCalledOnce();
+    });
+
+    it("includes audio decoding in the bounded job deadline", async () => {
+        vi.useFakeTimers();
+        const factory = vi.fn(() => new FakeWorker());
+        const engine = createTransformersWebGpuEngine(factory, {
+            available: () => ({ available: true }),
+            timeoutMs: 20,
+            decodeAudio: () => new Promise<Float32Array>(() => undefined),
+        });
+        const pending = engine.infer({
+            modelId: PHONE_GEMMA4_E2B_MODEL_ID,
+            prompt: "Transcribe",
+            audio: new Uint8Array([1]),
+            audioMimeType: "audio/webm",
+            maxTokens: 32,
+        });
+
+        await vi.advanceTimersByTimeAsync(20);
+        await expect(pending).resolves.toEqual({
+            kind: "error",
+            error: "Voice-message decoding timed out in this browser.",
+        });
+        expect(factory).not.toHaveBeenCalled();
+        await engine.dispose();
+        vi.useRealTimers();
+    });
+
+    it("waits for worker GPU-retirement acknowledgement after an inference timeout", async () => {
+        vi.useFakeTimers();
+        const worker = new FakeWorker();
+        const engine = createTransformersWebGpuEngine(() => worker, {
+            available: () => ({ available: true }),
+            timeoutMs: 20,
+            shutdownGraceMs: 30,
+        });
+        const pending = engine.infer(IMAGE_REQUEST);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(worker.sent[0]).toMatchObject({ kind: "infer" });
+
+        await vi.advanceTimersByTimeAsync(20);
+        expect(worker.sent[1]).toMatchObject({
+            kind: "dispose",
+            requestId: worker.sent[0].requestId,
+        });
+        expect(worker.terminate).not.toHaveBeenCalled();
+        worker.respond({ kind: "disposed", requestId: worker.sent[0].requestId });
+        await expect(pending).resolves.toEqual({
+            kind: "error",
+            error: "The isolated browser image model did not finish in time.",
+        });
+        expect(worker.terminate).toHaveBeenCalledOnce();
+        await engine.dispose();
+        vi.useRealTimers();
+    });
+
+    it("force-terminates only after the bounded GPU-retirement grace period", async () => {
+        vi.useFakeTimers();
+        const worker = new FakeWorker();
+        const engine = createTransformersWebGpuEngine(() => worker, {
+            available: () => ({ available: true }),
+            timeoutMs: 20,
+            shutdownGraceMs: 30,
+        });
+        const pending = engine.infer(IMAGE_REQUEST);
+        await vi.advanceTimersByTimeAsync(20);
+        expect(worker.sent.at(-1)).toMatchObject({ kind: "dispose" });
+        expect(worker.terminate).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(29);
+        expect(worker.terminate).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        await expect(pending).resolves.toMatchObject({ kind: "error" });
+        expect(worker.terminate).toHaveBeenCalledOnce();
+        await engine.dispose();
+        vi.useRealTimers();
+    });
+
+    it("requests orderly GPU retirement when disposed during active inference", async () => {
+        const worker = new FakeWorker();
+        const engine = createTransformersWebGpuEngine(() => worker, {
+            available: () => ({ available: true }),
+            timeoutMs: 10_000,
+            shutdownGraceMs: 100,
+        });
+        const pending = engine.infer(IMAGE_REQUEST);
+        await vi.waitFor(() => expect(worker.sent).toHaveLength(1));
+        const disposing = engine.dispose();
+        expect(worker.sent[1]).toMatchObject({
+            kind: "dispose",
+            requestId: worker.sent[0].requestId,
+        });
+        expect(worker.terminate).not.toHaveBeenCalled();
+        worker.respond({ kind: "disposed", requestId: worker.sent[0].requestId });
+        await expect(pending).resolves.toEqual({
+            kind: "error",
+            error: "image-model worker was disposed",
+        });
+        await disposing;
+        expect(worker.terminate).toHaveBeenCalledOnce();
     });
 
     it("uses a fresh worker after every successful image job", async () => {

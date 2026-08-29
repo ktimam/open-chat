@@ -10,5 +10,11 @@ export const TRANSFORMERS_QWEN_DECODER_INPUT_METADATA: ReadonlyArray<{
     readonly type: "float32" | "int64";
     readonly shape: ReadonlyArray<string | number>;
 }>;
+export const TRANSFORMERS_GEMMA_DECODER_INPUT_METADATA: ReadonlyArray<{
+    readonly name: string;
+    readonly isTensor: true;
+    readonly type: "float32" | "float16" | "int64";
+    readonly shape: ReadonlyArray<string | number | ReadonlyArray<number>>;
+}>;
 export function patchTransformersWebGpuSessionSource(source: string, id: string): string | null;
 export function transformersWebGpuSequentialSessionsPlugin(): Plugin;

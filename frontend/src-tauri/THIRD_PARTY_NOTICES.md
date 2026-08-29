@@ -46,6 +46,13 @@ shows its license and requires acceptance. The built-in `gemma-4-e2b-it-q4` mode
 `unsloth/gemma-4-E2B-it-GGUF@0314792d7f1f7e229411f620751375812bb9faf2`, whose repository metadata
 declares Apache-2.0 and links to Google's Gemma 4 Apache-2.0 license.
 
+The feature-gated all-WebGPU client also supports the ONNX-community conversion at
+`onnx-community/gemma-4-E2B-it-ONNX@9f4bef82ea6e296bc69f8a2f5939f73af81b07a6`.
+Its pinned text/image files are downloaded and SHA-256 verified only when the user selects that
+model. The voice encoder is a separate optional download requested from the model settings; it is
+not part of the text/image installation. Neither the Gemma text/image weights nor the optional
+voice encoder is bundled in OpenChat's web or Android package.
+
 The 14 MB TinyLlama GGUF used by CI is MIT-licensed, downloaded only during CI from the immutable
 `tensorblock/tinyllama-15M-stories-GGUF@227c5a5ad3c1a830901543cf9959c53572014a68` revision, verified
 by SHA-256, and never bundled with OpenChat.

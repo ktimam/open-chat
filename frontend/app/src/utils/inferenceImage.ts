@@ -239,6 +239,21 @@ function detailCardCrop(dimensions: ImageDimensions): Omit<RegionCropRequest, ke
     };
 }
 
+function lowerDetailRowsCrop(
+    dimensions: ImageDimensions,
+): Omit<RegionCropRequest, keyof ResizeRequest> {
+    // Stable version-4 contract: focus the lower labelled rows on tall receipts while retaining
+    // full width. As with every region, landscape/near-square inputs keep their original pixels.
+    const sourceY = Math.floor((dimensions.height * 68) / 100);
+    const sourceBottom = Math.ceil((dimensions.height * 90) / 100);
+    return {
+        sourceX: 0,
+        sourceY,
+        sourceWidth: dimensions.width,
+        sourceHeight: sourceBottom - sourceY,
+    };
+}
+
 /**
  * Derive a bounded model-only detail raster from the original image pixels. This is deliberately a
  * closed, content-agnostic transform: it neither locates text nor performs OCR, and the source image
@@ -250,7 +265,7 @@ export async function prepareImageRegionForInference(
     region: InferenceImageRegion,
     crop: InferenceImageRegionCropper = canvasRegionCrop,
 ): Promise<Uint8Array> {
-    if (region !== "lower_half" && region !== "detail_card") {
+    if (region !== "lower_half" && region !== "detail_card" && region !== "lower_detail_rows") {
         throw new Error("Unsupported inference image region.");
     }
     const intrinsicDimensions = intrinsicImageDimensions(bytes);
@@ -267,7 +282,9 @@ export async function prepareImageRegionForInference(
     const source =
         region === "detail_card"
             ? detailCardCrop(intrinsicDimensions)
-            : lowerHalfCrop(intrinsicDimensions);
+            : region === "lower_detail_rows"
+              ? lowerDetailRowsCrop(intrinsicDimensions)
+              : lowerHalfCrop(intrinsicDimensions);
     const output = inferenceImageDimensions({
         width: source.sourceWidth,
         height: source.sourceHeight,

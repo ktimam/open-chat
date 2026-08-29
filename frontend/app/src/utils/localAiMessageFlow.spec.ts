@@ -70,4 +70,59 @@ describe("selected-message local AI lifecycle", () => {
         expect(testDeps.sendReply).toHaveBeenCalledOnce();
         expect(testDeps.sendReply).toHaveBeenCalledWith("🤖 answer");
     });
+
+    it("passes encoded voice bytes and MIME through the same stale-safe inference boundary", async () => {
+        const audio = new Uint8Array([8, 9, 10]);
+        const testDeps = deps({
+            readInput: vi.fn(async () => ({
+                text: "voice caption",
+                audio,
+                audioMimeType: "audio/webm;codecs=opus",
+            })),
+            promptFor: () => "transcribe",
+            contextFor: (input) => [
+                {
+                    author: "Alice",
+                    text: input.text,
+                    hasAudio: input.audio !== undefined,
+                    audioIncluded: input.audio !== undefined,
+                },
+            ],
+        });
+
+        await expect(runLocalAiMessageFlow(testDeps)).resolves.toEqual({
+            kind: "success",
+            message: "AI response added.",
+        });
+        expect(testDeps.infer).toHaveBeenCalledWith(
+            "transcribe",
+            undefined,
+            [
+                {
+                    author: "Alice",
+                    text: "voice caption",
+                    hasAudio: true,
+                    audioIncluded: true,
+                },
+            ],
+            audio,
+            "audio/webm;codecs=opus",
+        );
+    });
+
+    it("reports an unreadable voice message without starting inference or posting", async () => {
+        const testDeps = deps({
+            readInput: vi.fn(async () => undefined),
+            unsupportedMessage: () =>
+                "The selected voice message could not be read for local AI processing.",
+        });
+
+        await expect(runLocalAiMessageFlow(testDeps)).resolves.toEqual({
+            kind: "error",
+            message:
+                "On-device AI failed: The selected voice message could not be read for local AI processing.",
+        });
+        expect(testDeps.infer).not.toHaveBeenCalled();
+        expect(testDeps.sendReply).not.toHaveBeenCalled();
+    });
 });

@@ -1,18 +1,25 @@
-import type { InferenceRequest, InferenceResult } from "@shared";
+import { isAndroidTauriApp, type InferenceRequest, type InferenceResult } from "@shared";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { transformersWebGpuFeatureEnabled } from "../../transformersWebGpuFeatureFlag.mjs";
 import { readTransformersWebGpuDevRuntimeVersion } from "./transformersWebGpuDevRuntimeVersion";
 import {
+    decodeTransformersWebGpuAudio,
+    TRANSFORMERS_WEBGPU_AUDIO_DECODE_TIMEOUT_MS,
+    TRANSFORMERS_WEBGPU_AUDIO_SAMPLE_RATE,
+    TRANSFORMERS_WEBGPU_MAX_ENCODED_AUDIO_BYTES,
+} from "./transformersWebGpuAudio";
+import {
+    PHONE_GEMMA4_E2B_MODEL_ID,
     PHONE_QWEN3_VL_2B_MODEL_ID,
-    TRANSFORMERS_QWEN_ARTIFACT_BYTES,
-    TRANSFORMERS_QWEN_ARTIFACTS,
-    TRANSFORMERS_QWEN_MODEL_ID,
-    TRANSFORMERS_QWEN_REVISION,
     TRANSFORMERS_WEBGPU_ADAPTER_UNAVAILABLE_REASON,
-    TRANSFORMERS_WEBGPU_CACHE_KEY,
+    TRANSFORMERS_WEBGPU_HUGGING_FACE_BASE,
     TRANSFORMERS_WEBGPU_MODEL_PROXY_BASE,
     TRANSFORMERS_WEBGPU_RUNTIME_ASSETS,
+    transformersWebGpuModelSpec,
+    type TransformersWebGpuArtifact,
     type TransformersWebGpuFromWorker,
+    type TransformersWebGpuModelId,
+    type TransformersWebGpuModelSpec,
     type TransformersWebGpuProgressPhase,
     type TransformersWebGpuToWorker,
 } from "./transformersWebGpuProtocol";
@@ -32,13 +39,13 @@ export type TransformersWebGpuRuntimeAvailability =
 
 export type TransformersWebGpuStatus = {
     phase: TransformersWebGpuProgressPhase | "idle";
-    stage?: "text" | "image";
+    stage?: "text" | "image" | "audio";
     progress?: number;
     file?: string;
 };
 
 export type TransformersWebGpuEngine = {
-    infer(request: InferenceRequest): Promise<InferenceResult>;
+    infer(request: InferenceRequest, modelId?: TransformersWebGpuModelId): Promise<InferenceResult>;
     dispose(): Promise<void>;
 };
 
@@ -49,17 +56,32 @@ type SpikeEligibility = {
 };
 
 const DEFAULT_JOB_TIMEOUT_MS = 15 * 60_000;
+const DEFAULT_WORKER_SHUTDOWN_GRACE_MS = 30_000;
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
-const MAX_OUTPUT_TOKENS = 512;
+const MAX_OUTPUT_TOKENS = 96;
 const CACHE_DIGEST_HEADER = "x-content-sha256";
 const RUNTIME_VERSION_HEADER = "x-openchat-runtime-version";
 const RUNTIME_ASSET_HEADER = "x-openchat-runtime-asset";
 
-let defaultCacheVerification: Promise<boolean> | undefined;
-let defaultRuntimeOfflineVerification: Promise<boolean> | undefined;
+const defaultCacheVerification = new Map<TransformersWebGpuModelId, Promise<boolean>>();
+const defaultRuntimeOfflineVerification = new Map<TransformersWebGpuModelId, Promise<boolean>>();
+const defaultAudioVerification = new Map<TransformersWebGpuModelId, Promise<boolean>>();
+const defaultVerifiedAudioModels = new Set<TransformersWebGpuModelId>();
 
 export const TRANSFORMERS_WEBGPU_MODEL_NOT_DOWNLOADED_MESSAGE =
     "The selected Qwen3-VL 2B model needs an update or its all-WebGPU download is incomplete. Open On-device models and tap Retry download before running an image.";
+
+export const TRANSFORMERS_WEBGPU_GEMMA_MODEL_NOT_DOWNLOADED_MESSAGE =
+    "The selected Gemma 4 E2B model needs an update or its all-WebGPU download is incomplete. Open On-device models and tap Retry download before processing this message.";
+
+export const TRANSFORMERS_WEBGPU_GEMMA_AUDIO_NOT_DOWNLOADED_MESSAGE =
+    "Gemma voice support is not installed. Open On-device models and download the optional voice-message add-on, then try again.";
+
+export function transformersWebGpuModelNotDownloadedMessage(modelId: string | undefined): string {
+    return modelId === PHONE_GEMMA4_E2B_MODEL_ID
+        ? TRANSFORMERS_WEBGPU_GEMMA_MODEL_NOT_DOWNLOADED_MESSAGE
+        : TRANSFORMERS_WEBGPU_MODEL_NOT_DOWNLOADED_MESSAGE;
+}
 
 export type TransformersWebGpuArtifactCache = Pick<Cache, "match" | "put" | "delete">;
 export type TransformersWebGpuArtifactCacheStorage = {
@@ -73,6 +95,8 @@ export type TransformersWebGpuPreloadOptions = {
     fetcher?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
     baseUrl?: string;
     runtimeVersion?: string;
+    /** Test seam. Production derives this from the Android Tauri bridge and feature flag. */
+    packagedAndroid?: boolean;
     /** Test seam. Production always streams and hashes the stored response body. */
     cacheBodyVerifier?: (
         response: Response,
@@ -81,6 +105,26 @@ export type TransformersWebGpuPreloadOptions = {
         signal?: AbortSignal,
     ) => Promise<boolean>;
 };
+
+function requiredSpec(modelId: string | undefined): TransformersWebGpuModelSpec {
+    const spec = transformersWebGpuModelSpec(modelId);
+    if (spec === undefined)
+        throw new Error("This all-WebGPU model is not supported by this build.");
+    return spec;
+}
+
+function resolveModelAndOptions<T extends object>(
+    modelOrOptions: string | T | undefined,
+    options: T | undefined,
+): { spec: TransformersWebGpuModelSpec; options: T } {
+    if (typeof modelOrOptions === "string") {
+        return { spec: requiredSpec(modelOrOptions), options: (options ?? {}) as T };
+    }
+    return {
+        spec: requiredSpec(PHONE_QWEN3_VL_2B_MODEL_ID),
+        options: (modelOrOptions ?? {}) as T,
+    };
+}
 
 function runtimeVersion(explicit?: string): string {
     const developmentGeneration = readTransformersWebGpuDevRuntimeVersion(
@@ -92,7 +136,12 @@ function runtimeVersion(explicit?: string): string {
 function usesDefaultReadinessDependencies(
     options: Pick<
         TransformersWebGpuPreloadOptions,
-        "cacheStorage" | "baseUrl" | "runtimeVersion" | "cacheBodyVerifier" | "fetcher"
+        | "cacheStorage"
+        | "baseUrl"
+        | "runtimeVersion"
+        | "cacheBodyVerifier"
+        | "fetcher"
+        | "packagedAndroid"
     >,
 ): boolean {
     return (
@@ -100,25 +149,68 @@ function usesDefaultReadinessDependencies(
         options.baseUrl === undefined &&
         options.runtimeVersion === undefined &&
         options.cacheBodyVerifier === undefined &&
-        options.fetcher === undefined
+        options.fetcher === undefined &&
+        options.packagedAndroid === undefined
     );
 }
 
 /** Invalidate the per-page proof when selection/cancellation changes the underlying cache. */
-export function invalidateTransformersWebGpuReadiness(): void {
-    defaultCacheVerification = undefined;
-    defaultRuntimeOfflineVerification = undefined;
+export function invalidateTransformersWebGpuReadiness(modelId?: TransformersWebGpuModelId): void {
+    if (modelId === undefined) {
+        defaultCacheVerification.clear();
+        defaultRuntimeOfflineVerification.clear();
+        defaultAudioVerification.clear();
+        defaultVerifiedAudioModels.clear();
+    } else {
+        defaultCacheVerification.delete(modelId);
+        defaultRuntimeOfflineVerification.delete(modelId);
+        defaultAudioVerification.delete(modelId);
+        defaultVerifiedAudioModels.delete(modelId);
+    }
 }
 
-function artifactUrl(path: string, baseUrl?: string): string {
+function artifactUrl(spec: TransformersWebGpuModelSpec, path: string, baseUrl?: string): string {
     const base =
         baseUrl ??
         (typeof globalThis.location === "undefined"
             ? "http://localhost/"
             : globalThis.location.href);
     return new URL(
-        `${TRANSFORMERS_WEBGPU_MODEL_PROXY_BASE}${TRANSFORMERS_QWEN_MODEL_ID}/resolve/${TRANSFORMERS_QWEN_REVISION}/${path}`,
+        `${TRANSFORMERS_WEBGPU_MODEL_PROXY_BASE}${spec.repository}/resolve/${spec.revision}/${path}`,
         base,
+    ).href;
+}
+
+export function transformersWebGpuPackagedAndroidClient(): boolean {
+    return transformersWebGpuClientEnabled() && isAndroidTauriApp();
+}
+
+/**
+ * Source used only while Model Manager owns the pinned download. Cache identity remains the local
+ * `/hf-model/...` URL consumed by the fail-closed worker. A packaged Android app has no Vite proxy,
+ * so immutable Hub files are fetched directly while the two audited Adreno graphs come from the APK.
+ */
+export function transformersWebGpuArtifactDownloadUrl(
+    path: string,
+    options: Pick<TransformersWebGpuPreloadOptions, "baseUrl" | "packagedAndroid"> = {},
+    modelId: string = PHONE_QWEN3_VL_2B_MODEL_ID,
+): string {
+    const spec = requiredSpec(modelId);
+    const packaged =
+        options.packagedAndroid === true ||
+        (options.packagedAndroid === undefined && transformersWebGpuPackagedAndroidClient());
+    if (!packaged) return artifactUrl(spec, path, options.baseUrl);
+    if (spec.packagedModelBase !== undefined && spec.packagedArtifacts.includes(path)) {
+        const base =
+            options.baseUrl ??
+            (typeof globalThis.location === "undefined"
+                ? "http://tauri.localhost/"
+                : globalThis.location.href);
+        return new URL(`${spec.packagedModelBase}${path}`, base).href;
+    }
+    return new URL(
+        `${spec.repository}/resolve/${spec.revision}/${path}`,
+        TRANSFORMERS_WEBGPU_HUGGING_FACE_BASE,
     ).href;
 }
 
@@ -147,7 +239,7 @@ function abortReason(signal: AbortSignal): unknown {
 
 function cachedArtifactMatches(
     response: Response | undefined,
-    artifact: (typeof TRANSFORMERS_QWEN_ARTIFACTS)[number],
+    artifact: TransformersWebGpuArtifact,
 ): boolean {
     if (response === undefined || !response.ok) return false;
     return (
@@ -158,30 +250,50 @@ function cachedArtifactMatches(
 
 async function openArtifactCache(
     storage: TransformersWebGpuArtifactCacheStorage | undefined,
+    spec: TransformersWebGpuModelSpec,
 ): Promise<TransformersWebGpuArtifactCache> {
     const available = storage ?? globalThis.caches;
     if (available === undefined) {
         throw new Error("This browser cannot store the all-WebGPU model files.");
     }
-    return available.open(TRANSFORMERS_WEBGPU_CACHE_KEY);
+    return available.open(spec.cacheKey);
 }
 
+type TransformersWebGpuDownloadedOptions = Pick<
+    TransformersWebGpuPreloadOptions,
+    | "cacheStorage"
+    | "baseUrl"
+    | "runtimeVersion"
+    | "cacheBodyVerifier"
+    | "signal"
+    | "packagedAndroid"
+>;
+
 /** True only when every pinned worker input is present under the exact cache key and digest. */
+export function transformersWebGpuModelDownloaded(
+    options?: TransformersWebGpuDownloadedOptions,
+): Promise<boolean>;
+export function transformersWebGpuModelDownloaded(
+    modelId: string,
+    options?: TransformersWebGpuDownloadedOptions,
+): Promise<boolean>;
 export async function transformersWebGpuModelDownloaded(
-    options: Pick<
-        TransformersWebGpuPreloadOptions,
-        "cacheStorage" | "baseUrl" | "runtimeVersion" | "cacheBodyVerifier" | "signal"
-    > = {},
+    modelOrOptions: string | TransformersWebGpuDownloadedOptions = {},
+    maybeOptions: TransformersWebGpuDownloadedOptions = {},
 ): Promise<boolean> {
+    const resolved = resolveModelAndOptions(modelOrOptions, maybeOptions);
+    const { spec } = resolved;
+    const options = resolved.options;
     const useMemo = usesDefaultReadinessDependencies(options);
-    if (useMemo && defaultCacheVerification !== undefined) return defaultCacheVerification;
+    const memoized = defaultCacheVerification.get(spec.id);
+    if (useMemo && memoized !== undefined) return memoized;
 
     const verification = (async (): Promise<boolean> => {
         try {
-            const cache = await openArtifactCache(options.cacheStorage);
+            const cache = await openArtifactCache(options.cacheStorage, spec);
             const verifyBody = options.cacheBodyVerifier ?? cachedResponseBodyMatches;
-            for (const artifact of TRANSFORMERS_QWEN_ARTIFACTS) {
-                const url = artifactUrl(artifact.path, options.baseUrl);
+            for (const artifact of spec.artifacts) {
+                const url = artifactUrl(spec, artifact.path, options.baseUrl);
                 const cached = await cache.match(url);
                 if (
                     !cachedArtifactMatches(cached, artifact) ||
@@ -217,18 +329,18 @@ export async function transformersWebGpuModelDownloaded(
             return false;
         }
     })();
-    if (useMemo) defaultCacheVerification = verification;
+    if (useMemo) defaultCacheVerification.set(spec.id, verification);
     let verified: boolean;
     try {
         verified = await verification;
     } catch (error) {
-        if (useMemo && defaultCacheVerification === verification) {
-            defaultCacheVerification = undefined;
+        if (useMemo && defaultCacheVerification.get(spec.id) === verification) {
+            defaultCacheVerification.delete(spec.id);
         }
         throw error;
     }
-    if (useMemo && !verified && defaultCacheVerification === verification) {
-        defaultCacheVerification = undefined;
+    if (useMemo && !verified && defaultCacheVerification.get(spec.id) === verification) {
+        defaultCacheVerification.delete(spec.id);
     }
     return verified;
 }
@@ -344,19 +456,32 @@ async function preloadTransformersWebGpuRuntimeAssets(
 
 /** Check the HTTP cache without permitting network access before starting an image-model worker. */
 export async function transformersWebGpuRuntimeAvailableOffline(
-    options: Pick<
+    modelOrOptions:
+        | string
+        | Pick<
+              TransformersWebGpuPreloadOptions,
+              "fetcher" | "baseUrl" | "runtimeVersion" | "cacheStorage" | "packagedAndroid"
+          > = {},
+    maybeOptions: Pick<
         TransformersWebGpuPreloadOptions,
-        "fetcher" | "baseUrl" | "runtimeVersion" | "cacheStorage"
+        "fetcher" | "baseUrl" | "runtimeVersion" | "cacheStorage" | "packagedAndroid"
     > = {},
 ): Promise<boolean> {
+    const resolved = resolveModelAndOptions(modelOrOptions, maybeOptions);
+    const { spec } = resolved;
+    const options = resolved.options;
     const useMemo = usesDefaultReadinessDependencies(options);
-    if (useMemo && defaultRuntimeOfflineVerification !== undefined) {
-        return defaultRuntimeOfflineVerification;
+    const memoized = defaultRuntimeOfflineVerification.get(spec.id);
+    if (useMemo && memoized !== undefined) {
+        return memoized;
     }
     const verification = (async (): Promise<boolean> => {
         const fetcher = options.fetcher ?? globalThis.fetch.bind(globalThis);
+        const packaged =
+            options.packagedAndroid === true ||
+            (options.packagedAndroid === undefined && transformersWebGpuPackagedAndroidClient());
         try {
-            const artifactCache = await openArtifactCache(options.cacheStorage);
+            const artifactCache = await openArtifactCache(options.cacheStorage, spec);
             for (const asset of TRANSFORMERS_WEBGPU_RUNTIME_ASSETS) {
                 const url = transformersWebGpuRuntimeAssetUrl(
                     asset,
@@ -366,6 +491,21 @@ export async function transformersWebGpuRuntimeAvailableOffline(
                 const selected = await artifactCache.match(url);
                 if (!cachedRuntimeAssetMetadataMatches(selected, asset, options.runtimeVersion)) {
                     return false;
+                }
+                if (packaged) {
+                    // Worker and ORT assets are immutable APK resources. CacheStorage body proof is
+                    // enough here; unlike an HTTP deployment, Worker construction never needs a
+                    // prior network response in the WebView's HTTP cache.
+                    const verified = await runtimeResponseBytes(selected!.clone(), asset);
+                    if (
+                        verified.bytes.byteLength !==
+                            Number(selected!.headers.get("content-length")) ||
+                        verified.digest !==
+                            selected!.headers.get(CACHE_DIGEST_HEADER)?.toLowerCase()
+                    ) {
+                        return false;
+                    }
+                    continue;
                 }
                 const response = await fetcher(url, {
                     cache: "only-if-cached",
@@ -385,21 +525,32 @@ export async function transformersWebGpuRuntimeAvailableOffline(
             return false;
         }
     })();
-    if (useMemo) defaultRuntimeOfflineVerification = verification;
+    if (useMemo) defaultRuntimeOfflineVerification.set(spec.id, verification);
     const verified = await verification;
-    if (useMemo && !verified && defaultRuntimeOfflineVerification === verification) {
-        defaultRuntimeOfflineVerification = undefined;
+    if (useMemo && !verified && defaultRuntimeOfflineVerification.get(spec.id) === verification) {
+        defaultRuntimeOfflineVerification.delete(spec.id);
     }
     return verified;
 }
 
 /** Stream the exact revision into the same Cache API entry the worker reads. Hashing happens while
  * CacheStorage consumes each body, so the 1.1 GB decoder shard is never materialized in memory. */
+export function preloadTransformersWebGpuModel(
+    options?: TransformersWebGpuPreloadOptions,
+): Promise<void>;
+export function preloadTransformersWebGpuModel(
+    modelId: string,
+    options?: TransformersWebGpuPreloadOptions,
+): Promise<void>;
 export async function preloadTransformersWebGpuModel(
-    options: TransformersWebGpuPreloadOptions = {},
+    modelOrOptions: string | TransformersWebGpuPreloadOptions = {},
+    maybeOptions: TransformersWebGpuPreloadOptions = {},
 ): Promise<void> {
-    if (usesDefaultReadinessDependencies(options)) invalidateTransformersWebGpuReadiness();
-    const cache = await openArtifactCache(options.cacheStorage);
+    const resolved = resolveModelAndOptions(modelOrOptions, maybeOptions);
+    const { spec } = resolved;
+    const options = resolved.options;
+    if (usesDefaultReadinessDependencies(options)) invalidateTransformersWebGpuReadiness(spec.id);
+    const cache = await openArtifactCache(options.cacheStorage, spec);
     const fetcher = options.fetcher ?? globalThis.fetch.bind(globalThis);
     const signal = options.signal;
     const onProgress = options.onProgress ?? (() => undefined);
@@ -413,22 +564,23 @@ export async function preloadTransformersWebGpuModel(
         // Persistence is best-effort; CacheStorage remains usable when the prompt is denied.
     }
 
-    onProgress(0, TRANSFORMERS_QWEN_ARTIFACT_BYTES);
-    for (const artifact of TRANSFORMERS_QWEN_ARTIFACTS) {
+    onProgress(0, spec.artifactBytes);
+    for (const artifact of spec.artifacts) {
         if (signal?.aborted === true) throw abortReason(signal);
-        const url = artifactUrl(artifact.path, options.baseUrl);
+        const url = artifactUrl(spec, artifact.path, options.baseUrl);
         const cached = await cache.match(url);
         if (
             cachedArtifactMatches(cached, artifact) &&
             (await verifyBody(cached!, artifact.bytes, artifact.sha256, signal))
         ) {
             completed += artifact.bytes;
-            onProgress(completed, TRANSFORMERS_QWEN_ARTIFACT_BYTES);
+            onProgress(completed, spec.artifactBytes);
             continue;
         }
         if (cached !== undefined) await cache.delete(url);
 
-        const response = await fetcher(url, {
+        const downloadUrl = transformersWebGpuArtifactDownloadUrl(artifact.path, options, spec.id);
+        const response = await fetcher(downloadUrl, {
             signal,
             cache: "no-store",
             credentials: "same-origin",
@@ -465,7 +617,7 @@ export async function preloadTransformersWebGpuModel(
                     const now = Date.now();
                     if (now - lastPublishedAt >= 100) {
                         lastPublishedAt = now;
-                        onProgress(completed + received, TRANSFORMERS_QWEN_ARTIFACT_BYTES);
+                        onProgress(completed + received, spec.artifactBytes);
                     }
                     controller.enqueue(chunk);
                 },
@@ -476,7 +628,7 @@ export async function preloadTransformersWebGpuModel(
         headers.delete("transfer-encoding");
         headers.set("content-length", String(artifact.bytes));
         headers.set(CACHE_DIGEST_HEADER, artifact.sha256);
-        headers.set("x-openchat-model-revision", TRANSFORMERS_QWEN_REVISION);
+        headers.set("x-openchat-model-revision", spec.revision);
 
         try {
             await cache.put(url, new Response(counted, { status: 200, statusText: "OK", headers }));
@@ -498,17 +650,18 @@ export async function preloadTransformersWebGpuModel(
             throw new Error(`${artifact.path} was not retained by browser storage.`);
         }
         completed += artifact.bytes;
-        onProgress(completed, TRANSFORMERS_QWEN_ARTIFACT_BYTES);
+        onProgress(completed, spec.artifactBytes);
     }
     // Selection is not complete until the worker plus both pinned ORT files are verified and the
     // browser HTTP cache is primed. Inference itself is cache-only and cannot download them.
     await preloadTransformersWebGpuRuntimeAssets(cache, options);
     if (
-        !(await transformersWebGpuRuntimeAvailableOffline({
+        !(await transformersWebGpuRuntimeAvailableOffline(spec.id, {
             fetcher: options.fetcher,
             cacheStorage: options.cacheStorage,
             baseUrl: options.baseUrl,
             runtimeVersion: options.runtimeVersion,
+            packagedAndroid: options.packagedAndroid,
         }))
     ) {
         throw new Error(
@@ -518,8 +671,208 @@ export async function preloadTransformersWebGpuModel(
     if (usesDefaultReadinessDependencies(options)) {
         // Every CacheStorage body and every cache-only runtime response was proved during this
         // selection attempt. Subsequent focused passes and inference jobs reuse that per-page proof.
-        defaultCacheVerification = Promise.resolve(true);
+        defaultCacheVerification.set(spec.id, Promise.resolve(true));
     }
+}
+
+/** Verify only the optional Gemma audio files. Base model and runtime readiness are independent. */
+export async function transformersWebGpuAudioDownloaded(
+    modelId: string,
+    options: TransformersWebGpuDownloadedOptions = {},
+): Promise<boolean> {
+    const spec = requiredSpec(modelId);
+    const addon = spec.optionalAudio;
+    if (addon === undefined) return false;
+    const useMemo = usesDefaultReadinessDependencies(options);
+    const memoized = defaultAudioVerification.get(spec.id);
+    if (useMemo && memoized !== undefined) return memoized;
+    const verification = (async (): Promise<boolean> => {
+        try {
+            const cache = await openArtifactCache(options.cacheStorage, spec);
+            const verifyBody = options.cacheBodyVerifier ?? cachedResponseBodyMatches;
+            for (const artifact of addon.artifacts) {
+                const url = artifactUrl(spec, artifact.path, options.baseUrl);
+                const cached = await cache.match(url);
+                if (
+                    !cachedArtifactMatches(cached, artifact) ||
+                    !(await verifyBody(cached!, artifact.bytes, artifact.sha256, options.signal))
+                ) {
+                    if (cached !== undefined) await cache.delete(url).catch(() => undefined);
+                    return false;
+                }
+            }
+            return true;
+        } catch (error) {
+            if (options.signal?.aborted === true) throw abortReason(options.signal);
+            return false;
+        }
+    })();
+    if (useMemo) defaultAudioVerification.set(spec.id, verification);
+    let verified: boolean;
+    try {
+        verified = await verification;
+    } catch (error) {
+        if (useMemo && defaultAudioVerification.get(spec.id) === verification) {
+            defaultAudioVerification.delete(spec.id);
+            defaultVerifiedAudioModels.delete(spec.id);
+        }
+        throw error;
+    }
+    if (useMemo) {
+        if (verified) {
+            defaultVerifiedAudioModels.add(spec.id);
+        } else {
+            defaultVerifiedAudioModels.delete(spec.id);
+            if (defaultAudioVerification.get(spec.id) === verification) {
+                defaultAudioVerification.delete(spec.id);
+            }
+        }
+    }
+    return verified;
+}
+
+/** Synchronous capability state backed only by a successful default-cache verification. */
+export function transformersWebGpuAudioReady(modelId: string | undefined): boolean {
+    const spec = transformersWebGpuModelSpec(modelId);
+    return spec?.optionalAudio !== undefined && defaultVerifiedAudioModels.has(spec.id);
+}
+
+/** Install only Gemma's optional voice encoder. Running a voice message never calls this function. */
+export async function preloadTransformersWebGpuAudio(
+    modelId: string,
+    options: TransformersWebGpuPreloadOptions = {},
+): Promise<void> {
+    const spec = requiredSpec(modelId);
+    const addon = spec.optionalAudio;
+    if (addon === undefined) {
+        throw new Error(`${spec.name} does not provide an optional voice-message add-on.`);
+    }
+    if (usesDefaultReadinessDependencies(options)) {
+        defaultAudioVerification.delete(spec.id);
+        defaultVerifiedAudioModels.delete(spec.id);
+    }
+    if (!(await transformersWebGpuModelDownloaded(spec.id, options))) {
+        throw new Error(transformersWebGpuModelNotDownloadedMessage(spec.id));
+    }
+    const cache = await openArtifactCache(options.cacheStorage, spec);
+    const fetcher = options.fetcher ?? globalThis.fetch.bind(globalThis);
+    const signal = options.signal;
+    const onProgress = options.onProgress ?? (() => undefined);
+    const verifyBody = options.cacheBodyVerifier ?? cachedResponseBodyMatches;
+    let completed = 0;
+    let lastPublishedAt = 0;
+
+    onProgress(0, addon.artifactBytes);
+    for (const artifact of addon.artifacts) {
+        if (signal?.aborted === true) throw abortReason(signal);
+        const url = artifactUrl(spec, artifact.path, options.baseUrl);
+        const cached = await cache.match(url);
+        if (
+            cachedArtifactMatches(cached, artifact) &&
+            (await verifyBody(cached!, artifact.bytes, artifact.sha256, signal))
+        ) {
+            completed += artifact.bytes;
+            onProgress(completed, addon.artifactBytes);
+            continue;
+        }
+        if (cached !== undefined) await cache.delete(url);
+
+        const downloadUrl = transformersWebGpuArtifactDownloadUrl(artifact.path, options, spec.id);
+        const response = await fetcher(downloadUrl, {
+            signal,
+            cache: "no-store",
+            credentials: "same-origin",
+        });
+        if (!response.ok || response.body === null) {
+            throw new Error(`Failed to download ${artifact.path} (HTTP ${response.status}).`);
+        }
+        const declared = Number(response.headers.get("content-length") ?? "0");
+        const encoding = response.headers.get("content-encoding");
+        if (
+            Number.isFinite(declared) &&
+            declared > 0 &&
+            (encoding === null || encoding === "identity") &&
+            declared !== artifact.bytes
+        ) {
+            throw new Error(`${artifact.path} changed size upstream; retry later.`);
+        }
+
+        let received = 0;
+        const digest = sha256.create();
+        const counted = response.body.pipeThrough(
+            new TransformStream<Uint8Array, Uint8Array>({
+                transform(chunk, controller) {
+                    if (signal?.aborted === true) {
+                        controller.error(abortReason(signal));
+                        return;
+                    }
+                    received += chunk.byteLength;
+                    if (received > artifact.bytes) {
+                        controller.error(new Error(`${artifact.path} exceeded its pinned size.`));
+                        return;
+                    }
+                    digest.update(chunk);
+                    const now = Date.now();
+                    if (now - lastPublishedAt >= 100) {
+                        lastPublishedAt = now;
+                        onProgress(completed + received, addon.artifactBytes);
+                    }
+                    controller.enqueue(chunk);
+                },
+            }),
+        );
+        const headers = new Headers(response.headers);
+        headers.delete("content-encoding");
+        headers.delete("transfer-encoding");
+        headers.set("content-length", String(artifact.bytes));
+        headers.set(CACHE_DIGEST_HEADER, artifact.sha256);
+        headers.set("x-openchat-model-revision", spec.revision);
+        try {
+            await cache.put(url, new Response(counted, { status: 200, statusText: "OK", headers }));
+        } catch (error) {
+            await cache.delete(url).catch(() => undefined);
+            throw error;
+        }
+        const got = digestHex(digest.digest());
+        if (received !== artifact.bytes || got !== artifact.sha256) {
+            await cache.delete(url);
+            throw new Error(`${artifact.path} failed its pinned SHA-256 check.`);
+        }
+        const stored = await cache.match(url);
+        if (
+            !cachedArtifactMatches(stored, artifact) ||
+            !(await verifyBody(stored!, artifact.bytes, artifact.sha256, signal))
+        ) {
+            await cache.delete(url);
+            throw new Error(`${artifact.path} was not retained by browser storage.`);
+        }
+        completed += artifact.bytes;
+        onProgress(completed, addon.artifactBytes);
+    }
+    if (usesDefaultReadinessDependencies(options)) {
+        // Every optional body was streamed and hash-verified above. Voice inference reuses this
+        // proof instead of rereading 171.5 MB from CacheStorage for every message.
+        defaultAudioVerification.set(spec.id, Promise.resolve(true));
+        defaultVerifiedAudioModels.add(spec.id);
+    }
+}
+
+export async function deleteTransformersWebGpuAudio(
+    modelId: string,
+    storage: TransformersWebGpuArtifactCacheStorage | undefined = globalThis.caches,
+): Promise<void> {
+    const spec = requiredSpec(modelId);
+    if (spec.optionalAudio === undefined) return;
+    defaultAudioVerification.delete(spec.id);
+    defaultVerifiedAudioModels.delete(spec.id);
+    if (storage === undefined) return;
+    await disposeTransformersWebGpuInference();
+    const cache = await openArtifactCache(storage, spec);
+    await Promise.all(
+        spec.optionalAudio.artifacts.map((artifact) =>
+            cache.delete(artifactUrl(spec, artifact.path)).catch(() => false),
+        ),
+    );
 }
 
 export function transformersWebGpuSpikeEnabled(): boolean {
@@ -545,8 +898,13 @@ export function shouldUseTransformersWebGpuSpike(
     return (
         eligibility.enabled &&
         eligibility.mobile &&
-        eligibility.selectedModelId === PHONE_QWEN3_VL_2B_MODEL_ID
+        transformersWebGpuModelSpec(eligibility.selectedModelId) !== undefined
     );
+}
+
+/** True for a mobile browser or Android WebView in a deliberately feature-flagged local build. */
+export function transformersWebGpuClientEnabled(): boolean {
+    return transformersWebGpuSpikeEnabled() && mobileBrowser();
 }
 
 function cachedRuntimeAssetMetadataMatches(
@@ -614,9 +972,8 @@ async function cachedResponseBodyMatches(
 
 export function transformersWebGpuSelectionCanHandle(selectedModelId: string | undefined): boolean {
     return (
-        transformersWebGpuSpikeEnabled() &&
-        mobileBrowser() &&
-        selectedModelId === PHONE_QWEN3_VL_2B_MODEL_ID
+        transformersWebGpuClientEnabled() &&
+        transformersWebGpuModelSpec(selectedModelId) !== undefined
     );
 }
 
@@ -627,13 +984,9 @@ export function transformersWebGpuSpikeCanHandle(
     return transformersWebGpuSelectionCanHandle(selectedModelId);
 }
 
-export function transformersWebGpuRuntimeAvailability(): TransformersWebGpuRuntimeAvailability {
-    if (globalThis.crossOriginIsolated !== true) {
-        return {
-            available: false,
-            reason: "Accelerated image inference needs a newly opened cross-origin-isolated tab.",
-        };
-    }
+export function transformersWebGpuRuntimeAvailability(
+    requiresImageApis = true,
+): TransformersWebGpuRuntimeAvailability {
     if (
         typeof Worker === "undefined" ||
         typeof WebAssembly === "undefined" ||
@@ -641,13 +994,16 @@ export function transformersWebGpuRuntimeAvailability(): TransformersWebGpuRunti
     ) {
         return {
             available: false,
-            reason: "This browser cannot start the isolated image-model worker.",
+            reason: "This OpenChat client cannot start the on-device WebGPU image-model worker.",
         };
     }
-    if (typeof OffscreenCanvas === "undefined" || typeof createImageBitmap === "undefined") {
+    if (
+        requiresImageApis &&
+        (typeof OffscreenCanvas === "undefined" || typeof createImageBitmap === "undefined")
+    ) {
         return {
             available: false,
-            reason: "This browser cannot decode images inside the isolated model worker.",
+            reason: "This OpenChat client cannot decode images inside the on-device WebGPU model worker.",
         };
     }
     const gpu = (navigator as Navigator & { gpu?: unknown }).gpu;
@@ -671,14 +1027,18 @@ function defaultWorkerFactory(): TransformersWebGpuWorker {
 export function createTransformersWebGpuEngine(
     factory: TransformersWebGpuWorkerFactory = defaultWorkerFactory,
     options: {
-        available?: () => TransformersWebGpuRuntimeAvailability;
+        available?: (requiresImageApis?: boolean) => TransformersWebGpuRuntimeAvailability;
         timeoutMs?: number;
+        shutdownGraceMs?: number;
         publishStatus?: (status: TransformersWebGpuStatus) => void;
+        decodeAudio?: (encoded: Uint8Array, mimeType: string) => Promise<Float32Array>;
     } = {},
 ): TransformersWebGpuEngine {
     const available = options.available ?? transformersWebGpuRuntimeAvailability;
     const timeoutMs = options.timeoutMs ?? DEFAULT_JOB_TIMEOUT_MS;
+    const shutdownGraceMs = options.shutdownGraceMs ?? DEFAULT_WORKER_SHUTDOWN_GRACE_MS;
     const publishStatus = options.publishStatus ?? (() => undefined);
+    const decodeAudio = options.decodeAudio ?? decodeTransformersWebGpuAudio;
 
     let worker: TransformersWebGpuWorker | undefined;
     let nextRequestId = 0;
@@ -687,8 +1047,10 @@ export function createTransformersWebGpuEngine(
     let active:
         | {
               requestId: number;
-              stage: "text" | "image";
+              stage: "text" | "image" | "audio";
               timer: ReturnType<typeof setTimeout>;
+              shutdownTimer?: ReturnType<typeof setTimeout>;
+              terminalResult?: InferenceResult;
               settle: (result: InferenceResult) => void;
           }
         | undefined;
@@ -711,9 +1073,32 @@ export function createTransformersWebGpuEngine(
         const pending = active;
         active = undefined;
         clearTimeout(pending.timer);
+        if (pending.shutdownTimer !== undefined) clearTimeout(pending.shutdownTimer);
         if (resetRuntime) detachWorker(candidate);
         else publishStatus({ phase: "idle" });
         pending.settle(result);
+    };
+
+    const requestWorkerShutdown = (
+        candidate: TransformersWebGpuWorker,
+        result: InferenceResult,
+    ): void => {
+        if (worker !== candidate || active === undefined) return;
+        const pending = active;
+        if (pending.terminalResult !== undefined) return;
+        pending.terminalResult = result;
+        clearTimeout(pending.timer);
+        try {
+            candidate.postMessage({ kind: "dispose", requestId: pending.requestId });
+        } catch {
+            settleActive(candidate, result, true);
+            return;
+        }
+        if (active !== pending) return;
+        pending.shutdownTimer = setTimeout(
+            () => settleActive(candidate, result, true),
+            Math.max(1, shutdownGraceMs),
+        );
     };
 
     const getWorker = (): TransformersWebGpuWorker => {
@@ -724,7 +1109,11 @@ export function createTransformersWebGpuEngine(
             const message = event.data;
             if (message.kind === "runtime_error") {
                 if (active !== undefined) {
-                    settleActive(candidate, { kind: "error", error: message.error }, true);
+                    settleActive(
+                        candidate,
+                        active.terminalResult ?? { kind: "error", error: message.error },
+                        true,
+                    );
                 } else {
                     detachWorker(candidate);
                 }
@@ -743,25 +1132,45 @@ export function createTransformersWebGpuEngine(
                 case "result":
                     settleActive(
                         candidate,
-                        message.text.length === 0
-                            ? { kind: "error", error: "browser model returned no text" }
-                            : { kind: "ok", text: message.text },
+                        active.terminalResult ??
+                            (message.text.length === 0
+                                ? { kind: "error", error: "browser model returned no text" }
+                                : { kind: "ok", text: message.text }),
                         true,
                     );
                     return;
                 case "unavailable":
-                    settleActive(candidate, { kind: "unavailable", reason: message.reason }, true);
+                    settleActive(
+                        candidate,
+                        active.terminalResult ?? { kind: "unavailable", reason: message.reason },
+                        true,
+                    );
                     return;
                 case "error":
-                    settleActive(candidate, { kind: "error", error: message.error }, true);
+                    settleActive(
+                        candidate,
+                        active.terminalResult ?? { kind: "error", error: message.error },
+                        true,
+                    );
+                    return;
+                case "disposed":
+                    settleActive(
+                        candidate,
+                        active.terminalResult ?? {
+                            kind: "error",
+                            error: "The browser model stopped before returning a result.",
+                        },
+                        true,
+                    );
                     return;
             }
         };
         candidate.onerror = (event) => {
             if (worker !== candidate) return;
-            const error = event.message || "The isolated image-model worker stopped unexpectedly.";
+            const error =
+                event.message || "The on-device WebGPU image-model worker stopped unexpectedly.";
             if (active !== undefined) {
-                settleActive(candidate, { kind: "error", error }, true);
+                settleActive(candidate, active.terminalResult ?? { kind: "error", error }, true);
             } else {
                 detachWorker(candidate);
             }
@@ -770,55 +1179,124 @@ export function createTransformersWebGpuEngine(
         return candidate;
     };
 
-    const inferOne = (request: InferenceRequest): Promise<InferenceResult> => {
+    const inferOne = async (
+        request: InferenceRequest,
+        explicitModelId?: TransformersWebGpuModelId,
+    ): Promise<InferenceResult> => {
         if (disposed) {
             return Promise.resolve({ kind: "error", error: "image-model worker was disposed" });
         }
-        const readiness = available();
+        const deadline = Date.now() + timeoutMs;
+        const readiness = available(request.image !== undefined);
         if (!readiness.available) {
             return Promise.resolve({ kind: "unavailable", reason: readiness.reason });
         }
         if (
             (request.image !== undefined &&
                 (request.image.byteLength === 0 || request.image.byteLength > MAX_IMAGE_BYTES)) ||
+            (request.audio !== undefined &&
+                (request.audio.byteLength === 0 ||
+                    request.audio.byteLength > TRANSFORMERS_WEBGPU_MAX_ENCODED_AUDIO_BYTES)) ||
+            (request.audio === undefined) !== (request.audioMimeType === undefined) ||
+            (request.audio !== undefined && request.image !== undefined) ||
             (request.maxTokens !== undefined &&
                 (!Number.isInteger(request.maxTokens) ||
                     request.maxTokens < 1 ||
                     request.maxTokens > MAX_OUTPUT_TOKENS))
         ) {
-            return Promise.resolve({
+            return {
                 kind: "error",
                 error: "all-WebGPU browser request exceeds safety limits",
-            });
+            };
         }
 
+        const spec = requiredSpec(explicitModelId ?? request.modelId ?? PHONE_QWEN3_VL_2B_MODEL_ID);
+        if (request.audio !== undefined && spec.optionalAudio === undefined) {
+            return {
+                kind: "unavailable",
+                reason: `${spec.name} cannot process voice messages. Select Gemma 4 E2B instead.`,
+            };
+        }
+        let audioSamples: ArrayBuffer | undefined;
+        if (request.audio !== undefined && request.audioMimeType !== undefined) {
+            try {
+                const remaining = Math.min(
+                    TRANSFORMERS_WEBGPU_AUDIO_DECODE_TIMEOUT_MS,
+                    deadline - Date.now(),
+                );
+                if (remaining < 1)
+                    throw new Error("Voice-message decoding timed out in this browser.");
+                let decodeTimer: ReturnType<typeof setTimeout> | undefined;
+                const decoded = await Promise.race([
+                    decodeAudio(request.audio, request.audioMimeType),
+                    new Promise<never>((_, reject) => {
+                        decodeTimer = setTimeout(
+                            () =>
+                                reject(
+                                    new Error("Voice-message decoding timed out in this browser."),
+                                ),
+                            remaining,
+                        );
+                    }),
+                ]).finally(() => {
+                    if (decodeTimer !== undefined) clearTimeout(decodeTimer);
+                });
+                audioSamples = decoded.buffer.slice(
+                    decoded.byteOffset,
+                    decoded.byteOffset + decoded.byteLength,
+                ) as ArrayBuffer;
+            } catch (error) {
+                return {
+                    kind: "error",
+                    error: error instanceof Error ? error.message : String(error),
+                };
+            }
+        }
+        if (disposed) {
+            return { kind: "error", error: "image-model worker was disposed" };
+        }
+        const remaining = deadline - Date.now();
+        if (remaining < 1) {
+            return {
+                kind: "error",
+                error: "The isolated browser image model did not finish in time.",
+            };
+        }
         const candidate = getWorker();
         const requestId = ++nextRequestId;
-        const stage = request.image === undefined ? "text" : "image";
+        const stage =
+            request.audio !== undefined ? "audio" : request.image === undefined ? "text" : "image";
         const image = request.image?.slice().buffer as ArrayBuffer | undefined;
         publishStatus({ phase: "loading", stage });
         return new Promise<InferenceResult>((settle) => {
             const timer = setTimeout(() => {
-                settleActive(
-                    candidate,
-                    {
-                        kind: "error",
-                        error: "The isolated browser image model did not finish in time.",
-                    },
-                    true,
-                );
-            }, timeoutMs);
+                requestWorkerShutdown(candidate, {
+                    kind: "error",
+                    error: "The isolated browser image model did not finish in time.",
+                });
+            }, remaining);
             active = { requestId, stage, timer, settle };
             try {
                 const message: TransformersWebGpuToWorker = {
                     kind: "infer",
                     requestId,
+                    modelId: spec.id,
                     prompt: request.prompt,
                     text: request.text,
                     image,
+                    audioSamples,
+                    audioSampleRate:
+                        audioSamples === undefined
+                            ? undefined
+                            : TRANSFORMERS_WEBGPU_AUDIO_SAMPLE_RATE,
                     maxTokens: request.maxTokens,
                 };
-                candidate.postMessage(message, image === undefined ? [] : [image]);
+                candidate.postMessage(
+                    message,
+                    [image, audioSamples].filter(
+                        (value): value is ArrayBuffer => value !== undefined,
+                    ),
+                );
             } catch (error) {
                 settleActive(
                     candidate,
@@ -833,19 +1311,18 @@ export function createTransformersWebGpuEngine(
     };
 
     return {
-        infer(request) {
-            const run = queue.then(() => inferOne(request));
+        infer(request, modelId) {
+            const run = queue.then(() => inferOne(request, modelId));
             queue = run.catch(() => undefined);
             return run;
         },
         async dispose() {
             disposed = true;
             if (active !== undefined && worker !== undefined) {
-                settleActive(
-                    worker,
-                    { kind: "error", error: "image-model worker was disposed" },
-                    true,
-                );
+                requestWorkerShutdown(worker, {
+                    kind: "error",
+                    error: "image-model worker was disposed",
+                });
             } else {
                 detachWorker();
             }
@@ -871,20 +1348,52 @@ function publishDefaultStatus(status: TransformersWebGpuStatus): void {
 }
 
 export async function transformersWebGpuInfer(request: InferenceRequest): Promise<InferenceResult> {
-    if (!(await transformersWebGpuModelDownloaded())) {
-        return { kind: "error", error: TRANSFORMERS_WEBGPU_MODEL_NOT_DOWNLOADED_MESSAGE };
+    const spec = transformersWebGpuModelSpec(request.modelId ?? PHONE_QWEN3_VL_2B_MODEL_ID);
+    if (spec === undefined) {
+        return {
+            kind: "unavailable",
+            reason: "This all-WebGPU model is not supported by this build.",
+        };
     }
-    if (!(await transformersWebGpuRuntimeAvailableOffline())) {
-        return { kind: "error", error: TRANSFORMERS_WEBGPU_MODEL_NOT_DOWNLOADED_MESSAGE };
+    if (!(await transformersWebGpuModelDownloaded(spec.id))) {
+        return { kind: "error", error: transformersWebGpuModelNotDownloadedMessage(spec.id) };
+    }
+    if (request.audio !== undefined && !(await transformersWebGpuAudioDownloaded(spec.id))) {
+        return { kind: "error", error: TRANSFORMERS_WEBGPU_GEMMA_AUDIO_NOT_DOWNLOADED_MESSAGE };
+    }
+    if (!(await transformersWebGpuRuntimeAvailableOffline(spec.id))) {
+        return { kind: "error", error: transformersWebGpuModelNotDownloadedMessage(spec.id) };
     }
     defaultEngine ??= createTransformersWebGpuEngine(defaultWorkerFactory, {
         publishStatus: publishDefaultStatus,
     });
-    return defaultEngine.infer(request);
+    return defaultEngine.infer(request, spec.id);
 }
 
 export async function disposeTransformersWebGpuInference(): Promise<void> {
     const engine = defaultEngine;
     defaultEngine = undefined;
     await engine?.dispose();
+}
+
+/** Remove the complete pinned runtime/model cache after the user explicitly removes Qwen. */
+export function deleteTransformersWebGpuModel(
+    storage?: Pick<CacheStorage, "delete">,
+): Promise<void>;
+export function deleteTransformersWebGpuModel(
+    modelId: string,
+    storage?: Pick<CacheStorage, "delete">,
+): Promise<void>;
+export async function deleteTransformersWebGpuModel(
+    modelOrStorage: string | Pick<CacheStorage, "delete"> | undefined = PHONE_QWEN3_VL_2B_MODEL_ID,
+    maybeStorage: Pick<CacheStorage, "delete"> | undefined = globalThis.caches,
+): Promise<void> {
+    const spec =
+        typeof modelOrStorage === "string"
+            ? requiredSpec(modelOrStorage)
+            : requiredSpec(PHONE_QWEN3_VL_2B_MODEL_ID);
+    const storage = typeof modelOrStorage === "string" ? maybeStorage : modelOrStorage;
+    await disposeTransformersWebGpuInference();
+    invalidateTransformersWebGpuReadiness(spec.id);
+    if (storage !== undefined) await storage.delete(spec.cacheKey);
 }

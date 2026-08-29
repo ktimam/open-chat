@@ -22,6 +22,10 @@ import { sourcemapNewline } from "../sourcemapNewline.mjs";
 import { androidBundlePlugin } from "./rollup-plugin-android-bundle.mjs";
 import { wasmUrlAsset } from "./rollup-plugin-wasm-url.mjs";
 import { transformersWebGpuFeatureEnabled } from "./transformersWebGpuFeatureFlag.mjs";
+import {
+    patchQwen3Vl2bDecoderGraph,
+    QWEN3_VL_2B_DECODER_PATCHED_BYTES,
+} from "./transformersWebGpuDecoderGraph.mjs";
 import { resolveLocalDevAllowedHost } from "./devAllowedHost.mjs";
 import { publicKeyBuildPlugin } from "./publicKeyBuild.mjs";
 import {
@@ -147,7 +151,8 @@ const transformersWebGpuSpikeEnabled = transformersWebGpuFeatureEnabled(process.
 const explicitTransformersWebGpuFlag = JSON.stringify(
     transformersWebGpuSpikeEnabled ? "true" : "false",
 );
-const isNativeApp = process.env.OC_APP_TYPE === "android" || process.env.OC_APP_TYPE === "ios";
+const isNativeAndroid = process.env.OC_APP_TYPE === "android";
+const isNativeApp = isNativeAndroid || process.env.OC_APP_TYPE === "ios";
 
 // These assets back the browser-only local OCR route. Native clients use the Rust inference
 // runtime, so keeping the OCR worker/core/language payload out of native bundles avoids about
@@ -187,7 +192,7 @@ const localExtractorCopyTargets = isNativeApp
       ];
 
 const transformersWebGpuCopyTargets =
-    isNativeApp || !transformersWebGpuSpikeEnabled
+    !transformersWebGpuSpikeEnabled || (isNativeApp && !isNativeAndroid)
         ? []
         : [
               {
@@ -204,6 +209,32 @@ const transformersWebGpuCopyTargets =
                   rename: "huggingface-transformers-Apache-2.0.txt",
               },
           ];
+
+function packagedAndroidTransformersGraphs() {
+    return {
+        name: "packaged-android-transformers-graphs",
+        generateBundle() {
+            if (!isNativeAndroid || !transformersWebGpuSpikeEnabled) return;
+            const graphDir = path.resolve(__dirname, "model-overrides/qwen3vl2b/onnx");
+            const decoder = patchQwen3Vl2bDecoderGraph(
+                fs.readFileSync(path.join(graphDir, "decoder_model_merged_q4.onnx")),
+            );
+            if (decoder.byteLength !== QWEN3_VL_2B_DECODER_PATCHED_BYTES) {
+                throw new Error("The packaged Qwen decoder byte count changed.");
+            }
+            this.emitFile({
+                type: "asset",
+                fileName: "assets/transformers-webgpu/qwen3vl2b/onnx/decoder_model_merged_q4.onnx",
+                source: decoder,
+            });
+            this.emitFile({
+                type: "asset",
+                fileName: "assets/transformers-webgpu/qwen3vl2b/onnx/vision_encoder_q4.onnx",
+                source: fs.readFileSync(path.join(graphDir, "vision_encoder_q4.onnx")),
+            });
+        },
+    };
+}
 
 export default {
     input: `./src/main.ts`,
@@ -549,6 +580,7 @@ export default {
         terser(),
 
         // Pull in the worker and service worker
+        packagedAndroidTransformersGraphs(),
         copy({
             targets: [
                 {

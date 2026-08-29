@@ -16,7 +16,9 @@ const web = vi.hoisted(() => ({
     ensureWebModelRestored: vi.fn(async (): Promise<void> => undefined),
     isWebInferenceReady: vi.fn((): boolean => false),
     webInfer: vi.fn(),
+    webModelCatalogId: vi.fn((): string | undefined => "qwen3-vl-2b-instruct-q4"),
     webModelLabel: vi.fn((): string | undefined => undefined),
+    webModelModalities: vi.fn((): ("text" | "image" | "audio")[] => ["text", "image"]),
 }));
 
 vi.mock("./webInference", () => web);
@@ -42,10 +44,12 @@ import {
     buildLocalAiPrompt,
     isLocalAiCommandPrefix,
     parseLocalAiCommand,
+    PROCESS_WITH_AI_AUDIO_PROMPT,
     PROCESS_WITH_AI_IMAGE_PROMPT,
     PROCESS_WITH_AI_TEXT_PROMPT,
     routeComposerInput,
     runLocalAiCommand,
+    VOICE_MESSAGE_ADD_ON_REQUIRED,
 } from "./localAiCommand";
 
 describe("/ai composer UI parity", () => {
@@ -72,11 +76,13 @@ describe("/ai composer UI parity", () => {
 });
 
 describe("Process with AI prompt", () => {
-    it("uses distinct generic prompts for selected text and image messages", () => {
+    it("uses distinct generic prompts for selected text, image, and voice messages", () => {
         expect(PROCESS_WITH_AI_TEXT_PROMPT).toContain("selected message");
         expect(PROCESS_WITH_AI_IMAGE_PROMPT).toContain("selected image message");
         expect(PROCESS_WITH_AI_IMAGE_PROMPT).toContain("every clearly readable detail");
         expect(PROCESS_WITH_AI_IMAGE_PROMPT).toContain("original language");
+        expect(PROCESS_WITH_AI_AUDIO_PROMPT).toContain("selected voice message");
+        expect(PROCESS_WITH_AI_AUDIO_PROMPT).toContain("inaudible or uncertain");
     });
 });
 
@@ -99,6 +105,20 @@ describe("buildLocalAiPrompt", () => {
 
     it("leaves the ordinary /ai prompt unchanged when no message context is supplied", () => {
         expect(buildLocalAiPrompt("hello")).toBe("hello");
+    });
+
+    it("quotes a selected voice message with an explicit local attachment marker", () => {
+        const prompt = buildLocalAiPrompt("transcribe it", [
+            {
+                author: "Nour",
+                text: "voice caption",
+                hasAudio: true,
+                audioIncluded: true,
+            },
+        ]);
+
+        expect(prompt).toContain("Nour: voice caption [voice message attached to this request]");
+        expect(prompt).toContain("USER REQUEST\ntranscribe it");
     });
 });
 
@@ -174,6 +194,8 @@ describe("runLocalAiCommand (through the real inferOnDevice facade)", () => {
     beforeEach(() => {
         web.isWebInferenceReady.mockReset().mockReturnValue(false);
         web.webInfer.mockReset();
+        web.webModelCatalogId.mockReset().mockReturnValue("qwen3-vl-2b-instruct-q4");
+        web.webModelModalities.mockReset().mockReturnValue(["text", "image"]);
     });
 
     it("browser with NO model attached -> 'unavailable' (composer toasts instead of posting)", async () => {
@@ -217,6 +239,58 @@ describe("runLocalAiCommand (through the real inferOnDevice facade)", () => {
         expect(request.image).toBe(image);
         expect(request.prompt).toContain("Alex: receipt caption [image attached to this request]");
         expect(request.prompt).toContain(`USER REQUEST\n${PROCESS_WITH_AI_IMAGE_PROMPT}`);
+    });
+
+    it("forwards voice bytes, MIME, prompt, and context only when the selected add-on advertises audio", async () => {
+        web.isWebInferenceReady.mockReturnValue(true);
+        web.webModelModalities.mockReturnValue(["text", "image", "audio"]);
+        web.webInfer.mockResolvedValue({ kind: "ok", text: "transcript" });
+        const audio = new Uint8Array([3, 4, 5]);
+
+        const outcome = await runLocalAiCommand(
+            PROCESS_WITH_AI_AUDIO_PROMPT,
+            undefined,
+            [
+                {
+                    author: "Nour",
+                    hasAudio: true,
+                    audioIncluded: true,
+                },
+            ],
+            audio,
+            "audio/webm;codecs=opus",
+        );
+
+        expect(outcome).toEqual({ kind: "ok", reply: "transcript" });
+        const request = web.webInfer.mock.calls[0][0];
+        expect(request.audio).toBe(audio);
+        expect(request.audioMimeType).toBe("audio/webm;codecs=opus");
+        expect(request.prompt).toContain("Nour: [voice message attached to this request]");
+        expect(request.prompt).toContain(`USER REQUEST\n${PROCESS_WITH_AI_AUDIO_PROMPT}`);
+    });
+
+    it("fails closed with missing-add-on guidance when the selected Qwen/model lacks audio", async () => {
+        web.isWebInferenceReady.mockReturnValue(true);
+        web.webModelModalities.mockReturnValue(["text", "image"]);
+        const audio = new Uint8Array([6, 7]);
+
+        await expect(
+            runLocalAiCommand(PROCESS_WITH_AI_AUDIO_PROMPT, undefined, [], audio, "audio/webm"),
+        ).resolves.toEqual({ kind: "unavailable", reason: VOICE_MESSAGE_ADD_ON_REQUIRED });
+        expect(web.webInfer).not.toHaveBeenCalled();
+    });
+
+    it("rejects incomplete voice input before any model call", async () => {
+        web.isWebInferenceReady.mockReturnValue(true);
+        web.webModelModalities.mockReturnValue(["text", "image", "audio"]);
+
+        await expect(
+            runLocalAiCommand(PROCESS_WITH_AI_AUDIO_PROMPT, undefined, [], new Uint8Array([1])),
+        ).resolves.toEqual({
+            kind: "error",
+            error: "voice message input requires encoded audio bytes and an audio MIME type",
+        });
+        expect(web.webInfer).not.toHaveBeenCalled();
     });
 
     it("surfaces inference errors as {kind:'error'}", async () => {

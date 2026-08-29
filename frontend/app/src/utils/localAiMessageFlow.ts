@@ -1,6 +1,11 @@
 import type { LocalAiChatMessage, LocalAiResult } from "./localAiCommand";
 
-export type LocalAiMessageInput = { text?: string; image?: Uint8Array };
+export type LocalAiMessageInput = {
+    text?: string;
+    image?: Uint8Array;
+    audio?: Uint8Array;
+    audioMimeType?: string;
+};
 
 export type LocalAiMessageFlowResult =
     | { kind: "success"; message: string }
@@ -16,6 +21,8 @@ export interface LocalAiMessageFlowDeps {
         prompt: string,
         image: Uint8Array | undefined,
         context: LocalAiChatMessage[],
+        audio: Uint8Array | undefined,
+        audioMimeType: string | undefined,
     ) => Promise<LocalAiResult>;
     sendReply: (text: string) => Promise<{ kind: string }>;
     stillCurrent: () => boolean;
@@ -34,6 +41,8 @@ export async function runLocalAiMessageFlow(
             deps.promptFor(input),
             input.image,
             deps.contextFor(input),
+            input.audio,
+            input.audioMimeType,
         );
         if (!deps.stillCurrent()) return { kind: "stale" };
 

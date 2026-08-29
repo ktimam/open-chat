@@ -11,6 +11,7 @@ const {
     inferOnDeviceTextOnlyNoProjectorMock,
     inferenceCapabilityMock,
     isNativeClientMock,
+    usesWebInferenceRuntimeMock,
     selectedWebModelIdMock,
 } = vi.hoisted(() => ({
     acceleratedImageModelReadyMock: vi.fn(async () => false),
@@ -37,6 +38,7 @@ const {
         }),
     ),
     isNativeClientMock: vi.fn(() => false),
+    usesWebInferenceRuntimeMock: vi.fn(() => true),
     selectedWebModelIdMock: vi.fn<() => string | undefined>(() => "qwen3-vl-2b-instruct-q4"),
 }));
 
@@ -56,6 +58,7 @@ vi.mock("./onDeviceInference", () => ({
     inferOnDeviceTextOnlyNoProjector: inferOnDeviceTextOnlyNoProjectorMock,
     isNativeClient: isNativeClientMock,
     onDeviceInferenceCapability: inferenceCapabilityMock,
+    usesWebInferenceRuntime: usesWebInferenceRuntimeMock,
 }));
 vi.mock("./webInference", () => ({
     browserImageModelFirstReadiness: async () => {
@@ -132,6 +135,8 @@ beforeEach(() => {
     });
     isNativeClientMock.mockReset();
     isNativeClientMock.mockReturnValue(false);
+    usesWebInferenceRuntimeMock.mockReset();
+    usesWebInferenceRuntimeMock.mockReturnValue(true);
     selectedWebModelIdMock.mockReset();
     selectedWebModelIdMock.mockReturnValue("qwen3-vl-2b-instruct-q4");
 });
@@ -1063,7 +1068,7 @@ describe("provenance before posting", () => {
 
         // This assertion targets the shared model-output sanitization boundary. Browser mode adds a
         // separate source-grounded verification contract, which has its own focused coverage.
-        isNativeClientMock.mockReturnValue(true);
+        usesWebInferenceRuntimeMock.mockReturnValue(false);
         inferenceCapabilityMock.mockReturnValue({
             available: true,
             runtimesSupported: ["llama-cpp"],
@@ -1489,11 +1494,7 @@ describe("provenance before posting", () => {
             { kind: "invalid_request" } as const,
             "rejected this card's verified content",
         ],
-        [
-            "backend error",
-            { kind: "backend_error" } as const,
-            "card verification service failed",
-        ],
+        ["backend error", { kind: "backend_error" } as const, "card verification service failed"],
         [
             "malformed success",
             { kind: "malformed_success" } as const,
@@ -2642,6 +2643,9 @@ describe("both ChatMessage trees run the SHARED propose flow", () => {
             expect(src).not.toContain("canInferOnDevice()");
             expect(src).toContain("aiActionProposalReadiness(");
             expect(src).toContain('capturedContent.kind === "image_content"');
+            expect(src).toContain("usesWebInferenceRuntime()");
+            expect(src).toContain("!usesWebInferenceRuntime()");
+            expect(src).not.toContain("isNativeClient()");
             expect(src).not.toContain("canInfer: onDeviceInferenceReadiness");
             // A second copy of the message is a second thing to forget to fix.
             expect(src).not.toContain("No on-device model is ready");

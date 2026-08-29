@@ -1,14 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { browserReadiness, genericReadiness, nativeClient } = vi.hoisted(() => ({
+const { browserReadiness, genericReadiness, webRuntimeClient } = vi.hoisted(() => ({
     browserReadiness: vi.fn(),
     genericReadiness: vi.fn(),
-    nativeClient: vi.fn(),
+    webRuntimeClient: vi.fn(),
 }));
 
 vi.mock("./onDeviceInference", () => ({
-    isNativeClient: nativeClient,
     onDeviceInferenceReadiness: genericReadiness,
+    usesWebInferenceRuntime: webRuntimeClient,
 }));
 
 vi.mock("./webInference", () => ({
@@ -19,8 +19,8 @@ import { aiActionProposalReadiness } from "./aiActionProposalReadiness";
 
 describe("AI-action proposal readiness", () => {
     beforeEach(() => {
-        nativeClient.mockReset();
-        nativeClient.mockReturnValue(false);
+        webRuntimeClient.mockReset();
+        webRuntimeClient.mockReturnValue(true);
         browserReadiness.mockReset();
         genericReadiness.mockReset();
     });
@@ -41,7 +41,7 @@ describe("AI-action proposal readiness", () => {
         ["browser text", false, false],
         ["native image", true, true],
     ])("uses generic native/model readiness for %s", async (_name, native, image) => {
-        nativeClient.mockReturnValue(native);
+        webRuntimeClient.mockReturnValue(!native);
         genericReadiness.mockResolvedValue({ available: true });
 
         await expect(aiActionProposalReadiness(image)).resolves.toEqual({ available: true });

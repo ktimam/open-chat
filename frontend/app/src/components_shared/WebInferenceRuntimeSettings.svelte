@@ -1,12 +1,22 @@
 <script lang="ts">
     import {
+        deleteTransformersWebGpuAudio,
+        preloadTransformersWebGpuAudio,
+        transformersWebGpuSelectionCanHandle,
+        transformersWebGpuAudioDownloaded,
+    } from "../utils/transformersWebGpuInference";
+    import {
+        PHONE_GEMMA4_E2B_MODEL_ID,
+        transformersWebGpuModelSpec,
+    } from "../utils/transformersWebGpuProtocol";
+    import {
         resetTransformersWebGpuMaxOutputTokens,
         TRANSFORMERS_WEBGPU_MAX_OUTPUT_TOKEN_LIMITS,
         TRANSFORMERS_WEBGPU_MAX_OUTPUT_TOKENS_DEFAULT,
         transformersWebGpuMaxOutputTokens,
         updateTransformersWebGpuMaxOutputTokens,
     } from "../stores/transformersWebGpuSettings";
-    import { transformersWebGpuSelectionCanHandle } from "../utils/transformersWebGpuInference";
+    import { onDestroy } from "svelte";
 
     let {
         modelId,
@@ -20,7 +30,91 @@
     }>();
 
     let active = $derived(transformersWebGpuSelectionCanHandle(modelId));
+    let modelSpec = $derived(transformersWebGpuModelSpec(modelId));
+    let audioInstalled = $state(false);
+    let audioChecking = $state(false);
+    let audioBusy = $state(false);
+    let audioProgress = $state<{ received: number; total: number } | undefined>(undefined);
+    let audioMessage = $state("");
+    let audioGeneration = 0;
+    let audioController: AbortController | undefined;
     let savedMessage = $state("");
+
+    async function refreshAudioState() {
+        const generation = ++audioGeneration;
+        if (modelSpec?.optionalAudio === undefined) {
+            audioInstalled = false;
+            audioChecking = false;
+            audioMessage = "";
+            return;
+        }
+        audioChecking = true;
+        audioMessage = "";
+        try {
+            const installed = await transformersWebGpuAudioDownloaded(modelId);
+            if (generation === audioGeneration) audioInstalled = installed;
+        } catch (error) {
+            if (generation === audioGeneration) {
+                audioInstalled = false;
+                audioMessage = error instanceof Error ? error.message : String(error);
+            }
+        } finally {
+            if (generation === audioGeneration) audioChecking = false;
+        }
+    }
+
+    $effect(() => {
+        modelId;
+        void refreshAudioState();
+    });
+
+    async function installAudio() {
+        audioController?.abort();
+        audioController = new AbortController();
+        audioBusy = true;
+        audioMessage = "";
+        audioProgress = {
+            received: 0,
+            total: modelSpec?.optionalAudio?.artifactBytes ?? 0,
+        };
+        try {
+            await preloadTransformersWebGpuAudio(modelId, {
+                signal: audioController.signal,
+                onProgress(received, total) {
+                    audioProgress = { received, total };
+                },
+            });
+            audioInstalled = await transformersWebGpuAudioDownloaded(modelId);
+            if (!audioInstalled) throw new Error("The voice add-on could not be verified.");
+            audioMessage = "Voice-message support installed.";
+        } catch (error) {
+            if (!audioController.signal.aborted) {
+                audioMessage = error instanceof Error ? error.message : String(error);
+            }
+        } finally {
+            audioBusy = false;
+            audioProgress = undefined;
+        }
+    }
+
+    async function removeAudio() {
+        audioBusy = true;
+        audioMessage = "";
+        try {
+            await deleteTransformersWebGpuAudio(modelId);
+            audioInstalled = false;
+            audioMessage = "Voice-message support removed. Text and image support remain installed.";
+        } catch (error) {
+            audioMessage = error instanceof Error ? error.message : String(error);
+        } finally {
+            audioBusy = false;
+        }
+    }
+
+    onDestroy(() => {
+        audioGeneration += 1;
+        audioController?.abort();
+    });
 
     function saveMaxOutputTokens(event: Event) {
         const input = event.currentTarget as HTMLInputElement;
@@ -38,26 +132,28 @@
     <section class="runtime-settings" aria-label={`${modelName} runtime settings`}>
         <h4>All-WebGPU model runtime</h4>
         <p>
-            Qwen3-VL 2B runs embeddings, vision, and decoding on WebGPU. This route does not invoke
-            OCR and has no CPU/WASM model fallback.
+            {modelSpec?.name ?? modelName} runs embeddings, vision, and decoding on WebGPU. This
+            route does not invoke OCR and has no CPU/WASM model fallback.
         </p>
         <dl>
             <div>
                 <dt>Embeddings</dt>
-                <dd><code>embed_tokens · webgpu · q4</code></dd>
+                <dd><code>embed_tokens · webgpu · {modelSpec?.dtype ?? "q4"}</code></dd>
             </div>
             <div>
                 <dt>Vision</dt>
-                <dd><code>vision_encoder · webgpu · q4</code></dd>
+                <dd><code>vision_encoder · webgpu · {modelSpec?.dtype ?? "q4"}</code></dd>
             </div>
             <div>
                 <dt>Decoder</dt>
-                <dd><code>decoder_model_merged · webgpu · q4</code></dd>
+                <dd><code>decoder_model_merged · webgpu · {modelSpec?.dtype ?? "q4"}</code></dd>
             </div>
-            <div>
-                <dt>Image input</dt>
-                <dd><code>288 × 512 · normalized</code></dd>
-            </div>
+            {#if modelId !== PHONE_GEMMA4_E2B_MODEL_ID}
+                <div>
+                    <dt>Image input</dt>
+                    <dd><code>288 × 512 · normalized</code></dd>
+                </div>
+            {/if}
             <div>
                 <dt>Decoding</dt>
                 <dd><code>greedy · do_sample=false</code></dd>
@@ -67,6 +163,38 @@
                 <dd><code>one job per worker · release after result</code></dd>
             </div>
         </dl>
+
+        {#if modelSpec?.optionalAudio !== undefined}
+            <div class="audio-addon">
+                <div>
+                    <strong>Voice-message support (optional)</strong>
+                    <p class="hint">
+                        Separate {Math.round(modelSpec.optionalAudio.artifactBytes / 1024 / 1024)} MB
+                        download. Gemma text and image inference works without it.
+                    </p>
+                </div>
+                {#if audioChecking}
+                    <p class="hint" role="status">Checking voice add-on…</p>
+                {:else if audioInstalled}
+                    <button type="button" disabled={busy || audioBusy} onclick={removeAudio}>
+                        Remove voice support
+                    </button>
+                {:else}
+                    <button type="button" disabled={busy || audioBusy} onclick={installAudio}>
+                        {audioBusy ? "Downloading voice support…" : "Install voice support"}
+                    </button>
+                {/if}
+                {#if audioProgress !== undefined && audioProgress.total > 0}
+                    <progress value={audioProgress.received} max={audioProgress.total}></progress>
+                    <p class="hint" role="status">
+                        {Math.round((audioProgress.received / audioProgress.total) * 100)}%
+                    </p>
+                {/if}
+                {#if audioMessage !== ""}
+                    <p class="saved" role="status">{audioMessage}</p>
+                {/if}
+            </div>
+        {/if}
 
         <label>
             <span>Maximum output tokens</span>
@@ -142,6 +270,19 @@
         .hint,
         .saved {
             font-size: 0.875rem;
+        }
+
+        .audio-addon {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 6px;
+            padding-block: 8px;
+            border-block: 1px solid var(--oc-border, rgba(127, 127, 127, 0.3));
+        }
+
+        progress {
+            width: 100%;
         }
     }
 </style>

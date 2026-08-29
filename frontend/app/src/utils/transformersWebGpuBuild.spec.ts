@@ -829,8 +829,36 @@ describe("Transformers.js WebGPU build isolation", () => {
         expect(workers).not.toMatch(
             /const transformersWebGpuSpikeEnabled\s*=\s*process\.env\.OC_BUILD_ENV/,
         );
-        expect(rollup).toContain("isNativeApp || !transformersWebGpuSpikeEnabled");
+        expect(rollup).toContain(
+            "!transformersWebGpuSpikeEnabled || (isNativeApp && !isNativeAndroid)",
+        );
+        expect(rollup).toContain("packagedAndroidTransformersGraphs");
+        expect(rollup).toContain("patchQwen3Vl2bDecoderGraph");
+        expect(rollup).toContain(
+            "assets/transformers-webgpu/qwen3vl2b/onnx/decoder_model_merged_q4.onnx",
+        );
+        expect(rollup).toContain(
+            "assets/transformers-webgpu/qwen3vl2b/onnx/vision_encoder_q4.onnx",
+        );
         expect(rollup).toContain('src: "../openchat-worker/lib/worker.js*"');
+
+        const tauri = fs.readFileSync(path.join(FRONTEND_DIR, "src-tauri/src/lib.rs"), "utf8");
+        const tauriCargo = fs.readFileSync(
+            path.join(FRONTEND_DIR, "src-tauri/Cargo.toml"),
+            "utf8",
+        );
+        const inference = fs.readFileSync(
+            path.join(APP_DIR, "src/utils/transformersWebGpuInference.ts"),
+            "utf8",
+        );
+        const workerSource = fs.readFileSync(
+            path.join(APP_DIR, "src/workers/transformersWebGpuInference.worker.ts"),
+            "utf8",
+        );
+        expect(tauri).not.toContain('option_env!("OC_TRANSFORMERS_WEBGPU_IMAGE_SPIKE")');
+        expect(tauriCargo).toContain('transformers-webgpu-android = []');
+        expect(workerSource).toContain("onnx.wasm.numThreads = 1");
+        expect(inference).not.toContain("globalThis.crossOriginIsolated");
     });
 
     it("pins the exact checked-in decoder source and vision graph rewrites", () => {

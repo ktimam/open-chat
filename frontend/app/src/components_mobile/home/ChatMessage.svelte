@@ -14,13 +14,14 @@
         type ProposalPhase,
     } from "@utils/aiActionRunner";
     import {
+        PROCESS_WITH_AI_AUDIO_PROMPT,
         PROCESS_WITH_AI_IMAGE_PROMPT,
         PROCESS_WITH_AI_TEXT_PROMPT,
         runLocalAiCommand,
     } from "@utils/localAiCommand";
     import { runLocalAiMessageFlow } from "@utils/localAiMessageFlow";
     import { aiActionProposalReadiness } from "@utils/aiActionProposalReadiness";
-    import { isNativeClient } from "@utils/onDeviceInference";
+    import { usesWebInferenceRuntime } from "@utils/onDeviceInference";
     import { browserImageProposalRequiresModelReadiness } from "@src/stores/browserImageActionMode";
     import { createSingleFlight } from "@utils/singleFlight";
     import { webModelStatus } from "@utils/webInference";
@@ -442,14 +443,19 @@
     let proposalPhase = $state<ProposalPhase | undefined>(undefined);
     let proposalRequiresModelReadiness = $state(true);
     let activeAutoProposeSuggestionKey = $state<string | undefined>(undefined);
+    let proposalModelGeneration = $derived.by(() => {
+        const generation = $webModelStatus.generation;
+        if (generation === undefined || generation.stage === "audio") return undefined;
+        return { stage: generation.stage, phase: generation.phase };
+    });
     let autoProposeBusyResourceKey = $derived(
         i18nKey(
             autoProposeBusyI18nKey(
                 $webModelStatus.status,
-                !isNativeClient(),
+                usesWebInferenceRuntime(),
                 proposalPhase,
                 proposalRequiresModelReadiness,
-                $webModelStatus.generation,
+                proposalModelGeneration,
             ),
         ),
     );
@@ -486,8 +492,7 @@
             };
             return runProposeFlow({
                 preflight: () => preflightAiActionForMessage(client, capturedContext.chatId),
-                canInfer: () =>
-                    aiActionProposalReadiness(capturedContent.kind === "image_content"),
+                canInfer: () => aiActionProposalReadiness(capturedContent.kind === "image_content"),
                 requiresModelReadiness: () => requiresModelReadiness,
                 promptForExtraction,
                 propose: (extraction) =>
@@ -533,7 +538,7 @@
         const capturedContent = msg.content;
         const requiresModelReadiness = browserImageProposalRequiresModelReadiness(
             capturedContent.kind === "image_content",
-            isNativeClient(),
+            !usesWebInferenceRuntime(),
         );
         if (!proposing) proposalRequiresModelReadiness = requiresModelReadiness;
         return runAiActionSingleFlight({ suggested, capturedContent, requiresModelReadiness });
@@ -564,21 +569,30 @@
         let terminalStatusSet = false;
         try {
             const result = await runLocalAiMessageFlow({
-                readInput: () => contentToInput(capturedContent, client),
+                readInput: () =>
+                    contentToInput(capturedContent, client, undefined, undefined, {
+                        includeAudio: true,
+                    }),
                 unsupportedMessage: () =>
                     capturedContent.kind === "image_content"
                         ? "The displayed image could not be read for local AI processing."
-                        : "This message type cannot be processed by the local AI yet.",
+                        : capturedContent.kind === "audio_content"
+                          ? "The selected voice message could not be read for local AI processing."
+                          : "This message type cannot be processed by the local AI yet.",
                 promptFor: (input) =>
-                    input.image !== undefined
-                        ? PROCESS_WITH_AI_IMAGE_PROMPT
-                        : PROCESS_WITH_AI_TEXT_PROMPT,
+                    input.audio !== undefined
+                        ? PROCESS_WITH_AI_AUDIO_PROMPT
+                        : input.image !== undefined
+                          ? PROCESS_WITH_AI_IMAGE_PROMPT
+                          : PROCESS_WITH_AI_TEXT_PROMPT,
                 contextFor: (input) => [
                     {
                         author: capturedAuthor,
                         text: input.text,
                         hasImage: input.image !== undefined,
                         imageIncluded: input.image !== undefined,
+                        hasAudio: input.audio !== undefined,
+                        audioIncluded: input.audio !== undefined,
                     },
                 ],
                 infer: runLocalAiCommand,
@@ -805,7 +819,9 @@
     let canForward = $derived(client.canForward(msg.content));
     let canTranslate = $derived((client.getMessageText(msg.content) ?? "").length > 0);
     let canProcessWithAi = $derived(
-        msg.content.kind === "text_content" || msg.content.kind === "image_content",
+        msg.content.kind === "text_content" ||
+            msg.content.kind === "image_content" ||
+            msg.content.kind === "audio_content",
     );
     let canDeleteMessage = $derived(
         (canDelete || me) &&

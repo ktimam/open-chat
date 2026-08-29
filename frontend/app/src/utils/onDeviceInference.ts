@@ -26,6 +26,10 @@ import {
     webModelLabel,
     webModelModalities,
 } from "./webInference";
+import {
+    transformersWebGpuClientEnabled,
+    transformersWebGpuSelectionCanHandle,
+} from "./transformersWebGpuInference";
 
 // Generic on-device inference facade (design deliverable A). This is the seam any in-client feature calls
 // to run the user's selected model with its OWN prompt. It feature-detects the native runtime and degrades
@@ -55,6 +59,22 @@ export function isNativeClient(): boolean {
     return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
+/**
+ * Browser builds use the web runtime as before. A deliberately feature-flagged Android WebView also
+ * uses it, so Qwen embeddings, vision and decoding all stay on WebGPU instead of entering llama.cpp.
+ * Other native clients keep the existing native-runtime route.
+ */
+export function usesWebInferenceRuntime(): boolean {
+    return !isNativeClient() || transformersWebGpuClientEnabled();
+}
+
+function webInferenceReadyForClient(): boolean {
+    return (
+        isWebInferenceReady() &&
+        (!isNativeClient() || transformersWebGpuSelectionCanHandle(webModelCatalogId()))
+    );
+}
+
 // Can THIS client run an on-device inference right now — natively (Tauri + llama.cpp) or in the
 // BROWSER (llama.cpp-WASM over a GGUF the user attached from disk; see webInference.ts)? This is
 // the gate propose flows should use: a browser with a model attached runs the model exactly like
@@ -79,6 +99,16 @@ export type OnDeviceInferenceReadiness = {
 // runtime exists. Proposal entry points await it, so an old/dev shell cannot advertise inference
 // during the gap before the actual infer command runs.
 export async function onDeviceInferenceReadiness(): Promise<OnDeviceInferenceReadiness> {
+    if (usesWebInferenceRuntime()) {
+        await ensureWebModelRestored();
+        const ready = webInferenceReadyForClient();
+        return {
+            available: ready || (!isNativeClient() && browserOcrAvailable()),
+            ...(isNativeClient() && !ready
+                ? { reason: "no accelerated on-device model selected" }
+                : {}),
+        };
+    }
     if (isNativeClient()) {
         lastNativeReadyModelId = undefined;
         if (!(await probeNativeInferenceRuntime())) {
@@ -110,8 +140,7 @@ export async function onDeviceInferenceReadiness(): Promise<OnDeviceInferenceRea
             return { available: false, reason: "could not read installed on-device models" };
         }
     }
-    await ensureWebModelRestored();
-    return { available: isWebInferenceReady() || browserOcrAvailable() };
+    return { available: false };
 }
 
 export async function canInferOnDevice(): Promise<boolean> {
@@ -159,7 +188,9 @@ async function runInference(
             request.image === undefined ||
             request.image.byteLength === 0 ||
             request.image.byteLength > MAX_IMAGE_BYTES ||
-            (request.imageRegion !== "lower_half" && request.imageRegion !== "detail_card")
+            (request.imageRegion !== "lower_half" &&
+                request.imageRegion !== "detail_card" &&
+                request.imageRegion !== "lower_detail_rows")
         ) {
             return { kind: "error", error: "inference image region is invalid" };
         }
@@ -177,17 +208,22 @@ async function runInference(
             };
         }
     }
-    if (!isNativeClient() || SUPPORTED_RUNTIMES.length === 0) {
+    if (usesWebInferenceRuntime() || SUPPORTED_RUNTIMES.length === 0) {
         // Browser path: a GGUF (from disk or the catalog) runs via llama.cpp-WASM — text, and images
         // too when the attached model has a vision projector. A browser with no model attached still
         // degrades to "unavailable" exactly as before.
         await ensureWebModelRestored();
-        if (isWebInferenceReady()) {
+        if (webInferenceReadyForClient()) {
             return webInfer(request, {
                 requireProjectorAbsent: options.requireProjectorAbsent === true,
             });
         }
-        return { kind: "unavailable", reason: "on-device inference requires the native client" };
+        return {
+            kind: "unavailable",
+            reason: isNativeClient()
+                ? "no accelerated on-device model selected"
+                : "on-device inference requires the native client",
+        };
     }
 
     // A native bridge proves only that this is a Tauri shell, not that its optional llama.cpp feature
@@ -263,16 +299,28 @@ export function onDeviceInferenceCapability(): OnDeviceInferenceCapability {
     const selected = get(selectedModelId);
     // Modalities come from the catalog entry for the selected model (the native store doesn't track them).
     const entry = defaultModelCatalog.models.find((m) => m.id === selected);
-    if (!isNativeClient() && isWebInferenceReady()) {
-        // Browser model: ask the model what it can read. This used to be hardcoded to ["text"], which
-        // made every browser look image-blind no matter what was attached — the UI gate downstream
-        // (imageUnsupportedReason) reads nothing else, so the hardcode WAS the ban on browser vision.
-        return {
-            available: true,
-            runtimesSupported: ["llama-cpp"],
-            selectedModelId: webModelCatalogId() ?? webModelLabel(),
-            selectedModalities: webModelModalities(),
-        };
+    if (usesWebInferenceRuntime()) {
+        const runtime: ModelRuntime = transformersWebGpuClientEnabled()
+            ? "transformers-webgpu"
+            : "llama-cpp";
+        if (webInferenceReadyForClient()) {
+            // Browser/Android-WebView model: ask the selected runtime what it can read. The explicit
+            // runtime identity prevents the APK from advertising llama.cpp while Qwen is on WebGPU.
+            return {
+                available: true,
+                runtimesSupported: [runtime],
+                selectedModelId: webModelCatalogId() ?? webModelLabel(),
+                selectedModalities: webModelModalities(),
+            };
+        }
+        if (transformersWebGpuClientEnabled()) {
+            return {
+                available: false,
+                runtimesSupported: [runtime],
+                selectedModelId: webModelCatalogId() ?? webModelLabel(),
+                selectedModalities: [],
+            };
+        }
     }
     return {
         available:

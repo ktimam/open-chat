@@ -33,15 +33,20 @@ describe("Process with AI message menus", () => {
     it.each([
         ["classic", "components/home/ChatMessage.svelte"],
         ["mobile", "components_mobile/home/ChatMessage.svelte"],
-    ])("routes %s selected-message text/image through runLocalAiCommand", (_tree, path) => {
+    ])("routes %s selected-message text/image/audio through runLocalAiCommand", (_tree, path) => {
         const component = source(path);
 
         expect(component).toContain("async function processMessageWithAi()");
         expect(component).toContain("await runLocalAiMessageFlow({");
-        expect(component).toContain("readInput: () => contentToInput(capturedContent, client)");
+        expect(component).toContain("includeAudio: true");
         expect(component).toContain("infer: runLocalAiCommand");
+        expect(component).toContain("PROCESS_WITH_AI_AUDIO_PROMPT");
         expect(component).toContain("PROCESS_WITH_AI_TEXT_PROMPT");
         expect(component).toContain("PROCESS_WITH_AI_IMAGE_PROMPT");
+        expect(component).toContain('msg.content.kind === "audio_content"');
+        expect(component).toContain('capturedContent.kind === "audio_content"');
+        expect(component).toContain("hasAudio: input.audio !== undefined");
+        expect(component).toContain("audioIncluded: input.audio !== undefined");
         expect(component).toContain("onRunAiAction={runAiActionHandler}");
         expect(component).toContain("onProcessWithAi={canProcessWithAi");
     });

@@ -34,6 +34,7 @@ vi.mock("./onDeviceInference", () => ({
     inferOnDeviceTextOnlyNoProjector: vi.fn(async () => ({ kind: "ok", text: '{"amount":20}' })),
     isNativeClient: () => true,
     onDeviceInferenceCapability: () => facade.capability,
+    usesWebInferenceRuntime: () => false,
 }));
 
 // This suite isolates the model-modality gate. The production switch remains false; overriding it

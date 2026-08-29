@@ -50,6 +50,11 @@ describe("browser startup service-worker maintenance", () => {
         expect(desktopMount).toBeGreaterThan(failureMount);
     });
 
+    it("restores the web model for browser and feature-flagged Android WebGPU clients", () => {
+        expect(main).toContain("if (usesWebInferenceRuntime()) void restoreWebModel()");
+        expect(main).toContain("if (!nativeClient)");
+    });
+
     it("surfaces an authentication-worker startup failure instead of leaving the loader forever", () => {
         expect(workerAgent).toContain("WORKER_STARTUP_REQUEST_TIMEOUT_MS");
         expect(workerAgent).toContain("worker.onerror");

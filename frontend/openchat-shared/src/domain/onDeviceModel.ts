@@ -8,14 +8,14 @@
 // runtime is pluggable (a catalog entry declares which native backend can load it); and the inference
 // API is caller-driven. No model and no model-specific logic ships in OpenChat.
 
-export type ModelModality = "text" | "image";
+export type ModelModality = "text" | "image" | "audio";
 
 // A bounded, content-agnostic image focus requested by an app-authored extraction pass. The client
 // derives a new in-memory raster from the original pixels before inference; no OCR or text crosses
 // this seam. Keep this a closed enum so untrusted app manifests cannot request arbitrary coordinates
 // or tiny adversarial crops. `lower_half` is the full-width bottom 50%; `detail_card` is the
-// full-width band from 58% through 86% of height.
-export type InferenceImageRegion = "lower_half" | "detail_card";
+// version-3 band from 58% through 86%; `lower_detail_rows` is the version-4 68%-90% band.
+export type InferenceImageRegion = "lower_half" | "detail_card" | "lower_detail_rows";
 
 // Which native backend can load/run a given model. Pluggable — this is a named, extensible union so more
 // backends can be added without changing the catalog or inference contract; a catalog entry declares its
@@ -23,7 +23,7 @@ export type InferenceImageRegion = "lower_half" | "detail_card";
 // llama.cpp via the `llama-cpp-2` crate, on BOTH desktop and mobile — Gemma 4 text+image via a GGUF model +
 // an mmproj vision projector; it compiles uniformly into the Rust plugin (desktop MSVC, Android NDK, iOS
 // XCFramework), so one runtime + one model format serves every platform.
-export type ModelRuntime = "llama-cpp";
+export type ModelRuntime = "llama-cpp" | "transformers-webgpu";
 
 export interface ModelFile {
     // Publicly reachable download URL (the catalog is BYO-model — files are not hosted by OpenChat).
@@ -71,7 +71,8 @@ export interface ManagedModel {
 }
 
 // The generic inference request — the seam every in-client consumer calls through. The prompt is
-// caller-supplied; OpenChat passes it (and any image/text) to the selected on-device model unchanged.
+// caller-supplied; OpenChat passes it (and any image/audio/text) to the selected on-device model
+// unchanged. Media bytes remain optional because a runtime may support only a subset of modalities.
 export interface InferenceRequest {
     // A model the user has downloaded and selected. If omitted, the manager's currently-selected model.
     modelId?: string;
@@ -79,6 +80,10 @@ export interface InferenceRequest {
     prompt: string;
     // Optional image (e.g. extracted from a message) for vision-capable models.
     image?: Uint8Array;
+    // Optional encoded audio (e.g. an OpenChat voice message) for audio-capable models. The MIME
+    // type describes these exact bytes; callers must provide both fields together.
+    audio?: Uint8Array;
+    audioMimeType?: string;
     // Optional bounded region of `image` to present to this inference call.
     imageRegion?: InferenceImageRegion;
     // Optional additional text context.

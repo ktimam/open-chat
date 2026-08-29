@@ -4,7 +4,7 @@
 // client build gains a direct "chat with the local model" affordance decoupled from the AI-action
 // (propose/confirm) flow. The model runs entirely on-device; the prompt never leaves the machine.
 
-import { inferOnDevice } from "./onDeviceInference";
+import { inferOnDevice, onDeviceInferenceCapability } from "./onDeviceInference";
 
 // A leading /ai command, with everything after it captured as the prompt. Case-insensitive so
 // "/AI" works too. The prompt may span lines (Shift+Enter in the composer).
@@ -21,14 +21,20 @@ const MAX_CHAT_CONTEXT_MESSAGES = 24;
 // generic local-model inference; it does not inspect app manifests or propose an app action.
 export const PROCESS_WITH_AI_IMAGE_PROMPT =
     "Read and analyze the selected image message. Transcribe every clearly readable detail in its original language and reading order, preserving labels, names, amounts, currency symbols or codes, dates, times, references, notes, and status text. Do not omit a readable field or guess uncertain characters; mark uncertainty, then give a concise analysis.";
+export const PROCESS_WITH_AI_AUDIO_PROMPT =
+    "Transcribe and analyze the selected voice message. Preserve the speaker's original language, names, amounts, currencies, dates, times, references, and stated uncertainty. Do not invent words for unclear audio; mark inaudible or uncertain spans, then give a concise, helpful response.";
 export const PROCESS_WITH_AI_TEXT_PROMPT =
     "Summarize and analyze the selected message. Preserve its important facts, names, amounts, currencies, dates, references, and notes, and give a concise, helpful response.";
+export const VOICE_MESSAGE_ADD_ON_REQUIRED =
+    "The selected on-device model cannot process voice messages. Select Gemma 4 E2B under profile → App settings → On-device models and install its optional audio add-on, then try again.";
 
 export type LocalAiChatMessage = {
     author: string;
     text?: string;
     hasImage?: boolean;
     imageIncluded?: boolean;
+    hasAudio?: boolean;
+    audioIncluded?: boolean;
 };
 
 function contextLine(message: LocalAiChatMessage): string | undefined {
@@ -38,7 +44,11 @@ function contextLine(message: LocalAiChatMessage): string | undefined {
             .trim()
             .slice(0, 80) || "Unknown";
     const messageText = message.text?.replace(/\u0000/g, "").trim();
-    if ((messageText === undefined || messageText.length === 0) && !message.hasImage) {
+    if (
+        (messageText === undefined || messageText.length === 0) &&
+        !message.hasImage &&
+        !message.hasAudio
+    ) {
         return undefined;
     }
     const imageMarker = message.hasImage
@@ -46,15 +56,17 @@ function contextLine(message: LocalAiChatMessage): string | undefined {
             ? "[image attached to this request]"
             : "[image not included]"
         : "";
-    return `${author}: ${[messageText, imageMarker].filter(Boolean).join(" ")}`;
+    const audioMarker = message.hasAudio
+        ? message.audioIncluded
+            ? "[voice message attached to this request]"
+            : "[voice message not included]"
+        : "";
+    return `${author}: ${[messageText, imageMarker, audioMarker].filter(Boolean).join(" ")}`;
 }
 
 // Context is explicitly quoted and bounded so a selected message can be supplied to the same
 // selected-model path as `/ai` without implying that unrelated or unloaded chat history is present.
-export function buildLocalAiPrompt(
-    prompt: string,
-    context: LocalAiChatMessage[] = [],
-): string {
+export function buildLocalAiPrompt(prompt: string, context: LocalAiChatMessage[] = []): string {
     const candidates = context
         .slice(-MAX_CHAT_CONTEXT_MESSAGES)
         .map(contextLine)
@@ -131,10 +143,32 @@ export async function runLocalAiCommand(
     prompt: string,
     image?: Uint8Array,
     context: LocalAiChatMessage[] = [],
+    audio?: Uint8Array,
+    audioMimeType?: string,
 ): Promise<LocalAiResult> {
+    if (
+        (audio === undefined && audioMimeType !== undefined) ||
+        (audio !== undefined &&
+            (audio.byteLength === 0 ||
+                audioMimeType === undefined ||
+                !/^audio\//i.test(audioMimeType)))
+    ) {
+        return {
+            kind: "error",
+            error: "voice message input requires encoded audio bytes and an audio MIME type",
+        };
+    }
+    if (audio !== undefined) {
+        const capability = onDeviceInferenceCapability();
+        if (capability.available && !capability.selectedModalities.includes("audio")) {
+            return { kind: "unavailable", reason: VOICE_MESSAGE_ADD_ON_REQUIRED };
+        }
+    }
     const result = await inferOnDevice({
         prompt: buildLocalAiPrompt(prompt, context),
         image,
+        audio,
+        audioMimeType,
         maxTokens: MAX_REPLY_TOKENS,
     });
     switch (result.kind) {

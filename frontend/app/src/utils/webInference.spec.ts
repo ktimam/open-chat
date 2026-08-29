@@ -50,8 +50,12 @@ const wl = vi.hoisted(() => ({
 const transformers = vi.hoisted(() => ({
     enabled: false,
     downloaded: false,
+    audioReady: false,
+    audioChecks: 0,
     preloadCalls: 0,
+    preloadModelIds: [] as string[],
     disposeCalls: 0,
+    deleteCalls: 0,
     requests: [] as { prompt: string; image?: Uint8Array; maxTokens?: number }[],
     preloadSignals: [] as AbortSignal[],
     preloadImpl: undefined as
@@ -73,7 +77,7 @@ const transformers = vi.hoisted(() => ({
 vi.mock("./transformersWebGpuInference", async (importOriginal) => {
     const actual = await importOriginal<typeof import("./transformersWebGpuInference")>();
     const selected = (id: string | undefined) =>
-        transformers.enabled && id === "qwen3-vl-2b-instruct-q4";
+        transformers.enabled && (id === "qwen3-vl-2b-instruct-q4" || id === "gemma-4-e2b-it-q4");
     return {
         ...actual,
         transformersWebGpuSelectionCanHandle: selected,
@@ -82,19 +86,29 @@ vi.mock("./transformersWebGpuInference", async (importOriginal) => {
             id: string | undefined,
         ) => selected(id),
         transformersWebGpuModelDownloaded: vi.fn(async () => transformers.downloaded),
+        transformersWebGpuAudioDownloaded: vi.fn(async () => {
+            transformers.audioChecks += 1;
+            return transformers.audioReady;
+        }),
+        transformersWebGpuAudioReady: vi.fn(() => transformers.audioReady),
         preloadTransformersWebGpuModel: vi.fn(
-            async (options: {
-                signal?: AbortSignal;
-                onProgress?: (received: number, total: number) => void;
-            } = {}) => {
+            async (
+                _modelId: string,
+                options: {
+                    signal?: AbortSignal;
+                    onProgress?: (received: number, total: number) => void;
+                } = {},
+            ) => {
                 transformers.preloadCalls += 1;
+                transformers.preloadModelIds.push(_modelId);
                 if (options.signal !== undefined) transformers.preloadSignals.push(options.signal);
                 if (transformers.preloadImpl !== undefined) {
                     await transformers.preloadImpl(options);
                     return;
                 }
                 transformers.downloaded = true;
-                options?.onProgress?.(1_534_532_835, 1_534_532_835);
+                const total = _modelId === "gemma-4-e2b-it-q4" ? 3_229_930_094 : 1_534_532_835;
+                options?.onProgress?.(total, total);
             },
         ),
         subscribeTransformersWebGpuStatus: vi.fn((listener) => {
@@ -112,6 +126,9 @@ vi.mock("./transformersWebGpuInference", async (importOriginal) => {
         }),
         disposeTransformersWebGpuInference: vi.fn(async () => {
             transformers.disposeCalls += 1;
+        }),
+        deleteTransformersWebGpuModel: vi.fn(async () => {
+            transformers.deleteCalls += 1;
         }),
     };
 });
@@ -587,7 +604,7 @@ describe("webModelModalities", () => {
     });
 });
 
-describe("pinned Qwen3-VL all-WebGPU integration", () => {
+describe("pinned all-WebGPU model integration", () => {
     const weightsUrl = "https://host/models/Qwen3VL-2B-Instruct-Q4_K_M.gguf";
     const projectorUrl = "https://host/models/mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf";
     const entry = {
@@ -605,10 +622,14 @@ describe("pinned Qwen3-VL all-WebGPU integration", () => {
         resetTransformersWebGpuMaxOutputTokens();
         transformers.enabled = true;
         transformers.downloaded = false;
+        transformers.audioReady = false;
+        transformers.audioChecks = 0;
         transformers.preloadCalls = 0;
+        transformers.preloadModelIds = [];
         transformers.preloadSignals = [];
         transformers.preloadImpl = undefined;
         transformers.disposeCalls = 0;
+        transformers.deleteCalls = 0;
         transformers.requests = [];
         resetWllama();
     });
@@ -635,7 +656,14 @@ describe("pinned Qwen3-VL all-WebGPU integration", () => {
             kind: "ok",
             text: "all-webgpu result",
         });
-        expect(transformers.requests).toEqual([{ prompt: "read receipt", image, maxTokens: 48 }]);
+        expect(transformers.requests).toEqual([
+            {
+                prompt: "read receipt",
+                image,
+                maxTokens: 48,
+                modelId: "qwen3-vl-2b-instruct-q4",
+            },
+        ]);
         expect(wl.loadCount).toBe(0);
     });
 
@@ -669,6 +697,16 @@ describe("pinned Qwen3-VL all-WebGPU integration", () => {
         });
     });
 
+    it("deletes the pinned CacheStorage payload when the user removes Qwen", async () => {
+        await useWebModelFromUrl(entry);
+
+        await clearWebModel();
+
+        expect(transformers.deleteCalls).toBe(1);
+        expect(get(webModelStatus)).toMatchObject({ status: "none", id: undefined });
+        expect(localStorage.getItem(LS_URL_MODEL)).toBeNull();
+    });
+
     it("migrates the previous GGUF-shaped Qwen selection after exact ONNX cache verification", async () => {
         transformers.downloaded = true;
         localStorage.setItem(
@@ -695,10 +733,52 @@ describe("pinned Qwen3-VL all-WebGPU integration", () => {
         expect(wl.modelSource).toBeUndefined();
     });
 
-    it("allow-lists only the pinned 2B phone artifact supported by the current engine", () => {
+    it("allow-lists both pinned phone artifacts supported by the current engine", () => {
         expect(allWebGpuCatalogModelSupported(entry.id)).toBe(true);
+        expect(allWebGpuCatalogModelSupported("gemma-4-e2b-it-q4")).toBe(true);
         expect(allWebGpuCatalogModelSupported("qwen3.5-0.8b-instruct-q4")).toBe(false);
         expect(allWebGpuCatalogModelSupported("smolvlm-256m-instruct-q8")).toBe(false);
+    });
+
+    it("selects Gemma from its pinned base manifest without requiring the optional audio add-on", async () => {
+        const gemma = {
+            id: "gemma-4-e2b-it-q4",
+            name: "Gemma 4 E2B (multimodal)",
+            files: [],
+            sizeBytes: 0,
+            modalities: ["text", "image", "audio"] as ModelModality[],
+        };
+
+        await expect(useWebModelFromUrl(gemma)).resolves.toBeUndefined();
+
+        expect(transformers.preloadModelIds).toEqual([gemma.id]);
+        expect(get(webModelStatus)).toMatchObject({
+            id: gemma.id,
+            status: "attached",
+        });
+        expect(transformers.audioChecks).toBe(1);
+        expect(webModelModalities()).toEqual(["text", "image"]);
+        expect(JSON.parse(localStorage.getItem(LS_URL_MODEL)!)).toEqual({
+            runtime: "transformers-webgpu",
+            id: gemma.id,
+            name: gemma.name,
+        });
+    });
+
+    it("advertises Gemma audio only after the separate add-on verifies", async () => {
+        transformers.audioReady = true;
+        const gemma = {
+            id: "gemma-4-e2b-it-q4",
+            name: "Gemma 4 E2B (multimodal)",
+            files: [],
+            sizeBytes: 0,
+            modalities: ["text", "image", "audio"] as ModelModality[],
+        };
+
+        await expect(useWebModelFromUrl(gemma)).resolves.toBeUndefined();
+
+        expect(transformers.audioChecks).toBe(1);
+        expect(webModelModalities()).toEqual(["text", "image", "audio"]);
     });
 
     it("never downloads the Qwen GGUF when the all-WebGPU trial is unavailable", async () => {

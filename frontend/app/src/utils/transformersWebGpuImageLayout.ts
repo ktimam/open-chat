@@ -16,6 +16,11 @@ const MAX_FRAME_EDGE = 512;
 export const TRANSFORMERS_WEBGPU_MAX_RAW_IMAGE_PATCHES = 640;
 const MAX_FRAME_PIXELS = TRANSFORMERS_WEBGPU_MAX_RAW_IMAGE_PATCHES * PATCH_SIZE * PATCH_SIZE;
 
+const GEMMA4_POOLING_KERNEL_SIZE = 3;
+const GEMMA4_MAX_SOFT_TOKENS = 280;
+const GEMMA4_SIDE_ALIGNMENT = PATCH_SIZE * GEMMA4_POOLING_KERNEL_SIZE;
+const GEMMA4_MAX_PATCHES = GEMMA4_MAX_SOFT_TOKENS * GEMMA4_POOLING_KERNEL_SIZE ** 2;
+
 export const TRANSFORMERS_WEBGPU_FALLBACK_IMAGE_LAYOUT: TransformersWebGpuImageLayout = Object.freeze({
     frameWidth: 288,
     frameHeight: 512,
@@ -93,6 +98,44 @@ export function transformersWebGpuImageLayout(
     if (best === undefined) return TRANSFORMERS_WEBGPU_FALLBACK_IMAGE_LAYOUT;
     const { contentPixels: _contentPixels, paddingPixels: _paddingPixels, ...layout } = best;
     return layout;
+}
+
+/**
+ * Match the pinned Gemma4 image processor's aspect-preserving target exactly. Decoding directly
+ * to this size avoids first shrinking receipt text to Qwen's 640-patch frame and then enlarging
+ * already-lost digits back to Gemma's native 2,520-patch input.
+ */
+export function gemma4WebGpuImageTarget(
+    sourceWidth: number,
+    sourceHeight: number,
+): Readonly<{ width: number; height: number }> {
+    if (!positiveDimensions(sourceWidth, sourceHeight)) {
+        throw new Error("Gemma received invalid encoded image dimensions.");
+    }
+    const targetPixels = GEMMA4_MAX_PATCHES * PATCH_SIZE ** 2;
+    const factor = Math.sqrt(targetPixels / (sourceWidth * sourceHeight));
+    let height = Math.floor((factor * sourceHeight) / GEMMA4_SIDE_ALIGNMENT) * GEMMA4_SIDE_ALIGNMENT;
+    let width = Math.floor((factor * sourceWidth) / GEMMA4_SIDE_ALIGNMENT) * GEMMA4_SIDE_ALIGNMENT;
+    if (height === 0 && width === 0) {
+        throw new Error("Gemma could not derive a non-empty image target.");
+    }
+    const maxSide =
+        Math.floor(GEMMA4_MAX_PATCHES / GEMMA4_POOLING_KERNEL_SIZE ** 2) *
+        GEMMA4_SIDE_ALIGNMENT;
+    if (height === 0) {
+        height = GEMMA4_SIDE_ALIGNMENT;
+        width = Math.min(
+            Math.floor(sourceWidth / sourceHeight) * GEMMA4_SIDE_ALIGNMENT,
+            maxSide,
+        );
+    } else if (width === 0) {
+        width = GEMMA4_SIDE_ALIGNMENT;
+        height = Math.min(
+            Math.floor(sourceHeight / sourceWidth) * GEMMA4_SIDE_ALIGNMENT,
+            maxSide,
+        );
+    }
+    return { width, height };
 }
 
 /** Read the processor's single-image T/H/W grid without lossy bigint arithmetic. */
