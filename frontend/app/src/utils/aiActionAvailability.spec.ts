@@ -45,6 +45,11 @@ describe("new action-card availability", () => {
             finalConfirmation: true,
             privateContext: true,
         });
+        expect(evaluateLocalAiActionAvailability(LOCAL_ENV, "tauri.localhost")).toEqual({
+            contentAttestation: true,
+            finalConfirmation: true,
+            privateContext: true,
+        });
     });
 
     it("allows only the exact configured development proxy hostname", () => {
@@ -91,6 +96,8 @@ describe("new action-card availability", () => {
             "attacker-openchat-dev.example.ts.net",
             "sub.openchat-dev.example.ts.net",
             "openchat-dev.example.ts.net.attacker.example",
+            "attacker.tauri.localhost",
+            "tauri.localhost.attacker.example",
             "192.168.1.50",
         ]) {
             expect(evaluateLocalAiActionAvailability(LOCAL_ENV, hostname).contentAttestation).toBe(
