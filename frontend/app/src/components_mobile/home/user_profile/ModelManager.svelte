@@ -27,7 +27,7 @@
     import {
         cancelWebModelDownload,
         clearWebModel,
-        restoreWebModel,
+        ensureWebModelRestored,
         useWebModelFromUrl,
         webModelStatus,
     } from "@utils/webInference";
@@ -361,7 +361,7 @@
     onMount(async () => {
         void loadCatalog();
         await load();
-        if (!native) void restoreWebModel();
+        if (!native) void ensureWebModelRestored();
         if (native) {
             unlisten = await onModelDownloadProgress((p) => {
                 progress = {

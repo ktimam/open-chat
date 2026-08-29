@@ -6,6 +6,11 @@ const MAX_INFERENCE_IMAGE_EDGE = 768;
 const MAX_INFERENCE_SOURCE_PIXELS = 40_000_000;
 const MAX_INFERENCE_SOURCE_EDGE = 8_192;
 const INFERENCE_JPEG_QUALITY = 0.85;
+// Decode ordinary receipt bands at their cropped source resolution, then let the canvas perform the
+// one resize. Chromium's crop+decode-resize overload visibly discarded thin date glyphs on Android
+// (the same 909x352 band changed `14 Aug 2026` into `14 Aug`). Keep a hard bitmap ceiling so an
+// adversarial maximum-size source cannot force a phone to materialize a huge RGBA crop.
+const MAX_HIGH_QUALITY_REGION_BITMAP_PIXELS = 4 * 1024 * 1024;
 export const BROWSER_INFERENCE_IMAGE_PREPARE_TIMEOUT_MS = 15_000;
 
 export type ImageDimensions = { width: number; height: number };
@@ -150,6 +155,8 @@ async function encodeBitmap(bitmap: ImageBitmap, request: ResizeRequest): Promis
     canvas.height = request.height;
     const context = canvas.getContext("2d", { alpha: false });
     if (context === null) throw new Error("canvas 2d context unavailable");
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
     context.drawImage(bitmap, 0, 0, request.width, request.height);
     return encodeCanvas(canvas, request);
 }
@@ -184,6 +191,8 @@ async function canvasRegionCrop(
     bytes: Uint8Array,
     request: RegionCropRequest,
 ): Promise<Uint8Array> {
+    const preserveCroppedPixelsUntilCanvas =
+        request.sourceWidth * request.sourceHeight <= MAX_HIGH_QUALITY_REGION_BITMAP_PIXELS;
     const bitmap = await awaitAbortable(
         createImageBitmap(
             new Blob([bytes.slice().buffer as ArrayBuffer]),
@@ -191,12 +200,14 @@ async function canvasRegionCrop(
             request.sourceY,
             request.sourceWidth,
             request.sourceHeight,
-            {
-                imageOrientation: "from-image",
-                resizeWidth: request.width,
-                resizeHeight: request.height,
-                resizeQuality: "high",
-            },
+            preserveCroppedPixelsUntilCanvas
+                ? { imageOrientation: "from-image" }
+                : {
+                      imageOrientation: "from-image",
+                      resizeWidth: request.width,
+                      resizeHeight: request.height,
+                      resizeQuality: "high",
+                  },
         ),
         request.signal,
         (lateBitmap) => lateBitmap.close(),

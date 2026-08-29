@@ -38,7 +38,7 @@ describe("browser startup service-worker maintenance", () => {
     it("renders actionable recovery without booting either app when controller release fails", () => {
         const preparation = main.indexOf("await prepareServiceWorkerBeforeApplicationStart()");
         const failureMount = main.indexOf("mount(StartupFailure");
-        const restore = main.indexOf("restoreWebModel()");
+        const restore = main.indexOf("ensureWebModelRestored()");
         const mobileMount = main.indexOf("mount(AppV2");
         const desktopMount = main.indexOf("mount(App,");
 
@@ -51,7 +51,7 @@ describe("browser startup service-worker maintenance", () => {
     });
 
     it("restores the web model for browser and feature-flagged Android WebGPU clients", () => {
-        expect(main).toContain("if (usesWebInferenceRuntime()) void restoreWebModel()");
+        expect(main).toContain("if (usesWebInferenceRuntime()) void ensureWebModelRestored()");
         expect(main).toContain("if (!nativeClient)");
     });
 

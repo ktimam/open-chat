@@ -299,14 +299,16 @@ describe("prepareImageRegionForInference", () => {
         );
     });
 
-    it("uses the browser crop overload and closes its bounded bitmap", async () => {
+    it("keeps the exact lower-date band sharp until the bounded canvas resize", async () => {
         const bytes = pngBytes(909, 1600);
         const close = vi.fn();
-        const bitmap = { width: 729, height: 359, close };
+        const bitmap = { width: 909, height: 352, close };
+        const drawImage = vi.fn();
+        const context = { drawImage, imageSmoothingEnabled: false, imageSmoothingQuality: "low" };
         const canvas = {
             width: 0,
             height: 0,
-            getContext: vi.fn().mockReturnValue({ drawImage: vi.fn() }),
+            getContext: vi.fn().mockReturnValue(context),
             toBlob: vi.fn((callback: (blob: Blob | null) => void) => {
                 const encoded = new Blob([], { type: "image/jpeg" });
                 Object.defineProperty(encoded, "arrayBuffer", {
@@ -318,17 +320,50 @@ describe("prepareImageRegionForInference", () => {
         vi.stubGlobal("createImageBitmap", vi.fn().mockResolvedValue(bitmap));
         vi.spyOn(document, "createElement").mockReturnValue(canvas as unknown as HTMLCanvasElement);
 
-        await expect(prepareImageRegionForInference(bytes, "detail_card")).resolves.toEqual(
+        await expect(prepareImageRegionForInference(bytes, "lower_detail_rows")).resolves.toEqual(
             new Uint8Array([4, 5]),
         );
-        expect(createImageBitmap).toHaveBeenCalledWith(expect.any(Blob), 0, 928, 909, 448, {
+        expect(createImageBitmap).toHaveBeenCalledWith(expect.any(Blob), 0, 1088, 909, 352, {
             imageOrientation: "from-image",
-            resizeWidth: 729,
-            resizeHeight: 359,
+        });
+        expect(canvas.width).toBe(768);
+        expect(canvas.height).toBe(297);
+        expect(context.imageSmoothingEnabled).toBe(true);
+        expect(context.imageSmoothingQuality).toBe("high");
+        expect(drawImage).toHaveBeenCalledWith(bitmap, 0, 0, 768, 297);
+        expect(close).toHaveBeenCalledOnce();
+    });
+
+    it("retains decode-time resize as a memory guard for a multi-megapixel crop", async () => {
+        const bytes = pngBytes(4000, 8000);
+        const close = vi.fn();
+        const bitmap = { width: 684, height: 383, close };
+        const canvas = {
+            width: 0,
+            height: 0,
+            getContext: vi.fn().mockReturnValue({ drawImage: vi.fn() }),
+            toBlob: vi.fn((callback: (blob: Blob | null) => void) => {
+                const encoded = new Blob([], { type: "image/jpeg" });
+                Object.defineProperty(encoded, "arrayBuffer", {
+                    value: async () => new Uint8Array([7, 8]).buffer,
+                });
+                callback(encoded);
+            }),
+        };
+        vi.stubGlobal("createImageBitmap", vi.fn().mockResolvedValue(bitmap));
+        vi.spyOn(document, "createElement").mockReturnValue(canvas as unknown as HTMLCanvasElement);
+
+        await expect(prepareImageRegionForInference(bytes, "detail_card")).resolves.toEqual(
+            new Uint8Array([7, 8]),
+        );
+        expect(createImageBitmap).toHaveBeenCalledWith(expect.any(Blob), 0, 4640, 4000, 2240, {
+            imageOrientation: "from-image",
+            resizeWidth: 684,
+            resizeHeight: 383,
             resizeQuality: "high",
         });
-        expect(canvas.width).toBe(729);
-        expect(canvas.height).toBe(359);
+        expect(canvas.width).toBe(684);
+        expect(canvas.height).toBe(383);
         expect(close).toHaveBeenCalledOnce();
     });
 

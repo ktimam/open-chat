@@ -26,7 +26,7 @@
     import {
         cancelWebModelDownload,
         clearWebModel,
-        restoreWebModel,
+        ensureWebModelRestored,
         useWebModelFromUrl,
         webModelStatus,
     } from "@utils/webInference";
@@ -372,7 +372,7 @@
             });
         } else {
             // Re-attach a previously picked disk model (persisted FileSystemFileHandle).
-            void restoreWebModel();
+            void ensureWebModelRestored();
         }
     });
 

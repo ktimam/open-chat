@@ -38,7 +38,7 @@ export const TRANSFORMERS_GEMMA_CACHE_KEY = "codex-gemma4-e2b-all-webgpu-v4.2.0-
  *
  * The ORT files are package-pinned and therefore have exact byte/digest identities. The worker is
  * produced by the current OpenChat build, so its identity is the website version in its URL plus a
- * digest recorded after the selection page has consumed the complete response.
+ * digest recorded after Model Manager or persisted-startup restore has consumed the complete response.
  */
 export const TRANSFORMERS_WEBGPU_RUNTIME_ASSETS = [
     {

@@ -17,7 +17,7 @@ import AppV2 from "./components_mobile/App.svelte";
 import StartupFailure from "./components_shared/StartupFailure.svelte";
 import { setNativeTheme, writeNativeCssVariables } from "./theme/themes";
 import { isNativeClient, usesWebInferenceRuntime } from "./utils/onDeviceInference";
-import { restoreWebModel } from "./utils/webInference";
+import { ensureWebModelRestored } from "./utils/webInference";
 
 async function startApplication() {
     const nativeClient = isNativeClient();
@@ -42,7 +42,7 @@ async function startApplication() {
     // Browser and feature-flagged Android WebGPU builds re-attach the persisted model at boot, so
     // propose works after an APK restart without first opening Model Manager. Service-worker
     // maintenance above remains browser-only.
-    if (usesWebInferenceRuntime()) void restoreWebModel();
+    if (usesWebInferenceRuntime()) void ensureWebModelRestored();
 
     // Picks the app variant once at startup. The native Android build ships
     // OC_MOBILE_LAYOUT=v2, so phones (viewport < 768px) always mount AppV2

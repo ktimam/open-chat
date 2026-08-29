@@ -31,10 +31,12 @@ import {
     deleteTransformersWebGpuModel,
     invalidateTransformersWebGpuReadiness,
     preloadTransformersWebGpuModel,
+    refreshTransformersWebGpuRuntimeAssets,
     subscribeTransformersWebGpuStatus,
     transformersWebGpuAudioDownloaded,
     transformersWebGpuAudioReady,
     transformersWebGpuInfer,
+    transformersWebGpuModelArtifactsDownloaded,
     transformersWebGpuModelDownloaded,
     transformersWebGpuModelNotDownloadedMessage,
     transformersWebGpuSelectionCanHandle,
@@ -816,12 +818,39 @@ export async function restoreWebModel(): Promise<void> {
             const saved = pinned ?? legacy;
             if (saved !== undefined) {
                 const restoreGeneration = ++modelSelectionGeneration;
+                let runtimeRefreshFailure: string | undefined;
                 const modelSpec = transformersWebGpuModelSpec(saved.id);
                 const allWebGpu = pinned !== undefined || modelSpec !== undefined;
                 const transformers = allWebGpu && transformersWebGpuSelectionCanHandle(saved.id);
-                const downloaded = allWebGpu
-                    ? transformers && (await transformersWebGpuModelDownloaded(saved.id))
-                    : true;
+                let downloaded = !allWebGpu;
+                if (allWebGpu && transformers) {
+                    const modelArtifactsDownloaded =
+                        await transformersWebGpuModelArtifactsDownloaded(saved.id);
+                    downloaded =
+                        modelArtifactsDownloaded &&
+                        (await transformersWebGpuModelDownloaded(saved.id));
+                    if (modelArtifactsDownloaded && !downloaded) {
+                        // APK updates rotate the worker URL with OC_WEBSITE_VERSION, but the pinned
+                        // multi-gigabyte model revision has not changed. Refresh only the small
+                        // build-owned worker/ORT payload at startup; inference remains cache-only
+                        // and never becomes a hidden model-download trigger.
+                        try {
+                            await refreshTransformersWebGpuRuntimeAssets(saved.id);
+                            downloaded = await transformersWebGpuModelDownloaded(saved.id);
+                            if (!downloaded) {
+                                runtimeRefreshFailure =
+                                    "Your downloaded model is intact, but OpenChat could not verify this build's refreshed all-WebGPU worker and ORT files. Restart or reload OpenChat and try again; reinstall the current app build if the error continues.";
+                            }
+                        } catch {
+                            // Preserve the selected model and identify the small runtime layer as
+                            // the failure. A transient packaged-asset/HTTP-cache failure must not
+                            // forget or misdiagnose the user's already-verified model weights.
+                            downloaded = false;
+                            runtimeRefreshFailure =
+                                "Your downloaded model is intact, but OpenChat could not refresh this build's all-WebGPU worker and ORT files. Restart or reload OpenChat and try again; reinstall the current app build if the error continues.";
+                        }
+                    }
+                }
                 if (downloaded && modelSpec?.optionalAudio !== undefined) {
                     // Restore voice capability only after its separate cache has been verified.
                     // Missing audio never prevents the base text/image model from attaching.
@@ -843,9 +872,10 @@ export async function restoreWebModel(): Promise<void> {
                 state.status = downloaded ? "attached" : "error";
                 state.error = downloaded
                     ? undefined
-                    : transformers
-                      ? transformersWebGpuModelNotDownloadedMessage(saved.id)
-                      : "The selected all-WebGPU runtime is not enabled in this browser.";
+                    : (runtimeRefreshFailure ??
+                      (transformers
+                          ? transformersWebGpuModelNotDownloadedMessage(saved.id)
+                          : "The selected all-WebGPU runtime is not enabled in this browser."));
                 publish();
                 if (allWebGpu) {
                     try {

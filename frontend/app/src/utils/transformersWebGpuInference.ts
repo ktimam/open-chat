@@ -64,6 +64,7 @@ const RUNTIME_VERSION_HEADER = "x-openchat-runtime-version";
 const RUNTIME_ASSET_HEADER = "x-openchat-runtime-asset";
 
 const defaultCacheVerification = new Map<TransformersWebGpuModelId, Promise<boolean>>();
+const defaultModelArtifactVerification = new Map<TransformersWebGpuModelId, Promise<boolean>>();
 const defaultRuntimeOfflineVerification = new Map<TransformersWebGpuModelId, Promise<boolean>>();
 const defaultAudioVerification = new Map<TransformersWebGpuModelId, Promise<boolean>>();
 const defaultVerifiedAudioModels = new Set<TransformersWebGpuModelId>();
@@ -83,7 +84,8 @@ export function transformersWebGpuModelNotDownloadedMessage(modelId: string | un
         : TRANSFORMERS_WEBGPU_MODEL_NOT_DOWNLOADED_MESSAGE;
 }
 
-export type TransformersWebGpuArtifactCache = Pick<Cache, "match" | "put" | "delete">;
+export type TransformersWebGpuArtifactCache = Pick<Cache, "match" | "put" | "delete"> &
+    Partial<Pick<Cache, "keys">>;
 export type TransformersWebGpuArtifactCacheStorage = {
     open(name: string): Promise<TransformersWebGpuArtifactCache>;
 };
@@ -158,11 +160,13 @@ function usesDefaultReadinessDependencies(
 export function invalidateTransformersWebGpuReadiness(modelId?: TransformersWebGpuModelId): void {
     if (modelId === undefined) {
         defaultCacheVerification.clear();
+        defaultModelArtifactVerification.clear();
         defaultRuntimeOfflineVerification.clear();
         defaultAudioVerification.clear();
         defaultVerifiedAudioModels.clear();
     } else {
         defaultCacheVerification.delete(modelId);
+        defaultModelArtifactVerification.delete(modelId);
         defaultRuntimeOfflineVerification.delete(modelId);
         defaultAudioVerification.delete(modelId);
         defaultVerifiedAudioModels.delete(modelId);
@@ -269,7 +273,65 @@ type TransformersWebGpuDownloadedOptions = Pick<
     | "packagedAndroid"
 >;
 
-/** True only when every pinned worker input is present under the exact cache key and digest. */
+/** True only when every immutable model artifact is present under the exact cache key and digest.
+ * Runtime assets are deliberately separate: the APK worker URL changes with each client build,
+ * while multi-gigabyte model weights remain the same pinned revision. */
+export function transformersWebGpuModelArtifactsDownloaded(
+    options?: TransformersWebGpuDownloadedOptions,
+): Promise<boolean>;
+export function transformersWebGpuModelArtifactsDownloaded(
+    modelId: string,
+    options?: TransformersWebGpuDownloadedOptions,
+): Promise<boolean>;
+export async function transformersWebGpuModelArtifactsDownloaded(
+    modelOrOptions: string | TransformersWebGpuDownloadedOptions = {},
+    maybeOptions: TransformersWebGpuDownloadedOptions = {},
+): Promise<boolean> {
+    const resolved = resolveModelAndOptions(modelOrOptions, maybeOptions);
+    const { spec } = resolved;
+    const options = resolved.options;
+    const useMemo = usesDefaultReadinessDependencies(options);
+    const memoized = defaultModelArtifactVerification.get(spec.id);
+    if (useMemo && memoized !== undefined) return memoized;
+
+    const verification = (async (): Promise<boolean> => {
+        try {
+            const cache = await openArtifactCache(options.cacheStorage, spec);
+            const verifyBody = options.cacheBodyVerifier ?? cachedResponseBodyMatches;
+            for (const artifact of spec.artifacts) {
+                const url = artifactUrl(spec, artifact.path, options.baseUrl);
+                const cached = await cache.match(url);
+                if (
+                    !cachedArtifactMatches(cached, artifact) ||
+                    !(await verifyBody(cached!, artifact.bytes, artifact.sha256, options.signal))
+                ) {
+                    if (cached !== undefined) await cache.delete(url).catch(() => undefined);
+                    return false;
+                }
+            }
+            return true;
+        } catch (error) {
+            if (options.signal?.aborted === true) throw abortReason(options.signal);
+            return false;
+        }
+    })();
+    if (useMemo) defaultModelArtifactVerification.set(spec.id, verification);
+    let verified: boolean;
+    try {
+        verified = await verification;
+    } catch (error) {
+        if (useMemo && defaultModelArtifactVerification.get(spec.id) === verification) {
+            defaultModelArtifactVerification.delete(spec.id);
+        }
+        throw error;
+    }
+    if (useMemo && !verified && defaultModelArtifactVerification.get(spec.id) === verification) {
+        defaultModelArtifactVerification.delete(spec.id);
+    }
+    return verified;
+}
+
+/** True only when every pinned model input and the current build's runtime assets are verified. */
 export function transformersWebGpuModelDownloaded(
     options?: TransformersWebGpuDownloadedOptions,
 ): Promise<boolean>;
@@ -290,19 +352,9 @@ export async function transformersWebGpuModelDownloaded(
 
     const verification = (async (): Promise<boolean> => {
         try {
+            if (!(await transformersWebGpuModelArtifactsDownloaded(spec.id, options))) return false;
             const cache = await openArtifactCache(options.cacheStorage, spec);
             const verifyBody = options.cacheBodyVerifier ?? cachedResponseBodyMatches;
-            for (const artifact of spec.artifacts) {
-                const url = artifactUrl(spec, artifact.path, options.baseUrl);
-                const cached = await cache.match(url);
-                if (
-                    !cachedArtifactMatches(cached, artifact) ||
-                    !(await verifyBody(cached!, artifact.bytes, artifact.sha256, options.signal))
-                ) {
-                    if (cached !== undefined) await cache.delete(url).catch(() => undefined);
-                    return false;
-                }
-            }
             for (const asset of TRANSFORMERS_WEBGPU_RUNTIME_ASSETS) {
                 const url = transformersWebGpuRuntimeAssetUrl(
                     asset,
@@ -379,8 +431,9 @@ async function fetchRuntimeAssetForSelection(
     url: string,
     signal: AbortSignal | undefined,
 ): Promise<{ response: Response; cacheOnly: boolean }> {
-    // A cache-only lookup never reaches the network. On a miss, the selection page owns the one
-    // reload fetch that primes the HTTP cache used by Worker construction and ORT's module loader.
+    // A cache-only lookup never reaches the network. On a miss, Model Manager or persisted-startup
+    // restore owns the one reload fetch that primes the HTTP cache used by Worker construction and
+    // ORT's module loader. Neither caller reaches model-weight URLs through this helper.
     try {
         const cached = await fetcher(url, {
             signal,
@@ -423,8 +476,9 @@ async function preloadTransformersWebGpuRuntimeAssets(
             verified = await runtimeResponseBytes(response, asset);
         } catch (error) {
             if (!selected.cacheOnly || signalAborted(options.signal)) throw error;
-            // A corrupt/stale HTTP-cache entry must not trap Retry forever. Refreshing is still
-            // owned by Model Manager and happens before the model can become selectable.
+            // A corrupt/stale HTTP-cache entry must not trap Retry/startup restore forever. This
+            // runtime-only refresh happens before the model can become selectable; model-weight
+            // downloads remain exclusively owned by Model Manager.
             response = await fetcher(url, {
                 signal: options.signal,
                 cache: "reload",
@@ -451,6 +505,80 @@ async function preloadTransformersWebGpuRuntimeAssets(
             await cache.delete(url).catch(() => undefined);
             throw new Error(`${asset.path} was not retained by browser storage.`);
         }
+    }
+    await pruneSupersededTransformersWebGpuWorkers(cache, options);
+}
+
+async function pruneSupersededTransformersWebGpuWorkers(
+    cache: TransformersWebGpuArtifactCache,
+    options: Pick<TransformersWebGpuPreloadOptions, "baseUrl" | "runtimeVersion">,
+): Promise<void> {
+    if (cache.keys === undefined) return;
+    const worker = TRANSFORMERS_WEBGPU_RUNTIME_ASSETS.find((asset) => asset.kind === "worker");
+    if (worker === undefined) return;
+    const current = new URL(
+        transformersWebGpuRuntimeAssetUrl(worker, options.baseUrl, options.runtimeVersion),
+    );
+    let requests: readonly Request[];
+    try {
+        requests = await cache.keys();
+    } catch {
+        return;
+    }
+    await Promise.all(
+        requests.map(async (request) => {
+            let candidate: URL;
+            try {
+                candidate = new URL(request.url);
+            } catch {
+                return;
+            }
+            if (
+                candidate.origin === current.origin &&
+                candidate.pathname === current.pathname &&
+                candidate.href !== current.href
+            ) {
+                await cache.delete(candidate.href).catch(() => undefined);
+            }
+        }),
+    );
+}
+
+/** Refresh only the small worker/ORT payload owned by the current client build.
+ *
+ * This is the update path for a persisted, already-verified model revision. It never requests a
+ * model URL, so an APK update does not turn the existing multi-gigabyte Qwen/Gemma install into a
+ * second model download. Model Manager remains the only owner of model-weight downloads. */
+export function refreshTransformersWebGpuRuntimeAssets(
+    options?: TransformersWebGpuPreloadOptions,
+): Promise<void>;
+export function refreshTransformersWebGpuRuntimeAssets(
+    modelId: string,
+    options?: TransformersWebGpuPreloadOptions,
+): Promise<void>;
+export async function refreshTransformersWebGpuRuntimeAssets(
+    modelOrOptions: string | TransformersWebGpuPreloadOptions = {},
+    maybeOptions: TransformersWebGpuPreloadOptions = {},
+): Promise<void> {
+    const resolved = resolveModelAndOptions(modelOrOptions, maybeOptions);
+    const { spec } = resolved;
+    const options = resolved.options;
+    if (usesDefaultReadinessDependencies(options)) {
+        defaultCacheVerification.delete(spec.id);
+        defaultRuntimeOfflineVerification.delete(spec.id);
+    }
+    const cache = await openArtifactCache(options.cacheStorage, spec);
+    await preloadTransformersWebGpuRuntimeAssets(cache, options);
+    if (
+        !(await transformersWebGpuRuntimeAvailableOffline(spec.id, {
+            fetcher: options.fetcher,
+            cacheStorage: options.cacheStorage,
+            baseUrl: options.baseUrl,
+            runtimeVersion: options.runtimeVersion,
+            packagedAndroid: options.packagedAndroid,
+        }))
+    ) {
+        throw new Error("The current all-WebGPU worker and ORT files could not be restored.");
     }
 }
 
@@ -671,6 +799,7 @@ export async function preloadTransformersWebGpuModel(
     if (usesDefaultReadinessDependencies(options)) {
         // Every CacheStorage body and every cache-only runtime response was proved during this
         // selection attempt. Subsequent focused passes and inference jobs reuse that per-page proof.
+        defaultModelArtifactVerification.set(spec.id, Promise.resolve(true));
         defaultCacheVerification.set(spec.id, Promise.resolve(true));
     }
 }

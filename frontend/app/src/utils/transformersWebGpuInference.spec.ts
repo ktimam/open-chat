@@ -10,9 +10,11 @@ import {
     invalidateTransformersWebGpuReadiness,
     preloadTransformersWebGpuAudio,
     preloadTransformersWebGpuModel,
+    refreshTransformersWebGpuRuntimeAssets,
     shouldUseTransformersWebGpuSpike,
     transformersWebGpuArtifactDownloadUrl,
     transformersWebGpuAudioDownloaded,
+    transformersWebGpuModelArtifactsDownloaded,
     transformersWebGpuModelDownloaded,
     transformersWebGpuRuntimeAvailability,
     transformersWebGpuRuntimeAvailableOffline,
@@ -289,6 +291,93 @@ describe("Transformers.js Qwen WebGPU spike", () => {
         } finally {
             meta.remove();
         }
+    });
+
+    it("refreshes a rotated APK worker without requesting the already-pinned model weights", async () => {
+        const baseUrl = "http://tauri.localhost/";
+        const runtimeVersion = "new-apk-build";
+        const entries = new Map(
+            TRANSFORMERS_QWEN_ARTIFACTS.map((artifact) => [
+                `${baseUrl}hf-model/${TRANSFORMERS_QWEN_MODEL_ID}/resolve/${TRANSFORMERS_QWEN_REVISION}/${artifact.path}`,
+                new Response(null, {
+                    status: 200,
+                    headers: {
+                        "content-length": String(artifact.bytes),
+                        "x-content-sha256": artifact.sha256,
+                    },
+                }),
+            ]),
+        );
+        const worker = TRANSFORMERS_WEBGPU_RUNTIME_ASSETS.find((asset) => asset.kind === "worker")!;
+        const previousWorkerUrl = transformersWebGpuRuntimeAssetUrl(
+            worker,
+            baseUrl,
+            "previous-apk-build",
+        );
+        entries.set(previousWorkerUrl, runtimeResponse(worker));
+        const cache: TransformersWebGpuArtifactCache = {
+            match: vi.fn(async (request) => entries.get(String(request))?.clone()),
+            put: vi.fn(async (request, response) => {
+                entries.set(
+                    String(request),
+                    new Response(await response.arrayBuffer(), {
+                        status: response.status,
+                        statusText: response.statusText,
+                        headers: response.headers,
+                    }),
+                );
+            }),
+            delete: vi.fn(async (request) => entries.delete(String(request))),
+            keys: vi.fn(async () => Array.from(entries.keys(), (url) => new Request(url))),
+        };
+        const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+            expect(String(input)).not.toContain("/hf-model/");
+            expect(String(input)).not.toContain("huggingface.co");
+            const asset = TRANSFORMERS_WEBGPU_RUNTIME_ASSETS.find(({ path }) =>
+                String(input).includes(path),
+            );
+            if (asset === undefined) throw new Error(`unexpected runtime fetch: ${String(input)}`);
+            if (asset.kind === "worker" && init?.cache === "only-if-cached") {
+                throw new TypeError("current versioned worker is absent from the HTTP cache");
+            }
+            return runtimeResponse(asset);
+        });
+        const cacheBodyVerifier = vi.fn(async () => true);
+        const options = {
+            cacheStorage: { open: async () => cache },
+            baseUrl,
+            runtimeVersion,
+            packagedAndroid: true,
+            fetcher,
+            cacheBodyVerifier,
+        };
+
+        await expect(transformersWebGpuModelArtifactsDownloaded(options)).resolves.toBe(true);
+        expect(cacheBodyVerifier).toHaveBeenCalledTimes(TRANSFORMERS_QWEN_ARTIFACTS.length);
+        for (const artifact of TRANSFORMERS_QWEN_ARTIFACTS) {
+            expect(cacheBodyVerifier).toHaveBeenCalledWith(
+                expect.any(Response),
+                artifact.bytes,
+                artifact.sha256,
+                undefined,
+            );
+        }
+        await expect(transformersWebGpuModelDownloaded(options)).resolves.toBe(false);
+
+        await expect(refreshTransformersWebGpuRuntimeAssets(options)).resolves.toBeUndefined();
+        await expect(transformersWebGpuModelDownloaded(options)).resolves.toBe(true);
+        expect(fetcher).toHaveBeenCalledTimes(TRANSFORMERS_WEBGPU_RUNTIME_ASSETS.length + 1);
+        expect(
+            fetcher.mock.calls
+                .filter(([input]) => String(input).includes(worker.path))
+                .map(([, init]) => init?.cache),
+        ).toEqual(["only-if-cached", "reload"]);
+        expect(cache.put).toHaveBeenCalledTimes(TRANSFORMERS_WEBGPU_RUNTIME_ASSETS.length);
+        expect(cache.delete).toHaveBeenCalledWith(previousWorkerUrl);
+        expect(entries.has(previousWorkerUrl)).toBe(false);
+        expect(
+            entries.has(transformersWebGpuRuntimeAssetUrl(worker, baseUrl, runtimeVersion)),
+        ).toBe(true);
     });
 
     it("finishes Model Manager selection only after the worker and both ORT files are cached", async () => {

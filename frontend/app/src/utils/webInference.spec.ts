@@ -11,6 +11,7 @@ import {
     browserImageModelFirstReadiness,
     clearWebModel,
     cancelWebModelDownload,
+    ensureWebModelRestored,
     restoreWebModel,
     setWebModelFile,
     useWebModelFromUrl,
@@ -50,9 +51,13 @@ const wl = vi.hoisted(() => ({
 const transformers = vi.hoisted(() => ({
     enabled: false,
     downloaded: false,
+    artifactsDownloaded: false,
     audioReady: false,
     audioChecks: 0,
     preloadCalls: 0,
+    runtimeRefreshCalls: 0,
+    runtimeRefreshError: undefined as string | undefined,
+    runtimeRefreshGate: undefined as Promise<void> | undefined,
     preloadModelIds: [] as string[],
     disposeCalls: 0,
     deleteCalls: 0,
@@ -86,6 +91,9 @@ vi.mock("./transformersWebGpuInference", async (importOriginal) => {
             id: string | undefined,
         ) => selected(id),
         transformersWebGpuModelDownloaded: vi.fn(async () => transformers.downloaded),
+        transformersWebGpuModelArtifactsDownloaded: vi.fn(
+            async () => transformers.artifactsDownloaded,
+        ),
         transformersWebGpuAudioDownloaded: vi.fn(async () => {
             transformers.audioChecks += 1;
             return transformers.audioReady;
@@ -107,10 +115,19 @@ vi.mock("./transformersWebGpuInference", async (importOriginal) => {
                     return;
                 }
                 transformers.downloaded = true;
+                transformers.artifactsDownloaded = true;
                 const total = _modelId === "gemma-4-e2b-it-q4" ? 3_229_930_094 : 1_534_532_835;
                 options?.onProgress?.(total, total);
             },
         ),
+        refreshTransformersWebGpuRuntimeAssets: vi.fn(async () => {
+            transformers.runtimeRefreshCalls += 1;
+            await transformers.runtimeRefreshGate;
+            if (transformers.runtimeRefreshError !== undefined) {
+                throw new Error(transformers.runtimeRefreshError);
+            }
+            transformers.downloaded = true;
+        }),
         subscribeTransformersWebGpuStatus: vi.fn((listener) => {
             transformers.statusListener = listener;
             listener({ phase: "idle" });
@@ -622,9 +639,13 @@ describe("pinned all-WebGPU model integration", () => {
         resetTransformersWebGpuMaxOutputTokens();
         transformers.enabled = true;
         transformers.downloaded = false;
+        transformers.artifactsDownloaded = false;
         transformers.audioReady = false;
         transformers.audioChecks = 0;
         transformers.preloadCalls = 0;
+        transformers.runtimeRefreshCalls = 0;
+        transformers.runtimeRefreshError = undefined;
+        transformers.runtimeRefreshGate = undefined;
         transformers.preloadModelIds = [];
         transformers.preloadSignals = [];
         transformers.preloadImpl = undefined;
@@ -709,6 +730,7 @@ describe("pinned all-WebGPU model integration", () => {
 
     it("migrates the previous GGUF-shaped Qwen selection after exact ONNX cache verification", async () => {
         transformers.downloaded = true;
+        transformers.artifactsDownloaded = true;
         localStorage.setItem(
             LS_URL_MODEL,
             JSON.stringify({
@@ -937,8 +959,83 @@ describe("pinned all-WebGPU model integration", () => {
         expect(get(webModelStatus).generation).toBeUndefined();
     });
 
+    it("restores a persisted model across an APK worker rotation without downloading weights", async () => {
+        await useWebModelFromUrl(entry);
+        const modelDownloads = transformers.preloadCalls;
+        transformers.artifactsDownloaded = true;
+        transformers.downloaded = false;
+
+        await restoreWebModel();
+
+        expect(transformers.runtimeRefreshCalls).toBe(1);
+        expect(transformers.preloadCalls).toBe(modelDownloads);
+        expect(get(webModelStatus)).toMatchObject({
+            id: entry.id,
+            status: "attached",
+            error: undefined,
+        });
+        expect(localStorage.getItem(LS_URL_MODEL)).not.toBeNull();
+
+        await expect(webInfer({ prompt: "cache-only after startup" })).resolves.toEqual({
+            kind: "ok",
+            text: "all-webgpu result",
+        });
+        expect(transformers.runtimeRefreshCalls).toBe(1);
+        expect(transformers.preloadCalls).toBe(modelDownloads);
+    });
+
+    it("coalesces concurrent startup and Model Manager runtime restores", async () => {
+        localStorage.setItem(
+            LS_URL_MODEL,
+            JSON.stringify({
+                runtime: "transformers-webgpu",
+                id: entry.id,
+                name: entry.name,
+            }),
+        );
+        transformers.artifactsDownloaded = true;
+        transformers.downloaded = false;
+        let releaseRuntimeRefresh!: () => void;
+        transformers.runtimeRefreshGate = new Promise((resolve) => {
+            releaseRuntimeRefresh = resolve;
+        });
+
+        const startupRestore = ensureWebModelRestored();
+        await vi.waitFor(() => expect(transformers.runtimeRefreshCalls).toBe(1));
+        const managerRestore = ensureWebModelRestored();
+        await Promise.resolve();
+        expect(transformers.runtimeRefreshCalls).toBe(1);
+
+        releaseRuntimeRefresh();
+        await Promise.all([startupRestore, managerRestore]);
+        expect(transformers.runtimeRefreshCalls).toBe(1);
+        expect(get(webModelStatus)).toMatchObject({ id: entry.id, status: "attached" });
+    });
+
+    it("keeps the persisted selection retryable when its runtime-only refresh fails", async () => {
+        await useWebModelFromUrl(entry);
+        const persisted = localStorage.getItem(LS_URL_MODEL);
+        const modelDownloads = transformers.preloadCalls;
+        transformers.artifactsDownloaded = true;
+        transformers.downloaded = false;
+        transformers.runtimeRefreshError = "packaged worker unavailable";
+
+        await restoreWebModel();
+
+        expect(transformers.runtimeRefreshCalls).toBe(1);
+        expect(transformers.preloadCalls).toBe(modelDownloads);
+        expect(get(webModelStatus)).toMatchObject({
+            id: entry.id,
+            status: "error",
+            error: expect.stringContaining("downloaded model is intact"),
+        });
+        expect(get(webModelStatus).error).not.toContain("needs an update");
+        expect(localStorage.getItem(LS_URL_MODEL)).toBe(persisted);
+    });
+
     it("reports a persisted selection as unavailable when its pinned ONNX cache is incomplete", async () => {
         await useWebModelFromUrl(entry);
+        transformers.artifactsDownloaded = false;
         transformers.downloaded = false;
 
         await restoreWebModel();
@@ -952,5 +1049,6 @@ describe("pinned all-WebGPU model integration", () => {
             available: false,
             reason: expect.stringContaining("needs an update"),
         });
+        expect(transformers.runtimeRefreshCalls).toBe(0);
     });
 });
