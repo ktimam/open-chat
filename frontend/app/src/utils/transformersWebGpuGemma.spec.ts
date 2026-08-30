@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { Tensor as WebGpuOrtTensor } from "onnxruntime-web/webgpu";
 import { describe, expect, it, vi } from "vitest";
 import {
     patchTransformersWebGpuSessionSource,
@@ -14,6 +15,7 @@ import {
     GEMMA4_PER_LAYER_BYTES_PER_TOKEN,
     GEMMA4_PER_LAYER_EMBEDDING_LAYOUT,
     assertGemma4PromptTokenCount,
+    gemma4EmbeddingOutputTensors,
     gemma4PerLayerRowId,
     gemma4TokenIds,
 } from "./gemma4WebGpuEmbedding";
@@ -103,7 +105,6 @@ describe("Gemma 4 E2B all-WebGPU runtime", () => {
                 type: "int64",
                 dims: [1, 3],
                 data: new BigInt64Array([2n, 123n, BigInt(GEMMA4_IMAGE_TOKEN_ID)]),
-                constructor: class {} as never,
             }),
         ).toEqual([2, 123, GEMMA4_IMAGE_TOKEN_ID]);
         expect(() =>
@@ -111,7 +112,6 @@ describe("Gemma 4 E2B all-WebGPU runtime", () => {
                 type: "int64",
                 dims: [1, 1],
                 data: new BigInt64Array([262_144n]),
-                constructor: class {} as never,
             }),
         ).toThrow("out-of-range token id");
 
@@ -124,6 +124,26 @@ describe("Gemma 4 E2B all-WebGPU runtime", () => {
             "let gathered = f16(f16(i32(q) - i32(zp)) * f16(scale));",
         );
         expect(embeddingSource).toContain("let scaled = f16(gathered * f16(params.multiplier));");
+    });
+
+    it("returns browser WebGPU tensors that Transformers can recognize", () => {
+        const outputs = gemma4EmbeddingOutputTensors(
+            [1, 6],
+            new Float32Array(6 * GEMMA4_BASE_EMBEDDING_LAYOUT.width),
+            new Float32Array(6 * GEMMA4_PER_LAYER_EMBEDDING_LAYOUT.width),
+        );
+
+        expect(outputs.inputs_embeds).toBeInstanceOf(WebGpuOrtTensor);
+        expect(outputs.per_layer_inputs).toBeInstanceOf(WebGpuOrtTensor);
+        expect(outputs.inputs_embeds.dims).toEqual([1, 6, 1_536]);
+        expect(outputs.per_layer_inputs.dims).toEqual([1, 6, 35, 256]);
+
+        const embeddingSource = fs.readFileSync(
+            path.join(APP_DIR, "src/utils/gemma4WebGpuEmbedding.ts"),
+            "utf8",
+        );
+        expect(embeddingSource).toContain('new WebGpuOrtTensor("float32"');
+        expect(embeddingSource).not.toContain("new input.constructor");
     });
 
     it("fails closed before a prompt can exceed phone WebGPU embedding-buffer limits", () => {

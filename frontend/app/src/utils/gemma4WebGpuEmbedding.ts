@@ -1,3 +1,5 @@
+import { Tensor as WebGpuOrtTensor } from "onnxruntime-web/webgpu";
+
 /**
  * Phone-bounded Gemma 4 embedding facade.
  *
@@ -75,7 +77,6 @@ type RawOrtTensor = {
     readonly dims: readonly number[];
     readonly data?: BigInt64Array | bigint[];
     readonly cpuData?: BigInt64Array;
-    readonly constructor: new (type: string, data: Float32Array, dims: number[]) => unknown;
 };
 
 export type Gemma4EmbeddingSession = {
@@ -87,6 +88,43 @@ export type Gemma4EmbeddingSession = {
     run(feeds: { input_ids?: RawOrtTensor }): Promise<Record<string, unknown>>;
     release(): Promise<void>;
 };
+
+export function gemma4EmbeddingOutputTensors(
+    inputDims: readonly number[],
+    inputsEmbeds: Float32Array,
+    perLayerInputs: Float32Array,
+) {
+    const dims = inputDims.map(Number);
+    if (
+        dims.length !== 2 ||
+        !dims.every((value) => Number.isSafeInteger(value) && value > 0)
+    ) {
+        throw new Error("Gemma received invalid embedding input dimensions.");
+    }
+    const [batchSize, sequenceLength] = dims;
+    const expectedBaseValues = batchSize * sequenceLength * GEMMA4_BASE_EMBEDDING_LAYOUT.width;
+    const expectedPerLayerValues =
+        batchSize * sequenceLength * GEMMA4_PER_LAYER_EMBEDDING_LAYOUT.width;
+    if (
+        inputsEmbeds.length !== expectedBaseValues ||
+        perLayerInputs.length !== expectedPerLayerValues
+    ) {
+        throw new Error("Gemma produced invalid embedding output dimensions.");
+    }
+    return {
+        inputs_embeds: new WebGpuOrtTensor("float32", inputsEmbeds, [
+            batchSize,
+            sequenceLength,
+            GEMMA4_BASE_EMBEDDING_LAYOUT.width,
+        ]),
+        per_layer_inputs: new WebGpuOrtTensor("float32", perLayerInputs, [
+            batchSize,
+            sequenceLength,
+            35,
+            256,
+        ]),
+    };
+}
 
 type GpuBufferLike = {
     getMappedRange(): ArrayBuffer;
@@ -486,20 +524,7 @@ export function createGemma4WebGpuEmbeddingSession(
                     GEMMA4_PER_LAYER_EMBEDDING_LAYOUT,
                 ),
             ]);
-            const dims = input.dims.map(Number);
-            return {
-                inputs_embeds: new input.constructor("float32", inputsEmbeds, [
-                    dims[0],
-                    dims[1],
-                    1_536,
-                ]),
-                per_layer_inputs: new input.constructor("float32", perLayerInputs, [
-                    dims[0],
-                    dims[1],
-                    35,
-                    256,
-                ]),
-            };
+            return gemma4EmbeddingOutputTensors(input.dims, inputsEmbeds, perLayerInputs);
         },
         async release() {
             released = true;
