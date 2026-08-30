@@ -293,7 +293,7 @@ export function createBrowserOcrEngine(
             if (!available()) {
                 return Promise.resolve({
                     kind: "unavailable" as const,
-                    reason: "This browser cannot run the local image reader.",
+                    reason: "This device cannot run the local image reader.",
                 });
             }
             if (image.byteLength === 0 || image.byteLength > MAX_BROWSER_OCR_IMAGE_BYTES) {

@@ -12,11 +12,13 @@ import {
     clearWebModel,
     cancelWebModelDownload,
     ensureWebModelRestored,
+    refreshWebModelInstallStatus,
     restoreWebModel,
     setWebModelFile,
     useWebModelFromUrl,
     webInfer,
     webModelModalities,
+    webModelInstallStatus,
     webModelStatus,
 } from "./webInference";
 
@@ -51,7 +53,13 @@ const wl = vi.hoisted(() => ({
 const transformers = vi.hoisted(() => ({
     enabled: false,
     downloaded: false,
+    downloadedModelIds: new Set<string>(),
+    modelDownloadedImpl: undefined as
+        | ((modelId: string, options: { signal?: AbortSignal }) => Promise<boolean>)
+        | undefined,
+    modelDownloadedSignals: [] as AbortSignal[],
     artifactsDownloaded: false,
+    artifactPresenceImpl: undefined as ((modelId: string) => Promise<boolean>) | undefined,
     audioReady: false,
     audioChecks: 0,
     preloadCalls: 0,
@@ -61,6 +69,8 @@ const transformers = vi.hoisted(() => ({
     preloadModelIds: [] as string[],
     disposeCalls: 0,
     deleteCalls: 0,
+    deleteModelIds: [] as string[],
+    deleteError: undefined as string | undefined,
     requests: [] as { prompt: string; image?: Uint8Array; maxTokens?: number }[],
     preloadSignals: [] as AbortSignal[],
     preloadImpl: undefined as
@@ -90,10 +100,34 @@ vi.mock("./transformersWebGpuInference", async (importOriginal) => {
             _request: { image?: Uint8Array },
             id: string | undefined,
         ) => selected(id),
-        transformersWebGpuModelDownloaded: vi.fn(async () => transformers.downloaded),
+        transformersWebGpuModelDownloaded: vi.fn(
+            async (modelId: string, options: { signal?: AbortSignal } = {}) => {
+                if (options.signal !== undefined) {
+                    transformers.modelDownloadedSignals.push(options.signal);
+                }
+                if (transformers.modelDownloadedImpl !== undefined) {
+                    return transformers.modelDownloadedImpl(modelId, options);
+                }
+                return (
+                    transformers.downloaded &&
+                    (transformers.downloadedModelIds.size === 0 ||
+                        transformers.downloadedModelIds.has(modelId))
+                );
+            },
+        ),
         transformersWebGpuModelArtifactsDownloaded: vi.fn(
             async () => transformers.artifactsDownloaded,
         ),
+        transformersWebGpuModelArtifactsPresent: vi.fn(async (modelId: string) => {
+            if (transformers.artifactPresenceImpl !== undefined) {
+                return transformers.artifactPresenceImpl(modelId);
+            }
+            return (
+                transformers.artifactsDownloaded &&
+                (transformers.downloadedModelIds.size === 0 ||
+                    transformers.downloadedModelIds.has(modelId))
+            );
+        }),
         transformersWebGpuAudioDownloaded: vi.fn(async () => {
             transformers.audioChecks += 1;
             return transformers.audioReady;
@@ -116,6 +150,7 @@ vi.mock("./transformersWebGpuInference", async (importOriginal) => {
                 }
                 transformers.downloaded = true;
                 transformers.artifactsDownloaded = true;
+                transformers.downloadedModelIds.add(_modelId);
                 const total = _modelId === "gemma-4-e2b-it-q4" ? 3_229_930_094 : 1_534_532_835;
                 options?.onProgress?.(total, total);
             },
@@ -144,8 +179,13 @@ vi.mock("./transformersWebGpuInference", async (importOriginal) => {
         disposeTransformersWebGpuInference: vi.fn(async () => {
             transformers.disposeCalls += 1;
         }),
-        deleteTransformersWebGpuModel: vi.fn(async () => {
+        deleteTransformersWebGpuModel: vi.fn(async (modelId: string) => {
             transformers.deleteCalls += 1;
+            transformers.deleteModelIds.push(modelId);
+            if (transformers.deleteError !== undefined) {
+                throw new Error(transformers.deleteError);
+            }
+            transformers.downloadedModelIds.delete(modelId);
         }),
     };
 });
@@ -384,6 +424,25 @@ describe("webInfer", () => {
         expect(res.kind).toBe("unavailable");
         expect(res.kind === "unavailable" && res.reason).toMatch(/vision model|mmproj/);
         expect(wl.lastMessages).toBeUndefined(); // never reached the model
+    });
+
+    it("keeps the projector absent for private verification on legacy Wllama", async () => {
+        await attachVisionModel();
+        // The projector-free reload requests and verifies only the model weights.
+        wl.cached = [{ url: WEIGHTS_URL, bytes: WEIGHTS }];
+
+        await expect(
+            webInfer(
+                {
+                    modelId: "smolvlm-256m-instruct-q8",
+                    prompt: "verify bounded OCR text",
+                },
+                { requireProjectorAbsent: true },
+            ),
+        ).resolves.toEqual({ kind: "ok", text: "extracted" });
+        expect(wl.modelSource).toEqual({ url: WEIGHTS_URL, mmprojUrl: undefined });
+        expect(wl.loadCount).toBe(1);
+        expect(wl.lastMessages?.[0].content).toBe("verify bounded OCR text");
     });
 
     it("with no model attached an image is still 'unavailable', exactly as before", async () => {
@@ -633,13 +692,18 @@ describe("pinned all-WebGPU model integration", () => {
     };
 
     beforeEach(async () => {
+        transformers.deleteError = undefined;
         transformers.enabled = false;
         await clearWebModel();
         localStorage.clear();
         resetTransformersWebGpuMaxOutputTokens();
         transformers.enabled = true;
         transformers.downloaded = false;
+        transformers.downloadedModelIds.clear();
+        transformers.modelDownloadedImpl = undefined;
+        transformers.modelDownloadedSignals = [];
         transformers.artifactsDownloaded = false;
+        transformers.artifactPresenceImpl = undefined;
         transformers.audioReady = false;
         transformers.audioChecks = 0;
         transformers.preloadCalls = 0;
@@ -651,6 +715,7 @@ describe("pinned all-WebGPU model integration", () => {
         transformers.preloadImpl = undefined;
         transformers.disposeCalls = 0;
         transformers.deleteCalls = 0;
+        transformers.deleteModelIds = [];
         transformers.requests = [];
         resetWllama();
     });
@@ -724,6 +789,7 @@ describe("pinned all-WebGPU model integration", () => {
         await clearWebModel();
 
         expect(transformers.deleteCalls).toBe(1);
+        expect(transformers.deleteModelIds).toEqual([entry.id]);
         expect(get(webModelStatus)).toMatchObject({ status: "none", id: undefined });
         expect(localStorage.getItem(LS_URL_MODEL)).toBeNull();
     });
@@ -827,6 +893,54 @@ describe("pinned all-WebGPU model integration", () => {
         ]);
         expect(transformers.requests[0].image).toBeUndefined();
         expect(wl.loadCount).toBe(0);
+    });
+
+    it("routes Gemma private verification through the selected all-WebGPU model", async () => {
+        const gemma = {
+            id: "gemma-4-e2b-it-q4",
+            name: "Gemma 4 E2B (multimodal)",
+            files: [],
+            sizeBytes: 0,
+            modalities: ["text", "image", "audio"] as ModelModality[],
+        };
+        await useWebModelFromUrl(gemma);
+
+        await expect(
+            webInfer(
+                { modelId: gemma.id, prompt: "verify bounded OCR text" },
+                { requireProjectorAbsent: true },
+            ),
+        ).resolves.toEqual({ kind: "ok", text: "all-webgpu result" });
+        expect(transformers.requests).toEqual([
+            expect.objectContaining({
+                modelId: gemma.id,
+                prompt: "verify bounded OCR text",
+            }),
+        ]);
+        expect(transformers.requests[0].image).toBeUndefined();
+        expect(wl.loadCount).toBe(0);
+    });
+
+    it("rejects private verification when the pinned model selection changed", async () => {
+        const gemma = {
+            id: "gemma-4-e2b-it-q4",
+            name: "Gemma 4 E2B (multimodal)",
+            files: [],
+            sizeBytes: 0,
+            modalities: ["text", "image", "audio"] as ModelModality[],
+        };
+        await useWebModelFromUrl(gemma);
+
+        await expect(
+            webInfer(
+                { modelId: entry.id, prompt: "must reject a changed selection" },
+                { requireProjectorAbsent: true },
+            ),
+        ).resolves.toEqual({
+            kind: "error",
+            error: "the selected browser model changed before inference",
+        });
+        expect(transformers.requests).toEqual([]);
     });
 
     it("keeps the projector-absent boundary closed to supplied image bytes", async () => {
@@ -940,6 +1054,140 @@ describe("pinned all-WebGPU model integration", () => {
         expect(get(webModelStatus)).toMatchObject({ id: entry.id, status: "attached" });
     });
 
+    it("keeps both model downloads and switches back cache-only without deletion", async () => {
+        const gemma = {
+            id: "gemma-4-e2b-it-q4",
+            name: "Gemma 4 E2B (multimodal)",
+            files: [],
+            sizeBytes: 0,
+            modalities: ["text", "image", "audio"] as ModelModality[],
+        };
+
+        await useWebModelFromUrl(entry);
+        await useWebModelFromUrl(gemma);
+        const preloadCallsAfterBothDownloads = transformers.preloadCalls;
+
+        await useWebModelFromUrl(entry);
+
+        expect(transformers.preloadModelIds).toEqual([entry.id, gemma.id]);
+        expect(transformers.preloadCalls).toBe(preloadCallsAfterBothDownloads);
+        expect(transformers.deleteCalls).toBe(0);
+        expect(transformers.downloadedModelIds).toEqual(new Set([entry.id, gemma.id]));
+        expect(get(webModelInstallStatus)).toMatchObject({
+            [entry.id]: "downloaded",
+            [gemma.id]: "downloaded",
+        });
+        expect(get(webModelStatus)).toMatchObject({ id: entry.id, status: "attached" });
+    });
+
+    it("reports inactive cached models independently from the current selection", async () => {
+        transformers.artifactsDownloaded = true;
+        transformers.downloadedModelIds.add(entry.id);
+        transformers.downloadedModelIds.add("gemma-4-e2b-it-q4");
+
+        await refreshWebModelInstallStatus([entry.id, "gemma-4-e2b-it-q4"]);
+
+        expect(get(webModelInstallStatus)).toMatchObject({
+            [entry.id]: "downloaded",
+            "gemma-4-e2b-it-q4": "downloaded",
+        });
+    });
+
+    it("merges a refresh per model when a concurrent selection updates one model", async () => {
+        const gemmaId = "gemma-4-e2b-it-q4";
+        const resolvers = new Map<string, (downloaded: boolean) => void>();
+        transformers.artifactPresenceImpl = (modelId) =>
+            new Promise<boolean>((resolve) => resolvers.set(modelId, resolve));
+        const refresh = refreshWebModelInstallStatus([entry.id, gemmaId]);
+        await vi.waitFor(() => expect(resolvers.size).toBe(2));
+
+        await useWebModelFromUrl(entry);
+        resolvers.get(entry.id)!(false);
+        resolvers.get(gemmaId)!(true);
+        await refresh;
+
+        expect(get(webModelInstallStatus)).toMatchObject({
+            [entry.id]: "downloaded",
+            [gemmaId]: "downloaded",
+        });
+    });
+
+    it("merges a refresh per model when explicit removal updates one model", async () => {
+        const gemmaId = "gemma-4-e2b-it-q4";
+        await useWebModelFromUrl(entry);
+        const resolvers = new Map<string, (downloaded: boolean) => void>();
+        transformers.artifactPresenceImpl = (modelId) =>
+            new Promise<boolean>((resolve) => resolvers.set(modelId, resolve));
+        const refresh = refreshWebModelInstallStatus([entry.id, gemmaId]);
+        await vi.waitFor(() => expect(resolvers.size).toBe(2));
+
+        await clearWebModel();
+        resolvers.get(entry.id)!(true);
+        resolvers.get(gemmaId)!(true);
+        await refresh;
+
+        expect(get(webModelInstallStatus)).toMatchObject({
+            [entry.id]: "not_downloaded",
+            [gemmaId]: "downloaded",
+        });
+    });
+
+    it("does not apply the network stall timer while verifying a cached model and remains cancellable", async () => {
+        vi.useFakeTimers();
+        try {
+            const gemma = {
+                id: "gemma-4-e2b-it-q4",
+                name: "Gemma 4 E2B (multimodal)",
+                files: [],
+                sizeBytes: 0,
+                modalities: ["text", "image", "audio"] as ModelModality[],
+            };
+            await useWebModelFromUrl(entry);
+            await useWebModelFromUrl(gemma);
+            const preloads = transformers.preloadCalls;
+            transformers.modelDownloadedSignals = [];
+            let verificationStarted!: () => void;
+            const started = new Promise<void>((resolve) => {
+                verificationStarted = resolve;
+            });
+            transformers.modelDownloadedImpl = async (_modelId, { signal }) =>
+                new Promise<boolean>((_resolve, reject) => {
+                    verificationStarted();
+                    signal?.addEventListener("abort", () => reject(signal.reason), {
+                        once: true,
+                    });
+                });
+
+            const switching = useWebModelFromUrl(entry);
+            await started;
+            expect(transformers.modelDownloadedSignals).toHaveLength(1);
+            await vi.advanceTimersByTimeAsync(90_000);
+            expect(transformers.modelDownloadedSignals[0].aborted).toBe(false);
+
+            cancelWebModelDownload();
+            await expect(switching).resolves.toMatch(/cancelled|Retry download/i);
+            expect(transformers.modelDownloadedSignals[0].aborted).toBe(true);
+            expect(transformers.preloadCalls).toBe(preloads);
+            expect(get(webModelStatus)).toMatchObject({ id: gemma.id, status: "attached" });
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("keeps the selected model and downloaded status when explicit cache deletion fails", async () => {
+        await useWebModelFromUrl(entry);
+        const persisted = localStorage.getItem(LS_URL_MODEL);
+        transformers.deleteError = "CacheStorage removal failed";
+
+        await expect(clearWebModel()).rejects.toThrow("CacheStorage removal failed");
+
+        expect(get(webModelStatus)).toMatchObject({ id: entry.id, status: "attached" });
+        expect(get(webModelInstallStatus)).toMatchObject({ [entry.id]: "downloaded" });
+        expect(localStorage.getItem(LS_URL_MODEL)).toBe(persisted);
+        expect(transformers.downloadedModelIds.has(entry.id)).toBe(true);
+        transformers.deleteError = undefined;
+    });
+
     it("publishes content-free all-WebGPU engine progress for message status labels", async () => {
         await useWebModelFromUrl(entry);
         transformers.statusListener?.({
@@ -974,6 +1222,7 @@ describe("pinned all-WebGPU model integration", () => {
             status: "attached",
             error: undefined,
         });
+        expect(get(webModelInstallStatus)).toMatchObject({ [entry.id]: "downloaded" });
         expect(localStorage.getItem(LS_URL_MODEL)).not.toBeNull();
 
         await expect(webInfer({ prompt: "cache-only after startup" })).resolves.toEqual({
@@ -1029,6 +1278,7 @@ describe("pinned all-WebGPU model integration", () => {
             status: "error",
             error: expect.stringContaining("downloaded model is intact"),
         });
+        expect(get(webModelInstallStatus)).toMatchObject({ [entry.id]: "downloaded" });
         expect(get(webModelStatus).error).not.toContain("needs an update");
         expect(localStorage.getItem(LS_URL_MODEL)).toBe(persisted);
     });
@@ -1045,6 +1295,7 @@ describe("pinned all-WebGPU model integration", () => {
             status: "error",
             error: expect.stringContaining("needs an update"),
         });
+        expect(get(webModelInstallStatus)).toMatchObject({ [entry.id]: "not_downloaded" });
         await expect(browserImageModelFirstReadiness()).resolves.toEqual({
             available: false,
             reason: expect.stringContaining("needs an update"),

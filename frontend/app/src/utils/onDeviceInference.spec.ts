@@ -7,6 +7,7 @@ import {
     inferenceRuntimeAvailable,
     listLocalModels,
 } from "tauri-plugin-oc-api";
+import { browserImageActionMode } from "../stores/browserImageActionMode";
 import { selectedModelId } from "../stores/onDeviceModels";
 import {
     inferOnDevice,
@@ -22,6 +23,11 @@ import { clearWebModel, useWebModelFromUrl, webInfer } from "./webInference";
 const webRuntime = vi.hoisted(() => ({
     imageSupported: true,
     cached: [] as { url: string; bytes: Uint8Array }[],
+}));
+const localReaderRuntime = vi.hoisted(() => ({ available: false }));
+
+vi.mock("./browserOcr", () => ({
+    browserOcrAvailable: () => localReaderRuntime.available,
 }));
 
 vi.mock("@wllama/wllama/esm/index.js", () => {
@@ -127,9 +133,11 @@ beforeEach(() => {
     // Default: no model downloaded and none selected — each test opts into what it needs.
     mockListLocalModels.mockResolvedValue([]);
     selectedModelId.set("");
+    browserImageActionMode.set("model_only");
     setNative(false);
     setUserAgent(DEFAULT_USER_AGENT);
     webRuntime.cached = [];
+    localReaderRuntime.available = false;
 });
 
 afterEach(() => {
@@ -137,6 +145,7 @@ afterEach(() => {
     setUserAgent(DEFAULT_USER_AGENT);
     vi.unstubAllEnvs();
     selectedModelId.set("");
+    browserImageActionMode.set("model_only");
 });
 
 describe("isNativeClient", () => {
@@ -169,8 +178,34 @@ describe("onDeviceInferenceReadiness", () => {
         });
     });
 
+    it.each(["local_reader_only", "model_with_local_verification"] as const)(
+        "recognizes explicit %s OCR readiness in an all-WebGPU Android WebView",
+        async (mode) => {
+            enableLocalAndroidWebGpu();
+            browserImageActionMode.set(mode);
+            localReaderRuntime.available = true;
+
+            await expect(onDeviceInferenceReadiness()).resolves.toEqual({ available: true });
+            expect(mockInferenceRuntimeAvailable).not.toHaveBeenCalled();
+            expect(mockListLocalModels).not.toHaveBeenCalled();
+        },
+    );
+
+    it("does not advertise APK OCR readiness in model-only mode", async () => {
+        enableLocalAndroidWebGpu();
+        browserImageActionMode.set("model_only");
+        localReaderRuntime.available = true;
+
+        await expect(onDeviceInferenceReadiness()).resolves.toEqual({
+            available: false,
+            reason: "no accelerated on-device model selected",
+        });
+    });
+
     it("does not treat a Tauri bridge as proof that the runtime was compiled in", async () => {
         setNative(true);
+        browserImageActionMode.set("local_reader_only");
+        localReaderRuntime.available = true;
         mockInferenceRuntimeAvailable.mockResolvedValue(false);
 
         await expect(onDeviceInferenceReadiness()).resolves.toEqual({

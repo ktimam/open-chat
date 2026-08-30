@@ -15,10 +15,12 @@ import {
     transformersWebGpuArtifactDownloadUrl,
     transformersWebGpuAudioDownloaded,
     transformersWebGpuModelArtifactsDownloaded,
+    transformersWebGpuModelArtifactsPresent,
     transformersWebGpuModelDownloaded,
     transformersWebGpuRuntimeAvailability,
     transformersWebGpuRuntimeAvailableOffline,
     transformersWebGpuRuntimeAssetUrl,
+    transformersWebGpuClientEnabled,
     type TransformersWebGpuArtifactCache,
     type TransformersWebGpuWorker,
 } from "./transformersWebGpuInference";
@@ -185,6 +187,79 @@ describe("Transformers.js Qwen WebGPU spike", () => {
         expect(remove).toHaveBeenCalledWith(TRANSFORMERS_WEBGPU_CACHE_KEY);
     });
 
+    it("tracks model caches independently and explicit removal deletes only its target", async () => {
+        const baseUrl = globalThis.location.href;
+        const cacheEntries = new Map<string, Map<string, Response>>([
+            [TRANSFORMERS_WEBGPU_CACHE_KEY, new Map()],
+            [TRANSFORMERS_GEMMA_CACHE_KEY, new Map()],
+        ]);
+        const installMetadata = (
+            cacheKey: string,
+            modelId: string,
+            artifacts: readonly { path: string; bytes: number; sha256: string }[],
+        ) => {
+            const entries = cacheEntries.get(cacheKey)!;
+            for (const artifact of artifacts) {
+                entries.set(
+                    transformersWebGpuArtifactDownloadUrl(
+                        artifact.path,
+                        { baseUrl, packagedAndroid: false },
+                        modelId,
+                    ),
+                    new Response(null, {
+                        status: 200,
+                        headers: {
+                            "content-length": String(artifact.bytes),
+                            "x-content-sha256": artifact.sha256,
+                        },
+                    }),
+                );
+            }
+        };
+        installMetadata(
+            TRANSFORMERS_WEBGPU_CACHE_KEY,
+            PHONE_QWEN3_VL_2B_MODEL_ID,
+            TRANSFORMERS_QWEN_ARTIFACTS,
+        );
+        installMetadata(
+            TRANSFORMERS_GEMMA_CACHE_KEY,
+            PHONE_GEMMA4_E2B_MODEL_ID,
+            TRANSFORMERS_GEMMA_ARTIFACTS,
+        );
+        const storage = {
+            open: vi.fn(async (name: string) => {
+                const entries = cacheEntries.get(name);
+                if (entries === undefined) throw new Error(`unknown cache ${name}`);
+                return {
+                    match: async (request: RequestInfo | URL) =>
+                        entries.get(String(request))?.clone(),
+                    put: async () => undefined,
+                    delete: async (request: RequestInfo | URL) => entries.delete(String(request)),
+                } satisfies TransformersWebGpuArtifactCache;
+            }),
+            delete: vi.fn(async (name: string) => cacheEntries.delete(name)),
+        };
+
+        await expect(
+            transformersWebGpuModelArtifactsPresent(PHONE_QWEN3_VL_2B_MODEL_ID, {
+                cacheStorage: storage,
+                baseUrl,
+            }),
+        ).resolves.toBe(true);
+        await expect(
+            transformersWebGpuModelArtifactsPresent(PHONE_GEMMA4_E2B_MODEL_ID, {
+                cacheStorage: storage,
+                baseUrl,
+            }),
+        ).resolves.toBe(true);
+
+        await deleteTransformersWebGpuModel(PHONE_QWEN3_VL_2B_MODEL_ID, storage);
+
+        expect(storage.delete).toHaveBeenCalledTimes(1);
+        expect(storage.delete).toHaveBeenCalledWith(TRANSFORMERS_WEBGPU_CACHE_KEY);
+        expect(cacheEntries.has(TRANSFORMERS_GEMMA_CACHE_KEY)).toBe(true);
+    });
+
     it("installs, verifies, and removes only Gemma's optional audio cache entries", async () => {
         const baseUrl = globalThis.location.href;
         const entries = new Map<string, Response>();
@@ -273,6 +348,28 @@ describe("Transformers.js Qwen WebGPU spike", () => {
         for (const artifact of TRANSFORMERS_GEMMA_ARTIFACTS) {
             expect(entries.has(modelUrl(artifact.path))).toBe(true);
         }
+    });
+
+    it("surfaces optional-audio cache deletion failures", async () => {
+        const removalError = new Error("CacheStorage refused the audio deletion");
+        const cache: TransformersWebGpuArtifactCache = {
+            match: vi.fn(async () => undefined),
+            put: vi.fn(async () => undefined),
+            delete: vi.fn(async () => {
+                throw removalError;
+            }),
+        };
+        const storage = {
+            open: vi.fn(async (name: string) => {
+                expect(name).toBe(TRANSFORMERS_GEMMA_CACHE_KEY);
+                return cache;
+            }),
+        };
+
+        await expect(
+            deleteTransformersWebGpuAudio(PHONE_GEMMA4_E2B_MODEL_ID, storage),
+        ).rejects.toThrow("CacheStorage refused the audio deletion");
+        expect(cache.delete).toHaveBeenCalledTimes(1);
     });
 
     it("uses the current document's rotated development generation for the worker URL", () => {
@@ -807,6 +904,37 @@ describe("Transformers.js Qwen WebGPU spike", () => {
                 selectedModelId: "some-other-model",
             }),
         ).toBe(false);
+    });
+
+    it("admits mobile browsers and Android WebViews but excludes native iOS", () => {
+        const originalUserAgent = navigator.userAgent;
+        vi.stubEnv("OC_BUILD_ENV", "development");
+        vi.stubEnv("OC_DFX_NETWORK", "local");
+        vi.stubEnv("OC_TRANSFORMERS_WEBGPU_IMAGE_SPIKE", "true");
+        try {
+            Object.defineProperty(navigator, "userAgent", {
+                configurable: true,
+                value: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Mobile",
+            });
+            delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+            expect(transformersWebGpuClientEnabled()).toBe(true);
+
+            (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+            expect(transformersWebGpuClientEnabled()).toBe(false);
+
+            Object.defineProperty(navigator, "userAgent", {
+                configurable: true,
+                value: "Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 Chrome/150 Mobile",
+            });
+            expect(transformersWebGpuClientEnabled()).toBe(true);
+        } finally {
+            delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+            Object.defineProperty(navigator, "userAgent", {
+                configurable: true,
+                value: originalUserAgent,
+            });
+            vi.unstubAllEnvs();
+        }
     });
 
     it("creates a one-shot worker lazily, transfers an exact image copy, and releases it on success", async () => {

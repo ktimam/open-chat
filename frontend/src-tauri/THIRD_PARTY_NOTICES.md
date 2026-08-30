@@ -22,7 +22,7 @@ copyright notices for MIT-only code compiled into the application. `bindgen` is 
 so its BSD-3-Clause source and notice are not redistributed in the application bundle; it remains
 recorded in the generated CycloneDX SBOM.
 
-## Browser OCR runtime and assets
+## Web and Android OCR runtime and assets
 
 | Component                | Version | License                           | Disposition                                                                                                                                       |
 | ------------------------ | ------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -57,5 +57,6 @@ The 14 MB TinyLlama GGUF used by CI is MIT-licensed, downloaded only during CI f
 `tensorblock/tinyllama-15M-stories-GGUF@227c5a5ad3c1a830901543cf9959c53572014a68` revision, verified
 by SHA-256, and never bundled with OpenChat.
 
-Browser builds redistribute a Tesseract WebAssembly OCR runtime and Arabic/English language data. Android
-and iOS clients do not use or package the browser-only worker, core, or language payloads.
+Browser builds and all-WebGPU Android packages redistribute a Tesseract WebAssembly OCR runtime and
+Arabic/English language data for the explicit local-reader image modes. iOS clients do not use or
+package the worker, core, or language payloads.

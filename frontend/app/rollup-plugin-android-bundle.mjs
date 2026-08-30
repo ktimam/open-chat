@@ -12,7 +12,7 @@ const execPromise = promisify(exec);
  * The difference is just in the OC_APP_STORE env var
  */
 
-export function androidBundlePlugin({ version }) {
+export function androidBundlePlugin({ version, includeLocalExtractor = false }) {
     return {
         name: "android-bundle",
         async writeBundle() {
@@ -47,9 +47,11 @@ export function androidBundlePlugin({ version }) {
                 // TODO - we can and will revisit whether we need these assets in the bundle _at all_
                 await fs.remove(path.join(distBundleDir, "assets", "screenshots")); // these are all used in the blog section
                 await fs.remove(path.join(distBundleDir, "assets", "blog")); // the app doesn't render the blog
-                // Browser OCR is never selected by a native client. Keep its worker, WASM cores,
-                // and language data in the web deployment without duplicating them in OTA zips.
-                await fs.remove(path.join(distBundleDir, "assets", "local-extractor"));
+                // Only all-WebGPU Android exposes OCR as an explicit image-action mode. Ordinary
+                // native-llama OTA bundles retain their historical payload boundary.
+                if (!includeLocalExtractor) {
+                    await fs.remove(path.join(distBundleDir, "assets", "local-extractor"));
+                }
                 await fs.remove(path.join(distBundleDir, "out")); // this is just ts definitions
 
                 // Remove source maps

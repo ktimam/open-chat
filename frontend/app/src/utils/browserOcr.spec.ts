@@ -324,7 +324,7 @@ describe("browser OCR engine", () => {
         const unavailable = createBrowserOcrEngine(factory, { available: () => false });
         await expect(unavailable.recognize(new Uint8Array([1]))).resolves.toEqual({
             kind: "unavailable",
-            reason: "This browser cannot run the local image reader.",
+            reason: "This device cannot run the local image reader.",
         });
 
         const available = createBrowserOcrEngine(factory, { available: () => true });

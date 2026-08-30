@@ -273,6 +273,30 @@ type TransformersWebGpuDownloadedOptions = Pick<
     | "packagedAndroid"
 >;
 
+/**
+ * Cheap, UI-only installed hint. This checks that every immutable model artifact has the pinned
+ * metadata in this model's own revisioned cache, but deliberately does not stream multi-gigabyte
+ * bodies. Activation still goes through `transformersWebGpuModelDownloaded`, which performs the
+ * full body verification before inference. Keeping this separate lets Model Manager show cached,
+ * inactive models without weakening the fail-closed runtime boundary.
+ */
+export async function transformersWebGpuModelArtifactsPresent(
+    modelId: string,
+    options: Pick<TransformersWebGpuDownloadedOptions, "cacheStorage" | "baseUrl"> = {},
+): Promise<boolean> {
+    const spec = requiredSpec(modelId);
+    try {
+        const cache = await openArtifactCache(options.cacheStorage, spec);
+        for (const artifact of spec.artifacts) {
+            const cached = await cache.match(artifactUrl(spec, artifact.path, options.baseUrl));
+            if (!cachedArtifactMatches(cached, artifact)) return false;
+        }
+        return true;
+    } catch {
+        return false;
+    }
+}
+
 /** True only when every immutable model artifact is present under the exact cache key and digest.
  * Runtime assets are deliberately separate: the APK worker URL changes with each client build,
  * while multi-gigabyte model weights remain the same pinned revision. */
@@ -997,11 +1021,11 @@ export async function deleteTransformersWebGpuAudio(
     if (storage === undefined) return;
     await disposeTransformersWebGpuInference();
     const cache = await openArtifactCache(storage, spec);
-    await Promise.all(
-        spec.optionalAudio.artifacts.map((artifact) =>
-            cache.delete(artifactUrl(spec, artifact.path)).catch(() => false),
-        ),
-    );
+    // Delete sequentially so a rejected operation cannot race the caller's post-failure
+    // verification while another deletion is still mutating the same add-on cache.
+    for (const artifact of spec.optionalAudio.artifacts) {
+        await cache.delete(artifactUrl(spec, artifact.path));
+    }
 }
 
 export function transformersWebGpuSpikeEnabled(): boolean {
@@ -1033,7 +1057,14 @@ export function shouldUseTransformersWebGpuSpike(
 
 /** True for a mobile browser or Android WebView in a deliberately feature-flagged local build. */
 export function transformersWebGpuClientEnabled(): boolean {
-    return transformersWebGpuSpikeEnabled() && mobileBrowser();
+    if (!transformersWebGpuSpikeEnabled() || !mobileBrowser()) return false;
+    const nativeWebView = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+    // Browser builds remain eligible on supported mobile browsers. Native packaging intentionally
+    // ships the all-WebGPU/OCR payload only for Android; a flagged iOS WebView must stay on its
+    // native route because its bundle contains neither runtime.
+    return (
+        !nativeWebView || (typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent))
+    );
 }
 
 function cachedRuntimeAssetMetadataMatches(

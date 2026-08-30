@@ -17,9 +17,15 @@ export const TRANSFORMERS_WEBGPU_MAX_RAW_IMAGE_PATCHES = 640;
 const MAX_FRAME_PIXELS = TRANSFORMERS_WEBGPU_MAX_RAW_IMAGE_PATCHES * PATCH_SIZE * PATCH_SIZE;
 
 const GEMMA4_POOLING_KERNEL_SIZE = 3;
-const GEMMA4_MAX_SOFT_TOKENS = 280;
+// Gemma 4's unfused vision attention materializes an fp16 [1, 12, patches, patches]
+// score tensor. 240 soft tokens become 2,160 raw patches after 3x3 pooling, so that
+// tensor is 111,974,400 bytes: safely below WebGPU's 128 MiB minimum maximum storage
+// binding size. The theoretical 256-token edge leaves only 6.5 MiB of headroom; 240
+// leaves 21.2 MiB for backend padding/alignment and concurrent driver intermediates.
+export const GEMMA4_WEBGPU_MAX_SOFT_TOKENS = 240;
 const GEMMA4_SIDE_ALIGNMENT = PATCH_SIZE * GEMMA4_POOLING_KERNEL_SIZE;
-const GEMMA4_MAX_PATCHES = GEMMA4_MAX_SOFT_TOKENS * GEMMA4_POOLING_KERNEL_SIZE ** 2;
+export const GEMMA4_WEBGPU_MAX_RAW_IMAGE_PATCHES =
+    GEMMA4_WEBGPU_MAX_SOFT_TOKENS * GEMMA4_POOLING_KERNEL_SIZE ** 2;
 
 export const TRANSFORMERS_WEBGPU_FALLBACK_IMAGE_LAYOUT: TransformersWebGpuImageLayout = Object.freeze({
     frameWidth: 288,
@@ -103,7 +109,7 @@ export function transformersWebGpuImageLayout(
 /**
  * Match the pinned Gemma4 image processor's aspect-preserving target exactly. Decoding directly
  * to this size avoids first shrinking receipt text to Qwen's 640-patch frame and then enlarging
- * already-lost digits back to Gemma's native 2,520-patch input.
+ * already-lost digits back to Gemma's capped 2,160-patch input.
  */
 export function gemma4WebGpuImageTarget(
     sourceWidth: number,
@@ -112,7 +118,7 @@ export function gemma4WebGpuImageTarget(
     if (!positiveDimensions(sourceWidth, sourceHeight)) {
         throw new Error("Gemma received invalid encoded image dimensions.");
     }
-    const targetPixels = GEMMA4_MAX_PATCHES * PATCH_SIZE ** 2;
+    const targetPixels = GEMMA4_WEBGPU_MAX_RAW_IMAGE_PATCHES * PATCH_SIZE ** 2;
     const factor = Math.sqrt(targetPixels / (sourceWidth * sourceHeight));
     let height = Math.floor((factor * sourceHeight) / GEMMA4_SIDE_ALIGNMENT) * GEMMA4_SIDE_ALIGNMENT;
     let width = Math.floor((factor * sourceWidth) / GEMMA4_SIDE_ALIGNMENT) * GEMMA4_SIDE_ALIGNMENT;
@@ -120,7 +126,9 @@ export function gemma4WebGpuImageTarget(
         throw new Error("Gemma could not derive a non-empty image target.");
     }
     const maxSide =
-        Math.floor(GEMMA4_MAX_PATCHES / GEMMA4_POOLING_KERNEL_SIZE ** 2) *
+        Math.floor(
+            GEMMA4_WEBGPU_MAX_RAW_IMAGE_PATCHES / GEMMA4_POOLING_KERNEL_SIZE ** 2,
+        ) *
         GEMMA4_SIDE_ALIGNMENT;
     if (height === 0) {
         height = GEMMA4_SIDE_ALIGNMENT;

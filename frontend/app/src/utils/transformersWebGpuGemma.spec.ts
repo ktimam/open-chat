@@ -17,7 +17,11 @@ import {
     gemma4PerLayerRowId,
     gemma4TokenIds,
 } from "./gemma4WebGpuEmbedding";
-import { gemma4WebGpuImageTarget } from "./transformersWebGpuImageLayout";
+import {
+    GEMMA4_WEBGPU_MAX_RAW_IMAGE_PATCHES,
+    GEMMA4_WEBGPU_MAX_SOFT_TOKENS,
+    gemma4WebGpuImageTarget,
+} from "./transformersWebGpuImageLayout";
 import {
     PHONE_GEMMA4_E2B_MODEL_ID,
     TRANSFORMERS_GEMMA_ARTIFACT_BYTES,
@@ -150,12 +154,41 @@ describe("Gemma 4 E2B all-WebGPU runtime", () => {
         expect(workerSource).toContain('runtime.kind === "qwen" && name === "embed_tokens"');
     });
 
-    it("decodes the acceptance receipt once at Gemma's native patch target", () => {
+    it("keeps Gemma vision attention below the 128 MiB WebGPU binding floor", () => {
+        const fp16Bytes = 2;
+        const attentionHeads = 12;
+        const webGpuMinimumMaxStorageBufferBindingSize = 128 * 1024 * 1024;
+        const scoreBufferBytes =
+            attentionHeads * GEMMA4_WEBGPU_MAX_RAW_IMAGE_PATCHES ** 2 * fp16Bytes;
+
+        expect(GEMMA4_WEBGPU_MAX_SOFT_TOKENS).toBe(240);
+        expect(GEMMA4_WEBGPU_MAX_RAW_IMAGE_PATCHES).toBe(2_160);
+        expect(scoreBufferBytes).toBe(111_974_400);
+        expect(scoreBufferBytes).toBeLessThan(webGpuMinimumMaxStorageBufferBindingSize);
+
+        // 256 is mathematically under the limit but leaves only 6.5 MiB for backend
+        // alignment and concurrent driver intermediates; the 240 cap leaves 21.2 MiB.
+        const theoreticalEdgeBytes = attentionHeads * (256 * 9) ** 2 * fp16Bytes;
+        expect(theoreticalEdgeBytes).toBe(127_401_984);
+        expect(webGpuMinimumMaxStorageBufferBindingSize - theoreticalEdgeBytes).toBe(6_815_744);
+        expect(webGpuMinimumMaxStorageBufferBindingSize - scoreBufferBytes).toBe(22_243_328);
+    });
+
+    it("decodes the acceptance receipt once at Gemma's safe patch target", () => {
         const target = gemma4WebGpuImageTarget(909, 1_600);
-        expect(target).toEqual({ width: 576, height: 1_056 });
+        expect(target).toEqual({ width: 528, height: 960 });
         expect(target.width % 48).toBe(0);
         expect(target.height % 48).toBe(0);
-        expect((target.width / 16) * (target.height / 16)).toBeLessThanOrEqual(2_520);
+        expect((target.width / 16) * (target.height / 16)).toBeLessThanOrEqual(
+            GEMMA4_WEBGPU_MAX_RAW_IMAGE_PATCHES,
+        );
+
+        const workerSource = fs.readFileSync(
+            path.join(APP_DIR, "src/workers/transformersWebGpuInference.worker.ts"),
+            "utf8",
+        );
+        expect(workerSource).toContain("max_soft_tokens: GEMMA4_WEBGPU_MAX_SOFT_TOKENS");
+        expect(workerSource).not.toContain("max_soft_tokens: 280");
     });
 
     it("stages only the requested encoder and releases it before decoder materialization", async () => {

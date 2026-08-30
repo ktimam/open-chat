@@ -103,9 +103,14 @@
         try {
             await deleteTransformersWebGpuAudio(modelId);
             audioInstalled = false;
-            audioMessage = "Voice-message support removed. Text and image support remain installed.";
+            audioMessage =
+                "Voice-message support removed. Text and image support remain installed.";
         } catch (error) {
-            audioMessage = error instanceof Error ? error.message : String(error);
+            const message = error instanceof Error ? error.message : String(error);
+            // CacheStorage deletion can fail before or after removing one of the add-on files.
+            // Re-read the target so the control never claims a retained or partial add-on is gone.
+            await refreshAudioState();
+            audioMessage = message;
         } finally {
             audioBusy = false;
         }
@@ -132,8 +137,8 @@
     <section class="runtime-settings" aria-label={`${modelName} runtime settings`}>
         <h4>All-WebGPU model runtime</h4>
         <p>
-            {modelSpec?.name ?? modelName} runs embeddings, vision, and decoding on WebGPU. This
-            route does not invoke OCR and has no CPU/WASM model fallback.
+            {modelSpec?.name ?? modelName} runs embeddings, vision, and decoding on WebGPU. This route
+            does not invoke OCR and has no CPU/WASM model fallback.
         </p>
         <dl>
             <div>

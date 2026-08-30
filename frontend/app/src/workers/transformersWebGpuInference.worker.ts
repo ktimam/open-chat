@@ -42,6 +42,7 @@ import {
     transformersWebGpuProcessorConfig,
 } from "../utils/transformersWebGpuProcessorConfig";
 import {
+    GEMMA4_WEBGPU_MAX_SOFT_TOKENS,
     gemma4WebGpuImageTarget,
     TRANSFORMERS_WEBGPU_FALLBACK_IMAGE_LAYOUT,
     TRANSFORMERS_WEBGPU_MAX_RAW_IMAGE_PATCHES,
@@ -57,6 +58,10 @@ import {
     TRANSFORMERS_WEBGPU_MAX_AUDIO_SAMPLES,
     TRANSFORMERS_WEBGPU_MIN_AUDIO_SAMPLES,
 } from "../utils/transformersWebGpuAudio";
+import {
+    isTransformersWebGpuOrtRunFailure,
+    transformersWebGpuOrtRunError,
+} from "../utils/transformersWebGpuOrtDiagnostics";
 
 type QwenLoadedRuntime = {
     kind: "qwen";
@@ -338,7 +343,17 @@ function instrumentGpuSessions(runtime: LoadedRuntime, generation: number): void
                 );
                 return result;
             } catch (error) {
+                const failedStage = activeGpuStage;
                 if (!cachedEmbeddingFacade) activeGpuStage = `${name} failed`;
+                if (isTransformersWebGpuOrtRunFailure(error)) {
+                    throw transformersWebGpuOrtRunError(
+                        runtime.kind === "gemma" ? "Gemma 4 E2B" : "Qwen3-VL 2B",
+                        name,
+                        failedStage,
+                        args[0],
+                        error,
+                    );
+                }
                 throw error;
             }
         };
@@ -602,7 +617,7 @@ async function loadGemmaRuntime(
                 ...processorConfig.image_processor,
                 // Official supported OCR setting. Transformers.js 4.2 reads the instance config,
                 // not per-call options, so pin it here rather than pretending an ignored option works.
-                max_soft_tokens: 280,
+                max_soft_tokens: GEMMA4_WEBGPU_MAX_SOFT_TOKENS,
             });
         }
         if (modality === "audio") {

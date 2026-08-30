@@ -22,7 +22,6 @@ import { writable } from "svelte/store";
 import { resolveTransformersWebGpuMaxOutputTokens } from "../stores/transformersWebGpuSettings";
 import { splitModelFiles, WEB_MODEL_MAX_BYTES } from "./modelCatalog";
 import {
-    PHONE_QWEN3_VL_2B_MODEL_ID,
     transformersWebGpuModelSpec,
     type TransformersWebGpuModelId,
 } from "./transformersWebGpuProtocol";
@@ -37,6 +36,7 @@ import {
     transformersWebGpuAudioReady,
     transformersWebGpuInfer,
     transformersWebGpuModelArtifactsDownloaded,
+    transformersWebGpuModelArtifactsPresent,
     transformersWebGpuModelDownloaded,
     transformersWebGpuModelNotDownloadedMessage,
     transformersWebGpuSelectionCanHandle,
@@ -195,6 +195,61 @@ export const webModelStatus = writable<{
     progress?: { received: number; total: number };
     generation?: WebModelState["generation"];
 }>({ status: "none" });
+
+export type WebModelInstallState = "checking" | "downloaded" | "not_downloaded";
+
+/** Per-model CacheStorage presence for Model Manager. This is deliberately independent from the
+ * one active model in `webModelStatus`: choosing Gemma must not make cached Qwen look absent (or
+ * vice versa). A downloaded hint never authorizes inference; activation still performs the full
+ * pinned body verification. */
+export const webModelInstallStatus = writable<Readonly<Record<string, WebModelInstallState>>>({});
+let webModelInstallStates: Record<string, WebModelInstallState> = {};
+const webModelInstallGenerations = new Map<string, number>();
+
+function nextWebModelInstallGeneration(modelId: string): number {
+    const generation = (webModelInstallGenerations.get(modelId) ?? 0) + 1;
+    webModelInstallGenerations.set(modelId, generation);
+    return generation;
+}
+
+function setWebModelInstallState(modelId: string, status: WebModelInstallState): void {
+    nextWebModelInstallGeneration(modelId);
+    webModelInstallStates = { ...webModelInstallStates, [modelId]: status };
+    webModelInstallStatus.set(webModelInstallStates);
+}
+
+/** Refresh cheap per-model installed hints without reading multi-gigabyte cache bodies. */
+export async function refreshWebModelInstallStatus(modelIds: readonly string[]): Promise<void> {
+    const ids = [...new Set(modelIds)].filter(
+        (id) => transformersWebGpuModelSpec(id) !== undefined,
+    );
+    const generations = new Map(ids.map((id) => [id, nextWebModelInstallGeneration(id)]));
+    webModelInstallStates = {
+        ...webModelInstallStates,
+        ...Object.fromEntries(ids.map((id) => [id, "checking" as const])),
+    };
+    webModelInstallStatus.set(webModelInstallStates);
+    const results = await Promise.all(
+        ids.map(async (id) => ({
+            id,
+            downloaded: await transformersWebGpuModelArtifactsPresent(id),
+        })),
+    );
+    const current = results.filter(
+        ({ id }) => webModelInstallGenerations.get(id) === generations.get(id),
+    );
+    if (current.length === 0) return;
+    webModelInstallStates = {
+        ...webModelInstallStates,
+        ...Object.fromEntries(
+            current.map(({ id, downloaded }) => [
+                id,
+                downloaded ? ("downloaded" as const) : ("not_downloaded" as const),
+            ]),
+        ),
+    };
+    webModelInstallStatus.set(webModelInstallStates);
+}
 
 function publish(): void {
     webModelStatus.set({
@@ -640,22 +695,40 @@ export async function useWebModelFromUrl(
         state.name = entry.name;
         state.declaredModalities = [...modelSpec.modalities];
         state.imageSupported = true;
-        state.status = "downloading";
+        const installed = webModelInstallStates[entry.id] === "downloaded";
+        state.status = installed ? "verifying" : "downloading";
         state.error = undefined;
-        state.progress = { received: 0, total: modelSpec.artifactBytes };
+        state.progress = installed ? undefined : { received: 0, total: modelSpec.artifactBytes };
         state.generation = undefined;
         publish();
-        armStallTimer();
         try {
-            await preloadTransformersWebGpuModel(entry.id, {
-                signal: attempt.controller.signal,
-                onProgress(received, total) {
-                    if (!isCurrentAttempt()) return;
-                    armStallTimer();
-                    state.progress = { received, total };
-                    publish();
-                },
-            });
+            // A previously verified model keeps its own revisioned cache when another model is
+            // selected. Re-activating it is cache-only: reuse the per-page proof instead of entering
+            // the downloader (which invalidates that proof and rehashes every model shard).
+            const cachedAndVerified =
+                installed &&
+                (await transformersWebGpuModelDownloaded(entry.id, {
+                    signal: attempt.controller.signal,
+                }));
+            if (!isCurrentAttempt()) throw attempt.controller.signal.reason;
+            if (!cachedAndVerified) {
+                state.status = "downloading";
+                state.progress = { received: 0, total: modelSpec.artifactBytes };
+                publish();
+                // The stall timeout belongs only to network/cache population. A cold local
+                // verification can legitimately hash several gigabytes without progress events;
+                // cancellation is carried by the AbortSignal passed to that verifier above.
+                armStallTimer();
+                await preloadTransformersWebGpuModel(entry.id, {
+                    signal: attempt.controller.signal,
+                    onProgress(received, total) {
+                        if (!isCurrentAttempt()) return;
+                        armStallTimer();
+                        state.progress = { received, total };
+                        publish();
+                    },
+                });
+            }
             if (!isCurrentAttempt()) throw attempt.controller.signal.reason;
             state.status = "verifying";
             state.progress = undefined;
@@ -668,6 +741,7 @@ export async function useWebModelFromUrl(
                 throw new Error("The completed all-WebGPU model could not be verified.");
             }
             if (!isCurrentAttempt()) throw attempt.controller.signal.reason;
+            setWebModelInstallState(entry.id, "downloaded");
             if (modelSpec.optionalAudio !== undefined) {
                 // Re-verify an already installed add-on without downloading it. A base-only Gemma
                 // selection returns false immediately and remains fully usable for text/images.
@@ -826,6 +900,10 @@ export async function restoreWebModel(): Promise<void> {
                 if (allWebGpu && transformers) {
                     const modelArtifactsDownloaded =
                         await transformersWebGpuModelArtifactsDownloaded(saved.id);
+                    setWebModelInstallState(
+                        saved.id,
+                        modelArtifactsDownloaded ? "downloaded" : "not_downloaded",
+                    );
                     downloaded =
                         modelArtifactsDownloaded &&
                         (await transformersWebGpuModelDownloaded(saved.id));
@@ -940,7 +1018,11 @@ export async function restoreWebModel(): Promise<void> {
 export async function clearWebModel(): Promise<void> {
     const transformersModelId = transformersWebGpuModelSpec(state.id)?.id;
     modelSelectionGeneration += 1;
-    invalidateTransformersWebGpuReadiness();
+    // Explicit removal is target-specific. Do not discard another downloaded model's in-page
+    // verification proof merely because the current model is being removed.
+    if (transformersModelId !== undefined) {
+        invalidateTransformersWebGpuReadiness(transformersModelId);
+    }
     const download = activeCatalogDownload;
     if (download !== undefined) {
         stopCatalogDownload(download, "cancelled");
@@ -948,7 +1030,10 @@ export async function clearWebModel(): Promise<void> {
     }
     await unloadWebModel();
     if (transformersModelId !== undefined) {
-        await deleteTransformersWebGpuModel(transformersModelId).catch(() => undefined);
+        // Do not forget the selection or claim the cache is absent when CacheStorage removal
+        // fails. The caller surfaces this error and can retry the explicit Remove action.
+        await deleteTransformersWebGpuModel(transformersModelId);
+        setWebModelInstallState(transformersModelId, "not_downloaded");
     }
     state.file = undefined;
     state.handle = undefined;
@@ -1208,9 +1293,6 @@ export async function webInfer(
     }
     const selected = state.id;
     if (request.modelId !== undefined && request.modelId !== selected) {
-        return { kind: "error", error: "the selected browser model changed before inference" };
-    }
-    if (requireProjectorAbsent && selected !== PHONE_QWEN3_VL_2B_MODEL_ID) {
         return { kind: "error", error: "the selected browser model changed before inference" };
     }
     if (

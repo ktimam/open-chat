@@ -17,6 +17,17 @@ describe("browser Model Manager all-WebGPU parity", () => {
             expect(source).toContain("transformersWebGpuSelectionCanHandle(spec.id)");
             expect(source).toContain("spec.artifactBytes");
             expect(source).toContain("useWebModelFromUrl");
+            expect(source).toContain("refreshWebModelInstallStatus");
+            expect(source).toContain("webModelInstallStatus");
+            expect(source).toContain('"Downloaded"');
+            expect(source).toMatch(
+                /await ensureWebModelRestored\(\);\s*await refreshWebModelInstallStatus/,
+            );
+            expect(source).toContain("webErrorModelId === entry.id");
+            expect(source).toContain('? "Retry download"');
+            expect(source).toContain('? "Checking download"');
+            expect(source).toContain('disabled={$webModelInstallStatus[entry.id] === "checking"}');
+            expect(source).toContain("catch (error)");
             expect(source).toContain("cancelWebModelDownload");
             expect(source).toContain("Cancel download");
             expect(source).toContain("Retry download");
@@ -28,8 +39,10 @@ describe("browser Model Manager all-WebGPU parity", () => {
             expect(source).toContain("voice add-on optional");
             expect(source).toContain(`context="${index === 0 ? "desktop" : "phone"}"`);
             expect(source).toContain("const nativeClient = isNativeClient();");
+            expect(source).toContain("<BrowserImageActionModeSettings />");
+            expect(source).not.toContain("{#if !nativeClient}");
             expect(source).toMatch(
-                /\{#if !nativeClient\}\s*<BrowserImageActionModeSettings \/>\s*\{\/if\}/,
+                /{#if !native}[\s\S]*<BrowserImageActionModeSettings \/>[\s\S]*{:else}/,
             );
             expect(source).toContain("cancelWebModelDownload();");
             expect(source).not.toContain("webEligibleModels(");
@@ -39,18 +52,26 @@ describe("browser Model Manager all-WebGPU parity", () => {
         });
     }
 
-    it("forces the native all-WebGPU route to model-only even with a stale OCR preference", () => {
+    it("keeps explicit OCR modes reachable in the native all-WebGPU route", () => {
         const relative = "../utils/aiActionRunner.ts";
-        const source = readFileSync(
-            fileURLToPath(new URL(relative, import.meta.url)),
-            "utf8",
-        );
+        const source = readFileSync(fileURLToPath(new URL(relative, import.meta.url)), "utf8");
 
-        expect(source).toContain(
-            "const browserLocalReaderModesAllowed = webInference && !isNativeClient();",
-        );
+        expect(source).toContain("const browserLocalReaderModesAllowed = webInference;");
         expect(source).toMatch(
-            /webInference\s*&&\s*input\.image !== undefined\s*&&\s*\(!browserLocalReaderModesAllowed \|\| browserUsesModelOnly\(\)\)/,
+            /webInference\s*&&\s*input\.image !== undefined\s*&&\s*browserUsesModelOnly\(\)/,
+        );
+        expect(source).not.toContain("webInference && !isNativeClient()");
+        expect(source).toContain("browserUsesLocalReaderOnly()");
+        expect(source).toContain("browserUsesModelWithLocalVerification()");
+        expect(source).toContain(
+            "inferPrivateEvidenceWithPhase: typeof inferOnDeviceTextOnlyNoProjector",
+        );
+        expect(source).not.toContain("PRIVATE_VERIFICATION_MODEL_ID");
+        expect(source).toContain(
+            'source.local?.kind === "unavailable" || source.local?.kind === "error"',
+        );
+        expect(source).toContain(
+            "The local image reader could not produce complete evidence, so model verification was not run.",
         );
     });
 
@@ -68,6 +89,7 @@ describe("browser Model Manager all-WebGPU parity", () => {
         expect(source).toContain("preloadTransformersWebGpuAudio(modelId");
         expect(source).toContain("transformersWebGpuAudioDownloaded(modelId)");
         expect(source).toContain("deleteTransformersWebGpuAudio(modelId)");
+        expect(source).toContain("await refreshAudioState();");
         expect(source).toContain("Install voice support");
         expect(source).toContain("Remove voice support");
     });

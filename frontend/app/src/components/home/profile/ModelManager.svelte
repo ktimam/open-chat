@@ -27,7 +27,9 @@
         cancelWebModelDownload,
         clearWebModel,
         ensureWebModelRestored,
+        refreshWebModelInstallStatus,
         useWebModelFromUrl,
+        webModelInstallStatus,
         webModelStatus,
     } from "@utils/webInference";
     import {
@@ -117,6 +119,7 @@
     let unlisten: (() => void) | undefined;
 
     let webError = $state("");
+    let webErrorModelId = $state<string | undefined>(undefined);
     let webChoiceGeneration = 0;
 
     // The immutable all-WebGPU registry is authoritative for identity, size and capabilities. Catalog
@@ -165,6 +168,7 @@
     async function chooseWebModel(entry: ModelCatalogEntry) {
         const generation = ++webChoiceGeneration;
         webError = "";
+        webErrorModelId = undefined;
         const error = await useWebModelFromUrl({
             id: entry.id,
             name: entry.name,
@@ -172,12 +176,22 @@
             sizeBytes: entry.sizeBytes,
             modalities: entry.modalities,
         });
-        if (generation === webChoiceGeneration) webError = error ?? "";
+        if (generation === webChoiceGeneration) {
+            webError = error ?? "";
+            webErrorModelId = error === undefined ? undefined : entry.id;
+        }
     }
 
     async function detachWebModel() {
         webError = "";
-        await clearWebModel();
+        webErrorModelId = undefined;
+        const removing = $webModelStatus.id;
+        try {
+            await clearWebModel();
+        } catch (error) {
+            webError = error instanceof Error ? error.message : String(error);
+            webErrorModelId = removing;
+        }
     }
 
     function installStatus(entry: DisplayModel) {
@@ -372,7 +386,8 @@
             });
         } else {
             // Re-attach a previously picked disk model (persisted FileSystemFileHandle).
-            void ensureWebModelRestored();
+            await ensureWebModelRestored();
+            await refreshWebModelInstallStatus(webChoices.map((entry) => entry.id));
         }
     });
 
@@ -392,9 +407,7 @@
         />
     </p>
 
-    {#if !nativeClient}
-        <BrowserImageActionModeSettings />
-    {/if}
+    <BrowserImageActionModeSettings />
     <div class="web-model">
         {#if $webModelStatus.status === "none" && $webModelStatus.name !== undefined}
             <p class="hint">
@@ -445,6 +458,10 @@
                                 <span class="chip">
                                     <Translatable resourceKey={i18nKey("Current")} />
                                 </span>
+                            {:else if $webModelInstallStatus[entry.id] === "downloaded"}
+                                <span class="chip">
+                                    <Translatable resourceKey={i18nKey("Downloaded")} />
+                                </span>
                             {/if}
                         </div>
                         {#if currentWebId === entry.id}
@@ -460,19 +477,24 @@
                             {/if}
                             <Button
                                 secondary={webActive || i !== 0}
+                                disabled={$webModelInstallStatus[entry.id] === "checking"}
                                 small
                                 fill
                                 onClick={() => chooseWebModel(entry)}
                             >
                                 <Translatable
                                     resourceKey={i18nKey(
-                                        webActive
-                                            ? "Use this model"
-                                            : webError !== "" || $webModelStatus.status === "error"
-                                              ? "Retry download"
-                                            : i === 0
-                                              ? "Download & use (default)"
-                                              : "Download & use",
+                                        webErrorModelId === entry.id ||
+                                            ($webModelStatus.status === "error" &&
+                                                $webModelStatus.id === entry.id)
+                                            ? "Retry download"
+                                            : $webModelInstallStatus[entry.id] === "checking"
+                                              ? "Checking download"
+                                              : $webModelInstallStatus[entry.id] === "downloaded"
+                                                ? "Use this model"
+                                                : i === 0
+                                                  ? "Download & use (default)"
+                                                  : "Download & use",
                                     )}
                                 />
                             </Button>

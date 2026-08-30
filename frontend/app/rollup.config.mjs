@@ -154,12 +154,12 @@ const explicitTransformersWebGpuFlag = JSON.stringify(
 const isNativeAndroid = process.env.OC_APP_TYPE === "android";
 const isNativeApp = isNativeAndroid || process.env.OC_APP_TYPE === "ios";
 
-// These assets back the browser-only local OCR route. Native clients use the Rust inference
-// runtime, so keeping the OCR worker/core/language payload out of native bundles avoids about
-// 16 MB of unreachable application data. Web builds redistribute the matching license material.
-const localExtractorCopyTargets = isNativeApp
-    ? []
-    : [
+// These assets back the explicit local OCR route in web and all-WebGPU Android builds. Ordinary
+// native-llama Android and iOS builds do not expose that route. Keep the matching license material
+// beside every bundle that redistributes the worker/core/language payload.
+const localExtractorEnabled = !isNativeApp || (isNativeAndroid && transformersWebGpuSpikeEnabled);
+const localExtractorCopyTargets = localExtractorEnabled
+    ? [
           {
               src: "../node_modules/tesseract.js/dist/{worker.min.js,worker.min.js.LICENSE.txt}",
               dest: "build/assets/local-extractor/v7.0.0",
@@ -189,7 +189,8 @@ const localExtractorCopyTargets = isNativeApp
               dest: "build/assets/licenses/THIRD_PARTY_LICENSES",
               rename: "ieee754-BSD-3-Clause.txt",
           },
-      ];
+      ]
+    : [];
 
 const transformersWebGpuCopyTargets =
     !transformersWebGpuSpikeEnabled || (isNativeApp && !isNativeAndroid)
@@ -611,7 +612,10 @@ export default {
             ],
             hook: "buildStart",
         }),
-        androidBundlePlugin({ version }),
+        androidBundlePlugin({
+            version,
+            includeLocalExtractor: transformersWebGpuSpikeEnabled,
+        }),
     ],
     watch: {
         clearScreen: false,

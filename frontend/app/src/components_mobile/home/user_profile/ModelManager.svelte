@@ -28,7 +28,9 @@
         cancelWebModelDownload,
         clearWebModel,
         ensureWebModelRestored,
+        refreshWebModelInstallStatus,
         useWebModelFromUrl,
+        webModelInstallStatus,
         webModelStatus,
     } from "@utils/webInference";
     import {
@@ -66,10 +68,18 @@
     const native = nativeClient && !usesWebInferenceRuntime();
 
     let webError = $state("");
+    let webErrorModelId = $state<string | undefined>(undefined);
     let webChoiceGeneration = 0;
     async function detachWebModel() {
         webError = "";
-        await clearWebModel();
+        webErrorModelId = undefined;
+        const removing = $webModelStatus.id;
+        try {
+            await clearWebModel();
+        } catch (error) {
+            webError = error instanceof Error ? error.message : String(error);
+            webErrorModelId = removing;
+        }
     }
 
     // The OpenChat-hosted catalog (owner-curated on the registry, updatable without a client release)
@@ -123,6 +133,7 @@
     async function chooseWebModel(entry: ModelCatalogEntry) {
         const generation = ++webChoiceGeneration;
         webError = "";
+        webErrorModelId = undefined;
         const error = await useWebModelFromUrl({
             id: entry.id,
             name: entry.name,
@@ -130,7 +141,10 @@
             sizeBytes: entry.sizeBytes,
             modalities: entry.modalities,
         });
-        if (generation === webChoiceGeneration) webError = error ?? "";
+        if (generation === webChoiceGeneration) {
+            webError = error ?? "";
+            webErrorModelId = error === undefined ? undefined : entry.id;
+        }
     }
 
     async function loadCatalog() {
@@ -361,7 +375,10 @@
     onMount(async () => {
         void loadCatalog();
         await load();
-        if (!native) void ensureWebModelRestored();
+        if (!native) {
+            await ensureWebModelRestored();
+            await refreshWebModelInstallStatus(webChoices.map((entry) => entry.id));
+        }
         if (native) {
             unlisten = await onModelDownloadProgress((p) => {
                 progress = {
@@ -392,9 +409,7 @@
                     )}
                 ></Translatable>
             </BodySmall>
-            {#if !nativeClient}
-                <BrowserImageActionModeSettings />
-            {/if}
+            <BrowserImageActionModeSettings />
             {#if $webModelStatus.status === "downloading"}
                 <BodySmall>
                     <Translatable
@@ -448,6 +463,11 @@
                                 <Chip>
                                     <Translatable resourceKey={i18nKey("Current")}></Translatable>
                                 </Chip>
+                            {:else if $webModelInstallStatus[entry.id] === "downloaded"}
+                                <Chip>
+                                    <Translatable resourceKey={i18nKey("Downloaded")}
+                                    ></Translatable>
+                                </Chip>
                             {/if}
                         </Container>
                         {#if currentWebId === entry.id}
@@ -467,17 +487,22 @@
                             <Button
                                 width={"hug"}
                                 secondary={webActive || i !== 0}
+                                disabled={$webModelInstallStatus[entry.id] === "checking"}
                                 onClick={() => chooseWebModel(entry)}
                             >
                                 <Translatable
                                     resourceKey={i18nKey(
-                                        webActive
-                                            ? "Use this model"
-                                            : webError !== "" || $webModelStatus.status === "error"
-                                              ? "Retry download"
-                                            : i === 0
-                                              ? "Download & use (default)"
-                                              : "Download & use",
+                                        webErrorModelId === entry.id ||
+                                            ($webModelStatus.status === "error" &&
+                                                $webModelStatus.id === entry.id)
+                                            ? "Retry download"
+                                            : $webModelInstallStatus[entry.id] === "checking"
+                                              ? "Checking download"
+                                              : $webModelInstallStatus[entry.id] === "downloaded"
+                                                ? "Use this model"
+                                                : i === 0
+                                                  ? "Download & use (default)"
+                                                  : "Download & use",
                                     )}
                                 ></Translatable>
                             </Button>

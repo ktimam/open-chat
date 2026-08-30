@@ -115,16 +115,20 @@ describe("browser OCR assets", () => {
         expect(notices).not.toContain("introduces no WebAssembly");
     });
 
-    it("keeps browser-only OCR payloads out of native and OTA bundles", () => {
+    it("packages OCR only for web and explicit all-WebGPU Android bundles", () => {
         const rollup = readFileSync(resolve(appRoot, "rollup.config.mjs"), "utf8");
         const androidBundle = readFileSync(
             resolve(appRoot, "rollup-plugin-android-bundle.mjs"),
             "utf8",
         );
 
-        expect(rollup).toContain('process.env.OC_APP_TYPE === "android"');
-        expect(rollup).toContain('process.env.OC_APP_TYPE === "ios"');
-        expect(rollup).toContain("const localExtractorCopyTargets = isNativeApp");
+        expect(rollup).toContain(
+            "!isNativeApp || (isNativeAndroid && transformersWebGpuSpikeEnabled)",
+        );
+        expect(rollup).toContain("const localExtractorCopyTargets = localExtractorEnabled");
+        expect(rollup).toContain("includeLocalExtractor: transformersWebGpuSpikeEnabled");
+        expect(androidBundle).toContain("includeLocalExtractor = false");
+        expect(androidBundle).toContain("if (!includeLocalExtractor)");
         expect(androidBundle).toContain(
             'fs.remove(path.join(distBundleDir, "assets", "local-extractor"))',
         );

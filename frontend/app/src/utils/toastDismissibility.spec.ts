@@ -12,7 +12,9 @@ describe("failure toast dismissibility", () => {
         it(`${relative} keeps the close control touchable and inside a narrow viewport`, () => {
             const source = readFileSync(fileURLToPath(new URL(relative, import.meta.url)), "utf8");
 
-            expect(source).toContain('<button\n                    type="button"\n                    class="close"');
+            expect(source).toMatch(
+                /<button\r?\n\s+type="button"\r?\n\s+class="close"/,
+            );
             expect(source).toContain('aria-label="Dismiss notification"');
             expect(source).toContain("onclick={toastStore.hideToast}");
             expect(source).toContain("box-sizing: border-box;");

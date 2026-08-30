@@ -47,7 +47,6 @@ import {
 import {
     inferOnDevice,
     inferOnDeviceTextOnlyNoProjector,
-    isNativeClient,
     onDeviceInferenceCapability,
     usesWebInferenceRuntime,
 } from "./onDeviceInference";
@@ -68,6 +67,8 @@ const GPU_ONLY_IMAGE_UNAVAILABLE_MESSAGE =
     "Accelerated image inference is unavailable for the selected model on this device. The local reader is disabled.";
 const LOCAL_VERIFICATION_FAILED_MESSAGE =
     "The model result could not be verified against the image. No action was created.";
+const LOCAL_READER_VERIFICATION_FAILED_MESSAGE =
+    "The local image reader could not produce complete evidence, so model verification was not run. No action was created.";
 const PROVENANCE_FAILURE_MESSAGES = {
     invalid_request:
         "The app rejected this card's verified content. No action was posted; refresh OpenChat and retry.",
@@ -79,7 +80,6 @@ const PROVENANCE_FAILURE_MESSAGES = {
     offline: "OpenChat is offline. Reconnect, then retry the action.",
 } as const;
 const REQUIRED_VERIFIED_IMAGE_FIELDS = ["amount", "currency", "kind", "direction"] as const;
-const PRIVATE_VERIFICATION_MODEL_ID = "qwen3-vl-2b-instruct-q4";
 
 function readyCandidates(
     result: RunAiActionResult | ProposeResult | undefined,
@@ -631,10 +631,10 @@ async function runDefinition(
     const input = await contentToInput(content, client);
     if (input === undefined) return { kind: "unsupported_content" };
     const webInference = usesWebInferenceRuntime();
-    // The feature-flagged Android APK intentionally packages no OCR runtime. Even if an older app
-    // version left a browser image-mode preference in this origin's storage, its WebGPU route must
-    // remain model-only instead of trying to load browser OCR assets that do not exist in the APK.
-    const browserLocalReaderModesAllowed = webInference && !isNativeClient();
+    // Every all-WebGPU build, including Android, packages the same local OCR runtime. The selected
+    // mode is an explicit user boundary: OCR is reachable only in the two local-reader modes and
+    // is never introduced as an automatic fallback for model-only inference.
+    const browserLocalReaderModesAllowed = webInference;
     const verifyBrowserImageWithLocal =
         browserLocalReaderModesAllowed &&
         input.image !== undefined &&
@@ -817,11 +817,7 @@ async function runDefinition(
     // before inference. The two explicit local-reader modes keep their separate contract below:
     // verification is local-first and may return only a complete source-grounded local card when
     // its private text check is unavailable, while local-reader-only never probes a model at all.
-    if (
-        webInference &&
-        input.image !== undefined &&
-        (!browserLocalReaderModesAllowed || browserUsesModelOnly())
-    ) {
+    if (webInference && input.image !== undefined && browserUsesModelOnly()) {
         const modelReadiness = await selectedBrowserImageModelReadiness();
         if (!modelReadiness.available) {
             if (modelReadiness.reason !== undefined) {
@@ -843,10 +839,19 @@ async function runDefinition(
         if (strategy !== undefined) {
             if (verifyBrowserImageWithLocal) {
                 const source = await runSourceGroundedForPrivateVerification();
+                if (source.local?.kind === "unavailable" || source.local?.kind === "error") {
+                    // Preserve the local reader's concrete initialization/recognition failure. The
+                    // model has not run yet, so reporting a model-verification failure is misleading.
+                    return source.local;
+                }
                 if (
                     readyCandidates(source.local) === undefined ||
-                    source.privateImageEvidence === undefined ||
-                    privateVerificationModelId !== PRIVATE_VERIFICATION_MODEL_ID ||
+                    source.privateImageEvidence === undefined
+                ) {
+                    return { kind: "error", error: LOCAL_READER_VERIFICATION_FAILED_MESSAGE };
+                }
+                if (
+                    privateVerificationModelId === undefined ||
                     webModelCatalogId() !== privateVerificationModelId
                 ) {
                     return { kind: "error", error: LOCAL_VERIFICATION_FAILED_MESSAGE };
