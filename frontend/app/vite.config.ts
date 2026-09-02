@@ -644,9 +644,11 @@ export default defineConfig({
         "import.meta.env.OC_WEBSITE_VERSION": JSON.stringify(version),
     },
     // Prebundling can otherwise give svelte-material-icons a private Svelte runtime whose DOM
-    // getters are still uninitialized when the first mobile icon renders during startup.
+    // getters are still uninitialized when the first mobile icon renders during startup. The
+    // local component-lib contains .svelte.ts rune modules; those must use Vite's normal
+    // TypeScript-then-Svelte transform pipeline rather than Svelte's raw dependency prebundler.
     optimizeDeps: {
-        exclude: ["svelte-material-icons"],
+        exclude: ["component-lib", "svelte-material-icons"],
     },
     server: {
         // Mobile QC terminates HTTPS at a local proxy and forwards one configured hostname. Keep
