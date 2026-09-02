@@ -18,6 +18,7 @@
     import { OpenChat, type CreatedUser } from "@client";
     import { ErrorCode } from "@shared";
     import { navigate } from "@utils/navigation";
+    import { classifyAndroidWebAuthnSignInFailure } from "@src/utils/androidWebAuthnError";
     import { getContext, onMount } from "svelte";
     import { _ } from "svelte-i18n";
     import ChevronLeft from "svelte-material-icons/ChevronLeft.svelte";
@@ -52,16 +53,30 @@
     });
 
     function signIn() {
-        (client.isNativeAndroid()
+        const nativeAndroid = client.isNativeAndroid();
+        (nativeAndroid
             ? client.signInWithAndroidWebAuthn()
             : client.signInWithWebAuthn()
         ).catch(async (e) => {
-            if ("AUTH_FAILED" === e) {
-                error = "native.auth.error";
-                console.error("Auth error: ", e);
-            } else {
-                // Passkey either not found, or user cancelled auth request
+            if (!nativeAndroid) {
+                if ("AUTH_FAILED" === e) {
+                    error = "default";
+                    console.error("Auth error: ", e);
+                } else {
+                    step = "one-time-password";
+                }
+                return;
+            }
+
+            const failure = classifyAndroidWebAuthnSignInFailure(e);
+            if (failure.kind === "cancelled") {
+                return;
+            }
+            error = failure.errorCode;
+            if (failure.kind === "link_account") {
                 step = "one-time-password";
+            } else {
+                console.error("Android passkey sign-in error: ", e);
             }
         });
     }
@@ -297,7 +312,7 @@
     {#if error !== undefined}
         <Container gap={"md"} padding={["zero", "xxl"]} direction={"vertical"}>
             <ErrorMessage>
-                <Translatable resourceKey={i18nKey(error)} />
+                <Translatable resourceKey={i18nKey(`native.auth.errors.${error}`)} />
             </ErrorMessage>
         </Container>
     {/if}

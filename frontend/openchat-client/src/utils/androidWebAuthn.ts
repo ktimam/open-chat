@@ -1,5 +1,9 @@
 import { WebAuthnIdentity } from "@icp-sdk/core/identity";
-import type { WebAuthnKeyFull } from "@shared";
+import {
+    WEBAUTHN_KEY_CACHE_DB_NAME,
+    WEBAUTHN_KEY_CACHE_STORE_NAME,
+    type WebAuthnKeyFull,
+} from "@shared";
 import borc from "borc";
 import {
     DER_COSE_OID,
@@ -16,11 +20,86 @@ import {
     type Credential,
     type SignUpCredential,
     type SignInCredential,
+    type SignInPayload,
 } from "tauri-plugin-oc-api";
 
 // The official app uses oc.app. A local sideload build supplies the private HTTPS host used as its
 // Android relying party so the stored key metadata matches Credential Manager's RP-ID.
 const OC_APP_ORIGIN = import.meta.env.OC_ANDROID_RP_ID ?? "oc.app";
+const MAX_WEBAUTHN_CREDENTIAL_ID_BYTES = 1023;
+
+export function matchingCachedAndroidCredentialIds(
+    values: unknown[],
+    origin = OC_APP_ORIGIN,
+): Uint8Array[] {
+    return values.flatMap((value) => {
+        if (
+            typeof value !== "object" ||
+            value === null ||
+            !("origin" in value) ||
+            value.origin !== origin ||
+            !("credentialId" in value) ||
+            !(value.credentialId instanceof Uint8Array) ||
+            value.credentialId.byteLength === 0 ||
+            value.credentialId.byteLength > MAX_WEBAUTHN_CREDENTIAL_ID_BYTES
+        ) {
+            return [];
+        }
+        return [value.credentialId];
+    });
+}
+
+export async function cachedAndroidCredentialIds(): Promise<Uint8Array[]> {
+    try {
+        if (
+            typeof indexedDB === "undefined" ||
+            typeof indexedDB.databases !== "function" ||
+            !(await indexedDB.databases()).some(
+                (database) => database.name === WEBAUTHN_KEY_CACHE_DB_NAME,
+            )
+        ) {
+            return [];
+        }
+
+        return await new Promise<Uint8Array[]>((resolve) => {
+            const openRequest = indexedDB.open(WEBAUTHN_KEY_CACHE_DB_NAME);
+            const failClosed = () => resolve([]);
+            openRequest.onerror = failClosed;
+            openRequest.onupgradeneeded = () => {
+                openRequest.transaction?.abort();
+                failClosed();
+            };
+            openRequest.onsuccess = () => {
+                const db = openRequest.result;
+                if (!db.objectStoreNames.contains(WEBAUTHN_KEY_CACHE_STORE_NAME)) {
+                    db.close();
+                    failClosed();
+                    return;
+                }
+
+                try {
+                    const request = db
+                        .transaction(WEBAUTHN_KEY_CACHE_STORE_NAME, "readonly")
+                        .objectStore(WEBAUTHN_KEY_CACHE_STORE_NAME)
+                        .getAll();
+                    request.onerror = () => {
+                        db.close();
+                        failClosed();
+                    };
+                    request.onsuccess = () => {
+                        db.close();
+                        resolve(matchingCachedAndroidCredentialIds(request.result));
+                    };
+                } catch {
+                    db.close();
+                    failClosed();
+                }
+            };
+        });
+    } catch {
+        return [];
+    }
+}
 
 /**
  * Pops up a create passkey dialog for an Android user!
@@ -87,11 +166,37 @@ export async function createAndroidWebAuthnPasskeyIdentity(
  * @param challenge
  * @returns
  */
-async function getExistingAndroidWebAuthnPasskey(
+export function buildAndroidPasskeySignInPayload(
     challenge: ArrayBuffer,
+    credentialIds: Uint8Array[],
+): SignInPayload {
+    return {
+        challenge,
+        credentialIds: [
+            ...new Set(
+                credentialIds
+                    .filter(
+                        (credentialId) =>
+                            credentialId.byteLength > 0 &&
+                            credentialId.byteLength <= MAX_WEBAUTHN_CREDENTIAL_ID_BYTES,
+                    )
+                    .map((credentialId) =>
+                        btoa(String.fromCharCode(...credentialId))
+                            .replace(/\+/g, "-")
+                            .replace(/\//g, "_")
+                            .replace(/=+$/, ""),
+                    ),
+            ),
+        ],
+    };
+}
+
+export async function getExistingAndroidWebAuthnPasskey(
+    challenge: ArrayBuffer,
+    credentialIds: Uint8Array[] = [],
 ): Promise<Credential<SignInCredential>> {
     return new Promise((resolve, reject) => {
-        signIn({ challenge })
+        signIn(buildAndroidPasskeySignInPayload(challenge, credentialIds))
             .then((credential: Credential<SignInCredential> | null) => {
                 if (!credential) {
                     reject({
@@ -118,7 +223,10 @@ async function getExistingAndroidWebAuthnPasskey(
 export class AndroidWebAuthnPasskeyIdentity extends SignIdentity {
     protected _identity?: WebAuthnIdentity;
 
-    public constructor(readonly lookupPubKeyFn: (rawId: Uint8Array) => Promise<Uint8Array>) {
+    public constructor(
+        readonly lookupPubKeyFn: (rawId: Uint8Array) => Promise<Uint8Array>,
+        readonly credentialIds: Uint8Array[] = [],
+    ) {
         super();
     }
 
@@ -144,7 +252,10 @@ export class AndroidWebAuthnPasskeyIdentity extends SignIdentity {
         }
 
         // Check credentials from android side, while providing the challenge!
-        const credential = await getExistingAndroidWebAuthnPasskey(blob.buffer as ArrayBuffer);
+        const credential = await getExistingAndroidWebAuthnPasskey(
+            blob.buffer as ArrayBuffer,
+            this.credentialIds,
+        );
         const credentialId = credential.rawId;
         const pubkey = await this.lookupPubKeyFn(credentialId);
 

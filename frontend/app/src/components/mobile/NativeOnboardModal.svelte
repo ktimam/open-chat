@@ -4,6 +4,7 @@
     import { ErrorCode } from "@shared";
     import { getContext } from "svelte";
     import { locale } from "svelte-i18n";
+    import { classifyAndroidWebAuthnSignInFailure } from "@src/utils/androidWebAuthnError";
     import AccountPlus from "svelte-material-icons/AccountPlus.svelte";
     import LinkVariant from "svelte-material-icons/LinkVariant.svelte";
     import Login from "svelte-material-icons/Login.svelte";
@@ -47,12 +48,15 @@
 
     function signIn() {
         client.signInWithAndroidWebAuthn().catch(async (e) => {
-            if ("AUTH_FAILED" === e) {
-                error = "native.auth.error";
-                console.error("Auth error: ", e);
-            } else {
-                // Passkey either not found, or user cancelled auth request
+            const failure = classifyAndroidWebAuthnSignInFailure(e);
+            if (failure.kind === "cancelled") {
+                return;
+            }
+            error = failure.errorCode;
+            if (failure.kind === "link_account") {
                 step = "one-time-password";
+            } else {
+                console.error("Android passkey sign-in error: ", e);
             }
         });
     }

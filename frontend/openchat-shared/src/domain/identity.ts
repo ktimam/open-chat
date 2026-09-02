@@ -142,6 +142,9 @@ export type WebAuthnKeyFull = WebAuthnKey & {
     aaguid: Uint8Array;
 };
 
+export const WEBAUTHN_KEY_CACHE_DB_NAME = "openchat_webauthn_keys";
+export const WEBAUTHN_KEY_CACHE_STORE_NAME = "webauthn_keys";
+
 export type AccountLinkingCode = {
     value: string;
     expiresAt: bigint;

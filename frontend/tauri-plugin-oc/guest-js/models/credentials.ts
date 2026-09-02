@@ -6,6 +6,7 @@ export type SignUpPayload = {
 // Payload sent to the native Kotlin code when signing in
 export type SignInPayload = {
     challenge: ArrayBuffer;
+    credentialIds?: string[];
 };
 
 // Response sent back from the native Kotlin code, a JSON string!

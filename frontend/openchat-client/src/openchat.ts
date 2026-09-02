@@ -483,6 +483,7 @@ import {
 } from "./stores/user";
 import {
     AndroidWebAuthnPasskeyIdentity,
+    cachedAndroidCredentialIds,
     createAndroidWebAuthnPasskeyIdentity,
 } from "./utils/androidWebAuthn";
 import { dataToBlobUrl } from "./utils/blob";
@@ -8807,8 +8808,9 @@ export class OpenChat {
     }
 
     async signInWithAndroidWebAuthn(): Promise<[ECDSAKeyIdentity, DelegationChain, WebAuthnKey]> {
-        const webAuthnIdentity = new AndroidWebAuthnPasskeyIdentity((credentialId) =>
-            this.lookupWebAuthnPubKey(credentialId),
+        const webAuthnIdentity = new AndroidWebAuthnPasskeyIdentity(
+            (credentialId) => this.lookupWebAuthnPubKey(credentialId),
+            await cachedAndroidCredentialIds(),
         );
 
         return await this.#finaliseWebAuthnSignin(
@@ -8830,8 +8832,9 @@ export class OpenChat {
 
         if (this.isNativeAndroid()) {
             // Not 100% sure that this is right
-            const webAuthnIdentity = new AndroidWebAuthnPasskeyIdentity((credentialId) =>
-                this.lookupWebAuthnPubKey(credentialId),
+            const webAuthnIdentity = new AndroidWebAuthnPasskeyIdentity(
+                (credentialId) => this.lookupWebAuthnPubKey(credentialId),
+                [webAuthnKey.credentialId],
             );
             return await this.#finaliseWebAuthnSignin(
                 webAuthnIdentity,
