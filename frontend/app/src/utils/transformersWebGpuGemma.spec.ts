@@ -3,6 +3,7 @@ import path from "node:path";
 import { Tensor as WebGpuOrtTensor } from "onnxruntime-web/webgpu";
 import { describe, expect, it, vi } from "vitest";
 import {
+    patchGemma4DecoderForStandardSoftmaxRouting,
     patchTransformersWebGpuSessionSource,
     TRANSFORMERS_GEMMA_DECODER_INPUT_METADATA,
 } from "../../transformersWebGpuSequentialSessions.mjs";
@@ -15,6 +16,7 @@ import {
     GEMMA4_PER_LAYER_BYTES_PER_TOKEN,
     GEMMA4_PER_LAYER_EMBEDDING_LAYOUT,
     assertGemma4PromptTokenCount,
+    createGemma4WebGpuEmbeddingSession,
     gemma4EmbeddingOutputTensors,
     gemma4PerLayerRowId,
     gemma4TokenIds,
@@ -39,7 +41,55 @@ import {
 const APP_DIR = path.resolve(import.meta.dirname, "../..");
 const FRONTEND_DIR = path.resolve(APP_DIR, "..");
 
+const GEMMA_GQA_ORIGINAL_ATTRIBUTE = Uint8Array.of(
+    0x2a, 0x19, 0x0a, 0x12,
+    ...new TextEncoder().encode("rotary_interleaved"),
+    0x18, 0x00, 0xa0, 0x01, 0x02,
+);
+const GEMMA_GQA_ROUTING_ATTRIBUTE = Uint8Array.of(
+    0x2a, 0x19, 0x0a, 0x0e,
+    ...new TextEncoder().encode("smooth_softmax"),
+    0x78, 0x00, 0x78, 0x00,
+    0x18, 0x01, 0xa0, 0x01, 0x02,
+);
+
+function repeatedBytes(pattern: Uint8Array, count: number): Uint8Array {
+    const result = new Uint8Array(pattern.length * count);
+    for (let index = 0; index < count; index++) result.set(pattern, index * pattern.length);
+    return result;
+}
+
+function countBytes(source: Uint8Array, pattern: Uint8Array): number {
+    let count = 0;
+    for (let offset = 0; offset <= source.length - pattern.length; offset++) {
+        if (pattern.every((value, index) => source[offset + index] === value)) {
+            count++;
+            offset += pattern.length - 1;
+        }
+    }
+    return count;
+}
+
 describe("Gemma 4 E2B all-WebGPU runtime", () => {
+    it("marks exactly the 12 pinned GQA nodes for standard non-flash WebGPU attention", () => {
+        const original = repeatedBytes(GEMMA_GQA_ORIGINAL_ATTRIBUTE, 12);
+        const patched = patchGemma4DecoderForStandardSoftmaxRouting(original);
+
+        expect(patched).toHaveLength(original.length);
+        expect(countBytes(original, GEMMA_GQA_ORIGINAL_ATTRIBUTE)).toBe(12);
+        expect(countBytes(original, GEMMA_GQA_ROUTING_ATTRIBUTE)).toBe(0);
+        expect(countBytes(patched, GEMMA_GQA_ORIGINAL_ATTRIBUTE)).toBe(0);
+        expect(countBytes(patched, GEMMA_GQA_ROUTING_ATTRIBUTE)).toBe(12);
+        expect(
+            patchGemma4DecoderForStandardSoftmaxRouting(patched),
+        ).toEqual(patched);
+        expect(() =>
+            patchGemma4DecoderForStandardSoftmaxRouting(
+                repeatedBytes(GEMMA_GQA_ORIGINAL_ATTRIBUTE, 11),
+            ),
+        ).toThrow("refusing an unverified FlashAttention bypass");
+    });
+
     it("pins text/image separately from the optional audio add-on", () => {
         const spec = transformersWebGpuModelSpec(PHONE_GEMMA4_E2B_MODEL_ID);
         expect(spec).toMatchObject({
@@ -144,6 +194,98 @@ describe("Gemma 4 E2B all-WebGPU runtime", () => {
         );
         expect(embeddingSource).toContain('new WebGpuOrtTensor("float32"');
         expect(embeddingSource).not.toContain("new input.constructor");
+    });
+
+    it("shares one embedding pipeline and serializes Qualcomm-safe readbacks", async () => {
+        vi.stubGlobal("GPUBufferUsage", {
+            STORAGE: 1,
+            COPY_SRC: 2,
+            COPY_DST: 4,
+            UNIFORM: 8,
+            MAP_READ: 16,
+        });
+        vi.stubGlobal("GPUMapMode", { READ: 1 });
+
+        let activeMaps = 0;
+        let maxActiveMaps = 0;
+        let submittedWhileMapping = false;
+        const copiedBytes: number[] = [];
+        const createComputePipeline = vi.fn(() => ({ getBindGroupLayout: () => ({}) }));
+        const device = {
+            limits: { maxStorageBufferBindingSize: 128 * 1024 * 1024 },
+            createShaderModule: vi.fn(() => ({})),
+            createComputePipeline,
+            createBuffer: vi.fn(({ size }: { size: number }) => {
+                const storage = new ArrayBuffer(size);
+                return {
+                    getMappedRange: () => storage,
+                    unmap: vi.fn(),
+                    mapAsync: vi.fn(async () => {
+                        activeMaps++;
+                        maxActiveMaps = Math.max(maxActiveMaps, activeMaps);
+                        await Promise.resolve();
+                        activeMaps--;
+                    }),
+                    destroy: vi.fn(),
+                };
+            }),
+            createBindGroup: vi.fn(() => ({})),
+            createCommandEncoder: vi.fn(() => ({
+                beginComputePass: () => ({
+                    setPipeline: vi.fn(),
+                    setBindGroup: vi.fn(),
+                    dispatchWorkgroups: vi.fn(),
+                    end: vi.fn(),
+                }),
+                copyBufferToBuffer: (
+                    _source: unknown,
+                    _sourceOffset: number,
+                    _destination: unknown,
+                    _destinationOffset: number,
+                    size: number,
+                ) => copiedBytes.push(size),
+                finish: () => ({}),
+            })),
+            queue: {
+                submit: vi.fn(() => {
+                    if (activeMaps > 0) submittedWhileMapping = true;
+                }),
+            },
+        };
+        const sparseShard = {
+            size: GEMMA4_EMBEDDING_SHARD_BYTES,
+            slice: (start: number, end: number) => ({
+                arrayBuffer: async () => new ArrayBuffer(end - start),
+            }),
+        } as unknown as Blob;
+        const session = createGemma4WebGpuEmbeddingSession(sparseShard, () => device);
+        const inputIds = {
+            type: "int64",
+            dims: [1, 1],
+            data: new BigInt64Array([2n]),
+        };
+
+        try {
+            for (let run = 0; run < 2; run++) {
+                const outputs = await session.run({ input_ids: inputIds });
+                for (const output of Object.values(outputs) as Array<{ dispose?: () => void }>) {
+                    output.dispose?.();
+                }
+            }
+
+            expect(createComputePipeline).toHaveBeenCalledOnce();
+            expect(maxActiveMaps).toBe(1);
+            expect(submittedWhileMapping).toBe(false);
+            expect(copiedBytes).toEqual([
+                GEMMA4_PER_LAYER_BYTES_PER_TOKEN,
+                GEMMA4_BASE_EMBEDDING_LAYOUT.width * Float32Array.BYTES_PER_ELEMENT,
+                GEMMA4_PER_LAYER_BYTES_PER_TOKEN,
+                GEMMA4_BASE_EMBEDDING_LAYOUT.width * Float32Array.BYTES_PER_ELEMENT,
+            ]);
+        } finally {
+            await session.release();
+            vi.unstubAllGlobals();
+        }
     });
 
     it("fails closed before a prompt can exceed phone WebGPU embedding-buffer limits", () => {
@@ -268,7 +410,10 @@ describe("Gemma 4 E2B all-WebGPU runtime", () => {
                 options: { session_options?: { externalData?: Array<{ data: Blob }> } },
                 _cache: boolean,
             ) => ({
-                buffer_or_path: new Uint8Array([1]),
+                buffer_or_path:
+                    name === "decoder_model_merged"
+                        ? repeatedBytes(GEMMA_GQA_ORIGINAL_ATTRIBUTE, 12)
+                        : new Uint8Array([1]),
                 session_options: { externalData: options.session_options?.externalData },
                 session_config: { name, device: "webgpu", dtype: "q4f16" },
             }),

@@ -438,34 +438,24 @@ export function createGemma4WebGpuEmbeddingSession(
     const perLayerRows = new Map<number, Promise<CompressedRows>>();
     let released = false;
     let pipelineDevice: GpuDeviceLike | undefined;
-    let basePipeline: ReturnType<GpuDeviceLike["createComputePipeline"]> | undefined;
-    let perLayerPipeline: ReturnType<GpuDeviceLike["createComputePipeline"]> | undefined;
+    let embeddingPipeline: ReturnType<GpuDeviceLike["createComputePipeline"]> | undefined;
 
-    const pipelines = (device: GpuDeviceLike) => {
-        if (
-            pipelineDevice !== device ||
-            basePipeline === undefined ||
-            perLayerPipeline === undefined
-        ) {
+    const pipeline = (device: GpuDeviceLike) => {
+        if (pipelineDevice !== device || embeddingPipeline === undefined) {
             pipelineDevice = device;
-            basePipeline = device.createComputePipeline({
+            // Base and per-layer tables use the same bindings and WGSL. Their dimensions and
+            // quantization layouts are uniform data, so compiling a second identical pipeline only
+            // adds driver work. In particular, back-to-back pipeline creation can crash Qualcomm's
+            // Android Vulkan compiler instead of returning a recoverable WebGPU error.
+            embeddingPipeline = device.createComputePipeline({
                 layout: "auto",
                 compute: {
                     module: device.createShaderModule({ code: embeddingShader() }),
                     entryPoint: "main",
                 },
             });
-            perLayerPipeline = device.createComputePipeline({
-                layout: "auto",
-                compute: {
-                    module: device.createShaderModule({
-                        code: embeddingShader(),
-                    }),
-                    entryPoint: "main",
-                },
-            });
         }
-        return { base: basePipeline, perLayer: perLayerPipeline };
+        return embeddingPipeline;
     };
 
     return {
@@ -498,7 +488,7 @@ export function createGemma4WebGpuEmbeddingSession(
                 throw new Error("The WebGPU device is unavailable for Gemma token embeddings.");
             }
             assertGemma4PromptTokenCount(ids.length, device.limits?.maxStorageBufferBindingSize);
-            const activePipelines = pipelines(device);
+            const activePipeline = pipeline(device);
             const [baseCompressed, perLayerCompressed] = await Promise.all([
                 packedRows(shard, ids, GEMMA4_BASE_EMBEDDING_LAYOUT, baseRows),
                 packedRows(
@@ -508,22 +498,24 @@ export function createGemma4WebGpuEmbeddingSession(
                     perLayerRows,
                 ),
             ]);
-            const [inputsEmbeds, perLayerInputs] = await Promise.all([
-                runDequantization(
-                    device,
-                    activePipelines.base,
-                    baseCompressed,
-                    ids.length,
-                    GEMMA4_BASE_EMBEDDING_LAYOUT,
-                ),
-                runDequantization(
-                    device,
-                    activePipelines.perLayer,
-                    perLayerCompressed,
-                    ids.length,
-                    GEMMA4_PER_LAYER_EMBEDDING_LAYOUT,
-                ),
-            ]);
+            // Keep only one mapped readback and one queue submission in flight. Run the larger
+            // per-layer table first so its GPU buffers are gone before the smaller base table is
+            // dispatched; this gives Android WebGPU the lowest transient peak without changing the
+            // resulting tensors or model math.
+            const perLayerInputs = await runDequantization(
+                device,
+                activePipeline,
+                perLayerCompressed,
+                ids.length,
+                GEMMA4_PER_LAYER_EMBEDDING_LAYOUT,
+            );
+            const inputsEmbeds = await runDequantization(
+                device,
+                activePipeline,
+                baseCompressed,
+                ids.length,
+                GEMMA4_BASE_EMBEDDING_LAYOUT,
+            );
             return gemma4EmbeddingOutputTensors(input.dims, inputsEmbeds, perLayerInputs);
         },
         async release() {
@@ -531,8 +523,7 @@ export function createGemma4WebGpuEmbeddingSession(
             baseRows.clear();
             perLayerRows.clear();
             pipelineDevice = undefined;
-            basePipeline = undefined;
-            perLayerPipeline = undefined;
+            embeddingPipeline = undefined;
         },
     };
 }

@@ -16,5 +16,8 @@ export const TRANSFORMERS_GEMMA_DECODER_INPUT_METADATA: ReadonlyArray<{
     readonly type: "float32" | "float16" | "int64";
     readonly shape: ReadonlyArray<string | number | ReadonlyArray<number>>;
 }>;
+export function patchGemma4DecoderForStandardSoftmaxRouting(
+    model: Uint8Array | ArrayBuffer | ArrayBufferView,
+): Uint8Array;
 export function patchTransformersWebGpuSessionSource(source: string, id: string): string | null;
 export function transformersWebGpuSequentialSessionsPlugin(): Plugin;

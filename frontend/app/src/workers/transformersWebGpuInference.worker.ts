@@ -55,6 +55,10 @@ import {
     type RetirableWebGpuDevice,
 } from "../utils/transformersWebGpuDeviceRetirement";
 import {
+    installSerializedWebGpuPipelineCompilation,
+    setOrtWebGpuStandardSoftmaxRouting,
+} from "../utils/transformersWebGpuPipelineCompilation";
+import {
     TRANSFORMERS_WEBGPU_MAX_AUDIO_SAMPLES,
     TRANSFORMERS_WEBGPU_MIN_AUDIO_SAMPLES,
 } from "../utils/transformersWebGpuAudio";
@@ -92,6 +96,10 @@ type OnnxEnvironment = {
 
 type RunnableSession = {
     run: (...args: unknown[]) => Promise<unknown>;
+};
+
+type ModelJsonConfig = Record<string, unknown> & {
+    image_processor?: Record<string, unknown>;
 };
 
 type WorkerNavigator = Navigator & {
@@ -201,9 +209,29 @@ function progressFor(requestId: number): (update: unknown) => void {
     };
 }
 
+function stagedSessionProgressFor(
+    requestId: number,
+    modelName: string,
+): (sessionName: string, stage: string) => void {
+    return (sessionName, stage) => {
+        activeGpuStage = `${sessionName} ${stage}`;
+        post({
+            kind: "progress",
+            requestId,
+            phase: "loading",
+            file: `${modelName}: ${sessionName} ${stage}`,
+        });
+    };
+}
+
 async function requestAdapter(requireShaderF16 = false): Promise<unknown> {
     const gpu = (navigator as WorkerNavigator).gpu;
     if (gpu === undefined) throw new AdapterUnavailableError();
+    setOrtWebGpuStandardSoftmaxRouting(requireShaderF16);
+    // ORT's pinned JSPI bridge requests another adapter directly from navigator.gpu. Install the
+    // wrapper on that shared boundary before our preflight so both requests receive serialized
+    // devices. Wrapping only env.webgpu.adapter does not reach the bridge's native pipeline calls.
+    installSerializedWebGpuPipelineCompilation(gpu);
     // Use the browser's default adapter policy. WebGPU warns that forcing the high-performance
     // preference on portable devices makes power-switch device loss more likely.
     const adapter = await gpu.requestAdapter();
@@ -372,6 +400,7 @@ async function loadQwenRuntime(requestId: number): Promise<QwenLoadedRuntime> {
     configureRuntimeAssets(TRANSFORMERS_WEBGPU_CACHE_KEY, "Qwen3-VL 2B");
     const generation = ++runtimeGeneration;
     const progress_callback = progressFor(requestId);
+    const reportStagedSession = stagedSessionProgressFor(requestId, "Qwen3-VL 2B");
     runtimePromise = (async () => {
         const adapter = await requestAdapter();
         if (onnx.webgpu === undefined)
@@ -432,7 +461,8 @@ async function loadQwenRuntime(requestId: number): Promise<QwenLoadedRuntime> {
             }
             return [{ path: external.name, data }];
         };
-        const getJson = async (name: string): Promise<any> => JSON.parse(await getText(name));
+        const getJson = async (name: string): Promise<ModelJsonConfig> =>
+            JSON.parse(await getText(name)) as ModelJsonConfig;
         const [tokenizerJson, tokenizerConfig, preprocessorConfig, processorConfig, chatTemplate] =
             await Promise.all([
                 getJson("tokenizer.json"),
@@ -472,6 +502,7 @@ async function loadQwenRuntime(requestId: number): Promise<QwenLoadedRuntime> {
                 openchat_get_staged_external_data: getStagedExternalData,
                 openchat_wait_for_staged_webgpu_queue: waitForStagedWebGpuQueue,
                 openchat_with_staged_webgpu_release: withStagedWebGpuRelease,
+                openchat_report_staged_session: reportStagedSession,
             } as never,
         } as const;
         const model = await Qwen3VLForConditionalGeneration.from_pretrained(
@@ -539,7 +570,8 @@ async function loadGemmaRuntime(
         };
         const getText = async (name: string): Promise<string> =>
             (await getCachedResponse(name)).text();
-        const getJson = async (name: string): Promise<any> => JSON.parse(await getText(name));
+        const getJson = async (name: string): Promise<ModelJsonConfig> =>
+            JSON.parse(await getText(name)) as ModelJsonConfig;
         const exactExternalBlob = async (
             path: string,
             name: string,
@@ -641,6 +673,10 @@ async function loadGemmaRuntime(
                 openchat_with_staged_webgpu_release: withStagedWebGpuRelease,
                 openchat_create_gemma_embed_session: createEmbeddingSession,
                 openchat_gemma_required_modality: modality,
+                openchat_report_staged_session: stagedSessionProgressFor(
+                    message.requestId,
+                    "Gemma 4 E2B",
+                ),
             } as never,
         } as const;
         const model = await Gemma4ForConditionalGeneration.from_pretrained(
