@@ -61,4 +61,15 @@ describe("AI app provenance reconnect UI", () => {
             "keys.some((k) => k.appId === app.id && k.publicKey.length > 0)",
         );
     });
+
+    it("wraps the mobile reconnect actions within a narrow sheet", () => {
+        const component = source("components_mobile/home/AiAppLinkSheet.svelte");
+
+        expect(component).toContain(
+            '<Container gap={"md"} mainAxisAlignment={"end"} crossAxisAlignment={"center"} wrap>',
+        );
+        expect(component).toContain('resourceKey={i18nKey("aiApps.linkCodeCopy")}');
+        expect(component).toContain('resourceKey={i18nKey("aiApps.close")}');
+        expect(component).toContain('resourceKey={i18nKey("aiApps.checkConnection")}');
+    });
 });

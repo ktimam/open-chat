@@ -314,7 +314,7 @@
             </BodySmall>
         {/if}
 
-        <Container gap={"md"} mainAxisAlignment={"end"} crossAxisAlignment={"center"}>
+        <Container gap={"md"} mainAxisAlignment={"end"} crossAxisAlignment={"center"} wrap>
             {#if linkCode !== undefined && !expired}
                 <CommonButton onClick={copyCode} size={"medium"}>
                     {#snippet icon(color, size)}
