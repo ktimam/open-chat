@@ -57,6 +57,7 @@ const transformers = vi.hoisted(() => ({
     modelDownloadedImpl: undefined as
         | ((modelId: string, options: { signal?: AbortSignal }) => Promise<boolean>)
         | undefined,
+    modelDownloadedCalls: 0,
     modelDownloadedSignals: [] as AbortSignal[],
     artifactsDownloaded: false,
     artifactPresenceImpl: undefined as ((modelId: string) => Promise<boolean>) | undefined,
@@ -64,6 +65,7 @@ const transformers = vi.hoisted(() => ({
     audioChecks: 0,
     preloadCalls: 0,
     runtimeRefreshCalls: 0,
+    runtimeOfflineChecks: 0,
     runtimeRefreshError: undefined as string | undefined,
     runtimeRefreshGate: undefined as Promise<void> | undefined,
     preloadModelIds: [] as string[],
@@ -102,6 +104,7 @@ vi.mock("./transformersWebGpuInference", async (importOriginal) => {
         ) => selected(id),
         transformersWebGpuModelDownloaded: vi.fn(
             async (modelId: string, options: { signal?: AbortSignal } = {}) => {
+                transformers.modelDownloadedCalls += 1;
                 if (options.signal !== undefined) {
                     transformers.modelDownloadedSignals.push(options.signal);
                 }
@@ -127,6 +130,10 @@ vi.mock("./transformersWebGpuInference", async (importOriginal) => {
                 (transformers.downloadedModelIds.size === 0 ||
                     transformers.downloadedModelIds.has(modelId))
             );
+        }),
+        transformersWebGpuRuntimeAvailableOffline: vi.fn(async () => {
+            transformers.runtimeOfflineChecks += 1;
+            return transformers.downloaded;
         }),
         transformersWebGpuAudioDownloaded: vi.fn(async () => {
             transformers.audioChecks += 1;
@@ -701,6 +708,7 @@ describe("pinned all-WebGPU model integration", () => {
         transformers.downloaded = false;
         transformers.downloadedModelIds.clear();
         transformers.modelDownloadedImpl = undefined;
+        transformers.modelDownloadedCalls = 0;
         transformers.modelDownloadedSignals = [];
         transformers.artifactsDownloaded = false;
         transformers.artifactPresenceImpl = undefined;
@@ -708,6 +716,7 @@ describe("pinned all-WebGPU model integration", () => {
         transformers.audioChecks = 0;
         transformers.preloadCalls = 0;
         transformers.runtimeRefreshCalls = 0;
+        transformers.runtimeOfflineChecks = 0;
         transformers.runtimeRefreshError = undefined;
         transformers.runtimeRefreshGate = undefined;
         transformers.preloadModelIds = [];
@@ -1231,6 +1240,25 @@ describe("pinned all-WebGPU model integration", () => {
         });
         expect(transformers.runtimeRefreshCalls).toBe(1);
         expect(transformers.preloadCalls).toBe(modelDownloads);
+    });
+
+    it("restores a persisted selection without streaming multi-gigabyte model bodies at startup", async () => {
+        localStorage.setItem(
+            LS_URL_MODEL,
+            JSON.stringify({
+                runtime: "transformers-webgpu",
+                id: entry.id,
+                name: entry.name,
+            }),
+        );
+        transformers.artifactsDownloaded = true;
+        transformers.downloaded = true;
+
+        await restoreWebModel();
+
+        expect(transformers.modelDownloadedCalls).toBe(0);
+        expect(transformers.runtimeOfflineChecks).toBe(1);
+        expect(get(webModelStatus)).toMatchObject({ id: entry.id, status: "attached" });
     });
 
     it("coalesces concurrent startup and Model Manager runtime restores", async () => {

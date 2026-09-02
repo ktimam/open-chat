@@ -1649,13 +1649,17 @@ function noteFromOcr(
         if (startsWithLabel(line, declaration.ignoredLineLabels) !== undefined) return undefined;
         if (isConfiguredTitle(line)) return undefined;
         const relation = relationshipEvidence(line, declaration);
-        if (
-            relation !== undefined &&
-            (mappedValue(rules, declaration.directionField, [relation]).kind !== "none" ||
+        if (relation !== undefined) {
+            const direction = mappedValue(rules, declaration.directionField, [relation]);
+            const kind = mappedValue(rules, declaration.kindField, [relation]);
+            if (
+                direction.kind !== "none" ||
                 (!allowDeclaredNoteKindCue &&
-                    mappedValue(rules, declaration.kindField, [relation]).kind !== "none"))
-        ) {
-            return undefined;
+                    (kind.kind === "ambiguous" ||
+                        (kind.kind === "value" && kind.value !== declaration.fallbackKind)))
+            ) {
+                return undefined;
+            }
         }
         const dates = scanDates(line);
         if (dates.values.length > 0 || dates.invalid) return undefined;
@@ -1728,15 +1732,20 @@ function noteFromOcr(
         if (startsWithLabel(line, declaration.noteLabels) !== undefined) continue;
         if (isConfiguredTitle(line)) continue;
         const relation = relationshipEvidence(line, declaration);
-        if (
-            relation !== undefined &&
-            (mappedValue(rules, declaration.directionField, [relation]).kind !== "none" ||
-                mappedValue(rules, declaration.kindField, [relation]).kind !== "none")
-        ) {
-            // A visible completion/status line is semantic evidence, not a transaction note. This
-            // is rule-driven rather than language-specific: an app-declared Arabic success phrase
-            // is excluded in exactly the same way as an English one, and no absent note is made up.
-            continue;
+        if (relation !== undefined) {
+            const direction = mappedValue(rules, declaration.directionField, [relation]);
+            const kind = mappedValue(rules, declaration.kindField, [relation]);
+            if (
+                direction.kind !== "none" ||
+                kind.kind === "ambiguous" ||
+                (kind.kind === "value" && kind.value !== declaration.fallbackKind)
+            ) {
+                // Relationship and non-default completion/status lines are semantic evidence, not
+                // transaction notes. A cue for the app-declared fallback kind may also be the
+                // source's only descriptive label (for example, a reservation confirmation), so
+                // preserve that exact visible text instead of discarding it after classification.
+                continue;
+            }
         }
         const dates = scanDates(line);
         if (dates.values.length > 0 || dates.invalid) continue;

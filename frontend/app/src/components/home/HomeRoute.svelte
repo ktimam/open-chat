@@ -8,8 +8,8 @@
 
 <script lang="ts">
     import { chatsInitialisedStore, identityStateStore } from "@client";
+    import Loading from "@shared_components/Loading.svelte";
     import { type Component } from "svelte";
-    import FancyLoader from "../icons/FancyLoader.svelte";
     import LandingPage from "../landingpages/LandingPage.svelte";
     import Home from "./Home.svelte";
 
@@ -30,7 +30,7 @@
 {:else if showLoader}
     <div class="loading">
         <div class="inner-loader">
-            <FancyLoader />
+            <Loading size={"small"} />
         </div>
     </div>
 {:else}

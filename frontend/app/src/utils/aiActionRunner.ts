@@ -446,11 +446,15 @@ export interface ManualExtractionSource {
     modality: ModelModality;
     text?: string;
     rulesAlreadyResolved?: boolean;
+    sourceTimestamp?: number;
 }
 
-function preparedSourceForContent(content: MessageContent): ManualExtractionSource {
+function preparedSourceForContent(
+    content: MessageContent,
+    sourceTimestamp?: number,
+): ManualExtractionSource {
     return content.kind === "text_content"
-        ? { modality: "text", text: content.text, rulesAlreadyResolved: true }
+        ? { modality: "text", text: content.text, rulesAlreadyResolved: true, sourceTimestamp }
         : {
               modality: "image",
               text: content.kind === "image_content" ? content.caption : undefined,
@@ -526,6 +530,14 @@ export function buildManualCard(
             hasImage: source.modality === "image",
             text: source.text,
             rulesAlreadyResolved: source.rulesAlreadyResolved,
+            calendarAnchor:
+                source.sourceTimestamp !== undefined
+                    ? new Date(source.sourceTimestamp)
+                    : undefined,
+            messageTimestampAnchor:
+                source.sourceTimestamp !== undefined
+                    ? new Date(source.sourceTimestamp)
+                    : undefined,
         });
         const missing = missingRequired(finalExtraction, def.responseSchema);
         if (missing.length === 0) {
@@ -601,6 +613,7 @@ async function runDefinition(
     appRevision?: bigint,
     onPhase?: ProposalPhaseListener,
     manualExtractionSource?: ManualExtractionSource,
+    sourceTimestamp?: number,
 ): Promise<ProposeResult> {
     // `acceptsImage` is an explicit app capability, not a menu hint. Enforce it before the manual
     // seam, blob fetching, model-capability checks, or inference so an image can never reach an
@@ -620,7 +633,7 @@ async function runDefinition(
             appRevision,
             manualExtractionSource ??
                 (content.kind === "text_content"
-                    ? { modality: "text", text: content.text }
+                    ? { modality: "text", text: content.text, sourceTimestamp }
                     : {
                           modality: "image",
                           text: content.kind === "image_content" ? content.caption : undefined,
@@ -667,7 +680,7 @@ async function runDefinition(
         browserModelImageEvidence = undefined;
         const result = await runAiAction(
             def,
-            { ...input, modelId: selectedBrowserModelId },
+            { ...input, modelId: selectedBrowserModelId, sourceTimestamp },
             recipientKey,
             inferWithPhase,
             inboxCanisterId,
@@ -697,7 +710,7 @@ async function runDefinition(
     ): Promise<RunAiActionResult> =>
         runAiAction(
             def,
-            { privateImageEvidence, modelId: privateVerificationModelId },
+            { privateImageEvidence, modelId: privateVerificationModelId, sourceTimestamp },
             recipientKey,
             inferPrivateEvidenceWithPhase,
             inboxCanisterId,
@@ -728,6 +741,7 @@ async function runDefinition(
                               modality: "text",
                               text: input.text,
                               rulesAlreadyResolved: true,
+                              sourceTimestamp,
                           }
                         : { modality: "image", rulesAlreadyResolved: true },
                 );
@@ -920,6 +934,7 @@ export async function proposeAiActionForMessage(
     content: MessageContent,
     manualExtraction?: ManualExtraction,
     onPhase?: ProposalPhaseListener,
+    sourceTimestamp?: number,
 ): Promise<ProposeResult> {
     const { candidates, linkRequired, unavailable } = await resolveCandidates(client, chatId);
     if (candidates.length === 1) {
@@ -935,6 +950,8 @@ export async function proposeAiActionForMessage(
             c.app.id,
             c.app.updated,
             onPhase,
+            undefined,
+            sourceTimestamp,
         );
     }
     if (candidates.length > 1) {
@@ -1051,6 +1068,7 @@ export async function proposeAndPost(
     manualExtraction?: ManualExtraction,
     stillCurrent?: () => boolean,
     onPhase?: ProposalPhaseListener,
+    sourceTimestamp?: number,
 ): Promise<ProposeResult> {
     if (stillCurrent?.() === false) {
         return { kind: "error", error: "proposal context changed" };
@@ -1062,6 +1080,7 @@ export async function proposeAndPost(
         content,
         manualExtraction,
         onPhase,
+        sourceTimestamp,
     );
     if (stillCurrent?.() === false) {
         return { kind: "error", error: "proposal context changed" };
@@ -1071,7 +1090,7 @@ export async function proposeAndPost(
             client,
             messageContext,
             result,
-            preparedSourceForContent(content),
+            preparedSourceForContent(content, sourceTimestamp),
             stillCurrent,
             onPhase,
         );
@@ -1090,6 +1109,7 @@ export async function proposeAndPostCandidate(
     stillCurrent?: () => boolean,
     onPhase?: ProposalPhaseListener,
     manualExtractionSource?: ManualExtractionSource,
+    sourceTimestamp?: number,
 ): Promise<ProposeResult> {
     if (stillCurrent?.() === false) {
         return { kind: "error", error: "suggestion context changed" };
@@ -1114,6 +1134,7 @@ export async function proposeAndPostCandidate(
         candidate.app.updated,
         onPhase,
         manualExtractionSource,
+        sourceTimestamp,
     );
     // The model can run for seconds. Recheck before the only external write so switching accounts
     // during inference cannot post A's message-derived card into B's session.
@@ -1125,7 +1146,7 @@ export async function proposeAndPostCandidate(
             client,
             messageContext,
             result,
-            preparedSourceForContent(content),
+            preparedSourceForContent(content, sourceTimestamp),
             stillCurrent,
             onPhase,
         );

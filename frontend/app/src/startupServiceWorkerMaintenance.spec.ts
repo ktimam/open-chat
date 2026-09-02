@@ -55,6 +55,17 @@ describe("browser startup service-worker maintenance", () => {
         expect(main).toContain("if (!nativeClient)");
     });
 
+    it("uses the shared compositor-friendly spinner for both startup routes", () => {
+        for (const homeRoute of [desktopHomeRoute, mobileHomeRoute]) {
+            expect(homeRoute).toContain(
+                'import Loading from "@shared_components/Loading.svelte"',
+            );
+            expect(homeRoute).toContain('<Loading size={"small"} />');
+            expect(homeRoute).not.toContain("FancyLoader");
+            expect(homeRoute).not.toContain("<canvas");
+        }
+    });
+
     it("surfaces an authentication-worker startup failure instead of leaving the loader forever", () => {
         expect(workerAgent).toContain("WORKER_STARTUP_REQUEST_TIMEOUT_MS");
         expect(workerAgent).toContain("worker.onerror");

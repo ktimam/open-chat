@@ -1450,6 +1450,7 @@ type SafePropertySchema = {
     "x-openchat-require-explicit-for-image-only"?: unknown;
     "x-openchat-normalize-date"?: unknown;
     "x-openchat-date-from-text"?: unknown;
+    "x-openchat-date-from-message-timestamp-keywords"?: unknown;
     "x-openchat-property-aliases"?: unknown;
     "x-openchat-enum-aliases"?: unknown;
 };
@@ -2015,13 +2016,12 @@ function applyTextDateSchemaProperties(
     messageText: string,
     candidateCount: number | undefined,
     calendarAnchor: Date | undefined,
+    messageTimestampAnchor: Date | undefined,
 ): Record<string, unknown> {
     if (schema === undefined || candidateCount !== 1) return extraction;
     const props: unknown = (schema as { properties?: unknown }).properties;
     if (props === null || typeof props !== "object" || Array.isArray(props)) return extraction;
 
-    const derived = unambiguousDateFromText(messageText, calendarAnchor);
-    if (derived === undefined) return extraction;
     const out = { ...extraction };
     for (const [field, rawProperty] of Object.entries(props as Record<string, unknown>)) {
         if (
@@ -2034,12 +2034,34 @@ function applyTextDateSchemaProperties(
         }
         const property = rawProperty as SafePropertySchema;
         if (
-            property["x-openchat-date-from-text"] !== true ||
             property.type !== "string" ||
             property.format !== "date"
         ) {
             continue;
         }
+        const explicit =
+            property["x-openchat-date-from-text"] === true
+                ? unambiguousDateFromText(messageText, calendarAnchor)
+                : undefined;
+        const timestampKeywords = property[
+            "x-openchat-date-from-message-timestamp-keywords"
+        ];
+        const timestampFallback =
+            explicit === undefined &&
+            messageTimestampAnchor !== undefined &&
+            Number.isFinite(messageTimestampAnchor.getTime()) &&
+            Array.isArray(timestampKeywords) &&
+            timestampKeywords.length > 0 &&
+            timestampKeywords.length <= MAX_AI_ACTION_KEYWORDS_PER_MAPPING &&
+            timestampKeywords.every(
+                (keyword): keyword is string =>
+                    typeof keyword === "string" && isBoundedRuleString(keyword),
+            ) &&
+            timestampKeywords.some((keyword) => matchesKeyword(messageText, keyword))
+                ? formatLocalCalendarDate(messageTimestampAnchor)
+                : undefined;
+        const derived = explicit ?? timestampFallback;
+        if (derived === undefined) continue;
         const conformed = conformPropertyValue(derived, property);
         if (conformed !== INVALID_SCHEMA_VALUE) out[field] = conformed;
     }
@@ -2060,6 +2082,9 @@ export interface AiActionCandidateSource {
     candidateCount?: number;
     // The same local calendar anchor shown to the model after an explicit context/today rule.
     calendarAnchor?: Date;
+    // The authoritative source-message timestamp. Unlike calendarAnchor, this never falls back to
+    // inference time and is the only anchor eligible for message-timestamp schema policy.
+    messageTimestampAnchor?: Date;
     // A source-grounded parser has already applied from_message/keyword-map policy to each exact
     // candidate. Re-running message-wide overrides here can corrupt mixed-entry direction or let an
     // unrelated OCR note overrule an authoritative STATUS line. Normalization, schema conformance,
@@ -2090,6 +2115,7 @@ export function postProcessAiActionCandidate(
             source.text!,
             source.candidateCount,
             source.calendarAnchor,
+            source.messageTimestampAnchor,
         );
         processed = omitUnevidencedTextSchemaProperties(
             processed,
@@ -2757,6 +2783,8 @@ export async function runAiAction(
         text?: string;
         modelId?: string;
         privateImageEvidence?: PrivateImageEvidence;
+        /** Authoritative timestamp of the source chat message, used only by explicit schema policy. */
+        sourceTimestamp?: number;
     },
     recipientPublicKeyPem: string,
     infer: (req: InferenceRequest) => Promise<InferenceResult>,
@@ -2834,7 +2862,16 @@ export async function runAiAction(
     const providesTodayContext = boundedRules(rules).some(
         (rule) => rule.kind === "context" && rule.provide.includes("today"),
     );
-    const calendarAnchor = providesTodayContext && hasTextInput ? new Date() : undefined;
+    const sourceTimestamp =
+        input.sourceTimestamp !== undefined && Number.isSafeInteger(input.sourceTimestamp)
+            ? new Date(input.sourceTimestamp)
+            : undefined;
+    const calendarAnchor =
+        providesTodayContext && hasTextInput
+            ? sourceTimestamp !== undefined && Number.isFinite(sourceTimestamp.getTime())
+                ? sourceTimestamp
+                : new Date()
+            : undefined;
     const buildImagePassPrompt = (pass: AiActionImageModelPassConfig): string => {
         let passPrompt = pass.template;
         if (pass.includeRuleGuidance && compiledRuleLines.length > 0) {
@@ -3057,6 +3094,7 @@ export async function runAiAction(
             text: input.text,
             candidateCount: candidates.length,
             calendarAnchor,
+            messageTimestampAnchor: sourceTimestamp,
         });
         const missing = missingRequired(finalExtraction, def.responseSchema);
         if (missing.length === 0) {

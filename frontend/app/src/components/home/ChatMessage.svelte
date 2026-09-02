@@ -550,6 +550,7 @@
                         extraction,
                         stillCurrent,
                         onPhase,
+                        Number(timestamp),
                     ),
                 proposeCandidate: (candidate, extraction, source) =>
                     proposeAndPostCandidate(
@@ -561,6 +562,7 @@
                         stillCurrent,
                         onPhase,
                         source,
+                        Number(timestamp),
                     ),
                 resolveSuggestedCandidate:
                     suggested === undefined

@@ -191,6 +191,56 @@ describe("local action extractor", () => {
         expect(recognizeImage).toHaveBeenCalledWith(bytes);
     });
 
+    it("routes a visible reservation cue through the shared image source path", async () => {
+        const strictOcrSchema = {
+            ...schema,
+            "x-openchat-source-grounded-transactions": {
+                ...schema["x-openchat-source-grounded-transactions"],
+                requireOcrEvidenceFields: ["kind"],
+            },
+        };
+        const reservationRules: AiActionRule[] = rules.map((rule) =>
+            rule.kind === "keyword_map" && rule.field === "kind"
+                ? {
+                      ...rule,
+                      map: rule.map.map((entry) =>
+                          entry.value === "iou"
+                              ? { ...entry, keywords: [...entry.keywords, "reservation"] }
+                              : entry,
+                      ),
+                  }
+                : rule,
+        );
+
+        await expect(
+            extractLocalAction(
+                strictOcrSchema,
+                reservationRules,
+                { image: new Uint8Array([4, 5, 6]) },
+                {
+                    imageDimensions: { width: 1_080, height: 1_920 },
+                    prepareImage: async (image) => image,
+                    recognizeImage: async () => ({
+                        kind: "ok",
+                        confidence: 96,
+                        text: "RESERVATION\nTOTAL 12,900 EGP",
+                    }),
+                },
+            ),
+        ).resolves.toEqual({
+            kind: "candidates",
+            candidates: [
+                {
+                    amount: 12_900,
+                    currency: "EGP",
+                    kind: "iou",
+                    direction: "credit",
+                    note: "RESERVATION",
+                },
+            ],
+        });
+    });
+
     it("feeds source-grounded image output through the production card and payload path", async () => {
         const local = await extractLocalAction(
             schema,

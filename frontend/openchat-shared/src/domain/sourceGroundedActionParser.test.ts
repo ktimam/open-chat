@@ -1107,6 +1107,42 @@ describe("OCR source parsing", () => {
         }
     });
 
+    it("keeps an app-declared fallback-kind OCR cue as source-grounded note evidence", () => {
+        const evidenceRequired = structuredClone(SCHEMA);
+        evidenceRequired["x-openchat-source-grounded-transactions"].requireOcrEvidenceFields = [
+            "kind",
+        ];
+        const reservationRules = [
+            {
+                ...RULES[0],
+                map: RULES[0].map.map((entry) =>
+                    entry.value === "iou"
+                        ? { ...entry, keywords: [...entry.keywords, "reservation"] }
+                        : entry,
+                ),
+            },
+            ...RULES.slice(1),
+        ];
+
+        expect(
+            parseSourceGroundedTransactions(evidenceRequired, reservationRules, {
+                source: "ocr",
+                text: "RESERVATION\nTOTAL 12,900 EGP",
+            }),
+        ).toEqual({
+            kind: "candidates",
+            candidates: [
+                {
+                    amount: 12_900,
+                    currency: "EGP",
+                    kind: "iou",
+                    direction: "credit",
+                    note: "RESERVATION",
+                },
+            ],
+        });
+    });
+
     it("rejects direction cues hidden behind undeclared OCR labels before using the default", () => {
         for (const transcript of [
             "TOTAL EGP 350\nDETAILS: I OWE YOU",

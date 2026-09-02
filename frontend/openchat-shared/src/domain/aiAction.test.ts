@@ -4026,6 +4026,181 @@ describe("postProcessAiActionCandidate", () => {
             ).toBe("2027-08-03");
         });
 
+        it("uses the authoritative message date for an opted-in reservation confirmation", () => {
+            const reservationDef: AiActionDefinition = {
+                ...dateDef,
+                responseSchema: {
+                    type: "object",
+                    properties: {
+                        amount: { type: "number" },
+                        date: {
+                            type: "string",
+                            format: "date",
+                            "x-openchat-date-from-text": true,
+                            "x-openchat-date-from-message-timestamp-keywords": [
+                                "reservation confirmed",
+                            ],
+                        },
+                    },
+                },
+            };
+
+            expect(
+                postProcessAiActionCandidate(
+                    reservationDef,
+                    { amount: 100 },
+                    {
+                        text: "Reservation confirmed for 100 USD",
+                        candidateCount: 1,
+                        calendarAnchor: new Date(2026, 7, 13, 23, 30),
+                        messageTimestampAnchor: new Date(2026, 7, 13, 23, 30),
+                    },
+                ),
+            ).toEqual({ amount: 100, date: "2026-08-13" });
+        });
+
+        it("threads sourceTimestamp through the production action runner", async () => {
+            const reservationDef: AiActionDefinition = {
+                ...dateDef,
+                responseSchema: {
+                    type: "object",
+                    properties: {
+                        amount: { type: "number" },
+                        date: {
+                            type: "string",
+                            format: "date",
+                            "x-openchat-date-from-text": true,
+                            "x-openchat-date-from-message-timestamp-keywords": [
+                                "reservation confirmed",
+                            ],
+                        },
+                    },
+                },
+            };
+            const result = await runAiAction(
+                reservationDef,
+                {
+                    text: "Reservation confirmed for 100 USD",
+                    sourceTimestamp: new Date(2026, 7, 13, 23, 30).getTime(),
+                },
+                RECIPIENT,
+                async () => ({ kind: "ok" as const, text: '{"amount":100}' }),
+            );
+
+            expect(result.kind).toBe("ready");
+            if (result.kind === "ready") {
+                expect(result.extracted).toEqual({ amount: 100, date: "2026-08-13" });
+            }
+        });
+
+        it("does not use the message date without the declared reservation semantic", () => {
+            const reservationDef: AiActionDefinition = {
+                ...dateDef,
+                responseSchema: {
+                    type: "object",
+                    properties: {
+                        amount: { type: "number" },
+                        date: {
+                            type: "string",
+                            format: "date",
+                            "x-openchat-date-from-text": true,
+                            "x-openchat-date-from-message-timestamp-keywords": [
+                                "reservation confirmed",
+                            ],
+                        },
+                    },
+                },
+            };
+
+            expect(
+                postProcessAiActionCandidate(
+                    reservationDef,
+                    { amount: 100 },
+                    {
+                        text: "Please send 100 USD",
+                        candidateCount: 1,
+                        calendarAnchor: new Date(2026, 7, 13, 23, 30),
+                        messageTimestampAnchor: new Date(2026, 7, 13, 23, 30),
+                    },
+                ),
+            ).toEqual({ amount: 100 });
+        });
+
+        it("prefers an explicit source date over the message timestamp", () => {
+            const reservationDef: AiActionDefinition = {
+                ...dateDef,
+                responseSchema: {
+                    type: "object",
+                    properties: {
+                        amount: { type: "number" },
+                        date: {
+                            type: "string",
+                            format: "date",
+                            "x-openchat-date-from-text": true,
+                            "x-openchat-date-from-message-timestamp-keywords": [
+                                "reservation confirmed",
+                            ],
+                        },
+                    },
+                },
+            };
+
+            expect(
+                postProcessAiActionCandidate(
+                    reservationDef,
+                    { amount: 100 },
+                    {
+                        text: "Reservation confirmed for 14 August 2026",
+                        candidateCount: 1,
+                        calendarAnchor: new Date(2026, 7, 13, 23, 30),
+                        messageTimestampAnchor: new Date(2026, 7, 13, 23, 30),
+                    },
+                ).date,
+            ).toBe("2026-08-14");
+        });
+
+        it("never substitutes inference calendar context for a missing message timestamp", async () => {
+            const reservationDef: AiActionDefinition = {
+                ...dateDef,
+                responseSchema: {
+                    type: "object",
+                    properties: {
+                        amount: { type: "number" },
+                        date: {
+                            type: "string",
+                            format: "date",
+                            "x-openchat-date-from-text": true,
+                            "x-openchat-date-from-message-timestamp-keywords": [
+                                "reservation confirmed",
+                            ],
+                        },
+                    },
+                },
+            };
+            expect(
+                postProcessAiActionCandidate(
+                    reservationDef,
+                    { amount: 100 },
+                    {
+                        text: "Reservation confirmed for 100 USD",
+                        candidateCount: 1,
+                        calendarAnchor: new Date(2026, 7, 13, 23, 30),
+                    },
+                ),
+            ).toEqual({ amount: 100 });
+
+            const result = await runAiAction(
+                reservationDef,
+                { text: "Reservation confirmed for 100 USD" },
+                RECIPIENT,
+                async () => ({ kind: "ok" as const, text: '{"amount":100}' }),
+            );
+            expect(result.kind).toBe("ready");
+            if (result.kind === "ready") {
+                expect(result.extracted).toEqual({ amount: 100 });
+            }
+        });
+
         it("does nothing when the schema has not opted in", () => {
             const withoutAnnotation: AiActionDefinition = {
                 ...dateDef,

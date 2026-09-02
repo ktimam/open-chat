@@ -2608,7 +2608,7 @@ describe("both ChatMessage trees run the SHARED propose flow", () => {
             const src = readFileSync(fileURLToPath(new URL(relative, import.meta.url)), "utf8");
             expect(src).toContain("runProposeFlow(");
             expect(src).toContain("proposeCandidate: (candidate, extraction, source)");
-            expect(src).toMatch(/onPhase,\s+source,\s+\),/u);
+            expect(src).toMatch(/onPhase,\s+source,\s+Number\(timestamp\),\s+\),/u);
             expect(src).toContain("const runAiActionSingleFlight = createSingleFlight(");
             expect(src).toContain("function runAiActionHandler(suggested?: AutoProposeSuggestion)");
             expect(src).toContain("parseManualExtractionPrompt(");
@@ -2710,6 +2710,15 @@ describe("both ChatMessage trees run the SHARED propose flow", () => {
         const src = readFileSync(fileURLToPath(new URL(TREES.mobile, import.meta.url)), "utf8");
         expect(src).toContain("proposing && !activeAutoProposeSuggestionVisible");
         expect(src).toContain("resourceKey={autoProposeBusyResourceKey}");
+    });
+
+    it("passes the authoritative message timestamp through both action UI trees", () => {
+        for (const relative of [TREES.classic, TREES.mobile]) {
+            const src = readFileSync(fileURLToPath(new URL(relative, import.meta.url)), "utf8");
+            expect(src).toContain("Number(timestamp)");
+            expect(src).toMatch(/proposeAndPost\([\s\S]*?Number\(timestamp\)[\s\S]*?\)/u);
+            expect(src).toMatch(/proposeAndPostCandidate\([\s\S]*?Number\(timestamp\)[\s\S]*?\)/u);
+        }
     });
 
     it("mobile icon actions expose their localized menu label to assistive technology", () => {

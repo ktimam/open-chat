@@ -35,12 +35,12 @@ import {
     transformersWebGpuAudioDownloaded,
     transformersWebGpuAudioReady,
     transformersWebGpuInfer,
-    transformersWebGpuModelArtifactsDownloaded,
     transformersWebGpuModelArtifactsPresent,
     transformersWebGpuModelDownloaded,
     transformersWebGpuModelNotDownloadedMessage,
     transformersWebGpuSelectionCanHandle,
     transformersWebGpuSpikeCanHandle,
+    transformersWebGpuRuntimeAvailableOffline,
     transformersWebGpuRuntimeAvailability,
     type TransformersWebGpuStatus,
 } from "./transformersWebGpuInference";
@@ -898,23 +898,29 @@ export async function restoreWebModel(): Promise<void> {
                 const transformers = allWebGpu && transformersWebGpuSelectionCanHandle(saved.id);
                 let downloaded = !allWebGpu;
                 if (allWebGpu && transformers) {
-                    const modelArtifactsDownloaded =
-                        await transformersWebGpuModelArtifactsDownloaded(saved.id);
+                    // Cold start only needs enough information to restore the user's selection.
+                    // Streaming and hashing every cached model body here can read several GB on the
+                    // main thread while chats are initialising. The cache metadata is pinned to the
+                    // exact byte count and SHA written by Model Manager; inference still calls
+                    // transformersWebGpuModelDownloaded and fully re-verifies every body before a
+                    // worker can run.
+                    const modelArtifactsPresent =
+                        await transformersWebGpuModelArtifactsPresent(saved.id);
                     setWebModelInstallState(
                         saved.id,
-                        modelArtifactsDownloaded ? "downloaded" : "not_downloaded",
+                        modelArtifactsPresent ? "downloaded" : "not_downloaded",
                     );
                     downloaded =
-                        modelArtifactsDownloaded &&
-                        (await transformersWebGpuModelDownloaded(saved.id));
-                    if (modelArtifactsDownloaded && !downloaded) {
+                        modelArtifactsPresent &&
+                        (await transformersWebGpuRuntimeAvailableOffline(saved.id));
+                    if (modelArtifactsPresent && !downloaded) {
                         // APK updates rotate the worker URL with OC_WEBSITE_VERSION, but the pinned
                         // multi-gigabyte model revision has not changed. Refresh only the small
                         // build-owned worker/ORT payload at startup; inference remains cache-only
                         // and never becomes a hidden model-download trigger.
                         try {
                             await refreshTransformersWebGpuRuntimeAssets(saved.id);
-                            downloaded = await transformersWebGpuModelDownloaded(saved.id);
+                            downloaded = await transformersWebGpuRuntimeAvailableOffline(saved.id);
                             if (!downloaded) {
                                 runtimeRefreshFailure =
                                     "Your downloaded model is intact, but OpenChat could not verify this build's refreshed all-WebGPU worker and ORT files. Restart or reload OpenChat and try again; reinstall the current app build if the error continues.";
@@ -940,7 +946,9 @@ export async function restoreWebModel(): Promise<void> {
                 state.url = allWebGpu ? undefined : legacy?.url;
                 state.mmprojUrl = allWebGpu ? undefined : legacy?.mmprojUrl;
                 state.catalogFiles = allWebGpu ? undefined : legacy?.files;
-                state.catalogVerified = allWebGpu ? downloaded : false;
+                // Pinned all-WebGPU bodies are intentionally not marked verified by cold restore;
+                // the inference boundary performs that full proof immediately before worker use.
+                state.catalogVerified = allWebGpu ? undefined : false;
                 state.id = saved.id;
                 state.name = saved.name;
                 state.declaredModalities = allWebGpu

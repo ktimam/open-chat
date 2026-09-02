@@ -1,6 +1,6 @@
 <script lang="ts">
     import { chatsInitialisedStore, identityStateStore } from "@client";
-    import FancyLoader from "../icons/FancyLoader.svelte";
+    import Loading from "@shared_components/Loading.svelte";
     import Home from "./Home.svelte";
 
     let registering = $derived(
@@ -16,7 +16,7 @@
 {#if showLoader}
     <div class="loading">
         <div class="inner-loader">
-            <FancyLoader />
+            <Loading size={"small"} />
         </div>
     </div>
 {:else}
