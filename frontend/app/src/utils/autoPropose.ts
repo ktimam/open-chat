@@ -97,6 +97,7 @@ export function autoProposeBusyI18nKey(
         stage: "text" | "image";
         phase: "loading" | "downloading" | "inference";
     },
+    generationInferenceObserved = false,
 ): string {
     if (browserRuntime && modelProgressRelevant) {
         if (generation?.phase === "inference") {
@@ -105,6 +106,15 @@ export function autoProposeBusyI18nKey(
                 : "aiApps.autoPropose.processingPrompt";
         }
         if (generation?.phase === "loading" || generation?.phase === "downloading") {
+            // Staged all-WebGPU runtimes may begin inference with vision/embedding sessions, then
+            // lazily construct the decoder and report another loading phase within the same infer
+            // request. Keep that one user-visible operation moving forward instead of bouncing
+            // from Processing back to Loading. A pre-inference load remains labelled accurately.
+            if (generation.phase === "loading" && generationInferenceObserved) {
+                return generation.stage === "image"
+                    ? "aiApps.autoPropose.processingImage"
+                    : "aiApps.autoPropose.processingPrompt";
+            }
             return "aiApps.autoPropose.loadingModel";
         }
         if (status === "verifying") return "aiApps.autoPropose.verifyingModel";

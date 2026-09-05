@@ -1121,6 +1121,33 @@ export type BrowserImageModelFirstReadinessOptions = {
     retryAfterRecentFailure?: boolean;
 };
 
+/** Readiness for an app-declared OCR-evidence prompt. Unlike image readiness this requires only
+ * the selected model's text decoder, but preserves stale/download/WebGPU reasons verbatim. */
+export async function browserTextModelReadiness(): Promise<BrowserImageModelFirstReadiness> {
+    await ensureWebModelRestored();
+    const selected = webModelCatalogId();
+    if (!isWebInferenceReady()) {
+        return {
+            available: false,
+            reason:
+                state.error ??
+                (transformersWebGpuModelSpec(selected) !== undefined
+                    ? transformersWebGpuModelNotDownloadedMessage(selected)
+                    : "Select and download an on-device model before using the local image reader."),
+        };
+    }
+    if (transformersWebGpuModelSpec(selected) !== undefined) {
+        if (!transformersWebGpuSelectionCanHandle(selected)) {
+            return {
+                available: false,
+                reason: "The selected all-WebGPU runtime is not enabled in this browser.",
+            };
+        }
+        return transformersWebGpuRuntimeAvailability();
+    }
+    return { available: true };
+}
+
 export async function browserImageModelFirstReadiness(
     _options: BrowserImageModelFirstReadinessOptions = {},
 ): Promise<BrowserImageModelFirstReadiness> {

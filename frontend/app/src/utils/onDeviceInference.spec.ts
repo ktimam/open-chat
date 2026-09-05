@@ -179,13 +179,16 @@ describe("onDeviceInferenceReadiness", () => {
     });
 
     it.each(["local_reader_only", "model_with_local_verification"] as const)(
-        "recognizes explicit %s OCR readiness in an all-WebGPU Android WebView",
+        "still requires a selected decoder in explicit %s mode",
         async (mode) => {
             enableLocalAndroidWebGpu();
             browserImageActionMode.set(mode);
             localReaderRuntime.available = true;
 
-            await expect(onDeviceInferenceReadiness()).resolves.toEqual({ available: true });
+            await expect(onDeviceInferenceReadiness()).resolves.toEqual({
+                available: false,
+                reason: "no accelerated on-device model selected",
+            });
             expect(mockInferenceRuntimeAvailable).not.toHaveBeenCalled();
             expect(mockListLocalModels).not.toHaveBeenCalled();
         },

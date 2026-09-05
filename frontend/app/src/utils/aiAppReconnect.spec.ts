@@ -15,13 +15,13 @@ function registration(overrides: Partial<AiAppRegistration> = {}): AiAppRegistra
         updated: 12n,
         published: true,
         manifest: {
-            name: "IOU",
+            name: "Notebook",
             description: "",
             consumerPublicKey: "",
             perUserKeys: true,
             appCanisterId: "app-canister",
             inboxCanisterId: "inbox-canister",
-            actions: [{ name: "record_payment" }],
+            actions: [{ name: "record_observation" }],
             surfaces: [{ kind: "card", url: "https://app.example/card", display: "sheet" }],
         },
         ...overrides,
@@ -48,7 +48,7 @@ describe("resolveAiAppReconnectTarget", () => {
         await expect(
             resolveAiAppReconnectTarget(
                 client,
-                { appId: 7, appRevision: 12n, actionId: "record_payment" },
+                { appId: 7, appRevision: 12n, actionId: "record_observation" },
                 CHAT_ID,
             ),
         ).resolves.toEqual({
@@ -58,7 +58,7 @@ describe("resolveAiAppReconnectTarget", () => {
             retryCoordinates: {
                 appId: current.id,
                 appRevision: current.updated,
-                actionId: "record_payment",
+                actionId: "record_observation",
             },
         });
         expect(client.aiApps).toHaveBeenCalledWith([{ appId: 7 }]);
@@ -74,7 +74,7 @@ describe("resolveAiAppReconnectTarget", () => {
         await expect(
             resolveAiAppReconnectTarget(
                 client,
-                { appId: 7, appRevision: 12n, actionId: "record_payment" },
+                { appId: 7, appRevision: 12n, actionId: "record_observation" },
                 CHAT_ID,
             ),
         ).resolves.toEqual({
@@ -84,7 +84,7 @@ describe("resolveAiAppReconnectTarget", () => {
             retryCoordinates: {
                 appId: current.id,
                 appRevision: current.updated,
-                actionId: "record_payment",
+                actionId: "record_observation",
             },
         });
     });
@@ -102,7 +102,7 @@ describe("resolveAiAppReconnectTarget", () => {
         await expect(
             resolveAiAppReconnectTarget(
                 client,
-                { appId: 7, appRevision: 12n, actionId: "record_payment" },
+                { appId: 7, appRevision: 12n, actionId: "record_observation" },
                 CHAT_ID,
             ),
         ).resolves.toEqual({ kind: "app_or_action_unavailable" });
@@ -122,7 +122,7 @@ describe("resolveAiAppReconnectTarget", () => {
         let current = true;
         const pending = resolveAiAppReconnectTarget(
             client,
-            { appId: 7, appRevision: 12n, actionId: "record_payment" },
+            { appId: 7, appRevision: 12n, actionId: "record_observation" },
             CHAT_ID,
             () => current,
         );
@@ -163,7 +163,7 @@ describe("resolveAiAppReconnectTarget", () => {
         await expect(
             resolveAiAppReconnectTarget(
                 client,
-                { appId: 7, appRevision: 12n, actionId: "record_payment" },
+                { appId: 7, appRevision: 12n, actionId: "record_observation" },
                 CHAT_ID,
             ),
         ).resolves.toEqual({ kind: "app_or_action_unavailable" });
@@ -180,7 +180,7 @@ describe("resolveAiAppReconnectTarget", () => {
         await expect(
             resolveAiAppReconnectTarget(
                 client,
-                { appId: 7, appRevision: 12n, actionId: "record_payment" },
+                { appId: 7, appRevision: 12n, actionId: "record_observation" },
                 CHAT_ID,
             ),
         ).rejects.toBe(failure);
@@ -197,7 +197,7 @@ describe("resolveAiAppReconnectTarget", () => {
         await expect(
             resolveAiAppReconnectTarget(
                 client,
-                { appId: 7, appRevision: 12n, actionId: "record_payment" },
+                { appId: 7, appRevision: 12n, actionId: "record_observation" },
                 CHAT_ID,
             ),
         ).rejects.toBe(failure);

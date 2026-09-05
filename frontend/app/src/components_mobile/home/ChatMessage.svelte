@@ -328,7 +328,7 @@
     function promptForExtraction(): ManualExtractionPromptResult {
         if (!manualExtractEnabled()) return undefined;
         const raw = window.prompt(
-            'Enter the action\'s fields as JSON to propose it, e.g. {"amount":20,"currency":"USD"}',
+            "Enter the action's fields as a JSON object, using the field names defined by the app.",
             "{}",
         );
         return parseManualExtractionPrompt(raw, () =>
@@ -442,11 +442,17 @@
     let proposing = $state(false);
     let proposalPhase = $state<ProposalPhase | undefined>(undefined);
     let proposalRequiresModelReadiness = $state(true);
+    let proposalModelInferenceObserved = $state(false);
     let activeAutoProposeSuggestionKey = $state<string | undefined>(undefined);
     let proposalModelGeneration = $derived.by(() => {
         const generation = $webModelStatus.generation;
         if (generation === undefined || generation.stage === "audio") return undefined;
         return { stage: generation.stage, phase: generation.phase };
+    });
+    $effect(() => {
+        if (proposing && proposalModelGeneration?.phase === "inference") {
+            proposalModelInferenceObserved = true;
+        }
     });
     let autoProposeBusyResourceKey = $derived(
         i18nKey(
@@ -456,6 +462,7 @@
                 proposalPhase,
                 proposalRequiresModelReadiness,
                 proposalModelGeneration,
+                proposalModelInferenceObserved,
             ),
         ),
     );
@@ -533,6 +540,7 @@
         (busy) => {
             proposing = busy;
             proposalPhase = busy ? "preparing" : undefined;
+            if (!busy) proposalModelInferenceObserved = false;
         },
     );
 

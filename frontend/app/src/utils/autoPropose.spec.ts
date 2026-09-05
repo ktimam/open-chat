@@ -49,9 +49,9 @@ describe("proposal progress copy", () => {
         expect(autoProposeBusyI18nKey("loaded", true, phase)).toBe(expected);
     });
 
-    it("ignores stale model status for OCR-only image work", () => {
-        expect(autoProposeBusyI18nKey("loading", true, "reading_image", false)).toBe(
-            "aiApps.autoPropose.readingImage",
+    it("shows selected-model loading for OCR-evidence decoding", () => {
+        expect(autoProposeBusyI18nKey("loading", true, "reading_image", true)).toBe(
+            "aiApps.autoPropose.loadingModel",
         );
     });
 
@@ -74,6 +74,27 @@ describe("proposal progress copy", () => {
                 phase: "loading",
             }),
         ).toBe("aiApps.autoPropose.loadingModel");
+    });
+
+    it("keeps staged decoder construction in the active image-processing phase", () => {
+        let inferenceObserved = false;
+        const labels = (["loading", "inference", "loading"] as const).map((phase) => {
+            if (phase === "inference") inferenceObserved = true;
+            return autoProposeBusyI18nKey(
+                "attached",
+                true,
+                "generating",
+                true,
+                { stage: "image", phase },
+                inferenceObserved,
+            );
+        });
+
+        expect(labels).toEqual([
+            "aiApps.autoPropose.loadingModel",
+            "aiApps.autoPropose.processingImage",
+            "aiApps.autoPropose.processingImage",
+        ]);
     });
 });
 
@@ -178,30 +199,30 @@ describe("multi-suggestion labels", () => {
             chatKey: "chat",
             viewerId: "viewer",
             sessionEpoch: 1,
-            title: "Add expense",
+            title: "Add record",
             appRevision: 1n,
         };
         const suggestions = [
-            { ...base, appName: "IOU", appId: 1, actionId: "iou.first" },
-            { ...base, appName: "IOU", appId: 1, actionId: "iou.second" },
+            { ...base, appName: "Notebook", appId: 1, actionId: "notebook.first" },
+            { ...base, appName: "Notebook", appId: 1, actionId: "notebook.second" },
             { ...base, appName: "Tasks", appId: 2, actionId: "tasks.add" },
             { ...base, appName: "Clone", appId: 3, actionId: "same.action" },
             { ...base, appName: "Clone", appId: 4, actionId: "same.action" },
             {
                 ...base,
                 title: "Unique title",
-                appName: "IOU",
+                appName: "Notebook",
                 appId: 1,
-                actionId: "iou.unique",
+                actionId: "notebook.unique",
             },
         ];
 
         expect(suggestions.map((value) => autoProposeSuggestionLabel(value, suggestions))).toEqual([
-            "Add expense · IOU · iou.first",
-            "Add expense · IOU · iou.second",
-            "Add expense · Tasks",
-            "Add expense · Clone · same.action · #3",
-            "Add expense · Clone · same.action · #4",
+            "Add record · Notebook · notebook.first",
+            "Add record · Notebook · notebook.second",
+            "Add record · Tasks",
+            "Add record · Clone · same.action · #3",
+            "Add record · Clone · same.action · #4",
             "Unique title",
         ]);
     });
@@ -215,14 +236,14 @@ describe("auto-propose evaluation identity", () => {
             kind: "group_chat",
             groupId: "multi-suggestion-group",
         };
-        const firstAction = action("First IOU action", 1);
-        const secondAction = action("Second IOU action", 1);
+        const firstAction = action("First Notebook action", 1);
+        const secondAction = action("Second Notebook action", 1);
         const otherAction = action("Other app action", 1);
         const privateAction = action("Private app action", 0);
         const firstApp = {
             id: 101,
             updated: 7n,
-            manifest: { name: "IOU", actions: [firstAction, secondAction] },
+            manifest: { name: "Notebook", actions: [firstAction, secondAction] },
         };
         const otherApp = {
             id: 202,
@@ -278,14 +299,14 @@ describe("auto-propose evaluation identity", () => {
                     {
                         appId: 101,
                         appRevision: 7n,
-                        actionId: "First IOU action",
-                        appName: "IOU",
+                        actionId: "First Notebook action",
+                        appName: "Notebook",
                     },
                     {
                         appId: 101,
                         appRevision: 7n,
-                        actionId: "Second IOU action",
-                        appName: "IOU",
+                        actionId: "Second Notebook action",
+                        appName: "Notebook",
                     },
                     {
                         appId: 202,
@@ -420,13 +441,13 @@ describe("auto-propose evaluation identity", () => {
             kind: "group_chat",
             groupId: "multi-image-group",
         };
-        const firstAction = { ...action("Extract receipt", 0), acceptsImage: true };
+        const firstAction = { ...action("Extract document", 0), acceptsImage: true };
         const textOnlyAction = { ...action("Text only", 0), acceptsImage: false };
         const otherAction = { ...action("Archive image", 0), acceptsImage: true };
         const firstApp = {
             id: 303,
             updated: 10n,
-            manifest: { name: "IOU", actions: [firstAction, textOnlyAction] },
+            manifest: { name: "Notebook", actions: [firstAction, textOnlyAction] },
         };
         const otherApp = {
             id: 404,
@@ -476,8 +497,8 @@ describe("auto-propose evaluation identity", () => {
                     {
                         appId: 303,
                         appRevision: 10n,
-                        actionId: "Extract receipt",
-                        appName: "IOU",
+                        actionId: "Extract document",
+                        appName: "Notebook",
                     },
                     {
                         appId: 404,
@@ -508,13 +529,13 @@ describe("auto-propose evaluation identity", () => {
                 chatKey: "direct_chat:dismiss-other",
                 viewerId: "viewer-dismiss",
                 sessionEpoch,
-                appName: "IOU",
-                title: "Add to IOU",
+                appName: "Notebook",
+                title: "Add to Notebook",
                 appId: 10,
                 appRevision: 3n,
             };
-            const first = { ...shared, actionId: "iou.first" };
-            const second = { ...shared, actionId: "iou.second" };
+            const first = { ...shared, actionId: "notebook.first" };
+            const second = { ...shared, actionId: "notebook.second" };
             const messageKey = autoProposeSuggestionKey("viewer-dismiss", chat, undefined, 9001n);
             autoProposeSuggestions.set(new Map([[messageKey, [first, second]]]) as never);
 
@@ -538,12 +559,12 @@ describe("auto-propose evaluation identity", () => {
         const originalUser = currentUserStore.value;
         const originalEnabled = autoProposeEnabled.value;
         const chat: ChatIdentifier = { kind: "direct_chat", userId: "canonical-other" };
-        const privateAction = action("IOU", 0);
+        const privateAction = action("Notebook", 0);
         const candidate = {
             app: {
                 id: 91,
                 updated: 4n,
-                manifest: { name: "IOU", actions: [privateAction] },
+                manifest: { name: "Notebook", actions: [privateAction] },
             },
             action: privateAction,
         } as never;
@@ -589,7 +610,7 @@ describe("auto-propose evaluation identity", () => {
                 get(autoProposeSuggestions).get(
                     autoProposeSuggestionKey("viewer-canonical", chat, undefined, 7001n),
                 ),
-            ).toMatchObject([{ appId: 91, appRevision: 4n, actionId: "IOU" }]);
+            ).toMatchObject([{ appId: 91, appRevision: 4n, actionId: "Notebook" }]);
             registration.release();
         } finally {
             revokePrivateAutoProposeRuntime();
@@ -604,12 +625,12 @@ describe("auto-propose evaluation identity", () => {
         const originalUser = currentUserStore.value;
         const originalEnabled = autoProposeEnabled.value;
         const chat: ChatIdentifier = { kind: "direct_chat", userId: "activation-aba" };
-        const privateAction = action("IOU ABA", 0);
+        const privateAction = action("Notebook ABA", 0);
         const candidate = {
             app: {
                 id: 92,
                 updated: 1n,
-                manifest: { name: "IOU", actions: [privateAction] },
+                manifest: { name: "Notebook", actions: [privateAction] },
             },
             action: privateAction,
         } as never;

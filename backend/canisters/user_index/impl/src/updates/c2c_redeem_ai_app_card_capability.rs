@@ -49,7 +49,7 @@ fn redeem_impl(args: Args, state: &mut RuntimeState) -> Response {
             )),
         );
     }
-    // The app canister is one shared caller for every IOU user. Invalid-token spam must not
+    // The app canister is one shared caller for every linked app user. Invalid-token spam must not
     // place that caller into a state where an exact, still-valid capability is rejected before
     // it can even be looked up. The token map lookup is bounded/O(1); only failed verdicts enter
     // the caller failure bucket below. Valid capabilities continue through their exact

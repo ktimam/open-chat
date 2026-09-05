@@ -67,18 +67,49 @@ describe("private matcher host protocol", () => {
         currentUserStore.set(ORIGINAL_CURRENT_USER);
     });
 
-    it("accepts ready only for the exact attempt and canonical 48-byte transport key", () => {
+    it("accepts a bounded app-declared key scheme and canonical public key", () => {
         const binding = { frameNonce: b64url(32, 1), attemptId: b64url(16, 2) };
         const ready = {
             type: "oc:private-match:ready",
             version: 1,
             ...binding,
-            recipientKeyScheme: "iou.vetkd.bls12-381.v1",
+            recipientKeyScheme: "example.private_match-v2",
             recipientPublicKey: b64url(48, 3),
         };
+        expect(parsePrivateMatchReady(ready, binding)).toMatchObject({
+            ...binding,
+            recipientKeyScheme: "example.private_match-v2",
+            recipientPublicKey: expect.any(Uint8Array),
+        });
         expect(parsePrivateMatchReady(ready, binding)?.recipientPublicKey).toHaveLength(48);
         expect(parsePrivateMatchReady({ ...ready, attemptId: b64url(16, 9) }, binding)).toBeUndefined();
-        expect(parsePrivateMatchReady({ ...ready, recipientPublicKey: b64url(47, 3) }, binding)).toBeUndefined();
+        expect(parsePrivateMatchReady({ ...ready, recipientKeyScheme: "a" }, binding)?.recipientKeyScheme).toBe(
+            "a",
+        );
+        const maximumScheme = `a${"b".repeat(63)}`;
+        expect(
+            parsePrivateMatchReady({ ...ready, recipientKeyScheme: maximumScheme }, binding)
+                ?.recipientKeyScheme,
+        ).toBe(maximumScheme);
+        expect(
+            parsePrivateMatchReady({ ...ready, recipientPublicKey: b64url(16, 3) }, binding)
+                ?.recipientPublicKey,
+        ).toHaveLength(16);
+        expect(
+            parsePrivateMatchReady({ ...ready, recipientPublicKey: b64url(512, 3) }, binding)
+                ?.recipientPublicKey,
+        ).toHaveLength(512);
+        for (const recipientKeyScheme of [
+            "",
+            "UPPERCASE",
+            ".leading-dot",
+            "contains space",
+            `a${"b".repeat(64)}`,
+        ]) {
+            expect(parsePrivateMatchReady({ ...ready, recipientKeyScheme }, binding)).toBeUndefined();
+        }
+        expect(parsePrivateMatchReady({ ...ready, recipientPublicKey: b64url(15, 3) }, binding)).toBeUndefined();
+        expect(parsePrivateMatchReady({ ...ready, recipientPublicKey: b64url(513, 3) }, binding)).toBeUndefined();
     });
 
     it("accepts a boolean-only result and rejects metadata", () => {
@@ -213,6 +244,7 @@ describe("private matcher host protocol", () => {
             source.indexOf("messageText: exactMessageText"),
         );
         expect(source).not.toContain("BigInt(Date.now())");
+        expect(source).not.toMatch(/[a-z]+\.vetkd\.bls12-381\.v1/);
         expect(source).not.toMatch(/console\.|localStorage|sessionStorage/);
     });
 
@@ -233,7 +265,7 @@ describe("private matcher host protocol", () => {
                 CHAT,
                 undefined,
                 123n,
-                "School expense 350 EGP",
+                "Botanical sample 350 seeds",
                 [value],
                 VIEWER_ID,
                 stillCurrent,
@@ -258,7 +290,7 @@ describe("private matcher host protocol", () => {
                             version: 1,
                             frameNonce: bootstrap.frameNonce,
                             attemptId: bootstrap.attemptId,
-                            recipientKeyScheme: "iou.vetkd.bls12-381.v1",
+                            recipientKeyScheme: "example.private_match-v2",
                             recipientPublicKey: b64url(48, 7),
                         },
                     }),
@@ -309,10 +341,11 @@ describe("private matcher host protocol", () => {
             const capability = new Promise((resolve) => {
                 resolveCapability = resolve;
             });
-            const mintInFlight = vi.fn(() => capability);
+            const mintInFlight = vi.fn((..._args: unknown[]) => capability);
             const inFlight = start(mintInFlight, () => runtimeCurrent);
             inFlight.sendReady();
             expect(mintInFlight).toHaveBeenCalledTimes(1);
+            expect(mintInFlight.mock.calls[0]?.[6]).toBe("example.private_match-v2");
             runtimeCurrent = false;
             resolveCapability({
                 capability: b64url(32, 8),
@@ -328,7 +361,7 @@ describe("private matcher host protocol", () => {
                 ),
             ).toBe(false);
 
-            // An unlinked chat is a definitive false from IOU and never receives exact text.
+            // An app without the required private context returns false and never receives exact text.
             const unlinked = start(
                 vi.fn().mockResolvedValue({
                     capability: b64url(32, 11),
@@ -380,7 +413,7 @@ describe("private matcher host protocol", () => {
             ).toBe(false);
 
             // An extreme browser clock skew must not reject a canister-valid capability locally,
-            // but exact source text must still wait for the linked IOU frame to request it.
+            // but exact source text must still wait for the authorized app frame to request it.
             const skewedMint = vi.fn().mockResolvedValue({
                 capability: b64url(32, 9),
                 expiresAt: 1n,
@@ -415,7 +448,7 @@ describe("private matcher host protocol", () => {
                         ([message]) =>
                             (message as { type?: string }).type === "oc:private-match:source" &&
                             (message as { messageText?: string }).messageText ===
-                                "School expense 350 EGP",
+                                "Botanical sample 350 seeds",
                     ),
                 ).toBe(true),
             );

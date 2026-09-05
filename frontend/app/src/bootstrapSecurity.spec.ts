@@ -116,9 +116,17 @@ describe("application bootstrap security", () => {
         expect(viteConfig).not.toContain("allowedHosts: true");
     });
 
-    test("keeps mobile icons on the application's initialized Svelte runtime", () => {
-        expect(viteConfig).toMatch(
-            /optimizeDeps:\s*\{[\s\S]*?exclude:\s*\["svelte-material-icons"\]/,
+    test("keeps Svelte component dependencies on the application's initialized runtime", () => {
+        const exclusionList = /optimizeDeps:\s*\{[\s\S]*?exclude:\s*\[([^\]]*)\]/.exec(
+            viteConfig,
+        )?.[1];
+        expect(exclusionList).toBeDefined();
+        const excludedPackages = Array.from(
+            exclusionList?.matchAll(/["']([^"']+)["']/g) ?? [],
+            ([, packageName]) => packageName,
+        );
+        expect(excludedPackages).toEqual(
+            expect.arrayContaining(["component-lib", "svelte-material-icons"]),
         );
     });
 

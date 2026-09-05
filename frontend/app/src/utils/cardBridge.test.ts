@@ -183,8 +183,8 @@ describe("full-card content attestation", () => {
         const forged = {
             appVerified: true,
             title: "Trusted-looking title",
-            rows: [{ label: "Amount", value: "1" }],
-            confirmPayload: new TextEncoder().encode('{"amount":999}'),
+            rows: [{ label: "Quantity", value: "1" }],
+            confirmPayload: new TextEncoder().encode('{"quantity":999}'),
         };
         expect(isAppCardContentAttested(forged)).toBe(false);
         expect(isAppCardContentAttested({ ...forged, appContentVerified: false })).toBe(false);
@@ -233,9 +233,9 @@ describe("decodeConfirmPayload", () => {
     const enc = (o: unknown) => new TextEncoder().encode(JSON.stringify(o));
 
     test("decodes a JSON object", () => {
-        expect(decodeConfirmPayload(enc({ amount: 20, currency: "USD" }))).toEqual({
-            amount: 20,
-            currency: "USD",
+        expect(decodeConfirmPayload(enc({ quantity: 20, material: "wood" }))).toEqual({
+            quantity: 20,
+            material: "wood",
         });
     });
     test("empty / absent bytes -> {}", () => {
@@ -249,17 +249,17 @@ describe("decodeConfirmPayload", () => {
         expect(
             decodeConfirmPayload(
                 enc([
-                    { amount: 25, note: "first" },
-                    { amount: 10, note: "second" },
+                    { quantity: 25, description: "first" },
+                    { quantity: 10, description: "second" },
                 ]),
             ),
         ).toEqual({
             entries: [
-                { amount: 25, note: "first" },
-                { amount: 10, note: "second" },
+                { quantity: 25, description: "first" },
+                { quantity: 10, description: "second" },
             ],
         });
-        expect(decodeConfirmPayload(enc([1, { amount: 10 }]))).toEqual({});
+        expect(decodeConfirmPayload(enc([1, { quantity: 10 }]))).toEqual({});
     });
 });
 
@@ -276,10 +276,10 @@ describe("isRecord", () => {
 
 describe("isCardConfirmPayload", () => {
     test("accepts only object or array payloads", () => {
-        expect(isCardConfirmPayload({ amount: 1 })).toBe(true);
-        expect(isCardConfirmPayload([{ amount: 1 }])).toBe(true);
+        expect(isCardConfirmPayload({ quantity: 1 })).toBe(true);
+        expect(isCardConfirmPayload([{ quantity: 1 }])).toBe(true);
         expect(isCardConfirmPayload(undefined)).toBe(false);
-        expect(isCardConfirmPayload('{"amount":1}')).toBe(false);
+        expect(isCardConfirmPayload('{"quantity":1}')).toBe(false);
         expect(isCardConfirmPayload(null)).toBe(false);
     });
 });
@@ -306,12 +306,12 @@ describe("buildCardInit", () => {
                 },
             },
         };
-        const init = buildCardInit({ amount: 5 }, context, "nonce-1");
+        const init = buildCardInit({ quantity: 5 }, context, "nonce-1");
         expect(init).toEqual({
             type: "oc:card:init",
             version: 2,
             frameNonce: "nonce-1",
-            data: { amount: 5 },
+            data: { quantity: 5 },
             context,
         });
 
@@ -349,7 +349,7 @@ describe("buildCardInit", () => {
         );
 
         expect(() => structuredClone(proxiedContext)).toThrow();
-        const init = buildCardInit({ amount: 5 }, proxiedContext, "nonce-1");
+        const init = buildCardInit({ quantity: 5 }, proxiedContext, "nonce-1");
         expect(() => structuredClone(init)).not.toThrow();
         expect(init.context).not.toBe(proxiedContext);
         expect(init.context).toEqual(proxiedContext);
@@ -445,10 +445,10 @@ describe("private card-context handshake", () => {
         const privateValue = "Confidential sample";
         const publicData = reverseMapRows(
             [
-                { label: "Amount", value: "350" },
-                { label: "Currency", value: "USD" },
+                { label: "Quantity", value: "350" },
+                { label: "Material", value: "wood" },
             ],
-            { Amount: "amount", Currency: "currency" },
+            { Quantity: "quantity", Material: "material" },
         );
         const context: CardInitContext = {
             appId: 7,
@@ -703,14 +703,14 @@ describe("host-owned card approval", () => {
     });
 
     test("copies and freezes a JSON-only confirm payload", () => {
-        const source = { amount: 5, rows: [{ note: "rent" }] };
+        const source = { quantity: 5, rows: [{ description: "leaf" }] };
         const snapshot = snapshotCardConfirmPayload(source)!;
         expect(snapshot).toEqual(source);
         expect(Object.isFrozen(snapshot)).toBe(true);
         expect(Object.isFrozen((snapshot as typeof source).rows[0])).toBe(true);
-        source.amount = 99;
-        source.rows[0].note = "mutated";
-        expect(snapshot).toEqual({ amount: 5, rows: [{ note: "rent" }] });
+        source.quantity = 99;
+        source.rows[0].description = "mutated";
+        expect(snapshot).toEqual({ quantity: 5, rows: [{ description: "leaf" }] });
     });
 
     test("encodes the exact frozen payload bytes used for the final grant and response", () => {
@@ -719,12 +719,12 @@ describe("host-owned card approval", () => {
                 type: "oc:card:confirm",
                 version: 2,
                 frameNonce: "n",
-                payload: { amount: 5, nested: ["one", 2] },
+                payload: { quantity: 5, nested: ["one", 2] },
             },
             "n",
         )!;
         expect(new TextDecoder().decode(encodeCardConfirmPayload(request))).toBe(
-            '{"amount":5,"nested":["one",2]}',
+            '{"quantity":5,"nested":["one",2]}',
         );
     });
 
@@ -741,7 +741,7 @@ describe("host-owned card approval", () => {
         const binding = {
             frameNonce: "nonce-a",
             cardKey,
-            confirmPayload: new TextEncoder().encode('{"amount":5}'),
+            confirmPayload: new TextEncoder().encode('{"quantity":5}'),
         };
         const attempt = beginCardConfirmationAttempt(undefined, binding)!;
         expect(beginCardConfirmationAttempt(attempt, binding)).toBeUndefined();
@@ -749,7 +749,7 @@ describe("host-owned card approval", () => {
         expect(
             cardConfirmationAttemptStillCurrent(
                 attempt,
-                { ...binding, confirmPayload: new TextEncoder().encode('{"amount":6}') },
+                { ...binding, confirmPayload: new TextEncoder().encode('{"quantity":6}') },
                 true,
             ),
         ).toBe(false);
@@ -835,10 +835,10 @@ describe("host-owned card approval", () => {
             version: 2,
             frameNonce: "frame-a",
             requestNonce: "request-a",
-            payload: { amount: 5, opaque_ref: "opaque" },
+            payload: { quantity: 5, opaque_ref: "opaque" },
         };
         expect(cardCollectedConfirmFromMessage(message, "frame-a", "request-a")).toEqual({
-            amount: 5,
+            quantity: 5,
             opaque_ref: "opaque",
         });
         expect(
@@ -924,10 +924,10 @@ describe("host-owned card approval", () => {
 
     test("turns iframe messages into requests, never approval", () => {
         const request = cardApprovalRequestFromMessage(
-            { type: "oc:card:confirm", version: 2, frameNonce: "n", payload: { amount: 5 } },
+            { type: "oc:card:confirm", version: 2, frameNonce: "n", payload: { quantity: 5 } },
             "n",
         );
-        expect(request).toEqual({ kind: "confirm", payload: { amount: 5 } });
+        expect(request).toEqual({ kind: "confirm", payload: { quantity: 5 } });
         expect(
             cardApprovalRequestFromMessage(
                 { type: "oc:card:cancel", version: 2, frameNonce: "n" },
@@ -955,7 +955,7 @@ describe("host-owned card approval", () => {
                         type: "oc:card:confirm",
                         version,
                         frameNonce: "n",
-                        payload: { amount: 5 },
+                        payload: { quantity: 5 },
                     },
                     "n",
                 ),
@@ -993,7 +993,7 @@ describe("host-owned card approval", () => {
     });
 
     test("requires actionable state, idle host, and disclosure acknowledgement", () => {
-        const request = { kind: "confirm", payload: { amount: 5 } } as const;
+        const request = { kind: "confirm", payload: { quantity: 5 } } as const;
         expect(canApproveCardRequest(request, true, false, false, false)).toBe(true);
         expect(canApproveCardRequest(request, false, false, false, false)).toBe(false);
         expect(canApproveCardRequest(request, true, true, false, false)).toBe(false);
@@ -1026,7 +1026,7 @@ describe("host-owned card approval", () => {
                 type: "oc:card:confirm",
                 version: 2,
                 frameNonce: "n",
-                payload: { [`amount\u202e":"999`]: `12\u200b34`, note: "safe" },
+                payload: { [`quantity\u202e":"999`]: `12\u200b34`, description: "safe" },
             },
             "n",
         )!;
@@ -1144,33 +1144,33 @@ describe("card bootstrap retry", () => {
 describe("reverseMapRows", () => {
     // The manifest card template's label -> field-key map (client-side card.rows use `valueKey`).
     const fieldMap: Record<string, string> = {
-        Amount: "amount",
-        Currency: "currency",
-        Direction: "direction",
-        Note: "note",
+        Quantity: "quantity",
+        Material: "material",
+        Location: "location",
+        Description: "description",
     };
 
     test("joins hydrated {label,value} rows onto field keys", () => {
         const rows = [
-            { label: "Amount", value: "350" },
-            { label: "Currency", value: "EGP" },
-            { label: "Direction", value: "credit" },
-            { label: "Note", value: "lunch" },
+            { label: "Quantity", value: "350" },
+            { label: "Material", value: "paper" },
+            { label: "Location", value: "indoor" },
+            { label: "Description", value: "seeds" },
         ];
         expect(reverseMapRows(rows, fieldMap)).toEqual({
-            amount: "350",
-            currency: "EGP",
-            direction: "credit",
-            note: "lunch",
+            quantity: "350",
+            material: "paper",
+            location: "indoor",
+            description: "seeds",
         });
     });
 
     test("drops unmatched labels rather than inventing untrusted object keys", () => {
         const rows = [
-            { label: "Amount", value: "10" },
+            { label: "Quantity", value: "10" },
             { label: "Mystery Field", value: "x" },
         ];
-        expect(reverseMapRows(rows, fieldMap)).toEqual({ amount: "10" });
+        expect(reverseMapRows(rows, fieldMap)).toEqual({ quantity: "10" });
     });
 
     test("empty rows -> {}", () => {
@@ -1179,24 +1179,24 @@ describe("reverseMapRows", () => {
     });
 
     test("empty map -> no untrusted keys", () => {
-        expect(reverseMapRows([{ label: "Amount", value: "5" }], {})).toEqual({});
+        expect(reverseMapRows([{ label: "Quantity", value: "5" }], {})).toEqual({});
     });
 
     test("ignores reserved legacy rows without treating their values as app data", () => {
         const rows = [
-            { label: "Amount", value: "10" },
+            { label: "Quantity", value: "10" },
             { label: "__oc_reserved__", value: "untrusted legacy value" },
         ];
-        expect(reverseMapRows(rows, fieldMap)).toEqual({ amount: "10" });
+        expect(reverseMapRows(rows, fieldMap)).toEqual({ quantity: "10" });
     });
 
     test("requires own safe mappings and returns a null-prototype result", () => {
-        const inheritedMap = Object.create({ Amount: "amount" }) as Record<string, string>;
-        inheritedMap.Note = "__proto__";
+        const inheritedMap = Object.create({ Quantity: "quantity" }) as Record<string, string>;
+        inheritedMap.Description = "__proto__";
         const result = reverseMapRows(
             [
-                { label: "Amount", value: "10" },
-                { label: "Note", value: "pollute" },
+                { label: "Quantity", value: "10" },
+                { label: "Description", value: "pollute" },
             ],
             inheritedMap,
         );
@@ -1209,17 +1209,17 @@ describe("reverseMapRows", () => {
         expect(
             completelyReverseMapRows(
                 [
-                    { label: "Amount", value: "350" },
-                    { label: "Currency", value: "EGP" },
+                    { label: "Quantity", value: "350" },
+                    { label: "Material", value: "paper" },
                 ],
                 fieldMap,
             ),
-        ).toEqual({ amount: "350", currency: "EGP" });
+        ).toEqual({ quantity: "350", material: "paper" });
         expect(
             completelyReverseMapRows(
                 [
-                    { label: "Entry 1", value: "Settlement · 350 EGP" },
-                    { label: "Entry 2", value: "Charge · 20 EGP" },
+                    { label: "Entry 1", value: "Sample · 350 paper" },
+                    { label: "Entry 2", value: "Specimen · 20 paper" },
                 ],
                 fieldMap,
             ),
@@ -1227,10 +1227,10 @@ describe("reverseMapRows", () => {
         expect(
             completelyReverseMapRows(
                 [
-                    { label: "Amount", value: "350" },
+                    { label: "Quantity", value: "350" },
                     { label: "Total", value: "350" },
                 ],
-                { Amount: "amount", Total: "amount" },
+                { Quantity: "quantity", Total: "quantity" },
             ),
         ).toBeUndefined();
     });
@@ -1252,7 +1252,7 @@ describe("reverseMapRows", () => {
         ).toBe(true);
         expect(isMultiEntrySummaryRows([{ label: "Entry 1" }])).toBe(false);
         expect(isMultiEntrySummaryRows([{ label: "Entry 1" }, { label: "Entry 3" }])).toBe(false);
-        expect(isMultiEntrySummaryRows([{ label: "Entry 1" }, { label: "Amount" }])).toBe(false);
+        expect(isMultiEntrySummaryRows([{ label: "Entry 1" }, { label: "Quantity" }])).toBe(false);
     });
 
     test("losslessly reconstructs canonical multi-entry summaries for editable app cards", () => {
@@ -1261,49 +1261,49 @@ describe("reverseMapRows", () => {
                 [
                     {
                         label: "Entry 1",
-                        value: "Amount: 200 · Currency: EGP · Type: iou · Direction: credit · Note: uber",
+                        value: "Quantity: 200 · Material: paper · Type: specimen · Location: indoor · Description: fern",
                     },
                     {
                         label: "Entry 2",
-                        value: "Amount: 400 · Type: settlement · Direction: debt · Date: 2026-08-10 · Note: food",
+                        value: "Quantity: 400 · Type: sample · Location: outdoor · Observed: 2026-08-10 · Description: moss",
                     },
                 ],
                 {
-                    Amount: "amount",
-                    Currency: "currency",
+                    Quantity: "quantity",
+                    Material: "material",
                     Type: "kind",
-                    Direction: "direction",
-                    Date: "date",
-                    Note: "note",
+                    Location: "location",
+                    Observed: "observedAt",
+                    Description: "description",
                 },
             ),
         ).toEqual({
             entries: [
                 {
-                    amount: "200",
-                    currency: "EGP",
-                    kind: "iou",
-                    direction: "credit",
-                    note: "uber",
+                    quantity: "200",
+                    material: "paper",
+                    kind: "specimen",
+                    location: "indoor",
+                    description: "fern",
                 },
                 {
-                    amount: "400",
-                    kind: "settlement",
-                    direction: "debt",
-                    date: "2026-08-10",
-                    note: "food",
+                    quantity: "400",
+                    kind: "sample",
+                    location: "outdoor",
+                    observedAt: "2026-08-10",
+                    description: "moss",
                 },
             ],
         });
     });
 
     test("rejects ambiguous, reordered, duplicate, and non-canonical multi summaries", () => {
-        const map = { Amount: "amount", Type: "kind", Note: "note" };
+        const map = { Quantity: "quantity", Type: "kind", Description: "description" };
         expect(
             completelyReverseMapMultiRows(
                 [
-                    { label: "Entry 1", value: "Amount: 200 · Note: safe" },
-                    { label: "Entry 2", value: "Amount: 300 · Note: text · Type: iou" },
+                    { label: "Entry 1", value: "Quantity: 200 · Description: safe" },
+                    { label: "Entry 2", value: "Quantity: 300 · Description: text · Type: specimen" },
                 ],
                 map,
             ),
@@ -1311,8 +1311,8 @@ describe("reverseMapRows", () => {
         expect(
             completelyReverseMapMultiRows(
                 [
-                    { label: "Entry 1", value: "Amount: 200 · Amount: 300" },
-                    { label: "Entry 2", value: "Amount: 400" },
+                    { label: "Entry 1", value: "Quantity: 200 · Quantity: 300" },
+                    { label: "Entry 2", value: "Quantity: 400" },
                 ],
                 map,
             ),
@@ -1320,8 +1320,8 @@ describe("reverseMapRows", () => {
         expect(
             completelyReverseMapMultiRows(
                 [
-                    { label: "Entry 1", value: "Settlement · 200 EGP" },
-                    { label: "Entry 2", value: "Charge · 400 EGP" },
+                    { label: "Entry 1", value: "Sample · 200 paper" },
+                    { label: "Entry 2", value: "Specimen · 400 paper" },
                 ],
                 map,
             ),
@@ -1332,18 +1332,18 @@ describe("reverseMapRows", () => {
         expect(
             completelyReverseMapRows(
                 [
-                    { label: "Amount", value: "10" },
+                    { label: "Quantity", value: "10" },
                     { label: "__oc_reserved__", value: "not app data" },
                 ],
                 fieldMap,
             ),
-        ).toEqual({ amount: "10" });
-        const inheritedMap = Object.create({ Amount: "amount" }) as Record<string, string>;
+        ).toEqual({ quantity: "10" });
+        const inheritedMap = Object.create({ Quantity: "quantity" }) as Record<string, string>;
         expect(
-            completelyReverseMapRows([{ label: "Amount", value: "10" }], inheritedMap),
+            completelyReverseMapRows([{ label: "Quantity", value: "10" }], inheritedMap),
         ).toBeUndefined();
         expect(
-            completelyReverseMapRows([{ label: "Amount", value: "10" }], { Amount: "__proto__" }),
+            completelyReverseMapRows([{ label: "Quantity", value: "10" }], { Quantity: "__proto__" }),
         ).toBeUndefined();
     });
 });
@@ -1351,13 +1351,13 @@ describe("reverseMapRows", () => {
 describe("visibleRows (classic fallback fail-closed filter)", () => {
     test("drops reserved legacy rows without parsing them, and keeps human rows in order", () => {
         const rows = [
-            { label: "Amount", value: "350" },
+            { label: "Quantity", value: "350" },
             { label: "__oc_reserved__", value: "untrusted legacy value" },
-            { label: "Currency", value: "EGP" },
+            { label: "Material", value: "paper" },
         ];
         expect(visibleRows(rows)).toEqual([
-            { label: "Amount", value: "350" },
-            { label: "Currency", value: "EGP" },
+            { label: "Quantity", value: "350" },
+            { label: "Material", value: "paper" },
         ]);
     });
 
@@ -1365,13 +1365,13 @@ describe("visibleRows (classic fallback fail-closed filter)", () => {
         expect(
             visibleRows([
                 { label: "__oc_future_control__", value: "x" },
-                { label: "Note", value: "n" },
+                { label: "Description", value: "n" },
             ]),
-        ).toEqual([{ label: "Note", value: "n" }]);
+        ).toEqual([{ label: "Description", value: "n" }]);
     });
 
     test("passes ordinary rows through unchanged, and [] -> []", () => {
-        const rows = [{ label: "Amount", value: "1" }];
+        const rows = [{ label: "Quantity", value: "1" }];
         expect(visibleRows(rows)).toEqual(rows);
         expect(visibleRows([])).toEqual([]);
     });

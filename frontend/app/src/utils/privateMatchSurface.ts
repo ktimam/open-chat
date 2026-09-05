@@ -2,10 +2,10 @@
 //
 // Each attempt gets a fresh credentialless, no-referrer, opaque-origin iframe,
 // exact WindowProxy binding, random document nonce, random attempt id and a
-// frame-generated vetKD transport key. OpenChat first mints a
+// frame-generated transport public key. OpenChat first mints a
 // message/app/action/key-bound one-use capability; the exact source text crosses
-// only after IOU redeems it and proves that chat already has a durable sheet
-// link. The only accepted response is a boolean.
+// only after the app redeems it and proves the chat has the required durable
+// private context. The only accepted response is a boolean.
 
 import { currentUserIdStore, type ChatIdentifier, type OpenChat } from "@client";
 import type { AiActionCandidate } from "./aiActionRunner";
@@ -22,7 +22,9 @@ export const MAX_ACTIVE_PRIVATE_MATCH_OPERATIONS = 8;
 const PRIVATE_MATCH_RETRY_BACKOFF_MS = 250;
 const MAX_PRIVATE_MATCH_TEXT_BYTES = 32 * 1024;
 const VERSION = 1;
-const KEY_SCHEME = "iou.vetkd.bls12-381.v1";
+const RECIPIENT_KEY_SCHEME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+const MIN_RECIPIENT_PUBLIC_KEY_BYTES = 16;
+const MAX_RECIPIENT_PUBLIC_KEY_BYTES = 512;
 
 const MSG = {
     bootstrap: "oc:private-match:bootstrap",
@@ -77,7 +79,11 @@ function base64Url(bytes: Uint8Array): string {
         .replace(/=+$/, "");
 }
 
-function decodeCanonicalBase64Url(value: unknown, bytes: number): Uint8Array | undefined {
+function decodeCanonicalBase64Url(
+    value: unknown,
+    minimumBytes: number,
+    maximumBytes: number = minimumBytes,
+): Uint8Array | undefined {
     if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/.test(value)) return undefined;
     try {
         const padding = "=".repeat((4 - (value.length % 4)) % 4);
@@ -85,7 +91,11 @@ function decodeCanonicalBase64Url(value: unknown, bytes: number): Uint8Array | u
             atob(value.replace(/-/g, "+").replace(/_/g, "/") + padding),
             (character) => character.charCodeAt(0),
         );
-        return decoded.length === bytes && base64Url(decoded) === value ? decoded : undefined;
+        return decoded.length >= minimumBytes &&
+            decoded.length <= maximumBytes &&
+            base64Url(decoded) === value
+            ? decoded
+            : undefined;
     } catch {
         return undefined;
     }
@@ -101,6 +111,7 @@ function randomBinding(bytes: number): string {
 export type PrivateMatchFrameBinding = { frameNonce: string; attemptId: string };
 
 export type PrivateMatchReady = PrivateMatchFrameBinding & {
+    recipientKeyScheme: string;
     recipientPublicKey: Uint8Array;
 };
 
@@ -114,12 +125,19 @@ export function parsePrivateMatchReady(
         value.version !== VERSION ||
         value.frameNonce !== expected.frameNonce ||
         value.attemptId !== expected.attemptId ||
-        value.recipientKeyScheme !== KEY_SCHEME
+        typeof value.recipientKeyScheme !== "string" ||
+        !RECIPIENT_KEY_SCHEME.test(value.recipientKeyScheme)
     ) {
         return undefined;
     }
-    const recipientPublicKey = decodeCanonicalBase64Url(value.recipientPublicKey, 48);
-    return recipientPublicKey === undefined ? undefined : { ...expected, recipientPublicKey };
+    const recipientPublicKey = decodeCanonicalBase64Url(
+        value.recipientPublicKey,
+        MIN_RECIPIENT_PUBLIC_KEY_BYTES,
+        MAX_RECIPIENT_PUBLIC_KEY_BYTES,
+    );
+    return recipientPublicKey === undefined
+        ? undefined
+        : { ...expected, recipientKeyScheme: value.recipientKeyScheme, recipientPublicKey };
 }
 
 export function parsePrivateMatchResult(
@@ -272,7 +290,7 @@ async function matchOne(
                         candidate.app.id,
                         candidate.app.updated,
                         candidate.action.name,
-                        KEY_SCHEME,
+                        ready.recipientKeyScheme,
                         ready.recipientPublicKey,
                     )
                     .then((capability) => {
@@ -300,7 +318,7 @@ async function matchOne(
                             return;
                         }
                         authorizeSent = true;
-                        // Authorization carries no source text. The IOU frame must redeem it and
+                        // Authorization carries no source text. The app frame must redeem it and
                         // prove this exact chat has a durable sheet link before requesting text.
                         frameWindow.postMessage(
                             {
@@ -337,8 +355,8 @@ async function matchOne(
                     return;
                 }
                 sourceSent = true;
-                // This is the only exact-text egress point, reached only after IOU proved the chat
-                // link and loaded that linked sheet's encrypted Trigger-word roster.
+                // This is the only exact-text egress point, reached only after the app proved the
+                // required chat-bound private context is available.
                 frameWindow.postMessage(
                     {
                         type: MSG.source,

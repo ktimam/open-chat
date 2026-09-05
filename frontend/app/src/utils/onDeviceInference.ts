@@ -11,11 +11,6 @@ import {
     listLocalModels,
 } from "tauri-plugin-oc-api";
 import { selectedModelId } from "../stores/onDeviceModels";
-import {
-    browserUsesLocalReaderOnly,
-    browserUsesModelWithLocalVerification,
-} from "../stores/browserImageActionMode";
-import { browserOcrAvailable } from "./browserOcr";
 import { prepareImageRegionForInference } from "./inferenceImage";
 import {
     defaultModelCatalog,
@@ -106,14 +101,9 @@ export async function onDeviceInferenceReadiness(): Promise<OnDeviceInferenceRea
     if (usesWebInferenceRuntime()) {
         await ensureWebModelRestored();
         const ready = webInferenceReadyForClient();
-        const localReaderReady =
-            browserOcrAvailable() &&
-            (!isNativeClient() ||
-                (transformersWebGpuClientEnabled() &&
-                    (browserUsesLocalReaderOnly() || browserUsesModelWithLocalVerification())));
         return {
-            available: ready || localReaderReady,
-            ...(isNativeClient() && !ready && !localReaderReady
+            available: ready,
+            ...(isNativeClient() && !ready
                 ? { reason: "no accelerated on-device model selected" }
                 : {}),
         };

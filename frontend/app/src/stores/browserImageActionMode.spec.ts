@@ -80,19 +80,19 @@ describe("browser image action mode", () => {
         expect(localStorage.getItem(STORAGE_KEY)).toBe("model_only");
     });
 
-    it("skips the outer model readiness gate for browser images with a local recovery path", async () => {
+    it("keeps OCR-only image actions model-free in the browser and Android", async () => {
         const { browserImageActionMode, browserImageProposalRequiresModelReadiness } =
             await import("./browserImageActionMode");
 
         browserImageActionMode.set("local_reader_only");
         expect(browserImageProposalRequiresModelReadiness(true, false)).toBe(false);
         expect(browserImageProposalRequiresModelReadiness(false, false)).toBe(true);
-        expect(browserImageProposalRequiresModelReadiness(true, true)).toBe(true);
+        expect(browserImageProposalRequiresModelReadiness(true, true)).toBe(false);
 
         browserImageActionMode.set("model_only");
         expect(browserImageProposalRequiresModelReadiness(true, false)).toBe(true);
 
         browserImageActionMode.set("model_with_local_verification");
-        expect(browserImageProposalRequiresModelReadiness(true, false)).toBe(false);
+        expect(browserImageProposalRequiresModelReadiness(true, false)).toBe(true);
     });
 });

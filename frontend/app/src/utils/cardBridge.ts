@@ -439,9 +439,9 @@ export function supportsCredentiallessIframe(framePrototype?: object): boolean {
 }
 
 // Decode the card's frozen confirmPayload (opaque JSON bytes) into the iframe's prefill object.
-// A single action is already an object. A verified sender's multi-action payload is a top-level
-// array, while the IOU iframe's explicit multi mode expects `{ entries: [...] }`; wrap only a
-// non-empty all-object array. Mixed/scalar arrays fail closed instead of seeding partial rows.
+// A single action is already an object. The version-1 multi-action iframe contract wraps a
+// top-level array as `{ entries: [...] }`; wrap only a non-empty all-object array. Mixed/scalar
+// arrays fail closed instead of seeding partial rows.
 // Received cards do not hydrate this send-only payload and therefore normally use public rows.
 export function decodeConfirmPayload(bytes?: Uint8Array): Record<string, unknown> {
     if (bytes === undefined || bytes.byteLength === 0) return {};

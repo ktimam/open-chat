@@ -23,12 +23,12 @@
         {
             value: "model_with_local_verification",
             title: "Model + local verification",
-            detail: "Local OCR reads the image first and remains authoritative. After a complete read, the selected all-WebGPU image model checks only bounded private OCR evidence; it does not receive the original image in this mode. A mismatch or incomplete read stops the proposal. If model verification cannot finish, only the complete source-grounded OCR card is returned.",
+            detail: "The model reads the image and separately reads locally recognized text. The app normalizes both readings before they are compared. Conflicting values or an incomplete read stop the proposal.",
         },
         {
             value: "local_reader_only",
-            title: "Local reader (OCR) only",
-            detail: "Only local OCR and the source-grounded parser run. The selected model is never invoked, even when local reading is incomplete or unavailable.",
+            title: "OCR only",
+            detail: "Reads text locally, then lets the app's own parser prepare the action. No downloaded model is needed. Available for apps that support local reading.",
         },
     ];
 
@@ -36,8 +36,8 @@
         if (changing || mode === $browserImageActionMode) return;
         readinessError = "";
         browserImageActionMode.set(mode);
-        // Verification must not pre-load the image runtime: OCR may stop the request before any
-        // model work, and model verification receives only bounded private text evidence.
+        // OCR-only has no model readiness requirement. The proposal runner checks both model
+        // capabilities for verification; only direct image mode uses this eager runtime probe.
         if (mode !== "model_only") return;
 
         changing = true;

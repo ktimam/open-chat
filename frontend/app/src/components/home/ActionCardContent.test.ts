@@ -42,7 +42,7 @@ const RESOLVED_APP = {
         surface: { kind: "card", url: CARD_URL, display: "sheet" },
         url: CARD_URL,
         dataDisclosures: [],
-        labelToField: { Amount: "amount" },
+        labelToField: { Quantity: "quantity" },
     },
 };
 
@@ -50,7 +50,7 @@ function card(overrides: Partial<ActionCardContent> = {}): ActionCardContent {
     return {
         kind: "action_card_content",
         title: "Add entry",
-        rows: [{ label: "Amount", value: "25" }],
+        rows: [{ label: "Quantity", value: "25" }],
         confirmLabel: "Add",
         cancelLabel: "Cancel",
         actionId: "generic.entry.add",
@@ -58,7 +58,7 @@ function card(overrides: Partial<ActionCardContent> = {}): ActionCardContent {
         appRevision: APP_REVISION,
         appVerified: true,
         appContentVerified: true,
-        confirmPayload: new TextEncoder().encode('{"amount":25}'),
+        confirmPayload: new TextEncoder().encode('{"quantity":25}'),
         state: "pending",
         ...overrides,
     };
@@ -706,10 +706,10 @@ describe("action-card external surface load consent", () => {
             card({
                 title: "Add 2 entries",
                 rows: [
-                    { label: "Entry 1", value: "Settlement · 25 EGP" },
-                    { label: "Entry 2", value: "Charge · 10 EGP" },
+                    { label: "Entry 1", value: "Sample · 25 paper" },
+                    { label: "Entry 2", value: "Specimen · 10 paper" },
                 ],
-                confirmPayload: new TextEncoder().encode('[{"amount":25},{"amount":10}]'),
+                confirmPayload: new TextEncoder().encode('[{"quantity":25},{"quantity":10}]'),
             }),
             messageId,
             GROUP,
@@ -728,7 +728,7 @@ describe("action-card external surface load consent", () => {
             const init = (postMessage.mock.calls as unknown[][])
                 .map(([message]) => message as { type?: string; data?: unknown })
                 .find((message) => message.type === "oc:card:init");
-            expect(init?.data).toEqual({ entries: [{ amount: 25 }, { amount: 10 }] });
+            expect(init?.data).toEqual({ entries: [{ quantity: 25 }, { quantity: 10 }] });
 
             await vi.waitFor(() => expect(buttonNamed(view.target, "Add")?.disabled).toBe(false));
             buttonNamed(view.target, "Add")?.click();
@@ -743,8 +743,8 @@ describe("action-card external surface load consent", () => {
                 (message) => message.type === "oc:card:collect-confirm",
             );
             const editedPayload = [
-                { amount: 26, note: "edited first" },
-                { amount: 11, note: "edited second" },
+                { quantity: 26, description: "edited first" },
+                { quantity: 11, description: "edited second" },
             ];
             dispatchFromCardFrame(ready.iframe, {
                 type: "oc:card:confirm-collected",
@@ -786,26 +786,26 @@ describe("action-card external surface load consent", () => {
             cardSurface: {
                 ...RESOLVED_APP.cardSurface,
                 labelToField: {
-                    Amount: "amount",
-                    Currency: "currency",
+                    Quantity: "quantity",
+                    Material: "material",
                     Type: "kind",
-                    Direction: "direction",
-                    Date: "date",
-                    Note: "note",
+                    Location: "location",
+                    Observed: "observedAt",
+                    Description: "description",
                 },
             },
         });
         const view = await mountCard(
             card({
-                title: "Add to IOU (2 entries)",
+                title: "Add to Notebook (2 entries)",
                 rows: [
                     {
                         label: "Entry 1",
-                        value: "Amount: 200 · Type: iou · Direction: credit · Note: uber",
+                        value: "Quantity: 200 · Type: specimen · Location: indoor · Description: fern",
                     },
                     {
                         label: "Entry 2",
-                        value: "Amount: 400 · Currency: EGP · Type: settlement · Direction: debt · Note: food",
+                        value: "Quantity: 400 · Material: paper · Type: sample · Location: outdoor · Description: moss",
                     },
                 ],
                 confirmPayload: undefined,
@@ -826,13 +826,13 @@ describe("action-card external surface load consent", () => {
                 .find((message) => message.type === "oc:card:init");
             expect(init?.data).toEqual({
                 entries: [
-                    { amount: "200", kind: "iou", direction: "credit", note: "uber" },
+                    { quantity: "200", kind: "specimen", location: "indoor", description: "fern" },
                     {
-                        amount: "400",
-                        currency: "EGP",
-                        kind: "settlement",
-                        direction: "debt",
-                        note: "food",
+                        quantity: "400",
+                        material: "paper",
+                        kind: "sample",
+                        location: "outdoor",
+                        description: "moss",
                     },
                 ],
             });
@@ -851,13 +851,13 @@ describe("action-card external surface load consent", () => {
                 (message) => message.type === "oc:card:collect-confirm",
             );
             const editedPayload = [
-                { amount: 210, kind: "iou", direction: "credit", note: "edited uber" },
+                { quantity: 210, kind: "specimen", location: "indoor", description: "edited fern" },
                 {
-                    amount: 410,
-                    currency: "EGP",
-                    kind: "settlement",
-                    direction: "debt",
-                    note: "edited food",
+                    quantity: 410,
+                    material: "paper",
+                    kind: "sample",
+                    location: "outdoor",
+                    description: "edited moss",
                 },
             ];
             dispatchFromCardFrame(ready.iframe, {
@@ -921,8 +921,8 @@ describe("action-card external surface load consent", () => {
         const view = await mountCard(
             card({
                 rows: [
-                    { label: "Entry 1", value: "Settlement Â· 25 EGP" },
-                    { label: "Entry 2", value: "Charge Â· 10 EGP" },
+                    { label: "Entry 1", value: "Sample Â· 25 paper" },
+                    { label: "Entry 2", value: "Specimen Â· 10 paper" },
                 ],
                 // Received/reloaded cards intentionally do not hydrate the sender-only payload,
                 // so they retain the host-owned stored-card confirmation path.
@@ -1661,7 +1661,7 @@ describe("host-initiated one-click iframe confirmation", () => {
             expect(collect?.requestNonce).toMatch(/^[A-Za-z0-9_-]{43}$/);
             expect(mocks.createAiAppCardConfirmationGrant).not.toHaveBeenCalled();
 
-            const payload = { amount: 25, opaque_ref: "opaque-private-reference" };
+            const payload = { quantity: 25, opaque_ref: "opaque-private-reference" };
             dispatchFromCardFrame(ready.iframe, {
                 type: "oc:card:confirm-collected",
                 version: 2,
@@ -1736,14 +1736,14 @@ describe("host-initiated one-click iframe confirmation", () => {
                 type: "oc:card:confirm",
                 version: 2,
                 frameNonce: ready.frameNonce,
-                payload: { amount: 999 },
+                payload: { quantity: 999 },
             });
             dispatchFromCardFrame(ready.iframe, {
                 type: "oc:card:confirm-collected",
                 version: 2,
                 frameNonce: ready.frameNonce,
                 requestNonce: "A".repeat(43),
-                payload: { amount: 999 },
+                payload: { quantity: 999 },
             });
             await tick();
             expect(mocks.createAiAppCardConfirmationGrant).not.toHaveBeenCalled();
@@ -1765,7 +1765,7 @@ describe("host-initiated one-click iframe confirmation", () => {
                 version: 2,
                 frameNonce: ready.frameNonce,
                 requestNonce: `${collect?.requestNonce}wrong`,
-                payload: { amount: 999 },
+                payload: { quantity: 999 },
             });
             await tick();
             expect(mocks.createAiAppCardConfirmationGrant).not.toHaveBeenCalled();
@@ -1810,7 +1810,7 @@ describe("host-initiated one-click iframe confirmation", () => {
                 version: 2,
                 frameNonce: ready.frameNonce,
                 requestNonce: first.requestNonce,
-                payload: { amount: 25 },
+                payload: { quantity: 25 },
             });
             await vi.waitFor(() =>
                 expect(view.target.textContent).toContain("Confirmation failed. Try again."),
@@ -1843,7 +1843,7 @@ describe("host-initiated one-click iframe confirmation", () => {
                 version: 2,
                 frameNonce: ready.frameNonce,
                 requestNonce: requests[1].requestNonce,
-                payload: { amount: 25 },
+                payload: { quantity: 25 },
             });
             await vi.waitFor(() => expect(onRespond).toHaveBeenCalledOnce());
         } finally {
@@ -1898,7 +1898,7 @@ describe("host-initiated one-click iframe confirmation", () => {
                 version: 2,
                 frameNonce: ready.frameNonce,
                 requestNonce: firstCollect.requestNonce,
-                payload: { amount: 25 },
+                payload: { quantity: 25 },
             });
             await vi.waitFor(() =>
                 expect(mocks.createAiAppCardConfirmationGrant).toHaveBeenCalledOnce(),
@@ -1947,7 +1947,7 @@ describe("host-initiated one-click iframe confirmation", () => {
                 version: 2,
                 frameNonce: nextFrameNonce,
                 requestNonce: secondCollect.requestNonce,
-                payload: { amount: 30 },
+                payload: { quantity: 30 },
             });
             await vi.waitFor(() =>
                 expect(mocks.createAiAppCardConfirmationGrant).toHaveBeenCalledTimes(2),
@@ -1999,7 +1999,7 @@ describe("host-initiated one-click iframe confirmation", () => {
                 version: 2,
                 frameNonce: ready.frameNonce,
                 requestNonce: first.requestNonce,
-                payload: { amount: 25 },
+                payload: { quantity: 25 },
             });
             await vi.advanceTimersByTimeAsync(0);
             expect(mocks.createAiAppCardConfirmationGrant).toHaveBeenCalledOnce();
@@ -2037,7 +2037,7 @@ describe("host-initiated one-click iframe confirmation", () => {
                 version: 2,
                 frameNonce: ready.frameNonce,
                 requestNonce: requests[1].requestNonce,
-                payload: { amount: 25 },
+                payload: { quantity: 25 },
             });
             await vi.waitFor(() => expect(onRespond).toHaveBeenCalledOnce());
         } finally {
@@ -2078,7 +2078,7 @@ describe("host-initiated one-click iframe confirmation", () => {
                 version: 2,
                 frameNonce: ready.frameNonce,
                 requestNonce: first.requestNonce,
-                payload: { amount: 25 },
+                payload: { quantity: 25 },
             });
             await vi.advanceTimersByTimeAsync(0);
             expect(onRespond).toHaveBeenCalledOnce();
@@ -2105,7 +2105,7 @@ describe("host-initiated one-click iframe confirmation", () => {
                 version: 2,
                 frameNonce: ready.frameNonce,
                 requestNonce: requests[1].requestNonce,
-                payload: { amount: 25 },
+                payload: { quantity: 25 },
             });
             await vi.waitFor(() => expect(onRespond).toHaveBeenCalledTimes(2));
         } finally {

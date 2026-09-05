@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { InferenceRequest, InferenceResult, OnDeviceInferenceCapability } from "@shared";
 import type { BrowserModelImageEvidence } from "./imageSemanticDuplicateGuard";
+import type { AppProcessorInput, AppProcessorResult } from "./appLocalProcessor";
 
 const {
     acceleratedImageModelReadyMock,
+    textModelReadyMock,
     acceleratedImageModelFailureReasonMock,
     attestationAvailableMock,
     imageInferenceEvidenceMock,
@@ -13,9 +15,13 @@ const {
     isNativeClientMock,
     usesWebInferenceRuntimeMock,
     selectedWebModelIdMock,
+    recognizeBrowserImageMock,
+    disposeBrowserOcrMock,
+    processWithAppMock,
 } = vi.hoisted(() => ({
     acceleratedImageModelReadyMock: vi.fn(async () => false),
     acceleratedImageModelFailureReasonMock: vi.fn<() => string | undefined>(() => undefined),
+    textModelReadyMock: vi.fn(async () => ({ available: true as const })),
     attestationAvailableMock: vi.fn(() => false),
     imageInferenceEvidenceMock: vi.fn<() => BrowserModelImageEvidence | undefined>(() => undefined),
     inferOnDeviceMock: vi.fn(
@@ -40,13 +46,23 @@ const {
     isNativeClientMock: vi.fn(() => false),
     usesWebInferenceRuntimeMock: vi.fn(() => true),
     selectedWebModelIdMock: vi.fn<() => string | undefined>(() => "qwen3-vl-2b-instruct-q4"),
+    recognizeBrowserImageMock: vi.fn(),
+    disposeBrowserOcrMock: vi.fn(async () => undefined),
+    processWithAppMock: vi.fn(
+        async (
+            _url: string,
+            _actionId: string,
+            _input: AppProcessorInput,
+            _stillCurrent?: () => boolean,
+        ): Promise<AppProcessorResult> => ({ kind: "none" }),
+    ),
 }));
 
 // These specs pin the MANUAL-extraction gate: the manual path (no on-device runtime — the caller
 // supplies the extraction) must run the SAME deterministic pass as the model path (rules post-pass +
 // schema conformance + required-fields check) before a card is built. Previously it built the card
-// straight from the caller-supplied object, so a degenerate value (e.g. amount 0 against a schema
-// requiring amount > 0) posted a confirm card the consumer app then rejected as an invalid draft.
+// straight from the caller-supplied object, so a degenerate value (e.g. reading 0 against a schema
+// requiring reading > 0) posted a confirm card the consumer app then rejected as an invalid draft.
 
 // aiActionRunner imports the on-device inference facade at module level; stub it so importing the
 // module never touches the Tauri bridge (the manual path performs no inference at all).
@@ -67,8 +83,20 @@ vi.mock("./webInference", () => ({
             ? { available: true }
             : { available: false, reason: acceleratedImageModelFailureReasonMock() };
     },
+    browserTextModelReadiness: textModelReadyMock,
     webImageInferenceEvidence: imageInferenceEvidenceMock,
     webModelCatalogId: selectedWebModelIdMock,
+}));
+vi.mock("./browserOcr", () => ({
+    recognizeBrowserImage: recognizeBrowserImageMock,
+    disposeBrowserOcr: disposeBrowserOcrMock,
+}));
+vi.mock("./ocrImage", () => ({
+    prepareImageForBrowserOcr: async (image: Uint8Array) => image,
+}));
+vi.mock("./appLocalProcessor", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("./appLocalProcessor")>()),
+    processWithApp: processWithAppMock,
 }));
 
 import type {
@@ -76,9 +104,11 @@ import type {
     AiActionDefinition,
     AiAppCardContentV1,
     AiAppRegistration,
+    RunAiActionResult,
 } from "@shared";
 import { MAX_AI_ACTION_CANDIDATES } from "@shared";
 import type { MessageContext, OpenChat } from "@client";
+import { currentUserIdStore } from "@client";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { browserImageActionMode } from "../stores/browserImageActionMode";
@@ -116,6 +146,8 @@ beforeEach(() => {
     acceleratedImageModelReadyMock.mockResolvedValue(false);
     acceleratedImageModelFailureReasonMock.mockReset();
     acceleratedImageModelFailureReasonMock.mockReturnValue(undefined);
+    textModelReadyMock.mockReset();
+    textModelReadyMock.mockResolvedValue({ available: true });
     imageInferenceEvidenceMock.mockReset();
     imageInferenceEvidenceMock.mockReturnValue(undefined);
     attestationAvailableMock.mockReset();
@@ -139,26 +171,36 @@ beforeEach(() => {
     usesWebInferenceRuntimeMock.mockReturnValue(true);
     selectedWebModelIdMock.mockReset();
     selectedWebModelIdMock.mockReturnValue("qwen3-vl-2b-instruct-q4");
+    recognizeBrowserImageMock.mockReset();
+    recognizeBrowserImageMock.mockResolvedValue({
+        kind: "ok",
+        confidence: 90,
+        text: "METER 42 ZX NOMINAL",
+    });
+    disposeBrowserOcrMock.mockReset();
+    disposeBrowserOcrMock.mockResolvedValue(undefined);
+    processWithAppMock.mockReset();
+    processWithAppMock.mockResolvedValue({ kind: "none" });
 });
 
 const DEF: AiActionDefinition = {
-    name: "demo.expense.add",
-    description: "Log expense",
-    promptTemplate: "extract the transaction as JSON",
+    name: "demo.measurement.add",
+    description: "Log measurement",
+    promptTemplate: "extract the record as JSON",
     responseSchema: {
         type: "object",
         properties: {
-            kind: { type: "string", enum: ["expense", "settlement"] },
-            amount: { type: "number", exclusiveMinimum: 0 },
-            currency: { type: "string" },
+            kind: { type: "string", enum: ["measurement", "observed"] },
+            reading: { type: "number", exclusiveMinimum: 0 },
+            unit: { type: "string" },
         },
-        required: ["amount"],
+        required: ["reading"],
     },
     card: {
-        title: "Log expense",
+        title: "Log measurement",
         rows: [
-            { label: "Amount", valueKey: "amount" },
-            { label: "Currency", valueKey: "currency" },
+            { label: "Reading", valueKey: "reading" },
+            { label: "Unit", valueKey: "unit" },
         ],
         confirmLabel: "Add",
         cancelLabel: "Dismiss",
@@ -167,13 +209,13 @@ const DEF: AiActionDefinition = {
 
 describe("buildManualCard (manual-extraction gate)", () => {
     it("reports a degenerate manual extraction as incomplete — no card", () => {
-        const manual = { kind: "settlement", amount: 0, currency: "USD" };
+        const manual = { kind: "observed", reading: 0, unit: "LUX" };
         const r = buildManualCard(DEF, manual, RECIPIENT);
         expect(r.kind).toBe("incomplete_extraction");
         if (r.kind === "incomplete_extraction") {
             // raw carries the ORIGINAL manual extraction for the caller to surface/debug.
             expect(JSON.parse(r.raw)).toEqual(manual);
-            expect(r.missingFields).toEqual(["amount"]);
+            expect(r.missingFields).toEqual(["reading"]);
             expect(r.candidateCount).toBe(1);
             expect(r.validCandidateCount).toBe(0);
         }
@@ -182,22 +224,22 @@ describe("buildManualCard (manual-extraction gate)", () => {
     it("builds a ready card from a valid manual extraction, post-passed like the model path", () => {
         const r = buildManualCard(
             DEF,
-            { kind: "settlement", amount: 350, currency: "USD", extra: 1 },
+            { kind: "observed", reading: 350, unit: "LUX", extra: 1 },
             RECIPIENT,
         );
         expect(r.kind).toBe("ready");
         if (r.kind === "ready") {
             // Undeclared keys are dropped by the same conformance pass the model path runs.
-            expect(r.extracted).toEqual({ kind: "settlement", amount: 350, currency: "USD" });
+            expect(r.extracted).toEqual({ kind: "observed", reading: 350, unit: "LUX" });
             expect(r.card.rows).toEqual([
-                { label: "Amount", value: "350" },
-                { label: "Currency", value: "USD" },
+                { label: "Reading", value: "350" },
+                { label: "Unit", value: "LUX" },
             ]);
             expect(r.card.recipientPublicKey).toBe(RECIPIENT);
         }
     });
 
-    const imageOmissionDef = (required: string[] = ["amount"]): AiActionDefinition => {
+    const imageOmissionDef = (required: string[] = ["reading"]): AiActionDefinition => {
         const schema = DEF.responseSchema as {
             type: string;
             properties: Record<string, unknown>;
@@ -238,10 +280,10 @@ describe("buildManualCard (manual-extraction gate)", () => {
             const result = buildManualCard(
                 imageOmissionDef(),
                 {
-                    amount: 20,
-                    currency: "USD",
+                    reading: 20,
+                    unit: "LUX",
                     date: "2026-08-09",
-                    message: "model-generated receipt description",
+                    message: "model-generated report description",
                 },
                 RECIPIENT,
                 undefined,
@@ -253,10 +295,10 @@ describe("buildManualCard (manual-extraction gate)", () => {
 
             expect(result.kind).toBe("ready");
             if (result.kind === "ready") {
-                expect(result.extracted).toEqual({ amount: 20, currency: "USD" });
+                expect(result.extracted).toEqual({ reading: 20, unit: "LUX" });
                 expect(result.card.rows).toEqual([
-                    { label: "Amount", value: "20" },
-                    { label: "Currency", value: "USD" },
+                    { label: "Reading", value: "20" },
+                    { label: "Unit", value: "LUX" },
                 ]);
                 expect(JSON.parse(new TextDecoder().decode(result.card.confirmPayload!))).toEqual(
                     result.extracted,
@@ -266,12 +308,12 @@ describe("buildManualCard (manual-extraction gate)", () => {
     );
 
     it("keeps image-only annotated values on the manual text path", () => {
-        const sourceText = "paid 20 USD on 2026-08-09";
+        const sourceText = "measured 20 LUX on 2026-08-09";
         const result = buildManualCard(
             imageOmissionDef(),
             {
-                amount: 20,
-                currency: "USD",
+                reading: 20,
+                unit: "LUX",
                 date: "2026-08-09",
                 message: sourceText,
             },
@@ -297,28 +339,28 @@ describe("buildManualCard (manual-extraction gate)", () => {
             rules: [
                 {
                     kind: "keyword_map",
-                    field: "direction",
+                    field: "orientation",
                     mode: "override",
                     map: [
-                        { value: "credit", keywords: ["owed to you"] },
-                        { value: "debt", keywords: ["you owe"] },
+                        { value: "east", keywords: ["owed to you"] },
+                        { value: "west", keywords: ["you scan"] },
                     ],
                 },
             ],
             responseSchema: {
                 type: "object",
                 properties: {
-                    amount: { type: "number", exclusiveMinimum: 0 },
-                    direction: { type: "string", enum: ["credit", "debt"] },
+                    reading: { type: "number", exclusiveMinimum: 0 },
+                    orientation: { type: "string", enum: ["east", "west"] },
                     message: { type: "string" },
                 },
-                required: ["amount", "direction"],
+                required: ["reading", "orientation"],
             },
         };
 
         const result = buildManualCard(
             def,
-            { amount: 350, direction: "you owe", message: "model-authored claim" },
+            { reading: 350, orientation: "you scan", message: "model-authored claim" },
             RECIPIENT,
             undefined,
             undefined,
@@ -328,13 +370,13 @@ describe("buildManualCard (manual-extraction gate)", () => {
         );
 
         expect(result.kind).toBe("ready");
-        if (result.kind === "ready") expect(result.extracted.direction).toBe("credit");
+        if (result.kind === "ready") expect(result.extracted.orientation).toBe("east");
     });
 
     it("fails closed when an image-only omitted manual field is required", () => {
         const result = buildManualCard(
-            imageOmissionDef(["amount", "message"]),
-            { amount: 20, message: "model-generated receipt description" },
+            imageOmissionDef(["reading", "message"]),
+            { reading: 20, message: "model-generated report description" },
             RECIPIENT,
             undefined,
             undefined,
@@ -351,15 +393,15 @@ describe("buildManualCard (manual-extraction gate)", () => {
         });
     });
 
-    it("runs declared normalize rules over the manual extraction ('350 usd' -> 350)", () => {
+    it("runs declared normalize rules over the manual extraction ('350 lux' -> 350)", () => {
         const def: AiActionDefinition = {
             ...DEF,
-            rules: [{ kind: "normalize", field: "amount", ops: ["k_m_suffix"] }],
+            rules: [{ kind: "normalize", field: "reading", ops: ["k_m_suffix"] }],
         };
-        const r = buildManualCard(def, { amount: "350 usd" }, RECIPIENT);
+        const r = buildManualCard(def, { reading: "350 lux" }, RECIPIENT);
         expect(r.kind).toBe("ready");
         if (r.kind === "ready") {
-            expect(r.extracted.amount).toBe(350);
+            expect(r.extracted.reading).toBe(350);
         }
     });
 
@@ -380,10 +422,10 @@ describe("buildManualCard (manual-extraction gate)", () => {
                 },
             },
         };
-        const sourceText = "Journey qc: cleaning fee 350 EGP";
+        const sourceText = "Journey qc: cleaning fee 350 HPA";
         const r = buildManualCard(
             def,
-            { kind: "settlement", amount: 350, currency: "EGP" },
+            { kind: "observed", reading: 350, unit: "HPA" },
             RECIPIENT,
             undefined,
             undefined,
@@ -395,7 +437,7 @@ describe("buildManualCard (manual-extraction gate)", () => {
         if (r.kind === "ready") {
             expect(r.extracted.message).toBe(sourceText);
             expect(JSON.parse(new TextDecoder().decode(r.card.confirmPayload!))).toMatchObject({
-                currency: "EGP",
+                unit: "HPA",
                 message: sourceText,
             });
         }
@@ -403,12 +445,12 @@ describe("buildManualCard (manual-extraction gate)", () => {
 
     it("no schema: the manual extraction passes through and builds a card", () => {
         const def: AiActionDefinition = { ...DEF, responseSchema: undefined };
-        const r = buildManualCard(def, { amount: 0 }, RECIPIENT);
+        const r = buildManualCard(def, { reading: 0 }, RECIPIENT);
         expect(r.kind).toBe("ready");
     });
 
     it("threads the inbox + fan-out keys onto the card", () => {
-        const r = buildManualCard(DEF, { amount: 5 }, RECIPIENT, "aaaaa-aa", ["OTHER_KEY_PEM"]);
+        const r = buildManualCard(DEF, { reading: 5 }, RECIPIENT, "aaaaa-aa", ["OTHER_KEY_PEM"]);
         expect(r.kind).toBe("ready");
         if (r.kind === "ready") {
             expect(r.card.inboxCanisterId).toBe("aaaaa-aa");
@@ -420,20 +462,20 @@ describe("buildManualCard (manual-extraction gate)", () => {
         const r = buildManualCard(
             DEF,
             [
-                { kind: "expense", amount: 20, currency: "USD" },
-                { kind: "expense", amount: 30, currency: "EUR" },
+                { kind: "measurement", reading: 20, unit: "LUX" },
+                { kind: "measurement", reading: 30, unit: "EUR" },
             ],
             RECIPIENT,
         );
         expect(r.kind).toBe("ready_multi");
         if (r.kind === "ready_multi") {
             expect(r.card.rows).toEqual([
-                { label: "Entry 1", value: "Amount: 20 · Currency: USD" },
-                { label: "Entry 2", value: "Amount: 30 · Currency: EUR" },
+                { label: "Entry 1", value: "Reading: 20 · Unit: LUX" },
+                { label: "Entry 2", value: "Reading: 30 · Unit: EUR" },
             ]);
             expect(JSON.parse(new TextDecoder().decode(r.card.confirmPayload!))).toEqual([
-                { kind: "expense", amount: 20, currency: "USD" },
-                { kind: "expense", amount: 30, currency: "EUR" },
+                { kind: "measurement", reading: 20, unit: "LUX" },
+                { kind: "measurement", reading: 30, unit: "EUR" },
             ]);
             expect(r.card.rows.some((row) => row.label.startsWith("__oc_"))).toBe(false);
         }
@@ -441,7 +483,7 @@ describe("buildManualCard (manual-extraction gate)", () => {
 
     it("rejects a 33rd manual candidate before building a card", () => {
         const manual = Array.from({ length: MAX_AI_ACTION_CANDIDATES + 1 }, (_, index) => ({
-            amount: index + 1,
+            reading: index + 1,
         }));
         expect(buildManualCard(DEF, manual, RECIPIENT)).toEqual({
             kind: "error",
@@ -455,14 +497,14 @@ describe("buildManualCard (manual-extraction gate)", () => {
             responseSchema: {
                 type: "object",
                 properties: {
-                    amount: { type: "number", exclusiveMinimum: 0 },
+                    reading: { type: "number", exclusiveMinimum: 0 },
                     opaque: { type: "string" },
                 },
-                required: ["amount"],
+                required: ["reading"],
             },
-            card: { ...DEF.card, rows: [{ label: "Amount", valueKey: "amount" }] },
+            card: { ...DEF.card, rows: [{ label: "Reading", valueKey: "reading" }] },
         };
-        const manual = [{ amount: 1, opaque: "x".repeat(16 * 1_024) }, { amount: 2 }];
+        const manual = [{ reading: 1, opaque: "x".repeat(16 * 1_024) }, { reading: 2 }];
         expect(buildManualCard(def, manual, RECIPIENT)).toMatchObject({
             kind: "error",
             error: expect.stringContaining("confirmation payload"),
@@ -473,14 +515,14 @@ describe("buildManualCard (manual-extraction gate)", () => {
         const r = buildManualCard(
             DEF,
             [
-                { kind: "expense", amount: 0, currency: "USD" },
-                { kind: "expense", amount: 30, currency: "EUR" },
+                { kind: "measurement", reading: 0, unit: "LUX" },
+                { kind: "measurement", reading: 30, unit: "EUR" },
             ],
             RECIPIENT,
         );
         expect(r.kind).toBe("incomplete_extraction");
         if (r.kind === "incomplete_extraction") {
-            expect(r.missingFields).toEqual(["amount"]);
+            expect(r.missingFields).toEqual(["reading"]);
             expect(r.candidateCount).toBe(2);
             expect(r.validCandidateCount).toBe(1);
         }
@@ -488,14 +530,14 @@ describe("buildManualCard (manual-extraction gate)", () => {
 
     it("an all-invalid ARRAY reports incomplete required fields — no card", () => {
         const arr = [
-            { kind: "expense", amount: 0, currency: "USD" },
-            { kind: "expense", currency: "EUR" },
+            { kind: "measurement", reading: 0, unit: "LUX" },
+            { kind: "measurement", unit: "EUR" },
         ];
         const r = buildManualCard(DEF, arr, RECIPIENT);
         expect(r.kind).toBe("incomplete_extraction");
         if (r.kind === "incomplete_extraction") {
             expect(JSON.parse(r.raw)).toEqual(arr);
-            expect(r.missingFields).toEqual(["amount"]);
+            expect(r.missingFields).toEqual(["reading"]);
             expect(r.candidateCount).toBe(2);
             expect(r.validCandidateCount).toBe(0);
         }
@@ -507,17 +549,17 @@ describe("buildManualCard (manual-extraction gate)", () => {
             responseSchema: {
                 type: "object",
                 properties: {
-                    amount: { type: "number", exclusiveMinimum: 0 },
-                    direction: { type: "string", enum: ["credit", "debt"] },
+                    reading: { type: "number", exclusiveMinimum: 0 },
+                    orientation: { type: "string", enum: ["east", "west"] },
                 },
-                required: ["amount", "direction"],
+                required: ["reading", "orientation"],
             },
         };
         expect(
-            buildManualCard(def, [{ direction: "debt" }, { amount: 20 }], RECIPIENT),
+            buildManualCard(def, [{ orientation: "west" }, { reading: 20 }], RECIPIENT),
         ).toMatchObject({
             kind: "incomplete_extraction",
-            missingFields: ["amount", "direction"],
+            missingFields: ["orientation", "reading"],
             candidateCount: 2,
             validCandidateCount: 0,
         });
@@ -549,18 +591,18 @@ describe("manualExtractEnabled", () => {
 describe("parseManualExtractionPrompt", () => {
     it("parses a valid extraction without reporting an error", () => {
         const onInvalid = vi.fn();
-        expect(parseManualExtractionPrompt('{"amount":20,"currency":"USD"}', onInvalid)).toEqual({
-            amount: 20,
-            currency: "USD",
+        expect(parseManualExtractionPrompt('{"reading":20,"unit":"LUX"}', onInvalid)).toEqual({
+            reading: 20,
+            unit: "LUX",
         });
         expect(onInvalid).not.toHaveBeenCalled();
     });
 
     it("parses an array when every extraction is a plain object", () => {
         const onInvalid = vi.fn();
-        expect(parseManualExtractionPrompt('[{"amount":20},{"amount":30}]', onInvalid)).toEqual([
-            { amount: 20 },
-            { amount: 30 },
+        expect(parseManualExtractionPrompt('[{"reading":20},{"reading":30}]', onInvalid)).toEqual([
+            { reading: 20 },
+            { reading: 30 },
         ]);
         expect(onInvalid).not.toHaveBeenCalled();
     });
@@ -583,7 +625,7 @@ describe("parseManualExtractionPrompt", () => {
 
     it("reports malformed JSON once and maps it to the cancellation sentinel", () => {
         const onInvalid = vi.fn();
-        expect(parseManualExtractionPrompt('{"amount":', onInvalid)).toBe(
+        expect(parseManualExtractionPrompt('{"reading":', onInvalid)).toBe(
             MANUAL_EXTRACTION_CANCELLED,
         );
         expect(onInvalid).toHaveBeenCalledOnce();
@@ -592,9 +634,9 @@ describe("parseManualExtractionPrompt", () => {
     it.each([
         ["null", "null"],
         ["number", "7"],
-        ["string", '"expense"'],
-        ["mixed array", '[{"amount":20},null]'],
-        ["nested array item", '[{"amount":20},[{"amount":30}]]'],
+        ["string", '"measurement"'],
+        ["mixed array", '[{"reading":20},null]'],
+        ["nested array item", '[{"reading":20},[{"reading":30}]]'],
     ])("rejects valid JSON with a non-object extraction shape: %s", (_name, raw) => {
         const onInvalid = vi.fn();
         expect(parseManualExtractionPrompt(raw, onInvalid)).toBe(MANUAL_EXTRACTION_CANCELLED);
@@ -651,11 +693,11 @@ describe("imageUnsupportedReason", () => {
 
 const CARD: ActionCardContent = {
     kind: "action_card_content",
-    title: "Log expense",
+    title: "Log measurement",
     rows: [],
     confirmLabel: "Add",
     cancelLabel: "Dismiss",
-    actionId: "demo.expense.add",
+    actionId: "demo.measurement.add",
     state: "pending",
 };
 
@@ -664,7 +706,7 @@ const APP: AiAppRegistration = {
     owner: "owner-principal",
     manifest: {
         name: "Sample App",
-        description: "Shared ledger",
+        description: "Shared measurements",
         consumerPublicKey: RECIPIENT,
         perUserKeys: true,
         actions: [DEF],
@@ -735,8 +777,8 @@ describe("direct-chat per-user-key candidate resolution", () => {
             proposeAiActionForMessage(
                 client,
                 DIRECT_CHAT,
-                { kind: "text_content", text: "paid 20" },
-                { amount: 20 },
+                { kind: "text_content", text: "measured 20" },
+                { reading: 20 },
             ),
         ).resolves.toEqual({ kind: "link_required", app: APP });
         expect(calls.exploreAiApps).toHaveBeenCalledWith(undefined, 0, 8);
@@ -867,7 +909,7 @@ describe("new action-card availability preflight", () => {
     const messageContext: MessageContext = {
         chatId: { kind: "group_chat", groupId: "aaaaa-aa" },
     };
-    const content = { kind: "text_content", text: "paid 20" } as const;
+    const content = { kind: "text_content", text: "measured 20" } as const;
 
     it("the real UI preflight returns the attestation blocker before user-key/model work", async () => {
         const { client, calls } = proposalClient(APP);
@@ -947,12 +989,523 @@ describe("provenance before posting", () => {
     const messageContext: MessageContext = {
         chatId: { kind: "group_chat", groupId: "aaaaa-aa" },
     };
-    const content = { kind: "text_content", text: "paid 20" } as const;
+    const content = { kind: "text_content", text: "measured 20" } as const;
 
     beforeEach(() => {
         // These tests exercise the dormant post-attestation pipeline. Production remains false and
         // the proposal-entry tests below prove that no caller reaches this path while it is absent.
         attestationAvailableMock.mockReturnValue(true);
+    });
+
+    function processorFixture() {
+        const action: AiActionDefinition = {
+            ...DEF,
+            name: "instrument.samples.capture",
+            acceptsImage: true,
+            responseSchema: {
+                type: "object",
+                "x-openchat-local-processor": { version: 1 },
+                properties: {
+                    reading: { type: "number", exclusiveMinimum: 0 },
+                    observed_on: { type: "string" },
+                    display_label: { type: "string" },
+                },
+                required: ["reading"],
+            },
+            card: {
+                ...DEF.card,
+                rows: [
+                    { label: "Reading", valueKey: "reading" },
+                    { label: "Observed", valueKey: "observed_on" },
+                    { label: "Label", valueKey: "display_label" },
+                ],
+            },
+        };
+        const candidate: AiActionCandidate = {
+            app: { ...APP, manifest: { ...APP.manifest, actions: [action] } },
+            action,
+            recipientKey: RECIPIENT,
+        };
+        const createAiAppCardProvenance = vi.fn(async () => ({
+            kind: "success" as const,
+            provenance: new Uint8Array([8]),
+            expiresAt: BigInt(Date.now() + 60_000),
+        }));
+        const sendMessageWithContent = vi.fn(async () => ({ kind: "success" as const }));
+        const client = { createAiAppCardProvenance, sendMessageWithContent } as unknown as OpenChat;
+        return { action, candidate, client, createAiAppCardProvenance, sendMessageWithContent };
+    }
+
+    function declarePrivateReader(action: AiActionDefinition) {
+        action.responseSchema = {
+            ...(action.responseSchema as object),
+            "x-openchat-private-image-verifier": {
+                version: 2,
+                promptTemplate:
+                    "READ {{PRIMARY_IMAGE_EVIDENCE_JSON}} WITH {{SEMANTIC_IMAGE_VALUES_JSON}}",
+                requiredFields: ["reading"],
+                optionalFields: ["observed_on", "display_label"],
+                semanticFields: [],
+                ocrProfiles: ["eng", "ara+eng"],
+            },
+        };
+    }
+
+    it.each([false, true])(
+        "runs OCR-only through the app's parser without any model readiness or inference (native=%s)",
+        async (native) => {
+            const fixture = processorFixture();
+            declarePrivateReader(fixture.action);
+            browserImageActionMode.set("local_reader_only");
+            isNativeClientMock.mockReturnValue(native);
+            selectedWebModelIdMock.mockReturnValue(undefined);
+            inferenceCapabilityMock.mockReturnValue({
+                available: false,
+                runtimesSupported: [],
+                selectedModalities: [],
+            });
+            textModelReadyMock.mockResolvedValue({ available: false } as never);
+            const ocrTranscripts = [
+                { profile: "eng", text: "METER 42 ZX NOMINAL" },
+                { profile: "ara+eng", text: "قراءة الجهاز 42" },
+            ];
+            recognizeBrowserImageMock
+                .mockResolvedValueOnce({ kind: "ok", confidence: 90, text: ocrTranscripts[0].text })
+                .mockResolvedValueOnce({
+                    kind: "ok",
+                    confidence: 90,
+                    text: ocrTranscripts[1].text,
+                });
+            const extraction = { reading: 42, display_label: "Station Delta" };
+            processWithAppMock.mockResolvedValueOnce({
+                kind: "candidates",
+                candidates: [extraction],
+            });
+            const pixels = new Uint8Array([4, 2]);
+            const result = await proposeAndPostCandidate(
+                fixture.client,
+                messageContext,
+                { kind: "image_content", blobData: pixels } as unknown as Parameters<
+                    typeof proposeAndPostCandidate
+                >[2],
+                fixture.candidate,
+            );
+            expect(result).toMatchObject({ kind: "ready", extracted: extraction });
+            expect(processWithAppMock).toHaveBeenCalledExactlyOnceWith(
+                expect.any(String),
+                fixture.action.name,
+                { operation: "extract", modality: "image", ocrTranscripts },
+                expect.any(Function),
+            );
+            expect(recognizeBrowserImageMock.mock.calls.map(([, profile]) => profile)).toEqual([
+                "eng",
+                "ara+eng",
+            ]);
+            expect(disposeBrowserOcrMock).toHaveBeenCalledOnce();
+            expect(disposeBrowserOcrMock.mock.invocationCallOrder[0]).toBeLessThan(
+                processWithAppMock.mock.invocationCallOrder[0],
+            );
+            expect(textModelReadyMock).not.toHaveBeenCalled();
+            expect(acceleratedImageModelReadyMock).not.toHaveBeenCalled();
+            expect(inferOnDeviceMock).not.toHaveBeenCalled();
+            expect(inferOnDeviceTextOnlyNoProjectorMock).not.toHaveBeenCalled();
+            const exact = (
+                fixture.createAiAppCardProvenance.mock.calls as unknown as unknown[][]
+            )[0][3] as AiAppCardContentV1;
+            expect(JSON.parse(new TextDecoder().decode(exact.confirmPayload))).toEqual(extraction);
+            expect(JSON.stringify(exact)).not.toContain(ocrTranscripts[0].text);
+            expect(JSON.stringify(exact)).not.toContain(ocrTranscripts[1].text);
+        },
+    );
+
+    it("delegates declared local text extraction to the registered app surface before attestation", async () => {
+        const fixture = processorFixture();
+        const sourceTimestamp = Date.UTC(2026, 8, 4, 10);
+        const source = {
+            kind: "text_content",
+            text: "Sample collected at station Delta.",
+        } as const;
+        const extraction = {
+            reading: 42,
+            observed_on: "2026-09-04",
+            display_label: "Station Delta",
+        };
+        processWithAppMock.mockResolvedValueOnce({ kind: "candidates", candidates: [extraction] });
+        const stillCurrent = () => true;
+        const result = await proposeAndPostCandidate(
+            fixture.client,
+            messageContext,
+            source,
+            fixture.candidate,
+            undefined,
+            stillCurrent,
+            undefined,
+            undefined,
+            sourceTimestamp,
+        );
+
+        expect(result).toMatchObject({ kind: "ready", extracted: extraction });
+        expect(processWithAppMock).toHaveBeenCalledExactlyOnceWith(
+            expect.any(String),
+            fixture.action.name,
+            { operation: "extract", modality: "text", text: source.text, sourceTimestamp },
+            expect.any(Function),
+        );
+        const processorUrl = new URL(processWithAppMock.mock.calls[0][0]);
+        expect(processorUrl.origin + processorUrl.pathname).toBe("https://app.example/card");
+        expect(inferOnDeviceMock).not.toHaveBeenCalled();
+        expect(recognizeBrowserImageMock).not.toHaveBeenCalled();
+        expect(processWithAppMock.mock.invocationCallOrder[0]).toBeLessThan(
+            fixture.createAiAppCardProvenance.mock.invocationCallOrder[0],
+        );
+        const exact = (
+            fixture.createAiAppCardProvenance.mock.calls as unknown as unknown[][]
+        )[0][3] as AiAppCardContentV1;
+        expect(JSON.parse(new TextDecoder().decode(exact.confirmPayload))).toEqual(extraction);
+    });
+
+    it.each(["x-openchat-private-image-verifier", "x-openchat-local-processor"])(
+        "requires the app's complete OCR-only contract before reading pixels (%s missing)",
+        async (extension) => {
+            const fixture = processorFixture();
+            declarePrivateReader(fixture.action);
+            delete (fixture.action.responseSchema as Record<string, unknown>)[extension];
+            browserImageActionMode.set("local_reader_only");
+            selectedWebModelIdMock.mockReturnValue(undefined);
+            const result = await proposeAndPostCandidate(
+                fixture.client,
+                messageContext,
+                {
+                    kind: "image_content",
+                    blobData: new Uint8Array([4, 2]),
+                } as unknown as Parameters<typeof proposeAndPostCandidate>[2],
+                fixture.candidate,
+            );
+            expect(result).toMatchObject({ kind: "unavailable" });
+            expect(recognizeBrowserImageMock).not.toHaveBeenCalled();
+            expect(processWithAppMock).not.toHaveBeenCalled();
+            expect(textModelReadyMock).not.toHaveBeenCalled();
+            expect(inferOnDeviceMock).not.toHaveBeenCalled();
+            expect(inferOnDeviceTextOnlyNoProjectorMock).not.toHaveBeenCalled();
+        },
+    );
+
+    it("gives a model-only image result to the app for normalization before attesting its returned fields", async () => {
+        const fixture = processorFixture();
+        const raw = { reading: 42, observed_on: "4 Sep 2026", display_label: "raw model label" };
+        const normalized = {
+            reading: 42,
+            observed_on: "2026-09-04",
+            display_label: "Station Delta",
+        };
+        acceleratedImageModelReadyMock.mockResolvedValue(true);
+        inferenceCapabilityMock.mockReturnValue({
+            available: true,
+            runtimesSupported: ["llama-cpp"],
+            selectedModalities: ["text", "image"],
+        });
+        inferOnDeviceMock.mockResolvedValueOnce({ kind: "ok", text: JSON.stringify(raw) });
+        processWithAppMock.mockResolvedValueOnce({ kind: "candidates", candidates: [normalized] });
+        const result = await proposeAndPostCandidate(
+            fixture.client,
+            messageContext,
+            { kind: "image_content", blobData: new Uint8Array([4, 2]) } as unknown as Parameters<
+                typeof proposeAndPostCandidate
+            >[2],
+            fixture.candidate,
+        );
+
+        expect(result).toMatchObject({ kind: "ready", extracted: normalized });
+        expect(processWithAppMock).toHaveBeenCalledExactlyOnceWith(
+            expect.any(String),
+            fixture.action.name,
+            { operation: "normalize", modality: "image", candidates: [raw] },
+            expect.any(Function),
+        );
+        expect(inferOnDeviceMock).toHaveBeenCalledOnce();
+        expect(recognizeBrowserImageMock).not.toHaveBeenCalled();
+        expect(inferOnDeviceMock.mock.invocationCallOrder[0]).toBeLessThan(
+            processWithAppMock.mock.invocationCallOrder[0],
+        );
+        expect(processWithAppMock.mock.invocationCallOrder[0]).toBeLessThan(
+            fixture.createAiAppCardProvenance.mock.invocationCallOrder[0],
+        );
+        const exact = (
+            fixture.createAiAppCardProvenance.mock.calls as unknown as unknown[][]
+        )[0][3] as AiAppCardContentV1;
+        expect(JSON.parse(new TextDecoder().decode(exact.confirmPayload))).toEqual(normalized);
+    });
+
+    it.each(["none", "ambiguous"] as const)(
+        "keeps an app's %s extraction result explicit without invoking a model or creating provenance",
+        async (kind) => {
+            const fixture = processorFixture();
+            processWithAppMock.mockResolvedValueOnce({ kind });
+            const result = await proposeAndPostCandidate(
+                fixture.client,
+                messageContext,
+                content,
+                fixture.candidate,
+            );
+            expect(result).toEqual({ kind: "local_no_extraction", reason: kind });
+            expect(inferOnDeviceMock).not.toHaveBeenCalled();
+            expect(fixture.createAiAppCardProvenance).not.toHaveBeenCalled();
+            expect(fixture.sendMessageWithContent).not.toHaveBeenCalled();
+        },
+    );
+
+    it("validates app-returned candidates before attestation and refuses a partial collection", async () => {
+        const fixture = processorFixture();
+        processWithAppMock.mockResolvedValueOnce({
+            kind: "candidates",
+            candidates: [{ reading: 42 }, { reading: 0 }],
+        });
+        const result = await proposeAndPostCandidate(
+            fixture.client,
+            messageContext,
+            content,
+            fixture.candidate,
+        );
+        expect(result).toMatchObject({
+            kind: "incomplete_extraction",
+            missingFields: ["reading"],
+            candidateCount: 2,
+            validCandidateCount: 1,
+        });
+        expect(fixture.createAiAppCardProvenance).not.toHaveBeenCalled();
+        expect(fixture.sendMessageWithContent).not.toHaveBeenCalled();
+    });
+
+    it("does not invoke app processing for an action that has not declared the protocol", async () => {
+        const fixture = processorFixture();
+        delete (fixture.action.responseSchema as Record<string, unknown>)[
+            "x-openchat-local-processor"
+        ];
+        inferOnDeviceMock.mockResolvedValueOnce({ kind: "ok", text: '{"reading":42}' });
+        const result = await proposeAndPostCandidate(
+            fixture.client,
+            messageContext,
+            content,
+            fixture.candidate,
+        );
+        expect(result).toMatchObject({ kind: "ready", extracted: { reading: 42 } });
+        expect(processWithAppMock).not.toHaveBeenCalled();
+        expect(inferOnDeviceMock).toHaveBeenCalledOnce();
+    });
+
+    it("verifies an arbitrary image schema with one vision read and one OCR-evidence decode", async () => {
+        const measurementAction: AiActionDefinition = {
+            name: "instrument.measurement.capture",
+            description: "Capture a measurement",
+            acceptsImage: true,
+            promptTemplate: "Extract app-defined measurement fields.",
+            responseSchema: {
+                type: "object",
+                "x-openchat-local-processor": { version: 1 },
+                "x-openchat-image-prompt-template": {
+                    version: 1,
+                    template: "Read the instrument image as app-defined JSON.",
+                    includeRuleGuidance: false,
+                },
+                "x-openchat-private-image-verifier": {
+                    version: 2,
+                    promptTemplate:
+                        "Read fields from OCR={{PRIMARY_IMAGE_EVIDENCE_JSON}}\nHints={{SEMANTIC_IMAGE_VALUES_JSON}}",
+                    requiredFields: ["reading", "unit_code", "classification"],
+                    optionalFields: ["observed_on", "display_label"],
+                    semanticFields: ["classification"],
+                    ocrProfiles: ["eng"],
+                },
+                properties: {
+                    reading: { type: "number" },
+                    unit_code: { type: "string" },
+                    classification: { enum: ["nominal", "warning"] },
+                    observed_on: { type: "string" },
+                    display_label: { type: "string" },
+                },
+                required: ["reading", "unit_code", "classification"],
+            },
+            card: {
+                title: "Review measurement",
+                rows: [
+                    { label: "Reading", valueKey: "reading" },
+                    { label: "Unit", valueKey: "unit_code" },
+                    { label: "Class", valueKey: "classification" },
+                    { label: "Label", valueKey: "display_label" },
+                ],
+                confirmLabel: "Save",
+                cancelLabel: "Cancel",
+            },
+        };
+        const candidate: AiActionCandidate = {
+            app: {
+                ...APP,
+                manifest: { ...APP.manifest, actions: [measurementAction] },
+            },
+            action: measurementAction,
+            recipientKey: RECIPIENT,
+        };
+        const extraction = {
+            reading: 42,
+            unit_code: "ZX",
+            classification: "nominal",
+            observed_on: "2026-09-04",
+            display_label: "Field Session",
+        };
+        const visionExtraction = {
+            reading: extraction.reading,
+            unit_code: extraction.unit_code,
+            classification: extraction.classification,
+            observed_on: "4 Sep 2026",
+        };
+        inferOnDeviceMock.mockResolvedValue({
+            kind: "ok",
+            text: JSON.stringify(visionExtraction),
+        });
+        inferOnDeviceTextOnlyNoProjectorMock.mockResolvedValue({
+            kind: "ok",
+            text: JSON.stringify(extraction),
+        });
+        processWithAppMock
+            .mockResolvedValueOnce({
+                kind: "candidates",
+                candidates: [{ ...visionExtraction, observed_on: extraction.observed_on }],
+            })
+            .mockResolvedValueOnce({ kind: "candidates", candidates: [extraction] });
+        acceleratedImageModelReadyMock.mockResolvedValue(true);
+        inferenceCapabilityMock.mockReturnValue({
+            available: true,
+            runtimesSupported: ["llama-cpp"],
+            selectedModalities: ["text", "image"],
+            selectedModelId: "qwen3-vl-2b-instruct-q4",
+        });
+        const createAiAppCardProvenance = vi.fn(async () => ({
+            kind: "success" as const,
+            provenance: new Uint8Array([1]),
+            expiresAt: BigInt(Date.now() + 60_000),
+        }));
+        const sendMessageWithContent = vi.fn(async () => ({ kind: "success" as const }));
+        const client = {
+            createAiAppCardProvenance,
+            sendMessageWithContent,
+        } as unknown as OpenChat;
+
+        browserImageActionMode.set("model_with_local_verification");
+        try {
+            const result = await proposeAndPostCandidate(
+                client,
+                messageContext,
+                {
+                    kind: "image_content",
+                    blobData: new Uint8Array([1, 2, 3]),
+                    width: 640,
+                    height: 480,
+                } as unknown as Parameters<typeof proposeAndPostCandidate>[2],
+                candidate,
+            );
+            expect(result).toMatchObject({ kind: "ready", extracted: extraction });
+        } finally {
+            browserImageActionMode.set("model_only");
+        }
+
+        expect(recognizeBrowserImageMock).toHaveBeenCalledOnce();
+        expect(recognizeBrowserImageMock).toHaveBeenCalledWith(expect.any(Uint8Array), "eng");
+        expect(disposeBrowserOcrMock).toHaveBeenCalledOnce();
+        expect(inferOnDeviceMock).toHaveBeenCalledOnce();
+        expect(inferOnDeviceTextOnlyNoProjectorMock).toHaveBeenCalledOnce();
+        expect(inferOnDeviceMock.mock.calls[0][0]).toMatchObject({
+            modelId: "qwen3-vl-2b-instruct-q4",
+            image: expect.any(Uint8Array),
+        });
+        expect(inferOnDeviceTextOnlyNoProjectorMock.mock.calls[0][0]).toMatchObject({
+            modelId: "qwen3-vl-2b-instruct-q4",
+            image: undefined,
+        });
+        expect(inferOnDeviceTextOnlyNoProjectorMock.mock.calls[0][0].prompt).toContain(
+            "--- OCR PROFILE eng ---",
+        );
+        expect(disposeBrowserOcrMock.mock.invocationCallOrder[0]).toBeLessThan(
+            inferOnDeviceMock.mock.invocationCallOrder[0],
+        );
+        expect(inferOnDeviceMock.mock.invocationCallOrder[0]).toBeLessThan(
+            inferOnDeviceTextOnlyNoProjectorMock.mock.invocationCallOrder[0],
+        );
+        expect(processWithAppMock).toHaveBeenCalledTimes(2);
+        expect(processWithAppMock).toHaveBeenNthCalledWith(
+            1,
+            expect.any(String),
+            measurementAction.name,
+            { operation: "normalize", modality: "image", candidates: [visionExtraction] },
+            expect.any(Function),
+        );
+        expect(processWithAppMock).toHaveBeenNthCalledWith(
+            2,
+            expect.any(String),
+            measurementAction.name,
+            { operation: "normalize", modality: "image", candidates: [extraction] },
+            expect.any(Function),
+        );
+        expect(inferOnDeviceTextOnlyNoProjectorMock.mock.invocationCallOrder[0]).toBeLessThan(
+            processWithAppMock.mock.invocationCallOrder[1],
+        );
+        expect(processWithAppMock.mock.invocationCallOrder[1]).toBeLessThan(
+            createAiAppCardProvenance.mock.invocationCallOrder[0],
+        );
+        const provenanceCalls = createAiAppCardProvenance.mock.calls as unknown as unknown[][];
+        const sendCalls = sendMessageWithContent.mock.calls as unknown as unknown[][];
+        const exactContent = provenanceCalls[0][3] as AiAppCardContentV1;
+        expect(exactContent.rows).toContainEqual({ label: "Label", value: "Field Session" });
+        expect(JSON.parse(new TextDecoder().decode(exactContent.confirmPayload))).toEqual(
+            extraction,
+        );
+        expect(sendCalls[0][1]).toMatchObject({
+            rows: expect.arrayContaining([{ label: "Label", value: "Field Session" }]),
+        });
+    });
+
+    it("refuses conflicting calendar values after independently normalizing both verified reads in the app", async () => {
+        const fixture = processorFixture();
+        declarePrivateReader(fixture.action);
+        browserImageActionMode.set("model_with_local_verification");
+        acceleratedImageModelReadyMock.mockResolvedValue(true);
+        inferenceCapabilityMock.mockReturnValue({
+            available: true,
+            runtimesSupported: ["llama-cpp"],
+            selectedModalities: ["text", "image"],
+        });
+        const vision = { reading: 42, observed_on: "4 Sep 2026" };
+        const decoded = { reading: 42, observed_on: "2026-08-04" };
+        inferOnDeviceMock.mockResolvedValueOnce({ kind: "ok", text: JSON.stringify(vision) });
+        inferOnDeviceTextOnlyNoProjectorMock.mockResolvedValueOnce({
+            kind: "ok",
+            text: JSON.stringify(decoded),
+        });
+        processWithAppMock.mockImplementation(async (_url, _action, input) => ({
+            kind: "candidates",
+            candidates: (input.candidates ?? []).map((candidate) => ({
+                ...candidate,
+                observed_on:
+                    candidate.observed_on === "4 Sep 2026" ? "2026-09-04" : candidate.observed_on,
+            })),
+        }));
+        const result = await proposeAndPostCandidate(
+            fixture.client,
+            messageContext,
+            { kind: "image_content", blobData: new Uint8Array([4, 2]) } as unknown as Parameters<
+                typeof proposeAndPostCandidate
+            >[2],
+            fixture.candidate,
+        );
+        expect(result).toEqual({
+            kind: "error",
+            error: "The model result could not be verified against the image. No action was created.",
+        });
+        expect(processWithAppMock.mock.calls.map(([, , input]) => input.candidates)).toEqual([
+            [vision],
+            [decoded],
+        ]);
+        expect(fixture.createAiAppCardProvenance).not.toHaveBeenCalled();
+        expect(fixture.sendMessageWithContent).not.toHaveBeenCalled();
     });
 
     it("binds provenance and the send to the same preallocated message id", async () => {
@@ -969,7 +1522,7 @@ describe("provenance before posting", () => {
         } as unknown as OpenChat;
 
         const result = await proposeAndPostCandidate(client, messageContext, content, CANDIDATE, {
-            amount: 20,
+            reading: 20,
         });
 
         expect(result.kind).toBe("ready");
@@ -981,14 +1534,14 @@ describe("provenance before posting", () => {
         expect(sendArgs[5]).toBe(provedMessageId);
         expect(sendArgs[1]).toMatchObject({ appProvenance: provenance });
         expect(exactContent).toEqual({
-            title: "Log expense",
-            rows: [{ label: "Amount", value: "20" }],
+            title: "Log measurement",
+            rows: [{ label: "Reading", value: "20" }],
             confirmLabel: "Add",
             cancelLabel: "Dismiss",
             actionId: DEF.name,
             disclosure: undefined,
             expiresAt: undefined,
-            confirmPayload: new TextEncoder().encode('{"amount":20}'),
+            confirmPayload: new TextEncoder().encode('{"reading":20}'),
         });
         expect(Object.keys(exactContent).sort()).toEqual([
             "actionId",
@@ -1018,25 +1571,25 @@ describe("provenance before posting", () => {
             responseSchema: {
                 type: "object",
                 properties: {
-                    amount: { type: "number", minimum: 0.005, maximum: 100_000 },
-                    currency: {
+                    reading: { type: "number", minimum: 0.005, maximum: 100_000 },
+                    unit: {
                         type: "string",
                         minLength: 3,
                         maxLength: 3,
                         format: "ascii-uppercase",
                     },
                     date: { type: "string", minLength: 10, maxLength: 10, format: "date" },
-                    note: { type: "string", maxLength: 4_096, format: "utf8-no-nul" },
+                    annotation: { type: "string", maxLength: 4_096, format: "utf8-no-nul" },
                 },
-                required: ["amount"],
+                required: ["reading"],
             },
             card: {
                 ...DEF.card,
                 rows: [
-                    { label: "Amount", valueKey: "amount" },
-                    { label: "Currency", valueKey: "currency" },
+                    { label: "Reading", valueKey: "reading" },
+                    { label: "Unit", valueKey: "unit" },
                     { label: "Date", valueKey: "date" },
-                    { label: "Note", valueKey: "note" },
+                    { label: "Annotation", valueKey: "annotation" },
                 ],
             },
         };
@@ -1067,7 +1620,7 @@ describe("provenance before posting", () => {
         } as unknown as Parameters<typeof proposeAndPostCandidate>[2];
 
         // This assertion targets the shared model-output sanitization boundary. Browser mode adds a
-        // separate source-grounded verification contract, which has its own focused coverage.
+        // separate app-declared verification contract, which has its own focused coverage.
         usesWebInferenceRuntimeMock.mockReturnValue(false);
         inferenceCapabilityMock.mockReturnValue({
             available: true,
@@ -1078,10 +1631,10 @@ describe("provenance before posting", () => {
         inferOnDeviceMock.mockResolvedValueOnce({
             kind: "ok",
             text: JSON.stringify({
-                amount: 20,
-                currency: "$$$",
+                reading: 20,
+                unit: "$$$",
                 date: "08/07/2026",
-                note: `visible${String.fromCharCode(0)}hidden`,
+                annotation: `visible${String.fromCharCode(0)}hidden`,
             }),
         });
 
@@ -1100,14 +1653,14 @@ describe("provenance before posting", () => {
         const exactContent = provenanceCalls[0][3] as Record<string, unknown>;
         const provedMessageId = provenanceCalls[0][5] as bigint;
         expect(exactContent).toEqual({
-            title: "Log expense",
-            rows: [{ label: "Amount", value: "20" }],
+            title: "Log measurement",
+            rows: [{ label: "Reading", value: "20" }],
             confirmLabel: "Add",
             cancelLabel: "Dismiss",
             actionId: imageDef.name,
             disclosure: undefined,
             expiresAt: undefined,
-            confirmPayload: new TextEncoder().encode('{"amount":20}'),
+            confirmPayload: new TextEncoder().encode('{"reading":20}'),
         });
         expect(sendCalls[0][5]).toBe(provedMessageId);
         expect(sendCalls[0][1]).toMatchObject({ appProvenance: provenance });
@@ -1122,12 +1675,12 @@ describe("provenance before posting", () => {
                 type: "object",
                 "x-openchat-image-prompt-template": {
                     version: 1,
-                    template: "Read amount only.",
+                    template: "Read reading only.",
                     includeRuleGuidance: false,
                 },
                 "x-openchat-image-focused-passes": {
                     version: 1,
-                    primaryFields: ["amount"],
+                    primaryFields: ["reading"],
                     primaryMaxTokens: 32,
                     passes: [
                         {
@@ -1140,10 +1693,10 @@ describe("provenance before posting", () => {
                     ],
                 },
                 properties: {
-                    amount: { type: "number", minimum: 0.005 },
+                    reading: { type: "number", minimum: 0.005 },
                     date: { type: "string", format: "date" },
                 },
-                required: ["amount"],
+                required: ["reading"],
             },
         };
         const imageCandidate: AiActionCandidate = {
@@ -1176,7 +1729,7 @@ describe("provenance before posting", () => {
             call += 1;
             if (call === 1) {
                 selectedWebModelIdMock.mockReturnValue("another-model");
-                return { kind: "ok", text: '{"amount":12900}' };
+                return { kind: "ok", text: '{"reading":12345}' };
             }
             return { kind: "ok", text: '{"date":"2026-08-14"}' };
         });
@@ -1203,41 +1756,16 @@ describe("provenance before posting", () => {
             acceptsImage: true,
             responseSchema: {
                 type: "object",
-                "x-openchat-source-grounded-transactions": {
-                    version: 1,
-                    amountField: "amount",
-                    currencyField: "currency",
-                    kindField: "kind",
-                    directionField: "direction",
-                    dateField: "date",
-                    noteField: "note",
-                    sourceField: "message",
-                    fallbackKind: "iou",
-                    ocrDefaultDirection: "credit",
-                    maximumItems: 1,
-                    authoritativeAmountLabels: ["total"],
-                    dateLabels: ["date"],
-                    noteLabels: ["note"],
-                    ignoredLineLabels: ["reference"],
-                    titleLineKeywords: ["receipt"],
-                    relationshipLabelPrefixes: ["direction"],
-                },
-                "x-openchat-browser-image-strategy": {
-                    version: 1,
-                    primary: "selected_model",
-                    requireAcceleration: true,
-                    fallback: "source_grounded",
-                },
                 properties: {
-                    amount: { type: "number", minimum: 0.005 },
-                    currency: { type: "string" },
-                    kind: { type: "string", enum: ["iou", "settlement"] },
-                    direction: { type: "string", enum: ["credit", "debt"] },
+                    reading: { type: "number", minimum: 0.005 },
+                    unit: { type: "string" },
+                    kind: { type: "string", enum: ["scheduled", "observed"] },
+                    orientation: { type: "string", enum: ["east", "west"] },
                     date: { type: "string", format: "date" },
-                    note: { type: "string" },
+                    annotation: { type: "string" },
                     message: { type: "string" },
                 },
-                required: ["amount", "currency", "kind", "direction"],
+                required: ["reading", "unit", "kind", "orientation"],
             },
         };
         const imageCandidate: AiActionCandidate = {
@@ -1263,7 +1791,7 @@ describe("provenance before posting", () => {
         });
         inferOnDeviceMock.mockResolvedValueOnce({
             kind: "ok",
-            text: '{"amount":12900,"currency":"EGP","kind":"settlement","direction":"credit","date":"2026-08-13"}',
+            text: '{"reading":12345,"unit":"HPA","kind":"observed","orientation":"east","date":"2026-08-13"}',
         });
 
         const result = await proposeAndPostCandidate(
@@ -1292,6 +1820,97 @@ describe("provenance before posting", () => {
         expect(phases).not.toContain("reading_text");
     });
 
+    it("keeps a visible user-defined category and date range in a model-only image card without invoking OCR", async () => {
+        acceleratedImageModelReadyMock.mockResolvedValue(true);
+        const appImagePrompt =
+            "APP_DEFINED_IMAGE_PROMPT: extract only the fields and meanings declared by this app.";
+        const imageDef: AiActionDefinition = {
+            ...DEF,
+            acceptsImage: true,
+            responseSchema: {
+                type: "object",
+                "x-openchat-image-prompt-template": {
+                    version: 1,
+                    template: appImagePrompt,
+                    includeRuleGuidance: false,
+                },
+                properties: {
+                    reading: { type: "number", minimum: 0.005 },
+                    unit: { type: "string" },
+                    kind: { type: "string", enum: ["scheduled", "observed"] },
+                    orientation: {
+                        type: "string",
+                        enum: ["east", "west"],
+                        "x-openchat-default-for-image-only": "east",
+                    },
+                    date: { type: "string", format: "date" },
+                    annotation: { type: "string" },
+                    message: { type: "string" },
+                },
+                required: ["reading", "unit", "kind", "orientation"],
+            },
+        };
+        const imageCandidate: AiActionCandidate = {
+            app: { ...APP, manifest: { ...APP.manifest, actions: [imageDef] } },
+            action: imageDef,
+            recipientKey: RECIPIENT,
+        };
+        const client = {
+            createAiAppCardProvenance: vi.fn(async () => ({
+                kind: "success" as const,
+                provenance: new Uint8Array([9]),
+                expiresAt: BigInt(Date.now() + 60_000),
+            })),
+            sendMessageWithContent: vi.fn(async () => ({ kind: "success" })),
+        } as unknown as OpenChat;
+        const pixels = new Uint8Array([11, 22, 33, 44]);
+        const phases: string[] = [];
+        inferenceCapabilityMock.mockReturnValue({
+            available: true,
+            runtimesSupported: ["llama-cpp"],
+            selectedModalities: ["image"],
+            selectedModelId: "qwen3-vl-2b-instruct-q4",
+        });
+        inferOnDeviceMock.mockResolvedValueOnce({
+            kind: "ok",
+            text: '{"reading":1912.15,"unit":"LUX","kind":"scheduled","annotation":"Workshop Confirmed | From 2026-07-19 to 2026-08-06"}',
+        });
+
+        const result = await proposeAndPostCandidate(
+            client,
+            messageContext,
+            { kind: "image_content", blobData: pixels } as unknown as Parameters<
+                typeof proposeAndPostCandidate
+            >[2],
+            imageCandidate,
+            undefined,
+            undefined,
+            (phase) => phases.push(phase),
+        );
+
+        expect(result).toMatchObject({
+            kind: "ready",
+            extracted: {
+                reading: 1912.15,
+                unit: "LUX",
+                kind: "scheduled",
+                orientation: "east",
+                annotation: "Workshop Confirmed | From 2026-07-19 to 2026-08-06",
+            },
+        });
+        expect(inferOnDeviceMock).toHaveBeenCalledOnce();
+        expect(inferOnDeviceMock.mock.calls[0][0]).toMatchObject({
+            modelId: "qwen3-vl-2b-instruct-q4",
+            image: pixels,
+            prompt: appImagePrompt,
+        });
+        expect(inferOnDeviceTextOnlyNoProjectorMock).not.toHaveBeenCalled();
+        // The runner emits these phases immediately before either local image reader. Their
+        // absence proves a successful model-only result does not invoke OCR as a hidden side path.
+        expect(phases).not.toContain("reading_image");
+        expect(phases).not.toContain("reading_text");
+    });
+
     it("preserves a selected browser image model's update reason instead of calling it text-only", async () => {
         const updateReason =
             "Qwen3-VL 2B is selected but its all-WebGPU model files need an update. Open On-device models and tap Retry download.";
@@ -1308,41 +1927,16 @@ describe("provenance before posting", () => {
             acceptsImage: true,
             responseSchema: {
                 type: "object",
-                "x-openchat-source-grounded-transactions": {
-                    version: 1,
-                    amountField: "amount",
-                    currencyField: "currency",
-                    kindField: "kind",
-                    directionField: "direction",
-                    dateField: "date",
-                    noteField: "note",
-                    sourceField: "message",
-                    fallbackKind: "iou",
-                    ocrDefaultDirection: "credit",
-                    maximumItems: 1,
-                    authoritativeAmountLabels: ["total"],
-                    dateLabels: ["date"],
-                    noteLabels: ["note"],
-                    ignoredLineLabels: ["reference"],
-                    titleLineKeywords: ["receipt"],
-                    relationshipLabelPrefixes: ["direction"],
-                },
-                "x-openchat-browser-image-strategy": {
-                    version: 1,
-                    primary: "selected_model",
-                    requireAcceleration: true,
-                    fallback: "source_grounded",
-                },
                 properties: {
-                    amount: { type: "number", minimum: 0.005 },
-                    currency: { type: "string" },
-                    kind: { type: "string", enum: ["iou", "settlement"] },
-                    direction: { type: "string", enum: ["credit", "debt"] },
+                    reading: { type: "number", minimum: 0.005 },
+                    unit: { type: "string" },
+                    kind: { type: "string", enum: ["scheduled", "observed"] },
+                    orientation: { type: "string", enum: ["east", "west"] },
                     date: { type: "string" },
-                    note: { type: "string" },
+                    annotation: { type: "string" },
                     message: { type: "string" },
                 },
-                required: ["amount", "kind", "direction"],
+                required: ["reading", "kind", "orientation"],
             },
         };
         const candidate: AiActionCandidate = {
@@ -1370,15 +1964,32 @@ describe("provenance before posting", () => {
         expect(inferOnDeviceMock).not.toHaveBeenCalled();
     });
 
-    it("verification mode returns a complete local card when its private text model is unavailable", () => {
+    const unavailableVerifierSchema = {
+        type: "object",
+        "x-openchat-private-image-verifier": {
+            version: 1,
+            promptTemplate:
+                "VERIFY\nPRIMARY={{PRIMARY_IMAGE_EVIDENCE_JSON}}\nSEMANTIC={{SEMANTIC_IMAGE_VALUES_JSON}}",
+            requiredFields: ["reading"],
+            optionalFields: ["unit"],
+            semanticFields: [],
+        },
+        properties: {
+            reading: { type: "number" },
+            unit: { type: "string" },
+        },
+        required: ["reading"],
+    };
+
+    it("verification mode never substitutes an OCR-decoder card when vision is unavailable", () => {
         const local: ProposeResult = {
             kind: "ready",
             card: CARD,
             extracted: {
-                amount: 12_900,
-                currency: "EGP",
-                kind: "settlement",
-                direction: "credit",
+                reading: 12_345,
+                unit: "HPA",
+                kind: "observed",
+                orientation: "east",
                 date: "2026-08-14",
             },
         };
@@ -1387,15 +1998,33 @@ describe("provenance before posting", () => {
             reconcileModelWithLocalResult(
                 { kind: "unavailable", reason: "private verifier unavailable" },
                 local,
+                unavailableVerifierSchema,
             ),
-        ).toBe(local);
+        ).toEqual({ kind: "unavailable", reason: "private verifier unavailable" });
+    });
+
+    it("verification mode fails closed without a valid app verifier declaration", () => {
+        const local: ProposeResult = {
+            kind: "ready",
+            card: CARD,
+            extracted: { reading: 42 },
+        };
+        expect(
+            reconcileModelWithLocalResult(
+                { kind: "unavailable", reason: "private verifier unavailable" },
+                local,
+            ),
+        ).toEqual({
+            kind: "error",
+            error: "The model result could not be verified against the image. No action was created.",
+        });
     });
 
     it("verification mode never falls back to an incomplete local extraction", () => {
         const local: ProposeResult = {
             kind: "incomplete_extraction",
-            raw: '{"amount":12900}',
-            missingFields: ["direction"],
+            raw: '{"reading":12345}',
+            missingFields: ["orientation"],
             candidateCount: 1,
             validCandidateCount: 0,
         };
@@ -1404,7 +2033,121 @@ describe("provenance before posting", () => {
             reconcileModelWithLocalResult(
                 { kind: "unavailable", reason: "private verifier unavailable" },
                 local,
+                unavailableVerifierSchema,
             ),
+        ).toEqual({
+            kind: "error",
+            error: "The model result could not be verified against the image. No action was created.",
+        });
+    });
+
+    it("compares arbitrary app-declared required and optional verifier fields exactly", () => {
+        const responseSchema = {
+            type: "object",
+            "x-openchat-private-image-verifier": {
+                version: 1,
+                promptTemplate:
+                    "VERIFY\nPRIMARY={{PRIMARY_IMAGE_EVIDENCE_JSON}}\nSEMANTIC={{SEMANTIC_IMAGE_VALUES_JSON}}",
+                requiredFields: ["reading", "unit_code"],
+                optionalFields: ["observed_on"],
+                semanticFields: [],
+            },
+            properties: {
+                reading: { type: "number" },
+                unit_code: { type: "string" },
+                observed_on: { type: "string" },
+            },
+            required: ["reading", "unit_code"],
+        };
+        const local: ProposeResult = {
+            kind: "ready",
+            card: CARD,
+            extracted: { reading: 42, unit_code: "ZX", observed_on: "2026-09-03" },
+        };
+        const modelWithoutOptional: RunAiActionResult = {
+            kind: "ready",
+            card: CARD,
+            extracted: { reading: 42, unit_code: "ZX" },
+        };
+        expect(reconcileModelWithLocalResult(modelWithoutOptional, local, responseSchema)).toBe(
+            local,
+        );
+
+        const modelWithMatchingOptional: RunAiActionResult = {
+            ...modelWithoutOptional,
+            extracted: { reading: 42, unit_code: "ZX", observed_on: "2026-09-03" },
+        };
+        expect(
+            reconcileModelWithLocalResult(modelWithMatchingOptional, local, responseSchema),
+        ).toBe(local);
+
+        const modelWithInventedOptional: RunAiActionResult = {
+            ...modelWithoutOptional,
+            extracted: { reading: 42, unit_code: "ZX", observed_on: "invented-prefix" },
+        };
+        expect(
+            reconcileModelWithLocalResult(modelWithInventedOptional, local, responseSchema),
+        ).toMatchObject({ kind: "error" });
+
+        const localWithoutOptional: ProposeResult = {
+            ...local,
+            extracted: { reading: 42, unit_code: "ZX" },
+        };
+        expect(
+            reconcileModelWithLocalResult(
+                modelWithMatchingOptional,
+                localWithoutOptional,
+                responseSchema,
+            ),
+        ).toMatchObject({ kind: "error" });
+
+        const modelWithRequiredMismatch: RunAiActionResult = {
+            ...modelWithoutOptional,
+            extracted: { reading: 43, unit_code: "ZX" },
+        };
+        expect(
+            reconcileModelWithLocalResult(modelWithRequiredMismatch, local, responseSchema),
+        ).toMatchObject({ kind: "error" });
+    });
+
+    it("hands an evidence-decoded optional label to app-private post-processing", () => {
+        const responseSchema = {
+            type: "object",
+            "x-openchat-private-image-verifier": {
+                version: 1,
+                promptTemplate:
+                    "VERIFY\nPRIMARY={{PRIMARY_IMAGE_EVIDENCE_JSON}}\nSEMANTIC={{SEMANTIC_IMAGE_VALUES_JSON}}",
+                requiredFields: ["reading"],
+                optionalFields: ["display_label"],
+                semanticFields: [],
+            },
+            properties: {
+                reading: { type: "number" },
+                display_label: { type: "string" },
+            },
+            required: ["reading"],
+        };
+        const vision: RunAiActionResult = {
+            kind: "ready",
+            card: CARD,
+            extracted: { reading: 42 },
+        };
+        const evidenceDecoded: ProposeResult = {
+            kind: "ready",
+            card: CARD,
+            extracted: { reading: 42, display_label: "Field Session" },
+        };
+
+        expect(reconcileModelWithLocalResult(vision, evidenceDecoded, responseSchema)).toBe(
+            evidenceDecoded,
+        );
+
+        const inventedVisionLabel: RunAiActionResult = {
+            ...vision,
+            extracted: { reading: 42, display_label: "Invented Prefix" },
+        };
+        expect(
+            reconcileModelWithLocalResult(inventedVisionLabel, evidenceDecoded, responseSchema),
         ).toEqual({
             kind: "error",
             error: "The model result could not be verified against the image. No action was created.",
@@ -1418,7 +2161,7 @@ describe("provenance before posting", () => {
             responseSchema: {
                 type: "object",
                 properties: {
-                    amount: { type: "number", exclusiveMinimum: 0 },
+                    reading: { type: "number", exclusiveMinimum: 0 },
                     date: {
                         type: "string",
                         format: "date",
@@ -1429,7 +2172,7 @@ describe("provenance before posting", () => {
                         "x-openchat-omit-for-image-only": true,
                     },
                 },
-                required: ["amount"],
+                required: ["reading"],
             },
         };
         const imageCandidate: AiActionCandidate = {
@@ -1457,7 +2200,7 @@ describe("provenance before posting", () => {
             imageContent,
             imageCandidate,
             {
-                amount: 20,
+                reading: 20,
                 date: "2026-08-09",
                 message: "manual model stand-in",
             },
@@ -1467,8 +2210,8 @@ describe("provenance before posting", () => {
         expect(inferOnDeviceMock).not.toHaveBeenCalled();
         const provenanceCalls = createAiAppCardProvenance.mock.calls as unknown as unknown[][];
         expect(provenanceCalls[0][3]).toMatchObject({
-            rows: [{ label: "Amount", value: "20" }],
-            confirmPayload: new TextEncoder().encode('{"amount":20}'),
+            rows: [{ label: "Reading", value: "20" }],
+            confirmPayload: new TextEncoder().encode('{"reading":20}'),
         });
     });
 
@@ -1483,7 +2226,7 @@ describe("provenance before posting", () => {
             sendMessageWithContent: vi.fn(async () => ({ kind: "success" })),
         } as unknown as OpenChat;
         const threadContext: MessageContext = { ...messageContext, threadRootMessageIndex: 42 };
-        await proposeAndPostCandidate(client, threadContext, content, CANDIDATE, { amount: 20 });
+        await proposeAndPostCandidate(client, threadContext, content, CANDIDATE, { reading: 20 });
         const provenanceCalls = createAiAppCardProvenance.mock.calls as unknown as unknown[][];
         expect(provenanceCalls[0][6]).toBe(42);
     });
@@ -1513,7 +2256,7 @@ describe("provenance before posting", () => {
             sendMessageWithContent,
         } as unknown as OpenChat;
         const result = await proposeAndPostCandidate(client, messageContext, content, CANDIDATE, {
-            amount: 20,
+            reading: 20,
         });
         expect(result).toMatchObject({ kind: "error" });
         if (result.kind === "error") expect(result.error).toContain(message);
@@ -1530,13 +2273,13 @@ describe("provenance before posting", () => {
         } as unknown as OpenChat;
 
         await expect(
-            proposeAndPostCandidate(client, messageContext, content, CANDIDATE, { amount: 20 }),
+            proposeAndPostCandidate(client, messageContext, content, CANDIDATE, { reading: 20 }),
         ).resolves.toEqual({
             kind: "app_connection_unavailable",
             appId: APP.id,
             appRevision: APP.updated,
             actionId: DEF.name,
-            preparedExtraction: { amount: 20 },
+            preparedExtraction: { reading: 20 },
             preparedSource: { modality: "text", text: content.text, rulesAlreadyResolved: true },
         });
         expect(sendMessageWithContent).not.toHaveBeenCalled();
@@ -1553,7 +2296,7 @@ describe("provenance before posting", () => {
             sendMessageWithContent,
         } as unknown as OpenChat;
         const result = await proposeAndPostCandidate(client, messageContext, content, CANDIDATE, {
-            amount: 20,
+            reading: 20,
         });
         expect(result).toMatchObject({
             kind: "error",
@@ -1571,12 +2314,12 @@ describe("provenance before posting", () => {
         } as unknown as OpenChat;
 
         const result = await proposeAndPostCandidate(client, messageContext, content, CANDIDATE, {
-            amount: 0,
+            reading: 0,
         });
 
         expect(result).toMatchObject({
             kind: "incomplete_extraction",
-            missingFields: ["amount"],
+            missingFields: ["reading"],
         });
         expect(createAiAppCardProvenance).not.toHaveBeenCalled();
         expect(sendMessageWithContent).not.toHaveBeenCalled();
@@ -1595,8 +2338,8 @@ describe("provenance before posting", () => {
             sendMessageWithContent,
         } as unknown as OpenChat;
         const result = await proposeAndPostCandidate(client, messageContext, content, CANDIDATE, [
-            { amount: 20 },
-            { amount: 30 },
+            { reading: 20 },
+            { reading: 30 },
         ]);
         expect(result.kind).toBe("ready_multi");
         expect(createAiAppCardProvenance).toHaveBeenCalledTimes(1);
@@ -1607,12 +2350,12 @@ describe("provenance before posting", () => {
         const exactContent = provenanceCalls[0][3] as AiAppCardContentV1;
         const provedMessageId = provenanceCalls[0][5] as bigint;
         expect(JSON.parse(new TextDecoder().decode(exactContent.confirmPayload!))).toEqual([
-            { amount: 20 },
-            { amount: 30 },
+            { reading: 20 },
+            { reading: 30 },
         ]);
         expect(exactContent.rows).toEqual([
-            { label: "Entry 1", value: "Amount: 20" },
-            { label: "Entry 2", value: "Amount: 30" },
+            { label: "Entry 1", value: "Reading: 20" },
+            { label: "Entry 2", value: "Reading: 30" },
         ]);
         expect(createAiAppCardProvenance).toHaveBeenCalledWith(
             APP.id,
@@ -1628,8 +2371,8 @@ describe("provenance before posting", () => {
         expect(sendCall[5]).toBe(provedMessageId);
         expect(sentCard.appProvenance).toEqual(provenance);
         expect(JSON.parse(new TextDecoder().decode(sentCard.confirmPayload!))).toEqual([
-            { amount: 20 },
-            { amount: 30 },
+            { reading: 20 },
+            { reading: 30 },
         ]);
     });
 
@@ -1644,8 +2387,8 @@ describe("provenance before posting", () => {
         } as unknown as OpenChat;
 
         const result = await proposeAndPostCandidate(client, messageContext, content, CANDIDATE, [
-            { amount: 20 },
-            { amount: 30 },
+            { reading: 20 },
+            { reading: 30 },
         ]);
 
         expect(result).toEqual({
@@ -1653,7 +2396,7 @@ describe("provenance before posting", () => {
             appId: APP.id,
             appRevision: APP.updated,
             actionId: DEF.name,
-            preparedExtraction: [{ amount: 20 }, { amount: 30 }],
+            preparedExtraction: [{ reading: 20 }, { reading: 30 }],
             preparedSource: { modality: "text", text: content.text, rulesAlreadyResolved: true },
         });
         expect(createAiAppCardProvenance).toHaveBeenCalledTimes(1);
@@ -1666,8 +2409,8 @@ describe("provenance before posting", () => {
 // with nothing to offer. Keying the table by ProposeResult["kind"] means a NEW kind fails to compile
 // here too, so the table can never quietly stop covering the union it claims to cover.
 const EVERY_RESULT: Record<ProposeResult["kind"], ProposeResult> = {
-    ready: { kind: "ready", card: CARD, extracted: { amount: 20 } },
-    ready_multi: { kind: "ready_multi", card: CARD, extracted: [{ amount: 20 }] },
+    ready: { kind: "ready", card: CARD, extracted: { reading: 20 } },
+    ready_multi: { kind: "ready_multi", card: CARD, extracted: [{ reading: 20 }] },
     choose: { kind: "choose", candidates: [CANDIDATE] },
     link_required: { kind: "link_required", app: APP },
     actions_unavailable: {
@@ -1679,8 +2422,8 @@ const EVERY_RESULT: Record<ProposeResult["kind"], ProposeResult> = {
         appId: APP.id,
         appRevision: APP.updated,
         actionId: DEF.name,
-        preparedExtraction: { amount: 20 },
-        preparedSource: { modality: "text", text: "paid 20", rulesAlreadyResolved: true },
+        preparedExtraction: { reading: 20 },
+        preparedSource: { modality: "text", text: "measured 20", rulesAlreadyResolved: true },
     },
     no_actions: { kind: "no_actions" },
     unavailable: { kind: "unavailable", reason: "no model" },
@@ -1692,7 +2435,7 @@ const EVERY_RESULT: Record<ProposeResult["kind"], ProposeResult> = {
     incomplete_extraction: {
         kind: "incomplete_extraction",
         raw: "{}",
-        missingFields: ["direction"],
+        missingFields: ["orientation"],
         candidateCount: 1,
         validCandidateCount: 0,
     },
@@ -1761,17 +2504,27 @@ describe("proposeFailureMessage", () => {
         );
     });
 
+    it("describes every local extraction failure without assuming app-defined semantics", () => {
+        const expected = "The local reader couldn't determine a complete action from this message.";
+        expect(proposeFailureMessage({ kind: "local_no_extraction", reason: "none" })).toBe(
+            expected,
+        );
+        expect(proposeFailureMessage({ kind: "local_no_extraction", reason: "ambiguous" })).toBe(
+            expected,
+        );
+    });
+
     it("reports an incomplete required field instead of claiming there was no action", () => {
         expect(
             proposeFailureMessage({
                 kind: "incomplete_extraction",
-                raw: '{"amount":200,"kind":"iou"}',
-                missingFields: ["direction"],
+                raw: '{"reading":200,"kind":"scheduled"}',
+                missingFields: ["orientation"],
                 candidateCount: 1,
                 validCandidateCount: 0,
             }),
         ).toBe(
-            "The model found an action, but required fields were missing or invalid: direction. Nothing was posted.",
+            "The model found an action, but required fields were missing or invalid: orientation. Nothing was posted.",
         );
     });
 
@@ -1780,12 +2533,12 @@ describe("proposeFailureMessage", () => {
             proposeFailureMessage({
                 kind: "incomplete_extraction",
                 raw: "[]",
-                missingFields: ["amount", "direction"],
+                missingFields: ["reading", "orientation"],
                 candidateCount: 3,
                 validCandidateCount: 1,
             }),
         ).toBe(
-            "The model produced 3 action entries, but only 1 passed validation. Nothing was posted. Missing or invalid required fields: amount, direction.",
+            "The model produced 3 action entries, but only 1 passed validation. Nothing was posted. Missing or invalid required fields: reading, orientation.",
         );
     });
 });
@@ -1827,6 +2580,52 @@ function flowDeps(overrides: Partial<ProposeFlowDeps> = {}): {
 }
 
 describe("generic proposal context guard", () => {
+    it("stops an account switch during model generation before candidates leave for app processing", async () => {
+        attestationAvailableMock.mockReturnValue(true);
+        acceleratedImageModelReadyMock.mockResolvedValue(true);
+        inferenceCapabilityMock.mockReturnValue({
+            available: true,
+            runtimesSupported: ["llama-cpp"],
+            selectedModalities: ["text", "image"],
+        });
+        const viewer = vi.spyOn(currentUserIdStore, "value", "get").mockReturnValue("viewer-one");
+        const inference = deferred<InferenceResult>();
+        inferOnDeviceMock.mockImplementationOnce(() => inference.promise);
+        const action: AiActionDefinition = {
+            ...DEF,
+            acceptsImage: true,
+            responseSchema: {
+                ...(DEF.responseSchema as object),
+                "x-openchat-local-processor": { version: 1 },
+            },
+        };
+        const app = { ...APP, manifest: { ...APP.manifest, actions: [action] } };
+        const { client, calls } = proposalClient(app);
+        try {
+            const running = proposeAndPostCandidate(
+                client,
+                { chatId: { kind: "group_chat", groupId: "aaaaa-aa" } },
+                {
+                    kind: "image_content",
+                    blobData: new Uint8Array([4, 2]),
+                } as unknown as Parameters<typeof proposeAndPostCandidate>[2],
+                { app, action, recipientKey: RECIPIENT },
+            );
+            await vi.waitFor(() => expect(inferOnDeviceMock).toHaveBeenCalledOnce());
+            viewer.mockReturnValue("viewer-two");
+            inference.resolve({ kind: "ok", text: '{"reading":42,"unit":"LUX"}' });
+            await expect(running).resolves.toEqual({
+                kind: "error",
+                error: "proposal context changed",
+            });
+            expect(processWithAppMock).not.toHaveBeenCalled();
+            expect(calls.createAiAppCardProvenance).not.toHaveBeenCalled();
+            expect(calls.sendMessageWithContent).not.toHaveBeenCalled();
+        } finally {
+            viewer.mockRestore();
+        }
+    });
+
     it("stops after deferred inference when the captured account/context changes", async () => {
         attestationAvailableMock.mockReturnValue(true);
         const inference = deferred<InferenceResult>();
@@ -1836,13 +2635,13 @@ describe("generic proposal context guard", () => {
         const running = proposeAndPost(
             client,
             { chatId: { kind: "group_chat", groupId: "aaaaa-aa" } },
-            { kind: "text_content", text: "paid 20 USD" },
+            { kind: "text_content", text: "measured 20 LUX" },
             undefined,
             () => current,
         );
         await vi.waitFor(() => expect(inferOnDeviceMock).toHaveBeenCalledOnce());
         current = false;
-        inference.resolve({ kind: "ok", text: JSON.stringify({ amount: 20, currency: "USD" }) });
+        inference.resolve({ kind: "ok", text: JSON.stringify({ reading: 20, unit: "LUX" }) });
         await expect(running).resolves.toEqual({
             kind: "error",
             error: "proposal context changed",
@@ -1920,10 +2719,10 @@ describe("runProposeFlow", () => {
                 appId: APP.id,
                 appRevision: APP.updated,
                 actionId: DEF.name,
-                preparedExtraction: { amount: 20 },
+                preparedExtraction: { reading: 20 },
                 preparedSource: {
                     modality: "image",
-                    text: "receipt caption",
+                    text: "report caption",
                     rulesAlreadyResolved: true,
                 },
             }),
@@ -1951,14 +2750,14 @@ describe("runProposeFlow", () => {
                 appId: APP.id,
                 appRevision: APP.updated,
                 actionId: DEF.name,
-                preparedExtraction: { amount: 20 },
+                preparedExtraction: { reading: 20 },
                 preparedSource: {
                     modality: "image",
-                    text: "receipt caption",
+                    text: "report caption",
                     rulesAlreadyResolved: true,
                 },
             })
-            .mockResolvedValueOnce({ kind: "ready", card: CARD, extracted: { amount: 20 } });
+            .mockResolvedValueOnce({ kind: "ready", card: CARD, extracted: { reading: 20 } });
         const deps = flowDeps({
             canInfer: vi.fn(() => true),
             promptForExtraction: vi.fn(() => undefined),
@@ -1988,10 +2787,10 @@ describe("runProposeFlow", () => {
             [CANDIDATE, undefined],
             [
                 refreshedCandidate,
-                { amount: 20 },
+                { reading: 20 },
                 {
                     modality: "image",
-                    text: "receipt caption",
+                    text: "report caption",
                     rulesAlreadyResolved: true,
                 },
             ],
@@ -2006,10 +2805,10 @@ describe("runProposeFlow", () => {
                 appId: APP.id,
                 appRevision: APP.updated,
                 actionId: DEF.name,
-                preparedExtraction: { amount: 20 },
+                preparedExtraction: { reading: 20 },
                 preparedSource: {
                     modality: "image",
-                    text: "receipt caption",
+                    text: "report caption",
                     rulesAlreadyResolved: true,
                 },
             }),
@@ -2040,23 +2839,23 @@ describe("runProposeFlow", () => {
             selectedModelId: "qwen3-vl-2b-instruct-q4",
         });
         inferOnDeviceMock
-            .mockResolvedValueOnce({ kind: "ok", text: '{"amount":12900}' })
+            .mockResolvedValueOnce({ kind: "ok", text: '{"reading":12345}' })
             .mockResolvedValueOnce({ kind: "ok", text: '{"date":"2026-08-14"}' });
 
         const imageDef: AiActionDefinition = {
             ...DEF,
             acceptsImage: true,
-            rules: [{ kind: "from_message", field: "note", maxLength: 200 }],
+            rules: [{ kind: "from_message", field: "annotation", maxLength: 200 }],
             responseSchema: {
                 type: "object",
                 "x-openchat-image-prompt-template": {
                     version: 1,
-                    template: "Read amount only.",
+                    template: "Read reading only.",
                     includeRuleGuidance: false,
                 },
                 "x-openchat-image-focused-passes": {
                     version: 1,
-                    primaryFields: ["amount"],
+                    primaryFields: ["reading"],
                     primaryMaxTokens: 32,
                     passes: [
                         {
@@ -2069,11 +2868,11 @@ describe("runProposeFlow", () => {
                     ],
                 },
                 properties: {
-                    amount: { type: "number", minimum: 0.005 },
+                    reading: { type: "number", minimum: 0.005 },
                     date: { type: "string", format: "date" },
-                    note: { type: "string", maxLength: 200 },
+                    annotation: { type: "string", maxLength: 200 },
                 },
-                required: ["amount"],
+                required: ["reading"],
             },
         };
         const imageApp = { ...APP, manifest: { ...APP.manifest, actions: [imageDef] } };
@@ -2107,7 +2906,7 @@ describe("runProposeFlow", () => {
         const imageContent = {
             kind: "image_content",
             blobData: new Uint8Array([1, 2, 3]),
-            caption: "authoritative receipt caption",
+            caption: "authoritative report caption",
         } as unknown as Parameters<typeof proposeAndPostCandidate>[2];
         const proposeCandidate = vi.fn((candidate, extraction, source) =>
             proposeAndPostCandidate(
@@ -2154,13 +2953,13 @@ describe("runProposeFlow", () => {
             [
                 refreshedCandidate,
                 {
-                    amount: 12900,
+                    reading: 12345,
                     date: "2026-08-14",
-                    note: "authoritative receipt caption",
+                    annotation: "authoritative report caption",
                 },
                 {
                     modality: "image",
-                    text: "authoritative receipt caption",
+                    text: "authoritative report caption",
                     rulesAlreadyResolved: true,
                 },
             ],
@@ -2177,10 +2976,10 @@ describe("runProposeFlow", () => {
             appId: APP.id,
             appRevision: APP.updated,
             actionId: DEF.name,
-            preparedExtraction: { amount: 20 },
+            preparedExtraction: { reading: 20 },
             preparedSource: {
                 modality: "image",
-                text: "receipt caption",
+                text: "report caption",
                 rulesAlreadyResolved: true,
             },
         } satisfies ProposeResult;
@@ -2223,10 +3022,10 @@ describe("runProposeFlow", () => {
                 appId: APP.id,
                 appRevision: APP.updated,
                 actionId: DEF.name,
-                preparedExtraction: { amount: 20 },
+                preparedExtraction: { reading: 20 },
                 preparedSource: {
                     modality: "image",
-                    text: "receipt caption",
+                    text: "report caption",
                     rulesAlreadyResolved: true,
                 },
             }),
@@ -2260,10 +3059,10 @@ describe("runProposeFlow", () => {
                 appId: APP.id,
                 appRevision: APP.updated,
                 actionId: DEF.name,
-                preparedExtraction: { amount: 20 },
+                preparedExtraction: { reading: 20 },
                 preparedSource: {
                     modality: "image",
-                    text: "receipt caption",
+                    text: "report caption",
                     rulesAlreadyResolved: true,
                 },
             }),
@@ -2405,20 +3204,17 @@ describe("runProposeFlow", () => {
         expect(deps.propose).not.toHaveBeenCalled();
     });
 
-    it("enters an OCR-only image proposal without probing selected-model readiness", async () => {
+    it("skips model readiness for an OCR-only image proposal", async () => {
         const deps = flowDeps({
-            canInfer: vi.fn(() => false),
+            canInfer: vi.fn(async () => ({ available: false })),
             requiresModelReadiness: vi.fn(() => false),
-            propose: resolving({ kind: "local_no_extraction", reason: "none" }),
         });
 
         await runProposeFlow(deps);
 
         expect(deps.canInfer).not.toHaveBeenCalled();
         expect(deps.propose).toHaveBeenCalledOnce();
-        expect(deps.toast).toHaveBeenCalledWith(
-            "The local reader couldn't determine a complete action from this message.",
-        );
+        expect(deps.toast).not.toHaveBeenCalled();
     });
 
     it("awaits native readiness and preserves an update-required reason", async () => {
@@ -2463,10 +3259,10 @@ describe("runProposeFlow", () => {
     it("with no model but an extraction supplied, proposes with it and stays quiet", async () => {
         const deps = flowDeps({
             canInfer: vi.fn(() => false),
-            promptForExtraction: vi.fn(() => ({ amount: 20 })),
+            promptForExtraction: vi.fn(() => ({ reading: 20 })),
         });
         await runProposeFlow(deps);
-        expect(deps.propose).toHaveBeenCalledWith({ amount: 20 });
+        expect(deps.propose).toHaveBeenCalledWith({ reading: 20 });
         expect(deps.toast).not.toHaveBeenCalled();
     });
 
@@ -2480,10 +3276,10 @@ describe("runProposeFlow", () => {
     it("lets the explicit manual test seam override an available model deterministically", async () => {
         const deps = flowDeps({
             canInfer: vi.fn(() => true),
-            promptForExtraction: vi.fn(() => ({ amount: 20 })),
+            promptForExtraction: vi.fn(() => ({ reading: 20 })),
         });
         await runProposeFlow(deps);
-        expect(deps.propose).toHaveBeenCalledWith({ amount: 20 });
+        expect(deps.propose).toHaveBeenCalledWith({ reading: 20 });
         expect(deps.canInfer).not.toHaveBeenCalled();
         expect(deps.toast).not.toHaveBeenCalled();
     });
@@ -2574,13 +3370,13 @@ describe("runProposeFlow", () => {
             .mockResolvedValueOnce({ kind: "ready", card: CARD, extracted: {} });
         const deps = flowDeps({
             canInfer: vi.fn(() => false),
-            promptForExtraction: vi.fn(() => ({ amount: 20 })),
+            promptForExtraction: vi.fn(() => ({ reading: 20 })),
             propose,
             linkApp: vi.fn(async () => true),
         });
         await runProposeFlow(deps);
         expect(deps.linkApp).toHaveBeenCalledWith(APP);
-        expect(propose.mock.calls).toEqual([[{ amount: 20 }], [{ amount: 20 }]]);
+        expect(propose.mock.calls).toEqual([[{ reading: 20 }], [{ reading: 20 }]]);
         expect(deps.toast).not.toHaveBeenCalled();
     });
 

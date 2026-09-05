@@ -58,7 +58,7 @@ describe("browser Model Manager all-WebGPU parity", () => {
 
         expect(source).toContain("const browserLocalReaderModesAllowed = webInference;");
         expect(source).toMatch(
-            /webInference\s*&&\s*input\.image !== undefined\s*&&\s*browserUsesModelOnly\(\)/,
+            /webInference\s*&&\s*input\.image !== undefined\s*&&\s*useModelOnly/,
         );
         expect(source).not.toContain("webInference && !isNativeClient()");
         expect(source).toContain("browserUsesLocalReaderOnly()");
@@ -67,9 +67,9 @@ describe("browser Model Manager all-WebGPU parity", () => {
             "inferPrivateEvidenceWithPhase: typeof inferOnDeviceTextOnlyNoProjector",
         );
         expect(source).not.toContain("PRIVATE_VERIFICATION_MODEL_ID");
-        expect(source).toContain(
-            'source.local?.kind === "unavailable" || source.local?.kind === "error"',
-        );
+        expect(source).toContain("localImageEvidenceExtractorSupports(def.responseSchema)");
+        expect(source).toContain("const useLocalReaderOnly");
+        expect(source).toContain("const vision = await runSelectedModel(true)");
         expect(source).toContain(
             "The local image reader could not produce complete evidence, so model verification was not run.",
         );

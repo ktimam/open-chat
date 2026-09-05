@@ -7,7 +7,7 @@ export type BrowserImageActionMode =
 
 // localStorage is scoped to the current origin, matching the browser model cache/selection. This is
 // a user invocation choice, never an app capability grant. In local_reader_only mode image actions
-// may use only an app-declared source-grounded local reader; they never invoke the selected model.
+// use app-declared OCR profiles plus the app's own parser, without loading or running a model.
 // model_only is the inverse hard boundary and the default: a fresh browser follows the selected
 // all-WebGPU image-model path without silently introducing OCR. The two local-reader modes remain
 // explicit, persisted user choices; the runner owns those policies once selected.
@@ -63,19 +63,12 @@ export function browserUsesModelWithLocalVerification(): boolean {
 }
 
 /**
- * Whether the shared proposal flow must probe the selected model before it starts. Both browser
- * image modes with a declared local path enter the runner without the generic outer gate: OCR-only
- * never probes a model, while verification mode performs its own model readiness check and can
- * recover a failed/unavailable model only from a complete source-grounded local card. Text, native
- * proposals and browser model-only retain the outer readiness gate.
+ * OCR-only image actions use the app's own local parser in browsers and WebGPU Android builds.
+ * Other image modes and non-image model actions retain the normal readiness check.
  */
 export function browserImageProposalRequiresModelReadiness(
     isImage: boolean,
-    nativeClient: boolean,
+    _nativeClient: boolean,
 ): boolean {
-    return (
-        nativeClient ||
-        !isImage ||
-        (!browserUsesLocalReaderOnly() && !browserUsesModelWithLocalVerification())
-    );
+    return !isImage || !browserUsesLocalReaderOnly();
 }

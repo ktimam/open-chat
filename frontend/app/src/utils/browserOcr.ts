@@ -1,4 +1,5 @@
 import { writable } from "svelte/store";
+import type { AiActionPrivateImageOcrProfile } from "@shared";
 
 const ASSET_BASE = "/assets/local-extractor/v7.0.0";
 export const BROWSER_OCR_LANGUAGES = "eng";
@@ -62,10 +63,8 @@ function workerFactoryForLanguages(languages: string): BrowserOcrWorkerFactory {
         };
         const createWorker = loaded.createWorker ?? loaded.default?.createWorker;
         if (createWorker === undefined) throw new Error("OCR runtime is unavailable");
-        // Keep Latin money and multilingual semantics in separate recognitions. A combined RTL/LTR
-        // pass once reordered `13,500 EGP` into a grounded-but-wrong `500`, so only the English
-        // primary pass may provide money/date/note. The Arabic+English worker is loaded solely when
-        // required transaction semantics are missing, and its transcript is never concatenated.
+        // Each packaged language profile owns a separately cached worker. The app declaration picks
+        // the profiles; this host layer recognizes text but never assigns field meanings to it.
         return createWorker(languages, 1, {
             workerPath: `${ASSET_BASE}/worker.min.js`,
             corePath: `${ASSET_BASE}/core`,
@@ -334,18 +333,21 @@ export function createBrowserOcrEngine(
     };
 }
 
-const browserOcrEngine = createBrowserOcrEngine();
-const browserSemanticOcrEngine = createBrowserOcrEngine(semanticWorkerFactory);
+const browserOcrEngEngine = createBrowserOcrEngine();
+const browserOcrArabicEnglishEngine = createBrowserOcrEngine(semanticWorkerFactory);
+const browserOcrEngines: Record<AiActionPrivateImageOcrProfile, BrowserOcrEngine> = {
+    eng: browserOcrEngEngine,
+    "ara+eng": browserOcrArabicEnglishEngine,
+};
 
-export function recognizeBrowserImage(image: Uint8Array): Promise<BrowserOcrResult> {
-    return browserOcrEngine.recognize(image);
-}
-
-/** Arabic+English fallback used solely as bounded semantic evidence after English parsing fails. */
-export function recognizeBrowserSemanticImage(image: Uint8Array): Promise<BrowserOcrResult> {
-    return browserSemanticOcrEngine.recognize(image);
+/** Read text with one already-validated, packaged app-declared profile. */
+export function recognizeBrowserImage(
+    image: Uint8Array,
+    profile: AiActionPrivateImageOcrProfile = "eng",
+): Promise<BrowserOcrResult> {
+    return browserOcrEngines[profile].recognize(image);
 }
 
 export async function disposeBrowserOcr(): Promise<void> {
-    await Promise.all([browserOcrEngine.dispose(), browserSemanticOcrEngine.dispose()]);
+    await Promise.all(Object.values(browserOcrEngines).map((engine) => engine.dispose()));
 }

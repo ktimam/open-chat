@@ -1,16 +1,19 @@
 import {
     isValidPrivateImageEvidence,
-    parseSourceGroundedTransactions,
-    supportsSourceGroundedTransactions,
+    MAX_PRIVATE_IMAGE_EVIDENCE_BYTES,
+    privateImageVerifierConfig,
+    type AiActionPrivateImageOcrProfile,
+    type AiActionPrivateImageVerifierConfig,
     type AiActionRule,
     type PrivateImageEvidence,
 } from "@shared";
 import {
+    disposeBrowserOcr,
     recognizeBrowserImage,
-    recognizeBrowserSemanticImage,
     type BrowserOcrResult,
 } from "./browserOcr";
 import { prepareImageForBrowserOcr, type OcrImageDimensions } from "./ocrImage";
+import { appLocalProcessorSupports } from "./appLocalProcessor";
 
 export type LocalActionExtractorResult =
     | { kind: "unsupported" }
@@ -21,9 +24,12 @@ export type LocalActionExtractorResult =
 
 export interface PrivateVerificationExtraction {
     result: LocalActionExtractorResult;
-    // Present only after a successful image OCR pass and only while the caller holds this return
-    // value in memory. Ordinary extraction deliberately strips this property.
+    // Present only after successful app-declared image OCR and only while the caller holds this
+    // value in memory. It is never added to chat text, cards, logs, or persisted state.
     privateImageEvidence?: PrivateImageEvidence;
+    // The same bounded profile text is also available to the app's isolated deterministic reader.
+    // Profile metadata describes the OCR engine only; it does not assign meaning to any text.
+    ocrTranscripts?: { profile: AiActionPrivateImageOcrProfile; text: string }[];
 }
 
 interface LocalActionExtractorInput {
@@ -38,17 +44,24 @@ interface LocalActionExtractorOptions {
         image: Uint8Array,
         dimensions: OcrImageDimensions | undefined,
     ) => Promise<Uint8Array>;
-    recognizeImage?: (image: Uint8Array) => Promise<BrowserOcrResult>;
-    recognizeSemanticImage?: (image: Uint8Array) => Promise<BrowserOcrResult>;
+    recognizeImage?: (
+        image: Uint8Array,
+        profile: AiActionPrivateImageOcrProfile,
+    ) => Promise<BrowserOcrResult>;
+    disposeOcr?: () => Promise<void>;
 }
 
+/** App-owned local processing is independent of the optional image evidence collector. */
 export function localActionExtractorSupports(responseSchema: object | undefined): boolean {
-    return supportsSourceGroundedTransactions(responseSchema);
+    return appLocalProcessorSupports(responseSchema);
 }
 
-// Run the schema-opted deterministic extractor. Typed messages are parsed directly; images first
-// pass through the bounded local OCR worker. Neither branch calls a generative model, and OCR text
-// is kept ephemeral rather than returned in errors or status stores.
+/** An image can enter a local-reader mode only when its app declares the complete verifier. */
+export function localImageEvidenceExtractorSupports(responseSchema: object | undefined): boolean {
+    return privateImageVerifierConfig(responseSchema) !== undefined;
+}
+
+// This module collects evidence only. The isolated app document interprets text and local results.
 export async function extractLocalAction(
     responseSchema: object | undefined,
     rules: readonly AiActionRule[],
@@ -59,111 +72,137 @@ export async function extractLocalAction(
         .result;
 }
 
-const PRIVATE_SEMANTIC_VALUE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
-
-function categoricalSemanticEvidence(result: LocalActionExtractorResult): string | undefined {
-    if (result.kind !== "candidates") return undefined;
-    const lines: string[] = [];
-    for (const field of ["kind", "direction"] as const) {
-        const values = [
-            ...new Set(
-                result.candidates
-                    .map((candidate) => candidate[field])
-                    .filter(
-                        (value): value is string =>
-                            typeof value === "string" && PRIVATE_SEMANTIC_VALUE.test(value),
-                    ),
-            ),
-        ];
-        if (values.length > 0) lines.push(`${field}: ${values.join(", ")}`);
-    }
-    return lines.length > 0 ? lines.join("\n") : undefined;
-}
-
 function privateEvidence(
     primaryText: string,
-    semanticResult?: LocalActionExtractorResult,
+    verifier: AiActionPrivateImageVerifierConfig,
 ): PrivateImageEvidence | undefined {
-    const semanticText =
-        semanticResult === undefined ? undefined : categoricalSemanticEvidence(semanticResult);
-    const evidence: PrivateImageEvidence = {
-        primaryText,
-        ...(semanticText === undefined ? {} : { semanticText }),
-    };
-    return isValidPrivateImageEvidence(evidence) ? evidence : undefined;
+    const evidence: PrivateImageEvidence = { primaryText };
+    return isValidPrivateImageEvidence(evidence, verifier.semanticFields) ? evidence : undefined;
 }
 
-// Verification mode gets the same deterministic result plus an ephemeral OCR-to-text-model bridge.
-// The primary transcript remains exact; a second OCR transcript is never forwarded raw. Instead it
-// is reduced to the already-validated categorical kind/direction values, so decoy money cannot
-// compete with the authoritative primary amount/currency/date evidence.
+const PROFILE_SEPARATOR = "\n\n";
+const EVIDENCE_OMISSION_MARKER = "\n…\n";
+
+function utf8Bytes(value: string): number {
+    return new TextEncoder().encode(value).byteLength;
+}
+
+function boundedBeginningAndEnd(value: string, maximumBytes: number): string {
+    if (utf8Bytes(value) <= maximumBytes) return value;
+    const markerBytes = utf8Bytes(EVIDENCE_OMISSION_MARKER);
+    const contentBudget = Math.max(0, maximumBytes - markerBytes);
+    const beginningBudget = Math.floor(contentBudget / 2);
+    const endBudget = contentBudget - beginningBudget;
+    let beginning = "";
+    let beginningBytes = 0;
+    for (const character of value) {
+        const bytes = utf8Bytes(character);
+        if (beginningBytes + bytes > beginningBudget) break;
+        beginning += character;
+        beginningBytes += bytes;
+    }
+    let end = "";
+    let endBytes = 0;
+    for (const character of [...value].reverse()) {
+        const bytes = utf8Bytes(character);
+        if (endBytes + bytes > endBudget) break;
+        end = character + end;
+        endBytes += bytes;
+    }
+    return beginning + EVIDENCE_OMISSION_MARKER + end;
+}
+
+function boundedProfileTranscript(
+    profile: AiActionPrivateImageOcrProfile,
+    text: string,
+    maximumBytes: number,
+): { profile: AiActionPrivateImageOcrProfile; text: string } {
+    const header = `--- OCR PROFILE ${profile} ---\n`;
+    return {
+        profile,
+        text: boundedBeginningAndEnd(text, Math.max(0, maximumBytes - utf8Bytes(header))),
+    };
+}
+
+// Image OCR is a generic, ephemeral evidence collector. Profile selection comes from the app's
+// bounded verifier declaration; OpenChat neither parses the transcript nor assigns field meanings.
+// Workers are disposed before this function returns so OCR WASM memory cannot coexist with WebGPU
+// model inference on constrained phones.
 export async function extractLocalActionForPrivateVerification(
     responseSchema: object | undefined,
-    rules: readonly AiActionRule[],
+    _rules: readonly AiActionRule[],
     input: LocalActionExtractorInput,
     options: LocalActionExtractorOptions = {},
 ): Promise<PrivateVerificationExtraction> {
-    if (!localActionExtractorSupports(responseSchema)) {
+    if (input.image === undefined) {
         return { result: { kind: "unsupported" } };
     }
 
-    let source: "text" | "ocr";
-    let text: string;
-    let preparedImage: Uint8Array | undefined;
-    if (input.image !== undefined) {
-        try {
-            preparedImage = await (options.prepareImage ?? prepareImageForBrowserOcr)(
-                input.image,
-                options.imageDimensions,
-            );
-        } catch {
-            return {
-                result: {
-                    kind: "error",
-                    error: "The image could not be safely prepared for local reading. Try a smaller image.",
-                },
-            };
-        }
-        const recognized = await (options.recognizeImage ?? recognizeBrowserImage)(preparedImage);
-        if (recognized.kind !== "ok") return { result: recognized };
-        source = "ocr";
-        text = recognized.text;
-    } else {
-        source = "text";
-        text = input.text ?? "";
-    }
+    const verifier = privateImageVerifierConfig(responseSchema);
+    if (verifier === undefined) return { result: { kind: "unsupported" } };
 
-    const parse = (ocrSemanticText?: string) =>
-        parseSourceGroundedTransactions(responseSchema, rules, {
-            source,
-            text,
-            // Keep the chat caption separate from OCR: it is intentional note/semantic evidence, not
-            // a second document whose digits may compete with the visible transfer amount.
-            ...(source === "ocr" && input.text !== undefined ? { messageText: input.text } : {}),
-            ...(ocrSemanticText === undefined ? {} : { ocrSemanticText }),
-            now: options.now ?? new Date(),
-        });
-    const primary = parse();
-    const needsSemanticFallback =
-        source === "ocr" &&
-        ((primary.kind === "none" && primary.reason === "missing_transaction_semantics") ||
-            (primary.kind === "ambiguous" && primary.reason === "missing_ocr_direction"));
-    if (!needsSemanticFallback || preparedImage === undefined) {
+    let preparedImage: Uint8Array;
+    try {
+        preparedImage = await (options.prepareImage ?? prepareImageForBrowserOcr)(
+            input.image,
+            options.imageDimensions,
+        );
+    } catch {
         return {
-            result: primary,
-            ...(source === "ocr" ? { privateImageEvidence: privateEvidence(text) } : {}),
+            result: {
+                kind: "error",
+                error: "The image could not be safely prepared for local reading. Try a smaller image.",
+            },
         };
     }
 
-    // The English pass remains the sole authority for money/date/note. Only when its deterministic
-    // parser identifies missing required semantics do we pay for a separate Arabic recognition;
-    // the shared parser consumes that transcript exclusively as kind/direction evidence.
-    const semantic = await (options.recognizeSemanticImage ?? recognizeBrowserSemanticImage)(
-        preparedImage,
-    );
-    const result = semantic.kind === "ok" ? parse(semantic.text) : primary;
+    const recognizedTranscripts: { profile: AiActionPrivateImageOcrProfile; text: string }[] = [];
+    try {
+        for (const profile of verifier.ocrProfiles) {
+            const recognized = await (options.recognizeImage ?? recognizeBrowserImage)(
+                preparedImage,
+                profile,
+            );
+            // Every declared profile is part of the app's evidence contract. A partial profile set
+            // could silently change field interpretation, so one failed requested read fails closed.
+            if (recognized.kind !== "ok") return { result: recognized };
+            recognizedTranscripts.push({ profile, text: recognized.text });
+        }
+    } finally {
+        await (options.disposeOcr ?? disposeBrowserOcr)();
+    }
+
+    if (recognizedTranscripts.every(({ text }) => text.trim().length === 0)) {
+        return { result: { kind: "none", reason: "empty_or_oversized_image_text" } };
+    }
+
+    const separatorBytes = utf8Bytes(PROFILE_SEPARATOR);
+    const transcriptBudget =
+        recognizedTranscripts.length === 0
+            ? 0
+            : Math.floor(
+                  (MAX_PRIVATE_IMAGE_EVIDENCE_BYTES -
+                      separatorBytes * (recognizedTranscripts.length - 1)) /
+                      recognizedTranscripts.length,
+              );
+    const ocrTranscripts = recognizedTranscripts
+        .map(({ profile, text }) => boundedProfileTranscript(profile, text, transcriptBudget));
+    const primaryText = ocrTranscripts
+        .map(({ profile, text }) => `--- OCR PROFILE ${profile} ---\n${text}`)
+        .join(PROFILE_SEPARATOR);
+    const evidence = privateEvidence(primaryText, verifier);
+    if (evidence === undefined) {
+        return {
+            result: {
+                kind: "none",
+                reason: "empty_or_oversized_image_text",
+            },
+        };
+    }
     return {
-        result,
-        privateImageEvidence: privateEvidence(text, semantic.kind === "ok" ? result : undefined),
+        // The app interprets this evidence through its own parser or its declared model prompt.
+        result: { kind: "unsupported" },
+        privateImageEvidence: evidence,
+        ocrTranscripts,
     };
 }
