@@ -43,7 +43,7 @@ function contextLine(message: LocalAiChatMessage): string | undefined {
             .replace(/[\r\n]+/g, " ")
             .trim()
             .slice(0, 80) || "Unknown";
-    const messageText = message.text?.replace(/\u0000/g, "").trim();
+    const messageText = message.text?.replaceAll("\u0000", "").trim();
     if (
         (messageText === undefined || messageText.length === 0) &&
         !message.hasImage &&

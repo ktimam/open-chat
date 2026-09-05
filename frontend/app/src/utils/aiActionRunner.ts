@@ -1569,6 +1569,7 @@ export function unexpectedProposalFailureMessage(error: unknown): string {
     const raw = error instanceof Error ? error.message : String(error ?? "");
     const safe = raw
         .replace(/([?&](?:code|key|secret|token)=)[^&\s]*/giu, "$1[redacted]")
+        // eslint-disable-next-line no-control-regex -- Intentionally removes C0/C1 controls from untrusted error text.
         .replace(/[\u0000-\u001f\u007f-\u009f]+/gu, " ")
         .replace(/\s+/gu, " ")
         .trim();

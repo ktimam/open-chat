@@ -19,9 +19,9 @@ import {
   sep,
 } from "node:path";
 import { tmpdir } from "node:os";
-import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import { reviewedDependencyDigest } from "./security_dependency_hash.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const policyPath = resolve(
@@ -45,9 +45,7 @@ for (const [path, expected] of Object.entries(policy.reviewedDependencyFiles)) {
     failures.push("Reviewed dependency file is missing: " + path);
     continue;
   }
-  const actual = createHash("sha256")
-    .update(readFileSync(absolutePath))
-    .digest("hex");
+  const actual = reviewedDependencyDigest(readFileSync(absolutePath), policy, path);
   if (actual !== expected) {
     failures.push(
       "Reviewed dependency file changed: " +

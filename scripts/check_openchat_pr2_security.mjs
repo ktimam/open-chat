@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
-import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { reviewedDependencyDigest } from "./security_dependency_hash.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const policy = JSON.parse(readFileSync(resolve(root, ".github/security/openchat-pr2-security-baseline.json"), "utf8"));
@@ -55,7 +55,7 @@ for (const [path, expected] of Object.entries(policy.reviewedDependencyFiles)) {
     failures.push(`Reviewed dependency file is missing: ${path}`);
     continue;
   }
-  const actual = createHash("sha256").update(readFileSync(absolute)).digest("hex");
+  const actual = reviewedDependencyDigest(readFileSync(absolute), policy, path);
   if (actual !== expected) failures.push(`Reviewed dependency file changed: ${path} (${actual} != ${expected})`);
 }
 const reviewedDependencyFiles = new Set(Object.keys(policy.reviewedDependencyFiles));

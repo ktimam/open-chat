@@ -692,7 +692,7 @@ export function chatKeyFor(chatId: ChatIdentifier, currentUserId?: string): stri
             return `group:${chatId.groupId}`;
         case "channel":
             return `channel:${chatId.communityId}:${chatId.channelId}`;
-        case "direct_chat":
+        case "direct_chat": {
             // Both participants derive the same sorted two-principal identity. Missing viewer
             // context fails closed rather than falling back to the old ambiguous counterpart key.
             if (currentUserId === undefined) return undefined;
@@ -700,6 +700,7 @@ export function chatKeyFor(chatId: ChatIdentifier, currentUserId?: string): stri
             return context?.kind === "direct"
                 ? `direct:${context.userIds[0]}:${context.userIds[1]}`
                 : undefined;
+        }
     }
 }
 
@@ -2212,6 +2213,7 @@ function boundedInferenceFailure(error: unknown): string {
     const raw = error instanceof Error ? error.message : String(error ?? "");
     const safe = raw
         .replace(/([?&](?:code|key|secret|token)=)[^&\s]*/giu, "$1[redacted]")
+        // eslint-disable-next-line no-control-regex -- Intentionally removes C0/C1 controls from untrusted error text.
         .replace(/[\u0000-\u001f\u007f-\u009f]+/gu, " ")
         .replace(/\s+/gu, " ")
         .trim();

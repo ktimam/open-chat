@@ -655,15 +655,36 @@ describe("Transformers.js WebGPU build isolation", () => {
                 FRONTEND_DIR,
                 "node_modules/onnxruntime-web/lib/onnxjs/ort-schema/protobuf/onnx.js",
             ),
-        ) as any;
+        ) as {
+            onnx: {
+                ModelProto: {
+                    decode(bytes: Uint8Array): {
+                        graph: {
+                            input: unknown[];
+                            initializer: Array<{
+                                name: string;
+                                dataLocation: number;
+                                externalData: Array<{ key: string; value: string }>;
+                            }>;
+                            node: Array<{
+                                attribute: Array<{
+                                    name: string;
+                                    i: number | { toString(): string };
+                                }>;
+                            }>;
+                        };
+                    };
+                };
+            };
+        };
         const sourceGraph = schema.onnx.ModelProto.decode(source).graph;
         const graph = schema.onnx.ModelProto.decode(patched).graph;
         expect(graph.input).toHaveLength(sourceGraph.input.length + 1);
         expect(graph.initializer).toHaveLength(sourceGraph.initializer.length + 1);
         expect(
-            graph.initializer.filter(({ dataLocation }: any) => dataLocation === 1),
+            graph.initializer.filter(({ dataLocation }) => dataLocation === 1),
         ).toHaveLength(
-            sourceGraph.initializer.filter(({ dataLocation }: any) => dataLocation === 1).length,
+            sourceGraph.initializer.filter(({ dataLocation }) => dataLocation === 1).length,
         );
         expect(graph.input.at(-1)).toMatchObject({
             name: TRANSFORMERS_QWEN_DECODER_TOKEN_IDS_INPUT,
@@ -689,7 +710,7 @@ describe("Transformers.js WebGPU build isolation", () => {
             ],
         });
         expect(
-            Object.fromEntries(gather.attribute.map(({ name, i }: any) => [name, Number(i)])),
+            Object.fromEntries(gather.attribute.map(({ name, i }) => [name, Number(i)])),
         ).toEqual({ bits: 4, block_size: 32, gather_axis: 0, quantize_axis: 1 });
         expect(concat).toMatchObject({
             name: "__openchat/tied_embedding/Concat",
@@ -697,12 +718,13 @@ describe("Transformers.js WebGPU build isolation", () => {
             input: ["inputs_embeds", "__openchat_tied_token_embeddings"],
             output: ["__openchat_selected_input_embeddings"],
         });
-        expect(Number(concat.attribute.find(({ name }: any) => name === "axis").i)).toBe(1);
+        expect(Number(concat.attribute.find(({ name }) => name === "axis")?.i)).toBe(1);
 
         const external = (name: string) => {
-            const initializer = graph.initializer.find((entry: any) => entry.name === name);
+            const initializer = graph.initializer.find((entry) => entry.name === name);
+            if (initializer === undefined) throw new Error(`Missing initializer: ${name}`);
             return Object.fromEntries(
-                initializer.externalData.map(({ key, value }: any) => [key, value]),
+                initializer.externalData.map(({ key, value }) => [key, value]),
             );
         };
         expect(external("lm_head_MatMul_weight_quant")).toMatchObject({

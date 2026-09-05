@@ -2,8 +2,18 @@ on:
   pull_request:
     branches:
       - master
+      - codex/pr1-local-models
+  push:
+    branches:
+      - codex/pr1-local-models
+      - codex/pr2-app-chat-interfaces
+      - codex/pr2-clean-integration
+  workflow_dispatch:
 
 name: Frontend linting, type check & unit tests
+
+permissions:
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -26,14 +36,18 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20.20.0"
+          node-version: "24.18.1"
 
       - name: Install dependencies
         run: npm ci
 
-        # This acts as a safety net if a Mac-generated lockfile stripped the Linux binary
-      - name: Ensure Rollup Linux Binary
-        run: npm install @rollup/rollup-linux-x64-gnu
+        # A missing platform package is a lockfile failure, not permission to rewrite it in CI.
+      - name: Verify locked Rollup Linux Binary
+        run: node -e "require('@rollup/rollup-linux-x64-gnu')"
+
+      - name: Check PR and release policy regressions
+        working-directory: .
+        run: node --test scripts/pr-ci-policy.test.mjs scripts/android_release_policy.test.mjs scripts/android_release_checks.test.mjs
 
       - name: Build frontend
         run: npm run build:ci

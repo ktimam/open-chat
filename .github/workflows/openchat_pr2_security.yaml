@@ -2,7 +2,7 @@ name: OpenChat PR2 security policy
 
 on:
   pull_request:
-    branches: [master]
+    branches: [master, codex/pr1-local-models]
     paths:
       - ".github/dependabot.yml"
       - ".github/security/openchat-pr2-security-baseline.json"
@@ -13,6 +13,10 @@ on:
       - "frontend/**/package.json"
       - "frontend/package-lock.json"
       - "scripts/check_openchat_pr2_security.mjs"
+      - "scripts/security_dependency_hash*"
+      - "scripts/pr-ci-policy.test.mjs"
+  push:
+    branches: [codex/pr2-app-chat-interfaces, codex/pr2-clean-integration]
   workflow_dispatch:
 
 permissions:
@@ -41,6 +45,8 @@ jobs:
       - name: Install exact frontend lockfile
         working-directory: frontend
         run: npm ci
+      - name: Verify portable digest migration against reviewed history
+        run: node --test scripts/security_dependency_hash.test.mjs
       - name: Enforce CI, Dependabot and npm policy
         run: node scripts/check_openchat_pr2_security.mjs ci npm
       - name: Install pinned RustSec scanner

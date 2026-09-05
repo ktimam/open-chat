@@ -16,6 +16,20 @@ val tauriProperties = Properties().apply {
     }
 }
 
+// Published/manual CI artifacts must use configured stable signing. The existing local
+// developer APK path remains available, but CI cannot silently use its debug identity.
+val requireReleaseSigning = System.getenv("ANDROID_REQUIRE_RELEASE_SIGNING") == "true"
+val releaseSigningEnvironment = listOf(
+    "ANDROID_KEY_STORE_FILE", "ANDROID_KEYSTORE_PASSWORD", "ANDROID_KEY_ALIAS", "ANDROID_KEY_PASSWORD",
+).associateWith { System.getenv(it)?.takeIf { value -> value.isNotBlank() } }
+val hasReleaseSigning = releaseSigningEnvironment.values.all { it != null }
+require(!requireReleaseSigning || hasReleaseSigning) {
+    "Release signing is required; configure the keystore file, passwords, and alias (debug fallback is disabled)"
+}
+require(!hasReleaseSigning || file(releaseSigningEnvironment.getValue("ANDROID_KEY_STORE_FILE")!!).isFile) {
+    "Configured release keystore file does not exist"
+}
+
 val bundledOpenChatRpIdFile = projectDir.resolve("../../../../app/build/android-rp-id").normalize()
 val bundledOpenChatRpId = bundledOpenChatRpIdFile.takeIf { it.isFile }?.readText()?.trim()?.lowercase()
 val environmentOpenChatRpId = System.getenv("OC_ANDROID_RP_ID")?.trim()?.lowercase()
@@ -54,6 +68,14 @@ android {
             keyAlias = "androiddebugkey"
             keyPassword = "android"
         }
+        if (hasReleaseSigning) {
+            create("configuredRelease") {
+                storeFile = file(releaseSigningEnvironment.getValue("ANDROID_KEY_STORE_FILE")!!)
+                storePassword = releaseSigningEnvironment.getValue("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = releaseSigningEnvironment.getValue("ANDROID_KEY_ALIAS")
+                keyPassword = releaseSigningEnvironment.getValue("ANDROID_KEY_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
@@ -70,7 +92,7 @@ android {
             }
         }
         getByName("release") {
-            signingConfig = signingConfigs.getByName("debugRelease")
+            signingConfig = signingConfigs.getByName(if (hasReleaseSigning) "configuredRelease" else "debugRelease")
             isMinifyEnabled = true
             proguardFiles(
                 *fileTree(".") { include("**/*.pro") }

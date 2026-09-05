@@ -2,6 +2,8 @@ import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import process from "node:process";
+import { URL } from "node:url";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);

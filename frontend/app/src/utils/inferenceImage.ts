@@ -136,7 +136,11 @@ async function encodeCanvas(
                 if (settled) return;
                 settled = true;
                 request.signal.removeEventListener("abort", onAbort);
-                result === null ? reject(new Error("image encoding failed")) : resolve(result);
+                if (result === null) {
+                    reject(new Error("image encoding failed"));
+                } else {
+                    resolve(result);
+                }
             },
             request.mimeType,
             request.quality,

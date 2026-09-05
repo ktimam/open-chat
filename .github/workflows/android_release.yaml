@@ -2,15 +2,57 @@ name: Android Release
 
 on:
     workflow_dispatch:
-    # push:
-    #     branches:
-    #         - the_big_fork
+        inputs:
+            version:
+                description: "Signed APK version X.Y.Z; manual builds never publish a GitHub Release"
+                required: true
+                type: string
+            version_code:
+                description: "Explicit native versionCode (1..2100000000); verify it exceeds the last distributed build"
+                required: true
+                type: string
     release:
         types: [published]
 
 jobs:
-    build-android:
+    release-policy:
         runs-on: ubuntu-latest
+        permissions:
+            contents: read
+        outputs:
+            eligible: ${{ steps.policy.outputs.eligible }}
+            version: ${{ steps.policy.outputs.version }}
+            version_code: ${{ steps.policy.outputs.version_code }}
+            tauri_config: ${{ steps.policy.outputs.tauri_config }}
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-node@v3
+              with:
+                  node-version: "24.18.1"
+            - name: Test Android release policy
+              run: node --test scripts/android_release_policy.test.mjs scripts/android_release_checks.test.mjs
+            - name: Validate Android release intent and native version
+              id: policy
+              env:
+                  ANDROID_RELEASE_TAG: ${{ github.event.release.tag_name }}
+                  ANDROID_MANUAL_VERSION: ${{ inputs.version }}
+                  ANDROID_RELEASE_VERSION_CODE: ${{ vars.ANDROID_RELEASE_VERSION_CODE }}
+                  ANDROID_MANUAL_VERSION_CODE: ${{ inputs.version_code }}
+              run: node scripts/android_release_policy.mjs plan
+
+    build-android:
+        needs: release-policy
+        if: needs.release-policy.outputs.eligible == 'true'
+        runs-on: ubuntu-latest
+        permissions:
+            contents: write
+            actions: read
+        env:
+            VERSION: ${{ needs.release-policy.outputs.version }}
+            VERSION_CODE: ${{ needs.release-policy.outputs.version_code }}
+            ANDROID_TAURI_RELEASE_CONFIG: ${{ needs.release-policy.outputs.tauri_config }}
+            ANDROID_REQUIRE_RELEASE_SIGNING: "true"
+            ANDROID_RELEASE_CERT_SHA256: ${{ vars.ANDROID_RELEASE_CERT_SHA256 }}
         defaults:
             run:
                 working-directory: frontend
@@ -18,19 +60,31 @@ jobs:
         steps:
             - uses: actions/checkout@v4
 
-            - name: Extract Version
-              id: extract_version
+            - name: Setup Node.js
+              uses: actions/setup-node@v3
+              with:
+                  node-version: "24.18.1"
+                  cache: "npm"
+                  cache-dependency-path: frontend/package-lock.json
+
+            - name: Require successful checks for the exact release commit
+              working-directory: .
+              env:
+                  GITHUB_TOKEN: ${{ github.token }}
+              run: node scripts/android_release_checks.mjs
+
+            - name: Require configured release signing
+              env:
+                  ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+                  ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+                  ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+                  ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
               run: |
-                  if [ "${{ github.event_name }}" == "release" ]; then
-                    # Extract version from vX.Y.Z-android format
-                    # Remove 'v' prefix and strip everything after the hyphen
-                    VERSION=${GITHUB_REF_NAME#v}
-                    VERSION=${VERSION%%-*}
-                  else
-                    VERSION="manual-build-${{ github.run_number }}"
-                  fi
-                  echo "VERSION=$VERSION" >> $GITHUB_ENV
-                  echo "Detected version: $VERSION"
+                  set -euo pipefail
+                  node ../scripts/android_release_policy.mjs signing
+                  umask 077
+                  printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/openchat-release.keystore"
+                  echo "ANDROID_KEY_STORE_FILE=$RUNNER_TEMP/openchat-release.keystore" >> "$GITHUB_ENV"
 
             - name: Free Disk Space
               run: |
@@ -95,13 +149,6 @@ jobs:
                   # Skipping x86/x86_64 saves ~50% compilation time.
                   rustup target add aarch64-linux-android armv7-linux-androideabi
 
-            - name: Setup Node.js
-              uses: actions/setup-node@v3
-              with:
-                  node-version: "20.20.0"
-                  cache: "npm"
-                  cache-dependency-path: frontend/package-lock.json
-
             - name: Install frontend dependencies
               run: npm ci
 
@@ -110,19 +157,6 @@ jobs:
               with:
                   crate: tauri-cli
                   version: "2.10.0"
-
-            - name: Setup Keystore
-              run: |
-                  mkdir -p ~/.android
-
-                  if [ ! -z "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ]; then
-                    echo "Using provided keystore from secrets..."
-                    echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > ~/.android/debug.keystore
-                  else
-                    echo "No keystore secret found. Generating a temporary debug keystore..."
-                    echo "WARNING: App Links validation (assetlinks.json) will fail because the signature won't match."
-                    keytool -genkey -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
-                  fi
 
             - name: Create Env File
               run: |
@@ -169,11 +203,13 @@ jobs:
 
             - name: Build Android APK (Full)
               run: |
-                  cargo tauri android build --verbose --target aarch64 armv7 --features inference
-                  mv src-tauri/gen/android/app/build/outputs/apk/universal/release/openchat-release.apk ./openchat_${{ env.VERSION }}_full.apk
+                  cargo tauri android build --verbose --target aarch64 armv7 --features inference --config "$ANDROID_TAURI_RELEASE_CONFIG"
+                  mv src-tauri/gen/android/app/build/outputs/apk/universal/release/openchat-release.apk "./openchat_${VERSION}_full.apk"
+                  node ../scripts/android_release_policy.mjs verify-apk "./openchat_${VERSION}_full.apk"
               env:
-                  # Ensure these are passed if needed, though the gradle file uses the debug fallback we set up
-                  ANDROID_KEY_STORE_FILE: ${{ env.ANDROID_KEY_STORE_FILE }}
+                  ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+                  ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+                  ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
                   OC_APP_STORE: "false"
                   OC_ANDROID_OTA_UPDATES: "major"
 
@@ -182,13 +218,21 @@ jobs:
 
             - name: Build Android APK (Store)
               run: |
-                  cargo tauri android build --verbose --target aarch64 armv7 --features inference,store
-                  mv src-tauri/gen/android/app/build/outputs/apk/universal/release/openchat-release.apk ./openchat_${{ env.VERSION }}_store.apk
+                  cargo tauri android build --verbose --target aarch64 armv7 --features inference,store --config "$ANDROID_TAURI_RELEASE_CONFIG"
+                  mv src-tauri/gen/android/app/build/outputs/apk/universal/release/openchat-release.apk "./openchat_${VERSION}_store.apk"
+                  node ../scripts/android_release_policy.mjs verify-apk "./openchat_${VERSION}_store.apk"
               env:
-                  # Ensure these are passed if needed, though the gradle file uses the debug fallback we set up
-                  ANDROID_KEY_STORE_FILE: ${{ env.ANDROID_KEY_STORE_FILE }}
+                  ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+                  ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+                  ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
                   OC_APP_STORE: "true"
                   OC_ANDROID_OTA_UPDATES: "patch"
+
+            - name: Recheck exact-source release prerequisites
+              working-directory: .
+              env:
+                  GITHUB_TOKEN: ${{ github.token }}
+              run: node scripts/android_release_checks.mjs
 
             - name: Upload APKs
               uses: actions/upload-artifact@v4
