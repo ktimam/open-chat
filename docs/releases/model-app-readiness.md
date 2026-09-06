@@ -24,8 +24,8 @@ Android release safeguards and this preparation package follow that immutable ch
 Use the preparation commit SHA for further validation; never move the checkpoint tag.
 The current local-test APK source is `551265bbeff8191ed36d0446bc8ef1d54edf74f8`.
 It includes the generic voice, runtime-settings and worker-rebuild follow-ups. It replaces the
-earlier `e02bd70d4` artifact as the current build candidate, but slow cold startup remains under
-investigation and it is not fully accepted for mobile use.
+earlier `e02bd70d4` artifact as the current build candidate. Emulator private-network DNS is
+not configured for its backend, so cold startup is not fully accepted for mobile use.
 
 | Submission                                                                 | Observed head                                | Base                           | State                         |
 | -------------------------------------------------------------------------- | -------------------------------------------- | ------------------------------ | ----------------------------- |
@@ -80,7 +80,13 @@ The running APK serves frontend version `2.0.0-local-webgpu-551265bbe-20260906` 
 imports ORT, compiles the pinned WASM and receives acknowledgement from its packaged worker.
 The v2 welcome screen eventually renders. The initial startup-only probe captured the spinner;
 a controlled cold restart then exceeded the 30-second WebView readiness limit. The later
-rendered screen is not a passing cold-start result. That delay remains under investigation.
+rendered screen is not a passing cold-start result. Diagnosis found that the emulator cannot
+resolve the configured private backend (`net::ERR_NAME_NOT_RESOLVED`), while the host reaches
+the same status endpoint successfully. Bundled UI loads in 2.9 seconds; an existing registry
+retry/gating path delays onboarding until 50.7 seconds. This behavior predates the model
+changes in both PR1 and current upstream. No model assets load during startup. Emulator DNS
+and private-network routing need validation before repeating the unchanged readiness check;
+no APK-origin, account, guest-file or network-settings workaround was applied.
 The emulator is at sign-in and exposes no WebGPU adapter, so authenticated model settings,
 account linking, image/voice inference and model proposals were not verified. This artifact
 is not publisher-signed and was not uploaded. The configured builder's known Gradle fallback
@@ -109,25 +115,27 @@ ran only after a freshly compiled ARM64 library; build and fresh-artifact checks
 | Hosted native model checks on `753d2cecc`                                                   | Linux and Windows hermetic tests and both feature builds passed; separate pinned native CPU model inference passed                                                                           |
 | Signed shipping APK / production rollout                                                    | Not built or performed                                                                                                                                                                       |
 
-### Latest completed hosted checks: exact `551265bbe`
+### Latest completed hosted checks: exact `769689f4f`
 
-- [Frontend](https://github.com/ktimam/open-chat/actions/runs/34038030081): the complete
+- [Frontend](https://github.com/ktimam/open-chat/actions/runs/34039358129): the complete
   frontend pipeline and candidate packaging build passed, including the previous lint repair.
-- [Model checks](https://github.com/ktimam/open-chat/actions/runs/34038030110): Windows/Linux
-  native tests and feature builds, and actual inference with the pinned 14 MB native CPU
-  fixture passed. That CPU fixture is not phone WebGPU proof. The frontend-model job failed
-  during `npm ci` because the ONNX Node installer download timed out / could not reach the
-  network (`ETIMEDOUT` / `ENETUNREACH`); its tests did not run. This is not a passing model
-  job or evidence of a model-source regression. The dependency job checked 291 formatted
+- [Model checks](https://github.com/ktimam/open-chat/actions/runs/34039358119): frontend model
+  contracts, Windows/Linux native tests and feature builds, and actual inference with the
+  pinned 14 MB native CPU fixture passed. That CPU fixture is not phone WebGPU proof.
+  The earlier `551265bbe` frontend-model job did not run its tests because the ONNX Node
+  installer download failed (`ETIMEDOUT` / `ENETUNREACH`); the new run verifies those same
+  source tests successfully. The dependency job checked 291 formatted
   files without a formatting error, then failed the expired baseline and reviewed dependency
   drift. Its later Rust/license/SBOM steps were skipped; no security allowance was raised.
-- [Backend](https://github.com/ktimam/open-chat/actions/runs/34038030077): full unit tests
-  and formatting passed. Strict Clippy found only two needless borrows of formatted trap
-  messages in the verifier test fixture. Both are now removed without changing message bytes
-  or assertions; its four fixture tests, scoped strict Clippy and formatting pass locally.
-  The follow-up still needs the complete hosted workspace Clippy run. Earlier seeded-key,
-  test-helper, module-order and user-index source-contract failures no longer fail this run.
-- [App security](https://github.com/ktimam/open-chat/actions/runs/34038030066): review expiry,
+- [Backend](https://github.com/ktimam/open-chat/actions/runs/34039358377): full unit tests
+  and formatting passed. The verifier fixture's two needless borrows no longer fail. Strict
+  Clippy progressed to one further test-module ordering finding in `principal_to_user_id_map`.
+  Its test module is now moved after the unchanged default implementation; the authorization
+  generation test, scoped strict Clippy and workspace formatting pass locally. The follow-up
+  still needs the complete hosted workspace Clippy run. Backend CI now preserves the exact
+  lockfile and uses `--keep-going` to collect independent lint errors in one run, while retaining
+  fatal warnings and the same test scope. A red-to-green policy regression guards those options.
+- [App security](https://github.com/ktimam/open-chat/actions/runs/34039358128): review expiry,
   reviewed dependency drift and advisory policy still fail. Fresh npm audits for the current
   integration lock reported two moderate findings and no high/critical findings in both scopes;
   the moderate count exceeds the old policy's one-finding allowance. No allowance was raised.

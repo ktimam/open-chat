@@ -59,6 +59,16 @@ impl PrincipalToUserIdMap {
     }
 }
 
+impl Default for PrincipalToUserIdMap {
+    fn default() -> Self {
+        PrincipalToUserIdMap {
+            prefix: PrincipalKeyPrefix::new_for_principal_to_user_id_map(),
+            count: 0,
+            generation: 0,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -72,15 +82,5 @@ mod tests {
         map.generation = u64::MAX;
         assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| map.bump_generation())).is_err());
         assert_eq!(map.generation(), u64::MAX);
-    }
-}
-
-impl Default for PrincipalToUserIdMap {
-    fn default() -> Self {
-        PrincipalToUserIdMap {
-            prefix: PrincipalKeyPrefix::new_for_principal_to_user_id_map(),
-            count: 0,
-            generation: 0,
-        }
     }
 }

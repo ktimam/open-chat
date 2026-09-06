@@ -32,6 +32,19 @@ for (const filename of workflows) {
   });
 }
 
+test("backend CI preserves the lock and reports independent lint failures without waiving them", () => {
+  const workflow = read("../.github/workflows/backend.yaml");
+  assert.match(
+    workflow,
+    /command: clippy\s+args: --locked --keep-going --tests -- -D warnings/u,
+  );
+  assert.match(
+    workflow,
+    /command: test\s+args: --locked --workspace --exclude integration_tests/u,
+  );
+  assert.doesNotMatch(workflow, /continue-on-error:\s*true|\|\|\s*true/u);
+});
+
 test("frontend CI uses the reviewed runtime and never rewrites dependency or source inputs", () => {
   const workflow = read("../.github/workflows/frontend.yaml");
   const policy = JSON.parse(
@@ -52,8 +65,8 @@ test("frontend CI uses the reviewed runtime and never rewrites dependency or sou
   assert.match(workflow, /scripts\/android_bundle\.test\.mjs/u);
   assert.match(workflow, /scripts\/frontend_format_check\.test\.mjs/u);
   assert.match(workflow, /scripts\/android_dev\.test\.mjs/u);
-    assert.match(workflow, /scripts\/verify_webgpu_distribution\.test\.mjs/u);
-    assert.match(workflow, /scripts\/model_asset_notices\.test\.mjs/u);
+  assert.match(workflow, /scripts\/verify_webgpu_distribution\.test\.mjs/u);
+  assert.match(workflow, /scripts\/model_asset_notices\.test\.mjs/u);
   assert.match(workflow, /command -v zip\b/u);
   assert.match(workflow, /command -v unzip\b/u);
   assert.match(workflow, /node scripts\/cdp_axios_compatibility\.mjs/u);

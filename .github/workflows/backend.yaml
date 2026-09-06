@@ -42,7 +42,7 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: clippy
-          args: --tests -- -D warnings
+          args: --locked --keep-going --tests -- -D warnings
 
   unit_tests:
     name: run unit tests
@@ -55,4 +55,4 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --workspace --exclude integration_tests
+          args: --locked --workspace --exclude integration_tests
