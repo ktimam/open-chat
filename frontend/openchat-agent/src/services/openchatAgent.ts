@@ -15,6 +15,7 @@ import type {
     ArchiveChatResponse,
     AuthenticationPrincipalsResponse,
     BlobReference,
+    PublicBlobMediaKind,
     BlockUserResponse,
     BotCommandResponse,
     BotDefinition,
@@ -2308,6 +2309,7 @@ export class OpenChatAgent extends EventTarget {
     async downloadPublicBlob(
         ref: BlobReference,
         maxBytes: number,
+        mediaKind?: PublicBlobMediaKind,
     ): Promise<Uint8Array | undefined> {
         if (offline()) return undefined;
         try {
@@ -2319,7 +2321,7 @@ export class OpenChatAgent extends EventTarget {
                 this._agent,
                 ref.canisterId,
             );
-            return await bucketClient.downloadPublicBlob(ref.blobId, maxBytes);
+            return await bucketClient.downloadPublicBlob(ref.blobId, maxBytes, mediaKind);
         } catch {
             return undefined;
         }

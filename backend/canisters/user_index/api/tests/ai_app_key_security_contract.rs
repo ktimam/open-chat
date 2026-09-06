@@ -34,7 +34,7 @@ fn fanout_and_self_reads_trap_instead_of_returning_partial_migration_results() {
     let fanout = source("backend/canisters/user_index/impl/src/queries/ai_app_user_keys.rs");
     let own = source("backend/canisters/user_index/impl/src/queries/my_ai_app_keys.rs");
     for query in [fanout, own] {
-        assert!(query.contains("unwrap_or_else(|error| ic_cdk::trap(&error.message()))"));
+        assert!(query.contains("unwrap_or_else(|error| ic_cdk::trap(error.message()))"));
     }
 }
 

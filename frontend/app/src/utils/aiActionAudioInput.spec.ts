@@ -123,6 +123,7 @@ describe("selected voice-message input", () => {
         expect(downloadPublicBlob).toHaveBeenCalledWith(
             { canisterId, blobId: 55n },
             MAX_LOCAL_AI_AUDIO_BYTES,
+            "audio",
         );
     });
 

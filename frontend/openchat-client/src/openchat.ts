@@ -13,6 +13,7 @@ import {
     type ModerationConfig,
     type VaultLogResponse,
     type BlobReference,
+    type PublicBlobMediaKind,
     CURRENT_TERMS_VERSION,
     ARBITRUM_NETWORK,
     AuthProvider,
@@ -6458,8 +6459,12 @@ export class OpenChat {
         return this.#worker.send({ kind: "vaultFileChunk", bucketCanisterId, fileId, chunkIndex });
     }
 
-    downloadPublicBlob(ref: BlobReference, maxBytes: number): Promise<Uint8Array | undefined> {
-        return this.#worker.send({ kind: "downloadPublicBlob", ref, maxBytes });
+    downloadPublicBlob(
+        ref: BlobReference,
+        maxBytes: number,
+        mediaKind?: PublicBlobMediaKind,
+    ): Promise<Uint8Array | undefined> {
+        return this.#worker.send({ kind: "downloadPublicBlob", ref, maxBytes, mediaKind });
     }
 
     setCommunityModerationFlags(communityId: string, flags: number): Promise<boolean> {

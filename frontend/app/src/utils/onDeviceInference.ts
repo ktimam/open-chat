@@ -30,13 +30,12 @@ import {
     transformersWebGpuSelectionCanHandle,
 } from "./transformersWebGpuInference";
 
-// Generic on-device inference facade (design deliverable A). This is the seam any in-client feature calls
-// to run the user's selected model with its OWN prompt. It feature-detects the native runtime and degrades
-// to "unavailable" in the plain web/PWA build — there is never an autonomous fallback.
+// Generic on-device inference facade: callers supply their own prompt/media and parse their own output.
+// It routes to the selected browser runtime or native bridge. Explicit all-WebGPU selection stays on
+// that runtime; unavailable capability and execution failures never trigger a CPU/provider fallback.
 
-// Native runtimes this build supports. The Tauri plugin integrates llama.cpp (via llama-cpp-2, the
-// `inference` cargo feature) on every platform, so the facade reports the capability as available once a
-// matching model is downloaded and selected.
+// Native bridge runtimes supported by the catalog contract. Availability also depends on the built
+// Tauri plugin and compatible downloaded artifacts; explicitly enabled Android WebGPU bypasses IPC.
 const SUPPORTED_RUNTIMES: ModelRuntime[] = ["llama-cpp"];
 const MAX_PROMPT_BYTES = 64 * 1024;
 const MAX_TEXT_BYTES = 1024 * 1024;
@@ -51,9 +50,8 @@ const encodedLength = (value: string): number => new TextEncoder().encode(value)
 let lastNativeInferenceRuntimeAvailable: boolean | undefined;
 let lastNativeReadyModelId: string | undefined;
 
-// On-device inference runs wherever the Tauri native bridge is present (Android, iOS and desktop) — not
-// just the mobile OS targets that `OpenChat.isNativeApp()` reports. Detect the bridge directly so the UI
-// and this facade agree, and the plain web/PWA build (no bridge) degrades to "unavailable".
+// Detect the Tauri bridge directly on mobile and desktop. Browser inference does not require it;
+// explicitly enabled Android all-WebGPU also uses the browser runtime despite the bridge's presence.
 export function isNativeClient(): boolean {
     return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
@@ -74,10 +72,8 @@ function webInferenceReadyForClient(): boolean {
     );
 }
 
-// Can THIS client run an on-device inference right now — natively (Tauri + llama.cpp) or in the
-// BROWSER (llama.cpp-WASM over a GGUF the user attached from disk; see webInference.ts)? This is
-// the gate propose flows should use: a browser with a model attached runs the model exactly like
-// the native app, and only clients with NEITHER degrade to the manual-extraction fallback.
+// Reports current selected-runtime readiness for callers. The browser facade supports an explicitly
+// selected legacy GGUF runtime or enabled all-WebGPU; this check does not switch between them.
 async function probeNativeInferenceRuntime(): Promise<boolean> {
     let available = false;
     try {
@@ -149,7 +145,7 @@ export async function canInferOnDevice(): Promise<boolean> {
 // The native llama.cpp backend is a single process-global (`LlamaBackend::init()` at the top of every
 // inference) that is NOT re-entrant: two overlapping calls make the second fail with
 // "BackendAlreadyInitialized", and each call also reloads the whole model. Several independent callers
-// exist (AI-action extraction, the /ai command, …), so funnel every inference through one queue — at
+// exist (message commands and other in-client consumers), so funnel every inference through one queue — at
 // most one runs at a time; the rest await their turn. Failures don't break the chain.
 let inferenceQueue: Promise<unknown> = Promise.resolve();
 
@@ -208,9 +204,8 @@ async function runInference(
         }
     }
     if (usesWebInferenceRuntime() || SUPPORTED_RUNTIMES.length === 0) {
-        // Browser path: a GGUF (from disk or the catalog) runs via llama.cpp-WASM — text, and images
-        // too when the attached model has a vision projector. A browser with no model attached still
-        // degrades to "unavailable" exactly as before.
+        // Restore the persisted selection before checking it. webInfer owns runtime-specific media
+        // handling and returns explicit errors/unavailability without selecting a replacement model.
         await ensureWebModelRestored();
         if (webInferenceReadyForClient()) {
             return webInfer(request, {
@@ -222,6 +217,13 @@ async function runInference(
             reason: isNativeClient()
                 ? "no accelerated on-device model selected"
                 : "on-device inference requires the native client",
+        };
+    }
+
+    if (request.audio !== undefined || request.audioMimeType !== undefined) {
+        return {
+            kind: "unavailable",
+            reason: "The selected native runtime does not support audio.",
         };
     }
 

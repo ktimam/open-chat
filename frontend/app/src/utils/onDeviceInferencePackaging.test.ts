@@ -41,7 +41,7 @@ describe("on-device inference packaging", () => {
         const contracts = workflowStep(workflow, "Run all local-model frontend contracts");
 
         expect(contracts).toContain("npm test --");
-        const command = /\n        run: >-\r?\n((?:          [^\r\n]+\r?\n?)+)/.exec(contracts);
+        const command = /\n {8}run: >-\r?\n((?: {10}[^\r\n]+\r?\n?)+)/.exec(contracts);
         expect(command).not.toBeNull();
         const words = command![1].trim().split(/\s+/);
         expect(words.splice(0, 3)).toEqual(["npm", "test", "--"]);

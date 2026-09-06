@@ -87,9 +87,12 @@ function sourceFiles(path) {
 // Discover current and future tests by model-owned naming families, not a frozen
 // list of today's filenames. App-authored action/OCR suites remain in full CI.
 const modelFamily =
-  /\/(?:customModels|onDeviceModels|model|onDeviceInference|webInference|transformersWebGpu|gemma4WebGpu|WebInferenceRuntimeSettings|localAi|localImageInput|inferenceImage|rollup-plugin-wasm-url|bootstrapSecurity)[^/]*\.(?:spec|test)\.[cm]?[jt]sx?$/u;
-const appFiles = sourceFiles("app");
-const inventory = appFiles.filter((path) => modelFamily.test(path));
+  /\/(?:customModels|onDeviceModels|model|onDeviceInference|nativeInferenceRuntimeBridge|webInference|transformersWebGpu|gemma4WebGpu|WebInferenceRuntimeSettings|localAi|localAudioInput|configuredLocalBlobUrl|localImageInput|imageDimensions|inferenceImage|publicBlob|rollup-plugin-wasm-url|bootstrapSecurity)[^/]*\.(?:spec|test)\.[cm]?[jt]sx?$/u;
+const candidateFiles = [
+  ...sourceFiles("app"),
+  ...sourceFiles("openchat-agent/src/services/storageBucket"),
+];
+const inventory = candidateFiles.filter((path) => modelFamily.test(path));
 const filters = modelTestFilters(workflow);
 const patterns = pullRequestPaths(workflow).map(pathPattern);
 const triggers = (path) => patterns.some((pattern) => pattern.test(path));
@@ -104,10 +107,13 @@ test("the model CI selects every discovered local-model frontend test", () => {
 
 test("model selectors are literal Vitest path prefixes that include future sibling tests", () => {
   for (const filter of filters) {
-    assert.match(filter, /^app\/[a-zA-Z0-9_./-]+$/u);
+    assert.match(
+      filter,
+      /^(?:app|openchat-agent\/src\/services\/storageBucket)\/[a-zA-Z0-9_./-]+$/u,
+    );
     assert.doesNotMatch(filter, /\.(?:spec|test)\./u);
     assert.ok(
-      appFiles.some((path) => path.includes(filter)),
+      candidateFiles.some((path) => path.includes(filter)),
       `unused filter: ${filter}`,
     );
   }
@@ -169,6 +175,21 @@ test("every discovered model test triggers the model pull-request workflow", () 
 test("model runtime, workers, helpers, UI, build, notices and policy inputs trigger on pull requests", () => {
   for (const path of [
     "frontend/app/src/utils/webInference.ts",
+    "frontend/app/src/utils/nativeInferenceRuntimeBridge.spec.ts",
+    "frontend/app/src/utils/imageDimensions.ts",
+    "frontend/app/.ic-assets.json5",
+    "frontend/vite-env.d.ts",
+    "frontend/global.d.ts",
+    "frontend/app/src/components/home/MessageEntry.svelte",
+    "frontend/app/src/components_mobile/home/MessageEntry.svelte",
+    "frontend/app/src/utils/localAudioInput.ts",
+    "frontend/app/src/utils/configuredLocalBlobUrl.ts",
+    "frontend/openchat-agent/src/services/storageBucket/publicBlob.ts",
+    "frontend/openchat-agent/src/services/storageBucket/storageBucket.client.ts",
+    "frontend/openchat-client/src/openchat.ts",
+    "frontend/openchat-worker/src/worker.ts",
+    "frontend/openchat-shared/src/domain/worker.ts",
+    "frontend/openchat-agent/src/services/openchatAgent.ts",
     "frontend/app/src/utils/transformersWebGpuInference.ts",
     "frontend/app/src/utils/transformersWebGpuAudio.ts",
     "frontend/app/src/utils/transformersWebGpuDeviceRetirement.ts",

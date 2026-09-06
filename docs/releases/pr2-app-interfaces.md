@@ -31,8 +31,8 @@ Protocol reference: [Local app processing](../local-app-processing.md).
 
 ## Verification and readiness
 
-The combined integration source plus lint cleanup and compatible dependency updates passed 1,766 frontend tests, both
-typechecks and read-only lint. App-host boundary checks found no findings. Recorded-response
+The combined integration follow-up passed 1,862 frontend tests, both typechecks and read-only
+lint. App-host boundary checks found no findings. Recorded-response
 replay, real model inference and fully verified app-card flows remain distinct evidence.
 A complete physical-phone partner-card run is still outstanding.
 
@@ -41,6 +41,7 @@ hosted checks. Refresh and independently validate its app-only scope after PR1 i
 Do not copy the combined checkpoint into this PR while calling it app-interface-only.
 
 Release remains blocked by expired/drifted dependency policies, fresh advisory findings,
-actual CI coverage, coordinated backend rollout and artifact/runtime/signing/version gates.
+complete final-head CI, coordinated backend rollout and artifact/runtime acceptance. Publisher
+signing/version requirements are separate from the requested locally signed test APK.
 See [release readiness](model-app-readiness.md) for the exact snapshot and required sequence.
 This draft does not request production activation or claim release readiness.

@@ -51,31 +51,6 @@ fn verify_wasm_sha256(wasm: &[u8], expected: &[u8; 32]) -> Result<(), String> {
     }
 }
 
-#[cfg(test)]
-mod deployment_hash_tests {
-    use super::{decode_sha256, verify_wasm_sha256};
-    use sha256::sha256;
-
-    #[test]
-    fn accepts_exact_sha256_hex_case_insensitively() {
-        let lower = "9cc556105da92d7c32c7f4891cc0c45e8f543825259ca3424260b07023d3f10b";
-        assert_eq!(decode_sha256(lower).unwrap(), decode_sha256(&lower.to_uppercase()).unwrap());
-    }
-
-    #[test]
-    fn rejects_malformed_sha256() {
-        assert!(decode_sha256("00").is_err());
-        assert!(decode_sha256(&"g".repeat(64)).is_err());
-    }
-
-    #[test]
-    fn refuses_wasm_bytes_that_do_not_match_the_expected_hash() {
-        let expected = sha256(b"expected wasm");
-        assert!(verify_wasm_sha256(b"expected wasm", &expected).is_ok());
-        assert!(verify_wasm_sha256(b"different wasm", &expected).is_err());
-    }
-}
-
 pub async fn upgrade_openchat_installer_canister(
     identity: Box<dyn Identity>,
     url: String,
@@ -685,4 +660,29 @@ async fn upgrade_wasm<A: CandidType + Send + Sync>(
         .await
         .expect("Failed to start canister");
     println!("Canister started");
+}
+
+#[cfg(test)]
+mod deployment_hash_tests {
+    use super::{decode_sha256, verify_wasm_sha256};
+    use sha256::sha256;
+
+    #[test]
+    fn accepts_exact_sha256_hex_case_insensitively() {
+        let lower = "9cc556105da92d7c32c7f4891cc0c45e8f543825259ca3424260b07023d3f10b";
+        assert_eq!(decode_sha256(lower).unwrap(), decode_sha256(&lower.to_uppercase()).unwrap());
+    }
+
+    #[test]
+    fn rejects_malformed_sha256() {
+        assert!(decode_sha256("00").is_err());
+        assert!(decode_sha256(&"g".repeat(64)).is_err());
+    }
+
+    #[test]
+    fn refuses_wasm_bytes_that_do_not_match_the_expected_hash() {
+        let expected = sha256(b"expected wasm");
+        assert!(verify_wasm_sha256(b"expected wasm", &expected).is_ok());
+        assert!(verify_wasm_sha256(b"different wasm", &expected).is_err());
+    }
 }

@@ -94,6 +94,8 @@ async function fetchBoundedAudio(url: string): Promise<Uint8Array | undefined> {
     } catch {
         return undefined;
     } finally {
+        // Early header/status rejection must also cancel an unread network response body.
+        controller.abort();
         clearTimeout(timeout);
     }
 }

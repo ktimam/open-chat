@@ -387,6 +387,22 @@ describe("webInfer", () => {
         resetWllama();
     });
 
+    it.each([
+        { prompt: "Listen", audio: new Uint8Array([1]) },
+        { prompt: "Listen", audioMimeType: "audio/webm" },
+    ])(
+        "does not silently drop audio when the selected legacy browser runtime cannot handle it",
+        async (request) => {
+            await attachVisionModel();
+            await expect(webInfer(request)).resolves.toEqual({
+                kind: "unavailable",
+                reason: "The selected browser runtime does not support audio.",
+            });
+            expect(wl.loadCount).toBe(0);
+            expect(wl.lastMessages).toBeUndefined();
+        },
+    );
+
     it("a TEXT request still sends a plain string prompt — the vision path changes nothing here", async () => {
         await setWebModelFile(new File([new Uint8Array(8)], "local-model.gguf"));
         const res = await webInfer({ prompt: "extract this", text: "Total: £12" });

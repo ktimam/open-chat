@@ -86,10 +86,10 @@ describe("browser Model Manager all-WebGPU parity", () => {
 
         expect(source).toContain("Voice-message support (optional)");
         expect(source).toContain("Gemma text and image inference works without it.");
-        expect(source).toContain("preloadTransformersWebGpuAudio(modelId");
-        expect(source).toContain("transformersWebGpuAudioDownloaded(modelId)");
-        expect(source).toContain("deleteTransformersWebGpuAudio(modelId)");
-        expect(source).toContain("await refreshAudioState();");
+        expect(source).toContain("preloadTransformersWebGpuAudio(targetModelId");
+        expect(source).toContain("transformersWebGpuAudioDownloaded(targetModelId)");
+        expect(source).toContain("deleteTransformersWebGpuAudio(targetModelId)");
+        expect(source).toContain("await refreshAudioState(targetModelId, generation);");
         expect(source).toContain("Install voice support");
         expect(source).toContain("Remove voice support");
     });

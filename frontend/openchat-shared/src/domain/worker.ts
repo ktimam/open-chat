@@ -949,10 +949,13 @@ type VaultFileChunk = {
     chunkIndex: number;
 };
 
+export type PublicBlobMediaKind = "image" | "audio";
+
 type DownloadPublicBlob = {
     kind: "downloadPublicBlob";
     ref: BlobReference;
     maxBytes: number;
+    mediaKind?: PublicBlobMediaKind;
 };
 
 type ImportGroupToCommunity = {

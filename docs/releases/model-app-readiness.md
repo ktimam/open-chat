@@ -23,15 +23,15 @@ The lint cleanup, compatible dependency updates, portable security hashes, CI co
 Android release safeguards and this preparation package follow that immutable checkpoint.
 Use the preparation commit SHA for further validation; never move the checkpoint tag.
 The APK preparation source assessed here is `e02bd70d4017b92f534f03ad50712ae7729227b3`.
-The local-test APK below contains that preparation's frontend/native source. Subsequent
-backend CI repairs are separate checkpoints and require their own exact-commit checks;
-they do not change this APK's frontend or native runtime.
+The local-test APK below contains that preparation's frontend/native source. Later preparation
+also changes generic voice handling, runtime settings and worker rebuilding. Those fixes are
+not in the earlier APK; a refreshed local artifact needs its own source and packaging evidence.
 
-| Submission | Observed head | Base | State |
-| --- | --- | --- | --- |
-| [Upstream PR #9132](https://github.com/open-chat-labs/open-chat/pull/9132) | `codex/pr1-local-models`, `045f7132e` | upstream `master` | Draft; no reported check runs |
-| [Fork PR #73](https://github.com/ktimam/open-chat/pull/73) | `codex/pr2-app-chat-interfaces`, `c7299aa11` | `codex/pr1-local-models` | Draft; no reported check runs |
-| APK preparation source | `codex/pr2-clean-integration`, `e02bd70d4` | descends from both heads above | Not either PR's current head |
+| Submission                                                                 | Observed head                                | Base                           | State                         |
+| -------------------------------------------------------------------------- | -------------------------------------------- | ------------------------------ | ----------------------------- |
+| [Upstream PR #9132](https://github.com/open-chat-labs/open-chat/pull/9132) | `codex/pr1-local-models`, `045f7132e`        | upstream `master`              | Draft; no reported check runs |
+| [Fork PR #73](https://github.com/ktimam/open-chat/pull/73)                 | `codex/pr2-app-chat-interfaces`, `c7299aa11` | `codex/pr1-local-models`       | Draft; no reported check runs |
+| APK preparation source                                                     | `codex/pr2-clean-integration`, `e02bd70d4`   | descends from both heads above | Not either PR's current head  |
 
 The integration checkpoint is 16 commits / 115 changed files beyond PR #73's head.
 Those commits mix later model-runtime fixes and app-interface fixes. It is 60 commits beyond
@@ -82,48 +82,50 @@ account linking and model proposals were not verified. This artifact is not publ
 and was not uploaded. Kotlin's cross-drive incremental-cache failure recovered using its
 ordinary full-compilation fallback; the overall build and fresh-artifact checks passed.
 
-| Check | Result |
-| --- | --- |
-| Full frontend unit tests, current integration follow-up | 129 files / 1,787 passed with four workers; zero skipped tests |
-| Svelte typecheck, current integration follow-up | 0 errors; 546 warnings in 195 files |
-| Agent TypeScript check | Passed |
-| Read-only ESLint | 0 errors; 31 existing warnings (26 errors corrected) |
-| Frozen isolated dependency install | Passed; model/ONNX/OCR runtime lock entries unchanged |
-| Release/CI/digest/format/preflight/archive/notice tests | 147 passed, zero skipped |
-| Current frontend CI policy test command, including SBOM lock identity and model CI coverage | 134 passed, zero skipped; narrower command than the historical aggregate above |
-| Production WebGPU candidate build | Passed in 2m55.5s with the final frozen dependency tree, explicit immutable-delivery contract and real public-key query; both store/full OTA ZIPs produced |
-| Built WebGPU payload | 26 exact assets verified: worker, ORT pair, two Qwen graphs and 21 notices/sidecars; this is packaging evidence, not inference |
-| Built module browser smoke | Chrome 152.0.7977.76 imports actual ORT JS, compiles pinned WASM and receives disposal acknowledgement from the compiled worker under the built CSP; no model inference or full-app UI claim |
-| Immutable download endpoints | 52/52 public HEAD checks passed: 26 unbundled base/audio files × web/APK origins, expected lengths and CORS headers; no body-hash or browser-enforcement claim |
-| Actual OTA ZIP round trip | 3 tests passed on Windows; corrected UTF-8 archive also extracted with Android's actual `zip@2.4.2` dependency, preserving six files' exact names and bytes |
-| Diff whitespace check | Passed |
-| App/host boundary audit | 5,137 text files / no findings; rerun after any scope split |
-| Hosted checks on existing PRs | None reported; not a pass |
-| Affected backend Rust packages | 57 tests passed, 1 existing ignored test; strict Clippy and workspace formatting passed |
-| Nine affected backend library targets, current integration follow-up | 590 tests passed, none ignored; combined strict Clippy passed for library and test targets |
-| Native model-manager follow-up | 23 tests passed, none ignored; default-feature strict Clippy passed for library and test targets |
-| Hosted native model checks on `0f1581436` | Linux and Windows hermetic tests and both feature builds passed; separate pinned native CPU model inference passed |
-| Signed shipping APK / production rollout | Not built or performed |
+| Check                                                                                       | Result                                                                                                                                                                                       |
+| ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Full frontend unit tests, current integration follow-up                                     | 133 files / 1,862 passed with four workers; zero skipped tests                                                                                                                               |
+| Svelte typecheck, current integration follow-up                                             | 0 errors; 546 warnings in 195 files                                                                                                                                                          |
+| Agent TypeScript check                                                                      | Passed                                                                                                                                                                                       |
+| Read-only ESLint                                                                            | 0 errors; 31 existing warnings (26 errors corrected)                                                                                                                                         |
+| Frozen isolated dependency install                                                          | Passed; model/ONNX/OCR runtime lock entries unchanged                                                                                                                                        |
+| Release/CI/digest/format/preflight/archive/notice tests                                     | 147 passed, zero skipped                                                                                                                                                                     |
+| Current frontend CI policy test command, including SBOM lock identity and model CI coverage | 134 passed, zero skipped; narrower command than the historical aggregate above                                                                                                               |
+| Production WebGPU candidate build                                                           | Passed in 2m55.5s with the final frozen dependency tree, explicit immutable-delivery contract and real public-key query; both store/full OTA ZIPs produced                                   |
+| Built WebGPU payload                                                                        | 26 exact assets verified: worker, ORT pair, two Qwen graphs and 21 notices/sidecars; this is packaging evidence, not inference                                                               |
+| Built module browser smoke                                                                  | Chrome 152.0.7977.76 imports actual ORT JS, compiles pinned WASM and receives disposal acknowledgement from the compiled worker under the built CSP; no model inference or full-app UI claim |
+| Immutable download endpoints                                                                | 52/52 public HEAD checks passed: 26 unbundled base/audio files × web/APK origins, expected lengths and CORS headers; no body-hash or browser-enforcement claim                               |
+| Actual OTA ZIP round trip                                                                   | 3 tests passed on Windows; corrected UTF-8 archive also extracted with Android's actual `zip@2.4.2` dependency, preserving six files' exact names and bytes                                  |
+| Diff whitespace check                                                                       | Passed                                                                                                                                                                                       |
+| App/host boundary audit                                                                     | 5,145 text files / no findings; rerun after any scope split                                                                                                                                  |
+| Hosted checks on existing PRs                                                               | None reported; not a pass                                                                                                                                                                    |
+| Affected backend Rust packages                                                              | 57 tests passed, 1 existing ignored test; strict Clippy and workspace formatting passed                                                                                                      |
+| Nine affected backend library targets, current integration follow-up                        | 590 tests passed, none ignored; combined strict Clippy passed for library and test targets                                                                                                   |
+| Native model-manager follow-up                                                              | 23 tests passed, none ignored; default-feature strict Clippy passed for library and test targets                                                                                             |
+| Hosted native model checks on `753d2cecc`                                                   | Linux and Windows hermetic tests and both feature builds passed; separate pinned native CPU model inference passed                                                                           |
+| Signed shipping APK / production rollout                                                    | Not built or performed                                                                                                                                                                       |
 
-### Latest completed hosted checks: exact `0f1581436`
+### Latest completed hosted checks: exact `753d2cecc`
 
-- [Frontend](https://github.com/ktimam/open-chat/actions/runs/34032873204): passed the
-  complete frontend pipeline and the separate opt-in production WebGPU candidate build and
-  asset verification, using Node `24.18.1` and repository-pinned `dfx@0.31.0-beta.1`.
-- [Model checks](https://github.com/ktimam/open-chat/actions/runs/34032873214): frontend
+- [Frontend](https://github.com/ktimam/open-chat/actions/runs/34036017278): policy tests and
+  type checks passed; lint caught literal spaces in a new packaging-test regular expression.
+  The selector now uses explicit repetition counts. Full local read-only lint passes again;
+  the complete pipeline and candidate build still need the follow-up commit's hosted run.
+  The earlier exact `0f1581436` pipeline and candidate packaging checks passed.
+- [Model checks](https://github.com/ktimam/open-chat/actions/runs/34036017347): frontend
   model contracts, Windows/Linux native tests and feature builds, and actual inference with
   the pinned 14 MB native CPU fixture all passed. That CPU fixture is not phone WebGPU proof.
-  The dependency job failed on changed reviewed digests and the expired baseline after
-  successfully checking formatting; its later Rust/license/SBOM steps were skipped.
-- [Backend](https://github.com/ktimam/open-chat/actions/runs/34032873174): formatting passed;
-  strict Clippy failed on three native model-manager expressions. Unit tests reached the
-  user-index suite, where a fixture reserved one byte for a seven-byte prepared request and
-  correctly received `InvalidRequestSize`. The fixture now reserves its actual byte length
-  and explicitly asserts that an oversized request is still rejected. Production size
-  validation is unchanged. The three native expression fixes retain network restrictions,
-  schema size/object checks and rollback behavior, with added IPv6 and schema-boundary tests.
-  All source repairs require a new exact-commit hosted run.
-- [App security](https://github.com/ktimam/open-chat/actions/runs/34032873202): failed
+  The dependency job failed; its later Rust/license/SBOM steps were skipped. The expired
+  baseline and reviewed dependency drift remain unapproved.
+- [Backend](https://github.com/ktimam/open-chat/actions/runs/34036017324): formatting passed.
+  Clippy found deprecated seeded test-key generation, two explicit multi-field security-test
+  helpers and a test module preceding production items. Those four findings are repaired;
+  focused strict Clippy for the integration-test and upgrader crates passes. Upgrader hash
+  tests pass (3). The unit job reached a source-contract assertion still expecting a needless
+  reference removed by the preceding lint repair. It now matches the unchanged trapping
+  behavior; all 33 user-index API contract tests pass locally. No authorization, routing,
+  migration, wire format or deployment operation was changed. A new hosted run is required.
+- [App security](https://github.com/ktimam/open-chat/actions/runs/34036017374): failed
   review expiry, reviewed dependency drift and unreviewed native manifests. Fresh npm audits
   in this run reported two moderate findings and no high/critical findings in both scopes;
   the moderate count exceeds the old policy's one-finding allowance. No allowance was raised.
@@ -153,6 +155,21 @@ paths. A regression inventories the actual test files and verifies both workflow
 Vitest discovery. This also exposed an existing WASM packaging suite excluded by the root Vitest
 configuration; that suite is now included. The exact expanded model command passes 29 suites /
 418 tests. Full frontend CI was already broader; neither suite is physical-device inference proof.
+
+The subsequent generic voice closure now exercises both composers and the real media-reader /
+storage transport path. Public downloads retain image-only defaults (5 MiB / four queries)
+and require explicit audio selection (10 MiB / seven queries). The public actor is anonymous,
+does not retry, and shares a 12-second deadline through headers and body consumption. An
+independent review reproduced a stalled-body escape from the original timer; the corrected
+helper now aborts and cancels that stream, with a red-to-green regression. Early reader
+rejections also abort unread bodies. These bounds do not prove that arbitrary containers
+decode successfully or that a model transcribes them accurately.
+
+Mounted runtime-settings tests prevent stale optional-audio completion from updating a new
+model or a destroyed component. Generic `/ai` tests cover both UI handlers, staged/replied
+media, exact account/chat/thread capture and duplicate-run guards. Unsupported audio is
+rejected before legacy browser/native text-only inference. The full frontend result above
+includes these changes; no CPU/provider fallback or app-specific extraction was introduced.
 
 ### Earlier build failures and their repairs
 
@@ -216,9 +233,9 @@ changes still fail. No expiry extension or advisory waiver was added.
 Fresh npm advisory results on 2026-09-06 for published `e02bd70d4`, after the scoped overrides:
 
 | Dependency scope | High | Moderate | Low | Critical |
-| --- | --- | --- | --- | --- |
-| Production | 0 | 2 | 0 | 0 |
-| All | 0 | 2 | 0 | 0 |
+| ---------------- | ---- | -------- | --- | -------- |
+| Production       | 0    | 2        | 0   | 0        |
+| All              | 0    | 2        | 0   | 0        |
 
 The public lockfile was byte-matched to SHA-256
 `b68b016ac2d66b72e80a383db020b8b8502a36cb57802d29e72463f0bdc51b01` before the
@@ -237,9 +254,9 @@ exact-PR-base dependency review.
 Historical npm results for `808a75d3e`, before those scoped overrides:
 
 | Dependency scope | High | Moderate | Low | Critical |
-| --- | --- | --- | --- | --- |
-| Production | 5 | 3 | 0 | 0 |
-| All | 5 | 6 | 0 | 0 |
+| ---------------- | ---- | -------- | --- | -------- |
+| Production       | 5    | 3        | 0   | 0        |
+| All              | 5    | 6        | 0   | 0        |
 
 Compatible updates reduced the all-dependency total from 20 to 11 in this audit snapshot.
 Tiptap is locked to 3.31.3 and DOMPurify to 3.4.14, above their patched minimums;

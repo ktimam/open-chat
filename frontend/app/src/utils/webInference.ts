@@ -1357,6 +1357,12 @@ export async function webInfer(
         });
         return attachImageInferenceEvidence(request, selected, result);
     }
+    if (request.audio !== undefined || request.audioMimeType !== undefined) {
+        return {
+            kind: "unavailable",
+            reason: "The selected browser runtime does not support audio.",
+        };
+    }
     try {
         await ensureLoaded(requireProjectorAbsent, request.image !== undefined);
         // Ask the LOADED model, never the catalog: an image sent to a model with no projector throws

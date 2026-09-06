@@ -437,7 +437,7 @@ export async function contentToInput(
             content,
             client === undefined
                 ? undefined
-                : (ref, maxBytes) => client.downloadPublicBlob(ref, maxBytes),
+                : (ref, maxBytes) => client.downloadPublicBlob(ref, maxBytes, "audio"),
             page,
             blobUrlPattern,
         );

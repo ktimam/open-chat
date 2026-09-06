@@ -27,14 +27,17 @@ of this PR; the current integration checkpoint also contains app-interface work 
 
 ## Verification and readiness
 
-Combined integration source plus lint cleanup and compatible dependency updates: 1,766 frontend tests passed; both
-typechecks and read-only lint passed with existing warnings. This is not evidence for the
-not-yet-created refreshed model-only head. Existing upstream PR check runs are absent.
+Combined integration follow-up: 1,862 frontend tests passed; both typechecks and read-only
+lint passed with existing warnings. Separately, the isolated model-only refresh passed 872
+frontend tests, native default-feature tests, type/lint checks and actual worker emission.
+Its dependency lock is unchanged. This local refresh has not replaced the existing PR head;
+upstream reconciliation, complete production builds and hosted acceptance remain outstanding.
 
 Before ready-for-review: validate the refreshed head against current upstream, repair and
 refresh the expired dependency policy through an actual audit, run the expanded hosted checks,
-repeat native/runtime tests and provide bounded real-device evidence. Signed artifact,
-production model-asset distribution and OTA decisions remain separate release gates.
+repeat native/runtime tests and provide bounded real-device evidence. The requested APK is
+for local testing only. Publisher signing, production asset distribution and OTA decisions
+remain separate gates and do not require publisher credentials for that local build.
 
 See [release readiness](model-app-readiness.md) for exact observed refs, audit results,
 commands, scope separation and outstanding gates. No production activation is requested.

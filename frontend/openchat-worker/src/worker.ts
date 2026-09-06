@@ -1064,7 +1064,7 @@ function getAction(
             );
 
         case "downloadPublicBlob":
-            return agent.downloadPublicBlob(payload.ref, payload.maxBytes);
+            return agent.downloadPublicBlob(payload.ref, payload.maxBytes, payload.mediaKind);
 
         case "updateRegistry":
             return agent.getRegistry();

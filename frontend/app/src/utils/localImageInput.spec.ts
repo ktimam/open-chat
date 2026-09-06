@@ -24,6 +24,35 @@ function image(extra: Record<string, unknown>): MessageContent {
 }
 
 describe("localImageBytes", () => {
+    it.each(["non-ok", "oversized-length", "invalid-length", "bodyless"] as const)(
+        "aborts the fetch without consuming an early rejected %s response",
+        async (reason) => {
+            const response = new Response(reason === "bodyless" ? null : new Uint8Array([1]), {
+                status: reason === "non-ok" ? 404 : reason === "bodyless" ? 204 : 200,
+                headers: {
+                    "Content-Length":
+                        reason === "oversized-length"
+                            ? String(MAX_AI_IMAGE_DOWNLOAD_BYTES + 1)
+                            : reason === "invalid-length"
+                              ? "invalid"
+                              : "1",
+                },
+            });
+            const getReader =
+                response.body === null ? vi.fn() : vi.spyOn(response.body, "getReader");
+            const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(response);
+            await expect(
+                localImageBytes(
+                    image({
+                        blobUrl: "https://media.example/image.png",
+                    }),
+                ),
+            ).resolves.toBeUndefined();
+            expect(fetchSpy.mock.calls[0][1]?.signal?.aborted).toBe(true);
+            expect(getReader).not.toHaveBeenCalled();
+        },
+    );
+
     it("uses bounded in-memory bytes without fetching", async () => {
         const fetchSpy = vi.spyOn(globalThis, "fetch");
         const loader = vi.fn();

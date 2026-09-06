@@ -7,6 +7,7 @@ use ai_app_verifier_canister::c2c_verify_ai_app_v2::{self, ManifestCommitmentV2,
 use candid::{CandidType, Principal};
 use ecies_payload::EciesEnvelope;
 use p256::SecretKey;
+use p256::elliptic_curve::Generate;
 use p256::pkcs8::{EncodePrivateKey, EncodePublicKey};
 use pocket_ic::PocketIc;
 use rand::SeedableRng;
@@ -58,7 +59,7 @@ pub(crate) struct Recipient {
 }
 
 pub(crate) fn new_recipient(rng: &mut StdRng) -> Recipient {
-    let sk = SecretKey::random(rng);
+    let sk = SecretKey::generate_from_rng(rng);
     let pk_pem = sk.public_key().to_public_key_pem(Default::default()).unwrap();
     let sk_pem = sk.to_pkcs8_pem(Default::default()).unwrap().to_string();
     let fingerprint = ecies_payload::key_fingerprint(&pk_pem).unwrap();
@@ -521,6 +522,10 @@ pub(crate) fn selector_from_claim(claim: &user_index_canister::c2c_claim_ai_app_
         .expect("v1 consumer queue selector must be 32 bytes")
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Security tests vary each forged routing field independently"
+)]
 pub(crate) fn post_card(
     env: &mut PocketIc,
     user_index: CanisterId,

@@ -38,11 +38,21 @@
     let audioMessage = $state("");
     let audioGeneration = 0;
     let audioController: AbortController | undefined;
+    let destroyed = false;
     let savedMessage = $state("");
 
-    async function refreshAudioState() {
-        const generation = ++audioGeneration;
-        if (modelSpec?.optionalAudio === undefined) {
+    function invalidateAudioOperation() {
+        audioGeneration += 1;
+        audioController?.abort();
+        audioController = undefined;
+    }
+
+    function audioOperationCurrent(targetModelId: string, generation: number) {
+        return !destroyed && modelId === targetModelId && generation === audioGeneration;
+    }
+
+    async function refreshAudioState(targetModelId: string, generation = audioGeneration) {
+        if (transformersWebGpuModelSpec(targetModelId)?.optionalAudio === undefined) {
             audioInstalled = false;
             audioChecking = false;
             audioMessage = "";
@@ -51,26 +61,35 @@
         audioChecking = true;
         audioMessage = "";
         try {
-            const installed = await transformersWebGpuAudioDownloaded(modelId);
-            if (generation === audioGeneration) audioInstalled = installed;
+            const installed = await transformersWebGpuAudioDownloaded(targetModelId);
+            if (audioOperationCurrent(targetModelId, generation)) audioInstalled = installed;
         } catch (error) {
-            if (generation === audioGeneration) {
+            if (audioOperationCurrent(targetModelId, generation)) {
                 audioInstalled = false;
                 audioMessage = error instanceof Error ? error.message : String(error);
             }
         } finally {
-            if (generation === audioGeneration) audioChecking = false;
+            if (audioOperationCurrent(targetModelId, generation)) audioChecking = false;
         }
     }
 
     $effect(() => {
-        modelId;
-        void refreshAudioState();
+        const targetModelId = modelId;
+        invalidateAudioOperation();
+        audioInstalled = false;
+        audioBusy = false;
+        audioProgress = undefined;
+        audioMessage = "";
+        void refreshAudioState(targetModelId);
+        return invalidateAudioOperation;
     });
 
     async function installAudio() {
-        audioController?.abort();
-        audioController = new AbortController();
+        invalidateAudioOperation();
+        const targetModelId = modelId;
+        const generation = audioGeneration;
+        const controller = new AbortController();
+        audioController = controller;
         audioBusy = true;
         audioMessage = "";
         audioProgress = {
@@ -78,47 +97,60 @@
             total: modelSpec?.optionalAudio?.artifactBytes ?? 0,
         };
         try {
-            await preloadTransformersWebGpuAudio(modelId, {
-                signal: audioController.signal,
+            await preloadTransformersWebGpuAudio(targetModelId, {
+                signal: controller.signal,
                 onProgress(received, total) {
-                    audioProgress = { received, total };
+                    if (audioOperationCurrent(targetModelId, generation)) {
+                        audioProgress = { received, total };
+                    }
                 },
             });
-            audioInstalled = await transformersWebGpuAudioDownloaded(modelId);
+            if (!audioOperationCurrent(targetModelId, generation)) return;
+            const installed = await transformersWebGpuAudioDownloaded(targetModelId);
+            if (!audioOperationCurrent(targetModelId, generation)) return;
+            audioInstalled = installed;
             if (!audioInstalled) throw new Error("The voice add-on could not be verified.");
             audioMessage = "Voice-message support installed.";
         } catch (error) {
-            if (!audioController.signal.aborted) {
+            if (audioOperationCurrent(targetModelId, generation) && !controller.signal.aborted) {
                 audioMessage = error instanceof Error ? error.message : String(error);
             }
         } finally {
-            audioBusy = false;
-            audioProgress = undefined;
+            if (audioOperationCurrent(targetModelId, generation)) {
+                audioBusy = false;
+                audioProgress = undefined;
+                audioController = undefined;
+            }
         }
     }
 
     async function removeAudio() {
+        invalidateAudioOperation();
+        const targetModelId = modelId;
+        const generation = audioGeneration;
         audioBusy = true;
         audioMessage = "";
         try {
-            await deleteTransformersWebGpuAudio(modelId);
+            await deleteTransformersWebGpuAudio(targetModelId);
+            if (!audioOperationCurrent(targetModelId, generation)) return;
             audioInstalled = false;
             audioMessage =
                 "Voice-message support removed. Text and image support remain installed.";
         } catch (error) {
+            if (!audioOperationCurrent(targetModelId, generation)) return;
             const message = error instanceof Error ? error.message : String(error);
             // CacheStorage deletion can fail before or after removing one of the add-on files.
             // Re-read the target so the control never claims a retained or partial add-on is gone.
-            await refreshAudioState();
-            audioMessage = message;
+            await refreshAudioState(targetModelId, generation);
+            if (audioOperationCurrent(targetModelId, generation)) audioMessage = message;
         } finally {
-            audioBusy = false;
+            if (audioOperationCurrent(targetModelId, generation)) audioBusy = false;
         }
     }
 
     onDestroy(() => {
-        audioGeneration += 1;
-        audioController?.abort();
+        destroyed = true;
+        invalidateAudioOperation();
     });
 
     function saveMaxOutputTokens(event: Event) {

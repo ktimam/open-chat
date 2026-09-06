@@ -388,6 +388,7 @@
     async function handleLocalAiCommand(prompt: string) {
         const captured = captureLocalAiComposerContext($currentUserIdStore, messageContext);
         const capturedAttachment = attachment;
+        const capturedReply = replyingTo?.content;
         const capturedMarkdown = containsMarkdown;
         const context = recentLocalAiChatContext();
         const stillCurrent = () =>
@@ -399,6 +400,7 @@
             client,
             prompt,
             attachment: capturedAttachment,
+            repliedContent: capturedReply,
             context,
             captured,
             stillCurrent,
@@ -437,12 +439,14 @@
             if (event.kind !== "message" || event.deleted) return [];
             const text = client.getMessageText(event.content);
             const hasImage = event.content.kind === "image_content";
-            if ((text === undefined || text.trim().length === 0) && !hasImage) return [];
+            const hasAudio = event.content.kind === "audio_content";
+            if ((text === undefined || text.trim().length === 0) && !hasImage && !hasAudio)
+                return [];
             const author =
                 event.sender === $currentUserIdStore
                     ? "You"
                     : ($allUsersStore.get(event.sender)?.username ?? "Unknown member");
-            return [{ author, text, hasImage }];
+            return [{ author, text, hasImage, hasAudio }];
         });
     }
 

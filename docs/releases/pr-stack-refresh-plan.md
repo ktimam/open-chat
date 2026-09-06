@@ -19,7 +19,7 @@ and hosted CI have not run; this isolated branch is not pushed.
 This starts the append-only refresh; it does not establish whole-PR acceptance, change either
 published PR head or reconcile upstream.
 
-## Model-only refresh in progress
+## Model-only refresh: local validation complete
 
 The next isolated slice carries the all-WebGPU Qwen/Gemma runtime, optional audio, model-cache
 identity and lifecycle, both model-manager UIs, generic build delivery and matching notices.
@@ -30,11 +30,28 @@ identity/OTA settings are excluded by hunk, not copied into the model-only branc
 
 Review found two cross-layer requirements that helper tests alone missed: native model-list
 responses must carry per-file identity for the new installation-status UI, and optional voice
-support needs an actual generic `/ai` caller, not only an inference API. The native metadata
-slice and generic voice-media path are being carried with their corresponding tests. The
-settings component is also being tested for stale audio completion after model changes and
-destruction. These checks are not whole-PR or physical-device acceptance, and the slice remains
-local until its independent checks and scope review finish.
+support needs an actual generic `/ai` caller, not only an inference API. Both are now included.
+Both composers retain captured viewer/chat/thread guards and support staged or explicitly
+replied media through bounded generic readers. The native availability probe prevents old or
+feature-disabled shells from advertising inference they cannot run. Mounted settings tests
+cover stale optional-audio completion after model changes and destruction.
+
+The public media bridge keeps image-only defaults and requires explicit audio opt-in. Its
+anonymous no-retry transport retains one deadline through response-body consumption; stalled
+body and early-rejection cleanup regressions cover the actual reader/transport helpers.
+Unsupported audio never silently becomes a text-only native or legacy browser request.
+
+Independent local checks pass: 66 frontend suites / 872 tests, Svelte and agent type checks,
+read-only lint, actual worker emission, 18 default native tests and strict native Clippy.
+The exact expanded model CI selection passes 31 suites / 452 tests; its generic Node policy
+step passes 32 tests. A regression proves the previous invalid workspace command fails.
+Model package versions and dependency lock remain unchanged; package script edits only add
+read-only CI linting. The native feature-enabled local build is not accepted: SDK access was
+denied, so only the verified default-feature result is claimed.
+
+These checks are not complete upstream/PR acceptance or physical-device inference. The
+model-only slice remains local pending dependency review, current-upstream reconciliation,
+production build validation and the append-only stack refresh below.
 
 ## Pinned comparison points
 
@@ -54,19 +71,19 @@ local package identity and OTA compatibility review; do not resolve them with a 
 Paths below are relative to the repository; globs include corresponding tests. Classification
 is by responsibility, not permission to copy an entire commit or directory without review.
 
-| Area | Destination | Review requirement |
-| --- | --- | --- |
-| `frontend/app/src/utils/transformersWebGpu*`, `gemma4WebGpuEmbedding.ts`, inference worker, sequential-session build helper | PR1 | Preserve GPU lifecycle, embedding identity and optional audio fixes together |
-| `modelCatalog*`, `onDeviceInference*`, `webInference*`, native model manager and model command/types | PR1 | Preserve cached installations and keep readiness distinct from selection |
-| Both `ModelManager.svelte` components and shared runtime settings | PR1, mixed UI hunks reviewed | Do not import app action structures into the model-only head |
-| `appLocalProcessor*`, `aiAppReconnect*`, `privateMatchSurface*`, `cardBridge*`, action card components, app link sheet | PR2 | App-owned interpretation, content attestation and scoped linking remain together |
-| `aiActionRunner*`, `aiActionAvailability*`, `aiActionProposalReadiness*`, local command/message/menu flow, shared action schema | Mixed | PR1 owns generic inference; PR2 adds registered app routing and action construction |
-| `browserOcr*`, `inferenceImage*`, local extraction, image mode settings | Mixed | Evidence/runtime plumbing may be generic; app-specific interpretation must stay outside this repository |
-| Startup, home routes, chat/message/image components, toasts, build configuration, translations | Mixed | Attribute individual hunks and tests; verify both UI versions |
-| Passkey bridge, identity model, native onboarding, client authentication | Shared prerequisite | Prefer a small isolated prerequisite or generic PR1 commit, then inherit into PR2 |
-| Backend capability redemption update and local app-processing protocol docs | PR2 | Preserve exact authority/content checks; never loosen for UI success |
-| Model illustrations | PR1 | Documentation must match actual shipping versus development runtime |
-| Lint, compatible dependency patches, portable hashes and CI/release guards after checkpoint | Shared tooling | Carry generic portions first; PR2-only policy files and historical tests stay on the app stack |
+| Area                                                                                                                            | Destination                  | Review requirement                                                                                      |
+| ------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `frontend/app/src/utils/transformersWebGpu*`, `gemma4WebGpuEmbedding.ts`, inference worker, sequential-session build helper     | PR1                          | Preserve GPU lifecycle, embedding identity and optional audio fixes together                            |
+| `modelCatalog*`, `onDeviceInference*`, `webInference*`, native model manager and model command/types                            | PR1                          | Preserve cached installations and keep readiness distinct from selection                                |
+| Both `ModelManager.svelte` components and shared runtime settings                                                               | PR1, mixed UI hunks reviewed | Do not import app action structures into the model-only head                                            |
+| `appLocalProcessor*`, `aiAppReconnect*`, `privateMatchSurface*`, `cardBridge*`, action card components, app link sheet          | PR2                          | App-owned interpretation, content attestation and scoped linking remain together                        |
+| `aiActionRunner*`, `aiActionAvailability*`, `aiActionProposalReadiness*`, local command/message/menu flow, shared action schema | Mixed                        | PR1 owns generic inference; PR2 adds registered app routing and action construction                     |
+| `browserOcr*`, `inferenceImage*`, local extraction, image mode settings                                                         | Mixed                        | Evidence/runtime plumbing may be generic; app-specific interpretation must stay outside this repository |
+| Startup, home routes, chat/message/image components, toasts, build configuration, translations                                  | Mixed                        | Attribute individual hunks and tests; verify both UI versions                                           |
+| Passkey bridge, identity model, native onboarding, client authentication                                                        | Shared prerequisite          | Prefer a small isolated prerequisite or generic PR1 commit, then inherit into PR2                       |
+| Backend capability redemption update and local app-processing protocol docs                                                     | PR2                          | Preserve exact authority/content checks; never loosen for UI success                                    |
+| Model illustrations                                                                                                             | PR1                          | Documentation must match actual shipping versus development runtime                                     |
+| Lint, compatible dependency patches, portable hashes and CI/release guards after checkpoint                                     | Shared tooling               | Carry generic portions first; PR2-only policy files and historical tests stay on the app stack          |
 
 Candidate model-focused commits include `97ab1e985` (decoder compilation), `42e519e10`
 (embedding identity), `1212f2d8d` (optional audio), and `9614e9c64` (model illustrations).

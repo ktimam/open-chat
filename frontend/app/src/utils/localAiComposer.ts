@@ -1,7 +1,8 @@
-import type { AttachmentContent, MessageContext, OpenChat } from "@client";
+import type { AttachmentContent, MessageContent, MessageContext, OpenChat } from "@client";
 import { messageContextsEqual } from "@client";
-import { contentToInput } from "./aiActionRunner";
-import { runLocalAiCommand, type LocalAiChatMessage, type LocalAiResult } from "./localAiCommand";
+import { localAudioInput } from "./localAudioInput";
+import { localImageBytes } from "./localImageInput";
+import { runLocalAiCommand, type LocalAiChatMessage } from "./localAiCommand";
 
 type LocalAiComposerClient = Pick<OpenChat, "downloadPublicBlob" | "sendMessageWithContent">;
 
@@ -21,7 +22,8 @@ export interface LocalAiComposerRequest {
     client: LocalAiComposerClient;
     prompt: string;
     attachment?: AttachmentContent;
-    context: LocalAiChatMessage[];
+    repliedContent?: MessageContent;
+    context?: LocalAiChatMessage[];
     captured: CapturedLocalAiComposerContext;
     stillCurrent: () => boolean;
     // The normal composer send owns attachment upload and the visible user prompt. It must run
@@ -30,12 +32,9 @@ export interface LocalAiComposerRequest {
 }
 
 interface LocalAiComposerDependencies {
-    contentToInput: typeof contentToInput;
-    infer: (
-        prompt: string,
-        image?: Uint8Array,
-        context?: LocalAiChatMessage[],
-    ) => Promise<LocalAiResult>;
+    readImage: typeof localImageBytes;
+    readAudio: typeof localAudioInput;
+    infer: typeof runLocalAiCommand;
 }
 
 export interface LocalAiComposerRunner {
@@ -76,7 +75,8 @@ export function createLocalAiComposerRunner(
     overrides: Partial<LocalAiComposerDependencies> = {},
 ): LocalAiComposerRunner {
     const dependencies: LocalAiComposerDependencies = {
-        contentToInput,
+        readImage: localImageBytes,
+        readAudio: localAudioInput,
         infer: runLocalAiCommand,
         ...overrides,
     };
@@ -88,25 +88,60 @@ export function createLocalAiComposerRunner(
 
             // Reserve the run before posting the visible prompt. `run` sets `running` synchronously,
             // so a second click/Enter cannot post another prompt while this request is in flight.
+            const content = request.attachment ?? request.repliedContent;
             request.onAccepted();
 
             let image: Uint8Array | undefined;
-            if (request.attachment?.kind === "image_content") {
-                const input = await dependencies.contentToInput(request.attachment, request.client);
-                // Loading a settled image may cross the worker bridge. Never start a costly model
-                // run, much less send its result, after the viewer/chat/thread has changed.
+            let audio: Uint8Array | undefined;
+            let audioMimeType: string | undefined;
+            if (content?.kind === "image_content") {
+                image = await dependencies.readImage(content, (ref, maxBytes) =>
+                    request.client.downloadPublicBlob(ref, maxBytes),
+                );
                 if (!request.stillCurrent()) return { kind: "stale" };
-                if (input?.image === undefined) {
+                if (image === undefined) {
                     return {
                         kind: "error",
-                        error: "The staged image could not be read for local AI processing.",
+                        error: "The selected image could not be read for local AI processing.",
                     };
                 }
-                image = input.image;
+            } else if (content?.kind === "audio_content") {
+                const input = await dependencies.readAudio(content, (ref, maxBytes) =>
+                    request.client.downloadPublicBlob(ref, maxBytes, "audio"),
+                );
+                if (!request.stillCurrent()) return { kind: "stale" };
+                if (input === undefined) {
+                    return {
+                        kind: "error",
+                        error: "The selected voice message could not be read. Use an audio message up to 30 seconds and 10 MiB.",
+                    };
+                }
+                ({ audio, audioMimeType } = input);
             }
 
             if (!request.stillCurrent()) return { kind: "stale" };
-            const inference = await dependencies.infer(request.prompt, image, request.context);
+            // Only the explicitly selected attachment/reply is supplied. Unrelated or unloaded chat
+            // history is never implied, and quoted message content cannot replace the user's prompt.
+            const context = [...(request.context ?? [])];
+            if (content?.kind === "text_content") {
+                context.push({ author: "Selected message", text: content.text });
+            } else if (content?.kind === "image_content" || content?.kind === "audio_content") {
+                context.push({
+                    author: "Selected message",
+                    text: content.caption,
+                    hasImage: image !== undefined,
+                    imageIncluded: image !== undefined,
+                    hasAudio: audio !== undefined,
+                    audioIncluded: audio !== undefined,
+                });
+            }
+            const inference = await dependencies.infer(
+                request.prompt,
+                image,
+                context,
+                audio,
+                audioMimeType,
+            );
             if (!request.stillCurrent()) return { kind: "stale" };
             if (inference.kind !== "ok") return inference;
 

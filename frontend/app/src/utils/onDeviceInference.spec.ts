@@ -157,6 +157,24 @@ describe("isNativeClient", () => {
     });
 });
 
+describe("legacy native audio boundary", () => {
+    it.each([
+        { prompt: "Listen", audio: new Uint8Array([1]) },
+        { prompt: "Listen", audioMimeType: "audio/webm" },
+    ])("rejects supplied audio instead of invoking text-only native inference", async (request) => {
+        setNative(true);
+        selectedModelId.set(MODEL_ID);
+        mockListLocalModels.mockResolvedValue([localModel()]);
+        await expect(inferOnDevice(request)).resolves.toEqual({
+            kind: "unavailable",
+            reason: "The selected native runtime does not support audio.",
+        });
+        expect(mockInferenceRuntimeAvailable).not.toHaveBeenCalled();
+        expect(mockListLocalModels).not.toHaveBeenCalled();
+        expect(mockInfer).not.toHaveBeenCalled();
+    });
+});
+
 describe("onDeviceInferenceReadiness", () => {
     it("requires the accelerated model in a feature-flagged Android WebView without probing llama.cpp", async () => {
         enableLocalAndroidWebGpu();

@@ -103,6 +103,10 @@ fn pair_key(
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Test helper keeps each signed revocation binding explicit"
+)]
 fn revoke(
     env: &mut PocketIc,
     app_canister: Principal,

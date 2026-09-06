@@ -17,10 +17,11 @@ import type {
     ForwardFileResponse,
     UploadChunkResponse,
     VaultFileChunkResponse,
+    PublicBlobMediaKind,
 } from "@shared";
 import {
     createAnonymousPublicBlobAgent,
-    downloadPublicImageBlob,
+    downloadPublicMediaBlob,
     MAX_PUBLIC_IMAGE_BYTES,
     publicBlobIdlFactory,
     type PublicBlobHttpService,
@@ -108,13 +109,15 @@ export class StorageBucketClient extends CandidCanisterAgent<StorageBucketServic
     downloadPublicBlob(
         fileId: bigint,
         maxBytes = MAX_PUBLIC_IMAGE_BYTES,
+        mediaKind?: PublicBlobMediaKind,
     ): Promise<Uint8Array | undefined> {
-        return downloadPublicImageBlob(fileId, maxBytes, (request) =>
-            this.handleQueryResponse(
-                () => this.#publicBlobService.http_request(request),
-                (response) => response,
-                { fileId, range: request.headers[0]?.[1] },
-            ),
+        // This optional public fallback has a strict query/deadline budget. Do not
+        // route it through the authenticated client's retrying query wrapper.
+        return downloadPublicMediaBlob(
+            fileId,
+            maxBytes,
+            (request) => this.#publicBlobService.http_request(request),
+            mediaKind,
         );
     }
 }
