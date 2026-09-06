@@ -22,16 +22,16 @@ on `codex/pr2-clean-integration`, tagged `model-integration-checkpoint-2026-09-0
 The lint cleanup, compatible dependency updates, portable security hashes, CI coverage,
 Android release safeguards and this preparation package follow that immutable checkpoint.
 Use the preparation commit SHA for further validation; never move the checkpoint tag.
-The APK preparation source assessed here is `e02bd70d4017b92f534f03ad50712ae7729227b3`.
-The local-test APK below contains that preparation's frontend/native source. Later preparation
-also changes generic voice handling, runtime settings and worker rebuilding. Those fixes are
-not in the earlier APK; a refreshed local artifact needs its own source and packaging evidence.
+The current local-test APK source is `551265bbeff8191ed36d0446bc8ef1d54edf74f8`.
+It includes the generic voice, runtime-settings and worker-rebuild follow-ups. It replaces the
+earlier `e02bd70d4` artifact as the current build candidate, but slow cold startup remains under
+investigation and it is not fully accepted for mobile use.
 
 | Submission                                                                 | Observed head                                | Base                           | State                         |
 | -------------------------------------------------------------------------- | -------------------------------------------- | ------------------------------ | ----------------------------- |
 | [Upstream PR #9132](https://github.com/open-chat-labs/open-chat/pull/9132) | `codex/pr1-local-models`, `045f7132e`        | upstream `master`              | Draft; no reported check runs |
 | [Fork PR #73](https://github.com/ktimam/open-chat/pull/73)                 | `codex/pr2-app-chat-interfaces`, `c7299aa11` | `codex/pr1-local-models`       | Draft; no reported check runs |
-| APK preparation source                                                     | `codex/pr2-clean-integration`, `e02bd70d4`   | descends from both heads above | Not either PR's current head  |
+| APK preparation source                                                     | `codex/pr2-clean-integration`, `551265bbe`   | descends from both heads above | Not either PR's current head  |
 
 The integration checkpoint is 16 commits / 115 changed files beyond PR #73's head.
 Those commits mix later model-runtime fixes and app-interface fixes. It is 60 commits beyond
@@ -57,9 +57,10 @@ Conflict resolution against current upstream is not verified.
    [PR1](pr1-local-models.md) and [PR2](pr2-app-interfaces.md).
 
 The [stack refresh plan](pr-stack-refresh-plan.md) identifies mixed areas and an append-only
-refresh sequence. An isolated PR1 refresh has committed generic ZIP packaging locally and is
-validating the later model-only runtime/build/UI slice against PR1's exact lockfile. The full
-model/app scope split is not complete and neither published PR head has changed.
+refresh sequence. An isolated PR1 refresh has committed generic ZIP packaging and the later
+model-only runtime/build/UI slice locally, with exact-lock validation. Its fresh dependency
+audit still requires remediation. The full model/app scope split is not complete and neither
+published PR head has changed.
 
 This is a proposed publishing sequence, not an executed history rewrite. Keep the checkpoint
 tag available for comparison; do not move it to a rebased or lint-cleaned head.
@@ -70,17 +71,20 @@ Results below use isolated integration source plus the current fixes and exact u
 frontend lockfile, not refreshed PR1/PR2 heads. The production web build was run; no signed
 shipping APK was built or accepted.
 
-The local-test ARM64 APK was subsequently built and installed over the emulator's existing
-package without uninstalling or clearing data. It is 82,954,970 bytes, SHA-256
-`05239e790f1b5b69b89dad761b81322a82b157dabf5fa39032af910bdb9e4070`, with the existing
+The refreshed local-test ARM64 APK was built and installed over the emulator's existing
+package without uninstalling or clearing data. It is 84,773,670 bytes, SHA-256
+`04c1579baf8f3d5012388863bc7280b455cbaf31af6746993937ede5e44c4bf5`, with the existing
 local Android debug certificate and `com.oc.app` identity (native version `0.1.0`, code `1000`).
-The running APK serves frontend version `2.0.0-local-webgpu-20260906-142434` and OTA policy
+The running APK serves frontend version `2.0.0-local-webgpu-551265bbe-20260906` and OTA policy
 `none`. Its 26 served runtime/graph/notice assets match the built hashes; the actual WebView
 imports ORT, compiles the pinned WASM and receives acknowledgement from its packaged worker.
-The v2 onboarding UI renders. The emulator is at sign-in, so authenticated model settings,
-account linking and model proposals were not verified. This artifact is not publisher-signed
-and was not uploaded. Kotlin's cross-drive incremental-cache failure recovered using its
-ordinary full-compilation fallback; the overall build and fresh-artifact checks passed.
+The v2 welcome screen eventually renders. The initial startup-only probe captured the spinner;
+a controlled cold restart then exceeded the 30-second WebView readiness limit. The later
+rendered screen is not a passing cold-start result. That delay remains under investigation.
+The emulator is at sign-in and exposes no WebGPU adapter, so authenticated model settings,
+account linking, image/voice inference and model proposals were not verified. This artifact
+is not publisher-signed and was not uploaded. The configured builder's known Gradle fallback
+ran only after a freshly compiled ARM64 library; build and fresh-artifact checks passed.
 
 | Check                                                                                       | Result                                                                                                                                                                                       |
 | ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -105,29 +109,27 @@ ordinary full-compilation fallback; the overall build and fresh-artifact checks 
 | Hosted native model checks on `753d2cecc`                                                   | Linux and Windows hermetic tests and both feature builds passed; separate pinned native CPU model inference passed                                                                           |
 | Signed shipping APK / production rollout                                                    | Not built or performed                                                                                                                                                                       |
 
-### Latest completed hosted checks: exact `753d2cecc`
+### Latest completed hosted checks: exact `551265bbe`
 
-- [Frontend](https://github.com/ktimam/open-chat/actions/runs/34036017278): policy tests and
-  type checks passed; lint caught literal spaces in a new packaging-test regular expression.
-  The selector now uses explicit repetition counts. Full local read-only lint passes again;
-  the complete pipeline and candidate build still need the follow-up commit's hosted run.
-  The earlier exact `0f1581436` pipeline and candidate packaging checks passed.
-- [Model checks](https://github.com/ktimam/open-chat/actions/runs/34036017347): frontend
-  model contracts, Windows/Linux native tests and feature builds, and actual inference with
-  the pinned 14 MB native CPU fixture all passed. That CPU fixture is not phone WebGPU proof.
-  The dependency job failed; its later Rust/license/SBOM steps were skipped. The expired
-  baseline and reviewed dependency drift remain unapproved.
-- [Backend](https://github.com/ktimam/open-chat/actions/runs/34036017324): formatting passed.
-  Clippy found deprecated seeded test-key generation, two explicit multi-field security-test
-  helpers and a test module preceding production items. Those four findings are repaired;
-  focused strict Clippy for the integration-test and upgrader crates passes. Upgrader hash
-  tests pass (3). The unit job reached a source-contract assertion still expecting a needless
-  reference removed by the preceding lint repair. It now matches the unchanged trapping
-  behavior; all 33 user-index API contract tests pass locally. No authorization, routing,
-  migration, wire format or deployment operation was changed. A new hosted run is required.
-- [App security](https://github.com/ktimam/open-chat/actions/runs/34036017374): failed
-  review expiry, reviewed dependency drift and unreviewed native manifests. Fresh npm audits
-  in this run reported two moderate findings and no high/critical findings in both scopes;
+- [Frontend](https://github.com/ktimam/open-chat/actions/runs/34038030081): the complete
+  frontend pipeline and candidate packaging build passed, including the previous lint repair.
+- [Model checks](https://github.com/ktimam/open-chat/actions/runs/34038030110): Windows/Linux
+  native tests and feature builds, and actual inference with the pinned 14 MB native CPU
+  fixture passed. That CPU fixture is not phone WebGPU proof. The frontend-model job failed
+  during `npm ci` because the ONNX Node installer download timed out / could not reach the
+  network (`ETIMEDOUT` / `ENETUNREACH`); its tests did not run. This is not a passing model
+  job or evidence of a model-source regression. The dependency job checked 291 formatted
+  files without a formatting error, then failed the expired baseline and reviewed dependency
+  drift. Its later Rust/license/SBOM steps were skipped; no security allowance was raised.
+- [Backend](https://github.com/ktimam/open-chat/actions/runs/34038030077): full unit tests
+  and formatting passed. Strict Clippy found only two needless borrows of formatted trap
+  messages in the verifier test fixture. Both are now removed without changing message bytes
+  or assertions; its four fixture tests, scoped strict Clippy and formatting pass locally.
+  The follow-up still needs the complete hosted workspace Clippy run. Earlier seeded-key,
+  test-helper, module-order and user-index source-contract failures no longer fail this run.
+- [App security](https://github.com/ktimam/open-chat/actions/runs/34038030066): review expiry,
+  reviewed dependency drift and advisory policy still fail. Fresh npm audits for the current
+  integration lock reported two moderate findings and no high/critical findings in both scopes;
   the moderate count exceeds the old policy's one-finding allowance. No allowance was raised.
 
 Local backend follow-up repairs the duplicate permission arm, adds exhaustive provenance and

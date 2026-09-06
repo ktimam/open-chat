@@ -49,9 +49,14 @@ Model package versions and dependency lock remain unchanged; package script edit
 read-only CI linting. The native feature-enabled local build is not accepted: SDK access was
 denied, so only the verified default-feature result is claimed.
 
-These checks are not complete upstream/PR acceptance or physical-device inference. The
-model-only slice remains local pending dependency review, current-upstream reconciliation,
-production build validation and the append-only stack refresh below.
+The model-only refresh is committed locally as `dc57e67ef7a6a7167fdf2a1fb6c23511a8bfe599`,
+followed by a narrow imported-notice whitespace rule at `a26f51692b0f3505f728f4a294f6e9d32648abd5`.
+Neither commit is pushed. These checks are not complete upstream/PR acceptance or physical-device
+inference. A fresh exact-lock audit reports 20 affected package entries overall (10 high,
+9 moderate, 1 low), including four high model-introduced entries. Six inherited findings are
+already repaired in current upstream. These findings require actual remediation, not a
+review-baseline waiver. Current-upstream reconciliation, production build validation and
+the append-only stack refresh below remain outstanding.
 
 ## Pinned comparison points
 

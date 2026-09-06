@@ -73,7 +73,7 @@ async fn proxy_c2c_claim_ai_app_link_code(
 ) -> user_index_canister::c2c_claim_ai_app_link_code::Response {
     user_index_canister_c2c_client::c2c_claim_ai_app_link_code(args.user_index_canister_id, &args.args)
         .await
-        .unwrap_or_else(|error| ic_cdk::trap(&format!("claim link code transport failure: {error:?}")))
+        .unwrap_or_else(|error| ic_cdk::trap(format!("claim link code transport failure: {error:?}")))
 }
 
 /// Test-only ingress bridge for the app-authenticated revoke endpoint.
@@ -81,7 +81,7 @@ async fn proxy_c2c_claim_ai_app_link_code(
 async fn proxy_revoke_ai_app_user_key(args: ProxyRevokeUserKeyArgs) -> user_index_canister::revoke_ai_app_user_key::Response {
     user_index_canister_c2c_client::revoke_ai_app_user_key(args.user_index_canister_id, &args.args)
         .await
-        .unwrap_or_else(|error| ic_cdk::trap(&format!("revoke user key transport failure: {error:?}")))
+        .unwrap_or_else(|error| ic_cdk::trap(format!("revoke user key transport failure: {error:?}")))
 }
 
 /// Test-only fixture configuration. Production apps derive this set from their private account
