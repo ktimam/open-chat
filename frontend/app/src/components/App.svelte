@@ -681,8 +681,8 @@
         <div
             class:fixed={burstFixed}
             class="burst-wrapper"
-            style={`background-image: url(${burstUrl})`}>
-        </div>
+            style={`background-image: url(${burstUrl})`}
+        ></div>
     {/if}
 
     <Head />
@@ -690,7 +690,8 @@
     <ActiveCall
         {showLandingPage}
         onClearSelection={() => navigate(routeForScope($chatListScopeStore))}
-        bind:this={videoCallElement} />
+        bind:this={videoCallElement}
+    />
 
     <VideoCallAccessRequests />
 

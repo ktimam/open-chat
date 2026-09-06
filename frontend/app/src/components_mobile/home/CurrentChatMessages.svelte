@@ -344,7 +344,8 @@
             {chat}
             bind:initialised
             bind:messagesDiv
-            bind:messagesDivHeight>
+            bind:messagesDivHeight
+        >
             {#snippet row(
                 item,
                 { isAccepted, isConfirmed, isFailed, isReadByMe, messageObserver, focusIndex },
@@ -391,7 +392,8 @@
                         {onGoToMessageIndex}
                         onExpandMessage={() => toggleMessageExpansion(evt, true)}
                         onCollapseMessage={() => toggleMessageExpansion(evt, false)}
-                        event={evt} />
+                        event={evt}
+                    />
                 {/if}
             {/snippet}
         </ChatEventList>

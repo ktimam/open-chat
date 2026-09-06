@@ -62,7 +62,10 @@ export class AutoProposeEventWatermarks {
         const previous = this.latest.get(key);
         // A new mount/context activation establishes a fresh authoritative baseline. Never lower a
         // live boundary when two component lifetimes briefly overlap during a transition.
-        this.latest.set(key, previous === undefined ? latestEventIndex : Math.max(previous, latestEventIndex));
+        this.latest.set(
+            key,
+            previous === undefined ? latestEventIndex : Math.max(previous, latestEventIndex),
+        );
         this.activeRegistration.set(key, registration);
         return registration;
     }
@@ -126,7 +129,8 @@ export class AutoProposeEventWatermarks {
             (event) => Number.isSafeInteger(event.index) && event.index >= 0,
         );
         const latestInWindow = valid.reduce<number | undefined>(
-            (latest, event) => (latest === undefined || event.index > latest ? event.index : latest),
+            (latest, event) =>
+                latest === undefined || event.index > latest ? event.index : latest,
             undefined,
         );
         const boundary = this.latest.get(key);

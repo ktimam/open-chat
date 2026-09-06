@@ -13,12 +13,10 @@ describe("Android bundled frontend OTA policy", () => {
         const buildAndroid = fs.readFileSync(path.join(APP_DIR, "build_android.sh"), "utf8");
 
         expect(buildAndroid).toContain("set -euo pipefail");
-        expect(buildAndroid).toContain('${OC_ANDROID_OTA_UPDATES:-none}');
+        expect(buildAndroid).toContain("${OC_ANDROID_OTA_UPDATES:-none}");
         expect(buildAndroid).toContain("none|patch|minor|major)");
-        expect(buildAndroid).toContain(
-            'export OC_OTA_UPDATES="${OC_ANDROID_OTA_UPDATES:-none}"',
-        );
-        expect(buildAndroid).not.toContain('${OC_OTA_UPDATES:-');
+        expect(buildAndroid).toContain('export OC_OTA_UPDATES="${OC_ANDROID_OTA_UPDATES:-none}"');
+        expect(buildAndroid).not.toContain("${OC_OTA_UPDATES:-");
         for (const requiredAsset of [
             "build/index.html",
             "build/version",
@@ -61,8 +59,8 @@ describe("Android bundled frontend OTA policy", () => {
         ]) {
             expect(buildAndroid).toContain(`\${${name}:-${officialDefault}}`);
         }
-        expect(buildAndroid).toContain('export OC_BLOB_URL_PATTERN=\'https://{canisterId}');
-        expect(buildAndroid).toContain('export OC_CANISTER_URL_PATH=\'https://{canisterId}');
+        expect(buildAndroid).toContain("export OC_BLOB_URL_PATTERN='https://{canisterId}");
+        expect(buildAndroid).toContain("export OC_CANISTER_URL_PATH='https://{canisterId}");
         expect(buildAndroid).toContain("${OC_INTERNET_IDENTITY_CANISTER_ID:-");
         expect(buildAndroid).toContain("${OC_INTERNET_IDENTITY_URL:-");
         expect(buildAndroid).toContain("${OC_II_DERIVATION_ORIGIN:-");
@@ -110,5 +108,4 @@ describe("Android bundled frontend OTA policy", () => {
         expect(result.status, result.stderr).toBe(0);
         expect(result.stdout).toBe("caller-version|file-only");
     });
-
 });

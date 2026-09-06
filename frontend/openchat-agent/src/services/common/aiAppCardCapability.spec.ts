@@ -61,8 +61,12 @@ describe("createAiAppCardCapabilityResponse", () => {
             },
         });
         expect(createAiAppCardCapabilityResponse(success({ context_version: 2 }))).toBeUndefined();
-        expect(createAiAppCardCapabilityResponse(success({ app_subject: new Uint8Array(31) }))).toBeUndefined();
-        expect(createAiAppCardCapabilityResponse(success({ chat_handle: new Uint8Array(33) }))).toBeUndefined();
+        expect(
+            createAiAppCardCapabilityResponse(success({ app_subject: new Uint8Array(31) })),
+        ).toBeUndefined();
+        expect(
+            createAiAppCardCapabilityResponse(success({ chat_handle: new Uint8Array(33) })),
+        ).toBeUndefined();
         expect(createAiAppCardCapabilityResponse(success({ message_handle: [] }))).toBeUndefined();
     });
 

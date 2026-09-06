@@ -201,10 +201,7 @@ describe("surface destination disclosure and consent markers", () => {
         expect(opening?.url).toBe(
             "https://app.example/settings#openchat-routing/AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
         );
-        expect(opening?.dataDisclosures).toEqual([
-            "one_time_chat_link_token",
-            "chat_display_name",
-        ]);
+        expect(opening?.dataDisclosures).toEqual(["one_time_chat_link_token", "chat_display_name"]);
     });
 
     it("uses unpadded base64url rather than hex or standard base64", async () => {
@@ -327,7 +324,6 @@ describe("surface destination disclosure and consent markers", () => {
         expect(first?.url).not.toContain(firstChat.groupId);
         expect(second?.url).not.toContain(secondChat.groupId);
     });
-
 });
 
 describe("cardSurfaceForAction — owner resolution + labelToField", () => {

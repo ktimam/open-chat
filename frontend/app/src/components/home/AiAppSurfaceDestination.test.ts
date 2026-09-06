@@ -131,7 +131,7 @@ describe("AI app surface consent gate", () => {
 
         const desktop = readFileSync(files[0], "utf8").replace(/\s+/g, " ");
         expect(desktop).toContain('<ModalContent closeIcon fill={display === "sheet"}');
-        expect(desktop).toContain('<Button hollow small onClick={onDismiss}>Not now</Button>');
+        expect(desktop).toContain("<Button hollow small onClick={onDismiss}>Not now</Button>");
         expect(desktop).toMatch(/<Button\s+small\s+disabled=.*?>\s*<OpenInNew/s);
 
         const mobile = readFileSync(files[1], "utf8").replace(/\s+/g, " ");

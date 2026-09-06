@@ -1,5 +1,5 @@
 <script lang="ts">
-import type { AiAppRegistration, OpenChat } from "@client";
+    import type { AiAppRegistration, OpenChat } from "@client";
     import {
         anonUserStore,
         exploreCommunitiesFiltersStore,
@@ -105,7 +105,9 @@ import type { AiAppRegistration, OpenChat } from "@client";
 
     function refreshConnected() {
         client.myAiAppKeys().then((keys) => {
-            connectedAppIds = new Set(keys.filter((k) => k.publicKey.length > 0).map((k) => k.appId));
+            connectedAppIds = new Set(
+                keys.filter((k) => k.publicKey.length > 0).map((k) => k.appId),
+            );
         });
     }
 
@@ -234,12 +236,14 @@ import type { AiAppRegistration, OpenChat } from "@client";
                         onPerformSearch={performSearch}
                         placeholder={i18nKey(
                             view === "aiApps" ? "aiApps.searchPlaceholder" : "communities.search",
-                        )} />
+                        )}
+                    />
                 </div>
                 {#if view !== "aiApps"}
                     <div class="create">
                         <Button onClick={createCommunity} hollow
-                            ><Translatable resourceKey={i18nKey("communities.create")} /></Button>
+                            ><Translatable resourceKey={i18nKey("communities.create")} /></Button
+                        >
                     </div>
                 {/if}
             {/if}
@@ -263,7 +267,8 @@ import type { AiAppRegistration, OpenChat } from "@client";
                 type="button"
                 class="chip"
                 class:selected={view === "communities"}
-                onclick={() => setView("communities")}>
+                onclick={() => setView("communities")}
+            >
                 <AccountGroup size="1em" color="currentColor" />
                 <Translatable resourceKey={i18nKey("communities.explore")} />
             </button>
@@ -271,7 +276,8 @@ import type { AiAppRegistration, OpenChat } from "@client";
                 type="button"
                 class="chip"
                 class:selected={view === "aiApps"}
-                onclick={() => setView("aiApps")}>
+                onclick={() => setView("aiApps")}
+            >
                 <AutoFix size="1em" color="currentColor" />
                 <Translatable resourceKey={i18nKey("aiApps.exploreChip")} />
             </button>
@@ -286,7 +292,8 @@ import type { AiAppRegistration, OpenChat } from "@client";
                         onPerformSearch={performSearch}
                         placeholder={i18nKey(
                             view === "aiApps" ? "aiApps.searchPlaceholder" : "communities.search",
-                        )} />
+                        )}
+                    />
                 </div>
             {/if}
         </div>
@@ -296,7 +303,8 @@ import type { AiAppRegistration, OpenChat } from "@client";
         <div
             class="communities"
             class:loading
-            class:empty={communitySearchState.results.length === 0}>
+            class:empty={communitySearchState.results.length === 0}
+        >
             {#if loading}
                 <div class="loading">
                     <FancyLoader />
@@ -322,7 +330,8 @@ import type { AiAppRegistration, OpenChat } from "@client";
                         <AiAppCard
                             {app}
                             connected={connectedAppIds.has(app.id)}
-                            onSelect={() => (selectedApp = app)} />
+                            onSelect={() => (selectedApp = app)}
+                        />
                     {/each}
                 {/if}
             {:else if communitySearchState.results.length === 0}
@@ -357,7 +366,8 @@ import type { AiAppRegistration, OpenChat } from "@client";
                             gateConfig={community.gateConfig}
                             language={community.primaryLanguage}
                             flags={community.flags}
-                            verified={community.verified} />
+                            verified={community.verified}
+                        />
                     </CommunityCardLink>
                 {/each}
             {/if}
@@ -371,7 +381,8 @@ import type { AiAppRegistration, OpenChat } from "@client";
                         view === "aiApps"
                             ? searchAiApps(false)
                             : search($exploreCommunitiesFiltersStore, false)}
-                    ><Translatable resourceKey={i18nKey("communities.loadMore")} /></Button>
+                    ><Translatable resourceKey={i18nKey("communities.loadMore")} /></Button
+                >
             </div>
         {/if}
     </div>
@@ -395,7 +406,8 @@ import type { AiAppRegistration, OpenChat } from "@client";
                 appSurface = o;
                 selectedApp = undefined;
             }}
-            onDisconnected={refreshConnected} />
+            onDisconnected={refreshConnected}
+        />
     {/if}
     {#if linkingApp !== undefined}
         <AiAppLinkModal
@@ -404,7 +416,8 @@ import type { AiAppRegistration, OpenChat } from "@client";
             onLinked={() => {
                 linkingApp = undefined;
                 refreshConnected();
-            }} />
+            }}
+        />
     {/if}
     {#if appSurface !== undefined}
         <AiAppSurfaceModal
@@ -412,7 +425,8 @@ import type { AiAppRegistration, OpenChat } from "@client";
             url={appSurface.url}
             display={appSurface.surface.display}
             dataDisclosures={appSurface.dataDisclosures}
-            onDismiss={() => (appSurface = undefined)} />
+            onDismiss={() => (appSurface = undefined)}
+        />
     {/if}
 </div>
 

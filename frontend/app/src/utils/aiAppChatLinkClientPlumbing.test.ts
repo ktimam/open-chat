@@ -87,12 +87,8 @@ describe("privacy-safe card-provenance failure plumbing", () => {
         const agent = source("../openchat-agent/src/services/openchatAgent.ts");
         const client = source("../openchat-client/src/openchat.ts");
 
-        expect(shared).toContain(
-            "T extends CreateAiAppCardProvenance ? AiAppCardProvenanceResult",
-        );
-        expect(agent).toContain(
-            'if (offline()) return Promise.resolve({ kind: "offline" });',
-        );
+        expect(shared).toContain("T extends CreateAiAppCardProvenance ? AiAppCardProvenanceResult");
+        expect(agent).toContain('if (offline()) return Promise.resolve({ kind: "offline" });');
         expect(client).toContain('.catch(() => ({ kind: "transport_error" }));');
     });
 

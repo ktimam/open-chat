@@ -60,7 +60,8 @@
         <div
             class="message"
             class:failure={$toastStore.kind === "failure"}
-            class:success={$toastStore.kind === "success"}>
+            class:success={$toastStore.kind === "success"}
+        >
             <div class="text">
                 <Body align={"center"}>
                     <Translatable resourceKey={$reactiveResourceKey} />

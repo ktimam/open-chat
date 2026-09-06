@@ -365,7 +365,8 @@
 
     <ActiveCall
         onClearSelection={() => navigate(routeForScope($chatListScopeStore))}
-        bind:this={videoCallElement} />
+        bind:this={videoCallElement}
+    />
 
     <VideoCallAccessRequests />
 

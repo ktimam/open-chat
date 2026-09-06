@@ -54,31 +54,30 @@
 
     function signIn() {
         const nativeAndroid = client.isNativeAndroid();
-        (nativeAndroid
-            ? client.signInWithAndroidWebAuthn()
-            : client.signInWithWebAuthn()
-        ).catch(async (e) => {
-            if (!nativeAndroid) {
-                if ("AUTH_FAILED" === e) {
-                    error = "default";
-                    console.error("Auth error: ", e);
-                } else {
-                    step = "one-time-password";
+        (nativeAndroid ? client.signInWithAndroidWebAuthn() : client.signInWithWebAuthn()).catch(
+            async (e) => {
+                if (!nativeAndroid) {
+                    if ("AUTH_FAILED" === e) {
+                        error = "default";
+                        console.error("Auth error: ", e);
+                    } else {
+                        step = "one-time-password";
+                    }
+                    return;
                 }
-                return;
-            }
 
-            const failure = classifyAndroidWebAuthnSignInFailure(e);
-            if (failure.kind === "cancelled") {
-                return;
-            }
-            error = failure.errorCode;
-            if (failure.kind === "link_account") {
-                step = "one-time-password";
-            } else {
-                console.error("Android passkey sign-in error: ", e);
-            }
-        });
+                const failure = classifyAndroidWebAuthnSignInFailure(e);
+                if (failure.kind === "cancelled") {
+                    return;
+                }
+                error = failure.errorCode;
+                if (failure.kind === "link_account") {
+                    step = "one-time-password";
+                } else {
+                    console.error("Android passkey sign-in error: ", e);
+                }
+            },
+        );
     }
 
     function signUp() {
@@ -146,18 +145,21 @@
                 <Translatable
                     resourceKey={i18nKey(
                         `We are just downloading a quick update and then we will have you on your way ...`,
-                    )} />
+                    )}
+                />
             </BodySmall>
 
             <Progress
                 colour={ColourVars.primary}
                 size={"1rem"}
-                percent={checker.versionState.downloadProgress} />
+                percent={checker.versionState.downloadProgress}
+            />
 
             <Button
                 disabled={checker.versionState.downloadProgress < 100}
                 onClick={() => checker.reload()}
-                secondary>
+                secondary
+            >
                 <Translatable resourceKey={i18nKey("Reload and continue")} />
             </Button>
         </Column>
@@ -177,7 +179,8 @@
             <Translatable
                 resourceKey={i18nKey(
                     "Preview OpenChat communities without joining. You will need an account to gain access.",
-                )} />
+                )}
+            />
         </BodySmall>
     </Container>
 
@@ -185,7 +188,8 @@
         crossAxisAlignment={"center"}
         mainAxisAlignment={"center"}
         gap={"md"}
-        padding={["zero", "xxl"]}>
+        padding={["zero", "xxl"]}
+    >
         <div class="line"></div>
         <Body colour={"textSecondary"} align={"center"} width={"hug"} fontWeight={"bold"}>
             <Translatable resourceKey={i18nKey("or join")} />
@@ -196,7 +200,8 @@
         crossAxisAlignment={"center"}
         gap={"md"}
         padding={["zero", "xxl"]}
-        direction={"vertical"}>
+        direction={"vertical"}
+    >
         <Button disabled={outdated} onClick={signIn}>
             <Translatable resourceKey={i18nKey("I'm an existing user")} />
         </Button>
@@ -210,7 +215,8 @@
                     i18nKey(
                         "OpenChat uses *Passkeys* to secure accounts.\n Visit [oc.app web](https://oc.app) to found out more.",
                     ),
-                )}></Markdown>
+                )}
+            ></Markdown>
         </BodySmall>
     </Container>
 {/snippet}
@@ -221,7 +227,8 @@
     <Container padding={["zero", "xxl"]} direction={"vertical"}>
         <H1><Translatable resourceKey={i18nKey("Create new account")} /></H1>
         <Title fontWeight={"bold"} colour={"primary"}
-            ><Translatable resourceKey={i18nKey("Welcome aboard!")} /></Title>
+            ><Translatable resourceKey={i18nKey("Welcome aboard!")} /></Title
+        >
     </Container>
 
     <Container padding={["zero", "xxl"]} direction={"vertical"}>
@@ -229,7 +236,8 @@
             <Translatable
                 resourceKey={i18nKey(
                     "We're really glad you're here. You're joining a safe, private space built and shaped by its community.",
-                )} />
+                )}
+            />
         </Subtitle>
     </Container>
 
@@ -244,7 +252,8 @@
     <Container padding={["zero", "xxl"]} direction={"vertical"}>
         <H1><Translatable resourceKey={i18nKey("Existing user")} /></H1>
         <Title fontWeight={"bold"} colour={"primary"}
-            ><Translatable resourceKey={i18nKey("Welcome back!")} /></Title>
+            ><Translatable resourceKey={i18nKey("Welcome back!")} /></Title
+        >
     </Container>
 
     <Container gap={"sm"} padding={["zero", "xxl"]} direction={"vertical"}>
@@ -252,13 +261,15 @@
             <Translatable
                 resourceKey={i18nKey(
                     "Let's reconnect your account so you can continue exactly where you left off.",
-                )} />
+                )}
+            />
         </Subtitle>
         <BodySmall colour={"textTertiary"}>
             <Translatable
                 resourceKey={i18nKey(
                     "If you expected to use an existing passkey, it may not be available on this device at the moment.",
-                )} />
+                )}
+            />
         </BodySmall>
     </Container>
 
@@ -270,7 +281,8 @@
                 bind:this={alcInput}
                 type="text"
                 maxlength="6"
-                pattern="[a-zA-Z0-9]{6}" />
+                pattern="[a-zA-Z0-9]{6}"
+            />
             <!-- svelte-ignore a11y_click_events_have_key_events -->
             <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div class="alc" onclick={() => alcInput?.focus()}>
@@ -288,7 +300,8 @@
             <Button
                 loading={linkingInProgress}
                 disabled={linkingInProgress || !alcValid}
-                onClick={linkAccount}>
+                onClick={linkAccount}
+            >
                 <Translatable resourceKey={i18nKey("Link with existing account")} />
             </Button>
         </Container>
@@ -299,7 +312,8 @@
     <Container
         supplementalClass={"login_mockup"}
         height={{ size: step === "choose-auth" ? "23rem" : "11rem" }}
-        backgroundImage={"/assets/login_mockup.svg"}>
+        backgroundImage={"/assets/login_mockup.svg"}
+    >
         <span></span>
     </Container>
     {#if step === "choose-auth"}

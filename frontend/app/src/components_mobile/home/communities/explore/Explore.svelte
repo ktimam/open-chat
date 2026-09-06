@@ -124,7 +124,7 @@
                 communitySearchState.term === "" ? undefined : communitySearchState.term,
                 communitySearchState.index,
                 8,
-                disableRestrictedContent ? 0 : filters.flags ?? 0,
+                disableRestrictedContent ? 0 : (filters.flags ?? 0),
                 filters.languages,
             )
             .then((results) => {
@@ -303,12 +303,14 @@
                 gateConfig={community.gateConfig}
                 language={community.primaryLanguage}
                 flags={community.flags}
-                verified={community.verified} />
+                verified={community.verified}
+            />
             <Button onClick={() => goToCommunity(community)}>
                 {#snippet icon(color)}
                     <EyeOutline {color} />
                 {/snippet}
-                View community</Button>
+                View community</Button
+            >
         </Container>
     </Sheet>
 {/if}
@@ -334,7 +336,8 @@
     parentDirection={"vertical"}
     gap={"xl"}
     direction={"vertical"}
-    padding={["zero", "zero", "huge"]}>
+    padding={["zero", "zero", "huge"]}
+>
     <!-- TODO Explore does not have a hedear -->
     <SectionHeader onAction={createCommunity} onBack={() => history.back()}>
         {#snippet title()}
@@ -358,7 +361,8 @@
             <Translatable
                 resourceKey={i18nKey(
                     "Find communities that resonate with you or maybe start a community of your own. Whether it's crypto, gaming or your favourite sport - this is the place to find your people.",
-                )} />
+                )}
+            />
         </Body>
     </Container>
 
@@ -367,7 +371,8 @@
         direction={"vertical"}
         padding={["zero", "zero", "lg", "zero"]}
         gap={"lg"}
-        background={ColourVars.background0}>
+        background={ColourVars.background0}
+    >
         <Container padding={["zero", "lg"]}>
             <Search
                 bind:value={searchState.term}
@@ -383,13 +388,15 @@
                               ? "Search bots"
                               : "aiApps.searchPlaceholder",
                     ),
-                )} />
+                )}
+            />
         </Container>
 
         <Container padding={["zero", "xl"]} gap={"sm"}>
             <Chip
                 onClick={() => setView("communities")}
-                mode={view === "communities" ? "rounded" : "unselected"}>
+                mode={view === "communities" ? "rounded" : "unselected"}
+            >
                 {#snippet icon(color)}
                     <Account {color} />
                 {/snippet}
@@ -403,7 +410,8 @@
             </Chip>
             <Chip
                 onClick={() => setView("aiApps")}
-                mode={view === "aiApps" ? "rounded" : "unselected"}>
+                mode={view === "aiApps" ? "rounded" : "unselected"}
+            >
                 {#snippet icon(color)}
                     <AutoFix {color} />
                 {/snippet}
@@ -418,7 +426,8 @@
         mainAxisAlignment={loading ? "center" : "start"}
         gap={"md"}
         direction={"vertical"}
-        padding={["zero", "lg", "md", "lg"]}>
+        padding={["zero", "lg", "md", "lg"]}
+    >
         {#if loading}
             <FancyLoader size={"4rem"} />
         {:else if searchState.results.length === 0}
@@ -427,7 +436,8 @@
                 crossAxisAlignment={"center"}
                 gap={"sm"}
                 height={"fill"}
-                direction={"vertical"}>
+                direction={"vertical"}
+            >
                 {#if $offlineStore}
                     <CloudOffOutline size={"1.8em"} />
                     <Subtitle colour={"textSecondary"} align={"center"}>
@@ -459,8 +469,8 @@
                                       ? "No matching bots"
                                       : "aiApps.noMatch",
                             ),
-                        )}>
-                    </NothingToSee>
+                        )}
+                    ></NothingToSee>
                 {/if}
             </Container>
         {:else}
@@ -468,7 +478,8 @@
                 <Container
                     padding={$anonUserStore ? ["zero", "lg", "huge", "lg"] : ["zero", "lg"]}
                     direction={"vertical"}
-                    gap={"lg"}>
+                    gap={"lg"}
+                >
                     {#each communitySearchState.results as community (community.id.communityId)}
                         {@render communityCard(community)}
                     {/each}
@@ -477,24 +488,28 @@
                 <Container
                     padding={$anonUserStore ? ["zero", "lg", "huge", "lg"] : ["zero", "lg"]}
                     direction={"vertical"}
-                    gap={"lg"}>
+                    gap={"lg"}
+                >
                     {#each botSearchState.results as bot (bot.id)}
                         <BotCard
                             onSelect={(id) =>
                                 publish("showBot", { bot: botState.externalBots.get(id)! })}
-                            {bot} />
+                            {bot}
+                        />
                     {/each}
                 </Container>
             {:else}
                 <Container
                     padding={$anonUserStore ? ["zero", "lg", "huge", "lg"] : ["zero", "lg"]}
                     direction={"vertical"}
-                    gap={"lg"}>
+                    gap={"lg"}
+                >
                     {#each aiAppSearchState.results as app (app.id)}
                         <AiAppCard
                             {app}
                             connected={connectedAppIds.has(app.id)}
-                            onSelect={() => (selectedApp = app)} />
+                            onSelect={() => (selectedApp = app)}
+                        />
                     {/each}
                 </Container>
             {/if}
@@ -504,7 +519,8 @@
                         size={"small_text"}
                         onClick={() => search(false)}
                         disabled={searching}
-                        loading={searching}>
+                        loading={searching}
+                    >
                         {#snippet icon(color, size)}
                             <LoadMore {color} {size} />
                         {/snippet}
@@ -556,7 +572,8 @@
             appSurface = opening;
             selectedApp = undefined;
         }}
-        onDisconnected={refreshConnected} />
+        onDisconnected={refreshConnected}
+    />
 {/if}
 
 {#if linkingApp !== undefined}
@@ -566,7 +583,8 @@
         onLinked={() => {
             linkingApp = undefined;
             refreshConnected();
-        }} />
+        }}
+    />
 {/if}
 
 {#if appSurface !== undefined}
@@ -575,7 +593,8 @@
         url={appSurface.url}
         display={appSurface.surface.display}
         dataDisclosures={appSurface.dataDisclosures}
-        onDismiss={() => (appSurface = undefined)} />
+        onDismiss={() => (appSurface = undefined)}
+    />
 {/if}
 
 <style lang="scss">

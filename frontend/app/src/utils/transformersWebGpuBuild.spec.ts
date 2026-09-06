@@ -681,9 +681,7 @@ describe("Transformers.js WebGPU build isolation", () => {
         const graph = schema.onnx.ModelProto.decode(patched).graph;
         expect(graph.input).toHaveLength(sourceGraph.input.length + 1);
         expect(graph.initializer).toHaveLength(sourceGraph.initializer.length + 1);
-        expect(
-            graph.initializer.filter(({ dataLocation }) => dataLocation === 1),
-        ).toHaveLength(
+        expect(graph.initializer.filter(({ dataLocation }) => dataLocation === 1)).toHaveLength(
             sourceGraph.initializer.filter(({ dataLocation }) => dataLocation === 1).length,
         );
         expect(graph.input.at(-1)).toMatchObject({
@@ -865,10 +863,7 @@ describe("Transformers.js WebGPU build isolation", () => {
         expect(rollup).toContain('src: "../openchat-worker/lib/worker.js*"');
 
         const tauri = fs.readFileSync(path.join(FRONTEND_DIR, "src-tauri/src/lib.rs"), "utf8");
-        const tauriCargo = fs.readFileSync(
-            path.join(FRONTEND_DIR, "src-tauri/Cargo.toml"),
-            "utf8",
-        );
+        const tauriCargo = fs.readFileSync(path.join(FRONTEND_DIR, "src-tauri/Cargo.toml"), "utf8");
         const inference = fs.readFileSync(
             path.join(APP_DIR, "src/utils/transformersWebGpuInference.ts"),
             "utf8",
@@ -878,7 +873,7 @@ describe("Transformers.js WebGPU build isolation", () => {
             "utf8",
         );
         expect(tauri).not.toContain('option_env!("OC_TRANSFORMERS_WEBGPU_IMAGE_SPIKE")');
-        expect(tauriCargo).toContain('transformers-webgpu-android = []');
+        expect(tauriCargo).toContain("transformers-webgpu-android = []");
         expect(workerSource).toContain("onnx.wasm.numThreads = 1");
         expect(inference).not.toContain("globalThis.crossOriginIsolated");
     });

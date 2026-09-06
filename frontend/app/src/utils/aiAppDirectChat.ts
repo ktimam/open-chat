@@ -30,17 +30,15 @@ interface DirectChatAiAppConnection {
 export function directChatAiAppConnections(
     keys: readonly AiAppUserKeyInput[],
 ): Map<number, DirectChatAiAppConnection> {
-    const sorted = [...keys].sort(
-        (left, right) => {
-            const byId = left.appId - right.appId;
-            if (byId !== 0) return byId;
-            const byKey = left.publicKey.localeCompare(right.publicKey);
-            if (byKey !== 0) return byKey;
-            const leftVersion = left.keyVersion ?? 0n;
-            const rightVersion = right.keyVersion ?? 0n;
-            return leftVersion < rightVersion ? -1 : leftVersion > rightVersion ? 1 : 0;
-        },
-    );
+    const sorted = [...keys].sort((left, right) => {
+        const byId = left.appId - right.appId;
+        if (byId !== 0) return byId;
+        const byKey = left.publicKey.localeCompare(right.publicKey);
+        if (byKey !== 0) return byKey;
+        const leftVersion = left.keyVersion ?? 0n;
+        const rightVersion = right.keyVersion ?? 0n;
+        return leftVersion < rightVersion ? -1 : leftVersion > rightVersion ? 1 : 0;
+    });
     const byAppId = new Map<number, DirectChatAiAppConnection>();
     for (const key of sorted) {
         if (!byAppId.has(key.appId)) {
@@ -82,9 +80,7 @@ export async function loadDirectChatAiApps(client: OpenChat): Promise<DirectChat
         .sort((left, right) => left - right)
         .slice(0, MAX_DIRECT_AI_APP_EXACT_LOOKUPS);
     const exact =
-        exactIds.length === 0
-            ? []
-            : await client.aiApps(exactIds.map((appId) => ({ appId })));
+        exactIds.length === 0 ? [] : await client.aiApps(exactIds.map((appId) => ({ appId })));
     const requestedExactIds = new Set(exactIds);
     const exactAppIds = new Set<number>();
     const byAppId = new Map<number, AiAppRegistration>();
@@ -98,9 +94,7 @@ export async function loadDirectChatAiApps(client: OpenChat): Promise<DirectChat
         exactAppIds.add(app.id);
     }
 
-    const connectedKeys = new Map(
-        [...allKeys].filter(([, publicKey]) => publicKey.length > 0),
-    );
+    const connectedKeys = new Map([...allKeys].filter(([, publicKey]) => publicKey.length > 0));
     const connectedKeyVersions = new Map(
         [...allConnections]
             .filter(([, connection]) => connection.publicKey.length > 0)

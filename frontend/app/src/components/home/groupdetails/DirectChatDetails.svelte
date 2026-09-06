@@ -175,7 +175,8 @@
     {/if}
     <h4>
         <Translatable
-            resourceKey={i18nKey(`Direct chat with ${client.getDisplayName(chat.them.userId)}`)} />
+            resourceKey={i18nKey(`Direct chat with ${client.getDisplayName(chat.them.userId)}`)}
+        />
     </h4>
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -222,7 +223,8 @@
                     onChange={toggleDisappearingMessages}
                     label={i18nKey("disappearingMessages.label")}
                     align={"start"}
-                    checked={disappearingMessages}>
+                    checked={disappearingMessages}
+                >
                     <div class="section-title disappear">
                         <Translatable resourceKey={i18nKey("disappearingMessages.label")} />
                     </div>
@@ -240,7 +242,8 @@
                 disabled={!dirty || saving}
                 fill
                 onClick={updateDirectChatDetails}
-                ><Translatable resourceKey={i18nKey("update")} /></Button>
+                ><Translatable resourceKey={i18nKey("update")} /></Button
+            >
         </div>
     </div>
 {/if}

@@ -144,7 +144,8 @@
             onClick={clickedThread}
             mainAxisAlignment={"spaceBetween"}
             crossAxisAlignment={"center"}
-            gap={"md"}>
+            gap={"md"}
+        >
             <div class="avatar">
                 <Avatar url={chatData.avatarUrl} size={"lg"} />
             </div>
@@ -159,7 +160,8 @@
                         <Markdown
                             text={client.getContentAsText($_, thread.rootMessage.event.content)}
                             oneLine
-                            suppressLinks />
+                            suppressLinks
+                        />
                     </BodySmall>
                 </Container>
             </Container>
@@ -218,17 +220,20 @@
                         dateFormatter={(date) => client.toDatetimeString(date)}
                         msg={thread.rootMessage.event}
                         senderContext={thread.rootMessage.event.senderContext}
-                        disablePan={true} />
+                        disablePan={true}
+                    />
                     {#if missingMessages > 0}
                         <BodySmall
                             height={{ size: "2rem" }}
                             colour={"textSecondary"}
                             align={"center"}
-                            fontWeight={"bold"}>
+                            fontWeight={"bold"}
+                        >
                             <Translatable
                                 resourceKey={i18nKey("thread.moreMessages", {
                                     number: missingMessages.toString(),
-                                })} />
+                                })}
+                            />
                         </BodySmall>
                     {/if}
                     {#each grouped as userGroup}
@@ -265,7 +270,8 @@
                                 dateFormatter={(date) => client.toDatetimeString(date)}
                                 msg={evt.event}
                                 senderContext={evt.event.senderContext}
-                                disablePan={true} />
+                                disablePan={true}
+                            />
                         {/each}
                     {/each}
 

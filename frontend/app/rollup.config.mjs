@@ -9,6 +9,7 @@ import terser from "@rollup/plugin-terser";
 import typescript from "@rollup/plugin-typescript";
 import autoprefixer from "autoprefixer";
 import fs from "fs-extra";
+import { createHash } from "node:crypto";
 import path from "path";
 import { rimrafSync } from "rimraf";
 import copy from "rollup-plugin-copy";
@@ -21,7 +22,12 @@ import { sveltePreprocess } from "svelte-preprocess";
 import { sourcemapNewline } from "../sourcemapNewline.mjs";
 import { androidBundlePlugin } from "./rollup-plugin-android-bundle.mjs";
 import { wasmUrlAsset } from "./rollup-plugin-wasm-url.mjs";
+import { modelAssetNoticesPlugin } from "./modelAssetNotices.mjs";
 import { transformersWebGpuFeatureEnabled } from "./transformersWebGpuFeatureFlag.mjs";
+import {
+    TRANSFORMERS_QWEN_ARTIFACTS,
+    TRANSFORMERS_WEBGPU_RUNTIME_ASSETS,
+} from "./src/utils/transformersWebGpuProtocol.ts";
 import {
     patchQwen3Vl2bDecoderGraph,
     QWEN3_VL_2B_DECODER_PATCHED_BYTES,
@@ -215,13 +221,52 @@ function packagedAndroidTransformersGraphs() {
     return {
         name: "packaged-android-transformers-graphs",
         generateBundle() {
-            if (!isNativeAndroid || !transformersWebGpuSpikeEnabled) return;
+            if (!transformersWebGpuSpikeEnabled || (isNativeApp && !isNativeAndroid)) return;
+            // Production web and Android both redistribute exact reviewed runtime bytes.
+            // Never let a different installed ORT package silently become a release asset.
+            for (const artifact of TRANSFORMERS_WEBGPU_RUNTIME_ASSETS.filter(
+                (asset) => asset.kind === "pinned",
+            )) {
+                const source = fs.readFileSync(
+                    path.resolve(
+                        __dirname,
+                        "../node_modules/onnxruntime-web/dist",
+                        path.basename(artifact.path),
+                    ),
+                );
+                if (
+                    source.byteLength !== artifact.bytes ||
+                    createHash("sha256").update(source).digest("hex") !== artifact.sha256
+                ) {
+                    throw new Error(
+                        `Packaged runtime asset differs from its immutable manifest: ${artifact.path}`,
+                    );
+                }
+            }
             const graphDir = path.resolve(__dirname, "model-overrides/qwen3vl2b/onnx");
             const decoder = patchQwen3Vl2bDecoderGraph(
                 fs.readFileSync(path.join(graphDir, "decoder_model_merged_q4.onnx")),
             );
             if (decoder.byteLength !== QWEN3_VL_2B_DECODER_PATCHED_BYTES) {
                 throw new Error("The packaged Qwen decoder byte count changed.");
+            }
+            const vision = fs.readFileSync(path.join(graphDir, "vision_encoder_q4.onnx"));
+            for (const [name, bytes] of [
+                ["decoder_model_merged_q4.onnx", decoder],
+                ["vision_encoder_q4.onnx", vision],
+            ]) {
+                const artifact = TRANSFORMERS_QWEN_ARTIFACTS.find(
+                    (entry) => entry.path === `onnx/${name}`,
+                );
+                if (
+                    !artifact ||
+                    bytes.byteLength !== artifact.bytes ||
+                    createHash("sha256").update(bytes).digest("hex") !== artifact.sha256
+                ) {
+                    throw new Error(
+                        `Packaged model graph differs from its immutable manifest: ${name}`,
+                    );
+                }
             }
             this.emitFile({
                 type: "asset",
@@ -231,7 +276,7 @@ function packagedAndroidTransformersGraphs() {
             this.emitFile({
                 type: "asset",
                 fileName: "assets/transformers-webgpu/qwen3vl2b/onnx/vision_encoder_q4.onnx",
-                source: fs.readFileSync(path.join(graphDir, "vision_encoder_q4.onnx")),
+                source: vision,
             });
         },
     };
@@ -323,6 +368,7 @@ export default {
                 // Imported by src/utils/publicImageDisplay.ts for local-replica image URLs.
                 "./localReplicaImageProxy.ts",
                 "../vite-env.d.ts",
+                "../global.d.ts",
                 "../node_modules/component-lib/src/**/*.ts",
                 // The former sub-packages are now compiled from source.
                 "../openchat-shared/src/**/*",
@@ -388,6 +434,9 @@ export default {
                 "OC_LOCAL_AI_APP_PRIVATE_CONTEXT_ENABLED",
             ),
             "import.meta.env.OC_TRANSFORMERS_WEBGPU_IMAGE_SPIKE": explicitTransformersWebGpuFlag,
+            "import.meta.env.OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY": maybeStringify(
+                process.env.OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY,
+            ),
             "import.meta.env.OC_NODE_ENV": JSON.stringify(process.env.NODE_ENV ?? "production"),
             "import.meta.env.OC_WEBSITE_VERSION": JSON.stringify(process.env.OC_WEBSITE_VERSION),
             "import.meta.env.OC_ROLLBAR_ACCESS_TOKEN": JSON.stringify(
@@ -582,6 +631,10 @@ export default {
 
         // Pull in the worker and service worker
         packagedAndroidTransformersGraphs(),
+        modelAssetNoticesPlugin({
+            includeWllama: true,
+            includeWebGpu: transformersWebGpuSpikeEnabled && (!isNativeApp || isNativeAndroid),
+        }),
         copy({
             targets: [
                 {

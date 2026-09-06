@@ -61,7 +61,7 @@ describe("direct AI-app card client routing", () => {
 
         const userClient = source("../openchat-agent/src/services/user/user.client.ts");
         expect(userClient).toContain(
-            'createAiAppCardCapability( userId: string, messageId: bigint, threadRootMessageIndex: number | undefined, recipientKeyScheme: string, recipientPublicKey: Uint8Array, )',
+            "createAiAppCardCapability( userId: string, messageId: bigint, threadRootMessageIndex: number | undefined, recipientKeyScheme: string, recipientPublicKey: Uint8Array, )",
         );
         expect(userClient).toContain('"create_ai_app_card_capability"');
         expect(userClient).toContain("user_id: principalStringToBytes(userId)");
@@ -81,7 +81,7 @@ describe("direct AI-app card client routing", () => {
 
         const userClient = source("../openchat-agent/src/services/user/user.client.ts");
         expect(userClient).toContain(
-            'createAiAppCardConfirmationGrant( userId: string, messageId: bigint, threadRootMessageIndex: number | undefined, confirmPayload: Uint8Array, )',
+            "createAiAppCardConfirmationGrant( userId: string, messageId: bigint, threadRootMessageIndex: number | undefined, confirmPayload: Uint8Array, )",
         );
         expect(userClient).toContain('"create_ai_app_card_confirmation_grant"');
         expect(userClient).toContain("user_id: principalStringToBytes(userId)");

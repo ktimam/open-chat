@@ -45,6 +45,10 @@ val openChatRpId = (environmentOpenChatRpId ?: bundledOpenChatRpId ?: "oc.app").
 
 android {
     compileSdk = 36
+    // Match the tested APK's r26b native build and Gradle build-tools inputs.
+    // These source pins also keep local builds independent of release-only environment variables.
+    ndkVersion = "26.1.10909125"
+    buildToolsVersion = "35.0.0"
     namespace = "com.oc.app"
     defaultConfig {
         manifestPlaceholders["usesCleartextTraffic"] = "false"

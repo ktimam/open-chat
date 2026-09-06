@@ -371,8 +371,7 @@ async function matchOne(
             const matched = parsePrivateMatchResult(event.data, binding);
             if (matched !== undefined) {
                 finish(
-                    matched &&
-                        privateMatchRuntimeCurrent(expectedViewerId, stillCurrent)
+                    matched && privateMatchRuntimeCurrent(expectedViewerId, stillCurrent)
                         ? "matched"
                         : "no_match",
                 );
@@ -397,10 +396,7 @@ async function matchOne(
             },
             { once: true },
         );
-        timer = window.setTimeout(
-            () => finish("transient"),
-            PRIVATE_MATCH_ATTEMPT_TIMEOUT_MS,
-        );
+        timer = window.setTimeout(() => finish("transient"), PRIVATE_MATCH_ATTEMPT_TIMEOUT_MS);
         frame.src = opening.url;
         document.body.appendChild(frame);
     });
@@ -476,9 +472,8 @@ export async function collectPrivateMatchCandidates(
         }
     };
     await Promise.all(
-        Array.from(
-            { length: Math.min(MAX_PRIVATE_MATCH_CONCURRENCY, queue.length) },
-            () => worker(),
+        Array.from({ length: Math.min(MAX_PRIVATE_MATCH_CONCURRENCY, queue.length) }, () =>
+            worker(),
         ),
     );
     return {
@@ -503,24 +498,16 @@ export async function runPrivateMatchCandidates(
 ): Promise<PrivateMatchRunResult> {
     const byteLength = new TextEncoder().encode(exactMessageText).length;
     if (byteLength === 0 || byteLength > MAX_PRIVATE_MATCH_TEXT_BYTES) return { kind: "no_match" };
-    const queue = boundedPrivateMatchCandidates(
-        candidates,
-        chatId,
-        expectedViewerId,
-        stillCurrent,
-    );
+    const queue = boundedPrivateMatchCandidates(candidates, chatId, expectedViewerId, stillCurrent);
     if (queue.length === 0) return { kind: "no_match" };
 
     let operationTimedOut = false;
     const operation = new AbortController();
     if (!activeOperations.admit(operation)) return { kind: "transient" };
-    const operationTimer = window.setTimeout(
-        () => {
-            operationTimedOut = true;
-            operation.abort();
-        },
-        PRIVATE_MATCH_OPERATION_TIMEOUT_MS,
-    );
+    const operationTimer = window.setTimeout(() => {
+        operationTimedOut = true;
+        operation.abort();
+    }, PRIVATE_MATCH_OPERATION_TIMEOUT_MS);
     let collected: CollectedPrivateMatches = { matches: [], sawTransient: false };
     try {
         collected = await collectPrivateMatchCandidates(

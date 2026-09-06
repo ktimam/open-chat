@@ -50,4 +50,16 @@ describe("on-device inference packaging", () => {
 
         expect(manifest).toMatch(/inference\s*=\s*\["tauri-plugin-oc\/inference"\]/);
     });
+
+    it("excludes debug telemetry from default native dependencies and shipping features", () => {
+        const manifest = source("frontend/src-tauri/Cargo.toml");
+        const app = source("frontend/src-tauri/src/lib.rs");
+        const workflow = source(".github/workflows/android_release.yaml");
+
+        expect(manifest).toMatch(/tauri-plugin-devtools\s*=\s*\{[^}]*optional\s*=\s*true[^}]*\}/);
+        expect(manifest).toMatch(/devtools\s*=\s*\["dep:tauri-plugin-devtools"\]/);
+        expect(manifest).not.toMatch(/default\s*=\s*\[[^\]]*"devtools"/);
+        expect(app).toContain('#[cfg(all(debug_assertions, feature = "devtools"))]');
+        expect(workflow).not.toMatch(/--features[^\n]*\bdevtools\b/);
+    });
 });

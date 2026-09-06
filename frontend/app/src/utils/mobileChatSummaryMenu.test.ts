@@ -19,7 +19,7 @@ describe("mobile chat-summary menu activation", () => {
         );
 
         expect(source).toContain("onClick={selectChatFromRow}");
-        expect(source).toContain("mobileMode={\"longpress\"}");
+        expect(source).toContain('mobileMode={"longpress"}');
         expect(source).toContain("<MenuItem onclick={selectChat}>");
     });
 });

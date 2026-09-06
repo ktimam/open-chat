@@ -22,6 +22,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { reviewedDependencyDigest } from "./security_dependency_hash.mjs";
+import { checkFrontendFormatting } from "./frontend_format_check.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const policyPath = resolve(
@@ -199,26 +200,8 @@ if (modes.has("format")) {
         .split(String.fromCharCode(92))
         .join("/"),
     );
-    const args = [
-      "exec",
-      "prettier",
-      "--",
-      "--plugin=prettier-plugin-svelte",
-      "--check",
-      ...prettierPaths,
-    ];
-    const result =
-      process.platform === "win32"
-        ? run(
-            process.env.ComSpec ?? "cmd.exe",
-            ["/d", "/s", "/c", "npm", ...args],
-            frontendRoot,
-          )
-        : run("npm", args, frontendRoot);
-    if (result.status !== 0) {
-      failures.push(
-        `Candidate source/config formatting failed:\n${result.stdout}${result.stderr}`,
-      );
+    for (const failure of checkFrontendFormatting(frontendRoot, prettierPaths)) {
+      failures.push(`Candidate source/config formatting failed:\n${failure}`);
     }
   }
   console.log(

@@ -45,10 +45,7 @@ describe("generic local image evidence", () => {
             return {
                 kind: "ok" as const,
                 confidence: 90,
-                text:
-                    profile === "eng"
-                        ? "METER 42 ZX\nOBSERVED 2026-09-04"
-                        : "العداد ٤٢\nNOMINAL",
+                text: profile === "eng" ? "METER 42 ZX\nOBSERVED 2026-09-04" : "العداد ٤٢\nNOMINAL",
             };
         });
         const disposeOcr = vi.fn(async () => {
@@ -103,18 +100,21 @@ describe("generic local image evidence", () => {
     });
 
     it("preserves a successfully empty profile for app interpretation and rejects entirely empty reads", async () => {
-        const read = (primaryText: string) => extractLocalActionForPrivateVerification(
-            measurementSchema,
-            noRules,
-            { image: new Uint8Array([1]) },
-            {
-                prepareImage: async (image) => image,
-                recognizeImage: async (_image, profile) => ({
-                    kind: "ok", confidence: 90, text: profile === "eng" ? primaryText : "",
-                }),
-                disposeOcr: async () => undefined,
-            },
-        );
+        const read = (primaryText: string) =>
+            extractLocalActionForPrivateVerification(
+                measurementSchema,
+                noRules,
+                { image: new Uint8Array([1]) },
+                {
+                    prepareImage: async (image) => image,
+                    recognizeImage: async (_image, profile) => ({
+                        kind: "ok",
+                        confidence: 90,
+                        text: profile === "eng" ? primaryText : "",
+                    }),
+                    disposeOcr: async () => undefined,
+                },
+            );
         expect((await read("METER 42")).ocrTranscripts).toEqual([
             { profile: "eng", text: "METER 42" },
             { profile: "ara+eng", text: "" },
@@ -153,14 +153,22 @@ describe("generic local image evidence", () => {
         expect(text).toContain("_AR_END");
         expect(text).toContain("\n…\n");
         expect(result.ocrTranscripts?.map(({ profile }) => profile)).toEqual(["eng", "ara+eng"]);
-        expect(result.ocrTranscripts?.reduce((total, transcript) =>
-            total + new TextEncoder().encode(transcript.text).byteLength, 0),
+        expect(
+            result.ocrTranscripts?.reduce(
+                (total, transcript) => total + new TextEncoder().encode(transcript.text).byteLength,
+                0,
+            ),
         ).toBeLessThanOrEqual(MAX_PRIVATE_IMAGE_EVIDENCE_BYTES);
-        expect(result.ocrTranscripts?.map(({ profile, text: transcript }) =>
-            `--- OCR PROFILE ${profile} ---\n${transcript}`).join("\n\n"),
+        expect(
+            result.ocrTranscripts
+                ?.map(
+                    ({ profile, text: transcript }) =>
+                        `--- OCR PROFILE ${profile} ---\n${transcript}`,
+                )
+                .join("\n\n"),
         ).toBe(text);
-        expect(result.ocrTranscripts?.every(({ text: transcript }) =>
-            !transcript.includes("\ufffd")),
+        expect(
+            result.ocrTranscripts?.every(({ text: transcript }) => !transcript.includes("\ufffd")),
         ).toBe(true);
     });
 

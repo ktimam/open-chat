@@ -163,7 +163,8 @@
             {#if error || signUpError}
                 <div class="error">
                     <Translatable
-                        resourceKey={i18nKey(`native.auth.errors.${error ?? "default"}`)} />
+                        resourceKey={i18nKey(`native.auth.errors.${error ?? "default"}`)}
+                    />
                 </div>
             {/if}
             {#if step === "choose-auth"}
@@ -184,7 +185,8 @@
                         bind:this={alcInput}
                         type="text"
                         maxlength="6"
-                        pattern="[a-zA-Z0-9]{6}" />
+                        pattern="[a-zA-Z0-9]{6}"
+                    />
                     <!-- svelte-ignore a11y_no_static_element_interactions -->
                     <!-- svelte-ignore a11y_click_events_have_key_events -->
                     <div class="alc" onclick={() => alcInput?.focus()}>

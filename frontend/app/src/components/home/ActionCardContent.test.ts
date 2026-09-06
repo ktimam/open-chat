@@ -244,9 +244,7 @@ function dispatchFromCardFrame(iframe: HTMLIFrameElement, data: unknown): void {
     );
 }
 
-function latestWindowMessageListener(
-    addEventListener: ReturnType<typeof vi.spyOn>,
-): EventListener {
+function latestWindowMessageListener(addEventListener: ReturnType<typeof vi.spyOn>): EventListener {
     const listener = (addEventListener.mock.calls as unknown[][])
         .filter(([type, callback]) => type === "message" && typeof callback === "function")
         .map(([, callback]) => callback as EventListener)
@@ -1348,9 +1346,7 @@ describe("action-card external surface load consent", () => {
         const addEventListener = vi.spyOn(window, "addEventListener");
         const first = await mountCard(card(), 1_008n);
         let firstPostMessage: ReturnType<typeof vi.spyOn> | undefined;
-        let remounted:
-            | Awaited<ReturnType<typeof mountCard>>
-            | undefined;
+        let remounted: Awaited<ReturnType<typeof mountCard>> | undefined;
         let remountedPostMessage: ReturnType<typeof vi.spyOn> | undefined;
         try {
             await waitForResolution();

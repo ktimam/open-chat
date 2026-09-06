@@ -1,6 +1,9 @@
 import { isAndroidTauriApp, type InferenceRequest, type InferenceResult } from "@shared";
 import { sha256 } from "@noble/hashes/sha2.js";
-import { transformersWebGpuFeatureEnabled } from "../../transformersWebGpuFeatureFlag.mjs";
+import {
+    transformersWebGpuFeatureEnabled,
+    transformersWebGpuProductionAssetsEnabled,
+} from "../../transformersWebGpuFeatureFlag.mjs";
 import { readTransformersWebGpuDevRuntimeVersion } from "./transformersWebGpuDevRuntimeVersion";
 import {
     decodeTransformersWebGpuAudio,
@@ -193,6 +196,7 @@ export function transformersWebGpuPackagedAndroidClient(): boolean {
  * Source used only while Model Manager owns the pinned download. Cache identity remains the local
  * `/hf-model/...` URL consumed by the fail-closed worker. A packaged Android app has no Vite proxy,
  * so immutable Hub files are fetched directly while the two audited Adreno graphs come from the APK.
+ * The production web contract uses the same sources, with those graphs served by the web bundle.
  */
 export function transformersWebGpuArtifactDownloadUrl(
     path: string,
@@ -200,10 +204,20 @@ export function transformersWebGpuArtifactDownloadUrl(
     modelId: string = PHONE_QWEN3_VL_2B_MODEL_ID,
 ): string {
     const spec = requiredSpec(modelId);
+    if (
+        ![...spec.artifacts, ...(spec.optionalAudio?.artifacts ?? [])].some(
+            (artifact) => artifact.path === path,
+        )
+    ) {
+        throw new Error("Only artifacts in the immutable model manifest may be downloaded.");
+    }
     const packaged =
         options.packagedAndroid === true ||
         (options.packagedAndroid === undefined && transformersWebGpuPackagedAndroidClient());
-    if (!packaged) return artifactUrl(spec, path, options.baseUrl);
+    const productionAssets = transformersWebGpuProductionAssetsEnabled(
+        transformersWebGpuBuildEnvironment(),
+    );
+    if (!packaged && !productionAssets) return artifactUrl(spec, path, options.baseUrl);
     if (spec.packagedModelBase !== undefined && spec.packagedArtifacts.includes(path)) {
         const base =
             options.baseUrl ??
@@ -1028,12 +1042,18 @@ export async function deleteTransformersWebGpuAudio(
     }
 }
 
-export function transformersWebGpuSpikeEnabled(): boolean {
-    return transformersWebGpuFeatureEnabled({
+function transformersWebGpuBuildEnvironment() {
+    return {
         OC_BUILD_ENV: import.meta.env.OC_BUILD_ENV,
         OC_DFX_NETWORK: import.meta.env.OC_DFX_NETWORK,
         OC_TRANSFORMERS_WEBGPU_IMAGE_SPIKE: import.meta.env.OC_TRANSFORMERS_WEBGPU_IMAGE_SPIKE,
-    });
+        OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY: import.meta.env
+            .OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY,
+    };
+}
+
+export function transformersWebGpuSpikeEnabled(): boolean {
+    return transformersWebGpuFeatureEnabled(transformersWebGpuBuildEnvironment());
 }
 
 function mobileBrowser(): boolean {
@@ -1055,7 +1075,7 @@ export function shouldUseTransformersWebGpuSpike(
     );
 }
 
-/** True for a mobile browser or Android WebView in a deliberately feature-flagged local build. */
+/** True for a mobile browser or Android WebView in a deliberately enabled runtime build. */
 export function transformersWebGpuClientEnabled(): boolean {
     if (!transformersWebGpuSpikeEnabled() || !mobileBrowser()) return false;
     const nativeWebView = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;

@@ -30,7 +30,7 @@ jobs:
               with:
                   node-version: "24.18.1"
             - name: Test Android release policy
-              run: node --test scripts/android_release_policy.test.mjs scripts/android_release_checks.test.mjs
+              run: node --test scripts/android_release_policy.test.mjs scripts/android_release_checks.test.mjs scripts/release_preflight.test.mjs
             - name: Validate Android release intent and native version
               id: policy
               env:
@@ -53,6 +53,8 @@ jobs:
             ANDROID_TAURI_RELEASE_CONFIG: ${{ needs.release-policy.outputs.tauri_config }}
             ANDROID_REQUIRE_RELEASE_SIGNING: "true"
             ANDROID_RELEASE_CERT_SHA256: ${{ vars.ANDROID_RELEASE_CERT_SHA256 }}
+            ANDROID_NDK_VERSION: "26.1.10909125"
+            ANDROID_BUILD_TOOLS_VERSION: "35.0.0"
         defaults:
             run:
                 working-directory: frontend
@@ -108,17 +110,11 @@ jobs:
             - name: Setup Android SDK
               uses: android-actions/setup-android@v3
 
-            - name: Set NDK_HOME
+            - name: Install the tested Android SDK toolchain
               run: |
-                  # Find the NDK directory (usually the latest version installed by setup-android or pre-installed on the runner)
-                  NDK_PATH=$(find $ANDROID_HOME/ndk -maxdepth 1 -mindepth 1 -type d | sort -V | tail -n 1)
-                  if [ -z "$NDK_PATH" ]; then
-                    echo "NDK not found! Installing a specific version..."
-                    sdkmanager "ndk;26.1.10909125"
-                    NDK_PATH=$ANDROID_HOME/ndk/26.1.10909125
-                  fi
-                  echo "NDK_HOME=$NDK_PATH" >> $GITHUB_ENV
-                  echo "Using NDK at $NDK_PATH"
+                  set -euo pipefail
+                  sdkmanager "platforms;android-36" "build-tools;$ANDROID_BUILD_TOOLS_VERSION" "ndk;$ANDROID_NDK_VERSION"
+                  echo "NDK_HOME=$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
 
             - name: Setup Rust
               uses: ./.github/workflows/setup-rust
@@ -151,6 +147,14 @@ jobs:
 
             - name: Install frontend dependencies
               run: npm ci
+
+            - name: Install the repository-pinned dfx build prerequisite
+              uses: dfinity/setup-dfx@e50c04f104ee4285ec010f10609483cf41e4d365
+              with:
+                  dfx-version: "0.31.0-beta.1"
+
+            - name: Verify dfx is available for the public-key query
+              run: dfx --version
 
             - name: Install Tauri CLI
               uses: baptiste0928/cargo-install@v3

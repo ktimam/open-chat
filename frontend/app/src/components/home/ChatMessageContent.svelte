@@ -107,7 +107,8 @@
         {blockLevelMarkdown}
         {onRemovePreview}
         {ogPreviews}
-        {messagePreviews} />
+        {messagePreviews}
+    />
 {:else if content.kind === "image_content"}
     <ImageContent
         {edited}
@@ -117,7 +118,8 @@
         {reply}
         {pinned}
         {height}
-        {blockLevelMarkdown} />
+        {blockLevelMarkdown}
+    />
 {:else if content.kind === "video_content"}
     <VideoContent {edited} {fill} {content} {reply} {height} {blockLevelMarkdown} />
 {:else if content.kind === "video_call_content"}
@@ -143,7 +145,8 @@
 {:else if content.kind === "p2p_swap_content_initial"}
     <MessageContentInitial
         text={i18nKey(failed ? "p2pSwap.failedToCreateMessage" : "p2pSwap.creatingYourMessage")}
-        {failed} />
+        {failed}
+    />
 {:else if content.kind === "prize_content"}
     <PrizeContent chatId={messageContext.chatId} {messageId} {content} {me} {intersecting} />
 {:else if content.kind === "p2p_swap_content"}
@@ -161,7 +164,8 @@
         threadRootMessageIndex={messageContext.threadRootMessageIndex}
         viewerId={$currentUserIdStore}
         {reconciliationTrigger}
-        onRespond={onRespondToActionCard} />
+        onRespond={onRespondToActionCard}
+    />
 {:else if content.kind === "giphy_content"}
     <GiphyContent {edited} {intersecting} {fill} {content} {reply} {height} {blockLevelMarkdown} />
 {:else if content.kind === "proposal_content"}
@@ -173,7 +177,8 @@
         {collapsed}
         {readonly}
         {reply}
-        {onExpandMessage} />
+        {onExpandMessage}
+    />
 {:else if content.kind === "message_reminder_created_content" && !content.hidden}
     <MessageReminderCreatedContent {content} />
 {:else if content.kind === "message_reminder_content"}

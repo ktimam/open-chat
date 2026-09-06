@@ -30,10 +30,7 @@ function registration(overrides: Partial<AiAppRegistration> = {}): AiAppRegistra
 
 const CHAT_ID = { kind: "direct_chat", userId: "other-user" } as ChatIdentifier;
 
-function clientReturning(
-    apps: AiAppRegistration[],
-    keys: AiAppUserKey[] = [],
-): OpenChat {
+function clientReturning(apps: AiAppRegistration[], keys: AiAppUserKey[] = []): OpenChat {
     return {
         aiApps: vi.fn().mockResolvedValue(apps),
         myAiAppKeys: vi.fn().mockResolvedValue(keys),

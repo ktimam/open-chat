@@ -352,8 +352,7 @@
                 if (evt.kind !== "message") return "event";
                 if (
                     evt.content.kind === "text_content" &&
-                    ((evt.ogPreviews?.length ?? 0) > 0 ||
-                        (evt.messagePreviews?.length ?? 0) > 0)
+                    ((evt.ogPreviews?.length ?? 0) > 0 || (evt.messagePreviews?.length ?? 0) > 0)
                 ) {
                     return "text_preview";
                 }
@@ -426,7 +425,6 @@
     });
 
     onMount(() => {
-
         const messageObserverOptions = {
             root: messagesDiv as Element,
             rootMargin: "0px",
@@ -824,7 +822,11 @@
             items[0]?.key === preFirst &&
             items[items.length - 1]?.key === preLast
         ) {
-            vclDebug.log("!load-noprogress", { len: preLen, prev: shouldLoadPrev, new: shouldLoadNew });
+            vclDebug.log("!load-noprogress", {
+                len: preLen,
+                prev: shouldLoadPrev,
+                new: shouldLoadNew,
+            });
             const until = Date.now() + 5000;
             if (shouldLoadPrev) loadPrevCooldownUntil = until;
             if (shouldLoadNew) loadNewCooldownUntil = until;
@@ -1236,13 +1238,7 @@
         portalState.close();
         eventListLastScrolled.set(Date.now());
 
-        if (
-            !initialised ||
-            interrupt ||
-            loadingFromUserScroll ||
-            scrollingToMessage ||
-            !visible
-        )
+        if (!initialised || interrupt || loadingFromUserScroll || scrollingToMessage || !visible)
             return;
 
         loadMoreIfRequired(true);
@@ -1317,7 +1313,8 @@
     {timestampFor}
     {stickyDateElTop}
     bind:stickyDateTimestamp
-    row={renderRow} />
+    row={renderRow}
+/>
 
 {#snippet renderRow(item: FlatChatItem, _absIdx: number)}
     {@render row(item, {

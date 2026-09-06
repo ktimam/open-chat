@@ -261,10 +261,7 @@ export async function createChatLinkSurfaceOpening(
         app: descriptor.app,
         surface: descriptor.surface,
         url,
-        dataDisclosures: [
-            ...surfaceDataDisclosures(descriptor.template),
-            "chat_display_name",
-        ],
+        dataDisclosures: [...surfaceDataDisclosures(descriptor.template), "chat_display_name"],
         chatLinkToken: minted.token.slice(),
         expiresAt: minted.expiresAt,
     };
@@ -347,7 +344,9 @@ export function privateMatchSurfaceOpening(
 }
 
 export function hasPrivateMatchSurface(app: AiAppRegistration): boolean {
-    return privateMatchSurfaceOpening(app, { kind: "direct_chat", userId: "aaaaa-aa" }) !== undefined;
+    return (
+        privateMatchSurfaceOpening(app, { kind: "direct_chat", userId: "aaaaa-aa" }) !== undefined
+    );
 }
 
 // The card surface for the app that OWNS a given action, resolved against the chat. Also returns the

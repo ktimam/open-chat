@@ -70,7 +70,7 @@ pub enum Pr2EntropyReseedWatchdog {
 /// from aliasing a historical post-snapshot lifecycle. Snapshot recovery must still use the
 /// controller-enforced stop -> load -> same-Wasm upgrade -> start protocol so the lifecycle hook
 /// runs before the canister can serve requests.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Pr2EntropyGate {
     // Legacy fields are retained only for stable-state compatibility. They are deliberately not
     // reinterpreted as logical lifecycle state; legacy readiness therefore decodes fail-closed.
@@ -106,27 +106,6 @@ pub struct Pr2EntropyGate {
     reseed_lifecycle: Option<Pr2EntropyLifecycleId>,
     #[serde(default)]
     lifecycle_generation_exhausted: bool,
-}
-
-impl Default for Pr2EntropyGate {
-    fn default() -> Self {
-        Self {
-            observed_canister_version: None,
-            ready_canister_version: None,
-            root_seed: [0; 32],
-            next_output_counter: 0,
-            last_raw_rand_commitment: None,
-            reseed_in_progress_for: None,
-            reseed_attempts: 0,
-            retry_after: 0,
-            reseed_attempt_generation: 0,
-            reseed_deadline: 0,
-            lifecycle: None,
-            ready_lifecycle: None,
-            reseed_lifecycle: None,
-            lifecycle_generation_exhausted: false,
-        }
-    }
 }
 
 impl Pr2EntropyGate {

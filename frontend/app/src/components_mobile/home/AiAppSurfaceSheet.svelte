@@ -76,7 +76,9 @@
             <HardenedAiAppSurface {title} {url} {dataDisclosures} {onConsent} />
         {:else if normalizedUrl !== undefined}
             <div class="external-prompt">
-                <BodySmall>Continue setting up this chat in {title}. OpenChat will open your browser.</BodySmall>
+                <BodySmall
+                    >Continue setting up this chat in {title}. OpenChat will open your browser.</BodySmall
+                >
                 <AiAppSurfaceDestination {displayUrl} {dataDisclosures} />
             </div>
         {:else}

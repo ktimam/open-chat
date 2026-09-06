@@ -43,11 +43,10 @@ describe("AI-app link completion", () => {
 
     it("does not accept another app's newer binding", () => {
         expect(
-            aiAppLinkCompleted(
-                [{ appId: 8, publicKey: "new-key", keyVersion: 5n }],
-                7,
-                { publicKey: "current-key", keyVersion: 4n },
-            ),
+            aiAppLinkCompleted([{ appId: 8, publicKey: "new-key", keyVersion: 5n }], 7, {
+                publicKey: "current-key",
+                keyVersion: 4n,
+            }),
         ).toBe(false);
     });
 });

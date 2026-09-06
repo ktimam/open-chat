@@ -82,10 +82,13 @@ describe("private matcher host protocol", () => {
             recipientPublicKey: expect.any(Uint8Array),
         });
         expect(parsePrivateMatchReady(ready, binding)?.recipientPublicKey).toHaveLength(48);
-        expect(parsePrivateMatchReady({ ...ready, attemptId: b64url(16, 9) }, binding)).toBeUndefined();
-        expect(parsePrivateMatchReady({ ...ready, recipientKeyScheme: "a" }, binding)?.recipientKeyScheme).toBe(
-            "a",
-        );
+        expect(
+            parsePrivateMatchReady({ ...ready, attemptId: b64url(16, 9) }, binding),
+        ).toBeUndefined();
+        expect(
+            parsePrivateMatchReady({ ...ready, recipientKeyScheme: "a" }, binding)
+                ?.recipientKeyScheme,
+        ).toBe("a");
         const maximumScheme = `a${"b".repeat(63)}`;
         expect(
             parsePrivateMatchReady({ ...ready, recipientKeyScheme: maximumScheme }, binding)
@@ -106,10 +109,16 @@ describe("private matcher host protocol", () => {
             "contains space",
             `a${"b".repeat(64)}`,
         ]) {
-            expect(parsePrivateMatchReady({ ...ready, recipientKeyScheme }, binding)).toBeUndefined();
+            expect(
+                parsePrivateMatchReady({ ...ready, recipientKeyScheme }, binding),
+            ).toBeUndefined();
         }
-        expect(parsePrivateMatchReady({ ...ready, recipientPublicKey: b64url(15, 3) }, binding)).toBeUndefined();
-        expect(parsePrivateMatchReady({ ...ready, recipientPublicKey: b64url(513, 3) }, binding)).toBeUndefined();
+        expect(
+            parsePrivateMatchReady({ ...ready, recipientPublicKey: b64url(15, 3) }, binding),
+        ).toBeUndefined();
+        expect(
+            parsePrivateMatchReady({ ...ready, recipientPublicKey: b64url(513, 3) }, binding),
+        ).toBeUndefined();
     });
 
     it("accepts a boolean-only result and rejects metadata", () => {
@@ -121,7 +130,9 @@ describe("private matcher host protocol", () => {
             matched: true,
         };
         expect(parsePrivateMatchResult(result, binding)).toBe(true);
-        expect(parsePrivateMatchResult({ ...result, templateName: "School" }, binding)).toBeUndefined();
+        expect(
+            parsePrivateMatchResult({ ...result, templateName: "School" }, binding),
+        ).toBeUndefined();
         expect(parsePrivateMatchResult({ ...result, count: 1 }, binding)).toBeUndefined();
     });
 
@@ -374,8 +385,7 @@ describe("private matcher host protocol", () => {
                 expect(
                     unlinked.postMessage.mock.calls.some(
                         ([message]) =>
-                            (message as { type?: string }).type ===
-                            "oc:private-match:authorize",
+                            (message as { type?: string }).type === "oc:private-match:authorize",
                     ),
                 ).toBe(true),
             );
@@ -394,7 +404,10 @@ describe("private matcher host protocol", () => {
             const afterSwitchCapability = new Promise((resolve) => {
                 resolveAfterSwitch = resolve;
             });
-            const switched = start(vi.fn(() => afterSwitchCapability), () => sessionCurrent);
+            const switched = start(
+                vi.fn(() => afterSwitchCapability),
+                () => sessionCurrent,
+            );
             switched.sendReady();
             sessionCurrent = false;
             currentUserStore.set({ ...ORIGINAL_CURRENT_USER, userId: "other-viewer" });
@@ -430,8 +443,7 @@ describe("private matcher host protocol", () => {
                 ).toBe(true),
             );
             const authorize = skewed.postMessage.mock.calls.find(
-                ([message]) =>
-                    (message as { type?: string }).type === "oc:private-match:authorize",
+                ([message]) => (message as { type?: string }).type === "oc:private-match:authorize",
             )?.[0] as Record<string, unknown> | undefined;
             expect(authorize).toBeDefined();
             expect(authorize).not.toHaveProperty("messageText");

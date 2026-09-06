@@ -67,7 +67,9 @@
                 <HardenedAiAppSurface {title} {url} {dataDisclosures} {onConsent} />
             {:else if normalizedUrl !== undefined}
                 <div class="external-prompt">
-                    <p>Continue setting up this chat in {title}. OpenChat will open your browser.</p>
+                    <p>
+                        Continue setting up this chat in {title}. OpenChat will open your browser.
+                    </p>
                     <AiAppSurfaceDestination {displayUrl} {dataDisclosures} />
                 </div>
             {:else}
@@ -84,11 +86,7 @@
                 <ButtonGroup>
                     {#if display === "external"}
                         <Button hollow small onClick={onDismiss}>Not now</Button>
-                        <Button
-                            small
-                            disabled={normalizedUrl === undefined}
-                            onClick={openBrowser}
-                        >
+                        <Button small disabled={normalizedUrl === undefined} onClick={openBrowser}>
                             <OpenInNew size="1em" color="currentColor" />
                             Open {title}
                         </Button>

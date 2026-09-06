@@ -7,11 +7,7 @@ import {
     type AiActionRule,
     type PrivateImageEvidence,
 } from "@shared";
-import {
-    disposeBrowserOcr,
-    recognizeBrowserImage,
-    type BrowserOcrResult,
-} from "./browserOcr";
+import { disposeBrowserOcr, recognizeBrowserImage, type BrowserOcrResult } from "./browserOcr";
 import { prepareImageForBrowserOcr, type OcrImageDimensions } from "./ocrImage";
 import { appLocalProcessorSupports } from "./appLocalProcessor";
 
@@ -185,8 +181,9 @@ export async function extractLocalActionForPrivateVerification(
                       separatorBytes * (recognizedTranscripts.length - 1)) /
                       recognizedTranscripts.length,
               );
-    const ocrTranscripts = recognizedTranscripts
-        .map(({ profile, text }) => boundedProfileTranscript(profile, text, transcriptBudget));
+    const ocrTranscripts = recognizedTranscripts.map(({ profile, text }) =>
+        boundedProfileTranscript(profile, text, transcriptBudget),
+    );
     const primaryText = ocrTranscripts
         .map(({ profile, text }) => `--- OCR PROFILE ${profile} ---\n${text}`)
         .join(PROFILE_SEPARATOR);

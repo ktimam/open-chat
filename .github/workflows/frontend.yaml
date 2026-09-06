@@ -45,9 +45,30 @@ jobs:
       - name: Verify locked Rollup Linux Binary
         run: node -e "require('@rollup/rollup-linux-x64-gnu')"
 
+      - name: Verify OTA archive prerequisites
+        run: |
+          command -v zip
+          command -v unzip
+
       - name: Check PR and release policy regressions
         working-directory: .
-        run: node --test scripts/pr-ci-policy.test.mjs scripts/android_release_policy.test.mjs scripts/android_release_checks.test.mjs
+        run: node --test scripts/pr-ci-policy.test.mjs scripts/android_release_policy.test.mjs scripts/android_release_checks.test.mjs scripts/release_preflight.test.mjs scripts/android_bundle.test.mjs scripts/frontend_format_check.test.mjs scripts/android_dev.test.mjs scripts/verify_webgpu_distribution.test.mjs scripts/model_asset_notices.test.mjs
+
+      - name: Verify narrowly scoped dependency compatibility
+        working-directory: .
+        run: |
+          node scripts/cdp_axios_compatibility.mjs
+          node scripts/decoder_compatibility.mjs
+          node scripts/onnx_adm_zip_compatibility.mjs
+          node scripts/transformers_sharp_compatibility.mjs
+
+      - name: Install the repository-pinned dfx build prerequisite
+        uses: dfinity/setup-dfx@e50c04f104ee4285ec010f10609483cf41e4d365
+        with:
+          dfx-version: "0.31.0-beta.1"
+
+      - name: Verify dfx is available for the public-key query
+        run: dfx --version
 
       - name: Build frontend
         run: npm run build:ci
@@ -58,6 +79,22 @@ jobs:
           OC_WEBSITE_VERSION: 1.0.0
           OC_METERED_APIKEY: DUMMY_METERED_APIKEY
           OC_VAPID_PUBLIC_KEY: DUMMY_VAPID_PUBLIC_KEY
+
+      # A candidate build proves immutable asset packaging, not deployment approval
+      # or physical-device inference. The default production build stays separate.
+      - name: Build and verify the opt-in production WebGPU candidate
+        run: |
+          npm run build:prod
+          node ../scripts/verify_webgpu_distribution.mjs app/build
+        env:
+          NODE_ENV: ci
+          OC_USERGEEK_APIKEY: DUMMY_USERGEEK_APIKEY
+          OC_ROLLBAR_ACCESS_TOKEN: DUMMY_ROLLBAR_ACCESS_TOKEN
+          OC_WEBSITE_VERSION: 1.0.0
+          OC_METERED_APIKEY: DUMMY_METERED_APIKEY
+          OC_VAPID_PUBLIC_KEY: DUMMY_VAPID_PUBLIC_KEY
+          OC_TRANSFORMERS_WEBGPU_IMAGE_SPIKE: "true"
+          OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY: immutable-hub-v1
 
       - name: Save dependencies to cache
         if: ${{ github.ref == 'refs/heads/master' }}

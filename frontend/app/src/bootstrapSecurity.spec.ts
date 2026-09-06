@@ -19,6 +19,13 @@ const svelteConfig = readAppFile("svelte.config.js");
 const viteConfig = readAppFile("vite.config.ts");
 
 describe("application bootstrap security", () => {
+    test("the production compiler includes the same shared ambient declarations as typecheck", () => {
+        const rollup = readAppFile("rollup.config.mjs");
+        const compiler = rollup.slice(rollup.indexOf("typescript({"), rollup.indexOf("inject({"));
+        expect(compiler).toContain('"../global.d.ts"');
+        expect(readAppFile("tsconfig.json")).toContain('"../global.d.ts"');
+    });
+
     test("keeps build-time CSP and version injection without loopback telemetry", () => {
         expect(indexHtml).toContain("<%- csp %>");
         expect(indexHtml).toContain("<%- injectScript %>");

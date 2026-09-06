@@ -304,7 +304,8 @@
             // TODO rethink, same as in CurrentChat.svelte
             keyboard.disableViewportResize();
             creatingCryptoTransfer = undefined;
-        }} />
+        }}
+    />
 {/if}
 
 <Container background={ColourVars.background0} height={"fill"} direction={"vertical"}>
@@ -327,7 +328,8 @@
             {chat}
             bind:initialised
             bind:messagesDiv
-            bind:messagesDivHeight>
+            bind:messagesDivHeight
+        >
             {#snippet row(
                 item,
                 { isAccepted, isConfirmed, isFailed, isReadByMe, messageObserver, focusIndex },
@@ -347,9 +349,7 @@
                         accepted={isAccepted($unconfirmedStore, evt)}
                         confirmed={isConfirmed($unconfirmedStore, evt)}
                         failed={isFailed($failedMessagesStore, evt)}
-                        readByMe={isThreadRoot ||
-                            !isFollowedByMe ||
-                            isReadByMe($messagesRead, evt)}
+                        readByMe={isThreadRoot || !isFollowedByMe || isReadByMe($messagesRead, evt)}
                         observer={messageObserver}
                         focused={evt.event.kind === "message" &&
                             focusIndex === evt.event.messageIndex}
@@ -375,7 +375,8 @@
                         onReplyTo={replyTo}
                         onEditEvent={() => editEvent(evt)}
                         onExpandMessage={() => toggleMessageExpansion(evt, true)}
-                        onCollapseMessage={() => toggleMessageExpansion(evt, false)} />
+                        onCollapseMessage={() => toggleMessageExpansion(evt, false)}
+                    />
                 {/if}
             {/snippet}
         </ChatEventList>
@@ -404,6 +405,7 @@
             {onSendMessage}
             onMakeMeme={makeMeme}
             onTokenTransfer={tokenTransfer}
-            onCreateP2PSwapMessage={createP2PSwapMessage} />
+            onCreateP2PSwapMessage={createP2PSwapMessage}
+        />
     {/if}
 </Container>

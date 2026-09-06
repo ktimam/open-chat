@@ -6320,7 +6320,9 @@ export const AiActionDefinition = Type.Object({
     card: AiActionCardTemplate,
     endpoint: Type.String(),
     consumer_public_key: Type.Optional(Type.String()),
-    recipient_scope: Type.Optional(Type.Union([Type.Literal("confirmer"), Type.Literal("app_authorized")])),
+    recipient_scope: Type.Optional(
+        Type.Union([Type.Literal("confirmer"), Type.Literal("app_authorized")]),
+    ),
     rules: Type.Array(AiActionRule),
     accepts_image: Type.Boolean(),
 });
@@ -10962,7 +10964,8 @@ export const UserCreateAiAppPrivateMatchCapabilitySuccessResult = CreateAiAppCar
 export type CommunityCreateAiAppPrivateMatchCapabilitySuccessResult = Static<
     typeof CommunityCreateAiAppPrivateMatchCapabilitySuccessResult
 >;
-export const CommunityCreateAiAppPrivateMatchCapabilitySuccessResult = CreateAiAppCardCapabilitySuccess;
+export const CommunityCreateAiAppPrivateMatchCapabilitySuccessResult =
+    CreateAiAppCardCapabilitySuccess;
 
 export type GroupCreateAiAppPrivateMatchCapabilitySuccessResult = Static<
     typeof GroupCreateAiAppPrivateMatchCapabilitySuccessResult

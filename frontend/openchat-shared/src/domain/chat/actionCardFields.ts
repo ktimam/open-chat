@@ -48,7 +48,15 @@ export type CardField =
           maxLength?: number;
           required?: boolean;
       }
-    | { kind: "number"; label: string; key: string; default?: number; min?: number; max?: number; required?: boolean }
+    | {
+          kind: "number";
+          label: string;
+          key: string;
+          default?: number;
+          min?: number;
+          max?: number;
+          required?: boolean;
+      }
     | { kind: "toggle"; label: string; key: string; default?: boolean }
     | { kind: "date"; label: string; key: string; default?: string; required?: boolean };
 

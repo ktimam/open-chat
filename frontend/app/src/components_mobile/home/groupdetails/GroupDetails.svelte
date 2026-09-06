@@ -198,14 +198,16 @@
     <ImportToCommunity
         groupId={chat.id}
         onCancel={() => (importToCommunities = undefined)}
-        ownedCommunities={importToCommunities} />
+        ownedCommunities={importToCommunities}
+    />
 {/if}
 
 <Container
     closeMenuOnScroll
     background={ColourVars.background0}
     height={"fill"}
-    direction={"vertical"}>
+    direction={"vertical"}
+>
     <Container gap={"xl"} direction={"vertical"} padding={["lg", "md", "md", "md"]}>
         <!-- this is the group card -->
         <Container direction={"vertical"}>
@@ -216,7 +218,8 @@
                 mainAxisAlignment={"end"}
                 padding={"sm"}
                 gap={"sm"}
-                background={defaultBackgroundGradient}>
+                background={defaultBackgroundGradient}
+            >
                 <IconButton onclick={() => publish("closeModalPage")} size={"md"} mode={"dark"}>
                     {#snippet icon(color)}
                         <ArrowLeft {color} />
@@ -241,13 +244,15 @@
                 supplementalClass={"name_and_description"}
                 gap={"xl"}
                 padding={["zero", "lg"]}
-                direction="vertical">
+                direction="vertical"
+            >
                 <Container crossAxisAlignment={"end"} gap={"md"}>
                     <Avatar borderWidth={"thick"} size={"xxl"} url={avatarUrl}></Avatar>
                     <Container
                         direction={"vertical"}
                         mainAxisAlignment={"center"}
-                        supplementalClass={"group_name"}>
+                        supplementalClass={"group_name"}
+                    >
                         <H2 fontWeight={"bold"} width={"hug"}>{chat.name}</H2>
                         <Container gap={"xs"}>
                             <BodySmall colour={"textSecondary"} width={"hug"}>
@@ -283,7 +288,8 @@
                                 toggleMuteNotifications(
                                     !$selectedChatSummaryStore?.membership.notificationsMuted,
                                     undefined,
-                                )}>
+                                )}
+                        >
                             {#snippet icon(color, size)}
                                 {#if muted}
                                     <Bell {color} {size} />
@@ -292,7 +298,8 @@
                                 {/if}
                             {/snippet}
                             <Translatable
-                                resourceKey={i18nKey(muted ? "Unmute chat" : "Mute chat")} />
+                                resourceKey={i18nKey(muted ? "Unmute chat" : "Mute chat")}
+                            />
                         </BigButton>
                         <BigButton
                             {width}
@@ -300,14 +307,16 @@
                                 toggleMuteNotifications(
                                     undefined,
                                     !$selectedChatSummaryStore?.membership.atEveryoneMuted,
-                                )}>
+                                )}
+                        >
                             {#snippet icon(color, size)}
                                 <At {color} {size} />
                             {/snippet}
                             <Translatable
                                 resourceKey={i18nKey(
                                     atEveryoneMuted ? "Unmute @everyone" : "Mute @everyone",
-                                )} />
+                                )}
+                            />
                         </BigButton>
                         <BigButton {width} onClick={shareGroup}>
                             {#snippet icon(color, size)}
@@ -337,7 +346,8 @@
             isPublic={chat.public}
             isCommunityPublic={$selectedCommunitySummaryStore?.public ?? true}
             isChannel={chat.kind === "channel"}
-            embeddedContent={chat.kind === "channel" && chat.externalUrl !== undefined} />
+            embeddedContent={chat.kind === "channel" && chat.externalUrl !== undefined}
+        />
 
         <AccessGateSummary gateConfig={chat.gateConfig} />
 
@@ -376,7 +386,8 @@
                         <Translatable
                             resourceKey={i18nKey(
                                 "If your group is growing, and you would like to support multiple conversation streams, it might be time to convert to a community.",
-                            )}></Translatable>
+                            )}
+                        ></Translatable>
                     </Body>
                 </Container>
 
@@ -401,7 +412,8 @@
                         <Translatable
                             resourceKey={i18nKey(
                                 "Convert this group into a channel and import it into an existing community.",
-                            )}></Translatable>
+                            )}
+                        ></Translatable>
                     </Body>
                 </Container>
 
@@ -426,7 +438,8 @@
                         <Translatable
                             resourceKey={i18nKey(
                                 "Keep in mind that by deleting a group all of its data is also removed, and this operation cannot be undone.",
-                            )}></Translatable>
+                            )}
+                        ></Translatable>
                     </Body>
                 </Container>
 
@@ -449,7 +462,8 @@
                         <Translatable
                             resourceKey={i18nKey(
                                 "Keep in mind that you may have to pass access gates to re-join later. A group must have at least one owner.",
-                            )}></Translatable>
+                            )}
+                        ></Translatable>
                     </Body>
                 </Container>
 

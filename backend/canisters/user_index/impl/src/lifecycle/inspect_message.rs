@@ -95,8 +95,7 @@ fn method_is_valid(method_name: &str, permissions: CallerPermissions) -> bool {
         // Production publication remains governance-only. In test mode the update handler admits
         // only the exact registered app owner (or governance) after looking up `app_id`; the
         // inspect hook cannot decode that ownership proof, so let signed-in users reach it.
-        "publish_ai_app" =>
-            permissions.governance_principal || (permissions.test_mode && permissions.openchat_user),
+        "publish_ai_app" => permissions.governance_principal || (permissions.test_mode && permissions.openchat_user),
         "award_external_achievement" => true,
         "remove_bot" => permissions.governance_principal || permissions.openchat_user,
         _ => false,

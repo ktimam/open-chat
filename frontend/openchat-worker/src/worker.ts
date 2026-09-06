@@ -170,11 +170,7 @@ const sendError = (kind: string, correlationId: number) => {
     };
 };
 
-function streamReplies(
-    kind: string,
-    correlationId: number,
-    chain: Stream<WorkerResponseInner>,
-) {
+function streamReplies(kind: string, correlationId: number, chain: Stream<WorkerResponseInner>) {
     const start = Date.now();
     chain.subscribe({
         onResult: (value, final) => {

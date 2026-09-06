@@ -95,10 +95,7 @@ export function gemma4EmbeddingOutputTensors(
     perLayerInputs: Float32Array,
 ) {
     const dims = inputDims.map(Number);
-    if (
-        dims.length !== 2 ||
-        !dims.every((value) => Number.isSafeInteger(value) && value > 0)
-    ) {
+    if (dims.length !== 2 || !dims.every((value) => Number.isSafeInteger(value) && value > 0)) {
         throw new Error("Gemma received invalid embedding input dimensions.");
     }
     const [batchSize, sequenceLength] = dims;

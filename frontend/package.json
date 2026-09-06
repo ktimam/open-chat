@@ -24,7 +24,7 @@
         "build:ci": "npm run typecheck && npm run typecheck:agent && npm run lint:check && npm run test && npm run build:prod",
         "changelog": "auto-changelog --tag-pattern '-website' --file-pattern '^frontend'",
         "tauri": "tauri",
-        "mobile": "cargo tauri android dev --no-watch"
+        "mobile": "node ../scripts/android_dev.mjs"
     },
     "author": "julian.jelfs@gmail.com",
     "dependencies": {
@@ -178,6 +178,12 @@
     },
     "packageManager": "npm@10.8.2",
     "overrides": {
+        "@coinbase/cdp-sdk@1.52.0": {
+            "axios": "1.18.1"
+        },
+        "@huggingface/transformers@4.2.0": {
+            "sharp": "0.35.3"
+        },
         "@metamask/utils": {
             "uuid": "^11.1.1"
         },
@@ -189,9 +195,15 @@
         "jayson": {
             "uuid": "^11.1.1"
         },
+        "onnxruntime-node@1.24.3": {
+            "adm-zip": "0.6.0"
+        },
         "onnxruntime-web": "$onnxruntime-web",
         "page": {
             "path-to-regexp": "^1.9.0"
+        },
+        "query-string@8.2.0": {
+            "decode-uri-component": "0.5.0"
         },
         "svelte-material-icons": {
             "svelte": "^5.0.0"

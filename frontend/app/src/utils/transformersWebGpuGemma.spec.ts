@@ -42,15 +42,32 @@ const APP_DIR = path.resolve(import.meta.dirname, "../..");
 const FRONTEND_DIR = path.resolve(APP_DIR, "..");
 
 const GEMMA_GQA_ORIGINAL_ATTRIBUTE = Uint8Array.of(
-    0x2a, 0x19, 0x0a, 0x12,
+    0x2a,
+    0x19,
+    0x0a,
+    0x12,
     ...new TextEncoder().encode("rotary_interleaved"),
-    0x18, 0x00, 0xa0, 0x01, 0x02,
+    0x18,
+    0x00,
+    0xa0,
+    0x01,
+    0x02,
 );
 const GEMMA_GQA_ROUTING_ATTRIBUTE = Uint8Array.of(
-    0x2a, 0x19, 0x0a, 0x0e,
+    0x2a,
+    0x19,
+    0x0a,
+    0x0e,
     ...new TextEncoder().encode("smooth_softmax"),
-    0x78, 0x00, 0x78, 0x00,
-    0x18, 0x01, 0xa0, 0x01, 0x02,
+    0x78,
+    0x00,
+    0x78,
+    0x00,
+    0x18,
+    0x01,
+    0xa0,
+    0x01,
+    0x02,
 );
 
 function repeatedBytes(pattern: Uint8Array, count: number): Uint8Array {
@@ -80,9 +97,7 @@ describe("Gemma 4 E2B all-WebGPU runtime", () => {
         expect(countBytes(original, GEMMA_GQA_ROUTING_ATTRIBUTE)).toBe(0);
         expect(countBytes(patched, GEMMA_GQA_ORIGINAL_ATTRIBUTE)).toBe(0);
         expect(countBytes(patched, GEMMA_GQA_ROUTING_ATTRIBUTE)).toBe(12);
-        expect(
-            patchGemma4DecoderForStandardSoftmaxRouting(patched),
-        ).toEqual(patched);
+        expect(patchGemma4DecoderForStandardSoftmaxRouting(patched)).toEqual(patched);
         expect(() =>
             patchGemma4DecoderForStandardSoftmaxRouting(
                 repeatedBytes(GEMMA_GQA_ORIGINAL_ATTRIBUTE, 11),

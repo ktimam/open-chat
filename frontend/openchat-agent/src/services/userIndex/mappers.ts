@@ -45,11 +45,7 @@ import type {
     AiAppUserKey,
     ExploreAiAppsResponse,
 } from "@shared";
-import {
-    aiAppFromRegistration,
-    CommonResponses,
-    UnsupportedValueError,
-} from "@shared";
+import { aiAppFromRegistration, CommonResponses, UnsupportedValueError } from "@shared";
 import type {
     BotDefinition as ApiBotDefinition,
     BotInstallationLocation as ApiBotInstallationLocation,
@@ -688,9 +684,7 @@ function aiAppManifestWithDecodedPrincipals(m: TAiAppManifest): AiAppManifestWir
     return {
         ...m,
         app_canister_id:
-            m.app_canister_id !== undefined
-                ? principalBytesToString(m.app_canister_id)
-                : undefined,
+            m.app_canister_id !== undefined ? principalBytesToString(m.app_canister_id) : undefined,
         inbox_canister_id:
             m.inbox_canister_id !== undefined
                 ? principalBytesToString(m.inbox_canister_id)

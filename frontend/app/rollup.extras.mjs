@@ -65,10 +65,7 @@ export function initEnv() {
 
         if (fs.existsSync(canisterPath)) {
             const canisters = JSON.parse(fs.readFileSync(canisterPath));
-            setEnvironmentDefault(
-                "OC_TRANSLATIONS_CANISTER",
-                canisters.translations[dfxNetwork],
-            );
+            setEnvironmentDefault("OC_TRANSLATIONS_CANISTER", canisters.translations[dfxNetwork]);
             setEnvironmentDefault("OC_USER_INDEX_CANISTER", canisters.user_index[dfxNetwork]);
             setEnvironmentDefault("OC_GROUP_INDEX_CANISTER", canisters.group_index[dfxNetwork]);
             setEnvironmentDefault(
@@ -77,20 +74,11 @@ export function initEnv() {
             );
             setEnvironmentDefault("OC_IDENTITY_CANISTER", canisters.identity[dfxNetwork]);
             setEnvironmentDefault("OC_ONLINE_CANISTER", canisters.online_users[dfxNetwork]);
-            setEnvironmentDefault(
-                "OC_PROPOSALS_BOT_CANISTER",
-                canisters.proposals_bot[dfxNetwork],
-            );
+            setEnvironmentDefault("OC_PROPOSALS_BOT_CANISTER", canisters.proposals_bot[dfxNetwork]);
             setEnvironmentDefault("OC_AIRDROP_BOT_CANISTER", canisters.airdrop_bot[dfxNetwork]);
-            setEnvironmentDefault(
-                "OC_STORAGE_INDEX_CANISTER",
-                canisters.storage_index[dfxNetwork],
-            );
+            setEnvironmentDefault("OC_STORAGE_INDEX_CANISTER", canisters.storage_index[dfxNetwork]);
             setEnvironmentDefault("OC_REGISTRY_CANISTER", canisters.registry[dfxNetwork]);
-            setEnvironmentDefault(
-                "OC_MARKET_MAKER_CANISTER",
-                canisters.market_maker[dfxNetwork],
-            );
+            setEnvironmentDefault("OC_MARKET_MAKER_CANISTER", canisters.market_maker[dfxNetwork]);
             setEnvironmentDefault(
                 "OC_SIGN_IN_WITH_EMAIL_CANISTER",
                 canisters.sign_in_with_email[dfxNetwork],

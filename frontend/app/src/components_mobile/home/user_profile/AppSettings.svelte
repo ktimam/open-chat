@@ -117,7 +117,8 @@
                 title={i18nKey("aiApps.myApps")}
                 info={i18nKey(
                     "View the AI apps you have registered and publish them to the app directory.",
-                )} />
+                )}
+            />
 
             <LinkedCard
                 onClick={() => publish("userProfileBotConfig")}

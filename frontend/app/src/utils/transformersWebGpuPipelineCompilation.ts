@@ -22,8 +22,7 @@ type ShaderModuleDescriptorLike = {
 
 const STANDARD_SOFTMAX_ROUTING_FLAG = "__openchatOrtStandardSoftmaxRouting";
 const ORT_SMOOTH_SOFTMAX_MAX = "var max_value: f32 = 0.0;";
-const ORT_STANDARD_SOFTMAX_MAX =
-    "var max_value = f32(-3.4028234663852886e+38f);";
+const ORT_STANDARD_SOFTMAX_MAX = "var max_value = f32(-3.4028234663852886e+38f);";
 const ORT_SMOOTH_SOFTMAX_DENOMINATOR = "sum += exp(-max_value);";
 
 const serializedDevices = new WeakSet<object>();
@@ -48,8 +47,7 @@ function standardSoftmaxShader(descriptor: ShaderModuleDescriptorLike): ShaderMo
         return descriptor;
     }
     const maxCount = descriptor.code.split(ORT_SMOOTH_SOFTMAX_MAX).length - 1;
-    const denominatorCount =
-        descriptor.code.split(ORT_SMOOTH_SOFTMAX_DENOMINATOR).length - 1;
+    const denominatorCount = descriptor.code.split(ORT_SMOOTH_SOFTMAX_DENOMINATOR).length - 1;
     if (maxCount === 0 && denominatorCount === 0) return descriptor;
     if (maxCount !== 1 || denominatorCount !== 1) {
         throw new Error(

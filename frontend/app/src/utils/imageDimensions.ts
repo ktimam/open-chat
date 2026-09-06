@@ -5,12 +5,7 @@ function bytesView(input: Uint8Array | ArrayBuffer): Uint8Array {
 }
 
 function positiveDimensions(width: number, height: number): boolean {
-    return (
-        Number.isSafeInteger(width) &&
-        Number.isSafeInteger(height) &&
-        width > 0 &&
-        height > 0
-    );
+    return Number.isSafeInteger(width) && Number.isSafeInteger(height) && width > 0 && height > 0;
 }
 
 function ascii(bytes: Uint8Array, offset: number, length: number): string {
@@ -86,19 +81,7 @@ function jpegExifOrientation(
 }
 
 const JPEG_START_OF_FRAME_MARKERS = new Set([
-    0xc0,
-    0xc1,
-    0xc2,
-    0xc3,
-    0xc5,
-    0xc6,
-    0xc7,
-    0xc9,
-    0xca,
-    0xcb,
-    0xcd,
-    0xce,
-    0xcf,
+    0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf,
 ]);
 
 function jpegDimensions(bytes: Uint8Array): IntrinsicImageDimensions | undefined {

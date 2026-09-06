@@ -65,12 +65,12 @@ describe("createAiAppCardProvenanceResponse", () => {
 
     it.each([
         ["app unavailable", "AppUnavailable", { kind: "app_unavailable" }],
-        ["invalid request", { InvalidRequest: "private backend detail" }, { kind: "invalid_request" }],
         [
-            "backend error",
-            { Error: [1, "private backend detail"] },
-            { kind: "backend_error" },
+            "invalid request",
+            { InvalidRequest: "private backend detail" },
+            { kind: "invalid_request" },
         ],
+        ["backend error", { Error: [1, "private backend detail"] }, { kind: "backend_error" }],
     ] as const)("maps %s to a detail-free category", (_label, response, expected) => {
         expect(
             createAiAppCardProvenanceResponse(

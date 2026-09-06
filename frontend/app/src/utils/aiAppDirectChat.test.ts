@@ -7,10 +7,7 @@ import {
     resolveConnectedDirectChatAiApp,
 } from "./aiAppDirectChat";
 
-function app(
-    id: number,
-    overrides: Partial<AiAppRegistration> = {},
-): AiAppRegistration {
+function app(id: number, overrides: Partial<AiAppRegistration> = {}): AiAppRegistration {
     return {
         id,
         owner: "owner",
@@ -30,13 +27,13 @@ function app(
 
 describe("directChatAiAppKeys", () => {
     it("deduplicates deterministically and lets an empty conflicting row fail closed", () => {
-        expect(
-            [...directChatAiAppKeys([
+        expect([
+            ...directChatAiAppKeys([
                 { appId: 2, publicKey: "key-2" },
                 { appId: 1, publicKey: "key-1" },
                 { appId: 1, publicKey: "" },
-            ])],
-        ).toEqual([
+            ]),
+        ]).toEqual([
             [1, ""],
             [2, "key-2"],
         ]);
@@ -78,11 +75,7 @@ describe("loadDirectChatAiApps", () => {
                 matches: [{ ...app(2), published: false }],
                 total: 1,
             })),
-            aiApps: vi.fn(async () => [
-                visible,
-                app(99),
-                { ...app(3), published: false },
-            ]),
+            aiApps: vi.fn(async () => [visible, app(99), { ...app(3), published: false }]),
         } as unknown as OpenChat;
 
         const loaded = await loadDirectChatAiApps(client);
@@ -146,10 +139,7 @@ describe("resolveConnectedDirectChatAiApp", () => {
 
     it.each([
         ["unpublished", { ...app(7), published: false }],
-        [
-            "not per-user-key",
-            { ...app(7), manifest: { ...app(7).manifest, perUserKeys: false } },
-        ],
+        ["not per-user-key", { ...app(7), manifest: { ...app(7).manifest, perUserKeys: false } }],
         ["stale", { ...app(7), updated: 71n }],
     ])("rejects an exact response that is %s", async (_label, returned) => {
         const client = {

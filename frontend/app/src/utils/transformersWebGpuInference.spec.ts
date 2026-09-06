@@ -187,6 +187,62 @@ describe("Transformers.js Qwen WebGPU spike", () => {
         expect(remove).toHaveBeenCalledWith(TRANSFORMERS_WEBGPU_CACHE_KEY);
     });
 
+    it("production web downloads every declared artifact without a development proxy", () => {
+        vi.stubEnv("OC_BUILD_ENV", "production");
+        vi.stubEnv("OC_DFX_NETWORK", "ic");
+        vi.stubEnv("OC_TRANSFORMERS_WEBGPU_IMAGE_SPIKE", "true");
+        vi.stubEnv("OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY", "immutable-hub-v1");
+        try {
+            const baseUrl = "https://oc.app/chat/example";
+            for (const [modelId, artifacts] of [
+                [PHONE_QWEN3_VL_2B_MODEL_ID, TRANSFORMERS_QWEN_ARTIFACTS],
+                [
+                    PHONE_GEMMA4_E2B_MODEL_ID,
+                    [...TRANSFORMERS_GEMMA_ARTIFACTS, ...TRANSFORMERS_GEMMA_AUDIO_ARTIFACTS],
+                ],
+            ] as const) {
+                for (const artifact of artifacts) {
+                    const url = new URL(
+                        transformersWebGpuArtifactDownloadUrl(
+                            artifact.path,
+                            { baseUrl, packagedAndroid: false },
+                            modelId,
+                        ),
+                    );
+                    expect(url.pathname).not.toContain("/hf-model/");
+                    if (
+                        modelId === PHONE_QWEN3_VL_2B_MODEL_ID &&
+                        TRANSFORMERS_WEBGPU_PACKAGED_MODEL_ARTIFACTS.some(
+                            (path) => path === artifact.path,
+                        )
+                    ) {
+                        expect(url.href).toBe(
+                            `https://oc.app/assets/transformers-webgpu/qwen3vl2b/${artifact.path}`,
+                        );
+                    } else {
+                        expect(url.origin).toBe("https://huggingface.co");
+                        expect(url.pathname).toMatch(/\/resolve\/[a-f0-9]{40}\//);
+                        expect(url.pathname.endsWith(`/${artifact.path}`)).toBe(true);
+                    }
+                }
+            }
+        } finally {
+            vi.unstubAllEnvs();
+        }
+    });
+
+    it.each([
+        "../config.json",
+        "https://example.invalid/weights",
+        "onnx/unreviewed.onnx",
+        "config.json?revision=main",
+        "%2e%2e/config.json",
+    ])("refuses a download outside the exact artifact manifest: %s", (path) => {
+        expect(() =>
+            transformersWebGpuArtifactDownloadUrl(path, { packagedAndroid: true }),
+        ).toThrow(/immutable model manifest/);
+    });
+
     it("tracks model caches independently and explicit removal deletes only its target", async () => {
         const baseUrl = globalThis.location.href;
         const cacheEntries = new Map<string, Map<string, Response>>([

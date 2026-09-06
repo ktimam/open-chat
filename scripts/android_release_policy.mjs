@@ -1,11 +1,20 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
-import { appendFileSync, readdirSync } from "node:fs";
+import { appendFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
+export const ANDROID_RELEASE_BUILD_TOOLS_VERSION = "35.0.0";
+
+export function releaseBuildToolsDirectory(androidHome, version) {
+    if (typeof androidHome !== "string" || !androidHome.trim()) throw new Error("ANDROID_HOME is required for APK verification.");
+    if (version !== ANDROID_RELEASE_BUILD_TOOLS_VERSION) {
+        throw new Error(`ANDROID_BUILD_TOOLS_VERSION must explicitly select the reviewed ${ANDROID_RELEASE_BUILD_TOOLS_VERSION} tools.`);
+    }
+    return resolve(androidHome, "build-tools", version);
+}
 
 export function nativeVersion(version, code) {
     const match = typeof version === "string" && semver.exec(version);
@@ -77,11 +86,8 @@ export function verifyApkMetadata({ badging, certificates, version, versionCode,
 
 function verifyApk(apk, environment) {
     if (!apk || !environment.ANDROID_HOME) throw new Error("APK path and ANDROID_HOME are required.");
-    const buildTools = resolve(environment.ANDROID_HOME, "build-tools");
-    const versions = readdirSync(buildTools).filter((name) => /^\d+\.\d+\.\d+$/u.test(name));
-    versions.sort((left, right) => left.localeCompare(right, "en", { numeric: true }));
-    if (!versions.length) throw new Error("No stable Android build-tools installation found.");
-    const toolDirectory = resolve(buildTools, versions.at(-1));
+    const toolDirectory = releaseBuildToolsDirectory(environment.ANDROID_HOME, environment.ANDROID_BUILD_TOOLS_VERSION);
+    if (!existsSync(toolDirectory)) throw new Error("The reviewed Android build-tools installation is missing; install it before APK verification.");
     const run = (name, args) => {
         const result = spawnSync(resolve(toolDirectory, name), args, { encoding: "utf8" });
         if (result.error || result.status !== 0) throw new Error(`APK verification failed: ${name}`);

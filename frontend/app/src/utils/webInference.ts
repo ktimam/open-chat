@@ -904,8 +904,9 @@ export async function restoreWebModel(): Promise<void> {
                     // exact byte count and SHA written by Model Manager; inference still calls
                     // transformersWebGpuModelDownloaded and fully re-verifies every body before a
                     // worker can run.
-                    const modelArtifactsPresent =
-                        await transformersWebGpuModelArtifactsPresent(saved.id);
+                    const modelArtifactsPresent = await transformersWebGpuModelArtifactsPresent(
+                        saved.id,
+                    );
                     setWebModelInstallState(
                         saved.id,
                         modelArtifactsPresent ? "downloaded" : "not_downloaded",

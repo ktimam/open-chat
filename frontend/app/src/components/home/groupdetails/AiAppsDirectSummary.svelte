@@ -57,8 +57,7 @@
     let relevant = $derived(
         apps.filter(
             (app) =>
-                isDirectChatCardApp(app) &&
-                (!connected.has(app.id) || exactAppIds.has(app.id)),
+                isDirectChatCardApp(app) && (!connected.has(app.id) || exactAppIds.has(app.id)),
         ),
     );
 

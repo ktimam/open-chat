@@ -94,9 +94,7 @@ describe("embedded app surface isolation", () => {
         const compact = card.replace(/\s+/g, " ");
         expect(compact).toContain("const frame = iframeEl; const target = frame?.contentWindow;");
         expect(compact).toContain("iframeEl !== frame ||");
-        expect(compact).toContain(
-            'isCardBridgeEventForFrame(event, target, "null", frameNonce)',
-        );
+        expect(compact).toContain('isCardBridgeEventForFrame(event, target, "null", frameNonce)');
         expect(card).toContain("onload={onIframeLoad}");
         expect(card).toContain("import.meta.env.DEV");
     });

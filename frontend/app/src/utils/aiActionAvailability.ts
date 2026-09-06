@@ -18,13 +18,7 @@ export interface AiActionAvailability {
 
 // Tauri serves the packaged Android UI from this exact synthetic loopback host. Keep it explicit:
 // suffixes and lookalikes must not inherit local-only action-card capabilities.
-const LOOPBACK_HOSTNAMES = new Set([
-    "localhost",
-    "127.0.0.1",
-    "::1",
-    "[::1]",
-    "tauri.localhost",
-]);
+const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1", "[::1]", "tauri.localhost"]);
 
 // These switches are release brakes, not authorization. Even an explicitly armed local build must
 // still receive the backend attestations and scoped grants checked by each call path. Requiring the

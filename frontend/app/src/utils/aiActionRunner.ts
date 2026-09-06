@@ -46,7 +46,11 @@ import {
     localImageEvidenceExtractorSupports,
     type LocalActionExtractorResult,
 } from "./localActionExtractor";
-import { processWithApp, type AppProcessorInput, type AppProcessorResult } from "./appLocalProcessor";
+import {
+    processWithApp,
+    type AppProcessorInput,
+    type AppProcessorResult,
+} from "./appLocalProcessor";
 import {
     inferOnDevice,
     inferOnDeviceTextOnlyNoProjector,
@@ -189,7 +193,7 @@ export type ProposeResult =
     | { kind: "unsupported_content" }
     // A schema-opted source reader ran without a generative model but could not safely produce a
     // complete action. Keep this distinct from model no_extraction.
-      | {
+    | {
           kind: "local_no_extraction";
           reason: "ambiguous" | "none";
       }
@@ -728,7 +732,9 @@ async function runDefinition(
                 ? { width: content.width, height: content.height }
                 : undefined,
     };
-    const localResult = (local: LocalActionExtractorResult | AppProcessorResult): ProposeResult | undefined => {
+    const localResult = (
+        local: LocalActionExtractorResult | AppProcessorResult,
+    ): ProposeResult | undefined => {
         switch (local.kind) {
             case "candidates":
                 return buildManualCard(
@@ -764,7 +770,11 @@ async function runDefinition(
         }
     };
     const runAppProcessor = async (request: AppProcessorInput): Promise<ProposeResult> => {
-        if (appProcessorUrl === undefined) return { kind: "error", error: "The app's registered local processor could not be resolved. Refresh and retry." };
+        if (appProcessorUrl === undefined)
+            return {
+                kind: "error",
+                error: "The app's registered local processor could not be resolved. Refresh and retry.",
+            };
         if (!contextCurrent()) return { kind: "error", error: "proposal context changed" };
         const result = await processWithApp(appProcessorUrl, def.name, request, contextCurrent);
         onPhase?.("validating");
@@ -775,18 +785,23 @@ async function runDefinition(
         const candidates = readyCandidates(result);
         if (candidates === undefined) return result;
         const normalized = await runAppProcessor({
-            operation: "normalize", modality: input.image !== undefined ? "image" : input.audio !== undefined ? "audio" : "text", candidates,
+            operation: "normalize",
+            modality:
+                input.image !== undefined ? "image" : input.audio !== undefined ? "audio" : "text",
+            candidates,
             ...(input.text === undefined ? {} : { text: input.text }),
             ...(sourceTimestamp === undefined ? {} : { sourceTimestamp }),
         });
         return normalized.kind === "local_no_extraction"
             ? { kind: "no_extraction", raw: "" }
-            : normalized as RunAiActionResult;
+            : (normalized as RunAiActionResult);
     };
     const runAppExtraction = async (): Promise<ProposeResult> => {
         onPhase?.("reading_text");
         return runAppProcessor({
-            operation: "extract", modality: "text", text: input.text ?? "",
+            operation: "extract",
+            modality: "text",
+            text: input.text ?? "",
             ...(sourceTimestamp === undefined ? {} : { sourceTimestamp }),
         });
     };
@@ -861,7 +876,10 @@ async function runDefinition(
         }
         if (useLocalReaderOnly) {
             if (!localActionExtractorSupports(def.responseSchema)) {
-                return { kind: "unavailable", reason: "This app does not provide a local processor for OCR-only mode." };
+                return {
+                    kind: "unavailable",
+                    reason: "This app does not provide a local processor for OCR-only mode.",
+                };
             }
             const source = await readPrivateImageEvidence();
             if (source.failure !== undefined) return source.failure;
@@ -869,7 +887,9 @@ async function runDefinition(
                 return { kind: "error", error: LOCAL_READER_VERIFICATION_FAILED_MESSAGE };
             }
             return runAppProcessor({
-                operation: "extract", modality: "image", ocrTranscripts: source.ocrTranscripts,
+                operation: "extract",
+                modality: "image",
+                ocrTranscripts: source.ocrTranscripts,
                 ...(input.text === undefined ? {} : { text: input.text }),
                 ...(sourceTimestamp === undefined ? {} : { sourceTimestamp }),
             });
@@ -912,7 +932,9 @@ async function runDefinition(
             return { kind: "error", error: LOCAL_VERIFICATION_FAILED_MESSAGE };
         }
         if (vision.kind === "unavailable" || vision.kind === "error") return vision;
-        const decoded = await normalizeWithApp(await runPrivateEvidenceModel(source.privateImageEvidence));
+        const decoded = await normalizeWithApp(
+            await runPrivateEvidenceModel(source.privateImageEvidence),
+        );
         if (webModelCatalogId() !== selectedBrowserModelId) {
             return { kind: "error", error: LOCAL_VERIFICATION_FAILED_MESSAGE };
         }
@@ -932,7 +954,11 @@ async function runDefinition(
         }
     }
 
-    if (input.image === undefined && input.audio === undefined && localActionExtractorSupports(def.responseSchema)) {
+    if (
+        input.image === undefined &&
+        input.audio === undefined &&
+        localActionExtractorSupports(def.responseSchema)
+    ) {
         return runAppExtraction();
     }
 

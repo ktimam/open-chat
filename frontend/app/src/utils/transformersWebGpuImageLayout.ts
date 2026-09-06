@@ -27,22 +27,18 @@ const GEMMA4_SIDE_ALIGNMENT = PATCH_SIZE * GEMMA4_POOLING_KERNEL_SIZE;
 export const GEMMA4_WEBGPU_MAX_RAW_IMAGE_PATCHES =
     GEMMA4_WEBGPU_MAX_SOFT_TOKENS * GEMMA4_POOLING_KERNEL_SIZE ** 2;
 
-export const TRANSFORMERS_WEBGPU_FALLBACK_IMAGE_LAYOUT: TransformersWebGpuImageLayout = Object.freeze({
-    frameWidth: 288,
-    frameHeight: 512,
-    drawWidth: 288,
-    drawHeight: 512,
-    drawX: 0,
-    drawY: 0,
-});
+export const TRANSFORMERS_WEBGPU_FALLBACK_IMAGE_LAYOUT: TransformersWebGpuImageLayout =
+    Object.freeze({
+        frameWidth: 288,
+        frameHeight: 512,
+        drawWidth: 288,
+        drawHeight: 512,
+        drawX: 0,
+        drawY: 0,
+    });
 
 function positiveDimensions(width: number, height: number): boolean {
-    return (
-        Number.isSafeInteger(width) &&
-        Number.isSafeInteger(height) &&
-        width > 0 &&
-        height > 0
-    );
+    return Number.isSafeInteger(width) && Number.isSafeInteger(height) && width > 0 && height > 0;
 }
 
 /**
@@ -120,28 +116,21 @@ export function gemma4WebGpuImageTarget(
     }
     const targetPixels = GEMMA4_WEBGPU_MAX_RAW_IMAGE_PATCHES * PATCH_SIZE ** 2;
     const factor = Math.sqrt(targetPixels / (sourceWidth * sourceHeight));
-    let height = Math.floor((factor * sourceHeight) / GEMMA4_SIDE_ALIGNMENT) * GEMMA4_SIDE_ALIGNMENT;
+    let height =
+        Math.floor((factor * sourceHeight) / GEMMA4_SIDE_ALIGNMENT) * GEMMA4_SIDE_ALIGNMENT;
     let width = Math.floor((factor * sourceWidth) / GEMMA4_SIDE_ALIGNMENT) * GEMMA4_SIDE_ALIGNMENT;
     if (height === 0 && width === 0) {
         throw new Error("Gemma could not derive a non-empty image target.");
     }
     const maxSide =
-        Math.floor(
-            GEMMA4_WEBGPU_MAX_RAW_IMAGE_PATCHES / GEMMA4_POOLING_KERNEL_SIZE ** 2,
-        ) *
+        Math.floor(GEMMA4_WEBGPU_MAX_RAW_IMAGE_PATCHES / GEMMA4_POOLING_KERNEL_SIZE ** 2) *
         GEMMA4_SIDE_ALIGNMENT;
     if (height === 0) {
         height = GEMMA4_SIDE_ALIGNMENT;
-        width = Math.min(
-            Math.floor(sourceWidth / sourceHeight) * GEMMA4_SIDE_ALIGNMENT,
-            maxSide,
-        );
+        width = Math.min(Math.floor(sourceWidth / sourceHeight) * GEMMA4_SIDE_ALIGNMENT, maxSide);
     } else if (width === 0) {
         width = GEMMA4_SIDE_ALIGNMENT;
-        height = Math.min(
-            Math.floor(sourceHeight / sourceWidth) * GEMMA4_SIDE_ALIGNMENT,
-            maxSide,
-        );
+        height = Math.min(Math.floor(sourceHeight / sourceWidth) * GEMMA4_SIDE_ALIGNMENT, maxSide);
     }
     return { width, height };
 }

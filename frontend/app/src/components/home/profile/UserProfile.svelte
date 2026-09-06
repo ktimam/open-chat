@@ -592,7 +592,8 @@
                         small
                         onChange={() => autoProposeSuggestions.toggle()}
                         label={i18nKey("aiApps.autoPropose.setting")}
-                        checked={$autoProposeSuggestions} />
+                        checked={$autoProposeSuggestions}
+                    />
                 </CollapsibleCard>
             </div>
             <div class="video">

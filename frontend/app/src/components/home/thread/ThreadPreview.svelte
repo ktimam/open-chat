@@ -129,7 +129,8 @@
         <CollapsibleCard
             onToggle={() => (open = !open)}
             {open}
-            headerText={i18nKey("userInfoHeader")}>
+            headerText={i18nKey("userInfoHeader")}
+        >
             {#snippet titleSlot()}
                 <div class="header">
                     <div class="avatar">
@@ -143,13 +144,16 @@
                             </h4>
                             <LinkButton underline="hover" onClick={selectThread}
                                 ><Translatable
-                                    resourceKey={i18nKey("thread.open")} />&#8594;</LinkButton>
+                                    resourceKey={i18nKey("thread.open")}
+                                />&#8594;</LinkButton
+                            >
                         </div>
                         <div class="root-msg">
                             <Markdown
                                 text={client.getContentAsText($_, thread.rootMessage.event.content)}
                                 oneLine
-                                suppressLinks />
+                                suppressLinks
+                            />
                         </div>
                     </div>
                     <Tooltip position={"bottom"} align={"middle"}>
@@ -161,7 +165,8 @@
                             {:else}
                                 <Spinner
                                     backgroundColour={"rgba(0,0,0,0.3)"}
-                                    foregroundColour={"var(--button-spinner)"} />
+                                    foregroundColour={"var(--button-spinner)"}
+                                />
                             {/if}
                         </div>
                         {#snippet popupTemplate()}
@@ -175,7 +180,8 @@
                                 values: { count: unreadCount.toString() },
                             })}
                             class:muted
-                            class="unread">
+                            class="unread"
+                        >
                             {unreadCount > 999 ? "999+" : unreadCount}
                         </div>
                     {/if}
@@ -217,14 +223,16 @@
                             expiresAt={thread.rootMessage.expiresAt}
                             dateFormatter={(date) => client.toDatetimeString(date)}
                             msg={thread.rootMessage.event}
-                            senderContext={thread.rootMessage.event.senderContext} />
+                            senderContext={thread.rootMessage.event.senderContext}
+                        />
                     </div>
                     {#if missingMessages > 0}
                         <div class="separator">
                             <Translatable
                                 resourceKey={i18nKey("thread.moreMessages", {
                                     number: missingMessages.toString(),
-                                })} />
+                                })}
+                            />
                         </div>
                     {/if}
                     {#each grouped as userGroup}
@@ -261,12 +269,15 @@
                                 expiresAt={evt.expiresAt}
                                 dateFormatter={(date) => client.toDatetimeString(date)}
                                 msg={evt.event}
-                                senderContext={evt.event.senderContext} />
+                                senderContext={evt.event.senderContext}
+                            />
                         {/each}
                     {/each}
                     <LinkButton underline="hover" onClick={selectThread}
                         ><Translatable
-                            resourceKey={i18nKey("thread.openThread")} />&#8594;</LinkButton>
+                            resourceKey={i18nKey("thread.openThread")}
+                        />&#8594;</LinkButton
+                    >
                 </div>
             </IntersectionObserverComponent>
         </CollapsibleCard>

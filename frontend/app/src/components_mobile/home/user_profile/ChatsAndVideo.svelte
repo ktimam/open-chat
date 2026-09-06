@@ -64,21 +64,24 @@
             </H2>
             <Setting
                 toggle={() => lowBandwidth.toggle()}
-                info={"If you're having connection issues or just want to save bandwidth, enabling this option will try to optimise the app's data traffic."}>
+                info={"If you're having connection issues or just want to save bandwidth, enabling this option will try to optimise the app's data traffic."}
+            >
                 <Switch width={"fill"} reverse bind:checked={$lowBandwidth}>
                     <Translatable resourceKey={i18nKey("lowBandwidth")}></Translatable>
                 </Switch>
             </Setting>
             <Setting
                 toggle={() => hideMessagesFromDirectBlocked.toggle()}
-                info={"With this option turned on, messages from users you have blocked will not be visible in group and community chats. Keep in mind that this might cause you to lose some conversation context."}>
+                info={"With this option turned on, messages from users you have blocked will not be visible in group and community chats. Keep in mind that this might cause you to lose some conversation context."}
+            >
                 <Switch width={"fill"} reverse bind:checked={$hideMessagesFromDirectBlocked}>
                     <Translatable resourceKey={i18nKey("Hide messages from blocked users")} />
                 </Switch>
             </Setting>
             <Setting
                 toggle={() => autoProposeSuggestions.toggle()}
-                info={"When a message looks like something a registered AI app can act on, show a small suggestion chip under it. Long-press a chip's X to mute suggestions for that chat."}>
+                info={"When a message looks like something a registered AI app can act on, show a small suggestion chip under it. Long-press a chip's X to mute suggestions for that chat."}
+            >
                 <Switch width={"fill"} reverse bind:checked={$autoProposeSuggestions}>
                     <Translatable resourceKey={i18nKey("aiApps.autoPropose.setting")} />
                 </Switch>
@@ -90,21 +93,24 @@
             </H2>
             <Setting
                 toggle={() => videoCameraOn.toggle()}
-                info={"With this option on, camera will be active when a vide call starts. By default, this option is turned on."}>
+                info={"With this option on, camera will be active when a vide call starts. By default, this option is turned on."}
+            >
                 <Switch width={"fill"} reverse bind:checked={$videoCameraOn}>
                     <Translatable resourceKey={i18nKey("profile.videoCameraOn")}></Translatable>
                 </Switch>
             </Setting>
             <Setting
                 toggle={() => videoMicOn.toggle()}
-                info={"When this option on, your microphone will be active when a video call starts, otherwise it will be muted. By default, this option is turned on."}>
+                info={"When this option on, your microphone will be active when a video call starts, otherwise it will be muted. By default, this option is turned on."}
+            >
                 <Switch width={"fill"} reverse bind:checked={$videoMicOn}>
                     <Translatable resourceKey={i18nKey("profile.videoMicOn")}></Translatable>
                 </Switch>
             </Setting>
             <Setting
                 toggle={() => videoSpeakerView.toggle()}
-                info={"This setting controls whether the video call view will focus on the active speaker or automatically or just show a grid of all of the speakers."}>
+                info={"This setting controls whether the video call view will focus on the active speaker or automatically or just show a grid of all of the speakers."}
+            >
                 <Switch width={"fill"} reverse bind:checked={$videoSpeakerView}>
                     <Translatable resourceKey={i18nKey("profile.videoSpeakerView")}></Translatable>
                 </Switch>
@@ -118,7 +124,8 @@
                     <Translatable
                         resourceKey={i18nKey(
                             "Choose which ringtone you would like to hear when receiving an incoming video call.",
-                        )}></Translatable>
+                        )}
+                    ></Translatable>
                 </BodySmall>
             </Column>
             {#each ringtones as ringtone}
@@ -132,34 +139,40 @@
                 </H2>
                 <Setting
                     toggle={() => toggleModerationFlag(ModerationFlags.Offensive)}
-                    info={"Choose if you would like to see communities and groups marked as offensive."}>
+                    info={"Choose if you would like to see communities and groups marked as offensive."}
+                >
                     <Switch
                         width={"fill"}
                         reverse
                         onChange={() => toggleModerationFlag(ModerationFlags.Offensive)}
-                        checked={$offensiveEnabledStore}>
+                        checked={$offensiveEnabledStore}
+                    >
                         <Translatable resourceKey={i18nKey("communities.offensive")}></Translatable>
                     </Switch>
                 </Setting>
                 <Setting
                     toggle={() => toggleModerationFlag(ModerationFlags.Adult)}
-                    info={"Choose if you would like to see communitie and groups marked as containing adult content."}>
+                    info={"Choose if you would like to see communitie and groups marked as containing adult content."}
+                >
                     <Switch
                         width={"fill"}
                         reverse
                         onChange={() => toggleModerationFlag(ModerationFlags.Adult)}
-                        checked={$adultEnabledStore}>
+                        checked={$adultEnabledStore}
+                    >
                         <Translatable resourceKey={i18nKey("communities.adult")}></Translatable>
                     </Switch>
                 </Setting>
                 <Setting
                     toggle={() => toggleModerationFlag(ModerationFlags.UnderReview)}
-                    info={"Choose if you would like to see communities and groups that are currently under review."}>
+                    info={"Choose if you would like to see communities and groups that are currently under review."}
+                >
                     <Switch
                         width={"fill"}
                         reverse
                         onChange={() => toggleModerationFlag(ModerationFlags.UnderReview)}
-                        checked={$underReviewEnabledStore}>
+                        checked={$underReviewEnabledStore}
+                    >
                         <Translatable resourceKey={i18nKey("communities.underReview")}
                         ></Translatable>
                     </Switch>

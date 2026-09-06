@@ -133,14 +133,16 @@
             supplementalClass={"direct_chat_details"}
             gap={"xl"}
             direction={"vertical"}
-            padding={["lg", "md", "md", "md"]}>
+            padding={["lg", "md", "md", "md"]}
+        >
             {#if profile}
                 <UserProfileSummaryCard showChit={false} mode={"view"} {user} {profile}>
                     {#snippet buttons()}
                         <IconButton
                             onclick={() => publish("closeModalPage")}
                             size={"md"}
-                            mode={"dark"}>
+                            mode={"dark"}
+                        >
                             {#snippet icon(color)}
                                 <ArrowLeft {color} />
                             {/snippet}
@@ -170,7 +172,8 @@
                     {#snippet toggle(onToggle, enabled)}
                         <Setting
                             toggle={onToggle}
-                            info={"A feature that automatically deletes messages after a set period, helping keep chats private and temporary."}>
+                            info={"A feature that automatically deletes messages after a set period, helping keep chats private and temporary."}
+                        >
                             <Switch onChange={onToggle} width={"fill"} reverse checked={enabled}>
                                 <Translatable resourceKey={i18nKey("disappearingMessages.label")} />
                             </Switch>

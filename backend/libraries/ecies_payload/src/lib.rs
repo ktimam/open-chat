@@ -301,9 +301,9 @@ pub fn encrypt(plaintext: &[u8], recipient_public_key_pem: &str, rng: &mut impl 
     let shared = p256::ecdh::diffie_hellman(ephemeral_sk.to_nonzero_scalar(), recipient_pk.as_affine());
     let (key, nonce) = derive_key_and_nonce(shared.raw_secret_bytes())?;
 
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key));
+    let cipher = Aes256Gcm::new(&Key::<Aes256Gcm>::from(key));
     let ciphertext = cipher
-        .encrypt(Nonce::from_slice(&nonce), plaintext)
+        .encrypt(&Nonce::from(nonce), plaintext)
         .map_err(|e| format!("aes-gcm encrypt: {e}"))?;
 
     Ok(EciesEnvelope {
@@ -323,9 +323,9 @@ pub fn decrypt(envelope: &EciesEnvelope, recipient_secret_key_pem: &str) -> Resu
     let shared = p256::ecdh::diffie_hellman(recipient_sk.to_nonzero_scalar(), ephemeral_pk.as_affine());
     let (key, nonce) = derive_key_and_nonce(shared.raw_secret_bytes())?;
 
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key));
+    let cipher = Aes256Gcm::new(&Key::<Aes256Gcm>::from(key));
     cipher
-        .decrypt(Nonce::from_slice(&nonce), envelope.ciphertext.as_slice())
+        .decrypt(&Nonce::from(nonce), envelope.ciphertext.as_slice())
         .map_err(|e| format!("aes-gcm decrypt: {e}"))
 }
 

@@ -1303,7 +1303,10 @@ describe("reverseMapRows", () => {
             completelyReverseMapMultiRows(
                 [
                     { label: "Entry 1", value: "Quantity: 200 · Description: safe" },
-                    { label: "Entry 2", value: "Quantity: 300 · Description: text · Type: specimen" },
+                    {
+                        label: "Entry 2",
+                        value: "Quantity: 300 · Description: text · Type: specimen",
+                    },
                 ],
                 map,
             ),
@@ -1343,7 +1346,9 @@ describe("reverseMapRows", () => {
             completelyReverseMapRows([{ label: "Quantity", value: "10" }], inheritedMap),
         ).toBeUndefined();
         expect(
-            completelyReverseMapRows([{ label: "Quantity", value: "10" }], { Quantity: "__proto__" }),
+            completelyReverseMapRows([{ label: "Quantity", value: "10" }], {
+                Quantity: "__proto__",
+            }),
         ).toBeUndefined();
     });
 });

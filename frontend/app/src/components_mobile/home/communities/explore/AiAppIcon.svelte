@@ -29,7 +29,8 @@
         style={`width:${size};height:${size}`}
         src={iconUrl}
         alt=""
-        onerror={() => (failed = true)} />
+        onerror={() => (failed = true)}
+    />
 {:else}
     <div class="badge" style={`width:${size};height:${size}`}>
         <AutoFix size={"1.5rem"} color={ColourVars.textOnPrimary} />

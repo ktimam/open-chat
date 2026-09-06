@@ -57,10 +57,7 @@ describe("local Android passkey association", () => {
         const frontend = resolve(import.meta.dirname, "../..");
         const app = resolve(frontend, "app");
         const kotlin = readFileSync(
-            resolve(
-                frontend,
-                "tauri-plugin-oc/android/src/main/java/commands/PasskeyAuth.kt",
-            ),
+            resolve(frontend, "tauri-plugin-oc/android/src/main/java/commands/PasskeyAuth.kt"),
             "utf8",
         );
         const gradle = readFileSync(
@@ -80,14 +77,12 @@ describe("local Android passkey association", () => {
         expect(kotlin).toContain('"openchat_rp_id"');
         expect(kotlin).not.toContain('const val RP_ID = "oc.app"');
         expect(gradle).toContain('System.getenv("OC_ANDROID_RP_ID")');
-        expect(gradle).toContain('app/build/android-rp-id');
+        expect(gradle).toContain("app/build/android-rp-id");
         expect(gradle).toContain("environmentOpenChatRpId == bundledOpenChatRpId");
         expect(gradle).toContain('resValue("string", "openchat_rp_id", openChatRpId)');
         expect(manifest).toContain('android:name="asset_statements"');
         expect(webAuthn).toContain('import.meta.env.OC_ANDROID_RP_ID ?? "oc.app"');
-        expect(rollup).toContain(
-            '"import.meta.env.OC_ANDROID_RP_ID": JSON.stringify(androidRpId)',
-        );
+        expect(rollup).toContain('"import.meta.env.OC_ANDROID_RP_ID": JSON.stringify(androidRpId)');
         expect(rollup).toContain('fs.writeFileSync("build/android-rp-id", androidRpId)');
     });
 });

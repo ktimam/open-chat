@@ -57,9 +57,7 @@ describe("browser startup service-worker maintenance", () => {
 
     it("uses the shared compositor-friendly spinner for both startup routes", () => {
         for (const homeRoute of [desktopHomeRoute, mobileHomeRoute]) {
-            expect(homeRoute).toContain(
-                'import Loading from "@shared_components/Loading.svelte"',
-            );
+            expect(homeRoute).toContain('import Loading from "@shared_components/Loading.svelte"');
             expect(homeRoute).toContain('<Loading size={"small"} />');
             expect(homeRoute).not.toContain("FancyLoader");
             expect(homeRoute).not.toContain("<canvas");

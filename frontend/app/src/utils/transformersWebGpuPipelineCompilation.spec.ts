@@ -141,9 +141,7 @@ describe("serialized WebGPU pipeline compilation", () => {
             setOrtWebGpuStandardSoftmaxRouting(true);
             device.createShaderModule(smoothShader);
             const routed = nativeShader.mock.calls[0][0].code;
-            expect(routed).toContain(
-                "var max_value = f32(-3.4028234663852886e+38f);",
-            );
+            expect(routed).toContain("var max_value = f32(-3.4028234663852886e+38f);");
             expect(routed).not.toContain("var max_value: f32 = 0.0;");
             expect(routed).not.toContain("sum += exp(-max_value);");
 

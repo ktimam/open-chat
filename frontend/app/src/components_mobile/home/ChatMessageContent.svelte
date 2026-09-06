@@ -113,7 +113,8 @@
         {isPreview}
         {onRemovePreview}
         {ogPreviews}
-        {messagePreviews} />
+        {messagePreviews}
+    />
 {:else if content.kind === "image_content"}
     <ImageContent
         bind:contentWidth
@@ -127,7 +128,8 @@
         {height}
         {blockLevelMarkdown}
         {isPreview}
-        {onRemovePreview} />
+        {onRemovePreview}
+    />
 {:else if content.kind === "video_content"}
     <VideoContent
         bind:contentWidth
@@ -138,7 +140,8 @@
         {reply}
         {height}
         {blockLevelMarkdown}
-        {isPreview} />
+        {isPreview}
+    />
 {:else if content.kind === "video_call_content"}
     <VideoCallContent {me} {senderId} {messageIndex} {content} {timestamp} />
 {:else if content.kind === "audio_content"}
@@ -160,11 +163,13 @@
         text={i18nKey(
             failed ? "prizes.creatingPrizeMessageFailed" : "prizes.creatingYourPrizeMessage",
         )}
-        {failed} />
+        {failed}
+    />
 {:else if content.kind === "p2p_swap_content_initial"}
     <MessageContentInitial
         text={i18nKey(failed ? "p2pSwap.failedToCreateMessage" : "p2pSwap.creatingYourMessage")}
-        {failed} />
+        {failed}
+    />
 {:else if content.kind === "prize_content"}
     <PrizeContent chatId={messageContext.chatId} {messageId} {content} {me} {intersecting} />
 {:else if content.kind === "p2p_swap_content"}
@@ -176,7 +181,8 @@
         {me}
         {reply}
         {pinned}
-        {isPreview} />
+        {isPreview}
+    />
 {:else if content.kind === "prize_winner_content"}
     <PrizeWinnerContent {content} />
 {:else if content.kind === "poll_content"}
@@ -190,7 +196,8 @@
         threadRootMessageIndex={messageContext.threadRootMessageIndex}
         viewerId={$currentUserIdStore}
         {reconciliationTrigger}
-        onRespond={onRespondToActionCard} />
+        onRespond={onRespondToActionCard}
+    />
 {:else if content.kind === "giphy_content"}
     <GiphyContent
         {me}
@@ -201,7 +208,8 @@
         {reply}
         {height}
         {blockLevelMarkdown}
-        {isPreview} />
+        {isPreview}
+    />
 {:else if content.kind === "proposal_content"}
     <ProposalContent
         {content}
@@ -211,7 +219,8 @@
         {collapsed}
         {readonly}
         {reply}
-        {onExpandMessage} />
+        {onExpandMessage}
+    />
 {:else if content.kind === "message_reminder_created_content" && !content.hidden}
     <MessageReminderCreatedContent {content} />
 {:else if content.kind === "message_reminder_content"}

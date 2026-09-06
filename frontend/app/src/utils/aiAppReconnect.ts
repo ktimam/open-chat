@@ -74,7 +74,8 @@ export async function resolveAiAppReconnectTarget(
     if (
         matching.length > 1 ||
         matching.some(
-            (key) => key.keyVersion < 0n || (key.publicKey.trim().length === 0 && key.keyVersion !== 0n),
+            (key) =>
+                key.keyVersion < 0n || (key.publicKey.trim().length === 0 && key.keyVersion !== 0n),
         )
     ) {
         return { kind: "app_or_action_unavailable" };

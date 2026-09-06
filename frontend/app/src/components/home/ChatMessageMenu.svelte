@@ -335,8 +335,8 @@
                     id="dont_show"
                     label={i18nKey("install.dontShow")}
                     checked={!$confirmMessageDeletion}
-                    onChange={confirmMessageDeletion.toggle}>
-                </Checkbox>
+                    onChange={confirmMessageDeletion.toggle}
+                ></Checkbox>
             </div>
         </div>
     </AreYouSure>
@@ -410,7 +410,8 @@
                             {#snippet icon()}
                                 <EyeArrowRightIcon
                                     size={$iconSize}
-                                    color={"var(--icon-inverted-txt)"} />
+                                    color={"var(--icon-inverted-txt)"}
+                                />
                             {/snippet}
                             {#snippet text()}
                                 <div>
@@ -476,7 +477,8 @@
                         {#snippet icon()}
                             <ClockRemoveOutline
                                 size={$iconSize}
-                                color={"var(--icon-inverted-txt)"} />
+                                color={"var(--icon-inverted-txt)"}
+                            />
                         {/snippet}
                         {#snippet text()}
                             <div>
@@ -528,7 +530,8 @@
                             {#snippet icon()}
                                 <ChatPlusOutline
                                     size={$iconSize}
-                                    color={"var(--icon-inverted-txt)"} />
+                                    color={"var(--icon-inverted-txt)"}
+                                />
                             {/snippet}
                             {#snippet text()}
                                 <div>
@@ -577,7 +580,8 @@
                             {#snippet icon()}
                                 <TranslateIcon
                                     size={$iconSize}
-                                    color={"var(--icon-inverted-txt)"} />
+                                    color={"var(--icon-inverted-txt)"}
+                                />
                             {/snippet}
                             {#snippet text()}
                                 <div>
@@ -623,7 +627,9 @@
                             <Robot size={$iconSize} color={"var(--icon-inverted-txt)"} />
                         {/snippet}
                         {#snippet text()}
-                            <div><Translatable resourceKey={i18nKey("aiActions.processWithAi")} /></div>
+                            <div>
+                                <Translatable resourceKey={i18nKey("aiActions.processWithAi")} />
+                            </div>
                         {/snippet}
                     </MenuItem>
                 {/if}

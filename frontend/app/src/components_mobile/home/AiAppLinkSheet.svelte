@@ -295,9 +295,7 @@
                 <BodySmall colour={"textSecondary"}>
                     <Translatable
                         resourceKey={i18nKey(
-                            purpose === "recovery"
-                                ? "aiApps.reconnectNotYet"
-                                : "aiApps.linkNotYet",
+                            purpose === "recovery" ? "aiApps.reconnectNotYet" : "aiApps.linkNotYet",
                             { name: app.manifest.name },
                         )}
                     />

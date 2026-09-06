@@ -59,8 +59,8 @@
             <span>
                 The token is opaque and expires shortly. The destination page, browser history, and
                 local software that handles the URL can observe it. Because it is in the URL
-                fragment, browsers do not send it in HTTP requests. This URL contains no raw chat
-                or user identifiers.
+                fragment, browsers do not send it in HTTP requests. This URL contains no raw chat or
+                user identifiers.
             </span>
         {/if}
         <span>

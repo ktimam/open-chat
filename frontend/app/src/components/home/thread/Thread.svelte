@@ -329,13 +329,15 @@
     <P2PSwapContentBuilder
         fromLedger={$lastCryptoSent ?? LEDGER_CANISTER_ICP}
         {messageContext}
-        onClose={() => (creatingP2PSwapMessage = false)} />
+        onClose={() => (creatingP2PSwapMessage = false)}
+    />
 {/if}
 
 <GiphySelector
     onSend={onSendMessageWithContent}
     bind:this={giphySelector}
-    bind:open={selectingGif} />
+    bind:open={selectingGif}
+/>
 
 <MemeBuilder onSend={onSendMessageWithContent} bind:this={memeBuilder} bind:open={buildingMeme} />
 
@@ -346,7 +348,8 @@
         draftAmount={creatingCryptoTransfer.amount}
         defaultReceiver={defaultCryptoTransferReceiver()}
         {messageContext}
-        onClose={() => (creatingCryptoTransfer = undefined)} />
+        onClose={() => (creatingCryptoTransfer = undefined)}
+    />
 {/if}
 
 <DropTarget {chat} mode={"thread"} {onFileSelected}>
@@ -370,7 +373,8 @@
             {chat}
             bind:initialised
             bind:messagesDiv
-            bind:messagesDivHeight>
+            bind:messagesDivHeight
+        >
             {#snippet row(
                 item,
                 { isAccepted, isConfirmed, isFailed, isReadByMe, messageObserver, focusIndex },
@@ -390,9 +394,7 @@
                         accepted={isAccepted($unconfirmedStore, evt)}
                         confirmed={isConfirmed($unconfirmedStore, evt)}
                         failed={isFailed($failedMessagesStore, evt)}
-                        readByMe={isThreadRoot ||
-                            !isFollowedByMe ||
-                            isReadByMe($messagesRead, evt)}
+                        readByMe={isThreadRoot || !isFollowedByMe || isReadByMe($messagesRead, evt)}
                         observer={messageObserver}
                         focused={evt.event.kind === "message" &&
                             focusIndex === evt.event.messageIndex}
@@ -418,7 +420,8 @@
                         onReplyTo={replyTo}
                         onEditEvent={() => editEvent(evt)}
                         onExpandMessage={() => toggleMessageExpansion(evt, true)}
-                        onCollapseMessage={() => toggleMessageExpansion(evt, false)} />
+                        onCollapseMessage={() => toggleMessageExpansion(evt, false)}
+                    />
                 {/if}
             {/snippet}
         </ChatEventList>
@@ -450,6 +453,7 @@
             onMakeMeme={makeMeme}
             onTokenTransfer={tokenTransfer}
             onCreateP2PSwapMessage={createP2PSwapMessage}
-            onCreatePoll={createPoll} />
+            onCreatePoll={createPoll}
+        />
     {/if}
 </DropTarget>

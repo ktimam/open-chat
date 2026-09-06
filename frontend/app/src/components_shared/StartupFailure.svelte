@@ -1,8 +1,6 @@
 <script lang="ts">
-    let {
-        message,
-        recovery = "reload",
-    }: { message: string; recovery?: "reload" | "new-tab" } = $props();
+    let { message, recovery = "reload" }: { message: string; recovery?: "reload" | "new-tab" } =
+        $props();
 </script>
 
 <div class="startup-failure" role="alert">

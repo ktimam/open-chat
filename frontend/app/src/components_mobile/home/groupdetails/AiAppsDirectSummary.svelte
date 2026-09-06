@@ -56,8 +56,7 @@
     let relevant = $derived(
         apps.filter(
             (app) =>
-                isDirectChatCardApp(app) &&
-                (!connected.has(app.id) || exactAppIds.has(app.id)),
+                isDirectChatCardApp(app) && (!connected.has(app.id) || exactAppIds.has(app.id)),
         ),
     );
 
@@ -192,11 +191,7 @@
                             {app.manifest.description}
                         </BodySmall>
                     {/if}
-                    <PrivateMatchAutomaticNotice
-                        {app}
-                        {chatId}
-                        available={connected.has(app.id)}
-                    />
+                    <PrivateMatchAutomaticNotice {app} {chatId} available={connected.has(app.id)} />
                     <!-- Plain div, not Container: the action row can hold three buttons, which
                          overflow a non-wrapping flex row on a narrow window — this wraps them. -->
                     <div class="app-actions">
