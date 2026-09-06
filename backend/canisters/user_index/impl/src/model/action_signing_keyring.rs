@@ -116,6 +116,7 @@ impl ActionSigningKeyring {
             .and_then(|entry| entry.secret_key_der.as_ref().map(|secret| (&entry.key_id, secret.as_slice())))
     }
 
+    #[cfg(test)]
     pub fn public_keys(&self) -> impl Iterator<Item = PublicActionSigningKey<'_>> {
         self.keys.iter().map(|entry| PublicActionSigningKey {
             key_id: &entry.key_id,

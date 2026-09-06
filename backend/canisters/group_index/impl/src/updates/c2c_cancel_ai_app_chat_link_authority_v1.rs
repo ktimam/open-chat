@@ -76,9 +76,11 @@ mod tests {
         let group = Principal::from_slice(&[1]);
         let exact = binding(group);
         let raw = [4; AI_APP_CHAT_LINK_AUTHORITY_TOKEN_BYTES];
-        let mut env = TestEnv::default();
-        env.caller = group;
-        env.now = 2;
+        let env = TestEnv {
+            caller: group,
+            now: 2,
+            ..TestEnv::default()
+        };
         let mut data = crate::Data::default();
         data.ai_app_chat_link_authority
             .insert(env.canister_id, &raw, exact.clone(), 100, 1)

@@ -55,8 +55,10 @@ mod tests {
     }
 
     fn state(caller: Principal, owner: Principal) -> RuntimeState {
-        let mut env = TestEnv::default();
-        env.caller = caller;
+        let env = TestEnv {
+            caller,
+            ..Default::default()
+        };
         let mut data = Data::default();
         let _ = add_user(&mut data, caller, "caller");
         let owner_id = if caller == owner { caller.into() } else { add_user(&mut data, owner, "owner") };

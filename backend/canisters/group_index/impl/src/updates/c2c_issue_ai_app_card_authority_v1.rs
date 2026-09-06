@@ -220,8 +220,10 @@ mod tests {
             let mut data = crate::Data::default();
             data.local_index_map.add_index(owner);
             data.local_index_map.add_group(owner, group.into());
-            let mut env = utils::env::test::TestEnv::default();
-            env.caller = group;
+            let env = utils::env::test::TestEnv {
+                caller: group,
+                ..utils::env::test::TestEnv::default()
+            };
             RuntimeState::new(Box::new(env), data)
         };
         let mut first_state = state();
@@ -240,7 +242,7 @@ mod tests {
             panic!("first authority issuance must succeed")
         };
         let snapshot =
-            msgpack::serialize_to_vec(&(&first_state.data.pr2_entropy, &first_state.data.ai_app_card_authority)).unwrap();
+            msgpack::serialize_to_vec((&first_state.data.pr2_entropy, &first_state.data.ai_app_card_authority)).unwrap();
 
         assert_eq!(
             first_state.data.ai_app_card_authority.consume(

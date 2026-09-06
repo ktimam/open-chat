@@ -18,6 +18,6 @@ fn ai_app_user_keys_impl(args: Args, state: &RuntimeState) -> Response {
         .data
         .ai_app_user_keys
         .keys_for_users(args.app_id, &user_ids)
-        .unwrap_or_else(|error| ic_cdk::trap(&error.message()));
+        .unwrap_or_else(|error| ic_cdk::trap(error.message()));
     Success(SuccessResult { keys })
 }

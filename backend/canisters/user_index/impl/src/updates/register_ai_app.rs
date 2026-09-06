@@ -561,11 +561,15 @@ mod tests {
     fn upgraded_test_mode_registrar_can_update_only_its_exact_existing_app() {
         let registrar = Principal::from_slice(&[41]);
         let other_owner: UserId = Principal::from_slice(&[42]).into();
-        let mut env = TestEnv::default();
-        env.caller = registrar;
-        env.now = 100;
-        let mut data = Data::default();
-        data.test_mode = true;
+        let env = TestEnv {
+            caller: registrar,
+            now: 100,
+            ..Default::default()
+        };
+        let mut data = Data {
+            test_mode: true,
+            ..Default::default()
+        };
         let existing = data.ai_apps.register(registrar.into(), manifest(), 10, true).unwrap();
         let mut other_manifest = manifest();
         other_manifest.name = "other-app".to_string();

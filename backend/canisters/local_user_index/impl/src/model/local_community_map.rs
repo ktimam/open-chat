@@ -13,25 +13,6 @@ pub struct LocalCommunityMap {
     registration_generations: HashMap<CommunityId, u64>,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use candid::Principal;
-
-    #[test]
-    fn remove_and_readd_changes_the_exact_registration_generation() {
-        let mut communities = LocalCommunityMap::default();
-        let id = CommunityId::from(Principal::from_slice(&[64]));
-        communities.add(id, BuildVersion::min());
-        let first = communities.registration_generation(&id);
-        assert!(communities.delete(&id));
-        assert_eq!(communities.registration_generation(&id), 0);
-        assert!(communities.registration_generations.is_empty());
-        communities.add(id, BuildVersion::min());
-        assert!(communities.registration_generation(&id) > first);
-    }
-}
-
 impl LocalCommunityMap {
     pub fn add(&mut self, community_id: CommunityId, wasm_version: BuildVersion) {
         let next = self.issue_registration_generation();
@@ -110,5 +91,24 @@ impl LocalCommunityMap {
 
     pub fn len(&self) -> usize {
         self.communities.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candid::Principal;
+
+    #[test]
+    fn remove_and_readd_changes_the_exact_registration_generation() {
+        let mut communities = LocalCommunityMap::default();
+        let id = CommunityId::from(Principal::from_slice(&[64]));
+        communities.add(id, BuildVersion::min());
+        let first = communities.registration_generation(&id);
+        assert!(communities.delete(&id));
+        assert_eq!(communities.registration_generation(&id), 0);
+        assert!(communities.registration_generations.is_empty());
+        communities.add(id, BuildVersion::min());
+        assert!(communities.registration_generation(&id) > first);
     }
 }

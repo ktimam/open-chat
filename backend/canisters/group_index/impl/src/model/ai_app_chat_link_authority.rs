@@ -115,6 +115,7 @@ impl AiAppChatLinkAuthorityStore {
         self.digest_version = DIGEST_VERSION;
     }
 
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.entries.len()
     }

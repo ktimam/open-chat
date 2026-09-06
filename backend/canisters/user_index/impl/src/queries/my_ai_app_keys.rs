@@ -26,7 +26,7 @@ fn my_ai_app_keys_impl(state: &RuntimeState) -> Response {
                 .data
                 .ai_app_user_keys
                 .keys_for_user(u)
-                .unwrap_or_else(|error| ic_cdk::trap(&error.message()))
+                .unwrap_or_else(|error| ic_cdk::trap(error.message()))
         })
         .unwrap_or_default();
 

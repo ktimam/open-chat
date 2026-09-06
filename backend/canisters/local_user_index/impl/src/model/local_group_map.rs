@@ -14,25 +14,6 @@ pub struct LocalGroupMap {
     registration_generations: HashMap<ChatId, u64>,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use candid::Principal;
-
-    #[test]
-    fn remove_and_readd_changes_the_exact_registration_generation() {
-        let mut groups = LocalGroupMap::default();
-        let id = ChatId::from(Principal::from_slice(&[63]));
-        groups.add(id, BuildVersion::min());
-        let first = groups.registration_generation(&id);
-        assert!(groups.delete(&id));
-        assert_eq!(groups.registration_generation(&id), 0);
-        assert!(groups.registration_generations.is_empty());
-        groups.add(id, BuildVersion::min());
-        assert!(groups.registration_generation(&id) > first);
-    }
-}
-
 impl LocalGroupMap {
     pub fn add(&mut self, chat_id: ChatId, wasm_version: BuildVersion) {
         let next = self.issue_registration_generation();
@@ -113,5 +94,24 @@ impl LocalGroupMap {
 
     pub fn len(&self) -> usize {
         self.groups.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candid::Principal;
+
+    #[test]
+    fn remove_and_readd_changes_the_exact_registration_generation() {
+        let mut groups = LocalGroupMap::default();
+        let id = ChatId::from(Principal::from_slice(&[63]));
+        groups.add(id, BuildVersion::min());
+        let first = groups.registration_generation(&id);
+        assert!(groups.delete(&id));
+        assert_eq!(groups.registration_generation(&id), 0);
+        assert!(groups.registration_generations.is_empty());
+        groups.add(id, BuildVersion::min());
+        assert!(groups.registration_generation(&id) > first);
     }
 }

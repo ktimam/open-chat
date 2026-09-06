@@ -36,9 +36,12 @@ they do not change this APK's frontend or native runtime.
 The integration checkpoint is 16 commits / 115 changed files beyond PR #73's head.
 Those commits mix later model-runtime fixes and app-interface fixes. It is 60 commits beyond
 PR #9132's head. Do not present this checkpoint as a PR2-only refresh without separating scope.
-Upstream `master` was `fb7c34bcc453e04480a36b4c5882cf63f362efbd` at assessment:
-the checkpoint and upstream have 98 and 124 unique commits respectively. Re-check these refs
-before any rebase or publication; conflict resolution against current upstream is not verified.
+Upstream `master` was rechecked at `df9d9ed52db00e87fbb7309280a325902c9bb2cc`:
+the checkpoint and upstream have 98 and 126 unique commits respectively. Since the first
+assessment, upstream added Play signing-key association and legacy-install migration notices.
+Its Android package-identity migration must be reviewed explicitly when reconciling the stack;
+do not uninstall or change the existing local-test package/account identity as a merge side effect.
+Conflict resolution against current upstream is not verified.
 
 ## Preserve the two-PR structure
 
@@ -54,7 +57,8 @@ before any rebase or publication; conflict resolution against current upstream i
    [PR1](pr1-local-models.md) and [PR2](pr2-app-interfaces.md).
 
 The [stack refresh plan](pr-stack-refresh-plan.md) identifies mixed areas and an append-only
-refresh sequence. An isolated PR1 refresh has started with generic ZIP packaging only; the
+refresh sequence. An isolated PR1 refresh has committed generic ZIP packaging locally and is
+validating the later model-only runtime/build/UI slice against PR1's exact lockfile. The full
 model/app scope split is not complete and neither published PR head has changed.
 
 This is a proposed publishing sequence, not an executed history rewrite. Keep the checkpoint
@@ -80,12 +84,13 @@ ordinary full-compilation fallback; the overall build and fresh-artifact checks 
 
 | Check | Result |
 | --- | --- |
-| Full frontend unit tests | 127 files / 1,783 passed with four workers; unchanged assertions/timeouts and zero skipped tests |
-| Svelte typecheck | 0 errors; 564 warnings in 205 files |
+| Full frontend unit tests, current integration follow-up | 129 files / 1,787 passed with four workers; zero skipped tests |
+| Svelte typecheck, current integration follow-up | 0 errors; 546 warnings in 195 files |
 | Agent TypeScript check | Passed |
 | Read-only ESLint | 0 errors; 31 existing warnings (26 errors corrected) |
 | Frozen isolated dependency install | Passed; model/ONNX/OCR runtime lock entries unchanged |
 | Release/CI/digest/format/preflight/archive/notice tests | 147 passed, zero skipped |
+| Current frontend CI policy test command, including SBOM lock identity and model CI coverage | 134 passed, zero skipped; narrower command than the historical aggregate above |
 | Production WebGPU candidate build | Passed in 2m55.5s with the final frozen dependency tree, explicit immutable-delivery contract and real public-key query; both store/full OTA ZIPs produced |
 | Built WebGPU payload | 26 exact assets verified: worker, ORT pair, two Qwen graphs and 21 notices/sidecars; this is packaging evidence, not inference |
 | Built module browser smoke | Chrome 152.0.7977.76 imports actual ORT JS, compiles pinned WASM and receives disposal acknowledgement from the compiled worker under the built CSP; no model inference or full-app UI claim |
@@ -95,24 +100,30 @@ ordinary full-compilation fallback; the overall build and fresh-artifact checks 
 | App/host boundary audit | 5,137 text files / no findings; rerun after any scope split |
 | Hosted checks on existing PRs | None reported; not a pass |
 | Affected backend Rust packages | 57 tests passed, 1 existing ignored test; strict Clippy and workspace formatting passed |
-| Hosted native model checks on `e02bd70d4` | Linux and Windows hermetic tests and both feature builds passed; separate pinned native CPU model inference passed |
+| Nine affected backend library targets, current integration follow-up | 590 tests passed, none ignored; combined strict Clippy passed for library and test targets |
+| Native model-manager follow-up | 23 tests passed, none ignored; default-feature strict Clippy passed for library and test targets |
+| Hosted native model checks on `0f1581436` | Linux and Windows hermetic tests and both feature builds passed; separate pinned native CPU model inference passed |
 | Signed shipping APK / production rollout | Not built or performed |
 
-### Latest hosted checks: exact `e02bd70d4`
+### Latest completed hosted checks: exact `0f1581436`
 
-- [Frontend](https://github.com/ktimam/open-chat/actions/runs/34031336098): passed the
+- [Frontend](https://github.com/ktimam/open-chat/actions/runs/34032873204): passed the
   complete frontend pipeline and the separate opt-in production WebGPU candidate build and
   asset verification, using Node `24.18.1` and repository-pinned `dfx@0.31.0-beta.1`.
-- [Model checks](https://github.com/ktimam/open-chat/actions/runs/34031336128): frontend
+- [Model checks](https://github.com/ktimam/open-chat/actions/runs/34032873214): frontend
   model contracts, Windows/Linux native tests and feature builds, and actual inference with
   the pinned 14 MB native CPU fixture all passed. That CPU fixture is not phone WebGPU proof.
   The dependency job failed on changed reviewed digests and the expired baseline after
   successfully checking formatting; its later Rust/license/SBOM steps were skipped.
-- [Backend](https://github.com/ktimam/open-chat/actions/runs/34031336096): failed strict
-  Clippy and unit-test compilation. The failures include chat-event lint violations and an
-  unreachable duplicate action-card permission arm. These are genuine source failures;
-  frontend success does not cover them. Repairs must pass a new exact-commit run.
-- [App security](https://github.com/ktimam/open-chat/actions/runs/34031336108): failed
+- [Backend](https://github.com/ktimam/open-chat/actions/runs/34032873174): formatting passed;
+  strict Clippy failed on three native model-manager expressions. Unit tests reached the
+  user-index suite, where a fixture reserved one byte for a seven-byte prepared request and
+  correctly received `InvalidRequestSize`. The fixture now reserves its actual byte length
+  and explicitly asserts that an oversized request is still rejected. Production size
+  validation is unchanged. The three native expression fixes retain network restrictions,
+  schema size/object checks and rollback behavior, with added IPv6 and schema-boundary tests.
+  All source repairs require a new exact-commit hosted run.
+- [App security](https://github.com/ktimam/open-chat/actions/runs/34032873202): failed
   review expiry, reviewed dependency drift and unreviewed native manifests. Fresh npm audits
   in this run reported two moderate findings and no high/critical findings in both scopes;
   the moderate count exceeds the old policy's one-finding allowance. No allowance was raised.
@@ -122,12 +133,26 @@ role tests, applies narrow documented lint expectations to existing public API r
 and boxes only three private prepared-deposit payloads. The affected chat-events, group-chat,
 group, community and user targets pass 146 tests and focused strict Clippy. A further mechanical
 inbox cleanup preserves cursor iteration and replaces test-only temporary vectors; its 60
-tests pass, bringing the focused total to 206. The full Windows
-workspace Clippy attempt stops at the local Cygwin-Perl/MSVC OpenSSL build incompatibility;
-that is not a source pass. Further targeted checks expose additional lint failures in the
-user-index, group-index and local-user-index implementations. These remain outstanding; the
-first repaired targets do not establish full backend acceptance. Public wire payloads and
-card-authorization requirements are unchanged by this repair batch.
+tests pass, bringing the first focused total to 206. Subsequent user-index, group-index and
+local-user-index repairs bring the combined nine-target total to 590 passing tests and strict
+Clippy. These changes retain stored structures and public wire payloads; only transient lookup
+results are boxed, with value, persistence and expiry-boundary regressions. The full Windows
+workspace Clippy attempt still stops at the local Cygwin-Perl/MSVC OpenSSL build incompatibility;
+that is not a source pass or a substitute for full Linux CI. Card-authorization requirements
+are unchanged by these repair batches.
+
+The development model-worker watcher now includes its full generic helper list. A helper edit
+rebuilds the worker and rotates its runtime version only after success; generated output is not
+watched. The sequential-session transform is imported afresh on each attempt, including retries
+after build or syntax failures. Tests exercise the real transpiled Vite plugin with controlled
+build/watch fixtures. This closes a stale-development-worker path, not a phone GPU acceptance gate.
+
+The dedicated model workflow previously selected only eight named test files and did not trigger
+for many worker/runtime edits. It now selects model test families and relevant source/build/notice
+paths. A regression inventories the actual test files and verifies both workflow selection and
+Vitest discovery. This also exposed an existing WASM packaging suite excluded by the root Vitest
+configuration; that suite is now included. The exact expanded model command passes 29 suites /
+418 tests. Full frontend CI was already broader; neither suite is physical-device inference proof.
 
 ### Earlier build failures and their repairs
 
@@ -275,6 +300,18 @@ transform stages; the missing conversion-publisher metadata is stated, not inven
 distribution verifier requires the exact runtime, graphs and all 21 notice/sidecar outputs.
 These checks establish packaging and attribution coverage, not inference or complete conversion
 reproducibility. The stale `open` notice now matches locked `5.4.1`.
+
+The pinned `cargo-cyclonedx@0.5.9` generator was also executed for the native model plugin with
+`inference` features and all targets. It emitted 508 components; all 507 external package
+identities/checksums in its isolated lockfile matched source `Cargo.lock` SHA-256
+`04de513dc25b67d786d0650c17362fe5dece72d9a879c171e93e695d3d5aa33d`.
+Because this generator has no `--locked` flag, the wrapper now forces offline resolution,
+rejects source-lock mutation or isolated dependency drift before writing the report, and adds
+both raw lock hashes and the scope as report metadata. Ten regression tests cover allowed
+pruning and rejected version/source/checksum, Git revision and malformed-record changes.
+This is subset lock-identity evidence, not dependency-edge/feature completeness, path-source
+content proof, a full APK/model-weight SBOM or license/advisory acceptance. The policy command
+still exits nonzero for the expired baseline and reviewed dependency drift; no waiver was added.
 
 Frontend, backend and model/app security workflows now include the stacked PR base and
 integration pushes, with regression tests for that routing. These changes are not on the

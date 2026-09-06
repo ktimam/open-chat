@@ -77,8 +77,10 @@ mod tests {
     }
 
     fn state(caller: Principal, app_canister: Principal) -> (RuntimeState, u32, u64, Principal, String) {
-        let mut env = TestEnv::default();
-        env.caller = caller;
+        let env = TestEnv {
+            caller,
+            ..Default::default()
+        };
         let inbox = Principal::from_slice(&[30]);
         let key = public_key(8);
         let action = AiActionDefinition {

@@ -393,10 +393,10 @@ impl AiAppCallThrottle {
         self.clear_legacy();
         let failures = self.failures_mut(kind);
         Self::prune(failures, now);
-        if let Some(failures) = failures.get(&caller) {
-            if failures.len() >= MAX_FAILURES_PER_CALLER {
-                return Err(Self::retry_after(failures, now));
-            }
+        if let Some(failures) = failures.get(&caller)
+            && failures.len() >= MAX_FAILURES_PER_CALLER
+        {
+            return Err(Self::retry_after(failures, now));
         }
         Ok(())
     }
@@ -465,8 +465,9 @@ impl AiAppCallThrottle {
     }
 
     fn make_room_for_subject(failures: &mut HashMap<(Principal, [u8; 32]), Vec<TimestampMillis>>, key: (Principal, [u8; 32])) {
-        if !failures.contains_key(&key) && failures.len() >= MAX_TRACKED_CALLERS_PER_ENDPOINT {
-            if let Some(oldest) = failures
+        if !failures.contains_key(&key)
+            && failures.len() >= MAX_TRACKED_CALLERS_PER_ENDPOINT
+            && let Some(oldest) = failures
                 .iter()
                 .min_by(|((caller_a, subject_a), times_a), ((caller_b, subject_b), times_b)| {
                     times_a
@@ -477,9 +478,8 @@ impl AiAppCallThrottle {
                         .then_with(|| subject_a.cmp(subject_b))
                 })
                 .map(|(key, _)| *key)
-            {
-                failures.remove(&oldest);
-            }
+        {
+            failures.remove(&oldest);
         }
     }
 
@@ -496,8 +496,9 @@ impl AiAppCallThrottle {
     }
 
     fn make_room_for_caller(timestamps_by_caller: &mut HashMap<Principal, Vec<TimestampMillis>>, caller: Principal) {
-        if !timestamps_by_caller.contains_key(&caller) && timestamps_by_caller.len() >= MAX_TRACKED_CALLERS_PER_ENDPOINT {
-            if let Some(oldest) = timestamps_by_caller
+        if !timestamps_by_caller.contains_key(&caller)
+            && timestamps_by_caller.len() >= MAX_TRACKED_CALLERS_PER_ENDPOINT
+            && let Some(oldest) = timestamps_by_caller
                 .iter()
                 .min_by(|(principal_a, times_a), (principal_b, times_b)| {
                     times_a
@@ -507,9 +508,8 @@ impl AiAppCallThrottle {
                         .then_with(|| principal_a.as_slice().cmp(principal_b.as_slice()))
                 })
                 .map(|(principal, _)| *principal)
-            {
-                timestamps_by_caller.remove(&oldest);
-            }
+        {
+            timestamps_by_caller.remove(&oldest);
         }
     }
 
@@ -544,7 +544,7 @@ mod tests {
     use super::*;
 
     fn principal(seed: u32) -> Principal {
-        Principal::self_authenticating(&seed.to_le_bytes())
+        Principal::self_authenticating(seed.to_le_bytes())
     }
 
     #[test]

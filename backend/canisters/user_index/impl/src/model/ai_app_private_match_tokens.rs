@@ -56,7 +56,7 @@ pub enum InsertError {
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum LookupResult {
-    Valid(PrivateMatchCapability),
+    Valid(Box<PrivateMatchCapability>),
     WrongKind,
     Expired,
     NotFound,
@@ -146,7 +146,7 @@ impl AiAppPrivateMatchTokens {
         } else if value.kind != CapabilityKind::PrivateMatch {
             LookupResult::WrongKind
         } else {
-            LookupResult::Valid(value)
+            LookupResult::Valid(Box::new(value))
         }
     }
 
@@ -339,6 +339,31 @@ mod tests {
     }
 
     #[test]
+    fn boxed_lookup_preserves_the_complete_value_and_persisted_state_until_exact_expiry() {
+        let canister = Principal::from_slice(&[1]);
+        let raw = [2; TOKEN_BYTES];
+        for now in [19, 20, 21] {
+            let expected = capability(3, 4, 20);
+            let mut store = AiAppPrivateMatchTokens::default();
+            store.insert(canister, &raw, expected.clone(), 1).unwrap();
+            let persisted = msgpack::serialize_to_vec(&store).unwrap();
+            if now == 19 {
+                assert_eq!(
+                    store.lookup(canister, &raw, now),
+                    LookupResult::Valid(Box::new(expected.clone()))
+                );
+                assert_eq!(store.lookup(canister, &raw, now), LookupResult::Valid(Box::new(expected)));
+                assert_eq!(msgpack::serialize_to_vec(&store).unwrap(), persisted);
+                assert!(store.consume(canister, &raw));
+            } else {
+                assert_eq!(store.lookup(canister, &raw, now), LookupResult::Expired);
+                assert!(!store.consume(canister, &raw));
+            }
+            assert_eq!(store.lookup(canister, &raw, now), LookupResult::NotFound);
+        }
+    }
+
+    #[test]
     fn private_match_token_is_one_time_and_domain_separated_from_card_tokens() {
         let canister = Principal::from_slice(&[1]);
         let raw = [2; TOKEN_BYTES];
@@ -378,7 +403,7 @@ mod tests {
             store.insert(canister, &[99; TOKEN_BYTES], capability(3, 4, 20), 1),
             Err(InsertError::UserLimitReached)
         );
-        assert!(store.prune_expired_bounded(20) == false);
+        assert!(!store.prune_expired_bounded(20));
         assert!(
             store
                 .insert(canister, &[100; TOKEN_BYTES], capability(3, 4, 80_001), 60_001)

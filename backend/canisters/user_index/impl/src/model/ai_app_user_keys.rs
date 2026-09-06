@@ -143,6 +143,7 @@ impl SetAiAppUserKeyError {
 
 impl AiAppUserKeys {
     /// Validate, canonicalize and upsert the key for one (user, app) pair.
+    #[cfg(test)]
     pub fn set(&mut self, user_id: UserId, app_id: AiAppId, public_key: String) -> Result<(), SetAiAppUserKeyError> {
         let canonical = canonicalize_p256_public_key(&public_key).map_err(SetAiAppUserKeyError::InvalidPublicKey)?;
         self.set_canonical(user_id, app_id, canonical)
@@ -352,6 +353,7 @@ impl AiAppUserKeys {
     }
 
     /// Removes every binding for one canonical key. Work is bounded by the key reuse budget.
+    #[cfg(test)]
     pub fn remove_by_key(&mut self, public_key: &str) -> Result<u32, SetAiAppUserKeyError> {
         self.ensure_ready()?;
         let Ok(canonical) = canonicalize_p256_public_key(public_key) else {
@@ -638,7 +640,7 @@ mod tests {
     use rand::rngs::StdRng;
 
     fn user(seed: u32) -> UserId {
-        Principal::self_authenticating(&seed.to_le_bytes()).into()
+        Principal::self_authenticating(seed.to_le_bytes()).into()
     }
 
     fn key(seed: u64) -> String {

@@ -87,6 +87,10 @@ impl AiAppLinkCodes {
 
     /// Inserts a new code for a (user, app) pair, replacing any earlier code for the same pair so
     /// at most one code per pair is outstanding.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Keep the existing link-code issuer, app and user binding explicit at this authorization boundary"
+    )]
     pub fn insert_bound(
         &mut self,
         code: String,
@@ -195,6 +199,7 @@ impl AiAppLinkCodes {
         self.claim_bound(code, test_canister_id(), now)
     }
 
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.codes.len()
     }
@@ -391,7 +396,7 @@ mod tests {
     use candid::Principal;
 
     fn user(seed: u32) -> UserId {
-        Principal::self_authenticating(&seed.to_le_bytes()).into()
+        Principal::self_authenticating(seed.to_le_bytes()).into()
     }
 
     fn token(seed: usize) -> String {

@@ -306,6 +306,7 @@ impl AiAppRegistry {
         true
     }
 
+    #[cfg(test)]
     pub fn delete(&mut self, owner: UserId, name: &str) -> bool {
         if let Some(id) = self.owned_app_id(owner, name) { self.remove(id) } else { false }
     }

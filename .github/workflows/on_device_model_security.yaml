@@ -6,18 +6,53 @@ on:
     paths:
       - ".github/dependabot.yml"
       - ".github/security/openchat-pr1-security-baseline.json"
+      - ".github/workflows/frontend.yaml"
       - ".github/workflows/on_device_model_security.yaml"
       - "Cargo.lock"
       - "Cargo.toml"
       - "frontend/**/package.json"
       - "frontend/package-lock.json"
-      - "frontend/app/src/utils/modelCatalog*"
+      - "frontend/vitest.config.ts"
+      - "frontend/app/vitest.config.ts"
+      - "frontend/app/vite.config.ts"
+      - "frontend/app/tsconfig.json"
+      - "frontend/app/src/bootstrapSecurity*"
+      - "frontend/app/src/utils/model*"
       - "frontend/app/src/utils/onDeviceInference*"
-      - "frontend/openchat-shared/src/domain/onDeviceModel.ts"
+      - "frontend/app/src/utils/webInference*"
+      - "frontend/app/src/utils/transformersWebGpu*"
+      - "frontend/app/src/utils/gemma4WebGpu*"
+      - "frontend/app/src/utils/localAi*"
+      - "frontend/app/src/utils/localImageInput*"
+      - "frontend/app/src/utils/inferenceImage*"
+      - "frontend/app/src/stores/customModels*"
+      - "frontend/app/src/stores/onDeviceModels*"
+      - "frontend/app/src/stores/transformersWebGpu*"
+      - "frontend/app/src/workers/transformersWebGpu*"
+      - "frontend/app/src/components*/**/ModelManager.svelte"
+      - "frontend/app/src/components_shared/WebInferenceRuntimeSettings.svelte"
+      - "frontend/app/transformersWebGpu*"
+      - "frontend/app/build*"
+      - "frontend/app/rollup*"
+      - "frontend/app/modelAssetNotices.mjs"
+      - "frontend/app/model-asset-notices/**"
+      - "frontend/app/model-overrides/**"
+      - "frontend/openchat-shared/src/domain/onDeviceModel*"
+      - "frontend/openchat-agent/src/services/registry/modelCatalog*"
       - "frontend/src-tauri/**"
       - "frontend/tauri-plugin-oc/**"
       - "scripts/check_openchat_pr1_security.mjs"
       - "scripts/security_dependency_hash*"
+      - "scripts/sbom_lock_identity*"
+      - "scripts/model_ci_coverage*"
+      - "scripts/model_asset_notices*"
+      - "scripts/verify_webgpu_distribution*"
+      - "scripts/frontend_format_check*"
+      - "scripts/android_dev*"
+      - "scripts/android_bundle*"
+      - "scripts/decoder_compatibility.mjs"
+      - "scripts/onnx_adm_zip_compatibility.mjs"
+      - "scripts/transformers_sharp_compatibility.mjs"
       - "scripts/pr-ci-policy.test.mjs"
   push:
     branches: [codex/pr1-local-models, codex/pr2-app-chat-interfaces, codex/pr2-clean-integration]
@@ -123,16 +158,22 @@ jobs:
         run: npm ci
       - name: Run all local-model frontend contracts
         working-directory: frontend
+        # Vitest uses literal path filters, not shell globs. Prefixes also select
+        # Gemma/audio/lifecycle/build variants and future suites in these families.
         run: >-
           npm test --
-          app/src/stores/customModels.spec.ts
-          app/src/utils/localAiCommand.spec.ts
-          app/src/utils/modelCatalog.spec.ts
-          app/src/utils/modelSuitability.spec.ts
-          app/src/utils/onDeviceInference.spec.ts
-          app/src/utils/onDeviceInferencePackaging.test.ts
-          app/src/utils/webInference.spec.ts
-          app/src/bootstrapSecurity.spec.ts
+          app/rollup-plugin-wasm-url
+          app/src/stores/customModels
+          app/src/stores/transformersWebGpu
+          app/src/components_shared/WebInferenceRuntimeSettings
+          app/src/utils/localAi
+          app/src/utils/localImageInput
+          app/src/utils/inferenceImage
+          app/src/utils/model
+          app/src/utils/onDeviceInference
+          app/src/utils/webInference
+          app/src/utils/transformersWebGpu
+          app/src/bootstrapSecurity
 
   real-text-inference:
     name: Real inference with pinned 14 MB fixture

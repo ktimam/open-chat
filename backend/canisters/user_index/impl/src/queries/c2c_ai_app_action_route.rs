@@ -57,8 +57,8 @@ mod tests {
             name,
             description: "bounded lookup fixture".to_string(),
             icon_url: None,
-            app_canister_id: Some(Principal::from_slice(&[8]).into()),
-            inbox_canister_id: Some(Principal::from_slice(&[9]).into()),
+            app_canister_id: Some(Principal::from_slice(&[8])),
+            inbox_canister_id: Some(Principal::from_slice(&[9])),
             consumer_public_key: "MANIFEST_KEY".to_string(),
             per_user_keys: false,
             actions: vec![AiActionDefinition {

@@ -3,6 +3,7 @@ import { svelte } from "@sveltejs/vite-plugin-svelte";
 import chokidar from "chokidar";
 import fs from "fs";
 import http from "node:http";
+import { pathToFileURL } from "node:url";
 import path from "path";
 import { build, defineConfig, type Plugin, type PluginOption } from "vite";
 import { createHtmlPlugin } from "vite-plugin-html";
@@ -33,7 +34,6 @@ import {
     MAX_LOCAL_REPLICA_IMAGE_BYTES,
     parseLocalReplicaImagePath,
 } from "./localReplicaImageProxy";
-import { transformersWebGpuSequentialSessionsPlugin } from "./transformersWebGpuSequentialSessions.mjs";
 import { transformersWebGpuFeatureEnabled } from "./transformersWebGpuFeatureFlag.mjs";
 import {
     localAndroidAssetLinksPlugin,
@@ -510,7 +510,13 @@ function qwen3Vl2bModelOverridesPlugin(): Plugin {
 // openchat-worker/lib/worker.js together with the chokidar poll that waited for
 // those lib files to appear.
 function ocWorkerPlugin(): Plugin {
+    let buildAttempt = 0;
     async function buildWorker() {
+        // This helper is itself watched. Import it afresh for every attempt so changing the
+        // transform rebuilds with new code, including when the preceding attempt failed.
+        const { transformersWebGpuSequentialSessionsPlugin } = await import(
+            `${pathToFileURL(path.resolve(__dirname, "transformersWebGpuSequentialSessions.mjs")).href}?worker-build=${++buildAttempt}`
+        );
         for (const target of workerTargets) {
             await build({
                 configFile: false,
@@ -608,6 +614,13 @@ function ocWorkerPlugin(): Plugin {
                 "./src/utils/transformersWebGpuDeviceRetirement.ts",
                 "./src/utils/transformersWebGpuProtocol.ts",
                 "./src/utils/transformersWebGpuProcessorConfig.ts",
+                "./src/utils/gemma4WebGpuEmbedding.ts",
+                "./src/utils/imageDimensions.ts",
+                "./src/utils/transformersWebGpuAudio.ts",
+                "./src/utils/transformersWebGpuImageLayout.ts",
+                "./src/utils/transformersWebGpuOrtDiagnostics.ts",
+                "./src/utils/transformersWebGpuPipelineCompilation.ts",
+                "./transformersWebGpuSequentialSessions.mjs",
             ].map((d) => path.resolve(__dirname, d));
 
             let timer: ReturnType<typeof setTimeout> | undefined;

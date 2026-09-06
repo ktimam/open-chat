@@ -149,6 +149,10 @@ fn redeem_impl(args: Args, state: &mut RuntimeState) -> Response {
     })
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Preserve the existing public response variants returned by this internal redemption boundary"
+)]
 fn lookup_redemption_capability(
     data: &mut crate::Data,
     canister_id: types::CanisterId,
@@ -157,7 +161,7 @@ fn lookup_redemption_capability(
     now: types::TimestampMillis,
 ) -> Result<Capability, Response> {
     match data.ai_app_card_tokens.lookup_capability(canister_id, token, now) {
-        LookupCapabilityResult::Valid(value) => Ok(value),
+        LookupCapabilityResult::Valid(value) => Ok(*value),
         LookupCapabilityResult::Expired => Err(Expired),
         LookupCapabilityResult::NotFound => Err(reject_failed_redemption(data, caller, now, NotFound)),
     }
@@ -327,8 +331,10 @@ mod tests {
         let peer = user(2);
         let app_owner = user(3);
         let token = [0xC3; TOKEN_BYTES];
-        let mut env = TestEnv::default();
-        env.caller = app_canister;
+        let env = TestEnv {
+            caller: app_canister,
+            ..Default::default()
+        };
         let now = env.now;
         let mut data = Data::default();
         data.users.add_test_user(User {

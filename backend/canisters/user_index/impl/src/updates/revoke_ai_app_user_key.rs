@@ -127,10 +127,8 @@ fn revoke_ai_app_user_key_impl(args: Args, state: &mut RuntimeState) -> Response
         else {
             return Error(OCErrorCode::C2CError.into());
         };
-        if candidate_subject == app_subject {
-            if matched_user.replace(candidate_user).is_some() {
-                return Error(OCErrorCode::Impossible.into());
-            }
+        if candidate_subject == app_subject && matched_user.replace(candidate_user).is_some() {
+            return Error(OCErrorCode::Impossible.into());
         }
     }
     let Some(user_id) = matched_user else {

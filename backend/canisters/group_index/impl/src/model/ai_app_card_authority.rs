@@ -267,7 +267,7 @@ mod tests {
             context: AiAppCardContext {
                 user_id,
                 chat: Chat::Group(group.into()),
-                chat_key: format!("group:{}", Principal::from(group)),
+                chat_key: format!("group:{group}"),
                 thread_root_message_index: None,
                 message_id: MessageId::from(1u64),
                 app_id: 1,

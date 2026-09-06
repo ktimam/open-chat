@@ -225,7 +225,7 @@ fn mint_ai_app_card_provenance(prepared: PreparedCardProvenance, state: &mut Run
         prepared.context.app_revision,
         &prepared.context.action_id,
     );
-    if !current.is_some_and(|app| app.manifest.app_canister_id == Some(prepared.binding.app_canister_id)) {
+    if current.is_none_or(|app| app.manifest.app_canister_id != Some(prepared.binding.app_canister_id)) {
         return AppUnavailable;
     }
     if matches!(prepared.context.chat, Chat::Direct(_)) {
@@ -603,10 +603,14 @@ mod tests {
 
     #[test]
     fn unregistered_caller_is_rejected_even_in_test_mode() {
-        let mut env = utils::env::test::TestEnv::default();
-        env.caller = Principal::from_slice(&[99]);
-        let mut data = crate::Data::default();
-        data.test_mode = true;
+        let env = utils::env::test::TestEnv {
+            caller: Principal::from_slice(&[99]),
+            ..Default::default()
+        };
+        let data = crate::Data {
+            test_mode: true,
+            ..Default::default()
+        };
         let mut state = RuntimeState::new(Box::new(env), data);
         let group = Principal::from_slice(&[7]).into();
         let response = prepare_ai_app_card_provenance(

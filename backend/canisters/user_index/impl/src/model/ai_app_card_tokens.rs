@@ -96,14 +96,14 @@ pub enum ProvenanceStatus {
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum LookupCapabilityResult {
-    Valid(Capability),
+    Valid(Box<Capability>),
     Expired,
     NotFound,
 }
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum LookupConfirmationGrantResult {
-    Valid(ConfirmationGrant),
+    Valid(Box<ConfirmationGrant>),
     Expired,
     NotFound,
 }
@@ -381,7 +381,7 @@ impl AiAppCardTokens {
             self.prune_expired(now);
             LookupCapabilityResult::Expired
         } else {
-            LookupCapabilityResult::Valid(value)
+            LookupCapabilityResult::Valid(Box::new(value))
         }
     }
 
@@ -449,7 +449,7 @@ impl AiAppCardTokens {
             self.prune_expired(now);
             LookupConfirmationGrantResult::Expired
         } else {
-            LookupConfirmationGrantResult::Valid(value)
+            LookupConfirmationGrantResult::Valid(Box::new(value))
         }
     }
 
@@ -670,10 +670,10 @@ impl AiAppCardTokens {
     fn prune_capability_issuance(&mut self, now: TimestampMillis) {
         let cutoff = now.saturating_sub(CAPABILITY_ISSUANCE_WINDOW_MS);
         for _ in 0..MAX_EXPIRED_PRUNED_PER_CALL {
-            if !self
+            if self
                 .capability_issuance_global
                 .front()
-                .is_some_and(|(timestamp, _, _)| *timestamp <= cutoff)
+                .is_none_or(|(timestamp, _, _)| *timestamp > cutoff)
             {
                 break;
             }
@@ -1049,14 +1049,16 @@ mod tests {
         };
         let mut store = AiAppCardTokens::default();
         store.insert_capability(canister, &raw, capability.clone(), 1).unwrap();
+        let persisted = msgpack::serialize_to_vec(&store).unwrap();
         assert_eq!(
             store.lookup_capability(canister, &raw, 2),
-            LookupCapabilityResult::Valid(capability.clone())
+            LookupCapabilityResult::Valid(Box::new(capability.clone()))
         );
         assert_eq!(
             store.lookup_capability(canister, &raw, 2),
-            LookupCapabilityResult::Valid(capability)
+            LookupCapabilityResult::Valid(Box::new(capability))
         );
+        assert_eq!(msgpack::serialize_to_vec(&store).unwrap(), persisted);
         assert!(store.consume_capability(canister, &raw));
         assert_eq!(store.lookup_capability(canister, &raw, 2), LookupCapabilityResult::NotFound);
     }
@@ -1068,6 +1070,7 @@ mod tests {
         let grant = confirmation_grant(1, 2, 100);
         let mut store = AiAppCardTokens::default();
         store.insert_confirmation_grant(canister, &raw, grant.clone(), 1).unwrap();
+        let persisted = msgpack::serialize_to_vec(&store).unwrap();
 
         let looked_up = match store.lookup_confirmation_grant(canister, &raw, 2) {
             LookupConfirmationGrantResult::Valid(value) => value,
@@ -1076,9 +1079,10 @@ mod tests {
         assert_ne!(looked_up.confirm_payload_hash, [0; 32]);
         assert_eq!(
             store.lookup_confirmation_grant(canister, &raw, 2),
-            LookupConfirmationGrantResult::Valid(grant),
+            LookupConfirmationGrantResult::Valid(Box::new(grant)),
             "checking a mismatched binding must not consume the bearer"
         );
+        assert_eq!(msgpack::serialize_to_vec(&store).unwrap(), persisted);
         assert!(store.consume_confirmation_grant(canister, &raw));
         assert!(!store.consume_confirmation_grant(canister, &raw));
         assert_eq!(
@@ -1132,6 +1136,32 @@ mod tests {
             store.lookup_confirmation_grant(canister, &[13; TOKEN_BYTES], 2),
             LookupConfirmationGrantResult::Valid(_)
         ));
+    }
+
+    #[test]
+    fn capability_issuance_pruning_preserves_the_exact_window_boundary() {
+        let user_id: UserId = Principal::from_slice(&[1]).into();
+        let app_id = 2;
+        for (timestamp, retained) in [(None, false), (Some(9), false), (Some(10), false), (Some(11), true)] {
+            let mut store = AiAppCardTokens {
+                capability_issuance_global: timestamp.map(|time| (time, user_id, app_id)).into_iter().collect(),
+                capability_issuance_by_user_app: timestamp
+                    .map(|time| ((user_id, app_id), VecDeque::from([time])))
+                    .into_iter()
+                    .collect(),
+                ..Default::default()
+            };
+            store.prune_capability_issuance(CAPABILITY_ISSUANCE_WINDOW_MS + 10);
+            assert_eq!(
+                store.capability_issuance_global.len(),
+                usize::from(retained),
+                "timestamp={timestamp:?}"
+            );
+            assert_eq!(
+                store.capability_issuance_by_user_app.contains_key(&(user_id, app_id)),
+                retained
+            );
+        }
     }
 
     #[test]

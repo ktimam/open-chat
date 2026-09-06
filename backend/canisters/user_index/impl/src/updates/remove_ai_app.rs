@@ -140,7 +140,7 @@ mod tests {
             .map(|seed| {
                 (
                     (
-                        UserId::from(candid::Principal::self_authenticating(&(seed as u32).to_le_bytes())),
+                        UserId::from(candid::Principal::self_authenticating((seed as u32).to_le_bytes())),
                         app.id,
                     ),
                     format!("-----BEGIN PUBLIC KEY-----\ninvalid-{seed}\n-----END PUBLIC KEY-----\n"),

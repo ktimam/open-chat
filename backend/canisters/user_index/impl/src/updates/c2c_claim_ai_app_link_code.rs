@@ -190,9 +190,11 @@ mod tests {
     }
 
     fn state_with_link(caller: Principal, bound_app_canister: Principal) -> (RuntimeState, UserId, AiAppId, u64) {
-        let mut env = TestEnv::default();
-        env.now = 10;
-        env.caller = caller;
+        let env = TestEnv {
+            now: 10,
+            caller,
+            ..Default::default()
+        };
         let this_canister_id = env.canister_id;
         let owner: UserId = Principal::from_slice(&[55]).into();
         let mut data = Data::default();
@@ -348,7 +350,7 @@ mod tests {
             ),
             InvalidRequest(_)
         ));
-        assert_eq!(state.data.ai_apps.get(app_id).unwrap().published, false);
+        assert!(!state.data.ai_apps.get(app_id).unwrap().published);
         assert!(state.data.ai_app_link_codes.contains_bound(CODE, state.env.canister_id()));
     }
 }

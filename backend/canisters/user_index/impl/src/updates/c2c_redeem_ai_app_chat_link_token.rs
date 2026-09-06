@@ -358,8 +358,10 @@ mod tests {
             ),
             SubjectMismatch
         ));
-        let mut wrong_env = TestEnv::default();
-        wrong_env.caller = candid::Principal::from_slice(&[9]);
+        let wrong_env = TestEnv {
+            caller: candid::Principal::from_slice(&[9]),
+            ..Default::default()
+        };
         state.env = Box::new(wrong_env);
         assert!(matches!(
             redeem_impl(
@@ -371,8 +373,10 @@ mod tests {
             ),
             NotAuthorized
         ));
-        let mut correct_env = TestEnv::default();
-        correct_env.caller = candid::Principal::from_slice(&[8]);
+        let correct_env = TestEnv {
+            caller: candid::Principal::from_slice(&[8]),
+            ..Default::default()
+        };
         state.env = Box::new(correct_env);
         match redeem_impl(
             Args {

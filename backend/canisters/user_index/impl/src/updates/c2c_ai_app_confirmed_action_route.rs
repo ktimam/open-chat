@@ -37,6 +37,10 @@ async fn c2c_ai_app_confirmed_action_route(args: Args) -> Response {
     // distinct from the immutable confirmation timestamp so an exact delayed retry can obtain a
     // fresh bounded authorization without changing the card/delivery identity.
     let authorization_created_at = read_state(|state| state.env.now());
+    #[expect(
+        clippy::result_large_err,
+        reason = "Return the existing public route failure variants without changing the response representation"
+    )]
     let callback = match read_state(|state| {
         if matches!(args.context.chat, types::Chat::Direct(_))
             && validate_direct_card_lui_route(&args.context, &args.authority, caller, state).is_err()
@@ -450,6 +454,10 @@ mod tests {
         key
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The fixture names every recipient binding component to make authorization cases explicit"
+    )]
     fn authorized_recipient(
         user_id: UserId,
         public_key: String,

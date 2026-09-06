@@ -826,6 +826,10 @@ fn resolve_current_route(
     )
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep the existing current-route authorization inputs explicit without changing the caller contract"
+)]
 fn resolve_current_route_bindings(
     registry: &AiAppRegistry,
     user_keys: &AiAppUserKeys,
@@ -1464,19 +1468,29 @@ mod tests {
             assert_ne!(baseline.attempt_id, changed.attempt_id);
         }
 
+        let exact_prepared_request = vec![8, 6, 7, 5, 3, 0, 9];
         let mut outbox = ActionDeliveryOutbox::default();
         assert_eq!(
             outbox.start_in_slot(
                 baseline.slot_id,
                 baseline.attempt_id,
                 args.app_id,
-                1,
+                exact_prepared_request.len(),
                 baseline.attempt_created_at,
                 baseline.attempt_created_at,
             ),
             Ok(ActionDeliveryStart::Prepare { epoch: 1 })
         );
-        let exact_prepared_request = vec![8, 6, 7, 5, 3, 0, 9];
+        assert!(matches!(
+            outbox.store_prepared(
+                baseline.attempt_id,
+                1,
+                Principal::from_slice(&[9]),
+                vec![0; exact_prepared_request.len() + 1],
+                baseline.attempt_created_at,
+            ),
+            Err(ActionDeliveryOutboxError::InvalidRequestSize)
+        ));
         let prepared = outbox
             .store_prepared(
                 baseline.attempt_id,
@@ -1492,7 +1506,7 @@ mod tests {
                 exact_retry.slot_id,
                 exact_retry.attempt_id,
                 args.app_id,
-                1,
+                exact_prepared_request.len(),
                 exact_retry.attempt_created_at,
                 exact_retry.attempt_created_at,
             ),
@@ -1504,7 +1518,7 @@ mod tests {
                     changed.slot_id,
                     changed.attempt_id,
                     args.app_id,
-                    1,
+                    exact_prepared_request.len(),
                     changed.attempt_created_at,
                     changed.attempt_created_at,
                 ),
@@ -1731,8 +1745,8 @@ mod tests {
         let revision_a = registry.get(app_a.id).unwrap().updated;
         let revision_b = registry.get(app_b.id).unwrap().updated;
 
-        assert_eq!(resolve_current_inbox(&registry, app_a.id, revision_a), Ok(inbox_a.into()));
-        assert_eq!(resolve_current_inbox(&registry, app_b.id, revision_b), Ok(inbox_b.into()));
+        assert_eq!(resolve_current_inbox(&registry, app_a.id, revision_a), Ok(inbox_a));
+        assert_eq!(resolve_current_inbox(&registry, app_b.id, revision_b), Ok(inbox_b));
     }
 
     #[test]
@@ -1746,7 +1760,7 @@ mod tests {
         assert!(registry.publish(draft.id, 2));
         let current = registry.get(draft.id).unwrap().updated;
         assert!(resolve_current_inbox(&registry, draft.id, current.saturating_sub(1)).is_err());
-        assert_eq!(resolve_current_inbox(&registry, draft.id, current), Ok(inbox.into()));
+        assert_eq!(resolve_current_inbox(&registry, draft.id, current), Ok(inbox));
 
         let changed = registry
             .register(owner(1), manifest("draft", Some(Principal::from_slice(&[12]))), 3, false)
@@ -1953,7 +1967,7 @@ mod tests {
                 confirmer,
                 &callback_result,
                 &grant,
-                &[exact_binding.clone()],
+                std::slice::from_ref(&exact_binding),
                 authorization_created_at,
             ),
             Ok(())
@@ -2026,7 +2040,7 @@ mod tests {
                 confirmer,
                 &callback_result,
                 &changed_grant,
-                &[exact_binding.clone()],
+                std::slice::from_ref(&exact_binding),
                 authorization_created_at,
             )
             .is_err()

@@ -104,6 +104,10 @@ impl AiAppScopedIdentityKey {
         self.mac(&preimage)
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Keep every domain-separated direct-message identity component explicit without changing the existing preimage"
+    )]
     pub fn direct_message_handle(
         &self,
         user_index_canister_id: CanisterId,
@@ -360,7 +364,7 @@ mod tests {
 
     #[test]
     fn malformed_restored_secret_fails_closed() {
-        let encoded = msgpack::serialize_to_vec(&ByteBuf::from(vec![1; SECRET_BYTES - 1])).unwrap();
+        let encoded = msgpack::serialize_to_vec(ByteBuf::from(vec![1; SECRET_BYTES - 1])).unwrap();
         let mut key: AiAppScopedIdentityKey = msgpack::deserialize_then_unwrap(&encoded);
         assert!(key.ensure_initialized(&mut StdRng::seed_from_u64(43)).is_err());
         assert!(

@@ -390,20 +390,19 @@ fn authoritative_manifest_route(
     })
 }
 
+type PreparedActionDeposits = (
+    Vec<user_index_canister::c2c_deposit_actions::UnsignedActionDeposit>,
+    Vec<user_index_canister::c2c_deposit_actions::RecipientKeyBinding>,
+    String,
+    Option<user_index_canister::c2c_ai_app_confirmed_action_route::RecipientAuthorizationGrant>,
+);
+
 // Kept sync so the rng + signing key are touched without holding canister state across the await.
 fn prepare(
     args: Args,
     authoritative_route: ManifestRoute,
     state: &mut RuntimeState,
-) -> Result<
-    (
-        Vec<user_index_canister::c2c_deposit_actions::UnsignedActionDeposit>,
-        Vec<user_index_canister::c2c_deposit_actions::RecipientKeyBinding>,
-        String,
-        Option<user_index_canister::c2c_ai_app_confirmed_action_route::RecipientAuthorizationGrant>,
-    ),
-    Response,
-> {
+) -> Result<PreparedActionDeposits, Response> {
     let ManifestRoute {
         inbox_canister_id: target,
         recipients: supplied_recipients,
@@ -788,7 +787,7 @@ mod tests {
 
     fn route(per_user_keys: bool, confirmer: UserId) -> user_index_canister::c2c_ai_app_confirmed_action_route::SuccessResult {
         user_index_canister::c2c_ai_app_confirmed_action_route::SuccessResult {
-            inbox_canister_id: Principal::from_slice(&[9]).into(),
+            inbox_canister_id: Principal::from_slice(&[9]),
             consumer_queue_selector: ByteBuf::from(vec![4; 32]),
             consumer_queue_selector_version: 1,
             per_user_keys,
@@ -819,7 +818,7 @@ mod tests {
         assert_eq!(route.recipients[0].public_key, "ACTION_KEY");
         assert_eq!(route.recipients[0].consumer_queue_selector, vec![4; 32]);
         assert!(route.recipients[0].user_ids.is_empty());
-        assert_eq!(route.inbox_canister_id, Principal::from_slice(&[9]).into());
+        assert_eq!(route.inbox_canister_id, Principal::from_slice(&[9]));
         assert_eq!(route.external_context.app_subject.as_ref(), &[1; 32]);
     }
 

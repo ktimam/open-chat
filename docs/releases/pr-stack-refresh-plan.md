@@ -16,19 +16,38 @@ exclusions. Its frontend CI prerequisites now match the existing PR1 Node policy
 `dfx` version, check frozen Rollup resolution and run the archive test. The complete PR1 build
 and hosted CI have not run; this isolated branch is not pushed.
 
-This starts the append-only refresh; it does not transfer the later model runtime or app
-protocols, establish whole-PR acceptance, change either published PR head or reconcile upstream.
+This starts the append-only refresh; it does not establish whole-PR acceptance, change either
+published PR head or reconcile upstream.
+
+## Model-only refresh in progress
+
+The next isolated slice carries the all-WebGPU Qwen/Gemma runtime, optional audio, model-cache
+identity and lifecycle, both model-manager UIs, generic build delivery and matching notices.
+It uses a fresh install of PR1's exact npm lockfile; runtime package pins are unchanged.
+Real worker builds and model asset/notice emission have passed separately from inference.
+The app-card evidence hooks, OCR controls, app-processing protocols and local development
+identity/OTA settings are excluded by hunk, not copied into the model-only branch.
+
+Review found two cross-layer requirements that helper tests alone missed: native model-list
+responses must carry per-file identity for the new installation-status UI, and optional voice
+support needs an actual generic `/ai` caller, not only an inference API. The native metadata
+slice and generic voice-media path are being carried with their corresponding tests. The
+settings component is also being tested for stale audio completion after model changes and
+destruction. These checks are not whole-PR or physical-device acceptance, and the slice remains
+local until its independent checks and scope review finish.
 
 ## Pinned comparison points
 
 - PR1 model head: `045f7132e502ba01c56343800217070aa2ce4ea0`.
 - PR2 app-interface head: `c7299aa11b87fbfd56029fc90e05e423654f54f1`.
 - Combined checkpoint: `2029f00d726ca7c33de22c53c24cf1ada173d3fb`.
-- Observed upstream master: `fb7c34bcc453e04480a36b4c5882cf63f362efbd`.
+- Rechecked upstream master: `df9d9ed52db00e87fbb7309280a325902c9bb2cc`.
 
 The checkpoint is 16 commits / 115 changed files past PR2, and 60 commits past PR1.
-PR1 is an ancestor of both. Upstream and checkpoint have 124 and 98 unique commits;
+PR1 is an ancestor of both. Upstream and checkpoint have 126 and 98 unique commits;
 upstream integration and conflict resolution remain untested. Re-read remote refs before work.
+Upstream's Android rename/signing association and legacy-install notices need explicit account,
+local package identity and OTA compatibility review; do not resolve them with a blanket overwrite.
 
 ## Scope by area
 

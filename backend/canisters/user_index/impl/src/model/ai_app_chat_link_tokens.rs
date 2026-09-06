@@ -415,6 +415,7 @@ impl AiAppChatLinkTokens {
         self.digest_version = DIGEST_VERSION;
     }
 
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.tokens.len()
     }

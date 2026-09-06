@@ -358,6 +358,7 @@ impl ActionDeliveryOutbox {
     /// Starts a new immutable attempt, observes its durable result, or acquires the next epoch for
     /// replaying the already stored request. The caller must use `dispatch()` when `Dispatch` is
     /// returned; no caller-supplied route, key, ciphertext, or signature is consulted on that path.
+    #[cfg(test)]
     pub fn start(
         &mut self,
         attempt_id: ActionDeliveryAttemptId,

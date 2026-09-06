@@ -153,6 +153,10 @@ fn c2c_redeem_ai_app_private_match_capability(args: Args) -> Response {
     })
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Preserve the existing public response variants returned by this internal redemption boundary"
+)]
 fn lookup_capability(
     data: &mut crate::Data,
     canister_id: types::CanisterId,
@@ -161,7 +165,7 @@ fn lookup_capability(
     now: types::TimestampMillis,
 ) -> Result<PrivateMatchCapability, Response> {
     match data.ai_app_private_match_tokens.lookup(canister_id, token, now) {
-        LookupResult::Valid(value) => Ok(value),
+        LookupResult::Valid(value) => Ok(*value),
         LookupResult::Expired => Err(Expired),
         LookupResult::WrongKind | LookupResult::NotFound => Err(reject_failed_redemption(data, caller, now, NotFound)),
     }
