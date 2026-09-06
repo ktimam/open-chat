@@ -84,8 +84,7 @@ fn action_card_within_bounds(card: &ActionCardContentInitial, sender_user_type: 
 
     let app_tuple_all_present = card.app_id.is_some() && card.app_revision.is_some() && card.app_provenance.is_some();
     let app_tuple_all_absent = card.app_id.is_none() && card.app_revision.is_none() && card.app_provenance.is_none();
-    if (!app_tuple_all_present && !app_tuple_all_absent)
-        || !app_tuple_all_absent && !matches!(sender_user_type, UserType::User)
+    if (!app_tuple_all_absent && (!app_tuple_all_present || !matches!(sender_user_type, UserType::User)))
         || card
             .app_provenance
             .as_ref()
@@ -2809,6 +2808,35 @@ mod action_card_security_tests {
         let mut card = initial_card();
         card.confirm_payload = Some(ByteBuf::from(vec![0; 16_385]));
         assert!(is_rejected(card));
+    }
+
+    #[test]
+    fn every_app_provenance_tuple_is_validated_for_each_sender_kind() {
+        for sender in [
+            UserType::User,
+            UserType::Bot,
+            UserType::BotV2,
+            UserType::OcControlledBot,
+            UserType::Webhook,
+        ] {
+            for mask in 0..8 {
+                let mut candidate = initial_card();
+                candidate.app_id = (mask & 1 != 0).then_some(7);
+                candidate.app_revision = (mask & 2 != 0).then_some(11);
+                candidate.app_provenance = (mask & 4 != 0).then(|| ByteBuf::from(vec![1; types::AI_APP_CARD_TOKEN_BYTES]));
+
+                let accepted = match mask {
+                    0 => true,
+                    7 => matches!(sender, UserType::User),
+                    _ => false,
+                };
+                assert_eq!(
+                    action_card_within_bounds(&candidate, sender, 10),
+                    accepted,
+                    "unexpected provenance authorization for tuple mask {mask} and sender {sender:?}"
+                );
+            }
+        }
     }
 
     #[test]

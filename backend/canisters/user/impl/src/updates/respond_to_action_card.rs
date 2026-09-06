@@ -191,7 +191,10 @@ async fn respond_to_action_card(args: Args) -> Response {
 
 enum Prepared {
     Committed(ActionCardState),
-    NeedsDeposit { user_id: UserId, deposit: DepositInstruction },
+    NeedsDeposit {
+        user_id: UserId,
+        deposit: Box<DepositInstruction>,
+    },
 }
 
 struct DepositInstruction {
@@ -243,7 +246,7 @@ fn prepare(args: &Args, state: &mut RuntimeState) -> OCResult<Prepared> {
             };
             return Ok(Prepared::NeedsDeposit {
                 user_id: my_user_id,
-                deposit: DepositInstruction {
+                deposit: Box::new(DepositInstruction {
                     ingress_owner: state.data.owner,
                     local_user_index_canister_id: state.data.local_user_index_canister_id,
                     confirm_payload,
@@ -264,7 +267,7 @@ fn prepare(args: &Args, state: &mut RuntimeState) -> OCResult<Prepared> {
                         action_id: deposit.action_id,
                         member_user_ids: vec![my_user_id, other_user_id],
                     },
-                },
+                }),
             });
         }
         if requested_payload_hash.is_some() {
@@ -477,6 +480,71 @@ fn complete_response(deposit: &DepositInstruction, state: &mut RuntimeState) -> 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn boxed_prepared_deposit_preserves_the_owned_instruction() {
+        let user_id = candid::Principal::from_slice(&[1]).into();
+        let canister_id = candid::Principal::from_slice(&[2]);
+        let context = super::ActionDepositContext {
+            chat: types::Chat::Direct(canister_id.into()),
+            message_id: 3u64.into(),
+            thread_root_message_index: Some(4u32.into()),
+            confirmed_by: user_id,
+            app_id: Some(5),
+            app_revision: Some(6),
+            app_verified: true,
+            content_hash: Some([7; 32]),
+            confirmation_lease_generation: 8,
+            action_id: "sample.action".into(),
+            member_user_ids: vec![user_id],
+        };
+        let expected_context = candid::encode_one(&context).unwrap();
+        let instruction = Box::new(super::DepositInstruction {
+            local_user_index_canister_id: canister_id,
+            ingress_owner: canister_id,
+            confirm_payload: ByteBuf::from(vec![0, 255, 9]),
+            confirm_payload_hash: [10; 32],
+            confirmation_grant: Some(ByteBuf::from(vec![11; types::AI_APP_CARD_TOKEN_BYTES])),
+            confirmation_grant_hash: Some([12; 32]),
+            created_at: 13,
+            context,
+        });
+        let expected_address = (&*instruction) as *const super::DepositInstruction;
+        let prepared = super::Prepared::NeedsDeposit {
+            user_id,
+            deposit: instruction,
+        };
+        let super::Prepared::NeedsDeposit {
+            user_id: actual_user,
+            deposit,
+        } = prepared
+        else {
+            panic!("a required deposit must not become committed");
+        };
+        assert_eq!(actual_user, user_id);
+        assert_eq!((&*deposit) as *const super::DepositInstruction, expected_address);
+        assert_eq!(deposit.confirm_payload.as_slice(), &[0, 255, 9]);
+        assert_eq!(deposit.confirm_payload_hash, [10; 32]);
+        assert_eq!(
+            deposit.confirmation_grant.unwrap().as_slice(),
+            &[11; types::AI_APP_CARD_TOKEN_BYTES]
+        );
+        assert_eq!(deposit.confirmation_grant_hash, Some([12; 32]));
+        assert_eq!(deposit.created_at, 13);
+        assert_eq!(deposit.local_user_index_canister_id, canister_id);
+        assert_eq!(deposit.ingress_owner, canister_id);
+        assert_eq!(candid::encode_one(&deposit.context).unwrap(), expected_context);
+    }
+
+    #[test]
+    fn committed_action_short_circuits_before_any_deposit_work() {
+        let source = include_str!("respond_to_action_card.rs");
+        let handler_start = source.find("async fn respond_to_action_card").unwrap();
+        let handler_end = handler_start + source[handler_start..].find("enum Prepared").unwrap();
+        let handler = &source[handler_start..handler_end];
+        assert!(handler.contains("Ok(Prepared::Committed(state)) => return Success(state)"));
+        assert!(handler.find("Prepared::Committed").unwrap() < handler.find(".await").unwrap());
+    }
+
     use super::{ConfirmationGrantPlan, confirmation_grant_plan, requested_confirm_payload_hash};
     use candid::Principal;
     use serde_bytes::ByteBuf;

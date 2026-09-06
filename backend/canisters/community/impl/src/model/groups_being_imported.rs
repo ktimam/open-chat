@@ -21,6 +21,10 @@ pub enum GroupToImportAction {
 }
 
 impl GroupsBeingImported {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Keep the existing import boundary and its captured app policy explicit without changing callers"
+    )]
     pub fn add(
         &mut self,
         group_id: ChatId,

@@ -707,11 +707,7 @@ impl Inbox {
                 MigrationPhase::StableActions => {
                     let next = if let Some(cursor) = self.migration.stable_action_cursor.as_deref() {
                         let cursor = StableActionKey(cursor.try_into().expect("migration cursor must be 40 bytes"));
-                        self.stable_actions
-                            .range(cursor..)
-                            .skip(1)
-                            .next()
-                            .map(|entry| entry.into_pair())
+                        self.stable_actions.range(cursor..).nth(1).map(|entry| entry.into_pair())
                     } else {
                         self.stable_actions.first_key_value()
                     };
@@ -1502,7 +1498,7 @@ mod tests {
         assert_eq!(inbox.prepare_after_upgrade(), Ok(()));
         assert_eq!(inbox.run_migration_step(1), 0);
         assert!(deposit(&mut inbox, vec![92; 32], 1, 1));
-        assert_eq!(inbox.query(&vec![92; 32], 0, 100, 1)[0].id, 42);
+        assert_eq!(inbox.query(&[92; 32], 0, 100, 1)[0].id, 42);
         assert_eq!(inbox.action_count(), 1);
         assert_eq!(inbox.seen_count(), 1);
     }
@@ -1778,7 +1774,7 @@ mod tests {
         );
         assert_eq!(inbox.action_count(), 1);
         assert_eq!(inbox.seen_count(), 1);
-        assert!(inbox.query(&vec![92; 32], 0, 100, 2).is_empty());
+        assert!(inbox.query(&[92; 32], 0, 100, 2).is_empty());
         assert_eq!(
             inbox.deposit_batch(vec![pending(existing_key, 1, 3, 1)], 3),
             Ok(0),
@@ -1939,7 +1935,7 @@ mod tests {
         );
         assert_eq!(one_over.seen_count(), 0);
         assert_eq!(one_over.action_count(), 0);
-        assert!(one_over.query(&vec![44; 32], 0, 100, 1).is_empty());
+        assert!(one_over.query(&[44; 32], 0, 100, 1).is_empty());
     }
 
     #[test]
@@ -2152,7 +2148,7 @@ mod tests {
     #[test]
     fn duplicate_tombstone_does_not_extend_or_orphan_its_original_expiry() {
         let mut inbox = Inbox::new_for_test();
-        let key = StableTombstoneKey::new(&vec![71; 32], &vec![1; 32]);
+        let key = StableTombstoneKey::new(&[71; 32], &[1; 32]);
         assert!(inbox.insert_tombstone(key, 1, [2; 32]));
         assert!(!inbox.insert_tombstone(key, 100, [2; 32]));
 

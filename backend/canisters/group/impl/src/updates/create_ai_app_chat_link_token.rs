@@ -194,8 +194,10 @@ mod tests {
 
     fn state(caller: Principal, creator: Principal, join_caller: bool) -> RuntimeState {
         stable_memory_map::init(crate::memory::get_stable_memory_map_memory());
-        let mut env = TestEnv::default();
-        env.caller = caller;
+        let env = TestEnv {
+            caller,
+            ..Default::default()
+        };
         let creator_user_id: UserId = creator.into();
         let mut data = crate::Data::new(
             env.canister_id.into(),

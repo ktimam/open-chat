@@ -122,10 +122,8 @@ impl GroupRoleInternal {
                 .find(|cp| cp.subtype == c)
                 .map(|cp| cp.role)
                 .unwrap_or(ps.default),
-            // A registered app's AI-action posts a confirm-card from the user's OWN client (OpenChat's runner
-            // builds it from a registered AiActionDefinition). Allow the poster per the chat's default role, so
-            // clients — not just bots — can propose actions. The card's delivery routing (recipient_public_key)
-            // targets the registered consumer; binding that to the on-chain registry is a recommended hardening.
+            // App cards follow the configured message role. This does not grant app provenance;
+            // the chat update validates the app's attestation separately.
             MessageContentType::ActionCard => ps.default,
             MessageContentType::Deleted
             | MessageContentType::GovernanceProposal
@@ -133,8 +131,7 @@ impl GroupRoleInternal {
             | MessageContentType::MessageReminder
             | MessageContentType::PrizeWinner
             | MessageContentType::ReportedMessage
-            | MessageContentType::ModerationReport
-            | MessageContentType::ActionCard => GroupPermissionRole::None,
+            | MessageContentType::ModerationReport => GroupPermissionRole::None,
         };
 
         self.is_permitted(sender_role)
@@ -240,5 +237,72 @@ impl GroupRoleInternal {
             .into_iter()
             .filter_map(|(orp, p)| orp.map_or(default_permitted, |rp| self.is_permitted(rp)).then_some(p))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn action_cards_follow_each_configured_default_role() {
+        let roles = [
+            GroupRoleInternal::Owner,
+            GroupRoleInternal::Admin,
+            GroupRoleInternal::Moderator,
+            GroupRoleInternal::Member,
+        ];
+        for (permission, expected) in [
+            (GroupPermissionRole::None, [false, false, false, false]),
+            (GroupPermissionRole::Owner, [true, false, false, false]),
+            (GroupPermissionRole::Admins, [true, true, false, false]),
+            (GroupPermissionRole::Moderators, [true, true, true, false]),
+            (GroupPermissionRole::Members, [true, true, true, true]),
+        ] {
+            let permissions = GroupPermissions {
+                message_permissions: MessagePermissions {
+                    default: permission,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            for (role, allowed) in roles.into_iter().zip(expected) {
+                for is_thread in [false, true] {
+                    assert_eq!(
+                        role.can_send_message(MessageContentType::ActionCard, is_thread, &permissions),
+                        allowed,
+                        "role={role:?}, permission={permission:?}, is_thread={is_thread}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn action_cards_use_thread_permissions_only_inside_threads() {
+        for (root_role, thread_role, root_allowed, thread_allowed) in [
+            (GroupPermissionRole::Members, GroupPermissionRole::Admins, true, false),
+            (GroupPermissionRole::None, GroupPermissionRole::Members, false, true),
+        ] {
+            let permissions = GroupPermissions {
+                message_permissions: MessagePermissions {
+                    default: root_role,
+                    ..Default::default()
+                },
+                thread_permissions: Some(MessagePermissions {
+                    default: thread_role,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            assert_eq!(
+                GroupRoleInternal::Member.can_send_message(MessageContentType::ActionCard, false, &permissions),
+                root_allowed
+            );
+            assert_eq!(
+                GroupRoleInternal::Member.can_send_message(MessageContentType::ActionCard, true, &permissions),
+                thread_allowed
+            );
+        }
     }
 }

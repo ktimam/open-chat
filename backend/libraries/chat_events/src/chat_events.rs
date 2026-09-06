@@ -857,6 +857,10 @@ impl ChatEvents {
         self.ai_app_card_attested_source(thread_root_message_index, message_id, min_visible_event_index, Some(now))
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Keep message visibility and the exact confirmation lease identity explicit at this authority boundary"
+    )]
     pub fn ai_app_card_confirmation_reservation_source(
         &self,
         thread_root_message_index: Option<MessageIndex>,
@@ -933,10 +937,8 @@ impl ChatEvents {
             return Err(UpdateEventError::NotFound);
         };
 
-        if matches!(args.response, ActionCardResponse::Confirm) {
-            if app_card_confirmation_is_forbidden(card, chat) {
-                return Err(UpdateEventError::NoChange(OCErrorCode::InvalidRequest));
-            }
+        if matches!(args.response, ActionCardResponse::Confirm) && app_card_confirmation_is_forbidden(card, chat) {
+            return Err(UpdateEventError::NoChange(OCErrorCode::InvalidRequest));
         }
 
         let changed = match args.response {
@@ -970,7 +972,7 @@ impl ChatEvents {
                 content_hash: card.app_content_hash,
                 confirmation_lease_generation: card.confirmation_lease_generation,
                 confirmation_grant_hash: card.confirmation_grant_hash,
-                inbox_canister_id: card.inbox_canister_id.clone(),
+                inbox_canister_id: card.inbox_canister_id,
             }),
             _ => None,
         };
@@ -1136,6 +1138,10 @@ impl ChatEvents {
     }
 
     /// Commits a previously reserved confirmation and emits the normal message update notification.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Keep message visibility and the exact confirmation lease identity explicit at this authority boundary"
+    )]
     pub fn complete_action_card_confirm(
         &mut self,
         thread_root_message_index: Option<MessageIndex>,

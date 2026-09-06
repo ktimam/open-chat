@@ -34,6 +34,10 @@ pub struct RecipientAuthorizationGrant {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The success response carries the complete verified recipient route; keep the existing API representation"
+)]
 pub enum Response {
     Success(SuccessResult),
     InvalidAuthority,

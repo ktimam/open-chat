@@ -22,14 +22,16 @@ on `codex/pr2-clean-integration`, tagged `model-integration-checkpoint-2026-09-0
 The lint cleanup, compatible dependency updates, portable security hashes, CI coverage,
 Android release safeguards and this preparation package follow that immutable checkpoint.
 Use the preparation commit SHA for further validation; never move the checkpoint tag.
-The latest published preparation head assessed here is `808a75d3e6334c9fee72c353d5a44ee6a5658003`.
-Additional fixes described below are local changes after that head, not hosted-check passes.
+The APK preparation source assessed here is `e02bd70d4017b92f534f03ad50712ae7729227b3`.
+The local-test APK below contains that preparation's frontend/native source. Subsequent
+backend CI repairs are separate checkpoints and require their own exact-commit checks;
+they do not change this APK's frontend or native runtime.
 
 | Submission | Observed head | Base | State |
 | --- | --- | --- | --- |
 | [Upstream PR #9132](https://github.com/open-chat-labs/open-chat/pull/9132) | `codex/pr1-local-models`, `045f7132e` | upstream `master` | Draft; no reported check runs |
 | [Fork PR #73](https://github.com/ktimam/open-chat/pull/73) | `codex/pr2-app-chat-interfaces`, `c7299aa11` | `codex/pr1-local-models` | Draft; no reported check runs |
-| Tested integration checkpoint | `codex/pr2-clean-integration`, `2029f00d7` | descends from both heads above | Not either PR's current head |
+| APK preparation source | `codex/pr2-clean-integration`, `e02bd70d4` | descends from both heads above | Not either PR's current head |
 
 The integration checkpoint is 16 commits / 115 changed files beyond PR #73's head.
 Those commits mix later model-runtime fixes and app-interface fixes. It is 60 commits beyond
@@ -52,7 +54,8 @@ before any rebase or publication; conflict resolution against current upstream i
    [PR1](pr1-local-models.md) and [PR2](pr2-app-interfaces.md).
 
 The [stack refresh plan](pr-stack-refresh-plan.md) identifies mixed areas and an append-only
-refresh sequence. The scope split has not been executed.
+refresh sequence. An isolated PR1 refresh has started with generic ZIP packaging only; the
+model/app scope split is not complete and neither published PR head has changed.
 
 This is a proposed publishing sequence, not an executed history rewrite. Keep the checkpoint
 tag available for comparison; do not move it to a rebased or lint-cleaned head.
@@ -92,8 +95,41 @@ ordinary full-compilation fallback; the overall build and fresh-artifact checks 
 | App/host boundary audit | 5,137 text files / no findings; rerun after any scope split |
 | Hosted checks on existing PRs | None reported; not a pass |
 | Affected backend Rust packages | 57 tests passed, 1 existing ignored test; strict Clippy and workspace formatting passed |
-| Hosted native model checks on `808a75d3e` | Linux and Windows each passed 22 tests and both feature builds; separate native CPU model test passed |
+| Hosted native model checks on `e02bd70d4` | Linux and Windows hermetic tests and both feature builds passed; separate pinned native CPU model inference passed |
 | Signed shipping APK / production rollout | Not built or performed |
+
+### Latest hosted checks: exact `e02bd70d4`
+
+- [Frontend](https://github.com/ktimam/open-chat/actions/runs/34031336098): passed the
+  complete frontend pipeline and the separate opt-in production WebGPU candidate build and
+  asset verification, using Node `24.18.1` and repository-pinned `dfx@0.31.0-beta.1`.
+- [Model checks](https://github.com/ktimam/open-chat/actions/runs/34031336128): frontend
+  model contracts, Windows/Linux native tests and feature builds, and actual inference with
+  the pinned 14 MB native CPU fixture all passed. That CPU fixture is not phone WebGPU proof.
+  The dependency job failed on changed reviewed digests and the expired baseline after
+  successfully checking formatting; its later Rust/license/SBOM steps were skipped.
+- [Backend](https://github.com/ktimam/open-chat/actions/runs/34031336096): failed strict
+  Clippy and unit-test compilation. The failures include chat-event lint violations and an
+  unreachable duplicate action-card permission arm. These are genuine source failures;
+  frontend success does not cover them. Repairs must pass a new exact-commit run.
+- [App security](https://github.com/ktimam/open-chat/actions/runs/34031336108): failed
+  review expiry, reviewed dependency drift and unreviewed native manifests. Fresh npm audits
+  in this run reported two moderate findings and no high/critical findings in both scopes;
+  the moderate count exceeds the old policy's one-finding allowance. No allowance was raised.
+
+Local backend follow-up repairs the duplicate permission arm, adds exhaustive provenance and
+role tests, applies narrow documented lint expectations to existing public API representations,
+and boxes only three private prepared-deposit payloads. The affected chat-events, group-chat,
+group, community and user targets pass 146 tests and focused strict Clippy. A further mechanical
+inbox cleanup preserves cursor iteration and replaces test-only temporary vectors; its 60
+tests pass, bringing the focused total to 206. The full Windows
+workspace Clippy attempt stops at the local Cygwin-Perl/MSVC OpenSSL build incompatibility;
+that is not a source pass. Further targeted checks expose additional lint failures in the
+user-index, group-index and local-user-index implementations. These remain outstanding; the
+first repaired targets do not establish full backend acceptance. Public wire payloads and
+card-authorization requirements are unchanged by this repair batch.
+
+### Earlier build failures and their repairs
 
 Hosted checks on `808a75d3e` exposed failures that unit tests did not cover:
 
@@ -103,7 +139,8 @@ Hosted checks on `808a75d3e` exposed failures that unit tests did not cover:
   immutable official setup action. The real public-key query is retained, not replaced with a fixture.
 - [Backend run](https://github.com/ktimam/open-chat/actions/runs/33994920435):
   fixed formatting, an equivalent derived `Default`, and deprecated fixed-array conversions.
-  The affected packages pass local strict tests; the complete hosted backend suite still needs a rerun.
+  The affected packages passed local strict tests; the subsequent complete hosted run exposed
+  the additional backend failures recorded above.
 - [Model security run](https://github.com/ktimam/open-chat/actions/runs/33994920417)
   and [app security run](https://github.com/ktimam/open-chat/actions/runs/33994920407):
   security expiry/drift remains a failure. Separately, all 82 source formatting failures were
@@ -117,8 +154,10 @@ ZIP-capable `bsdtar`, retaining Info-ZIP on Unix, and passes literal arguments w
 The complete typecheck/lint/test/production pipeline then passed with the final dependency tree.
 A subsequent UTF-8 charset repair passed a broader Japanese/Arabic filename regression and
 Android's actual Rust archive consumer; both real OTA ZIPs were regenerated with that repair.
-The final emitted bundle has 325 module imports and no unresolved bare imports; optional dependency
-warnings alone were not treated as proof of a broken bundle. Unix Info-ZIP retains a pre-existing
+The browser smoke imports the actual emitted runtime and starts its compiled worker. The pinned
+ORT module retains Node-only guarded imports of `module` and `worker_threads`; a blanket claim
+that all emitted modules have no bare imports would be incorrect. Optional dependency warnings
+alone were not treated as proof of a broken browser bundle. Unix Info-ZIP retains a pre-existing
 non-ASCII filename/Rust-reader incompatibility: current public/build payload paths are ASCII,
 but qualify non-ASCII paths before introducing them into Unix-built OTA archives.
 
@@ -130,11 +169,11 @@ The 2026-09-06 emulator check used WebView 151.0.7922.199 in the running APK: `n
 exists but both default and high-performance adapter requests return null. It cannot prove the all-WebGPU path.
 
 The isolated install used npm `10.8.2` and local Node `24.14.1`. Frontend, Android and security
-CI now agree on Node `24.18.1`; hosted checks on the published preparation used that runtime,
-but verification of the subsequent local fixes under it is still required.
+CI now agree on Node `24.18.1`; the complete hosted frontend checks on `e02bd70d4` passed
+under that runtime. Later source changes still require their own validation.
 CI uses read-only lint and frozen install, with no ad-hoc Rollup install that mutates the lockfile.
 The local Windows production query used installed WSL `dfx@0.27.0`; CI pins the repository's
-declared `0.31.0-beta.1`. Local success does not replace the required hosted run with that exact toolchain.
+declared `0.31.0-beta.1`; the hosted frontend run above now passes with that exact toolchain.
 
 ## Security gates: blocked
 
@@ -149,7 +188,28 @@ original reviewed bytes. The unproven PR2 root Cargo manifest remains byte-exact
 Tests preserve every non-digest policy field, expiry and reviewed file set. Actual content
 changes still fail. No expiry extension or advisory waiver was added.
 
-Fresh npm advisory results on 2026-09-06 for published `808a75d3e`, before the new scoped overrides:
+Fresh npm advisory results on 2026-09-06 for published `e02bd70d4`, after the scoped overrides:
+
+| Dependency scope | High | Moderate | Low | Critical |
+| --- | --- | --- | --- | --- |
+| Production | 0 | 2 | 0 | 0 |
+| All | 0 | 2 | 0 | 0 |
+
+The public lockfile was byte-matched to SHA-256
+`b68b016ac2d66b72e80a383db020b8b8502a36cb57802d29e72463f0bdc51b01` before the
+independent audit. Hosted PR2 checks report the same counts. Both moderate entries arise from
+one dependency chain, `@solana/web3.js@1.98.4` → `jayson@4.3.0` → `stream-json@1.9.1`,
+and [GHSA-528h-pc64-c93x](https://github.com/uhop/stream-json/security/advisories/GHSA-528h-pc64-c93x).
+The advertised patched `stream-json` major is incompatible with the installed parent; an
+unverified override is not a fix. An isolated `jayson@4.1.3` downgrade satisfied Solana's
+declared range and its Node/browser client checks, but restored parser regressions: malformed
+JSON acceptance, missing incomplete-input errors and broken split UTF-8 input. It also retained
+the demonstrated nested-prototype mutation. The downgrade was rejected and the current lockfile
+retained; `npm audit`'s `fixAvailable` field is not a verified safe remediation. These results
+do not close the Rust, license, SBOM or
+exact-PR-base dependency review.
+
+Historical npm results for `808a75d3e`, before those scoped overrides:
 
 | Dependency scope | High | Moderate | Low | Critical |
 | --- | --- | --- | --- | --- |
@@ -178,8 +238,8 @@ optional packages, including cross-platform native wrappers. No model, ONNX or O
 version was changed. A `stream-json@3` override was rejected because the current `jayson`
 parent requires incompatible CommonJS subpaths. Its Node TCP/CLI parser also reproduces
 inherited-property injection; browser client reachability differs, which does not remediate the
-installed Node package. Both security policies still fail; the old audit
-counts above must not be presented as a fresh audit of the new lockfile.
+installed Node package. Both security policies still fail; the older counts are retained
+only to explain the remediation, not as the current lockfile audit.
 A smaller overall total does not excuse a category increase.
 These are dependency findings, not demonstrated browser exploitability. Assess runtime
 reachability, especially Node-only transitive dependencies of browser model packages;
@@ -222,7 +282,12 @@ two older PR heads yet. Candid and broader integration workflows still need coor
 validation on the final stack; private/custom-runner jobs were not enabled blindly.
 Absence of hosted check runs must not be reported as success.
 
-## Shipping behavior and Android gates: blocked
+## Publisher-only shipping guidance: not a local APK prerequisite
+
+The developer will not build or publish the actual distribution APK. The signing, release
+version, upload and rollout items in this section are handoff guidance for its publisher,
+not outstanding requests for the developer's credentials or barriers to using the local APK.
+Source/PR review and physical-device testing remain separate from APK publication.
 
 - [All-WebGPU feature gating](../../frontend/app/transformersWebGpuFeatureFlag.mjs) retains
   development + local network + explicit opt-in. A separate production candidate contract,

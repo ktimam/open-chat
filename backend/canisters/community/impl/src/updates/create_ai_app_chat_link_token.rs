@@ -207,8 +207,10 @@ mod tests {
         let viewer = Principal::from_slice(&[2]);
         let viewer_user_id: UserId = viewer.into();
         let channel_id = ChannelId::from(1u32);
-        let mut env = TestEnv::default();
-        env.caller = viewer;
+        let env = TestEnv {
+            caller: viewer,
+            ..Default::default()
+        };
         let mut data = crate::Data::new(
             env.canister_id.into(),
             creator,

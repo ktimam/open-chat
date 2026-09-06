@@ -9,6 +9,10 @@ pub struct Args {
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The success response carries the complete validated authority binding; keep the existing API representation"
+)]
 pub enum Response {
     Success(SuccessResult),
     NotFound,

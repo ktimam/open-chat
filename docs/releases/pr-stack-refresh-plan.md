@@ -1,7 +1,23 @@
 # Refreshing the existing two-PR stack
 
-Assessment: 2026-09-06. This is a scope map, not an executed split or a ready-for-review claim.
+Assessment: 2026-09-06. This is a scope map and work log, not a completed split or a ready-for-review claim.
 Keep both existing PRs in draft while the dependency and runtime gates are unresolved.
+
+## First isolated refresh slice
+
+An isolated `codex/pr1-refresh-local-build` worktree now starts at the exact published PR1
+head below. The first slice transfers only portable OTA ZIP packaging: literal `execFile`
+arguments, Windows UTF-8 ZIP creation and archive regression tests. It deliberately excludes
+the app-side `includeLocalExtractor` payload changes and leaves the native-platform guard
+untouched. Its dependency fixture matches PR1's existing `fs-extra@8.1.0`; no package or lockfile
+update is needed. Commit `a6fedf3e0` records this three-file slice locally: four Windows tests
+pass, including the actual plugin's store/full ZIP outputs, config injection, asset bytes and
+exclusions. Its frontend CI prerequisites now match the existing PR1 Node policy and pinned
+`dfx` version, check frozen Rollup resolution and run the archive test. The complete PR1 build
+and hosted CI have not run; this isolated branch is not pushed.
+
+This starts the append-only refresh; it does not transfer the later model runtime or app
+protocols, establish whole-PR acceptance, change either published PR head or reconcile upstream.
 
 ## Pinned comparison points
 
