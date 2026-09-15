@@ -140,9 +140,8 @@ function originalCheckoutBytes(source, path, migration) {
   );
 }
 
-// The historical proof runs in the PR1 security job with fetch-depth: 0.
-// PR2 owns its own policy migration and is not a prerequisite for this model PR.
-for (const pr of ["pr1"]) {
+// Both security baselines share this full-history migration proof.
+for (const pr of ["pr1", "pr2"]) {
   const policyPath = `.github/security/openchat-${pr}-security-baseline.json`;
   const policy = JSON.parse(readFileSync(resolve(root, policyPath), "utf8"));
   const migration = policy.dependencyDigestMigration;

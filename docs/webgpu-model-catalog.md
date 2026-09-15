@@ -141,31 +141,71 @@ independent string constants and a source-map comment (verified against the comp
 worker text). The historical GPU results below remain attached to their original
 worker hash; this comparison is not a fresh APK/phone runtime qualification.
 
-September 13: a separate PR2 native-cache follow-up passes eight catalog/download checks,
-including four sequential GPU calls, cold readiness, retaining the full model across removal
-and restoration, corruption rejection and single-file repair. The production worker is
-byte-identical to PR1's. This does not replace PR1's own checks below or establish phone/APK
-acceptance. Result: project-temp `output/playwright/model-delivery-cache-60eCSh/result.json`,
-SHA-256 `85105979064c93c526a83d03012e03126a0610551f153e03fdf2081ab6228b54`.
+September 13: eight further checks pass using the PR2 shared catalog component,
+production download/verification/inference APIs and the actual 2.26 GB candidate in native
+Chrome CacheStorage. Cold reload, four sequential hardware-WebGPU calls (one repeated image),
+worker closure, catalog removal/restoration with retained weights, same-size corruption
+rejection and repair of only the damaged small file pass. No model network request occurs
+during inference. The final run independently re-verifies the preceding real download;
+it does not download the model again. Browser and server close cleanly.
 
-September 12: 661 model-related tests across 32 suites pass, and frontend type checking
-completes with zero errors (558 existing warnings). The model worker builds independently
-and matches the combined checkout at 974,153 bytes / SHA-256
-`131557a3edb11a51f227c7cca76e4d90739d14a0152ba0e517cbefffd68916be`.
+Result: project-temp `output/playwright/model-delivery-cache-60eCSh/result.json`, SHA-256
+`85105979064c93c526a83d03012e03126a0610551f153e03fdf2081ab6228b54`.
+Two earlier failed harness records remain unchanged. The corrected test waits for actual
+asynchronous worker-close events and distinguishes independently reproduced, fully verified
+CacheStorage stream notifications from incomplete downloads or inference-time failures.
+No model, prompt, production code or accuracy expectation changed for these test corrections.
 
-A real Chrome check mounts the actual shared catalog component. File import of a compatible
-custom model/settings, invalid import, reload persistence, complete removal, retained
-CacheStorage and explicit server refresh pass. Mobile-width and desktop-width checks show
-no page overflow. Tiny cache sentinels are used, not model weights or readiness proofs.
-No model download or inference occurs in this UI check.
+This follow-up ran on PR2 only, whose production worker remains byte-identical to PR1's.
+It is not the full account UI, an APK or phone qualification. The candidate package/catalog
+remain separate, local and unactivated; no deployment or publication occurred.
 
-Regression tests cover empty/reordered bundled catalogs, model removal and absent optional
-audio. Built-in graph packaging verifies fixed adapter assets independently of model selection.
-CI automatically selects catalog suites and triggers on catalog JSON, store, registry and UI
-changes. The combined offline CI/ownership selection passes 155 tests; the 18 model dependency
-roots remain unchanged.
+September 12 final implementation checks: **661 tests in PR1 and 667 tests in PR2**,
+each across 32 model-related suites. Both frontend type checks completed with **zero errors**
+(existing warnings remain). Both independently built production workers are byte-identical:
+974,153 bytes, SHA-256 `131557a3edb11a51f227c7cca76e4d90739d14a0152ba0e517cbefffd68916be`.
 
-This model-only change does not include app/card/OCR logic. No server deployment, updated APK,
-new-model accuracy qualification or physical-phone acceptance is claimed. Existing APKs need
-one application update to acquire catalog support. New weights, precision choices and optional
-audio still require independent accuracy and repeated device testing before publication.
+Real Chrome checks mount the shared catalog component from each checkout and use actual
+file inputs, localStorage and CacheStorage. Importing a compatible custom ID/settings,
+invalid import, full reload, complete model removal, retained cache data and explicit
+same-origin refresh pass on both. Mobile-width (390px) and desktop-width controls have no
+page overflow. The checks use tiny cache sentinels, not model weights or readiness proofs,
+and run no inference. Their isolated browser/server instances close cleanly.
+
+Bootstrap regressions also cover reordered/empty bundled catalogs, removal of Qwen and
+omission of optional audio. Built-in graph packaging verifies adapter-owned byte/digest
+constants independently of the editable model list. CI discovers catalog test families
+and triggers on the JSON, registry, store and UI changes.
+No server deployment, new APK installation, new weights or physical-phone qualification is
+included in that result.
+
+A prior one-image desktop hardware-WebGPU diagnostic also passed using a new model ID
+and a validated mixed-precision Qwen configuration, with the unchanged production-built worker
+(`e2d09f941f5643706622e51f6f7b40db34b336997784bca2f8e0cf1413433d08`). The worker accepted the
+configured two-shard decoder and FP16 embedding artifact, returned the expected source fields,
+and retired all 5,408 observed GPU buffers. There were no runtime, browser or transport errors;
+the isolated browser, local server and child process exited cleanly.
+
+This diagnostic used a test-only read-only loopback transport and generated the candidate's
+FP16 table in memory from existing files. It did not import a catalog through Model Manager,
+download/persist the candidate, exercise real CacheStorage, or qualify it for phone use.
+The initial diagnostic returned correct model output but failed on two abandoned HTTP streams
+from eager test-cache existence probes. A separately versioned lazy transport fixed that test
+harness issue without changing model configuration, prompts, graphs or worker code; the original
+failed record is retained. See [the release evidence](releases/model-app-readiness.md#current-per-model-accuracy-gate).
+
+Subsequent eight-image runs confirm the runtime/configuration path, not candidate accuracy:
+the unchanged app prompt and a heading-only revision each pass source/card checks on 6/8
+images, while another existing prompt passes 3/8. Those variants remain unqualified and
+unactivated. These diagnostic records bind the earlier worker hash shown above; they are not
+a hardware rerun of the final bootstrap/export correction. The model-only PR1 port is now
+complete and independently tested, without PR2 app/card/OCR code.
+
+Unit/integration coverage exercises schema rejection, atomic storage, model removal,
+remote-refresh failure, custom model IDs through the host/worker contract, generation
+settings, UI imports, optional audio, and staged loader invariants. The production worker
+must also build against the pinned Transformers/ORT patches.
+
+These checks do not certify a newly added model's image/audio accuracy or phone memory
+requirements. Qualify each new weight/precision configuration with the existing image corpus,
+voice cases where enabled, and repeated physical-device GPU runs before publishing it.

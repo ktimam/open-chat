@@ -31,6 +31,7 @@
     import Markdown from "@shared_components/Markdown.svelte";
     import Stats from "../Stats.svelte";
     import AdvancedSection from "./AdvancedSection.svelte";
+    import AiAppsSummary from "./AiAppsSummary.svelte";
 
     const client = getContext<OpenChat>("client");
 
@@ -71,14 +72,16 @@
         <CollapsibleCard
             onToggle={groupInfoOpen.toggle}
             open={$groupInfoOpen}
-            headerText={i18nKey("group.groupInfo", undefined, chat.level)}>
+            headerText={i18nKey("group.groupInfo", undefined, chat.level)}
+        >
             <div class="sub-section photo">
                 <Avatar url={avatarSrc} size={AvatarSize.Large} />
 
                 <WithVerifiedBadge
                     {verified}
                     size={"small"}
-                    tooltip={i18nKey("verified.verified", undefined, chat.level, true)}>
+                    tooltip={i18nKey("verified.verified", undefined, chat.level, true)}
+                >
                     <h3 class="group-name">
                         {chat.name}
                     </h3>
@@ -108,16 +111,19 @@
         <CollapsibleCard
             onToggle={groupVisibilityOpen.toggle}
             open={$groupVisibilityOpen}
-            headerText={i18nKey("access.visibility")}>
+            headerText={i18nKey("access.visibility")}
+        >
             {#if chat.public}
                 <h4>
                     <Translatable
-                        resourceKey={i18nKey("group.publicGroup", undefined, chat.level, true)} />
+                        resourceKey={i18nKey("group.publicGroup", undefined, chat.level, true)}
+                    />
                 </h4>
             {:else}
                 <h4>
                     <Translatable
-                        resourceKey={i18nKey("group.privateGroup", undefined, chat.level, true)} />
+                        resourceKey={i18nKey("group.privateGroup", undefined, chat.level, true)}
+                    />
                 </h4>
             {/if}
             <div class="info">
@@ -125,7 +131,8 @@
                     <Translatable
                         resourceKey={chat.level === "channel"
                             ? i18nKey("publicChannelInfo")
-                            : i18nKey("publicGroupInfo", undefined, chat.level, true)} />
+                            : i18nKey("publicGroupInfo", undefined, chat.level, true)}
+                    />
                 {:else}
                     <p>
                         <Translatable
@@ -134,7 +141,8 @@
                                 undefined,
                                 chat.level,
                                 true,
-                            )} />
+                            )}
+                        />
                     </p>
                 {/if}
                 {#if !chat.public && !externalContent}
@@ -166,7 +174,8 @@
             <CollapsibleCard
                 onToggle={groupRulesOpen.toggle}
                 open={$groupRulesOpen}
-                headerText={i18nKey("rules.rules")}>
+                headerText={i18nKey("rules.rules")}
+            >
                 <Markdown inline={false} text={combinedRulesText} />
             </CollapsibleCard>
         {/if}
@@ -174,26 +183,31 @@
             <CollapsibleCard
                 onToggle={groupInviteUsersOpen.toggle}
                 open={$groupInviteUsersOpen}
-                headerText={i18nKey("invite.inviteWithLink", undefined, chat.level, true)}>
+                headerText={i18nKey("invite.inviteWithLink", undefined, chat.level, true)}
+            >
                 <InviteUsersWithLink container={chat} />
             </CollapsibleCard>
         {/if}
         <CollapsibleCard
             onToggle={groupPermissionsOpen.toggle}
             open={$groupPermissionsOpen}
-            headerText={i18nKey("permissions.permissions")}>
+            headerText={i18nKey("permissions.permissions")}
+        >
             <GroupPermissionsViewer
                 embeddedContent={externalContent}
                 permissions={chat.permissions}
                 isPublic={chat.public}
                 isCommunityPublic={$selectedCommunitySummaryStore?.public ?? true}
-                isChannel={chat.id.kind === "channel"} />
+                isChannel={chat.id.kind === "channel"}
+            />
         </CollapsibleCard>
+        <AiAppsSummary {chat} />
         {#if !externalContent}
             <CollapsibleCard
                 onToggle={groupStatsOpen.toggle}
                 open={$groupStatsOpen}
-                headerText={i18nKey("stats.groupStats", undefined, chat.level)}>
+                headerText={i18nKey("stats.groupStats", undefined, chat.level)}
+            >
                 <Stats showReported={false} stats={chat.metrics} />
             </CollapsibleCard>
         {/if}
@@ -201,7 +215,8 @@
             <CollapsibleCard
                 onToggle={groupAdvancedOpen.toggle}
                 open={$groupAdvancedOpen}
-                headerText={i18nKey("group.advanced")}>
+                headerText={i18nKey("group.advanced")}
+            >
                 <AdvancedSection group={chat} />
             </CollapsibleCard>
         {/if}

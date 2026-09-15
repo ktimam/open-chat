@@ -5,6 +5,7 @@
     interface Props {
         mode?: "transparent" | "dark" | "primary" | "secondary";
         icon: Snippet<[string]>;
+        ariaLabel?: string;
         disabled?: boolean;
         padding?: Padding;
         onclick?: (e?: Event) => void;
@@ -13,6 +14,7 @@
 
     let {
         icon,
+        ariaLabel,
         mode = "transparent",
         onclick,
         disabled = false,
@@ -39,8 +41,10 @@
     style={paddingCss}
     class={`icon_button ${size} ${mode}`}
     {disabled}
+    aria-label={ariaLabel}
     type={"button"}
-    {onclick}>
+    {onclick}
+>
     {@render icon(iconColour)}
 </button>
 

@@ -3,10 +3,12 @@ use crate::RuntimeState;
 mod calculate_hot_groups;
 mod calculate_hotness;
 mod calculate_metrics;
+mod cleanup_ai_app_card_authorities;
 pub mod push_community_deleted_notifications;
 pub mod push_group_deleted_notifications;
 
 pub(crate) fn start(state: &RuntimeState) {
+    cleanup_ai_app_card_authorities::start_job();
     calculate_metrics::start_job();
     calculate_hot_groups::start_job();
     calculate_hotness::start_job();

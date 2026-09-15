@@ -11,6 +11,7 @@ mod channel_summary;
 mod channel_summary_updates;
 mod community_events;
 mod deleted_message;
+mod enabled_ai_apps;
 mod events;
 mod events_by_index;
 mod events_window;

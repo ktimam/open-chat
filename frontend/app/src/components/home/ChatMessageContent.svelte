@@ -1,6 +1,13 @@
 <script lang="ts">
-    import type { MessageContent, MessageContext, OgPreview, RehydratedMessagePreview } from "@client";
+    import {
+        currentUserIdStore,
+        type MessageContent,
+        type MessageContext,
+        type OgPreview,
+        type RehydratedMessagePreview,
+    } from "@client";
     import { i18nKey } from "../../i18n/i18n";
+    import ActionCardContent from "./ActionCardContent.svelte";
     import AudioContent from "./AudioContent.svelte";
     import BlockedContent from "./BlockedContent.svelte";
     import BotPlaceholderContent from "./BotPlaceholderContent.svelte";
@@ -44,11 +51,17 @@
         undeleting?: boolean;
         intersecting: boolean;
         failed: boolean;
+        reconciliationTrigger?: boolean;
         timestamp?: bigint | undefined;
         blockLevelMarkdown: boolean;
         onExpandMessage?: (() => void) | undefined;
         onRemovePreview?: (url: string) => void;
         onRegisterVote?: (vote: { type: "delete" | "register"; answerIndex: number }) => void;
+        onRespondToActionCard?: (
+            response: "confirm" | "cancel",
+            confirmPayloadOverride?: Uint8Array,
+            confirmationGrant?: Uint8Array,
+        ) => boolean | Promise<boolean>;
         ogPreviews?: OgPreview[];
         messagePreviews?: RehydratedMessagePreview[];
     }
@@ -71,11 +84,13 @@
         undeleting = false,
         intersecting,
         failed,
+        reconciliationTrigger = false,
         timestamp = undefined,
         blockLevelMarkdown,
         onExpandMessage = undefined,
         onRemovePreview,
         onRegisterVote,
+        onRespondToActionCard,
         ogPreviews = [],
         messagePreviews = [],
     }: Props = $props();
@@ -92,7 +107,8 @@
         {blockLevelMarkdown}
         {onRemovePreview}
         {ogPreviews}
-        {messagePreviews} />
+        {messagePreviews}
+    />
 {:else if content.kind === "image_content"}
     <ImageContent
         {edited}
@@ -102,7 +118,8 @@
         {reply}
         {pinned}
         {height}
-        {blockLevelMarkdown} />
+        {blockLevelMarkdown}
+    />
 {:else if content.kind === "video_content"}
     <VideoContent {edited} {fill} {content} {reply} {height} {blockLevelMarkdown} />
 {:else if content.kind === "video_call_content"}
@@ -128,7 +145,8 @@
 {:else if content.kind === "p2p_swap_content_initial"}
     <MessageContentInitial
         text={i18nKey(failed ? "p2pSwap.failedToCreateMessage" : "p2pSwap.creatingYourMessage")}
-        {failed} />
+        {failed}
+    />
 {:else if content.kind === "prize_content"}
     <PrizeContent chatId={messageContext.chatId} {messageId} {content} {me} {intersecting} />
 {:else if content.kind === "p2p_swap_content"}
@@ -137,6 +155,17 @@
     <PrizeWinnerContent {content} {intersecting} />
 {:else if content.kind === "poll_content"}
     <PollContent {readonly} {me} {content} {senderId} {onRegisterVote} />
+{:else if content.kind === "action_card_content"}
+    <ActionCardContent
+        {content}
+        {readonly}
+        chatId={messageContext.chatId}
+        {messageId}
+        threadRootMessageIndex={messageContext.threadRootMessageIndex}
+        viewerId={$currentUserIdStore}
+        {reconciliationTrigger}
+        onRespond={onRespondToActionCard}
+    />
 {:else if content.kind === "giphy_content"}
     <GiphyContent {edited} {intersecting} {fill} {content} {reply} {height} {blockLevelMarkdown} />
 {:else if content.kind === "proposal_content"}
@@ -148,7 +177,8 @@
         {collapsed}
         {readonly}
         {reply}
-        {onExpandMessage} />
+        {onExpandMessage}
+    />
 {:else if content.kind === "message_reminder_created_content" && !content.hidden}
     <MessageReminderCreatedContent {content} />
 {:else if content.kind === "message_reminder_content"}

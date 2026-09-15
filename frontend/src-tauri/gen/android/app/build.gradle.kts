@@ -33,9 +33,9 @@ val tauriProperties = Properties().apply {
 // build a release locally. A keystore that is CONFIGURED but absent is a hard
 // failure: falling through to debug signing there produces an artifact Play
 // rejects outright, and one that no device will accept as an update over a
-// properly signed build (INSTALL_FAILED_UPDATE_INCOMPATIBLE, fixable only by
-// uninstalling, which wipes the account's local data). CI supplies the keystore
-// and fails before the build if the secret is missing.
+// properly signed build (INSTALL_FAILED_UPDATE_INCOMPATIBLE). Keep the existing
+// signing identity to preserve account data. CI explicitly requires configured
+// signing and fails before the build if any required secret is missing.
 val keystoreDir = rootProject.projectDir
 val keystoreProperties = Properties().apply {
     val propFile = File(keystoreDir, "keystore.properties")
@@ -45,10 +45,23 @@ fun signingProperty(name: String, env: String): String? =
     System.getenv(env)?.takeIf { it.isNotBlank() }
         ?: keystoreProperties.getProperty(name)?.takeIf { it.isNotBlank() }
 
+val requireReleaseSigning = System.getenv("OC_ANDROID_REQUIRE_RELEASE_SIGNING") == "true"
+val releaseSigningProperties = mapOf(
+    "storeFile" to "OC_ANDROID_KEYSTORE_PATH",
+    "storePassword" to "OC_ANDROID_KEYSTORE_PASSWORD",
+    "keyAlias" to "OC_ANDROID_KEY_ALIAS",
+    "keyPassword" to "OC_ANDROID_KEY_PASSWORD",
+).mapValues { (name, env) -> signingProperty(name, env) }
+val signingConfigured = releaseSigningProperties.values.any { it != null }
+val hasReleaseSigning = releaseSigningProperties.values.all { it != null }
+require((!requireReleaseSigning && !signingConfigured) || hasReleaseSigning) {
+    "Release signing is required or partially configured; supply all keystore properties (debug fallback is disabled)"
+}
+
 // A relative storeFile resolves against the directory holding the properties file.
 val releaseKeystore = signingProperty("storeFile", "OC_ANDROID_KEYSTORE_PATH")
     ?.let { path -> File(path).takeIf { it.isAbsolute } ?: File(keystoreDir, path) }
-    ?.also { if (!it.exists()) throw GradleException("Android keystore not found: $it") }
+    ?.also { if (!it.isFile) throw GradleException("Configured Android keystore file does not exist") }
 
 // Release version, passed in by CI as the tag's version (e.g. 2.0.2051).
 //
@@ -63,13 +76,14 @@ val releaseKeystore = signingProperty("storeFile", "OC_ANDROID_KEYSTORE_PATH")
 // (major*1000000 + minor*1000 + patch) caps patch at 999 and cannot express an
 // OpenChat version at all, which is why every APK so far has been stuck at 1000.
 //
-// Unset for local and manual builds, which fall back to tauri.properties.
+// Unset for local builds, which fall back to tauri.properties. Both publisher
+// release and manual workflow builds supply an explicitly validated version.
 val releaseVersionName: String? =
     System.getenv("OC_ANDROID_VERSION_NAME")?.takeIf { it.isNotBlank() }
 
 val releaseVersionCode: Int? = releaseVersionName?.let { name ->
     val parts = name.split(".")
-    if (parts.size != 3) {
+    if (!Regex("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$").matches(name)) {
         throw GradleException("OC_ANDROID_VERSION_NAME is not major.minor.patch: $name")
     }
     val (major, minor, patch) = parts.map {
@@ -85,11 +99,30 @@ val releaseVersionCode: Int? = releaseVersionName?.let { name ->
             "Version $name is out of range for the versionCode formula " +
                 "(major 0..2000, minor 0..99, patch 0..9999)")
     }
-    major * 1_000_000 + minor * 10_000 + patch
+    val code = major * 1_000_000 + minor * 10_000 + patch
+    require(code > 0) { "OC_ANDROID_VERSION_NAME must produce a positive versionCode" }
+    code
+}
+
+val bundledOpenChatRpIdFile = projectDir.resolve("../../../../app/build/android-rp-id").normalize()
+val bundledOpenChatRpId = bundledOpenChatRpIdFile.takeIf { it.isFile }?.readText()?.trim()?.lowercase()
+val environmentOpenChatRpId = System.getenv("OC_ANDROID_RP_ID")?.trim()?.lowercase()
+require(environmentOpenChatRpId == null || bundledOpenChatRpId == null || environmentOpenChatRpId == bundledOpenChatRpId) {
+    "OC_ANDROID_RP_ID differs between the outer Android build and the bundled frontend"
+}
+val openChatRpId = (environmentOpenChatRpId ?: bundledOpenChatRpId ?: "oc.app").also {
+    require(Regex("^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$").matches(it) &&
+        it.contains('.') && !it.contains("..")) {
+        "OC_ANDROID_RP_ID must be one valid HTTPS hostname"
+    }
 }
 
 android {
     compileSdk = 36
+    // Match the tested APK's r26b native build and Gradle build-tools inputs.
+    // These source pins also keep local builds independent of release-only environment variables.
+    ndkVersion = "26.1.10909125"
+    buildToolsVersion = "35.0.0"
     namespace = "com.oclabs.openchat"
     defaultConfig {
         manifestPlaceholders["usesCleartextTraffic"] = "false"
@@ -100,6 +133,12 @@ android {
             ?: tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = releaseVersionName
             ?: tauriProperties.getProperty("tauri.android.versionName", "1.0")
+        resValue("string", "openchat_rp_id", openChatRpId)
+        resValue(
+            "string",
+            "asset_statements",
+            "[{\\\"include\\\":\\\"https://$openChatRpId/.well-known/assetlinks.json\\\"}]",
+        )
     }
     
     signingConfigs {

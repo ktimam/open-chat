@@ -17,6 +17,14 @@ const MAX_REPLY_TOKENS = 512;
 const MAX_CHAT_CONTEXT_CHARS = 8_000;
 const MAX_CHAT_CONTEXT_MESSAGES = 24;
 
+// These prompts are shared by the classic and mobile message menus. This operation is deliberately
+// generic local-model inference; it does not inspect app manifests or propose an app action.
+export const PROCESS_WITH_AI_IMAGE_PROMPT =
+    "Read and analyze the selected image message. Transcribe every clearly readable detail in its original language and reading order, preserving labels, names, amounts, currency symbols or codes, dates, times, references, notes, and status text. Do not omit a readable field or guess uncertain characters; mark uncertainty, then give a concise analysis.";
+export const PROCESS_WITH_AI_AUDIO_PROMPT =
+    "Transcribe and analyze the selected voice message. Preserve the speaker's original language, names, amounts, currencies, dates, times, references, and stated uncertainty. Do not invent words for unclear audio; mark inaudible or uncertain spans, then give a concise, helpful response.";
+export const PROCESS_WITH_AI_TEXT_PROMPT =
+    "Summarize and analyze the selected message. Preserve its important facts, names, amounts, currencies, dates, references, and notes, and give a concise, helpful response.";
 export const VOICE_MESSAGE_ADD_ON_REQUIRED =
     "The selected on-device model cannot process voice messages. Select Gemma 4 E2B under profile → App settings → On-device models and install its optional audio add-on, then try again.";
 

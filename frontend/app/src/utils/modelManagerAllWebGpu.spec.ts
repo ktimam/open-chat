@@ -41,6 +41,11 @@ describe("browser Model Manager all-WebGPU parity", () => {
             expect(source).toContain("voice add-on optional");
             expect(source).toContain(`context="${index === 0 ? "desktop" : "phone"}"`);
             expect(source).toContain("const nativeClient = isNativeClient();");
+            expect(source).toContain("<BrowserImageActionModeSettings />");
+            expect(source).not.toContain("{#if !nativeClient}");
+            expect(source).toMatch(
+                /{#if !native}[\s\S]*<BrowserImageActionModeSettings \/>[\s\S]*{:else}/,
+            );
             expect(source).toContain("cancelWebModelDownload();");
             expect(source).not.toContain("webEligibleModels(");
             expect(source).not.toContain('accept=".gguf"');
@@ -48,6 +53,29 @@ describe("browser Model Manager all-WebGPU parity", () => {
             expect(source).not.toContain("setWebModelFile");
         });
     }
+
+    it("keeps explicit OCR modes reachable in the native all-WebGPU route", () => {
+        const relative = "../utils/aiActionRunner.ts";
+        const source = readFileSync(fileURLToPath(new URL(relative, import.meta.url)), "utf8");
+
+        expect(source).toContain("const browserLocalReaderModesAllowed = webInference;");
+        expect(source).toMatch(
+            /webInference\s*&&\s*input\.image !== undefined\s*&&\s*useModelOnly/,
+        );
+        expect(source).not.toContain("webInference && !isNativeClient()");
+        expect(source).toContain("browserUsesLocalReaderOnly()");
+        expect(source).toContain("browserUsesModelWithLocalVerification()");
+        expect(source).toContain(
+            "inferPrivateEvidenceWithPhase: typeof inferOnDeviceTextOnlyNoProjector",
+        );
+        expect(source).not.toContain("PRIVATE_VERIFICATION_MODEL_ID");
+        expect(source).toContain("localImageEvidenceExtractorSupports(def.responseSchema)");
+        expect(source).toContain("const useLocalReaderOnly");
+        expect(source).toContain("const vision = await runSelectedModel(true)");
+        expect(source).toContain(
+            "The local image reader could not produce complete evidence, so model verification was not run.",
+        );
+    });
 
     it("keeps Gemma voice support as a separately managed optional add-on", () => {
         const source = readFileSync(

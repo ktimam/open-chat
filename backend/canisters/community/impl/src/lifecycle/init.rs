@@ -61,6 +61,9 @@ fn init(args: Args) {
                 group.group_id,
                 group.channel_id,
                 group.total_bytes,
+                // Convert-group-into-new-community path doesn't carry the enabled
+                // AI apps set (out of scope); finalize falls back to empty.
+                std::collections::BTreeSet::new(),
                 true,
                 state,
             );

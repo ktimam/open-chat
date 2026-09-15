@@ -6,13 +6,17 @@ edition.workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dev-dependencies]
+action_inbox_canister = { path = "../canisters/action_inbox/api" }
+ai_app_verifier_canister = { path = "../external_canisters/ai_app_verifier/api" }
 airdrop_bot_canister = { path = "../canisters/airdrop_bot/api" }
 candid = { workspace = true }
+ct-codecs = { workspace = true }
 chat_events = { path = "../libraries/chat_events" }
 community_canister = { path = "../canisters/community/api" }
 constants = { path = "../libraries/constants" }
 cycles_dispenser_canister = { path = "../canisters/cycles_dispenser/api" }
 cycles_minting_canister = { path = "../external_canisters/cmc/api" }
+ecies_payload = { path = "../libraries/ecies_payload" }
 escrow_canister = { path = "../canisters/escrow/api" }
 event_relay_canister = { path = "../canisters/event_relay/api" }
 event_store_canister = { workspace = true }
@@ -33,12 +37,15 @@ notifications_index_canister = { path = "../canisters/notifications_index/api" }
 oc_error_codes = { path = "../libraries/error_codes" }
 online_users_canister = { path = "../canisters/online_users/api" }
 openchat_installer_canister = { path = "../canisters/openchat_installer/api" }
+p256 = { workspace = true, features = ["ecdh", "ecdsa", "pem", "pkcs8"] }
+p256_key_pair = { path = "../libraries/p256_key_pair" }
 pocket-ic = { workspace = true }
 proposals_bot_canister = { path = "../canisters/proposals_bot/api" }
 rand = { workspace = true }
 registry_canister = { path = "../canisters/registry/api" }
 reqwest = { workspace = true, features = ["blocking", "json"] }
 serde = { workspace = true }
+serde_bytes = { workspace = true }
 serde_json = { workspace = true }
 sha256 = { path = "../libraries/sha256" }
 sign_in_with_email_canister = { path = "../canisters/sign_in_with_email/api" }

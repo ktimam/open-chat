@@ -2,8 +2,18 @@ on:
   pull_request:
     branches:
       - master
+      - codex/pr1-local-models
+  push:
+    branches:
+      - codex/pr1-local-models
+      - codex/pr2-app-chat-interfaces
+      - codex/pr2-clean-integration
+  workflow_dispatch:
 
 name: Backend linting and unit tests
+
+permissions:
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -20,6 +30,9 @@ jobs:
   changes:
     name: detect backend changes
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
     steps:
@@ -63,7 +76,7 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: clippy
-          args: --workspace --exclude open-chat --exclude tauri-plugin-oc --tests -- -D warnings
+          args: --locked --keep-going --workspace --exclude open-chat --exclude tauri-plugin-oc --tests -- -D warnings
 
   unit_tests:
     name: run unit tests
@@ -78,4 +91,4 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --workspace --exclude integration_tests --exclude open-chat --exclude tauri-plugin-oc
+          args: --locked --workspace --exclude integration_tests --exclude open-chat --exclude tauri-plugin-oc

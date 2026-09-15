@@ -60,10 +60,13 @@
         <div
             class="message"
             class:failure={$toastStore.kind === "failure"}
-            class:success={$toastStore.kind === "success"}>
-            <Body align={"center"}>
-                <Translatable resourceKey={$reactiveResourceKey} />
-            </Body>
+            class:success={$toastStore.kind === "success"}
+        >
+            <div class="text">
+                <Body align={"center"}>
+                    <Translatable resourceKey={$reactiveResourceKey} />
+                </Body>
+            </div>
             {#if $toastStore.kind === "failure"}
                 {#if $toastStore.err !== undefined}
                     <Tooltip position="top" align="middle">
@@ -75,9 +78,14 @@
                         {/snippet}
                     </Tooltip>
                 {/if}
-                <div class="close" onclick={toastStore.hideToast}>
+                <button
+                    type="button"
+                    class="close"
+                    aria-label="Dismiss notification"
+                    onclick={toastStore.hideToast}
+                >
                     <Close size={$iconSize} color={"var(--text-on-feedback-surface)"} />
-                </div>
+                </button>
             {/if}
         </div>
     </div>
@@ -91,16 +99,20 @@
         display: flex;
         justify-content: center;
         align-items: center;
+        box-sizing: border-box;
+        padding: 0 $sp4;
         @include z-index("toast");
     }
 
     .message {
+        box-sizing: border-box;
         transition: background 200ms ease-in-out;
         background: var(--success-surface);
         border-radius: var(--rad-md);
         padding: $sp4;
         max-width: 800px;
-        margin: 0 $sp4;
+        margin: 0;
+        min-width: 0;
         display: flex;
         gap: $sp4;
         justify-content: center;
@@ -116,10 +128,26 @@
             background: var(--success-surface);
         }
 
+        .text {
+            flex: auto;
+            min-width: 0;
+            overflow-wrap: anywhere;
+        }
+
         .close,
         .report {
             flex: 0 0 30px;
             cursor: pointer;
+        }
+
+        .close {
+            appearance: none;
+            border: 0;
+            padding: 0;
+            background: transparent;
+            color: inherit;
+            line-height: 0;
+            touch-action: manipulation;
         }
     }
 </style>

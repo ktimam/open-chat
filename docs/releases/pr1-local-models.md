@@ -91,8 +91,8 @@ Application prompts, domain fixtures and semantic checks remain app-owned. The e
 shared-prompt investigation is historical; model-specific app configuration now lives in
 the app and PR2's generic interface, not in this model-only slice. Feature-scoped Rust CI is
 now wired, and the bounded source reviews are complete. Advisory acceptance and final
-source/hosted checks remain incomplete. The combined-stack acceptance
-record retains the exact APK identity, phone results and remaining gates separately.
+source/hosted checks remain incomplete. See the
+[current acceptance record](model-app-readiness.md#current-configurable-webgpu-model-catalog).
 
 September 14 user-directed disposition: the user requested documenting and skipping
 further inherited-advisory decisions. The ten findings are retained and deferred
@@ -259,19 +259,6 @@ not an outstanding PR1 defect. Introducing either prerequisite feature requires 
 review; their absence is not a reason to copy broader PR2 startup or authentication changes.
 
 ## Verification and readiness
-
-September 10 uncommitted generic-runtime follow-up: both model workers now validate actual
-generated token IDs against the effective EOS configuration before decoding. A response ending
-with EOS exactly at the cap passes; capped or unexplained non-EOS output fails without partial
-text. Token shape/count/prefix checks, existing generation options, the 96-token cap and GPU
-retirement are preserved. No app-specific fields or prompt selection are introduced.
-Root verification passes 114 targeted tests and strict scoped TypeScript in each PR worktree.
-The integration worker-only build's desktop Qwen 96/1/96 normal/cutoff/recovery diagnostic also
-passes, requiring exact historical normal output and the precise no-partial-text error. Its
-source-bound receipt is `output/playwright/qwen-production-full-model-20260909-9XH3GX/result.json`,
-SHA-256 `a6ff871e4ddc08d12f2db1bb654da0a71c862486c8aa3637edbf65a7ce655e34`.
-This is not a new PR1 full build, Gemma GPU, APK or phone qualification, nor a fix for incorrect
-source values in otherwise complete responses. No deployment or published-head update occurred.
 
 Latest status (September 9): local PR1 is `2c5c0b5a5b2d5c96c0522a0af88b6c1c5e0f162b`.
 All five Windows native gates pass with `--locked --offline`: 18 default-feature tests,
@@ -613,14 +600,7 @@ tools, unchanged core fixture code or a general native C audit. Feature-union an
 limitations remain explicit, without claiming current feature security clearance.
 
 Remaining dependency review is limited to model-related changes and their introduced or changed
-dependencies. The mirrored scoped Rust advisory transport and offline SBOM exporter
-now pass a fresh combined **160/160** implementation tests per PR (zero skipped),
-including the local-source snapshot identity regression. Evidence is recorded in
-`<project-temp-root>/admin/rust-feature-implementation-offline-20260909.json`
-(SHA-256 `24986cf96ee37616650c8c104825df86455782bdcaffd8035fdeac671b1f32c9`).
-No actual advisory query, official CycloneDX schema validation, current project
-SBOM export or hosted-CI acceptance is established by these offline tests.
-Historical whole-lockfile findings and expired broader baselines are not waived,
+dependencies. Historical whole-lockfile findings and expired broader baselines are not waived,
 but do not authorize new OpenChat core audits or make unrelated core remediation a scoped gate.
 No fresh advisory scan or feature security clearance is claimed. Validate the final proposed
 workflow scope before pushing: implicit installation audits are disabled, and the legacy

@@ -2,9 +2,12 @@ on:
   pull_request:
     branches:
       - master
+      - codex/pr1-local-models
   push:
     branches:
       - codex/pr1-local-models
+      - codex/pr2-app-chat-interfaces
+      - codex/pr2-clean-integration
   workflow_dispatch:
 
 name: Frontend linting, type check & unit tests
@@ -49,9 +52,9 @@ jobs:
           command -v zip
           command -v unzip
 
-      - name: Check model and packaging policy regressions
+      - name: Check PR and release policy regressions
         working-directory: .
-        run: node --test scripts/android_bundle.test.mjs scripts/android_build_prerequisites.test.mjs scripts/android_dev.test.mjs scripts/model_asset_notices.test.mjs scripts/verify_webgpu_distribution.test.mjs scripts/model_ci_coverage.test.mjs scripts/security_mode_scope.test.mjs scripts/sbom_lock_identity.test.mjs scripts/frontend_format_check.test.mjs scripts/frontend_format_inherited.test.mjs
+        run: node --test scripts/pr-ci-policy.test.mjs scripts/app_model_integration.test.mjs scripts/message_content_candid_contract.test.mjs scripts/validate_action_inbox_wiring.test.mjs scripts/android_release_policy.test.mjs scripts/android_release_checks.test.mjs scripts/release_preflight.test.mjs scripts/upgrade_canister.test.mjs scripts/android_bundle.test.mjs scripts/android_build_prerequisites.test.mjs scripts/frontend_format_check.test.mjs scripts/frontend_format_inherited.test.mjs scripts/android_dev.test.mjs scripts/verify_webgpu_distribution.test.mjs scripts/model_asset_notices.test.mjs scripts/sbom_lock_identity.test.mjs scripts/model_ci_coverage.test.mjs scripts/security_mode_scope.test.mjs
 
       # Pure local fixtures only: no advisory requests, installs, or live model runs.
       - name: Check offline feature inventory and CI contracts
@@ -84,8 +87,8 @@ jobs:
           OC_METERED_APIKEY: DUMMY_METERED_APIKEY
           OC_VAPID_PUBLIC_KEY: DUMMY_VAPID_PUBLIC_KEY
 
-      # Packaging evidence only: this does not deploy or verify device inference.
-      # Keep the default production build separate from this opt-in candidate.
+      # A candidate build proves immutable asset packaging, not deployment approval
+      # or physical-device inference. The default production build stays separate.
       - name: Build and verify the opt-in production WebGPU candidate
         run: |
           npm run build:prod

@@ -16,7 +16,7 @@ const pkgAliases = [
 ]);
 
 export default defineConfig({
-    plugins: [svelte()],
+    plugins: [svelte({ configFile: src("./svelte.config.js") })],
     resolve: {
         alias: [
             { find: "@dfinity/agent", replacement: "@icp-sdk/core/agent" },
@@ -24,10 +24,17 @@ export default defineConfig({
             ...pkgAliases,
             { find: "usergeek-ic-js", replacement: usergeekStub },
         ],
+        conditions: process.env.VITEST ? ["browser"] : undefined,
+        mainFields: ["module", "browser", "main"],
     },
     test: {
         globals: true,
         environment: "jsdom",
         exclude: ["lib/**", "node_modules/**"],
+        server: {
+            deps: {
+                inline: [/svelte/, /intl-messageformat/, /@formatjs/],
+            },
+        },
     },
 });

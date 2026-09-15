@@ -7,6 +7,8 @@ use types::{BuildVersion, CanisterId};
 async fn main() {
     let opts = Opts::parse();
 
+    set_expected_wasm_sha256(&opts.expected_wasm_sha256).expect("Invalid --expected-wasm-sha256 value");
+
     let identity = get_dfx_identity(&opts.controller);
 
     match opts.canister_to_upgrade {
@@ -124,4 +126,7 @@ struct Opts {
 
     #[arg(long)]
     version: BuildVersion,
+
+    #[arg(long)]
+    expected_wasm_sha256: String,
 }

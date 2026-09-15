@@ -64,6 +64,7 @@
         supportsReply: boolean;
         collapsed: boolean;
         threadRootMessage: Message | undefined;
+        isThreadRoot?: boolean;
         onExpandMessage?: (() => void) | undefined;
         onReplyTo: (replyContext: EnhancedReplyContext) => void;
         onCollapseMessage: () => void;
@@ -99,6 +100,7 @@
         supportsReply,
         collapsed,
         threadRootMessage,
+        isThreadRoot = false,
         onExpandMessage = undefined,
         onReplyTo,
         onCollapseMessage,
@@ -127,7 +129,7 @@
     let level = $derived($_(`level.${levelType}`).toLowerCase());
     let messageContext = $derived({
         chatId,
-        threadRootMessageIndex: threadRootMessage?.messageIndex,
+        threadRootMessageIndex: isThreadRoot ? undefined : threadRootMessage?.messageIndex,
     });
     let hidden = $derived(
         event.event.kind === "message" &&
@@ -144,7 +146,7 @@
             client.deleteFailedMessage(
                 chatId,
                 event.event.messageId,
-                threadRootMessage?.messageIndex,
+                isThreadRoot ? undefined : threadRootMessage?.messageIndex,
             );
         }
     }
@@ -194,6 +196,7 @@
             canStartThread={canReplyInThread}
             {publicGroup}
             {threadRootMessage}
+            {isThreadRoot}
             {supportsEdit}
             {supportsReply}
             {collapsed}
@@ -209,7 +212,8 @@
             eventIndex={event.index}
             timestamp={event.timestamp}
             expiresAt={event.expiresAt}
-            msg={event.event} />
+            msg={event.event}
+        />
     {/if}
 {:else if event.event.kind === "group_chat_created"}
     <GroupChatCreatedEvent {chatType} event={event.event} {me} timestamp={event.timestamp} />
@@ -222,7 +226,8 @@
         changed={event.event.userIds}
         changedBy={event.event.addedBy}
         resourceKey={"addedBy"}
-        timestamp={event.timestamp} />
+        timestamp={event.timestamp}
+    />
 {:else if event.event.kind === "users_invited"}
     <MembersChangedEvent
         level={levelType}
@@ -230,7 +235,8 @@
         changed={event.event.userIds}
         changedBy={event.event.invitedBy}
         resourceKey={"invitedBy"}
-        timestamp={event.timestamp} />
+        timestamp={event.timestamp}
+    />
 {:else if event.event.kind === "members_removed"}
     <MembersChangedEvent
         level={levelType}
@@ -238,7 +244,8 @@
         changed={event.event.userIds}
         changedBy={event.event.removedBy}
         resourceKey={"removedBy"}
-        timestamp={event.timestamp} />
+        timestamp={event.timestamp}
+    />
 {:else if event.event.kind === "aggregate_common_events"}
     <AggregateCommonEvents
         level={levelType}
@@ -247,7 +254,8 @@
         user={userSummary}
         joined={event.event.usersJoined}
         messagesDeleted={event.event.messagesDeleted}
-        rolesChanged={event.event.rolesChanged} />
+        rolesChanged={event.event.rolesChanged}
+    />
 {:else if event.event.kind === "users_blocked"}
     <MembersChangedEvent
         level={levelType}
@@ -255,7 +263,8 @@
         changed={event.event.userIds}
         changedBy={event.event.blockedBy}
         resourceKey={"blockedBy"}
-        timestamp={event.timestamp} />
+        timestamp={event.timestamp}
+    />
 {:else if event.event.kind === "users_unblocked"}
     <MembersChangedEvent
         level={levelType}
@@ -263,21 +272,24 @@
         changed={event.event.userIds}
         changedBy={event.event.unblockedBy}
         resourceKey={"unblockedBy"}
-        timestamp={event.timestamp} />
+        timestamp={event.timestamp}
+    />
 {:else if event.event.kind === "name_changed"}
     <GroupChangedEvent
         {level}
         user={userSummary}
         changedBy={event.event.changedBy}
         property={interpolate($_, i18nKey("groupName", undefined, levelType, true))}
-        timestamp={event.timestamp} />
+        timestamp={event.timestamp}
+    />
 {:else if event.event.kind === "desc_changed"}
     <GroupChangedEvent
         {level}
         user={userSummary}
         changedBy={event.event.changedBy}
         property={interpolate($_, i18nKey("groupDesc", undefined, levelType, true))}
-        timestamp={event.timestamp} />
+        timestamp={event.timestamp}
+    />
 {:else if event.event.kind === "rules_changed"}
     <GroupRulesChangedEvent user={userSummary} event={event.event} timestamp={event.timestamp} />
 {:else if event.event.kind === "avatar_changed"}
@@ -286,21 +298,24 @@
         user={userSummary}
         changedBy={event.event.changedBy}
         property={interpolate($_, i18nKey("groupAvatar", undefined, levelType, true))}
-        timestamp={event.timestamp} />
+        timestamp={event.timestamp}
+    />
 {:else if event.event.kind === "gate_updated"}
     <GroupChangedEvent
         {level}
         user={userSummary}
         changedBy={event.event.updatedBy}
         property={$_("access.gate").toLowerCase()}
-        timestamp={event.timestamp} />
+        timestamp={event.timestamp}
+    />
 {:else if event.event.kind === "external_url_updated"}
     <GroupChangedEvent
         {level}
         user={userSummary}
         changedBy={event.event.updatedBy}
         property={$_("externalContent.name").toLowerCase()}
-        timestamp={event.timestamp} />
+        timestamp={event.timestamp}
+    />
 {:else if event.event.kind === "group_visibility_changed"}
     <GroupVisibilityChangedEvent
         level={levelType}
@@ -308,27 +323,31 @@
         isPublic={event.event.public}
         messagesVisibleToNonMembers={event.event.messagesVisibleToNonMembers}
         changedBy={event.event.changedBy}
-        timestamp={event.timestamp} />
+        timestamp={event.timestamp}
+    />
 {:else if event.event.kind === "group_invite_code_changed"}
     {#if canInvite}
         <GroupInviteCodeChangedEvent
             user={userSummary}
             change={event.event.change}
             changedBy={event.event.changedBy}
-            timestamp={event.timestamp} />
+            timestamp={event.timestamp}
+        />
     {/if}
 {:else if event.event.kind === "permissions_changed"}
     <PermissionsChangedEvent
         level={levelType}
         user={userSummary}
         event={event.event}
-        timestamp={event.timestamp} />
+        timestamp={event.timestamp}
+    />
 {:else if event.event.kind === "events_ttl_updated"}
     <DisappearingMessageTimeUpdated
         user={userSummary}
         changedBy={event.event.updatedBy}
         newTimeToLive={event.event.newTimeToLive}
-        timestamp={event.timestamp} />
+        timestamp={event.timestamp}
+    />
 {:else if event.event.kind === "chat_frozen"}
     <ChatFrozenEvent user={userSummary} event={event.event} timestamp={event.timestamp} />
 {:else if event.event.kind === "chat_unfrozen"}
@@ -339,21 +358,24 @@
         resourceKey={"bots.events.add"}
         event={event.event}
         userId={$currentUserIdStore}
-        timestamp={event.timestamp} />
+        timestamp={event.timestamp}
+    />
 {:else if event.event.kind === "bot_removed"}
     <BotChangedEvent
         changedBy={event.event.removedBy}
         resourceKey={"bots.events.remove"}
         event={event.event}
         userId={$currentUserIdStore}
-        timestamp={event.timestamp} />
+        timestamp={event.timestamp}
+    />
 {:else if event.event.kind === "bot_updated"}
     <BotChangedEvent
         changedBy={event.event.updatedBy}
         resourceKey={"bots.events.update"}
         event={event.event}
         userId={$currentUserIdStore}
-        timestamp={event.timestamp} />
+        timestamp={event.timestamp}
+    />
 {:else if !client.isEventKindHidden(event.event.kind, publicGroup && chatType === "channel")}
     <div>Unexpected event type: {event.event.kind}</div>
 {/if}

@@ -2,10 +2,21 @@ on:
   pull_request:
     branches:
       - master
+      - codex/pr1-local-models
+  push:
+    branches:
+      - codex/pr1-local-models
+      - codex/pr2-app-chat-interfaces
+      - codex/pr2-clean-integration
+  workflow_dispatch:
 
-# If two events are triggered within a short time in the same PR, cancel the run of the oldest event
+permissions:
+  contents: read
+  pull-requests: read
+
+# Keep independent branches separate while cancelling obsolete runs of the same PR/ref.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 name: Validate candid files

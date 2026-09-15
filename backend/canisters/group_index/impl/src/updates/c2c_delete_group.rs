@@ -52,6 +52,10 @@ pub(crate) fn delete_group(
     };
 
     state.data.local_index_map.mark_group_deleted(&group_id);
+    state
+        .data
+        .ai_app_card_authority
+        .observe_route(crate::model::ai_app_card_authority::CardRouteKey::Group(group_id), None);
     state.data.deleted_groups.insert(
         DeletedGroupInfoInternal {
             id: group_id,

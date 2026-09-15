@@ -684,6 +684,9 @@ test("real current config preparation validates all existing sources/profiles wi
       "wasm-default",
       "windows-default",
       "windows-inference",
+      ...(scope === "pr2"
+        ? ["linux-release-tool", "windows-release-tool"]
+        : []),
     ].sort(),
     "Every declared feature/host profile must have a real offline metadata command",
   );

@@ -21,6 +21,7 @@ import {
     inititaliseLogger,
     MessagesReadFromServer,
     setMinLogLevel,
+    shouldReportError,
     shouldReportWorkerError,
     StorageUpdated,
     Stream,
@@ -150,15 +151,26 @@ function handleAgentEvent(ev: Event): void {
     }
 }
 
-const sendError = (kind: string, correlationId: number, payload?: unknown) => {
+function redactedWorkerError(error: unknown): Error {
+    // Preserve the logger's Error-as-second-argument contract without forwarding private
+    // messages, stacks, causes, custom properties or attacker-controlled error names.
+    const redacted = new Error("Worker failure details redacted");
+    if (error instanceof TypeError) redacted.name = "TypeError";
+    else if (error instanceof RangeError) redacted.name = "RangeError";
+    else if (error instanceof SyntaxError) redacted.name = "SyntaxError";
+    else if (error instanceof ReferenceError) redacted.name = "ReferenceError";
+    else if (error instanceof URIError) redacted.name = "URIError";
+    else if (error instanceof EvalError) redacted.name = "EvalError";
+    delete redacted.stack;
+    return redacted;
+}
+
+const sendError = (kind: string, correlationId: number) => {
     return (error: unknown) => {
         if (shouldReportWorkerError(kind, error)) {
-            // The error must be the logger's second argument: that is the slot the logger's own
-            // filtering inspects and the value Rollbar fingerprints on. Passing `kind` there
-            // (as previously) named every item after the request kind and bypassed filtering.
-            logger.error(`WORKER: request failed: ${kind}`, error, payload);
+            logger.error("WORKER: request failed", redactedWorkerError(error), kind);
         } else {
-            logger.debug("WORKER: expected request failure (not reported): ", kind, error);
+            logger.debug("WORKER: expected request failure", kind, redactedWorkerError(error).name);
         }
         postMessage({
             kind: "worker_error",
@@ -169,37 +181,30 @@ const sendError = (kind: string, correlationId: number, payload?: unknown) => {
     };
 };
 
-function streamReplies(
-    payload: WorkerRequest,
-    kind: string,
-    correlationId: number,
-    chain: Stream<WorkerResponseInner>,
-) {
+function streamReplies(kind: string, correlationId: number, chain: Stream<WorkerResponseInner>) {
     const start = Date.now();
     chain.subscribe({
         onResult: (value, final) => {
             console.debug(
                 `WORKER: sending streamed reply ${Date.now() - start}ms after subscribing`,
                 correlationId,
-                value,
                 Date.now(),
                 final,
             );
             sendResponse(kind, correlationId, value, final);
         },
-        onError: sendError(kind, correlationId, payload),
+        onError: sendError(kind, correlationId),
     });
 }
 
 function executeThenReply(
-    payload: WorkerRequest,
     kind: string,
     correlationId: number,
     promise: Promise<WorkerResponseInner>,
 ) {
     promise
         .then((response) => sendResponse(kind, correlationId, response))
-        .catch(sendError(kind, correlationId, payload));
+        .catch(sendError(kind, correlationId));
 }
 
 function sendResponse(
@@ -226,13 +231,17 @@ function sendEvent(msg: Omit<WorkerEvent, "kind">): void {
 }
 
 self.addEventListener("error", (err: ErrorEvent) => {
-    // The underlying error, not the event: the event serialises to nothing useful and dodges
-    // the logger's filtering
-    logger.error("WORKER: unhandled error: ", err.error ?? err.message);
+    const error = err.error ?? err.message;
+    if (shouldReportError(error)) {
+        logger.error("WORKER: unhandled error", redactedWorkerError(error));
+    }
 });
 
 self.addEventListener("unhandledrejection", (err: PromiseRejectionEvent) => {
-    logger.error("WORKER: unhandled promise rejection: ", err.reason ?? err);
+    const error = err.reason ?? err;
+    if (shouldReportError(error)) {
+        logger.error("WORKER: unhandled promise rejection", redactedWorkerError(error));
+    }
 });
 
 self.addEventListener("message", (msg: MessageEvent<CorrelatedWorkerRequest>) => {
@@ -259,7 +268,6 @@ self.addEventListener("message", (msg: MessageEvent<CorrelatedWorkerRequest>) =>
 
         if (kind === "setAuthIdentity") {
             executeThenReply(
-                payload,
                 kind,
                 correlationId,
                 initializeAuthIdentity(
@@ -294,7 +302,6 @@ self.addEventListener("message", (msg: MessageEvent<CorrelatedWorkerRequest>) =>
 
         if (kind === "createOpenChatIdentity") {
             executeThenReply(
-                payload,
                 kind,
                 correlationId,
                 createOpenChatIdentity(payload.webAuthnCredentialId).then((resp) => {
@@ -316,7 +323,6 @@ self.addEventListener("message", (msg: MessageEvent<CorrelatedWorkerRequest>) =>
 
         if (kind === "logout") {
             executeThenReply(
-                payload,
                 kind,
                 correlationId,
                 ocIdentityStorage.remove().then((_) => {
@@ -334,9 +340,9 @@ self.addEventListener("message", (msg: MessageEvent<CorrelatedWorkerRequest>) =>
         }
 
         if (!agent) {
+            logger.debug("WORKER: agent does not exist", kind, correlationId);
             // Reject rather than drop the request, otherwise the caller's promise would never settle.
             // Not routed via sendError since this is expected around login/logout and should not be reported.
-            logger.debug("WORKER: agent does not exist: ", msg.data);
             const error = new Error(`Worker has no agent to handle request: ${kind}`);
             postMessage({
                 kind: "worker_error",
@@ -350,12 +356,11 @@ self.addEventListener("message", (msg: MessageEvent<CorrelatedWorkerRequest>) =>
         const action = getAction(payload, agent, config);
 
         if (action instanceof Promise) {
-            executeThenReply(payload, kind, correlationId, action);
+            executeThenReply(kind, correlationId, action);
         } else {
-            streamReplies(payload, kind, correlationId, action);
+            streamReplies(kind, correlationId, action);
         }
     } catch (err) {
-        logger.debug("WORKER: unhandled error: ", err, kind);
         sendError(kind, correlationId)(err);
     }
 });
@@ -528,6 +533,16 @@ function getAction(
                 payload.voteType,
                 payload.threadRootMessageIndex,
                 payload.newAchievement,
+            );
+
+        case "respondToActionCard":
+            return agent.respondToActionCard(
+                payload.chatId,
+                payload.threadRootMessageIndex,
+                payload.messageId,
+                payload.response,
+                payload.confirmPayloadOverride,
+                payload.confirmationGrant,
             );
 
         case "deleteMessage":
@@ -1207,6 +1222,89 @@ function getAction(
 
         case "diamondMembershipFees":
             return agent.diamondMembershipFees();
+
+        case "aiApps":
+            return agent.aiApps(payload.lookups);
+
+        case "myAiApps":
+            return agent.myAiAppsPage(payload.pageIndex, payload.pageSize);
+
+        case "setAiAppEnabled":
+            return agent.setAiAppEnabled(payload.chatId, payload.appId, payload.enabled);
+
+        case "enabledAiApps":
+            return agent.enabledAiApps(payload.chatId);
+
+        case "myAiAppKeys":
+            return agent.myAiAppKeys();
+        case "aiAppUserKeys":
+            return agent.aiAppUserKeys(payload.appId, payload.userIds);
+
+        case "createAiAppLinkCode":
+            return agent.createAiAppLinkCode(payload.appId);
+
+        case "cancelAiAppLinkCode":
+            return agent.cancelAiAppLinkCode(payload.code);
+
+        case "createAiAppChatLinkToken":
+            return agent.createAiAppChatLinkToken(
+                payload.chatId,
+                payload.chatName,
+                payload.appId,
+                payload.appRevision,
+            );
+
+        case "cancelAiAppChatLinkToken":
+            return agent.cancelAiAppChatLinkToken(payload.token);
+
+        case "createAiAppCardProvenance":
+            return agent.createAiAppCardProvenance(
+                payload.appId,
+                payload.appRevision,
+                payload.actionId,
+                payload.content,
+                payload.chatId,
+                payload.messageId,
+                payload.threadRootMessageIndex,
+            );
+
+        case "createAiAppCardCapability":
+            return agent.createAiAppCardCapability(
+                payload.chatId,
+                payload.threadRootMessageIndex,
+                payload.messageId,
+                payload.recipientKeyScheme,
+                payload.recipientPublicKey,
+            );
+
+        case "createAiAppPrivateMatchCapability":
+            return agent.createAiAppPrivateMatchCapability(
+                payload.chatId,
+                payload.threadRootMessageIndex,
+                payload.messageId,
+                payload.appId,
+                payload.appRevision,
+                payload.actionId,
+                payload.recipientKeyScheme,
+                payload.recipientPublicKey,
+            );
+
+        case "createAiAppCardConfirmationGrant":
+            return agent.createAiAppCardConfirmationGrant(
+                payload.chatId,
+                payload.threadRootMessageIndex,
+                payload.messageId,
+                payload.confirmPayload,
+            );
+
+        case "removeMyAiAppKey":
+            return agent.removeMyAiAppKey(payload.appId);
+
+        case "publishAiApp":
+            return agent.publishAiApp(payload.appId);
+
+        case "exploreAiApps":
+            return agent.exploreAiApps(payload.searchTerm, payload.pageIndex, payload.pageSize);
 
         case "reportedMessages":
             return agent.reportedMessages(payload.userId);

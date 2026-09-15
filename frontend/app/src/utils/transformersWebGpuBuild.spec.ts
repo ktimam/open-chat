@@ -118,6 +118,7 @@ describe("Transformers.js WebGPU build isolation", () => {
             ).toBeGreaterThan(0);
         }
         expect(workers).toContain("transformersWebGpuInference.worker.ts");
+        expect(appBuild).toContain('"./localReplicaImageProxy.ts"');
         expect(workers).toContain('fileName: "transformers_webgpu_worker.js"');
         expect(workers).toContain('conditions: ["onnxruntime-web-use-extern-wasm"]');
         expect(workers).toContain('find: "onnxruntime-web/webgpu"');
@@ -135,7 +136,7 @@ describe("Transformers.js WebGPU build isolation", () => {
         expect(runtimeAssets).toContain("ort-1.29.0-dev.20260723-1b1e1db7bc");
         expect(protocol).toContain('from "./transformersWebGpuRuntimeAssets"');
         expect(appBuild).toContain('"./src/utils/transformersWebGpuRuntimeAssets.ts"');
-        expect(assetPolicy).toContain("{*.css,*.js,*.mjs,*.wasm}");
+        expect(assetPolicy).toContain("{*.css,*.js,*.mjs,*.wasm,*.traineddata.gz}");
         expect(modelWorker).toContain("tap Retry download");
         expect(modelWorker).not.toContain("env.allowRemoteModels = false");
         expect(modelWorker).toContain(

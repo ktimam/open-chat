@@ -299,6 +299,10 @@ test("automatic frontend installs explicitly disable implicit npm audits", () =>
     "dependency-policy",
     "frontend-contracts",
   ]);
+  assertAuditFreeInstalls(
+    read(".github/workflows/openchat_pr2_security.yaml"),
+    ["dependency-security"],
+  );
 });
 
 function assertOptionalNodeDownloadsSkipped(text, expectedJobs, indent = 2) {
@@ -349,7 +353,10 @@ test("feature installs skip unused ONNX Node GPU downloads without disabling lif
   assertOptionalNodeDownloadsSkipped(
     read(".github/workflows/android_release.yaml"),
     ["build-android"],
-    4,
+  );
+  assertOptionalNodeDownloadsSkipped(
+    read(".github/workflows/openchat_pr2_security.yaml"),
+    ["dependency-security"],
   );
 });
 
@@ -495,7 +502,7 @@ function sourceFiles(path) {
 // Discover current and future tests by model-owned naming families, not a frozen
 // list of today's filenames. App-authored action/OCR suites remain in full CI.
 const modelFamily =
-  /\/(?:customModels|onDeviceModels|model|onDeviceInference|nativeInferenceRuntimeBridge|webInference|webGpuModelCatalog|transformersWebGpu|gemma4WebGpu|WebInferenceRuntimeSettings|WebGpuModelCatalog|localAi|localAudioInput|configuredLocalBlobUrl|localImageInput|publicBlob|publicKeyBuild|rollup-plugin-wasm-url|bootstrapSecurity)[^/]*\.(?:spec|test)\.[cm]?[jt]sx?$/u;
+  /\/(?:customModels|onDeviceModels|model|onDeviceInference|nativeInferenceRuntimeBridge|webInference|webGpuModelCatalog|transformersWebGpu|gemma4WebGpu|WebInferenceRuntimeSettings|WebGpuModelCatalog|localAi|localAudioInput|configuredLocalBlobUrl|localImageInput|imageDimensions|inferenceImage|publicBlob|publicKeyBuild|rollup-plugin-wasm-url|bootstrapSecurity)[^/]*\.(?:spec|test)\.[cm]?[jt]sx?$/u;
 const candidateFiles = [
   ...sourceFiles("app"),
   ...sourceFiles("openchat-agent/src/services/storageBucket"),
@@ -606,6 +613,7 @@ test("model runtime, workers, helpers, UI, build, notices and policy inputs trig
     "frontend/app/src/utils/webInference.ts",
     "frontend/app/src/utils/nativeInferenceRuntimeBridge.spec.ts",
     "frontend/app/src/utils/imageDimensions.ts",
+    "frontend/app/src/utils/inferenceImage.ts",
     "frontend/app/.ic-assets.json5",
     "frontend/vite-env.d.ts",
     "frontend/global.d.ts",
@@ -676,11 +684,13 @@ test("model runtime, workers, helpers, UI, build, notices and policy inputs trig
     "scripts/model_ci_coverage.test.mjs",
     "scripts/model_asset_notices.test.mjs",
     "scripts/verify_webgpu_distribution.mjs",
+    "scripts/android_dev.mjs",
     "scripts/android_bundle.test.mjs",
     "scripts/android_build_prerequisites.test.mjs",
     "dfx.json",
     ".github/workflows/android_release.yaml",
     ".github/security/openchat-pr1-security-baseline.json",
+    ".github/security/openchat-pr2-security-baseline.json",
     ".github/workflows/frontend.yaml",
   ]) {
     assert.ok(existsSync(join(root, path)), `stale coverage fixture: ${path}`);
@@ -734,7 +744,7 @@ test("the limited PR glob matcher preserves path-segment and globstar boundaries
 test("normal frontend CI runs this coverage regression as a policy test", () => {
   const frontend = read(".github/workflows/frontend.yaml");
   const policyStep = frontend
-    .split("- name: Check model and packaging policy regressions")[1]
+    .split("- name: Check PR and release policy regressions")[1]
     ?.split(/\n {6}- /u)[0];
   assert.ok(policyStep, "missing frontend policy test step");
   assert.match(
@@ -827,25 +837,33 @@ test("the frontend build runs a read-only lint check", () => {
   );
 });
 
-test("frontend policy invokes only generic regression scripts present in this checkout", () => {
+test("frontend policy invokes the exact combined PR and release regressions present in this checkout", () => {
   const step = read(".github/workflows/frontend.yaml")
-    .split("- name: Check model and packaging policy regressions")[1]
+    .split("- name: Check PR and release policy regressions")[1]
     ?.split(/\n {6}- /u)[0];
   assert.ok(step);
   const command = /run: node --test ([^\r\n]+)/u.exec(step);
   assert.ok(command);
   const files = command[1].trim().split(/\s+/u);
   assert.deepEqual(files, [
+    "scripts/pr-ci-policy.test.mjs",
+    "scripts/app_model_integration.test.mjs",
+    "scripts/message_content_candid_contract.test.mjs",
+    "scripts/validate_action_inbox_wiring.test.mjs",
+    "scripts/android_release_policy.test.mjs",
+    "scripts/android_release_checks.test.mjs",
+    "scripts/release_preflight.test.mjs",
+    "scripts/upgrade_canister.test.mjs",
     "scripts/android_bundle.test.mjs",
     "scripts/android_build_prerequisites.test.mjs",
-    "scripts/android_dev.test.mjs",
-    "scripts/model_asset_notices.test.mjs",
-    "scripts/verify_webgpu_distribution.test.mjs",
-    "scripts/model_ci_coverage.test.mjs",
-    "scripts/security_mode_scope.test.mjs",
-    "scripts/sbom_lock_identity.test.mjs",
     "scripts/frontend_format_check.test.mjs",
     "scripts/frontend_format_inherited.test.mjs",
+    "scripts/android_dev.test.mjs",
+    "scripts/verify_webgpu_distribution.test.mjs",
+    "scripts/model_asset_notices.test.mjs",
+    "scripts/sbom_lock_identity.test.mjs",
+    "scripts/model_ci_coverage.test.mjs",
+    "scripts/security_mode_scope.test.mjs",
   ]);
   for (const path of files) assert.ok(existsSync(join(root, path)), path);
 });
@@ -866,6 +884,111 @@ test("historical dependency hash proofs run in the full-history security checkou
     read(".github/workflows/frontend.yaml"),
     /security_dependency_hash\.test\.mjs/u,
   );
+});
+
+const compatibilityScripts = [
+  "scripts/cdp_axios_compatibility.mjs",
+  "scripts/decoder_compatibility.mjs",
+  "scripts/onnx_adm_zip_compatibility.mjs",
+  "scripts/transformers_sharp_compatibility.mjs",
+];
+
+test("CI separately builds and verifies the opt-in WebGPU production candidate", () => {
+  const frontend = read(".github/workflows/frontend.yaml");
+  const name =
+    "- name: Build and verify the opt-in production WebGPU candidate";
+  const candidate = frontend.split(name)[1]?.split(/\n {6}- /u)[0];
+  assert.ok(candidate, "missing real production WebGPU packaging gate");
+  assert.match(candidate, /npm run build:prod/u);
+  assert.match(
+    candidate,
+    /node \.\.\/scripts\/verify_webgpu_distribution\.mjs app\/build/u,
+  );
+  assert.match(candidate, /OC_TRANSFORMERS_WEBGPU_IMAGE_SPIKE: "true"/u);
+  assert.match(
+    candidate,
+    /OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY: immutable-hub-v1/u,
+  );
+  assert.doesNotMatch(
+    candidate,
+    /continue-on-error|\|\|\s*true|npm (?:install|update)|deploy/u,
+  );
+  const standard = frontend
+    .split("- name: Build frontend")[1]
+    ?.split(/\n {6}- /u)[0];
+  assert.ok(standard);
+  assert.match(standard, /npm run build:ci/u);
+  assert.doesNotMatch(standard, /OC_TRANSFORMERS_WEBGPU_/u);
+  assert.ok(frontend.indexOf("run: npm run build:ci") < frontend.indexOf(name));
+});
+
+test("frontend checks cover both model and app-interface branches with read-only repository permissions", () => {
+  const frontend = read(".github/workflows/frontend.yaml");
+  const events = mappingBlock(frontend, "on", 0);
+  const push = mappingBlock(events, "push", 2);
+  for (const branch of [
+    "codex/pr1-local-models",
+    "codex/pr2-app-chat-interfaces",
+    "codex/pr2-clean-integration",
+  ]) {
+    assert.match(push, new RegExp(`^ +- ${branch}\\r?$`, "mu"));
+  }
+  assert.match(
+    mappingBlock(frontend, "permissions", 0),
+    /^ +contents: read\r?$/mu,
+  );
+  assert.doesNotMatch(frontend, /contents: write/u);
+});
+
+test("frontend CI runs every scoped dependency contract against the frozen install", () => {
+  const frontend = read(".github/workflows/frontend.yaml");
+  const jobs = mappingBlock(frontend, "jobs", 0);
+  const job = mappingBlock(jobs, "install-and-test", 2);
+  const stepName = "- name: Verify narrowly scoped dependency compatibility";
+  const step = job.split(stepName)[1]?.split(/\n {6}- /u)[0];
+  assert.ok(step, "missing installed-parent compatibility step");
+  assert.match(step, /working-directory: \./u);
+  const commands = [
+    ...step.matchAll(/^ +node (scripts\/[^\s]+\.mjs)\r?$/gmu),
+  ].map((match) => match[1]);
+  assert.deepEqual(commands, compatibilityScripts);
+  const install = job.indexOf("run: npm ci");
+  const compatibility = job.indexOf(stepName);
+  const build = job.indexOf("run: npm run build:ci");
+  assert.ok(install > 0 && compatibility > install && build > compatibility);
+  assert.doesNotMatch(step, /continue-on-error|\|\|\s*true|--ignore-scripts/u);
+  assert.doesNotMatch(job, /run: npm (?:install|update|audit fix)\b/u);
+  assert.match(job, /node-version: "24\.18\.1"/u);
+});
+
+test("every scoped dependency contract exists and triggers the model PR workflow", () => {
+  for (const path of compatibilityScripts) {
+    assert.ok(
+      existsSync(join(root, path)),
+      `missing compatibility script: ${path}`,
+    );
+    assert.ok(
+      triggers(path),
+      `compatibility script does not trigger CI: ${path}`,
+    );
+  }
+});
+
+test("Node image and installer fixes stay scoped to their reviewed model parents", () => {
+  const manifest = JSON.parse(read("frontend/package.json"));
+  const overrides = manifest.overrides;
+  assert.equal(manifest.dependencies["@huggingface/transformers"], "4.2.0");
+  for (const [parent, dependency, version] of [
+    ["@huggingface/transformers@4.2.0", "sharp", "0.35.4"],
+    ["onnxruntime-node@1.24.3", "adm-zip", "0.6.0"],
+  ]) {
+    assert.deepEqual(overrides[parent], { [dependency]: version });
+    assert.equal(Object.hasOwn(overrides, dependency), false);
+    assert.equal(
+      Object.hasOwn(overrides, parent.slice(0, parent.lastIndexOf("@"))),
+      false,
+    );
+  }
 });
 
 function assertCurrentAndroidSdkPackages(text) {
@@ -976,104 +1099,5 @@ test("Android component identity compiles actual sources against host fixtures a
   ]) {
     assert.ok(existsSync(join(root, path)), path);
     assert.ok(triggers(path), `component CI not triggered by ${path}`);
-  }
-});
-
-const compatibilityScripts = [
-  "scripts/cdp_axios_compatibility.mjs",
-  "scripts/decoder_compatibility.mjs",
-  "scripts/onnx_adm_zip_compatibility.mjs",
-  "scripts/transformers_sharp_compatibility.mjs",
-];
-
-test("CI separately builds and verifies the opt-in WebGPU production candidate", () => {
-  const frontend = read(".github/workflows/frontend.yaml");
-  const name =
-    "- name: Build and verify the opt-in production WebGPU candidate";
-  const candidate = frontend.split(name)[1]?.split(/\n {6}- /u)[0];
-  assert.ok(candidate, "missing real production WebGPU packaging gate");
-  assert.match(candidate, /npm run build:prod/u);
-  assert.match(
-    candidate,
-    /node \.\.\/scripts\/verify_webgpu_distribution\.mjs app\/build/u,
-  );
-  assert.match(candidate, /OC_TRANSFORMERS_WEBGPU_IMAGE_SPIKE: "true"/u);
-  assert.match(
-    candidate,
-    /OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY: immutable-hub-v1/u,
-  );
-  assert.doesNotMatch(
-    candidate,
-    /continue-on-error|\|\|\s*true|npm (?:install|update)|deploy/u,
-  );
-  const standard = frontend
-    .split("- name: Build frontend")[1]
-    ?.split(/\n {6}- /u)[0];
-  assert.ok(standard);
-  assert.match(standard, /npm run build:ci/u);
-  assert.doesNotMatch(standard, /OC_TRANSFORMERS_WEBGPU_/u);
-  assert.ok(frontend.indexOf("run: npm run build:ci") < frontend.indexOf(name));
-});
-
-test("frontend checks also cover the published model branch with read-only repository permissions", () => {
-  const frontend = read(".github/workflows/frontend.yaml");
-  const events = mappingBlock(frontend, "on", 0);
-  const push = mappingBlock(events, "push", 2);
-  assert.match(push, /^ +- codex\/pr1-local-models\r?$/mu);
-  assert.match(
-    mappingBlock(frontend, "permissions", 0),
-    /^ +contents: read\r?$/mu,
-  );
-  assert.doesNotMatch(frontend, /contents: write/u);
-});
-
-test("frontend CI runs every scoped dependency contract against the frozen install", () => {
-  const frontend = read(".github/workflows/frontend.yaml");
-  const jobs = mappingBlock(frontend, "jobs", 0);
-  const job = mappingBlock(jobs, "install-and-test", 2);
-  const stepName = "- name: Verify narrowly scoped dependency compatibility";
-  const step = job.split(stepName)[1]?.split(/\n {6}- /u)[0];
-  assert.ok(step, "missing installed-parent compatibility step");
-  assert.match(step, /working-directory: \./u);
-  const commands = [
-    ...step.matchAll(/^ +node (scripts\/[^\s]+\.mjs)\r?$/gmu),
-  ].map((match) => match[1]);
-  assert.deepEqual(commands, compatibilityScripts);
-  const install = job.indexOf("run: npm ci");
-  const compatibility = job.indexOf(stepName);
-  const build = job.indexOf("run: npm run build:ci");
-  assert.ok(install > 0 && compatibility > install && build > compatibility);
-  assert.doesNotMatch(step, /continue-on-error|\|\|\s*true|--ignore-scripts/u);
-  assert.doesNotMatch(job, /run: npm (?:install|update|audit fix)\b/u);
-  assert.match(job, /node-version: "24\.18\.1"/u);
-});
-
-test("every scoped dependency contract exists and triggers the model PR workflow", () => {
-  for (const path of compatibilityScripts) {
-    assert.ok(
-      existsSync(join(root, path)),
-      `missing compatibility script: ${path}`,
-    );
-    assert.ok(
-      triggers(path),
-      `compatibility script does not trigger CI: ${path}`,
-    );
-  }
-});
-
-test("Node image and installer fixes stay scoped to their reviewed model parents", () => {
-  const manifest = JSON.parse(read("frontend/package.json"));
-  const overrides = manifest.overrides;
-  assert.equal(manifest.dependencies["@huggingface/transformers"], "4.2.0");
-  for (const [parent, dependency, version] of [
-    ["@huggingface/transformers@4.2.0", "sharp", "0.35.4"],
-    ["onnxruntime-node@1.24.3", "adm-zip", "0.6.0"],
-  ]) {
-    assert.deepEqual(overrides[parent], { [dependency]: version });
-    assert.equal(Object.hasOwn(overrides, dependency), false);
-    assert.equal(
-      Object.hasOwn(overrides, parent.slice(0, parent.lastIndexOf("@"))),
-      false,
-    );
   }
 });

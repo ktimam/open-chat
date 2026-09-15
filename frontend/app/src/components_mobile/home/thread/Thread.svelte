@@ -15,6 +15,7 @@
     } from "@client";
     import {
         allUsersStore,
+        chatIdentifierToString,
         currentUserIdStore,
         currentUserStore,
         failedMessagesStore,
@@ -95,7 +96,13 @@
             true,
         ) as TimelineItem<Message>[],
     );
-    let items = $derived(flattener.flatten(timeline));
+    let items = $derived(
+        flattener.flatten(
+            timeline,
+            (event) =>
+                `${$currentUserIdStore}:${chatIdentifierToString(chat.id)}:${event === rootEvent ? "thread_root" : `thread_reply:${threadRootMessageIndex}`}`,
+        ),
+    );
     let readonly = $derived(client.isChatReadOnly(chat.id));
     let thread = $derived(rootEvent.event.thread);
     let loading = $derived(!initialised && $threadEventsStore.length === 0 && thread !== undefined);
@@ -302,7 +309,8 @@
             // TODO rethink, same as in CurrentChat.svelte
             keyboard.disableViewportResize();
             creatingCryptoTransfer = undefined;
-        }} />
+        }}
+    />
 {/if}
 
 <Container background={ColourVars.surface0} height={"fill"} direction={"vertical"}>
@@ -325,7 +333,8 @@
             {chat}
             bind:initialised
             bind:messagesDiv
-            bind:messagesDivHeight>
+            bind:messagesDivHeight
+        >
             {#snippet row(
                 item,
                 { isAccepted, isConfirmed, isFailed, isReadByMe, messageObserver, focusIndex },
@@ -334,6 +343,7 @@
                     <TimelineDate timestamp={item.timestamp} />
                 {:else if item.kind === "event"}
                     {@const evt = item.event as EventWrapper<Message>}
+                    {@const isThreadRoot = evt === rootEvent}
                     <ChatEvent
                         chatId={chat.id}
                         chatType={chat.kind}
@@ -344,17 +354,16 @@
                         accepted={isAccepted($unconfirmedStore, evt)}
                         confirmed={isConfirmed($unconfirmedStore, evt)}
                         failed={isFailed($failedMessagesStore, evt)}
-                        readByMe={evt.event.messageId === rootEvent.event.messageId ||
-                            !isFollowedByMe ||
-                            isReadByMe($messagesRead, evt)}
+                        readByMe={isThreadRoot || !isFollowedByMe || isReadByMe($messagesRead, evt)}
                         observer={messageObserver}
                         focused={evt.event.kind === "message" &&
                             focusIndex === evt.event.messageIndex}
                         {readonly}
                         {threadRootMessage}
+                        {isThreadRoot}
                         pinned={false}
-                        supportsEdit={evt.event.messageId !== rootEvent.event.messageId}
-                        supportsReply={evt.event.messageId !== rootEvent.event.messageId}
+                        supportsEdit={!isThreadRoot}
+                        supportsReply={!isThreadRoot}
                         canPin={client.canPinMessages(chat.id)}
                         canBlockUsers={client.canBlockUsers(chat.id)}
                         canDelete={client.canDeleteOtherUsersMessages(chat.id)}
@@ -371,7 +380,8 @@
                         onReplyTo={replyTo}
                         onEditEvent={() => editEvent(evt)}
                         onExpandMessage={() => toggleMessageExpansion(evt, true)}
-                        onCollapseMessage={() => toggleMessageExpansion(evt, false)} />
+                        onCollapseMessage={() => toggleMessageExpansion(evt, false)}
+                    />
                 {/if}
             {/snippet}
         </ChatEventList>
@@ -400,6 +410,7 @@
             {onSendMessage}
             onMakeMeme={makeMeme}
             onTokenTransfer={tokenTransfer}
-            onCreateP2PSwapMessage={createP2PSwapMessage} />
+            onCreateP2PSwapMessage={createP2PSwapMessage}
+        />
     {/if}
 </Container>

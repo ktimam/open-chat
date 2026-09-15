@@ -1,0 +1,380 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+    BROWSER_INFERENCE_IMAGE_PREPARE_TIMEOUT_MS,
+    prepareImageForBrowserInference,
+    prepareImageRegionForInference,
+} from "./inferenceImage";
+
+function pngBytes(width: number, height: number): Uint8Array {
+    const bytes = new Uint8Array(24);
+    bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+    bytes.set([0x49, 0x48, 0x44, 0x52], 12);
+    const view = new DataView(bytes.buffer);
+    view.setUint32(16, width);
+    view.setUint32(20, height);
+    return bytes;
+}
+
+function jpegBytes(width: number, height: number): Uint8Array {
+    return new Uint8Array([
+        0xff,
+        0xd8,
+        0xff,
+        0xc0,
+        0x00,
+        0x11,
+        0x08,
+        height >> 8,
+        height & 0xff,
+        width >> 8,
+        width & 0xff,
+        0x03,
+        0x01,
+        0x11,
+        0x00,
+        0x02,
+        0x11,
+        0x00,
+        0x03,
+        0x11,
+        0x00,
+    ]);
+}
+
+afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+});
+
+describe("prepareImageForBrowserInference", () => {
+    it("passes an already-small image through without decoding or copying it", async () => {
+        const bytes = jpegBytes(500, 400);
+        const decode = vi.fn();
+
+        await expect(
+            prepareImageForBrowserInference(bytes, { width: 500, height: 400 }, decode),
+        ).resolves.toBe(bytes);
+        expect(decode).not.toHaveBeenCalled();
+    });
+
+    it("shrinks a large phone photo to the bounded inference pixel budget", async () => {
+        const bytes = jpegBytes(4032, 3024);
+        const decode = vi.fn().mockResolvedValue(new Uint8Array([9, 8, 7]));
+
+        await expect(
+            prepareImageForBrowserInference(bytes, { width: 4032, height: 3024 }, decode),
+        ).resolves.toEqual(new Uint8Array([9, 8, 7]));
+        expect(decode).toHaveBeenCalledOnce();
+        expect(decode).toHaveBeenCalledWith(
+            bytes,
+            expect.objectContaining({
+                width: 591,
+                height: 443,
+                mimeType: "image/jpeg",
+                quality: 0.85,
+                signal: expect.any(AbortSignal),
+            }),
+        );
+    });
+
+    it("also constrains a very wide image by the 768px long-edge limit", async () => {
+        const bytes = jpegBytes(4000, 1000);
+        const decode = vi.fn().mockResolvedValue(new Uint8Array([1]));
+
+        await prepareImageForBrowserInference(bytes, { width: 4000, height: 1000 }, decode);
+
+        expect(decode).toHaveBeenCalledWith(
+            bytes,
+            expect.objectContaining({
+                width: 768,
+                height: 192,
+                mimeType: "image/jpeg",
+                quality: 0.85,
+                signal: expect.any(AbortSignal),
+            }),
+        );
+    });
+
+    it("uses intrinsic header dimensions and requests a bounded browser decode", async () => {
+        const bytes = pngBytes(3000, 2000);
+        const close = vi.fn();
+        const bitmap = { width: 627, height: 418, close };
+        const canvas = {
+            width: 0,
+            height: 0,
+            getContext: vi.fn().mockReturnValue({ drawImage: vi.fn() }),
+            toBlob: vi.fn((callback: (blob: Blob | null) => void) => {
+                const encoded = new Blob([], { type: "image/jpeg" });
+                Object.defineProperty(encoded, "arrayBuffer", {
+                    value: async () => new Uint8Array([4, 5]).buffer,
+                });
+                callback(encoded);
+            }),
+        };
+        vi.stubGlobal("createImageBitmap", vi.fn().mockResolvedValue(bitmap));
+        vi.spyOn(document, "createElement").mockReturnValue(canvas as unknown as HTMLCanvasElement);
+
+        await expect(prepareImageForBrowserInference(bytes)).resolves.toEqual(
+            new Uint8Array([4, 5]),
+        );
+        expect(createImageBitmap).toHaveBeenCalledWith(expect.any(Blob), {
+            imageOrientation: "from-image",
+            resizeWidth: 627,
+            resizeHeight: 418,
+            resizeQuality: "high",
+        });
+        expect(canvas.width).toBe(627);
+        expect(canvas.height).toBe(418);
+        expect(close).toHaveBeenCalledOnce();
+    });
+
+    it("fails closed if browser decoding or encoding fails", async () => {
+        const bytes = jpegBytes(4032, 3024);
+        const decode = vi.fn().mockRejectedValue(new Error("unsupported image"));
+
+        await expect(
+            prepareImageForBrowserInference(bytes, { width: 4032, height: 3024 }, decode),
+        ).rejects.toThrow(/safely prepared.*smaller image/i);
+    });
+
+    it("fails closed at the bounded deadline when browser image preparation never settles", async () => {
+        const bytes = jpegBytes(4032, 3024);
+        const decode = vi.fn().mockReturnValue(new Promise<Uint8Array>(() => undefined));
+        vi.useFakeTimers();
+        try {
+            const pending = prepareImageForBrowserInference(
+                bytes,
+                { width: 4032, height: 3024 },
+                decode,
+            );
+            const rejection = expect(pending).rejects.toThrow(/finish preparing.*in time/i);
+            await vi.advanceTimersByTimeAsync(BROWSER_INFERENCE_IMAGE_PREPARE_TIMEOUT_MS);
+
+            await rejection;
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("closes a decoded bitmap that arrives after the preparation deadline", async () => {
+        const bytes = pngBytes(3000, 2000);
+        const close = vi.fn();
+        let resolveBitmap!: (bitmap: ImageBitmap) => void;
+        const bitmap = { width: 3000, height: 2000, close } as unknown as ImageBitmap;
+        vi.stubGlobal(
+            "createImageBitmap",
+            vi.fn().mockReturnValue(
+                new Promise<ImageBitmap>((resolve) => {
+                    resolveBitmap = resolve;
+                }),
+            ),
+        );
+        vi.useFakeTimers();
+        try {
+            const pending = prepareImageForBrowserInference(bytes);
+            const rejection = expect(pending).rejects.toThrow(/finish preparing.*in time/i);
+            await vi.advanceTimersByTimeAsync(BROWSER_INFERENCE_IMAGE_PREPARE_TIMEOUT_MS);
+            await rejection;
+
+            resolveBitmap(bitmap);
+            await Promise.resolve();
+            await Promise.resolve();
+            expect(close).toHaveBeenCalledOnce();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("rejects unverifiable or dangerously oversized raster headers before decoding", async () => {
+        const decode = vi.fn();
+        await expect(
+            prepareImageForBrowserInference(new Uint8Array([1, 2, 3]), undefined, decode),
+        ).rejects.toThrow(/dimensions could not be verified/i);
+        await expect(
+            prepareImageForBrowserInference(pngBytes(9_000, 1_000), undefined, decode),
+        ).rejects.toThrow(/too large.*safely/i);
+        expect(decode).not.toHaveBeenCalled();
+    });
+});
+
+describe("prepareImageRegionForInference", () => {
+    it.each(["lower_half", "detail_card", "lower_detail_rows"] as const)(
+        "preserves the full raster for %s when the source is not a tall receipt",
+        async (region) => {
+            const bytes = pngBytes(1200, 900);
+            const crop = vi.fn();
+
+            await expect(prepareImageRegionForInference(bytes, region, crop)).resolves.toBe(bytes);
+            expect(crop).not.toHaveBeenCalled();
+        },
+    );
+
+    it("preserves the exact version-2 lower-half region", async () => {
+        const bytes = pngBytes(909, 1600);
+        const crop = vi.fn().mockResolvedValue(new Uint8Array([9, 8, 7]));
+
+        await expect(prepareImageRegionForInference(bytes, "lower_half", crop)).resolves.toEqual(
+            new Uint8Array([9, 8, 7]),
+        );
+        expect(crop).toHaveBeenCalledWith(
+            bytes,
+            expect.objectContaining({
+                sourceX: 0,
+                sourceY: 800,
+                sourceWidth: 909,
+                sourceHeight: 800,
+                width: 545,
+                height: 480,
+                mimeType: "image/jpeg",
+                quality: 0.85,
+                signal: expect.any(AbortSignal),
+            }),
+        );
+    });
+
+    it("focuses the reported 13-Aug detail card with the version-3 closed region", async () => {
+        const bytes = pngBytes(809, 1280);
+        const crop = vi.fn().mockResolvedValue(new Uint8Array([1, 3, 8]));
+
+        await expect(prepareImageRegionForInference(bytes, "detail_card", crop)).resolves.toEqual(
+            new Uint8Array([1, 3, 8]),
+        );
+        expect(crop).toHaveBeenCalledWith(
+            bytes,
+            expect.objectContaining({
+                sourceX: 0,
+                sourceY: 742,
+                sourceWidth: 809,
+                sourceHeight: 359,
+                width: 768,
+                height: 340,
+                mimeType: "image/jpeg",
+                quality: 0.85,
+                signal: expect.any(AbortSignal),
+            }),
+        );
+    });
+
+    it("keeps the existing 14-Aug detail card inside the same closed region", async () => {
+        const bytes = pngBytes(909, 1600);
+        const crop = vi.fn().mockResolvedValue(new Uint8Array([1, 4, 8]));
+
+        await expect(prepareImageRegionForInference(bytes, "detail_card", crop)).resolves.toEqual(
+            new Uint8Array([1, 4, 8]),
+        );
+        expect(crop).toHaveBeenCalledWith(
+            bytes,
+            expect.objectContaining({
+                sourceX: 0,
+                sourceY: 928,
+                sourceWidth: 909,
+                sourceHeight: 448,
+                width: 729,
+                height: 359,
+            }),
+        );
+    });
+
+    it("focuses the version-4 lower detail rows at full width from 68% through 90%", async () => {
+        const bytes = pngBytes(909, 1600);
+        const crop = vi.fn().mockResolvedValue(new Uint8Array([6, 8, 9]));
+
+        await expect(
+            prepareImageRegionForInference(bytes, "lower_detail_rows", crop),
+        ).resolves.toEqual(new Uint8Array([6, 8, 9]));
+        expect(crop).toHaveBeenCalledWith(
+            bytes,
+            expect.objectContaining({
+                sourceX: 0,
+                sourceY: 1088,
+                sourceWidth: 909,
+                sourceHeight: 352,
+                width: 768,
+                height: 297,
+                mimeType: "image/jpeg",
+                quality: 0.85,
+                signal: expect.any(AbortSignal),
+            }),
+        );
+    });
+
+    it("keeps the exact lower-date band sharp until the bounded canvas resize", async () => {
+        const bytes = pngBytes(909, 1600);
+        const close = vi.fn();
+        const bitmap = { width: 909, height: 352, close };
+        const drawImage = vi.fn();
+        const context = { drawImage, imageSmoothingEnabled: false, imageSmoothingQuality: "low" };
+        const canvas = {
+            width: 0,
+            height: 0,
+            getContext: vi.fn().mockReturnValue(context),
+            toBlob: vi.fn((callback: (blob: Blob | null) => void) => {
+                const encoded = new Blob([], { type: "image/jpeg" });
+                Object.defineProperty(encoded, "arrayBuffer", {
+                    value: async () => new Uint8Array([4, 5]).buffer,
+                });
+                callback(encoded);
+            }),
+        };
+        vi.stubGlobal("createImageBitmap", vi.fn().mockResolvedValue(bitmap));
+        vi.spyOn(document, "createElement").mockReturnValue(canvas as unknown as HTMLCanvasElement);
+
+        await expect(prepareImageRegionForInference(bytes, "lower_detail_rows")).resolves.toEqual(
+            new Uint8Array([4, 5]),
+        );
+        expect(createImageBitmap).toHaveBeenCalledWith(expect.any(Blob), 0, 1088, 909, 352, {
+            imageOrientation: "from-image",
+        });
+        expect(canvas.width).toBe(768);
+        expect(canvas.height).toBe(297);
+        expect(context.imageSmoothingEnabled).toBe(true);
+        expect(context.imageSmoothingQuality).toBe("high");
+        expect(drawImage).toHaveBeenCalledWith(bitmap, 0, 0, 768, 297);
+        expect(close).toHaveBeenCalledOnce();
+    });
+
+    it("retains decode-time resize as a memory guard for a multi-megapixel crop", async () => {
+        const bytes = pngBytes(4000, 8000);
+        const close = vi.fn();
+        const bitmap = { width: 684, height: 383, close };
+        const canvas = {
+            width: 0,
+            height: 0,
+            getContext: vi.fn().mockReturnValue({ drawImage: vi.fn() }),
+            toBlob: vi.fn((callback: (blob: Blob | null) => void) => {
+                const encoded = new Blob([], { type: "image/jpeg" });
+                Object.defineProperty(encoded, "arrayBuffer", {
+                    value: async () => new Uint8Array([7, 8]).buffer,
+                });
+                callback(encoded);
+            }),
+        };
+        vi.stubGlobal("createImageBitmap", vi.fn().mockResolvedValue(bitmap));
+        vi.spyOn(document, "createElement").mockReturnValue(canvas as unknown as HTMLCanvasElement);
+
+        await expect(prepareImageRegionForInference(bytes, "detail_card")).resolves.toEqual(
+            new Uint8Array([7, 8]),
+        );
+        expect(createImageBitmap).toHaveBeenCalledWith(expect.any(Blob), 0, 4640, 4000, 2240, {
+            imageOrientation: "from-image",
+            resizeWidth: 684,
+            resizeHeight: 383,
+            resizeQuality: "high",
+        });
+        expect(canvas.width).toBe(684);
+        expect(canvas.height).toBe(383);
+        expect(close).toHaveBeenCalledOnce();
+    });
+
+    it("rejects unsupported regions and oversized source rasters before decoding", async () => {
+        const crop = vi.fn();
+        await expect(
+            prepareImageRegionForInference(pngBytes(909, 1600), "upper_half" as never, crop),
+        ).rejects.toThrow(/unsupported inference image region/i);
+        await expect(
+            prepareImageRegionForInference(pngBytes(9_000, 1_000), "lower_half", crop),
+        ).rejects.toThrow(/too large to focus safely/i);
+        expect(crop).not.toHaveBeenCalled();
+    });
+});

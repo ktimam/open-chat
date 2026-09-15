@@ -1,0 +1,105 @@
+name: OpenChat PR2 security policy
+
+on:
+  pull_request:
+    branches: [master, codex/pr1-local-models]
+    # Consumer-only changes must run the source-bound scoped npm gate too.
+    # No path filter; the queried dependency roots remain model/app-card-only.
+  push:
+    branches: [codex/pr2-app-chat-interfaces, codex/pr2-clean-integration]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dependency-security:
+    name: Dependency delta, advisories and licenses
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Set up exact supported Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24.18.1"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install exact frontend lockfile
+        working-directory: frontend
+        env:
+          ONNXRUNTIME_NODE_INSTALL: "skip"
+        run: npm ci --no-audit
+      - name: Verify portable digest migration against reviewed history
+        run: node --test scripts/security_dependency_hash.test.mjs
+      - name: Test scoped npm ownership, collection and advisory contracts offline
+        working-directory: .
+        run: node --test scripts/npm_feature_scope.test.mjs scripts/npm_feature_seed_review.test.mjs scripts/npm_feature_advisories.test.mjs scripts/npm_feature_advisories.review.test.mjs scripts/npm_feature_runtime.test.mjs scripts/check_feature_ci.test.mjs scripts/security_mode_scope.test.mjs scripts/security_owned_rules.test.mjs
+      - name: Check partial npm CI wiring and exact Node runtime
+        working-directory: .
+        run: node scripts/check_feature_ci.mjs npm-pr2
+      - name: Validate the actual collector runtime offline before advisory requests
+        working-directory: .
+        run: |
+          set -euo pipefail
+          npm_root="$(npm root --global)"
+          node scripts/npm_feature_runtime_smoke.mjs --repository-root "$GITHUB_WORKSPACE" --scope pr2 --arborist-path "$npm_root/npm/node_modules/@npmcli/arborist" --output-directory "$RUNNER_TEMP" --mode plan
+      - name: Query advisories only for reviewed model and app-card dependency roots
+        working-directory: .
+        # The exact reviewed Node/npm tuple and Arborist source hashes are verified.
+        # Source, seeds, install mode and lock identities are checked before/after.
+        run: |
+          set -euo pipefail
+          npm_root="$(npm root --global)"
+          node scripts/npm_feature_advisories.mjs --repository-root "$GITHUB_WORKSPACE" --scope pr2 --arborist-path "$npm_root/npm/node_modules/@npmcli/arborist" --output-directory "$RUNNER_TEMP" --mode query-bulk
+      - name: Upload scoped model and app npm evidence, including failed checks
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: openchat-pr2-scoped-npm-report
+          path: ${{ runner.temp }}/npm-feature-advisories-*
+          if-no-files-found: error
+      - name: Prepare locked Rust metadata inputs explicitly
+        working-directory: .
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.95.0 --profile minimal
+          cargo_path="$(rustup which --toolchain 1.95.0 cargo)"
+          rustc_path="$(rustup which --toolchain 1.95.0 rustc)"
+          RUSTC="$rustc_path" "$cargo_path" fetch --locked
+      - name: Check direct app dependency licenses offline
+        working-directory: .
+        # Fails closed if locked Cargo metadata is not already cached.
+        run: node scripts/check_openchat_pr2_security.mjs licenses
+      - name: Check complete feature workflow wiring
+        working-directory: .
+        run: node scripts/check_feature_ci.mjs pr2
+      - name: Run scoped Rust collection, schema and advisory gate
+        working-directory: .
+        # Incomplete source review stops before advisory egress; no broad fallback.
+        run: |
+          set -euo pipefail
+          cargo_path="$(rustup which --toolchain 1.95.0 cargo)"
+          config_sha256="$(sha256sum scripts/rust_feature_scope.pr2.json)"
+          config_sha256="${config_sha256%% *}"
+          node scripts/rust_feature_ci.mjs --repository-root "$GITHUB_WORKSPACE" --scope pr2 --config-sha256 "$config_sha256" --output-directory "$RUNNER_TEMP" --cargo-executable "$cargo_path" --mode check-scoped
+      - name: Upload scoped Rust evidence, including failed checks
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: openchat-pr2-scoped-rust-report
+          path: |
+            ${{ runner.temp }}/rust-feature-ci-*/summary.json
+            ${{ runner.temp }}/rust-feature-ci-*/rust-feature-collection-*/summary.json
+            ${{ runner.temp }}/rust-feature-ci-*/rust-feature-collection-*/collection.json
+            ${{ runner.temp }}/rust-feature-ci-*/rust-feature-collection-*/*.selected.json
+            ${{ runner.temp }}/rust-feature-ci-*/rust-feature-collection-*/selected-rust.cdx*.json
+            ${{ runner.temp }}/rust-feature-ci-*/rust-feature-advisories-*/*
+          if-no-files-found: error

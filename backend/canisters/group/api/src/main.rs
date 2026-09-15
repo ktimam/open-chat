@@ -9,6 +9,7 @@ fn main() {
 
     generate_ts_method!(group, active_proposal_tallies);
     generate_ts_method!(group, deleted_message);
+    generate_ts_method!(group, enabled_ai_apps);
     generate_ts_method!(group, events);
     generate_ts_method!(group, events_by_index);
     generate_ts_method!(group, events_window);
@@ -46,6 +47,11 @@ fn main() {
     generate_ts_method!(group, regenerate_webhook);
     generate_ts_method!(group, register_poll_vote);
     generate_ts_method!(group, register_proposal_vote);
+    generate_ts_method!(group, respond_to_action_card);
+    generate_ts_method!(group, create_ai_app_card_confirmation_grant);
+    generate_ts_method!(group, create_ai_app_card_capability);
+    generate_ts_method!(group, create_ai_app_private_match_capability);
+    generate_ts_method!(group, create_ai_app_chat_link_token);
     generate_ts_method!(group, register_proposal_vote_v2);
     generate_ts_method!(group, register_webhook);
     generate_ts_method!(group, remove_participant);
@@ -53,6 +59,7 @@ fn main() {
     generate_ts_method!(group, report_message);
     generate_ts_method!(group, reset_invite_code);
     generate_ts_method!(group, send_message_v2);
+    generate_ts_method!(group, set_ai_app_enabled);
     generate_ts_method!(group, set_video_call_presence);
     generate_ts_method!(group, toggle_mute_notifications);
     generate_ts_method!(group, unblock_user);

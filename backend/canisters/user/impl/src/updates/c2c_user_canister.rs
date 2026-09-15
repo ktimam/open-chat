@@ -3,7 +3,6 @@ use crate::updates::c2c_send_messages::{HandleMessageArgs, get_sender_status, ha
 use crate::updates::start_video_call::handle_start_video_call;
 use crate::{RuntimeState, UserEventPusher, execute_update_async, mutate_state, read_state};
 use canister_api_macros::update;
-use canister_tracing_macros::trace;
 use chat_events::{
     AddRemoveReactionArgs, DeleteUndeleteMessagesArgs, EditMessageArgs, MessageContentInternal, Reader, TipMessageArgs,
 };
@@ -20,7 +19,6 @@ use user_canister::{
 };
 
 #[update(msgpack = true)]
-#[trace]
 async fn c2c_user_canister(args: Args) -> Response {
     execute_update_async(|| c2c_user_canister_impl(args)).await
 }
@@ -98,6 +96,9 @@ fn process_event(event: UserCanisterEvent, caller_user_id: UserId, state: &mut R
         }
         UserCanisterEvent::P2PSwapStatusChange(c) => {
             p2p_swap_change_status(*c, caller_user_id, state);
+        }
+        UserCanisterEvent::ActionCardStatusChange(c) => {
+            action_card_status_change(*c, caller_user_id, state);
         }
         UserCanisterEvent::JoinVideoCall(c) => {
             if let Some(chat) = state.data.direct_chats.get_mut(&caller_user_id.into()) {
@@ -381,6 +382,23 @@ fn p2p_swap_change_status(args: P2PSwapStatusChange, caller_user_id: UserId, sta
                 timestamp: now,
                 user_id: Some(caller_user_id),
             },
+            now,
+        );
+    }
+}
+
+// Apply-only mirror of an action-card response decided on the OTHER participant's canister (see
+// ChatEvents::apply_action_card_state — transitions a still-Pending local copy, never deposits).
+fn action_card_status_change(args: user_canister::ActionCardStatusChange, caller_user_id: UserId, state: &mut RuntimeState) {
+    if let Some(chat) = state.data.direct_chats.get_mut(&caller_user_id.into()) {
+        let now = state.env.now();
+        let thread_root_message_index = args.thread_root_message_id.map(|id| chat.main_message_id_to_index(id));
+        let _ = chat.events.apply_action_card_state(
+            thread_root_message_index,
+            args.message_id,
+            args.state,
+            args.responded_by,
+            args.responded_at,
             now,
         );
     }

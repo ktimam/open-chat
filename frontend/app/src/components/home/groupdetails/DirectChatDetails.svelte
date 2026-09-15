@@ -31,6 +31,7 @@
     import PhoneHangup from "svelte-material-icons/PhoneHangup.svelte";
     import DurationPicker from "../DurationPicker.svelte";
     import UserProfileCard from "../profile/UserProfileCard.svelte";
+    import AiAppsDirectSummary from "./AiAppsDirectSummary.svelte";
 
     const client = getContext<OpenChat>("client");
     const ONE_WEEK = 604800000n;
@@ -174,7 +175,8 @@
     {/if}
     <h4>
         <Translatable
-            resourceKey={i18nKey(`Direct chat with ${client.getDisplayName(chat.them.userId)}`)} />
+            resourceKey={i18nKey(`Direct chat with ${client.getDisplayName(chat.them.userId)}`)}
+        />
     </h4>
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -209,13 +211,20 @@
                     </Button>
                 </ButtonGroup>
             </div>
+            <div class="ai-apps">
+                <AiAppsDirectSummary
+                    chatId={chat.id}
+                    chatName={client.getDisplayName(chat.them.userId)}
+                />
+            </div>
             <div class="disappearing">
                 <Checkbox
                     id="disappearing-messages"
                     onChange={toggleDisappearingMessages}
                     label={i18nKey("disappearingMessages.label")}
                     align={"start"}
-                    checked={disappearingMessages}>
+                    checked={disappearingMessages}
+                >
                     <div class="section-title disappear">
                         <Translatable resourceKey={i18nKey("disappearingMessages.label")} />
                     </div>
@@ -233,7 +242,8 @@
                 disabled={!dirty || saving}
                 fill
                 onClick={updateDirectChatDetails}
-                ><Translatable resourceKey={i18nKey("update")} /></Button>
+                ><Translatable resourceKey={i18nKey("update")} /></Button
+            >
         </div>
     </div>
 {/if}
@@ -273,6 +283,11 @@
 
     .disappearing {
         align-self: flex-start;
+    }
+
+    .ai-apps {
+        align-self: stretch;
+        width: 100%;
     }
 
     .full-width-btn {

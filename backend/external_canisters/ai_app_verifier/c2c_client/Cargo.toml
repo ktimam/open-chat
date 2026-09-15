@@ -1,0 +1,11 @@
+[package]
+name = "ai_app_verifier_canister_c2c_client"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ai_app_verifier_canister = { path = "../api" }
+candid = { workspace = true }
+canister_client = { path = "../../../libraries/canister_client" }
+ic-cdk = { workspace = true }
+types = { path = "../../../libraries/types" }

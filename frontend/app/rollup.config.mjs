@@ -41,6 +41,7 @@ import {
     QWEN3_VL_2B_VISION_GEOMETRY_BYTES,
     QWEN3_VL_2B_VISION_GEOMETRY_SHA256,
 } from "./transformersWebGpuQwenVisionGraph.mjs";
+import { resolveLocalDevAllowedHost } from "./devAllowedHost.mjs";
 import {
     __dirname,
     copyFile,
@@ -70,6 +71,18 @@ function clean() {
             if (version) {
                 fs.writeFileSync("build/version", JSON.stringify({ version }));
             }
+            // The native protocol handler must decide whether a preserved install-over OTA cache
+            // is eligible before it serves index.html (and therefore before frontend JavaScript can
+            // enforce OC_OTA_UPDATES). Keep the policy as a separate bundled asset so the resolver
+            // can fail closed when it is missing or invalid.
+            fs.writeFileSync(
+                "build/ota-policy.json",
+                JSON.stringify({ strategy: otaUpdateStrategy }),
+            );
+            // Gradle runs after this child build command and cannot inherit environment variables
+            // loaded here from frontend/.env. Give the native Android build the exact RP ID that
+            // was compiled into JavaScript so passkey creation cannot silently use another host.
+            fs.writeFileSync("build/android-rp-id", androidRpId);
             const customDomains = process.env.OC_CUSTOM_DOMAINS;
             if (customDomains !== undefined) {
                 const origins = customDomains.split(",").map((d) => `https://${d}`);
@@ -97,7 +110,7 @@ const { version, production, development, env } = initEnv();
 
 // Vite substitutes import.meta.env built-ins while serving the browser app. Native packages use
 // this Rollup build instead, so every built-in consumed by shared UI code must be replaced here as
-// well. Leaving `import.meta.env.DEV` in an Android bundle makes the first model-surface lookup throw
+// well. Leaving `import.meta.env.DEV` in an Android bundle makes the first app-surface lookup throw
 // because a plain WebView module exposes `import.meta`, but not Vite's synthetic `env` object.
 function rejectUnresolvedViteEnv() {
     return {
@@ -118,14 +131,89 @@ function rejectUnresolvedViteEnv() {
     };
 }
 
+const otaUpdateStrategies = new Set(["none", "patch", "minor", "major"]);
+const otaUpdateStrategy = process.env.OC_OTA_UPDATES ?? "none";
+if (!otaUpdateStrategies.has(otaUpdateStrategy)) {
+    throw new Error(
+        `Invalid OC_OTA_UPDATES '${otaUpdateStrategy}': expected none, patch, minor, or major`,
+    );
+}
+
+const androidRpId = (process.env.OC_ANDROID_RP_ID ?? "oc.app").trim().toLowerCase();
+if (
+    !/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(androidRpId) ||
+    !androidRpId.includes(".") ||
+    androidRpId.includes("..")
+) {
+    throw new Error("OC_ANDROID_RP_ID must be one valid HTTPS hostname");
+}
+
 const override = (key, val) => `(window.OC_CONFIG?.${key} ?? ${val})`;
 
+// Never carry experimental app-card activation into production/testnet bundles, even if a caller
+// accidentally exports one of the local flags. Runtime loopback checks add a second boundary in the
+// application; this build-time substitution makes every non-local release a literal false value.
+const localOnlyAiAppCardFlag = (name) =>
+    JSON.stringify(
+        process.env.OC_BUILD_ENV === "development" &&
+            process.env.OC_DFX_NETWORK === "local" &&
+            process.env[name] === "true"
+            ? "true"
+            : "false",
+    );
+const resolvedLocalDevAllowedHost = resolveLocalDevAllowedHost(
+    process.env.OC_BUILD_ENV,
+    process.env.OC_DFX_NETWORK,
+    process.env.OC_DEV_ALLOWED_HOST,
+);
+const localOnlyDevAllowedHost =
+    resolvedLocalDevAllowedHost === undefined
+        ? "undefined"
+        : JSON.stringify(resolvedLocalDevAllowedHost);
 const transformersWebGpuSpikeEnabled = transformersWebGpuFeatureEnabled(process.env);
 const explicitTransformersWebGpuFlag = JSON.stringify(
     transformersWebGpuSpikeEnabled ? "true" : "false",
 );
 const isNativeAndroid = process.env.OC_APP_TYPE === "android";
 const isNativeApp = isNativeAndroid || process.env.OC_APP_TYPE === "ios";
+
+// These assets back the explicit local OCR route in web and all-WebGPU Android builds. Ordinary
+// native-llama Android and iOS builds do not expose that route. Keep the matching license material
+// beside every bundle that redistributes the worker/core/language payload.
+const localExtractorEnabled = !isNativeApp || (isNativeAndroid && transformersWebGpuSpikeEnabled);
+const localExtractorCopyTargets = localExtractorEnabled
+    ? [
+          {
+              src: "../node_modules/tesseract.js/dist/{worker.min.js,worker.min.js.LICENSE.txt}",
+              dest: "build/assets/local-extractor/v7.0.0",
+          },
+          {
+              src: "../node_modules/tesseract.js-core/{tesseract-core-relaxedsimd-lstm.wasm.js,tesseract-core-simd-lstm.wasm.js,tesseract-core-lstm.wasm.js}",
+              dest: "build/assets/local-extractor/v7.0.0/core",
+          },
+          {
+              src: "../node_modules/@tesseract.js-data/eng/4.0.0_best_int/eng.traineddata.gz",
+              dest: "build/assets/local-extractor/v7.0.0/lang",
+          },
+          {
+              src: "../node_modules/@tesseract.js-data/ara/4.0.0_best_int/ara.traineddata.gz",
+              dest: "build/assets/local-extractor/v7.0.0/lang",
+          },
+          {
+              src: "../src-tauri/THIRD_PARTY_NOTICES.md",
+              dest: "build/assets/licenses",
+          },
+          {
+              src: "../src-tauri/THIRD_PARTY_LICENSES/{Apache-2.0.txt,MIT.txt}",
+              dest: "build/assets/licenses/THIRD_PARTY_LICENSES",
+          },
+          {
+              src: "../node_modules/ieee754/LICENSE",
+              dest: "build/assets/licenses/THIRD_PARTY_LICENSES",
+              rename: "ieee754-BSD-3-Clause.txt",
+          },
+      ]
+    : [];
 
 const transformersWebGpuCopyTargets =
     !transformersWebGpuSpikeEnabled || (isNativeApp && !isNativeAndroid)
@@ -307,6 +395,8 @@ export default {
         typescript({
             include: [
                 "./src/**/*",
+                // Imported by src/utils/publicImageDisplay.ts for local-replica image URLs.
+                "./localReplicaImageProxy.ts",
                 "../vite-env.d.ts",
                 "../global.d.ts",
                 "../node_modules/component-lib/src/**/*.ts",
@@ -326,7 +416,10 @@ export default {
 
         replace({
             preventAssignment: true,
-            // Match Vite's builtin substitutions and erase any remaining bare env-object guard.
+            // @rollup/plugin-replace matches longer keys first and its default trailing delimiter
+            // prevents this bare fallback from consuming a dotted property access. Define Vite's
+            // complete builtin set explicitly, keep the app-specific OC_* keys below, then erase
+            // any remaining bare object guard so native bundles contain no synthetic Vite env.
             "import.meta.env.MODE": JSON.stringify(env),
             "import.meta.env.DEV": JSON.stringify(development),
             "import.meta.env.PROD": JSON.stringify(!development),
@@ -343,10 +436,11 @@ export default {
             ),
             "import.meta.env.OC_OTA_UPDATES": override(
                 "OC_OTA_UPDATES",
-                JSON.stringify(process.env.OC_OTA_UPDATES),
+                JSON.stringify(otaUpdateStrategy),
             ),
             "import.meta.env.OC_BUILD_ENV": JSON.stringify(process.env.OC_BUILD_ENV),
             "import.meta.env.OC_WEBAUTHN_ORIGIN": JSON.stringify(process.env.OC_WEBAUTHN_ORIGIN),
+            "import.meta.env.OC_ANDROID_RP_ID": JSON.stringify(androidRpId),
             "import.meta.env.OC_INTERNET_IDENTITY_URL": JSON.stringify(
                 process.env.OC_INTERNET_IDENTITY_URL,
             ),
@@ -354,7 +448,21 @@ export default {
                 process.env.OC_INTERNET_IDENTITY_CANISTER_ID,
             ),
             "import.meta.env.OC_NFID_URL": JSON.stringify(process.env.OC_NFID_URL),
+            "import.meta.env.OC_BUILD_ENV": JSON.stringify(process.env.OC_BUILD_ENV),
             "import.meta.env.OC_DFX_NETWORK": JSON.stringify(process.env.OC_DFX_NETWORK),
+            "import.meta.env.OC_DEV_ALLOWED_HOST": localOnlyDevAllowedHost,
+            "import.meta.env.OC_LOCAL_AI_APP_CARDS_ENABLED": localOnlyAiAppCardFlag(
+                "OC_LOCAL_AI_APP_CARDS_ENABLED",
+            ),
+            "import.meta.env.OC_LOCAL_AI_APP_CONTENT_ATTESTATION_ENABLED": localOnlyAiAppCardFlag(
+                "OC_LOCAL_AI_APP_CONTENT_ATTESTATION_ENABLED",
+            ),
+            "import.meta.env.OC_LOCAL_AI_APP_FINAL_CONFIRMATION_ENABLED": localOnlyAiAppCardFlag(
+                "OC_LOCAL_AI_APP_FINAL_CONFIRMATION_ENABLED",
+            ),
+            "import.meta.env.OC_LOCAL_AI_APP_PRIVATE_CONTEXT_ENABLED": localOnlyAiAppCardFlag(
+                "OC_LOCAL_AI_APP_PRIVATE_CONTEXT_ENABLED",
+            ),
             "import.meta.env.OC_TRANSFORMERS_WEBGPU_IMAGE_SPIKE": explicitTransformersWebGpuFlag,
             "import.meta.env.OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY": maybeStringify(
                 process.env.OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY,
@@ -446,7 +554,6 @@ export default {
             "import.meta.env.OC_ALCHEMY_API_KEY": JSON.stringify(process.env.OC_ALCHEMY_API_KEY),
             "import.meta.env.OC_BASE_ORIGIN": JSON.stringify(process.env.OC_BASE_ORIGIN),
         }),
-
         rejectUnresolvedViteEnv(),
         html({
             template: ({ files }) => {
@@ -588,6 +695,7 @@ export default {
                     src: "../openchat-service-worker/lib/*",
                     dest: "build",
                 },
+                ...localExtractorCopyTargets,
                 ...transformersWebGpuCopyTargets,
             ],
             hook: "generateBundle",
@@ -607,7 +715,10 @@ export default {
             ],
             hook: "buildStart",
         }),
-        androidBundlePlugin({ version }),
+        androidBundlePlugin({
+            version,
+            includeLocalExtractor: transformersWebGpuSpikeEnabled,
+        }),
     ],
     watch: {
         clearScreen: false,

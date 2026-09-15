@@ -464,6 +464,25 @@ describe("webInfer", () => {
         expect(wl.lastMessages).toBeUndefined(); // never reached the model
     });
 
+    it("keeps the projector absent for private verification on legacy Wllama", async () => {
+        await attachVisionModel();
+        // The projector-free reload requests and verifies only the model weights.
+        wl.cached = [{ url: WEIGHTS_URL, bytes: WEIGHTS }];
+
+        await expect(
+            webInfer(
+                {
+                    modelId: "smolvlm-256m-instruct-q8",
+                    prompt: "verify bounded OCR text",
+                },
+                { requireProjectorAbsent: true },
+            ),
+        ).resolves.toEqual({ kind: "ok", text: "extracted" });
+        expect(wl.modelSource).toEqual({ url: WEIGHTS_URL, mmprojUrl: undefined });
+        expect(wl.loadCount).toBe(1);
+        expect(wl.lastMessages?.[0].content).toBe("verify bounded OCR text");
+    });
+
     it("with no model attached an image is still 'unavailable', exactly as before", async () => {
         const res = await webInfer({ prompt: "read this", image: PIXELS });
         expect(res).toEqual({ kind: "unavailable", reason: "no browser model attached" });
@@ -902,47 +921,67 @@ describe("pinned all-WebGPU model integration", () => {
         expect(wl.loadCount).toBe(0);
     });
 
-    it("routes Qwen text through all-WebGPU with no caller image bytes", async () => {
-        await useWebModelFromUrl(entry);
+    it.each(["qwen3-vl-2b-instruct-q4", "gemma-4-e2b-it-q4"])(
+        "routes ordinary text through selected all-WebGPU model %s without a projector-free option",
+        async (modelId) => {
+            const model =
+                modelId === entry.id
+                    ? entry
+                    : {
+                          id: modelId,
+                          name: "Gemma 4 E2B (multimodal)",
+                          files: [],
+                          sizeBytes: 0,
+                          modalities: ["text", "image", "audio"] as ModelModality[],
+                      };
+            await useWebModelFromUrl(model);
 
-        await expect(webInfer({ prompt: "read this text" })).resolves.toEqual({
-            kind: "ok",
-            text: "all-webgpu result",
-        });
-        expect(transformers.requests).toEqual([
-            expect.objectContaining({
-                prompt: "read this text",
-            }),
-        ]);
-        expect(transformers.requests[0].image).toBeUndefined();
-        expect(wl.loadCount).toBe(0);
-    });
+            await expect(webInfer({ modelId, prompt: "read this text" })).resolves.toEqual({
+                kind: "ok",
+                text: "all-webgpu result",
+            });
+            expect(transformers.requests).toEqual([
+                expect.objectContaining({ modelId, prompt: "read this text" }),
+            ]);
+            expect(transformers.requests[0].image).toBeUndefined();
+            expect(wl.loadCount).toBe(0);
+        },
+    );
 
-    it("routes Gemma text through the selected all-WebGPU model", async () => {
-        const gemma = {
+    it("rejects ordinary text inference when the pinned model selection changed", async () => {
+        await useWebModelFromUrl({
             id: "gemma-4-e2b-it-q4",
             name: "Gemma 4 E2B (multimodal)",
             files: [],
             sizeBytes: 0,
             modalities: ["text", "image", "audio"] as ModelModality[],
-        };
-        await useWebModelFromUrl(gemma);
-
-        await expect(webInfer({ modelId: gemma.id, prompt: "read this text" })).resolves.toEqual({
-            kind: "ok",
-            text: "all-webgpu result",
         });
+
+        await expect(
+            webInfer({ modelId: entry.id, prompt: "must reject a changed selection" }),
+        ).resolves.toEqual({
+            kind: "error",
+            error: "the selected browser model changed before inference",
+        });
+        expect(transformers.requests).toEqual([]);
+    });
+
+    it("routes projector-absent verification through all-WebGPU with no caller image bytes", async () => {
+        await useWebModelFromUrl(entry);
+
+        await expect(
+            webInfer({ prompt: "verify bounded OCR text" }, { requireProjectorAbsent: true }),
+        ).resolves.toEqual({ kind: "ok", text: "all-webgpu result" });
         expect(transformers.requests).toEqual([
             expect.objectContaining({
-                modelId: gemma.id,
-                prompt: "read this text",
+                prompt: "verify bounded OCR text",
             }),
         ]);
         expect(transformers.requests[0].image).toBeUndefined();
         expect(wl.loadCount).toBe(0);
     });
 
-    it("rejects inference when the pinned model selection changed", async () => {
+    it("routes Gemma private verification through the selected all-WebGPU model", async () => {
         const gemma = {
             id: "gemma-4-e2b-it-q4",
             name: "Gemma 4 E2B (multimodal)",
@@ -953,11 +992,52 @@ describe("pinned all-WebGPU model integration", () => {
         await useWebModelFromUrl(gemma);
 
         await expect(
-            webInfer({ modelId: entry.id, prompt: "must reject a changed selection" }),
+            webInfer(
+                { modelId: gemma.id, prompt: "verify bounded OCR text" },
+                { requireProjectorAbsent: true },
+            ),
+        ).resolves.toEqual({ kind: "ok", text: "all-webgpu result" });
+        expect(transformers.requests).toEqual([
+            expect.objectContaining({
+                modelId: gemma.id,
+                prompt: "verify bounded OCR text",
+            }),
+        ]);
+        expect(transformers.requests[0].image).toBeUndefined();
+        expect(wl.loadCount).toBe(0);
+    });
+
+    it("rejects private verification when the pinned model selection changed", async () => {
+        const gemma = {
+            id: "gemma-4-e2b-it-q4",
+            name: "Gemma 4 E2B (multimodal)",
+            files: [],
+            sizeBytes: 0,
+            modalities: ["text", "image", "audio"] as ModelModality[],
+        };
+        await useWebModelFromUrl(gemma);
+
+        await expect(
+            webInfer(
+                { modelId: entry.id, prompt: "must reject a changed selection" },
+                { requireProjectorAbsent: true },
+            ),
         ).resolves.toEqual({
             kind: "error",
             error: "the selected browser model changed before inference",
         });
+        expect(transformers.requests).toEqual([]);
+    });
+
+    it("keeps the projector-absent boundary closed to supplied image bytes", async () => {
+        await useWebModelFromUrl(entry);
+
+        await expect(
+            webInfer(
+                { prompt: "must reject", image: new Uint8Array([1]) },
+                { requireProjectorAbsent: true },
+            ),
+        ).resolves.toEqual({ kind: "error", error: "projector-free inference accepts text only" });
         expect(transformers.requests).toEqual([]);
     });
 

@@ -7,21 +7,28 @@ import {
     inferenceRuntimeAvailable,
     listLocalModels,
 } from "tauri-plugin-oc-api";
+import { browserImageActionMode } from "../stores/browserImageActionMode";
 import { selectedModelId } from "../stores/onDeviceModels";
-import { defaultModelCatalog } from "./modelCatalog";
 import {
     inferOnDevice,
     isNativeClient,
-    onDeviceInferenceCapability,
-    onDeviceInferenceReadiness,
     NATIVE_INFERENCE_UPDATE_REQUIRED,
     NATIVE_MODEL_UPDATE_REQUIRED,
+    onDeviceInferenceCapability,
+    onDeviceInferenceReadiness,
+    usesWebInferenceRuntime,
 } from "./onDeviceInference";
+import { defaultModelCatalog } from "./modelCatalog";
 import { clearWebModel, useWebModelFromUrl, webInfer } from "./webInference";
 
 const webRuntime = vi.hoisted(() => ({
     imageSupported: true,
     cached: [] as { url: string; bytes: Uint8Array }[],
+}));
+const localReaderRuntime = vi.hoisted(() => ({ available: false }));
+
+vi.mock("./browserOcr", () => ({
+    browserOcrAvailable: () => localReaderRuntime.available,
 }));
 
 vi.mock("@wllama/wllama/esm/index.js", () => {
@@ -85,6 +92,8 @@ const mockInferenceRuntimeAvailable = vi.mocked(inferenceRuntimeAvailable);
 const mockListLocalModels = vi.mocked(listLocalModels);
 
 const MODEL_ID = "gemma-4-e2b-it-q4";
+const TRUSTED_MODEL = defaultModelCatalog.models.find((model) => model.id === MODEL_ID)!;
+const DEFAULT_USER_AGENT = navigator.userAgent;
 
 function setNative(native: boolean): void {
     if (native) {
@@ -94,12 +103,24 @@ function setNative(native: boolean): void {
     }
 }
 
+function setUserAgent(value: string): void {
+    Object.defineProperty(navigator, "userAgent", { configurable: true, value });
+}
+
+function enableLocalAndroidWebGpu(): void {
+    setNative(true);
+    setUserAgent("Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 Chrome/150 Mobile");
+    vi.stubEnv("OC_BUILD_ENV", "development");
+    vi.stubEnv("OC_DFX_NETWORK", "local");
+    vi.stubEnv("OC_TRANSFORMERS_WEBGPU_IMAGE_SPIKE", "true");
+}
+
 function localModel(overrides: Partial<LocalModel> = {}): LocalModel {
     return {
         modelId: MODEL_ID,
         runtime: "llama-cpp",
         sizeBytes: 4092392352,
-        files: defaultModelCatalog.models.find((model) => model.id === MODEL_ID)!.files,
+        files: TRUSTED_MODEL.files.map((file) => ({ ...file })),
         path: "/models/gemma-4-e2b-it-q4",
         ...overrides,
     };
@@ -116,13 +137,19 @@ beforeEach(async () => {
     // Default: no model downloaded and none selected — each test opts into what it needs.
     mockListLocalModels.mockResolvedValue([]);
     selectedModelId.set("");
+    browserImageActionMode.set("model_only");
     setNative(false);
+    setUserAgent(DEFAULT_USER_AGENT);
     webRuntime.cached = [];
+    localReaderRuntime.available = false;
 });
 
 afterEach(() => {
     setNative(false);
+    setUserAgent(DEFAULT_USER_AGENT);
+    vi.unstubAllEnvs();
     selectedModelId.set("");
+    browserImageActionMode.set("model_only");
 });
 
 describe("isNativeClient", () => {
@@ -134,7 +161,182 @@ describe("isNativeClient", () => {
     });
 });
 
+describe("legacy native audio boundary", () => {
+    it.each([
+        { prompt: "Listen", audio: new Uint8Array([1]) },
+        { prompt: "Listen", audioMimeType: "audio/webm" },
+    ])("rejects supplied audio instead of invoking text-only native inference", async (request) => {
+        setNative(true);
+        selectedModelId.set(MODEL_ID);
+        mockListLocalModels.mockResolvedValue([localModel()]);
+        await expect(inferOnDevice(request)).resolves.toEqual({
+            kind: "unavailable",
+            reason: "The selected native runtime does not support audio.",
+        });
+        expect(mockInferenceRuntimeAvailable).not.toHaveBeenCalled();
+        expect(mockListLocalModels).not.toHaveBeenCalled();
+        expect(mockInfer).not.toHaveBeenCalled();
+    });
+});
+
+describe("onDeviceInferenceReadiness", () => {
+    it("requires the accelerated model in a feature-flagged Android WebView without probing llama.cpp", async () => {
+        enableLocalAndroidWebGpu();
+        selectedModelId.set(MODEL_ID);
+        mockListLocalModels.mockResolvedValue([localModel()]);
+
+        expect(usesWebInferenceRuntime()).toBe(true);
+        await expect(onDeviceInferenceReadiness()).resolves.toEqual({
+            available: false,
+            reason: "no accelerated on-device model selected",
+        });
+        expect(mockInferenceRuntimeAvailable).not.toHaveBeenCalled();
+        expect(mockListLocalModels).not.toHaveBeenCalled();
+        expect(onDeviceInferenceCapability()).toEqual({
+            available: false,
+            runtimesSupported: ["transformers-webgpu"],
+            selectedModelId: undefined,
+            selectedModalities: [],
+        });
+    });
+
+    it.each(["local_reader_only", "model_with_local_verification"] as const)(
+        "still requires a selected decoder in explicit %s mode",
+        async (mode) => {
+            enableLocalAndroidWebGpu();
+            browserImageActionMode.set(mode);
+            localReaderRuntime.available = true;
+
+            await expect(onDeviceInferenceReadiness()).resolves.toEqual({
+                available: false,
+                reason: "no accelerated on-device model selected",
+            });
+            expect(mockInferenceRuntimeAvailable).not.toHaveBeenCalled();
+            expect(mockListLocalModels).not.toHaveBeenCalled();
+        },
+    );
+
+    it("does not advertise APK OCR readiness in model-only mode", async () => {
+        enableLocalAndroidWebGpu();
+        browserImageActionMode.set("model_only");
+        localReaderRuntime.available = true;
+
+        await expect(onDeviceInferenceReadiness()).resolves.toEqual({
+            available: false,
+            reason: "no accelerated on-device model selected",
+        });
+    });
+
+    it("does not treat a Tauri bridge as proof that the runtime was compiled in", async () => {
+        setNative(true);
+        browserImageActionMode.set("local_reader_only");
+        localReaderRuntime.available = true;
+        mockInferenceRuntimeAvailable.mockResolvedValue(false);
+
+        await expect(onDeviceInferenceReadiness()).resolves.toEqual({
+            available: false,
+            reason: "This OpenChat build does not include on-device inference. Update or reinstall OpenChat, then try again.",
+        });
+    });
+
+    it("is ready only when the selected install matches the trusted built-in metadata", async () => {
+        setNative(true);
+        selectedModelId.set(MODEL_ID);
+        mockListLocalModels.mockResolvedValue([localModel()]);
+
+        await expect(onDeviceInferenceReadiness()).resolves.toEqual({ available: true });
+        expect(onDeviceInferenceCapability().available).toBe(true);
+    });
+
+    it("requires an update for a stale selected install and never advertises it as ready", async () => {
+        setNative(true);
+        selectedModelId.set(MODEL_ID);
+        mockListLocalModels.mockResolvedValue([localModel({ sizeBytes: 4092390336 })]);
+
+        await expect(onDeviceInferenceReadiness()).resolves.toEqual({
+            available: false,
+            reason: NATIVE_MODEL_UPDATE_REQUIRED,
+        });
+        expect(onDeviceInferenceCapability().available).toBe(false);
+        expect(mockInfer).not.toHaveBeenCalled();
+    });
+
+    it("does not make an unselected stale install ready", async () => {
+        setNative(true);
+        selectedModelId.set("");
+        mockListLocalModels.mockResolvedValue([localModel({ sizeBytes: 4092390336 })]);
+
+        await expect(onDeviceInferenceReadiness()).resolves.toEqual({
+            available: false,
+            reason: "no on-device model selected",
+        });
+        expect(onDeviceInferenceCapability().available).toBe(false);
+    });
+});
+
+describe("focused inference image bounds", () => {
+    it.each(["lower_half", "detail_card", "lower_detail_rows"] as const)(
+        "rejects an oversized original for %s before attempting a region decode",
+        async (imageRegion) => {
+            const oversized = new Uint8Array(20 * 1024 * 1024 + 1);
+            oversized.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+            const decode = vi.fn();
+            vi.stubGlobal("createImageBitmap", decode);
+
+            await expect(
+                inferOnDevice({
+                    prompt: "read labelled detail",
+                    image: oversized,
+                    imageRegion,
+                }),
+            ).resolves.toEqual({ kind: "error", error: "inference image region is invalid" });
+            expect(decode).not.toHaveBeenCalled();
+        },
+    );
+
+    it("rejects an image region outside the closed shared enum", async () => {
+        await expect(
+            inferOnDevice({
+                prompt: "read labelled detail",
+                image: new Uint8Array([1]),
+                imageRegion: "arbitrary_box" as never,
+            }),
+        ).resolves.toEqual({ kind: "error", error: "inference image region is invalid" });
+    });
+});
+
 describe("inferOnDevice — unavailable branches", () => {
+    it("requires an update before touching models when this native build omitted inference", async () => {
+        setNative(true);
+        selectedModelId.set(MODEL_ID);
+        mockInferenceRuntimeAvailable.mockResolvedValue(false);
+        mockListLocalModels.mockResolvedValue([localModel()]);
+
+        const res = await inferOnDevice({ prompt: "hi" });
+
+        expect(res).toEqual({
+            kind: "unavailable",
+            reason: "This OpenChat build does not include on-device inference. Update or reinstall OpenChat, then try again.",
+        });
+        expect(mockListLocalModels).not.toHaveBeenCalled();
+        expect(mockInfer).not.toHaveBeenCalled();
+    });
+
+    it("treats a missing runtime probe command as an old build that requires an update", async () => {
+        setNative(true);
+        selectedModelId.set(MODEL_ID);
+        mockInferenceRuntimeAvailable.mockRejectedValue(new Error("command not found"));
+
+        const res = await inferOnDevice({ prompt: "hi" });
+
+        expect(res).toEqual({
+            kind: "unavailable",
+            reason: "This OpenChat build does not include on-device inference. Update or reinstall OpenChat, then try again.",
+        });
+        expect(mockListLocalModels).not.toHaveBeenCalled();
+        expect(mockInfer).not.toHaveBeenCalled();
+    });
+
     it("is unavailable (not the native client) when the bridge is absent", async () => {
         setNative(false);
         selectedModelId.set(MODEL_ID);
@@ -340,6 +542,15 @@ describe("onDeviceInferenceCapability", () => {
         expect(cap.selectedModalities).toEqual(["text", "image"]);
     });
 
+    it("is NOT available when a native shell omitted the inference runtime", async () => {
+        setNative(true);
+        selectedModelId.set(MODEL_ID);
+        mockInferenceRuntimeAvailable.mockResolvedValue(false);
+        await onDeviceInferenceReadiness();
+
+        expect(onDeviceInferenceCapability().available).toBe(false);
+    });
+
     it("is NOT available when not the native client (even with a model selected)", () => {
         setNative(false);
         selectedModelId.set(MODEL_ID);
@@ -427,7 +638,7 @@ describe("onDeviceInferenceCapability", () => {
         expect(mockInfer).not.toHaveBeenCalled();
     });
 
-    it("rejects installed metadata that disagrees with the trusted catalog", async () => {
+    it("fails closed with update guidance when installed metadata disagrees with the trusted catalog", async () => {
         setNative(true);
         selectedModelId.set(MODEL_ID);
         mockListLocalModels.mockResolvedValue([localModel({ sizeBytes: 1 })]);
@@ -545,6 +756,27 @@ describe("onDeviceInferenceCapability in a browser", () => {
         expect(cap.available).toBe(true);
         expect(cap.selectedModalities).toEqual(["text", "image"]);
         expect(cap.selectedModelId).toBe("smolvlm-256m-instruct-q8");
+    });
+
+    it("rejects a legacy non-WebGPU browser model in Android and never falls back to native IPC", async () => {
+        enableLocalAndroidWebGpu();
+        await attachWebVisionModel(["text", "image"]);
+
+        await expect(
+            inferOnDevice({ prompt: "read receipt", image: new Uint8Array([1, 2, 3]) }),
+        ).resolves.toEqual({
+            kind: "unavailable",
+            reason: "no accelerated on-device model selected",
+        });
+        expect(mockInferenceRuntimeAvailable).not.toHaveBeenCalled();
+        expect(mockListLocalModels).not.toHaveBeenCalled();
+        expect(mockInfer).not.toHaveBeenCalled();
+        expect(onDeviceInferenceCapability()).toEqual({
+            available: false,
+            runtimesSupported: ["transformers-webgpu"],
+            selectedModelId: "smolvlm-256m-instruct-q8",
+            selectedModalities: [],
+        });
     });
 
     it("still reports text-only for a text model", async () => {

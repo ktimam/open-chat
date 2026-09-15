@@ -41,13 +41,10 @@
         routeForChatIdentifier,
         routeForScope,
         routeStore,
+        startupErrorStore,
         subscribe,
     } from "@client";
-    import {
-        eventToError,
-        isIdbConnectionClosingError,
-        recordError,
-    } from "@utils/errorPostmortem";
+    import { eventToError, isIdbConnectionClosingError, recordError } from "@utils/errorPostmortem";
     import { navigate } from "@utils/navigation";
     import { warmRichTextEditor } from "@shared_components/richTextEditorLoader";
     import { onMount, setContext } from "svelte";
@@ -62,6 +59,7 @@
     import Head from "./Head.svelte";
     import Profiler from "./Profiler.svelte";
     import Router from "./Router.svelte";
+    import StartupFailure from "@shared_components/StartupFailure.svelte";
     import UpgradeBanner from "./UpgradeBanner.svelte";
     import Witch from "@shared_components/Witch.svelte";
     import InstallPrompt from "./home/InstallPrompt.svelte";
@@ -216,7 +214,6 @@
             pauseEventLoop: () => client.pauseEventLoop(),
             resumeEventLoop: () => client.resumeEventLoop(),
         };
-
 
         if (client.isNativeApp()) {
             // Inform the native app that svelte code is ready! SetTimeout
@@ -690,8 +687,8 @@
         <div
             class:fixed={burstFixed}
             class="burst-wrapper"
-            style={`background-image: url(${burstUrl})`}>
-        </div>
+            style={`background-image: url(${burstUrl})`}
+        ></div>
     {/if}
 
     <Head />
@@ -699,7 +696,8 @@
     <ActiveCall
         {showLandingPage}
         onClearSelection={() => navigate(routeForScope($chatListScopeStore))}
-        bind:this={videoCallElement} />
+        bind:this={videoCallElement}
+    />
 
     <VideoCallAccessRequests />
 
@@ -713,7 +711,9 @@
 
     <NotificationsBar />
 
-    {#if $identityStateStore.kind === "anon" || $identityStateStore.kind === "logging_in" || $identityStateStore.kind === "registering" || $identityStateStore.kind === "logged_in" || $identityStateStore.kind === "loading_user"}
+    {#if $startupErrorStore !== undefined}
+        <StartupFailure message={$startupErrorStore} />
+    {:else if $identityStateStore.kind === "anon" || $identityStateStore.kind === "logging_in" || $identityStateStore.kind === "registering" || $identityStateStore.kind === "logged_in" || $identityStateStore.kind === "loading_user"}
         {#if !$isLoading || $reviewingTranslations}
             <Router {showLandingPage} />
         {/if}

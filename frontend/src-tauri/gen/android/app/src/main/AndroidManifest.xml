@@ -29,6 +29,9 @@
         android:theme="@style/Theme.open_chat"
         android:usesCleartextTraffic="${usesCleartextTraffic}"
         tools:ignore="MissingTvBanner">
+        <meta-data
+            android:name="asset_statements"
+            android:resource="@string/asset_statements" />
         <activity
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
             android:launchMode="singleTask"

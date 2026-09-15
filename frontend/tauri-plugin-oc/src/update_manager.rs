@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 const VERSION_ENDPOINT: &str = "https://oc.app/version";
+const OTA_POLICY_ASSET: &str = "ota-policy.json";
 // TODO: This needs to be the actual URL where the bundle can be downloaded
 #[cfg(feature = "store")]
 const BUNDLE_URL_TEMPLATE: &str = "https://oc.app/downloads/store-{}.zip";
@@ -22,6 +23,73 @@ struct ServerVersion {
 #[derive(Serialize, Deserialize, Debug)]
 struct CachedVersion {
     version: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+enum OtaUpdateStrategy {
+    None,
+    Patch,
+    Minor,
+    Major,
+}
+
+#[derive(Debug, Deserialize)]
+struct OtaPolicy {
+    strategy: OtaUpdateStrategy,
+}
+
+fn parse_ota_update_strategy(bytes: &[u8]) -> OtaUpdateStrategy {
+    serde_json::from_slice::<OtaPolicy>(bytes)
+        .map(|policy| policy.strategy)
+        .unwrap_or(OtaUpdateStrategy::None)
+}
+
+fn can_update_to(current: &Version, candidate: &Version, strategy: OtaUpdateStrategy) -> bool {
+    if candidate <= current {
+        return false;
+    }
+
+    match strategy {
+        OtaUpdateStrategy::None => false,
+        OtaUpdateStrategy::Patch => {
+            current.major == candidate.major && current.minor == candidate.minor
+        }
+        OtaUpdateStrategy::Minor => current.major == candidate.major,
+        OtaUpdateStrategy::Major => true,
+    }
+}
+
+fn parse_shell_version(bytes: &[u8]) -> Option<Version> {
+    let info = serde_json::from_slice::<ServerVersion>(bytes).ok()?;
+    Version::parse(info.version.trim_start_matches('v')).ok()
+}
+
+fn cache_version_allowed(
+    bundled: Option<&Version>,
+    cached: Option<&Version>,
+    strategy: OtaUpdateStrategy,
+) -> bool {
+    match (bundled, cached) {
+        (Some(bundled), Some(cached)) => can_update_to(bundled, cached, strategy),
+        _ => false,
+    }
+}
+
+fn current_version_for_updates(
+    bundled: Option<Version>,
+    cached: Option<Version>,
+    strategy: OtaUpdateStrategy,
+) -> Option<Version> {
+    if strategy == OtaUpdateStrategy::None {
+        return None;
+    }
+    let bundled = bundled?;
+    Some(
+        cached
+            .filter(|cached| cache_version_allowed(Some(&bundled), Some(cached), strategy))
+            .unwrap_or(bundled),
+    )
 }
 
 #[derive(Serialize, Clone)]
@@ -61,65 +129,44 @@ impl<R: Runtime> UpdateManager<R> {
         None
     }
 
-    /// Delete the OTA cache when it is no longer newer than the shell.
-    ///
-    /// A Play or APK update replaces the binary but Android keeps app data, so
-    /// a cache written before the update survives it and can be OLDER than the
-    /// assets the new shell ships with. The scheme handler serves the cache
-    /// whenever version.json exists, without comparing, which pins the webview
-    /// to the stale bundle permanently:
-    ///
-    ///   shell 2.1.0 installed -> OTA to 2.1.1 -> website goes to 2.2.0 -> user
-    ///   updates from Play to shell 2.2.0 -> webview still serves 2.1.1.
-    ///
-    /// check_for_updates compares max(shell, cached) against the server and
-    /// sees nothing to do, while the running JS reports 2.1.1 and asks the user
-    /// to update again, forever. Across a major bump it is worse: the shell is
-    /// new enough but the JS believes it is not, so the blocking "update
-    /// required" sheet appears on a device that has already done everything
-    /// asked of it, and only clearing app data recovers.
-    ///
-    /// Equal counts as stale: the shell's own copy is authoritative, and
-    /// keeping a redundant cache only risks this again later.
-    pub fn discard_cache_if_stale(&self) {
-        // No shell version means no basis for comparison - keep the cache
-        // rather than discard something that might be the newer of the two.
-        let (Some(cached), Some(shell)) = (self.get_cached_version(), self.get_shell_version())
-        else {
-            return;
-        };
-
-        if cached > shell {
-            return;
-        }
-
-        if let Some(dir) = self.get_cache_dir()
-            && dir.exists()
-        {
-            match fs::remove_dir_all(&dir) {
-                Ok(()) => println!("Discarded OTA cache {cached} superseded by shell {shell}"),
-                // Failing to delete is survivable: the next launch tries again,
-                // and load_cache_into_memory is only reached through this call.
-                Err(e) => eprintln!("Failed to discard stale OTA cache: {e}"),
-            }
-        }
-    }
-
     /// The version of the web assets compiled into the installed binary, which
-    /// is what identifies the shell itself. It never changes without a
-    /// reinstall. Distinct from `get_cached_version`, which is the most recent
+    /// is what identifies the shell itself. It changes only with a binary
+    /// update. Distinct from `get_cached_version`, which is the most recent
     /// bundle downloaded over the air.
     pub fn get_shell_version(&self) -> Option<Version> {
-        if let Some(asset) = self.app_handle.asset_resolver().get("version".to_string())
-            && let Ok(info) = serde_json::from_slice::<ServerVersion>(&asset.bytes)
-        {
-            return Version::parse(info.version.trim_start_matches('v')).ok();
+        if let Some(asset) = self.app_handle.asset_resolver().get("version".to_string()) {
+            return parse_shell_version(&asset.bytes);
         }
         // No fallback to package_info(): that reads tauri.conf.json's version,
         // a stale "0.1.0" placeholder unrelated to the shipped web assets. This
         // value exists to tell a crash report which shell is running, and a
         // confident wrong answer is worse than none.
         None
+    }
+
+    fn get_ota_update_strategy(&self) -> OtaUpdateStrategy {
+        self.app_handle
+            .asset_resolver()
+            .get(OTA_POLICY_ASSET.to_string())
+            .map(|asset| parse_ota_update_strategy(&asset.bytes))
+            .unwrap_or(OtaUpdateStrategy::None)
+    }
+
+    /// Returns true only when the APK's bundled policy permits the preserved cache and the cached
+    /// frontend is a compatible upgrade over the frontend bundled into this APK. This is evaluated
+    /// by the native protocol handler before cached index.html can execute.
+    pub fn cached_update_allowed(&self) -> bool {
+        let strategy = self.get_ota_update_strategy();
+        if strategy == OtaUpdateStrategy::None {
+            return false;
+        }
+        // Cache selection must fail closed if the actual bundled frontend version cannot be read.
+        // The package version is a stale native-shell placeholder and is not safe for this choice.
+        cache_version_allowed(
+            self.get_shell_version().as_ref(),
+            self.get_cached_version().as_ref(),
+            strategy,
+        )
     }
 
     pub async fn get_server_version(&self) -> Result<Version, Box<dyn std::error::Error>> {
@@ -131,22 +178,24 @@ impl<R: Runtime> UpdateManager<R> {
     }
 
     pub async fn check_for_updates(&self) -> Result<bool, Box<dyn std::error::Error>> {
-        let server_version = self.get_server_version().await?;
+        let strategy = self.get_ota_update_strategy();
+        if strategy == OtaUpdateStrategy::None {
+            return Ok(false);
+        }
 
-        let shell_version = self
-            .get_shell_version()
-            .unwrap_or_else(|| Version::parse("0.0.0").unwrap());
-        let cached_version = self
-            .get_cached_version()
-            .unwrap_or_else(|| Version::parse("0.0.0").unwrap());
-
-        let current_version = if cached_version > shell_version {
-            cached_version.clone()
-        } else {
-            shell_version.clone()
+        // Unknown bundled assets are not version 0.0.0 (or the native package
+        // placeholder). Without a truthful shell version, do not contact OTA.
+        let Some(current_version) = current_version_for_updates(
+            self.get_shell_version(),
+            self.get_cached_version(),
+            strategy,
+        ) else {
+            return Ok(false);
         };
 
-        if server_version > current_version {
+        let server_version = self.get_server_version().await?;
+
+        if can_update_to(&current_version, &server_version, strategy) {
             println!(
                 "New version available: {} (current={})",
                 server_version, current_version
@@ -230,5 +279,198 @@ impl<R: Runtime> UpdateManager<R> {
         println!("Update installed to {:?}", cache_dir);
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        OtaUpdateStrategy, cache_version_allowed, can_update_to, current_version_for_updates,
+        parse_ota_update_strategy, parse_shell_version,
+    };
+    use semver::Version;
+
+    #[test]
+    fn missing_or_invalid_policy_fails_closed() {
+        assert_eq!(parse_ota_update_strategy(br#"{}"#), OtaUpdateStrategy::None);
+        assert_eq!(
+            parse_ota_update_strategy(br#"{"strategy":"unexpected"}"#),
+            OtaUpdateStrategy::None
+        );
+        assert_eq!(
+            parse_ota_update_strategy(br#"not json"#),
+            OtaUpdateStrategy::None
+        );
+    }
+
+    #[test]
+    fn disabled_policy_rejects_every_cached_update() {
+        let bundled = Version::parse("2.0.0-mobile-rc33").unwrap();
+        let live = Version::parse("2.0.2000").unwrap();
+
+        assert!(!can_update_to(&bundled, &live, OtaUpdateStrategy::None));
+    }
+
+    #[test]
+    fn enabled_policies_enforce_their_version_boundary() {
+        let bundled = Version::parse("2.3.4").unwrap();
+
+        assert!(can_update_to(
+            &bundled,
+            &Version::parse("2.3.5").unwrap(),
+            OtaUpdateStrategy::Patch
+        ));
+        assert!(!can_update_to(
+            &bundled,
+            &Version::parse("2.4.0").unwrap(),
+            OtaUpdateStrategy::Patch
+        ));
+        assert!(can_update_to(
+            &bundled,
+            &Version::parse("2.4.0").unwrap(),
+            OtaUpdateStrategy::Minor
+        ));
+        assert!(!can_update_to(
+            &bundled,
+            &Version::parse("3.0.0").unwrap(),
+            OtaUpdateStrategy::Minor
+        ));
+        assert!(can_update_to(
+            &bundled,
+            &Version::parse("3.0.0").unwrap(),
+            OtaUpdateStrategy::Major
+        ));
+    }
+
+    #[test]
+    fn cache_must_be_strictly_newer_than_the_bundled_frontend() {
+        let bundled = Version::parse("2.3.4").unwrap();
+
+        assert!(!can_update_to(&bundled, &bundled, OtaUpdateStrategy::Major));
+        assert!(!can_update_to(
+            &bundled,
+            &Version::parse("2.3.3").unwrap(),
+            OtaUpdateStrategy::Major
+        ));
+    }
+
+    #[test]
+    fn shell_version_reports_only_valid_bundled_asset_content() {
+        for input in [
+            br#"{"version":"v2.3.4"}"#.as_slice(),
+            br#"{"version":"2.3.4"}"#.as_slice(),
+        ] {
+            assert_eq!(parse_shell_version(input), Some(Version::new(2, 3, 4)));
+        }
+        for input in [
+            b"".as_slice(),
+            b"not json".as_slice(),
+            br#"{}"#.as_slice(),
+            br#"{"version":null}"#.as_slice(),
+            br#"{"version":"not-a-version"}"#.as_slice(),
+        ] {
+            assert_eq!(parse_shell_version(input), None);
+            assert_eq!(
+                current_version_for_updates(
+                    parse_shell_version(input),
+                    Some(Version::new(9, 0, 0)),
+                    OtaUpdateStrategy::Major,
+                ),
+                None,
+            );
+        }
+    }
+
+    #[test]
+    fn cache_serving_and_download_baseline_share_policy_boundaries() {
+        let bundled = Version::new(2, 3, 4);
+        let candidates = [
+            None,
+            Some(Version::new(2, 3, 3)),
+            Some(bundled.clone()),
+            Some(Version::new(2, 3, 5)),
+            Some(Version::new(2, 4, 0)),
+            Some(Version::new(3, 0, 0)),
+        ];
+        for (strategy, eligible) in [
+            (
+                OtaUpdateStrategy::None,
+                [false, false, false, false, false, false],
+            ),
+            (
+                OtaUpdateStrategy::Patch,
+                [false, false, false, true, false, false],
+            ),
+            (
+                OtaUpdateStrategy::Minor,
+                [false, false, false, true, true, false],
+            ),
+            (
+                OtaUpdateStrategy::Major,
+                [false, false, false, true, true, true],
+            ),
+        ] {
+            for (cached, allowed) in candidates.iter().zip(eligible) {
+                assert_eq!(
+                    cache_version_allowed(Some(&bundled), cached.as_ref(), strategy),
+                    allowed,
+                    "strategy={strategy:?}, cached={cached:?}",
+                );
+                let current =
+                    current_version_for_updates(Some(bundled.clone()), cached.clone(), strategy);
+                let expected = if strategy == OtaUpdateStrategy::None {
+                    None
+                } else if allowed {
+                    cached.clone()
+                } else {
+                    Some(bundled.clone())
+                };
+                assert_eq!(current, expected);
+                assert!(!cache_version_allowed(None, cached.as_ref(), strategy));
+                assert_eq!(
+                    current_version_for_updates(None, cached.clone(), strategy),
+                    None
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ignored_cache_cannot_mask_an_allowed_server_update() {
+        let bundled = Version::new(2, 3, 4);
+        let current = current_version_for_updates(
+            Some(bundled.clone()),
+            Some(Version::new(3, 0, 0)),
+            OtaUpdateStrategy::Patch,
+        )
+        .unwrap();
+        assert_eq!(current, bundled);
+        assert!(can_update_to(
+            &current,
+            &Version::new(2, 3, 5),
+            OtaUpdateStrategy::Patch
+        ));
+        assert!(!can_update_to(
+            &current,
+            &Version::new(2, 4, 0),
+            OtaUpdateStrategy::Patch
+        ));
+
+        let current = current_version_for_updates(
+            Some(bundled),
+            Some(Version::new(2, 3, 5)),
+            OtaUpdateStrategy::Patch,
+        )
+        .unwrap();
+        assert!(!can_update_to(
+            &current,
+            &Version::new(2, 3, 5),
+            OtaUpdateStrategy::Patch
+        ));
+        assert!(can_update_to(
+            &current,
+            &Version::new(2, 3, 6),
+            OtaUpdateStrategy::Patch
+        ));
     }
 }

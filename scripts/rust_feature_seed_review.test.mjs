@@ -52,72 +52,82 @@ function reviewedFixture() {
   return value;
 }
 
-test("actual PR1 source review closes only the bound model inventory and includes changed module glue", () => {
-  const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+test("actual PR2 source review binds app payloads and module glue without widening dependency profiles", () => {
+  const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
   const configBytes = readFileSync(
-    resolve(root, "scripts/rust_feature_scope.pr1.json"),
+    resolve(repo, "scripts/rust_feature_scope.pr2.json"),
   );
   const config = JSON.parse(configBytes);
   const review = JSON.parse(
-    readFileSync(resolve(root, "scripts/rust_feature_review.pr1.json"), "utf8"),
+    readFileSync(resolve(repo, "scripts/rust_feature_review.pr2.json")),
   );
   const sourceBytes = Object.fromEntries(
     Object.keys(config.sourceFiles).map((path) => [
       path,
-      readFileSync(resolve(root, path)),
+      readFileSync(resolve(repo, path)),
     ]),
   );
-  const result = verifyRustFeatureScopeReview({
+  const value = {
     config,
     configBytes,
     review,
     sourceBytes,
-    cargoLock: readFileSync(resolve(root, "Cargo.lock")),
-  });
+    cargoLock: readFileSync(resolve(repo, "Cargo.lock")),
+  };
+  const result = verifyRustFeatureScopeReview(value);
+  assert.equal(config.seeds.length, 255);
+  assert.equal(config.profiles.length, 7);
+  assert.equal(result.reviewedSourceCount, 347);
+  assert.equal(result.reviewedSeedProfileCount, 436);
+  assert.equal(result.reviewedUnitCount, 67);
   assert.equal(result.rootCompletenessVerified, true);
-  assert.equal(result.releaseAcceptance, false);
+  assert.deepEqual(result.completeness, { status: "complete", unresolved: [] });
+  assert.equal(result.automaticSourceAnalysis, false);
+  assert.equal(result.wholeRepositoryCoverage, false);
   assert.equal(result.advisoryChecksPerformed, false);
+  assert.equal(result.releaseAcceptance, false);
   assert.equal(config.completeness.status, "incomplete");
-  assert.deepEqual(
-    review.resolutions.map((item) => item.id),
-    ["nested-state-generated-owner-completeness"],
-  );
-  const declarations = [
-    [
-      "backend/canisters/registry/api/src/queries/mod.rs",
-      2,
-      "pub mod model_catalog;",
-    ],
-    [
-      "backend/canisters/registry/api/src/updates/mod.rs",
-      8,
-      "pub mod set_model_catalog;",
-    ],
-    [
-      "backend/canisters/registry/impl/src/queries/mod.rs",
-      3,
-      "mod model_catalog;",
-    ],
-    [
-      "backend/canisters/registry/impl/src/updates/mod.rs",
-      8,
-      "pub mod set_model_catalog;",
-    ],
-    ["backend/integration_tests/src/lib.rs", 37, "mod model_catalog_tests;"],
-  ];
-  for (const [path, line, text] of declarations) {
+  for (const profile of config.profiles)
     assert.equal(
-      sourceBytes[path].toString("utf8").split(/\r?\n/u)[line - 1],
-      text,
+      prepareRustFeatureInventory({ ...value, profileId: profile.id })
+        .rootCompletenessVerified,
+      false,
     );
-    assert.ok(
-      review.units.some((unit) =>
-        unit.sources.some(
-          (source) => source.path === path && source.lines.includes(line),
-        ),
-      ),
-    );
+  const moduleUnit = review.units.find(
+    (unit) => unit.id === "changed-app-module-declarations",
+  );
+  assert.equal(moduleUnit.disposition, "no-additional-external-owner-edge");
+  for (const source of moduleUnit.sources) {
+    const lines = sourceBytes[source.path].toString("utf8").split(/\r?\n/u);
+    for (const line of source.lines)
+      assert.match(lines[line - 1], /^(?:pub )?mod [a-z0-9_]+;$/u);
   }
+  for (const id of [
+    "nested-card-identifiers",
+    "http-metrics-and-memory-leaves",
+    "inbox-configuration-and-guards",
+    "card-core-forwarding-and-wrappers",
+  ]) {
+    assert.ok(review.units.some((unit) => unit.id === id));
+    const missing = { ...value, review: structuredClone(review) };
+    missing.review.units = missing.review.units.filter(
+      (unit) => unit.id !== id,
+    );
+    assert.throws(() => verifyRustFeatureScopeReview(missing));
+  }
+  const cardSource = "backend/libraries/types/src/chat_id.rs";
+  assert.throws(() =>
+    verifyRustFeatureScopeReview({
+      ...value,
+      sourceBytes: {
+        ...sourceBytes,
+        [cardSource]: Buffer.concat([
+          sourceBytes[cardSource],
+          Buffer.from("\n// drift\n"),
+        ]),
+      },
+    }),
+  );
   assert.ok(
     !Object.keys(config.sourceFiles).some((path) =>
       path.includes("dynamodb_index_store"),
@@ -366,6 +376,72 @@ test("actual local all-WebGPU profile owns exact model/app roots without inferen
   }
 });
 
+function assertReleaseToolRoots(config) {
+  const profiles = [
+    ["windows-release-tool", "x86_64-pc-windows-msvc"],
+    ["linux-release-tool", "x86_64-unknown-linux-gnu"],
+  ];
+  for (const [id, target] of profiles) {
+    const profile = config.profiles.find((item) => item.id === id);
+    assert.ok(profile, `Missing release-tool profile: ${id}`);
+    assert.equal(profile.target, target);
+    assert.deepEqual(profile.features, []);
+    const seeds = config.seeds.filter((seed) => seed.profiles.includes(id));
+    assert.deepEqual(
+      seeds.map((seed) => `${seed.ownerPackage}/${seed.dependencyName}`).sort(),
+      [
+        "canister_agent_utils/itertools",
+        "canister_upgrader/clap",
+        "sha256/sha2",
+      ],
+      "Hash guard scope must include its three external edges, not whole tool crates",
+    );
+    for (const seed of seeds) {
+      assert.equal(seed.kind, "normal");
+      assert.equal(seed.originContext, "build");
+      assert.deepEqual(
+        [...seed.profiles].sort(),
+        profiles.map(([name]) => name).sort(),
+      );
+    }
+  }
+  for (const path of [
+    "backend/tools/canister_upgrader/Cargo.toml",
+    "backend/tools/canister_upgrader/src/main.rs",
+    "backend/tools/canister_upgrader/src/lib.rs",
+    "backend/libraries/canister_agent_utils/Cargo.toml",
+    "backend/libraries/canister_agent_utils/src/lib.rs",
+    "scripts/upgrade-canister.sh",
+  ])
+    assert.ok(
+      Object.hasOwn(config.sourceFiles, path),
+      `Missing guard source pin: ${path}`,
+    );
+}
+
+test("PR2 release-tool hash guard owns exact host profiles and no sibling core roots", () => {
+  const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  const config = JSON.parse(
+    readFileSync(resolve(root, "scripts/rust_feature_scope.pr2.json"), "utf8"),
+  );
+  assertReleaseToolRoots(config);
+  const missing = structuredClone(config);
+  missing.seeds = missing.seeds.filter(
+    (seed) => !seed.id.startsWith("release-wasm-hash-guard.canister_upgrader."),
+  );
+  assert.throws(() => assertReleaseToolRoots(missing));
+  const expanded = structuredClone(config);
+  expanded.seeds
+    .find((seed) => seed.profiles.includes("wasm-default"))
+    .profiles.push("linux-release-tool");
+  assert.throws(() => assertReleaseToolRoots(expanded));
+  const shipping = structuredClone(config);
+  shipping.seeds.find((seed) =>
+    seed.profiles.includes("linux-release-tool"),
+  ).originContext = "production";
+  assert.throws(() => assertReleaseToolRoots(shipping));
+});
+
 // These exact caller-side schema edges were independently traced from the feature
 // tests. This boundary includes no fixture implementation/runtime crates,
 // Android roots or general core inventory.
@@ -548,6 +624,86 @@ test("actual shared test-schema roots cannot silently disappear or become shippi
     mutate(changed);
     assert.throws(() => assertSharedTestSchemaRoots(changed, scope));
   }
+});
+
+test("PR2 app-state schema evidence cannot silently disappear", () => {
+  const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  const config = JSON.parse(
+    readFileSync(resolve(repo, "scripts/rust_feature_scope.pr2.json"), "utf8"),
+  );
+  const required = [
+    ...["group", "community", "group_index", "local_user_index"].map(
+      (owner) => `backend/canisters/${owner}/impl/src/lib.rs`,
+    ),
+    ...[
+      "ai_app_call_throttle",
+      "ai_app_card_tokens",
+      "ai_app_chat_link_tokens",
+      "ai_app_link_codes",
+      "ai_app_private_match_tokens",
+    ].map((name) => `backend/canisters/user_index/impl/src/model/${name}.rs`),
+  ];
+  const check = (candidate) => {
+    for (const path of required)
+      assert.ok(
+        Object.hasOwn(candidate.sourceFiles, path),
+        `Missing reviewed app-state source: ${path}`,
+      );
+    const fieldRoots = candidate.seeds.filter(
+      (seed) => seed.feature === "app-state-field-serialization",
+    );
+    assert.deepEqual(fieldRoots.map((seed) => seed.ownerPackage).sort(), [
+      "community_canister_impl",
+      "group_canister_impl",
+    ]);
+    for (const seed of fieldRoots)
+      assert.deepEqual(
+        seed.profiles,
+        ["wasm-default", "windows-default"],
+        "Canister state serialization must not leak into native/mobile profiles",
+      );
+    for (const [owner, dependency] of [
+      ["user_index_canister_impl", "serde"],
+      ["user_index_canister_impl", "serde_bytes"],
+      ["user_index_canister_impl", "candid"],
+      ["user_index_canister_impl", "hex"],
+      ["sha256", "sha2"],
+      ["group_canister_impl", "serde"],
+      ["community_canister_impl", "serde"],
+      ["group_index_canister_impl", "serde"],
+      ["local_user_index_canister_impl", "serde"],
+    ])
+      assert.ok(
+        candidate.seeds.some(
+          (seed) =>
+            seed.ownerPackage === owner &&
+            seed.dependencyName === dependency &&
+            seed.kind === "normal" &&
+            seed.originContext === "production" &&
+            seed.profiles.includes("wasm-default") &&
+            seed.profiles.includes("windows-default"),
+        ),
+        `Missing reviewed app-state owner: ${owner}/${dependency}`,
+      );
+  };
+  check(config);
+  for (const path of required) {
+    const missing = structuredClone(config);
+    delete missing.sourceFiles[path];
+    assert.throws(() => check(missing), /Missing reviewed app-state source/u);
+  }
+  const missingSerde = structuredClone(config);
+  missingSerde.seeds = missingSerde.seeds.filter(
+    (seed) =>
+      seed.ownerPackage !== "user_index_canister_impl" ||
+      seed.dependencyName !== "serde",
+  );
+  assert.throws(() => check(missingSerde), /Missing reviewed app-state owner/u);
+  const mobileLeak = structuredClone(config);
+  mobileLeak.seeds
+    .find((seed) => seed.feature === "app-state-field-serialization")
+    .profiles.push("android-arm64-transformers-webgpu");
+  assert.throws(() => check(mobileLeak), /must not leak/u);
 });
 
 // Bounded regression over already reviewed sources, not a Rust parser or an

@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "provenance": "Versions and URLs preserve the existing integration runner. PocketIC pins bind the standalone 11.0.0 GitHub asset 324682378, not the different dfx-cached build: its compressed size and SHA-256 match the official release API, and its decompressed size and SHA-256 were independently measured on 2026-09-15 after archive verification. Other fixture pins preserve the cached 2026-09-08 inputs. Integrity pins do not claim integration tests passed.",
+  "fixtures": [
+    {
+      "name": "pocket-ic",
+      "url": "https://github.com/dfinity/pocketic/releases/download/11.0.0/pocket-ic-x86_64-linux.gz",
+      "gunzip": true,
+      "archiveBytes": 49658395,
+      "archiveSha256": "c5ba1ae43fe59281bc68cde0d45442452ecb1d04aefdf3f320c94d6f08612db3",
+      "bytes": 115083760,
+      "sha256": "1e3218a5d0bb4ca64ba271986833604c48d746f35117fe0844e4bddbb15ca96e"
+    },
+    {
+      "name": "icp_ledger.wasm.gz",
+      "url": "https://download.dfinity.systems/ic/ec35ebd252d4ffb151d2cfceba3a86c4fb87c6d6/canisters/ledger-canister_notify-method.wasm.gz",
+      "bytes": 721325,
+      "sha256": "f7cf2e5a902cccf2af834c6de4d94218162c9de2949349b3bc75f77872c630f0"
+    },
+    {
+      "name": "sns_wasm.wasm.gz",
+      "url": "https://download.dfinity.systems/ic/ec35ebd252d4ffb151d2cfceba3a86c4fb87c6d6/canisters/sns-wasm-canister.wasm.gz",
+      "bytes": 637291,
+      "sha256": "f1f4448e44325fd78017f3a17ca9d7a808c5d68be08ceb7f066a7ca7b784a4dd"
+    },
+    {
+      "name": "icrc_ledger.wasm.gz",
+      "url": "https://download.dfinity.systems/ic/ec35ebd252d4ffb151d2cfceba3a86c4fb87c6d6/canisters/ic-icrc1-ledger.wasm.gz",
+      "bytes": 592897,
+      "sha256": "67698536a91a5b9b26763d58cee4ad047af2c1e865fecc149e77823977408109"
+    },
+    {
+      "name": "event_store.wasm.gz",
+      "url": "https://github.com/open-chat-labs/event-store/releases/download/v0.12.0/event_store.wasm.gz",
+      "bytes": 388113,
+      "sha256": "88753cdbde8e0de2d2d25bc3f0da83846fc3ceb310bd8d45bd59ce840a9bf840"
+    }
+  ]
+}

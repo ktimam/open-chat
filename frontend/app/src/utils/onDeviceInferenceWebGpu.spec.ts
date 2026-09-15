@@ -8,6 +8,7 @@ import {
 import {
     canInferOnDevice,
     inferOnDevice,
+    inferOnDeviceTextOnlyNoProjector,
     onDeviceInferenceCapability,
     usesWebInferenceRuntime,
 } from "./onDeviceInference";
@@ -104,9 +105,38 @@ describe("explicit Android all-WebGPU routing", () => {
                 text: "model output",
             });
             expect(mockRestore).toHaveBeenCalledTimes(1);
-            expect(mockWebInfer).toHaveBeenCalledExactlyOnceWith(request);
+            expect(mockWebInfer).toHaveBeenCalledExactlyOnceWith(request, {
+                requireProjectorAbsent: false,
+            });
         },
     );
+
+    it("preserves the explicit projector-absent requirement for text-only verification", async () => {
+        const request = { prompt: "Verify the supplied text" };
+        await expect(inferOnDeviceTextOnlyNoProjector(request)).resolves.toEqual({
+            kind: "ok",
+            text: "model output",
+        });
+        expect(mockRestore).toHaveBeenCalledTimes(1);
+        expect(mockWebInfer).toHaveBeenCalledExactlyOnceWith(request, {
+            requireProjectorAbsent: true,
+        });
+        expect(mockWebInfer.mock.calls[0][0]).toBe(request);
+    });
+
+    it("rejects image input to the projector-free entry point before restoring or invoking a runtime", async () => {
+        await expect(
+            inferOnDeviceTextOnlyNoProjector({
+                prompt: "Read this image",
+                image: new Uint8Array([1, 2, 3]),
+            }),
+        ).resolves.toEqual({
+            kind: "error",
+            error: "projector-free inference accepts text only",
+        });
+        expect(mockRestore).not.toHaveBeenCalled();
+        expect(mockWebInfer).not.toHaveBeenCalled();
+    });
 
     it.each(["not ready", "incompatible"])(
         "does not use the native runtime when selection is %s",

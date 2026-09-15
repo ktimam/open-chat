@@ -90,11 +90,13 @@ pub async fn make_c2c_call_raw(
             // is out of cycles is just another `SysTransient` reject once flattened, and retrying
             // that every round burns our own cycles until someone tops the callee up.
             let error = C2CError::from_cdk_error(canister_id, method_name, error.into());
+            // Reject messages are controlled by the remote canister. Keep them in the typed error
+            // for callers that intentionally handle them, but never copy third-party text into the
+            // platform's shared logs.
             tracing::error!(
                 method_name,
                 %canister_id,
                 error_code = ?error.reject_code(),
-                error_message = error.message(),
                 "Error calling c2c"
             );
             Err(error)

@@ -34,8 +34,42 @@ import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 
-// TODO should this be a constant in a separate file?
-const val RP_ID = "oc.app"
+private const val DEFAULT_RP_ID = "oc.app"
+internal const val PASSKEY_RESIDENT_KEY = "required"
+internal const val PASSKEY_REQUIRE_RESIDENT_KEY = true
+internal const val MAX_BASE64URL_CREDENTIAL_ID_LENGTH = 1364
+private val BASE64URL_CREDENTIAL_ID = Regex("^[A-Za-z0-9_-]+$")
+
+internal fun normalizeCredentialIds(credentialIds: Array<String>): List<String> =
+    credentialIds
+        .asSequence()
+        .map(String::trim)
+        .filter {
+            it.isNotEmpty() &&
+                it.length <= MAX_BASE64URL_CREDENTIAL_ID_LENGTH &&
+                BASE64URL_CREDENTIAL_ID.matches(it)
+        }
+        .distinct()
+        .toList()
+
+// Official builds get the default. Local/sideload builds inject a validated string resource from
+// OC_ANDROID_RP_ID so Android Credential Manager verifies the APK against the same private HTTPS
+// origin that serves the local OpenChat environment.
+private fun resolveRpId(activity: Activity): String {
+    val resourceId = activity.resources.getIdentifier(
+        "openchat_rp_id",
+        "string",
+        activity.packageName,
+    )
+    if (resourceId == 0) return DEFAULT_RP_ID
+    val configured = activity.getString(resourceId).trim().lowercase()
+    return if (configured.matches(Regex("^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$")) &&
+        configured.contains('.') && !configured.contains("..")) {
+        configured
+    } else {
+        DEFAULT_RP_ID
+    }
+}
 
  @InvokeArg
  class SignUpArgs {
@@ -45,10 +79,12 @@ const val RP_ID = "oc.app"
 @InvokeArg
 class SignInArgs {
     val challenge: ByteArray? = null
+    val credentialIds: Array<String> = emptyArray()
 }
 
 class PasskeyAuth(private val activity: Activity) {
     private val credentialManager = CredentialManager.create(activity)
+    private val rpId = resolveRpId(activity)
 
     // Command for creating a passkey; prompts user for authentication, and
     // allows them to store the passkey in the device's secure storage.
@@ -85,7 +121,7 @@ class PasskeyAuth(private val activity: Activity) {
                     put("challenge", encodeBase64Url(challenge))
                     put("rp", JSONObject().apply {
                         put("name", "OpenChat")
-                        put("id", RP_ID)
+                        put("id", rpId)
                     })
                     put("user", JSONObject().apply {
                         put("id", userId)
@@ -103,6 +139,8 @@ class PasskeyAuth(private val activity: Activity) {
                     put("timeout", 60000)
                     put("authenticatorSelection", JSONObject().apply {
                         put("authenticatorAttachment", "platform")
+                        put("residentKey", PASSKEY_RESIDENT_KEY)
+                        put("requireResidentKey", PASSKEY_REQUIRE_RESIDENT_KEY)
                         put("userVerification", "required")
                     })
                     put("attestation", "none")
@@ -220,8 +258,15 @@ class PasskeyAuth(private val activity: Activity) {
                 val requestJson = JSONObject().apply {
                     put("challenge", encodeBase64Url(args.challenge))
                     put("timeout", 60000)
-                    put("rpId", RP_ID)
-                    put("allowCredentials", JSONArray()) // empty array
+                    put("rpId", rpId)
+                    put("allowCredentials", JSONArray().apply {
+                        normalizeCredentialIds(args.credentialIds).forEach { credentialId ->
+                            put(JSONObject().apply {
+                                put("type", "public-key")
+                                put("id", credentialId)
+                            })
+                        }
+                    })
                     put("userVerification", "required")
                 }
 

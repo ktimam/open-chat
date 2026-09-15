@@ -1,10 +1,15 @@
 import { type DBSchema } from "idb";
-import { Lazy, type WebAuthnKeyFull } from "@shared";
+import {
+    Lazy,
+    WEBAUTHN_KEY_CACHE_DB_NAME,
+    WEBAUTHN_KEY_CACHE_STORE_NAME,
+    type WebAuthnKeyFull,
+} from "@shared";
 import { bytesToHexString } from "./mapping";
 import { IndexedDbConnectionManager } from "./indexedDb";
 
 const CACHE_VERSION = 1;
-const STORE_NAME = "webauthn_keys" as const;
+const STORE_NAME = WEBAUTHN_KEY_CACHE_STORE_NAME;
 
 interface WebAuthnKeySchema extends DBSchema {
     webauthn_keys: {
@@ -18,7 +23,7 @@ export class WebAuthnDb {
 
     constructor() {
         this.connectionManager = IndexedDbConnectionManager.create<WebAuthnKeySchema>(
-            "openchat_webauthn_keys",
+            WEBAUTHN_KEY_CACHE_DB_NAME,
             [{ name: STORE_NAME }],
             CACHE_VERSION,
         );

@@ -11,6 +11,7 @@ import {
     listLocalModels,
 } from "tauri-plugin-oc-api";
 import { selectedModelId } from "../stores/onDeviceModels";
+import { prepareImageRegionForInference } from "./inferenceImage";
 import {
     defaultModelCatalog,
     nativeModelInstallStatus,
@@ -149,18 +150,67 @@ export async function canInferOnDevice(): Promise<boolean> {
 let inferenceQueue: Promise<unknown> = Promise.resolve();
 
 export function inferOnDevice(request: InferenceRequest): Promise<InferenceResult> {
-    const run = inferenceQueue.then(() => runInference(request));
+    return enqueueInference(request);
+}
+
+export function inferOnDeviceTextOnlyNoProjector(
+    request: InferenceRequest,
+): Promise<InferenceResult> {
+    if (request.image !== undefined) {
+        return Promise.resolve({
+            kind: "error",
+            error: "projector-free inference accepts text only",
+        });
+    }
+    return enqueueInference(request, { requireProjectorAbsent: true });
+}
+
+function enqueueInference(
+    request: InferenceRequest,
+    options: { requireProjectorAbsent?: boolean } = {},
+): Promise<InferenceResult> {
+    const run = inferenceQueue.then(() => runInference(request, options));
     inferenceQueue = run.catch(() => undefined);
     return run;
 }
 
-async function runInference(request: InferenceRequest): Promise<InferenceResult> {
+async function runInference(
+    request: InferenceRequest,
+    options: { requireProjectorAbsent?: boolean } = {},
+): Promise<InferenceResult> {
+    if (request.imageRegion !== undefined) {
+        if (
+            request.image === undefined ||
+            request.image.byteLength === 0 ||
+            request.image.byteLength > MAX_IMAGE_BYTES ||
+            (request.imageRegion !== "lower_half" &&
+                request.imageRegion !== "detail_card" &&
+                request.imageRegion !== "lower_detail_rows")
+        ) {
+            return { kind: "error", error: "inference image region is invalid" };
+        }
+        try {
+            const focusedImage = await prepareImageRegionForInference(
+                request.image,
+                request.imageRegion,
+            );
+            const { imageRegion: _imageRegion, ...withoutRegion } = request;
+            request = { ...withoutRegion, image: focusedImage };
+        } catch (error) {
+            return {
+                kind: "error",
+                error: error instanceof Error ? error.message : String(error),
+            };
+        }
+    }
     if (usesWebInferenceRuntime() || SUPPORTED_RUNTIMES.length === 0) {
         // Restore the persisted selection before checking it. webInfer owns runtime-specific media
         // handling and returns explicit errors/unavailability without selecting a replacement model.
         await ensureWebModelRestored();
         if (webInferenceReadyForClient()) {
-            return webInfer(request);
+            return webInfer(request, {
+                requireProjectorAbsent: options.requireProjectorAbsent === true,
+            });
         }
         return {
             kind: "unavailable",

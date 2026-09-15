@@ -76,7 +76,8 @@
                     {#if "success" === codeStatus}
                         <p class="subtitle">
                             <Translatable
-                                resourceKey={i18nKey("accountLinkingCode.webModal.subtitle")} />
+                                resourceKey={i18nKey("accountLinkingCode.webModal.subtitle")}
+                            />
                         </p>
                     {/if}
                 </div>
@@ -94,22 +95,23 @@
                         <div class="remaining">
                             {#if expired}
                                 <Translatable
-                                    resourceKey={i18nKey("accountLinkingCode.webModal.expired")} />
+                                    resourceKey={i18nKey("accountLinkingCode.webModal.expired")}
+                                />
                             {:else if remaining}
                                 <Translatable
                                     resourceKey={i18nKey(
                                         "accountLinkingCode.webModal.willExpireIn",
                                         { remaining: formatRemaining() },
-                                    )} />
+                                    )}
+                                />
                             {/if}
                         </div>
                     {:else if "error" === codeStatus}
                         <div class="error">
                             <div class="msg">
                                 <Translatable
-                                    resourceKey={i18nKey(
-                                        "accountLinkingCode.webModal.error.msg",
-                                    )} />
+                                    resourceKey={i18nKey("accountLinkingCode.webModal.error.msg")}
+                                />
                             </div>
                         </div>
                     {/if}
@@ -120,18 +122,19 @@
                     {#if "success" === codeStatus}
                         <Button onClick={modalClose} fill={true} danger={expired}>
                             <Translatable
-                                resourceKey={i18nKey("accountLinkingCode.webModal.close")} />
+                                resourceKey={i18nKey("accountLinkingCode.webModal.close")}
+                            />
                         </Button>
                     {:else if "error" === codeStatus}
                         <Button onClick={fetchAccountLinkingCode} loading={loadingCode}>
                             <Translatable
-                                resourceKey={i18nKey(
-                                    "accountLinkingCode.webModal.error.tryAgain",
-                                )} />
+                                resourceKey={i18nKey("accountLinkingCode.webModal.error.tryAgain")}
+                            />
                         </Button>
                         <Button onClick={modalClose} secondary={true}>
                             <Translatable
-                                resourceKey={i18nKey("accountLinkingCode.webModal.error.cancel")} />
+                                resourceKey={i18nKey("accountLinkingCode.webModal.error.cancel")}
+                            />
                         </Button>
                     {/if}
                 </div>
@@ -160,10 +163,8 @@
     .header,
     .footer,
     .code-content {
-        @include size-above(sm) {
-            width: 28rem;
-        }
-
+        box-sizing: border-box;
+        width: min(28rem, calc(100vw - 2rem));
         padding-left: $sp4;
         padding-right: $sp4;
     }
@@ -189,15 +190,19 @@
     .code-chars {
         @include font(book, normal, fs-220);
         display: flex;
-        gap: $sp4;
+        width: 100%;
+        gap: clamp(0.25rem, 2vw, 1rem);
         justify-content: center;
 
         .char {
             position: relative;
             display: flex;
+            box-sizing: border-box;
+            flex: 1 1 0;
             justify-content: center;
-            width: 3.5rem;
-            padding: $sp4;
+            min-width: 0;
+            max-width: 3.5rem;
+            padding: clamp(0.5rem, 2vw, 1rem) 0;
             border-radius: 0.5rem;
 
             &:after {

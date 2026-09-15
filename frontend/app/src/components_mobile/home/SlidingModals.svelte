@@ -193,6 +193,7 @@
         | { kind: "user_profile_chats_and_video" }
         | { kind: "user_profile_share" }
         | { kind: "user_profile_about" }
+        | { kind: "user_profile_account_linking" }
         | { kind: "user_profile_appearance" }
         | { kind: "user_profile_verify" }
         | { kind: "user_profile_community" }
@@ -201,6 +202,7 @@
         | { kind: "user_profile_delete_account" }
         | { kind: "user_profile_cache_management" }
         | { kind: "user_profile_models" }
+        | { kind: "user_profile_my_apps" }
         | { kind: "app_settings" }
         | { kind: "upgrade_diamond" }
         | { kind: "update_bot" }
@@ -533,7 +535,11 @@
                 push({ kind: "user_profile_cache_management" }),
             ),
             subscribe("userProfileModels", () => push({ kind: "user_profile_models" })),
+            subscribe("userProfileMyApps", () => push({ kind: "user_profile_my_apps" })),
             subscribe("userProfileAbout", () => push({ kind: "user_profile_about" })),
+            subscribe("userProfileAccountLinking", () =>
+                push({ kind: "user_profile_account_linking" }),
+            ),
             subscribe("closeModalPage", pop),
             subscribe("closeModalStack", popStack),
             subscribe("userProfileChatsAndVideo", () =>
@@ -621,6 +627,12 @@
             {:catch}
                 {@render loadFailed()}
             {/await}
+        {:else if page.kind === "user_profile_account_linking"}
+            {#await import("./user_profile/AccountLinkingCode.svelte") then { default: AccountLinkingCode }}
+                <AccountLinkingCode />
+            {:catch}
+                {@render loadFailed()}
+            {/await}
         {:else if page.kind === "user_profile_appearance"}
             {#await import("./user_profile/Appearance.svelte") then { default: Appearance }}
                 <Appearance />
@@ -636,6 +648,12 @@
         {:else if page.kind === "user_profile_models"}
             {#await import("./user_profile/ModelManager.svelte") then { default: ModelManager }}
                 <ModelManager />
+            {:catch}
+                {@render loadFailed()}
+            {/await}
+        {:else if page.kind === "user_profile_my_apps"}
+            {#await import("./user_profile/MyApps.svelte") then { default: MyApps }}
+                <MyApps />
             {:catch}
                 {@render loadFailed()}
             {/await}

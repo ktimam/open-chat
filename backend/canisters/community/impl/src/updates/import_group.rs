@@ -5,7 +5,8 @@ use canister_tracing_macros::trace;
 use community_canister::import_group::{Response::*, *};
 use group_index_canister::c2c_start_importing_group_into_community::Response as C2cResponse;
 use oc_error_codes::OCErrorCode;
-use types::{CanisterId, ChannelId, ChatId, OCResult, UserId};
+use std::collections::BTreeSet;
+use types::{AiAppId, CanisterId, ChannelId, ChatId, OCResult, UserId};
 
 #[update(guard = "caller_is_proposals_bot", msgpack = true)]
 async fn c2c_import_proposals_group(
@@ -51,9 +52,17 @@ async fn import_group_common(group_id: ChatId, user_id: UserId, group_index_cani
     )
     .await
     {
-        Ok(C2cResponse::Success(total_bytes)) => mutate_state(|state| {
+        Ok(C2cResponse::Success(result)) => mutate_state(|state| {
             let channel_id = state.generate_channel_id();
-            commit_group_to_import(user_id, group_id, channel_id, total_bytes, false, state)
+            commit_group_to_import(
+                user_id,
+                group_id,
+                channel_id,
+                result.total_bytes,
+                result.enabled_ai_apps,
+                false,
+                state,
+            )
         }),
         Ok(C2cResponse::Error(error)) => Error(error),
         Ok(response) => Error(OCErrorCode::Unknown.with_json(&response)),
@@ -87,16 +96,21 @@ pub(crate) fn commit_group_to_import(
     group_id: ChatId,
     channel_id: ChannelId,
     total_bytes: u64,
+    enabled_ai_apps: BTreeSet<AiAppId>,
     make_default_channel: bool,
     state: &mut RuntimeState,
 ) -> Response {
     let now = state.env.now();
 
-    if state
-        .data
-        .groups_being_imported
-        .add(group_id, channel_id, user_id, total_bytes, now, make_default_channel)
-    {
+    if state.data.groups_being_imported.add(
+        group_id,
+        channel_id,
+        user_id,
+        total_bytes,
+        enabled_ai_apps,
+        now,
+        make_default_channel,
+    ) {
         crate::jobs::import_groups::start_job_if_required(state);
 
         Success(SuccessResult { channel_id, total_bytes })

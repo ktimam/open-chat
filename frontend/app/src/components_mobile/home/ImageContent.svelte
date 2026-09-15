@@ -5,9 +5,10 @@
         publish,
         type ImageContent,
         type MemeFighterContent,
+        type OpenChat,
         type TextContent as TextContentType,
     } from "@client";
-    import { type Snippet } from "svelte";
+    import { getContext, type Snippet } from "svelte";
     import EyeOffOutline from "svelte-material-icons/EyeOffOutline.svelte";
     import EyeOutline from "svelte-material-icons/EyeOutline.svelte";
     import ImageOutline from "svelte-material-icons/ImageOutline.svelte";
@@ -15,8 +16,18 @@
     import { rtlStore } from "../../stores/rtl";
     import { lowBandwidth } from "../../stores/settings";
     import { getProxyAdjustedBlobUrl, reservedMediaStyle } from "../../utils/media";
+    import {
+        PublicImageObjectUrlResolver,
+        publicImageDisplayUrl,
+        shouldLoadNativePublicImageThroughWorker,
+    } from "../../utils/publicImageDisplay";
     import Translatable from "../Translatable.svelte";
     import MessageRenderer from "./MessageRenderer.svelte";
+
+    const client = getContext<OpenChat>("client");
+    const imageObjectUrlResolver = new PublicImageObjectUrlResolver((ref, maxBytes) =>
+        client.downloadPublicBlob(ref, maxBytes),
+    );
 
     interface Props {
         content: ImageContent | MemeFighterContent;
@@ -63,7 +74,14 @@
     let imageWidth = $state(0);
     let landscape = $derived(content.height < content.width);
     let normalised = $derived(normaliseContent(content));
-    let hidden = $state(false);
+    let nativeObjectUrl = $state<string>();
+    let displayUrl = $derived(
+        nativeObjectUrl ??
+            (content.kind === "image_content"
+                ? publicImageDisplayUrl(normalised.url, content.blobReference)
+                : normalised.url),
+    );
+    let hidden = $state($lowBandwidth && !draft);
     let zoomable = $derived(!draft && !reply && !pinned);
     let textContent = $derived<TextContentType | undefined>(
         normalised ? { kind: "text_content", text: normalised.caption ?? "" } : undefined,
@@ -80,6 +98,36 @@
         hidden = $lowBandwidth && !draft;
     });
 
+    function loadNativeObjectUrl() {
+        if (
+            !client.isNativeApp() ||
+            content.kind !== "image_content" ||
+            content.blobReference === undefined
+        ) {
+            return;
+        }
+        void imageObjectUrlResolver.resolve(content.blobReference, content.mimeType).then((url) => {
+            if (url !== undefined) nativeObjectUrl = url;
+        });
+    }
+
+    $effect(() => {
+        nativeObjectUrl = undefined;
+        imageObjectUrlResolver.clear();
+        if (
+            intersecting &&
+            !hidden &&
+            content.kind === "image_content" &&
+            shouldLoadNativePublicImageThroughWorker(
+                content.blobUrl,
+                content.blobReference,
+                client.isNativeApp(),
+            )
+        ) {
+            loadNativeObjectUrl();
+        }
+        return () => imageObjectUrlResolver.clear();
+    });
     function normaliseContent(content: ImageContent | MemeFighterContent) {
         switch (content.kind) {
             case "image_content":
@@ -109,6 +157,7 @@
         if (imgElement) {
             imgElement.src = normalised.fallback;
         }
+        if (nativeObjectUrl === undefined) loadNativeObjectUrl();
     }
 </script>
 
@@ -122,19 +171,22 @@
                 <Row gap="xs" crossAxisAlignment="center">
                     <ImageOutline
                         color={me ? ColourVars.secondaryAccent : ColourVars.primaryAccent}
-                        size="1.25rem" />
+                        size="1.25rem"
+                    />
                     <ChatCaption colour={me ? "secondaryAccent" : "primaryAccent"}>
                         <Translatable resourceKey={i18nKey("Photo")} />
                     </ChatCaption>
                 </Row>
             {/if}
         </Column>
-        <div
+        <img
+            bind:this={imgElement}
             class="reply_image_preview"
-            style="background-image:url({intersecting && !hidden
-                ? normalised.url
-                : normalised.fallback});">
-        </div>
+            draggable="false"
+            onerror={onError}
+            src={intersecting && !hidden ? displayUrl : normalised.fallback}
+            alt={normalised.caption}
+        />
     </Row>
 {/snippet}
 
@@ -146,10 +198,12 @@
                 padding={"xl"}
                 supplementalClass={"image_content_mask"}
                 mainAxisAlignment={"center"}
-                crossAxisAlignment={"center"}>
+                crossAxisAlignment={"center"}
+            >
                 {#if !reply && !draft}
                     <Button height={"hug"} width={"fill"} onClick={() => (hidden = false)}
-                        ><Translatable resourceKey={i18nKey(normalised.loadMsg)} /></Button>
+                        ><Translatable resourceKey={i18nKey(normalised.loadMsg)} /></Button
+                    >
                 {/if}
             </Column>
         {/if}
@@ -168,8 +222,9 @@
                     class:zoomable={zoomable && !hidden}
                     class:rtl={$rtlStore}
                     style={height === undefined ? undefined : `height: ${height}px`}
-                    src={intersecting && !hidden ? normalised.url : normalised.fallback}
-                    alt={normalised.caption} />
+                    src={intersecting && !hidden ? displayUrl : normalised.fallback}
+                    alt={normalised.caption}
+                />
             </div>
         </div>
     </Column>
@@ -179,13 +234,15 @@
     <Column
         supplementalClass={`regular_image_content ${me ? "me" : ""} ${fill ? "fill" : ""}`}
         maxWidth={"100%"}
-        width={narrow ? "fill" : "hug"}>
+        width={narrow ? "fill" : "hug"}
+    >
         {#if hidden}
             <Column
                 height={"fill"}
                 supplementalClass={"image_content_mask"}
                 mainAxisAlignment={"center"}
-                crossAxisAlignment={"center"}>
+                crossAxisAlignment={"center"}
+            >
                 {#if !reply && !draft}
                     <CommonButton2 onClick={() => (hidden = false)} variant="secondary" mode="text">
                         <EyeOutline size="2rem" color={ColourVars.textPrimary} />
@@ -197,7 +254,7 @@
         <!-- svelte-ignore a11y_click_events_have_key_events -->
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div class="image_wrapper" class:narrow onclick={focusImage}>
-            {#if normalised.url !== undefined}
+            {#if displayUrl !== undefined}
                 <img
                     decoding="async"
                     bind:this={imgElement}
@@ -217,8 +274,9 @@
                         : draft || reply || pinned
                           ? undefined
                           : reservedMediaStyle(content.width, content.height)}
-                    src={intersecting && !hidden ? normalised.url : normalised.fallback}
-                    alt={normalised.caption} />
+                    src={intersecting && !hidden ? displayUrl : normalised.fallback}
+                    alt={normalised.caption}
+                />
             {:else}
                 <!-- TODO generic image preview -->
                 <div></div>
@@ -245,7 +303,8 @@
     {edited}
     {blockLevelMarkdown}
     {isPreview}
-    {onRemove} />
+    {onRemove}
+/>
 
 <style lang="scss">
     :global {
@@ -314,6 +373,7 @@
             .image {
                 width: 100%;
                 display: block;
+                object-fit: contain;
 
                 &:not(.landscape) {
                     min-height: 6rem;
@@ -370,11 +430,13 @@
     }
 
     .reply_image_preview {
+        display: block;
         width: 4rem;
+        min-width: 4rem;
         min-height: 3rem;
         height: -webkit-fill-available;
-        background-size: cover;
-        background-position: center;
+        object-fit: cover;
+        object-position: center;
         border-radius: var(--rad-sm);
     }
 

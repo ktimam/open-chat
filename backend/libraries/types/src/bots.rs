@@ -1,9 +1,9 @@
 use crate::bitflags::{decode_from_bitflags, encode_as_bitflags};
 use crate::{
-    AudioContent, CanisterId, Chat, ChatEventCategory, ChatEventType, ChatId, ChatPermission, CommunityEventCategory,
-    CommunityEventType, CommunityId, CommunityOrGroup, CommunityPermission, FileContent, GiphyContent, GroupRole, ImageContent,
-    MessageContentInitial, MessageId, MessagePermission, OgPreview, OptionUpdate, PollContent, TextContent, TimestampMillis,
-    UserId, VideoContent, is_default,
+    ActionCardContentInitial, AudioContent, CanisterId, Chat, ChatEventCategory, ChatEventType, ChatId, ChatPermission,
+    CommunityEventCategory, CommunityEventType, CommunityId, CommunityOrGroup, CommunityPermission, FileContent, GiphyContent,
+    GroupRole, ImageContent, MessageContentInitial, MessageId, MessagePermission, OgPreview, OptionUpdate, PollContent,
+    TextContent, TimestampMillis, UserId, VideoContent, is_default,
 };
 use candid::CandidType;
 use serde::{Deserialize, Serialize};
@@ -233,6 +233,7 @@ impl BotPermissions {
                 MessagePermission::Prize,
                 MessagePermission::P2pSwap,
                 MessagePermission::VideoCall,
+                MessagePermission::ActionCard,
             ]))
     }
 
@@ -451,6 +452,7 @@ pub enum BotMessageContent {
     File(FileContent),
     Poll(PollContent),
     Giphy(GiphyContent),
+    ActionCard(ActionCardContentInitial),
 }
 
 #[ts_export]
@@ -486,6 +488,7 @@ impl From<BotMessageContent> for MessageContentInitial {
             BotMessageContent::File(c) => MessageContentInitial::File(c),
             BotMessageContent::Poll(c) => MessageContentInitial::Poll(c),
             BotMessageContent::Giphy(c) => MessageContentInitial::Giphy(c),
+            BotMessageContent::ActionCard(c) => MessageContentInitial::ActionCard(c),
         }
     }
 }

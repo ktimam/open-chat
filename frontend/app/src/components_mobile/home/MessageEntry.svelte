@@ -33,6 +33,7 @@
         botState,
         currentUserIdStore,
         directMessageCommandInstance,
+        eventsStore,
         localUpdates,
         messageContextsEqual,
         random64,
@@ -43,6 +44,7 @@
         selectedCommunityUserGroupsStore,
         SIGNER_WALLETS,
         throttleDeadline,
+        threadEventsStore,
         userGroupMentionRegex,
         userIdMentionRegex,
         videoProcessingProgress,
@@ -61,7 +63,11 @@
     import { enterSend } from "../../stores/settings";
     import { snowing } from "../../stores/snow";
     import { toastStore } from "../../stores/toast";
-    import { parseLocalAiCommand, routeComposerInput } from "../../utils/localAiCommand";
+    import {
+        parseLocalAiCommand,
+        routeComposerInput,
+        type LocalAiChatMessage,
+    } from "../../utils/localAiCommand";
     import {
         captureLocalAiComposerContext,
         createLocalAiComposerRunner,
@@ -71,6 +77,7 @@
     import CommandBuilder from "../bots/CommandInstanceBuilder.svelte";
     import CommandSelector from "../bots/CommandSelector.svelte";
     import Send from "../icons/Send.svelte";
+    import Spinner from "../icons/Spinner.svelte";
     import Progress from "../Progress.svelte";
     import Translatable from "../Translatable.svelte";
     import AudioAttacher from "./AudioAttacher.svelte";
@@ -87,11 +94,6 @@
     import ThrottleCountdown from "./ThrottleCountdown.svelte";
 
     const client = getContext<OpenChat>("client");
-    const localAiComposer = createLocalAiComposerRunner();
-    let componentMounted = true;
-    onDestroy(() => {
-        componentMounted = false;
-    });
 
     interface Props {
         chat: ChatSummary;
@@ -195,6 +197,29 @@
     let containsMarkdown = $state(false);
     let showDirectBotChatWarning = $state(false);
     let commandSent = false;
+    const localAiComposer = createLocalAiComposerRunner();
+    let componentMounted = true;
+    let localAiStatus: { kind: "processing" | "success" | "error"; message: string } | undefined =
+        $state(undefined);
+    let localAiStatusTimer: number | undefined;
+
+    function setLocalAiStatus(
+        status: { kind: "processing" | "success" | "error"; message: string } | undefined,
+    ) {
+        if (localAiStatusTimer !== undefined) window.clearTimeout(localAiStatusTimer);
+        localAiStatus = status;
+        if (status !== undefined && status.kind !== "processing") {
+            localAiStatusTimer = window.setTimeout(
+                () => (localAiStatus = undefined),
+                status.kind === "success" ? 3_500 : 8_000,
+            );
+        }
+    }
+
+    onDestroy(() => {
+        componentMounted = false;
+        if (localAiStatusTimer !== undefined) window.clearTimeout(localAiStatusTimer);
+    });
 
     // Update this to force a new textbox instance to be created
     let textboxId = $state(Symbol());
@@ -653,9 +678,7 @@
                 return;
             }
             if (localAiComposer.running) {
-                toastStore.showFailureToast(
-                    i18nKey("An on-device model request is already running."),
-                );
+                toastStore.showFailureToast(i18nKey("AI is already processing a request."));
                 return;
             }
             void handleLocalAiCommand(prompt);
@@ -682,30 +705,72 @@
         afterSendMessage();
     }
 
-    // Capture the selected media and destination before the normal send clears composer state.
-    // A late result is discarded after account/chat/thread changes or component teardown.
+    // Capture every authority/destination input before inference. MessageEntry persists while the
+    // selected chat changes, so using its live props after an await can otherwise post chat A's
+    // model output into chat B (or under a newly selected account).
     async function handleLocalAiCommand(prompt: string) {
         const captured = captureLocalAiComposerContext($currentUserIdStore, messageContext);
         const capturedAttachment = attachment;
         const capturedReply = replyingTo?.content;
         const capturedMarkdown = containsMarkdown;
+        const context = recentLocalAiChatContext();
         const stillCurrent = () =>
             componentMounted &&
             localAiComposerContextIsCurrent(captured, $currentUserIdStore, messageContext);
+        setLocalAiStatus({ kind: "processing", message: "AI is processing locally…" });
+
         const outcome = await localAiComposer.run({
             client,
             prompt,
             attachment: capturedAttachment,
             repliedContent: capturedReply,
+            context,
             captured,
             stillCurrent,
             onAccepted: () => onSendMessage([prompt, [], capturedMarkdown]),
         });
-        if (outcome.kind === "unavailable") {
-            toastStore.showFailureToast(i18nKey(outcome.reason));
-        } else if (outcome.kind === "error") {
-            toastStore.showFailureToast(i18nKey(`On-device model error: ${outcome.error}`));
+
+        switch (outcome.kind) {
+            case "sent":
+                setLocalAiStatus({ kind: "success", message: "AI response added." });
+                break;
+            case "stale":
+                setLocalAiStatus(undefined);
+                break;
+            case "busy":
+                setLocalAiStatus(undefined);
+                toastStore.showFailureToast(i18nKey("AI is already processing a request."));
+                break;
+            case "unavailable": {
+                const message = `On-device AI unavailable: ${outcome.reason}`;
+                setLocalAiStatus({ kind: "error", message });
+                toastStore.showFailureToast(i18nKey(message));
+                break;
+            }
+            case "error": {
+                const message = `On-device AI failed: ${outcome.error}`;
+                setLocalAiStatus({ kind: "error", message });
+                toastStore.showFailureToast(i18nKey(message));
+                break;
+            }
         }
+    }
+
+    function recentLocalAiChatContext(): LocalAiChatMessage[] {
+        const events = mode === "thread" ? $threadEventsStore : $eventsStore;
+        return events.flatMap(({ event }) => {
+            if (event.kind !== "message" || event.deleted) return [];
+            const text = client.getMessageText(event.content);
+            const hasImage = event.content.kind === "image_content";
+            const hasAudio = event.content.kind === "audio_content";
+            if ((text === undefined || text.trim().length === 0) && !hasImage && !hasAudio)
+                return [];
+            const author =
+                event.sender === $currentUserIdStore
+                    ? "You"
+                    : ($allUsersStore.get(event.sender)?.username ?? "Unknown member");
+            return [{ author, text, hasImage, hasAudio }];
+        });
     }
 
     function afterSendMessage() {
@@ -825,6 +890,20 @@
         onNoMatches={() => cancelCommandSelector(false)}
         onCancel={() => cancelCommandSelector(false)}
     />
+{/if}
+
+{#if localAiStatus !== undefined}
+    <div
+        class={`local-ai-status ${localAiStatus.kind}`}
+        role="status"
+        aria-live="polite"
+        data-testid="local-ai-status"
+    >
+        {#if localAiStatus.kind === "processing"}
+            <Spinner size="1rem" foregroundColour="var(--primary)" />
+        {/if}
+        <span>{localAiStatus.message}</span>
+    </div>
 {/if}
 
 {#if !$anonUserStore}
@@ -1115,6 +1194,24 @@
 {/if}
 
 <style lang="scss">
+    .local-ai-status {
+        display: flex;
+        align-items: center;
+        gap: var(--sp-xs);
+        padding: var(--sp-xs) var(--sp-md);
+        background: var(--surface-0);
+        color: var(--text-secondary);
+        font-size: 0.75rem;
+
+        &.error {
+            color: var(--validation-error);
+        }
+
+        &.success {
+            color: var(--validation-success);
+        }
+    }
+
     .message_entry_wrapper {
         width: 100%;
         // overflow: auto;

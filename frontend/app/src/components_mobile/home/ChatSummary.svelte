@@ -335,6 +335,11 @@
         onChatSelected(chatSummary);
     }
 
+    function selectChatFromRow(event?: MouseEvent) {
+        event?.stopPropagation();
+        selectChat();
+    }
+
     function addToFavourites() {
         client.addToFavourites(chatSummary.id);
     }
@@ -478,15 +483,17 @@
             mobileMode={"longpress"}
             withBgEffect={true}
             {longpressCooldown}
-            {menuItems}>
+            {menuItems}
+        >
             <Container
-                onClick={selectChat}
+                onClick={selectChatFromRow}
                 supplementalClass={"chat_summary"}
                 padding={["lg", "sm"]}
                 mainAxisAlignment={"spaceBetween"}
                 crossAxisAlignment={"center"}
                 gap={"lg"}
-                borderRadius={"md"}>
+                borderRadius={"md"}
+            >
                 <div class="avatar">
                     <Avatar size={"lg"} url={chat.avatarUrl} name={chat.name} />
                     {#if chat.eventsTTL}
@@ -507,7 +514,8 @@
                         gap={"lg"}
                         width={"fill"}
                         mainAxisAlignment={"spaceBetween"}
-                        crossAxisAlignment={"center"}>
+                        crossAxisAlignment={"center"}
+                    >
                         <Container crossAxisAlignment={"center"} gap={"sm"} width={"fill"}>
                             <WithVerifiedBadge {verified}>
                                 <Subtitle ellipsisTruncate fontWeight={"semi-bold"}>
@@ -525,7 +533,8 @@
                             width={"hug"}
                             gap={"xs"}
                             crossAxisAlignment={"center"}
-                            mainAxisAlignment={"end"}>
+                            mainAxisAlignment={"end"}
+                        >
                             {#if muted && notificationsSupported}
                                 <div class="icon" class:rtl={$rtlStore}>
                                     <MutedIcon size={"1em"} color={"var(--icon-txt)"} />
@@ -555,7 +564,8 @@
                     <Container
                         gap={"xs"}
                         mainAxisAlignment={"spaceBetween"}
-                        crossAxisAlignment={"end"}>
+                        crossAxisAlignment={"end"}
+                    >
                         <Row gap={"xs"} crossAxisAlignment={"center"}>
                             {#if LastMessageIcon}
                                 <LastMessageIcon color={ColourVars.textSecondary} />

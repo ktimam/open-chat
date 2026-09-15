@@ -19,6 +19,7 @@
     import { navigate } from "@utils/navigation";
     import { getContext } from "svelte";
     import { _, locale } from "svelte-i18n";
+    import AutoFix from "svelte-material-icons/AutoFix.svelte";
     import CollapseIcon from "svelte-material-icons/ArrowCollapseUp.svelte";
     import Cancel from "svelte-material-icons/Cancel.svelte";
     import ChatPlusOutline from "svelte-material-icons/ChatPlusOutline.svelte";
@@ -39,6 +40,7 @@
     import Refresh from "svelte-material-icons/Refresh.svelte";
     import Reply from "svelte-material-icons/Reply.svelte";
     import ReplyOutline from "svelte-material-icons/ReplyOutline.svelte";
+    import Robot from "svelte-material-icons/RobotOutline.svelte";
     import ForwardIcon from "svelte-material-icons/Share.svelte";
     import ShareIcon from "svelte-material-icons/ShareVariant.svelte";
     import TranslateIcon from "svelte-material-icons/Translate.svelte";
@@ -89,6 +91,7 @@
         translated: boolean;
         msg: Message;
         threadRootMessage: Message | undefined;
+        isThreadRoot?: boolean;
         canTip: boolean;
         selectQuickReaction: (unicode: string) => void;
         showEmojiPicker: () => void;
@@ -102,6 +105,8 @@
         onEditMessage: () => void;
         onReplyPrivately: () => void;
         onTipMessage: (ledger: string) => void;
+        onRunAiAction?: () => void;
+        onProcessWithAi?: () => void;
     }
 
     let {
@@ -131,6 +136,7 @@
         translated,
         msg,
         threadRootMessage,
+        isThreadRoot = false,
         canTip,
         selectQuickReaction,
         showEmojiPicker,
@@ -144,6 +150,8 @@
         onEditMessage,
         onReplyPrivately,
         onTipMessage,
+        onRunAiAction,
+        onProcessWithAi,
     }: Props = $props();
 
     let menuIconEl: MenuIcon | undefined;
@@ -164,9 +172,7 @@
     );
     let inThread = $derived(threadRootMessage !== undefined);
     let threadRootMessageIndex = $derived(
-        msg.messageId === threadRootMessage?.messageId
-            ? undefined
-            : threadRootMessage?.messageIndex,
+        isThreadRoot ? undefined : threadRootMessage?.messageIndex,
     );
     let isFollowedByMe = $derived(
         threadRootMessage !== undefined &&
@@ -329,8 +335,8 @@
                     id="dont_show"
                     label={i18nKey("install.dontShow")}
                     checked={!$confirmMessageDeletion}
-                    onChange={confirmMessageDeletion.toggle}>
-                </Checkbox>
+                    onChange={confirmMessageDeletion.toggle}
+                ></Checkbox>
             </div>
         </div>
     </AreYouSure>
@@ -404,7 +410,8 @@
                             {#snippet icon()}
                                 <EyeArrowRightIcon
                                     size={$iconSize}
-                                    color={"var(--icon-inverted-txt)"} />
+                                    color={"var(--icon-inverted-txt)"}
+                                />
                             {/snippet}
                             {#snippet text()}
                                 <div>
@@ -470,7 +477,8 @@
                         {#snippet icon()}
                             <ClockRemoveOutline
                                 size={$iconSize}
-                                color={"var(--icon-inverted-txt)"} />
+                                color={"var(--icon-inverted-txt)"}
+                            />
                         {/snippet}
                         {#snippet text()}
                             <div>
@@ -522,7 +530,8 @@
                             {#snippet icon()}
                                 <ChatPlusOutline
                                     size={$iconSize}
-                                    color={"var(--icon-inverted-txt)"} />
+                                    color={"var(--icon-inverted-txt)"}
+                                />
                             {/snippet}
                             {#snippet text()}
                                 <div>
@@ -571,7 +580,8 @@
                             {#snippet icon()}
                                 <TranslateIcon
                                     size={$iconSize}
-                                    color={"var(--icon-inverted-txt)"} />
+                                    color={"var(--icon-inverted-txt)"}
+                                />
                             {/snippet}
                             {#snippet text()}
                                 <div>
@@ -598,6 +608,28 @@
                         {/snippet}
                         {#snippet text()}
                             <div><Translatable resourceKey={i18nKey("tip.menu")} /></div>
+                        {/snippet}
+                    </MenuItem>
+                {/if}
+                {#if onRunAiAction !== undefined && confirmed && !inert && !failed}
+                    <MenuItem onclick={() => onRunAiAction()}>
+                        {#snippet icon()}
+                            <AutoFix size={$iconSize} color={"var(--icon-inverted-txt)"} />
+                        {/snippet}
+                        {#snippet text()}
+                            <div><Translatable resourceKey={i18nKey("aiActions.propose")} /></div>
+                        {/snippet}
+                    </MenuItem>
+                {/if}
+                {#if onProcessWithAi !== undefined && confirmed && !inert && !failed}
+                    <MenuItem onclick={onProcessWithAi}>
+                        {#snippet icon()}
+                            <Robot size={$iconSize} color={"var(--icon-inverted-txt)"} />
+                        {/snippet}
+                        {#snippet text()}
+                            <div>
+                                <Translatable resourceKey={i18nKey("aiActions.processWithAi")} />
+                            </div>
                         {/snippet}
                     </MenuItem>
                 {/if}

@@ -255,7 +255,10 @@
         ),
     );
     let items = $derived.by<FlatChatItem[]>(() => {
-        const flat: FlatChatItem[] = flattener.flatten(timeline);
+        const flat: FlatChatItem[] = flattener.flatten(
+            timeline,
+            () => `${$currentUserIdStore}:${chatIdentifierToString(chat.id)}:main`,
+        );
         if (showAvatar && chat !== undefined) {
             // rendered at the oldest end of the list (the visual top)
             flat.push(chatStartItem(chatIdentifierToString(chat.id)));
@@ -274,7 +277,11 @@
         void $threadOpenStore;
         const idx = $messageIndexStore;
         const sameChat = chatIdentifiersEqual($selectedChatIdStore, previousChatId);
-        if ($chatsInitialisedStore && idx !== undefined && (!sameChat || idx !== previousMessageIndex)) {
+        if (
+            $chatsInitialisedStore &&
+            idx !== undefined &&
+            (!sameChat || idx !== previousMessageIndex)
+        ) {
             untrack(() => {
                 scrollToMessageIndex(idx, false);
             });
@@ -308,7 +315,8 @@
         {chat}
         bind:initialised
         bind:messagesDiv
-        bind:messagesDivHeight>
+        bind:messagesDivHeight
+    >
         {#snippet row(
             item,
             { isAccepted, isConfirmed, isFailed, isReadByMe, messageObserver, focusIndex },
@@ -355,7 +363,8 @@
                     {onGoToMessageIndex}
                     onExpandMessage={() => toggleMessageExpansion(evt, true)}
                     onCollapseMessage={() => toggleMessageExpansion(evt, false)}
-                    event={evt} />
+                    event={evt}
+                />
             {/if}
         {/snippet}
     </ChatEventList>

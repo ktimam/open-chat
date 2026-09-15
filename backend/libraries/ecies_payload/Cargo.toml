@@ -1,0 +1,18 @@
+[package]
+name = "ecies_payload"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+aes-gcm = { workspace = true }
+candid = { workspace = true }
+hkdf = { workspace = true }
+p256 = { workspace = true, features = ["ecdh", "ecdsa", "pem", "pkcs8"] }
+serde = { workspace = true }
+serde_bytes = { workspace = true }
+sha2 = { workspace = true }
+
+[dev-dependencies]
+base64 = { workspace = true }
+jwt = { path = "../jwt" }
+rand = { workspace = true }

@@ -10,6 +10,12 @@ export const confirmMessageDeletion = new LocalStorageBoolStore(
     configKeys.confirmMessageDeletion,
     true,
 );
+// Global on/off switch for the AI-action auto-propose chips (per-chat muting lives in
+// utils/autoPropose.ts alongside the rest of the suggestion machinery).
+export const autoProposeSuggestions = new LocalStorageBoolStore(
+    configKeys.autoProposeSuggestions,
+    true,
+);
 export const chitPopup = new LocalStorageBoolStore(configKeys.chitPopup, true);
 export const hideChitIcon = new LocalStorageBoolStore(configKeys.hideChitIcon, false);
 export const disableChit = new LocalStorageBoolStore(configKeys.disableChit, false);
@@ -38,6 +44,7 @@ export const accountsSectionOpen = new LocalStorageBoolStore(
 export const statsSectionOpen = new LocalStorageBoolStore(configKeys.userStatsSection, false);
 export const advancedSectionOpen = new LocalStorageBoolStore(configKeys.userAdvancedSection, false);
 export const modelsSectionOpen = new LocalStorageBoolStore(configKeys.modelsSection, false);
+export const myAppsSectionOpen = new LocalStorageBoolStore(configKeys.myAppsSection, false);
 export const deleteAccountSectionOpen = new LocalStorageBoolStore(
     configKeys.userDeleteAccountSection,
     false,
@@ -58,6 +65,7 @@ export const groupInviteUsersOpen = new LocalStorageBoolStore(
     false,
 );
 export const groupAdvancedOpen = new LocalStorageBoolStore(configKeys.groupAdvancedSection, false);
+export const groupAiAppsOpen = new LocalStorageBoolStore(configKeys.groupAiAppsSection, false);
 export const exploreGroupsDismissed = new LocalStorageBoolStore(
     configKeys.exploreGroupsDismissed,
     false,

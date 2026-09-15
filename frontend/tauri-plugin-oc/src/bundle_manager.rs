@@ -41,10 +41,12 @@ where
     // Lazily load cached assets into memory on first request
     let cache = memory_cache.get_or_init(|| {
         let um = update_manager::UpdateManager::new(handle.clone());
-        // Before anything is loaded: a cache left behind by a store update is
-        // older than the assets this binary ships with, and serving it would
-        // pin the webview to the previous release. See discard_cache_if_stale.
-        um.discard_cache_if_stale();
+        // Preserved caches are optional: policy/version rejection must select
+        // bundled assets even if an old cache cannot be deleted from disk.
+        if !um.cached_update_allowed() {
+            return HashMap::new();
+        }
+
         um.get_cache_dir()
             .map(|dir| load_cache_into_memory(&dir))
             .unwrap_or_default()
@@ -111,6 +113,12 @@ fn load_cache_into_memory(cache_dir: &std::path::Path) -> HashMap<String, Cached
                 cache.insert(name, CachedAsset { data, mime_type });
             }
         }
+    }
+    // index.html is the minimum admission marker in addition to version.json;
+    // without it, fall back to the APK. This is not full nested-asset completeness
+    // validation: see the separate OTA loader limitation in OTA_UPDATES.md.
+    if !cache.contains_key("index.html") {
+        return HashMap::new();
     }
     if !cache.is_empty() {
         println!("Loaded {} cached assets into memory", cache.len());

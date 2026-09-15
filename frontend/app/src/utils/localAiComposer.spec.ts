@@ -98,7 +98,7 @@ describe("generic /ai voice invocation in both UIs", () => {
                 "utf8",
             );
             const start = source.indexOf("    async function handleLocalAiCommand(");
-            const end = source.indexOf("\n    function afterSendMessage", start);
+            const end = source.indexOf("\n    function recentLocalAiChatContext", start);
             expect(start).toBeGreaterThan(0);
             expect(end).toBeGreaterThan(start);
             const handler = transpileModule(source.slice(start, end), {
@@ -129,6 +129,8 @@ describe("generic /ai voice invocation in both UIs", () => {
                     "onAccepted",
                     "toastStore",
                     "i18nKey",
+                    "recentLocalAiChatContext",
+                    "setLocalAiStatus",
                 ],
             );
             const bytes = new Uint8Array([21, 22]);
@@ -155,6 +157,8 @@ describe("generic /ai voice invocation in both UIs", () => {
                 accepted,
                 { showFailureToast },
                 (key: string) => key,
+                () => [{ author: "Earlier message", text: "Bring the draft" }],
+                vi.fn(),
             );
             expect(accepted).toHaveBeenCalledExactlyOnceWith(["transcribe this", [], false]);
             expect(infer).toHaveBeenCalledWith(

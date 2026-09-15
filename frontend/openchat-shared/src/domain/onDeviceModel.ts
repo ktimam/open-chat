@@ -10,6 +10,13 @@
 
 export type ModelModality = "text" | "image" | "audio";
 
+// A bounded, content-agnostic image focus requested by an app-authored extraction pass. The client
+// derives a new in-memory raster from the original pixels before inference; no OCR or text crosses
+// this seam. Keep this a closed enum so untrusted app manifests cannot request arbitrary coordinates
+// or tiny adversarial crops. `lower_half` is the full-width bottom 50%; `detail_card` is the
+// version-3 band from 58% through 86%; `lower_detail_rows` is the version-4 68%-90% band.
+export type InferenceImageRegion = "lower_half" | "detail_card" | "lower_detail_rows";
+
 // A build matches a model to its supported runtime and artifact format. Native llama.cpp uses GGUF
 // and optional projectors; explicitly enabled browser/Android acceleration uses pinned ONNX graphs
 // with Transformers.js. Selecting all-WebGPU does not enable an automatic CPU/native fallback.
@@ -74,9 +81,14 @@ export interface InferenceRequest {
     // type describes these exact bytes; callers must provide both fields together.
     audio?: Uint8Array;
     audioMimeType?: string;
+    // Optional bounded region of `image` to present to this inference call.
+    imageRegion?: InferenceImageRegion;
     // Optional additional text context.
     text?: string;
     maxTokens?: number;
+    // Decoding intent only. JSON mode lets a runtime choose deterministic structured-output sampling
+    // without receiving or enabling a JSON-schema grammar.
+    responseMode?: "json";
     // Best-effort: ask the runtime to constrain output to this JSON schema (not all runtimes support it).
     responseSchema?: object;
 }

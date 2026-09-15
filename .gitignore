@@ -29,3 +29,6 @@ frontend/app/src/stores/timeline.ts
 claude.md
 GEMINI.md
 plans/
+
+# Generated APK resources. Keep source graphs and model manifests in their source directories.
+/frontend/src-tauri/gen/android/app/src/main/assets/

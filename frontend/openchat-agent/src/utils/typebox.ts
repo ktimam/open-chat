@@ -3,6 +3,10 @@ import { Kind, type Static, type TSchema } from "@sinclair/typebox";
 import { deepRemoveNullishFields } from "./nullish";
 import { TypeboxValidationError } from "@shared/domain/error";
 
+export interface TypeboxValidationOptions {
+    sensitive?: boolean;
+}
+
 // Whether a schema or anything beneath it carries a `default` annotation. Value.Default is
 // deep-identity on a subtree with no defaults, so such subtrees can be skipped entirely.
 const hasDefaultsCache = new WeakMap<TSchema, boolean>();
@@ -122,7 +126,11 @@ function applyDefaults(schema: TSchema, value: unknown): unknown {
 // Equivalent to Value.Parse(["Default", "Convert", "Assert"], schema, value), with the
 // Default step replaced by applyDefaults above. Convert is kept as-is (it is what turns
 // msgpack numbers/strings into bigints) and Value.Assert is the Parse "Assert" step.
-export function typeboxValidate<T extends TSchema>(value: unknown, validator: T): Static<T> {
+export function typeboxValidate<T extends TSchema>(
+    value: unknown,
+    validator: T,
+    options?: TypeboxValidationOptions,
+): Static<T> {
     try {
         const converted = Value.Convert(
             validator,
@@ -131,6 +139,10 @@ export function typeboxValidate<T extends TSchema>(value: unknown, validator: T)
         Value.Assert(validator, converted);
         return converted as Static<T>;
     } catch (err) {
+        if (options?.sensitive) {
+            console.error("Typebox validation failed for a sensitive value");
+            throw new TypeboxValidationError();
+        }
         console.error("Typebox validation failed: ", value, err);
         throw new TypeboxValidationError(err instanceof Error ? err : undefined);
     }

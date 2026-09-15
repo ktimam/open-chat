@@ -86,13 +86,15 @@ export async function listLocalModels(): Promise<LocalModel[]> {
     return await invoke<LocalModel[]>("plugin:oc|list_local_models");
 }
 
-/** Whether this installed native binary includes its optional inference runtime. */
-export async function inferenceRuntimeAvailable(): Promise<boolean> {
-    return await invoke<boolean>("plugin:oc|inference_runtime_available");
-}
-
 export async function deleteModel(modelId: string): Promise<void> {
     return await invoke<void>("plugin:oc|delete_model", { payload: { modelId } });
+}
+
+// True only when this exact native binary was compiled with the llama.cpp runtime. A Tauri bridge by
+// itself is not sufficient: development and legacy builds may expose the model-store commands while
+// omitting the optional inference feature.
+export async function inferenceRuntimeAvailable(): Promise<boolean> {
+    return await invoke<boolean>("plugin:oc|inference_runtime_available");
 }
 
 // Run the selected on-device model with a caller-supplied prompt. The native side loads the model into

@@ -145,4 +145,8 @@ fn commit(
         .data
         .local_index_map
         .add_community(local_user_index_canister, community_id);
+    state.data.ai_app_card_authority.observe_route(
+        crate::model::ai_app_card_authority::CardRouteKey::Community(community_id),
+        Some(local_user_index_canister),
+    );
 }

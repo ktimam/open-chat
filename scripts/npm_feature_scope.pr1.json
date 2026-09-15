@@ -370,9 +370,9 @@
         "sha256": "3aafb847e7aad846a15843fac6278050ecc88a59481aa48b6309767e7c923c96"
       },
       {
-        "workingTreeReview": "2026-09-11: fresh CURRENT PR1 dirty-source ownership review, not committed source bytes or an exact prior-review delta. All 48 selected model source/evidence files and 18 roots reviewed; graph transforms reuse the existing ONNX parser, early ORT configuration uses Node crypto, and browser factories/completion/pipeline helpers add no npm package. PR1-specific UI, transport and model build hooks independently checked against PR2; no added model root. Per-file raw/LF hashes and import/ownership findings retained in the project-temp admin record. No advisory, security, runtime, accuracy, phone or release acceptance; app/card scope not approved.",
+        "workingTreeReview": "2026-09-11: fresh CURRENT PR2 dirty-source MODEL ownership review, not committed source bytes or an exact prior-review delta. All 48 selected model source/evidence files and 18 roots reviewed; generation/vision graph transforms reuse the existing ONNX parser, early ORT configuration uses Node crypto, browser factories/completion/pipeline helpers add no npm package, and model-specific Vite/Rollup/worker hooks retain existing roots. Per-file raw/LF hashes and import/ownership findings retained in the project-temp admin record. No advisory, security, runtime, accuracy, phone or release acceptance; this does not approve the separately changing app/card scope.",
         "reviewRecord": "model-root-ownership-current-20260911.json",
-        "sha256": "ff421b4f4dfb13780b3ad74f33c5069889781309248158218583cbc395832ca5"
+        "sha256": "53e2535d3ab2c2a2c51a217de72362f0edeb36254def25674766f1b27a348f8e"
       }
     ]
   }

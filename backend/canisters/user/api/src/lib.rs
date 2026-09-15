@@ -199,6 +199,18 @@ pub enum UserCanisterEvent {
     JoinVideoCall(Box<JoinVideoCall>),
     SetReferralStatus(Box<ReferralStatus>),
     SetEventsTtl(Box<SetEventsTtl>),
+    // Mirrors an action-card response onto the other participant's copy of a direct chat (see
+    // ChatEvents::apply_action_card_state — apply-only, deposit-free on the receiving side).
+    ActionCardStatusChange(Box<ActionCardStatusChange>),
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ActionCardStatusChange {
+    pub thread_root_message_id: Option<MessageId>,
+    pub message_id: MessageId,
+    pub state: types::ActionCardState,
+    pub responded_by: UserId,
+    pub responded_at: TimestampMillis,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -428,4 +440,78 @@ pub enum CommunityCanisterEvent {
 pub enum GroupCanisterEvent {
     MessageActivity(MessageActivityEvent),
     Achievement(Achievement),
+}
+
+#[cfg(test)]
+mod ai_app_direct_api_contract_tests {
+    const UPDATE_MODULES: &str = include_str!("updates/mod.rs");
+    const TS_METHODS: &str = include_str!("main.rs");
+    const SEND_MESSAGE: &str = include_str!("../../impl/src/updates/send_message.rs");
+    const CREATE_CAPABILITY: &str = include_str!("../../impl/src/updates/create_ai_app_card_capability.rs");
+    const CREATE_GRANT: &str = include_str!("../../impl/src/updates/create_ai_app_card_confirmation_grant.rs");
+    const RESPOND: &str = include_str!("../../impl/src/updates/respond_to_action_card.rs");
+    const C2C_USER_CANISTER: &str = include_str!("../../impl/src/updates/c2c_user_canister.rs");
+    const POST_UPGRADE: &str = include_str!("../../impl/src/lifecycle/post_upgrade.rs");
+
+    #[test]
+    fn user_canister_exports_a_direct_card_confirmation_grant_method() {
+        assert!(
+            UPDATE_MODULES.contains("pub mod create_ai_app_card_confirmation_grant;"),
+            "the User API must define the same generic confirmation-grant contract as groups/channels"
+        );
+        assert!(
+            TS_METHODS.contains("generate_ts_method!(user, create_ai_app_card_confirmation_grant);"),
+            "the direct confirmation-grant method must be generated for agent clients"
+        );
+    }
+
+    #[test]
+    fn existing_direct_response_requires_override_and_grant_as_an_atomic_pair() {
+        let source = include_str!("updates/respond_to_action_card.rs");
+        assert!(source.contains("pub confirm_payload_override: Option<ByteBuf>"));
+        assert!(source.contains("pub confirmation_grant: Option<ByteBuf>"));
+    }
+
+    #[test]
+    fn direct_card_post_await_revalidators_never_re_read_callback_caller() {
+        for (name, source, marker) in [
+            ("send", SEND_MESSAGE, "fn revalidate_app_card_post("),
+            ("capability", CREATE_CAPABILITY, "fn revalidate("),
+            ("grant", CREATE_GRANT, "fn revalidate("),
+            ("respond", RESPOND, "fn revalidate_before_deposit("),
+        ] {
+            let start = source.find(marker).expect("post-await revalidator must exist");
+            let tail = &source[start..];
+            let end = tail[marker.len()..]
+                .find("\nfn ")
+                .map(|offset| marker.len() + offset)
+                .unwrap_or(tail.len());
+            let revalidator = &tail[..end];
+            assert!(
+                !revalidator.contains("state.env.caller()"),
+                "{name} must use its pre-await owner snapshot, not the callback caller"
+            );
+            assert!(
+                revalidator.contains("state.data.owner !="),
+                "{name} must still detect owner replacement after the await"
+            );
+        }
+    }
+
+    #[test]
+    fn direct_card_mirror_arguments_are_never_traced_and_old_history_is_purged() {
+        let endpoint_end = C2C_USER_CANISTER
+            .find("async fn c2c_user_canister_impl")
+            .expect("the C2C user endpoint implementation must exist");
+        let endpoint = &C2C_USER_CANISTER[..endpoint_end];
+
+        assert!(
+            !endpoint.contains("#[trace]"),
+            "the direct-message C2C envelope can contain private ActionCard payloads and must not be traced"
+        );
+        assert!(
+            POST_UPGRADE.contains("\"c2c_user_canister\""),
+            "the first fixed upgrade must purge C2C traces written by earlier PR2 builds"
+        );
+    }
 }

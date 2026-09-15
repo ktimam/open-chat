@@ -1,5 +1,11 @@
 <script lang="ts">
-    import type { MessageContent, MessageContext, OgPreview, RehydratedMessagePreview } from "@client";
+    import {
+        currentUserIdStore,
+        type MessageContent,
+        type MessageContext,
+        type OgPreview,
+        type RehydratedMessagePreview,
+    } from "@client";
     import { i18nKey } from "../../i18n/i18n";
     import AudioContent from "./AudioContent.svelte";
     import BlockedContent from "./BlockedContent.svelte";
@@ -16,6 +22,7 @@
     import P2PSwapContent from "./P2PSwapContent.svelte";
     import PlaceholderContent from "./PlaceholderContent.svelte";
     import RestrictedMessageContent from "./RestrictedMessageContent.svelte";
+    import ActionCardContent from "../../components/home/ActionCardContent.svelte";
     import PollContent from "./PollContent.svelte";
     import PrizeContent from "./PrizeContent.svelte";
     import PrizeWinnerContent from "./PrizeWinnerContent.svelte";
@@ -45,6 +52,7 @@
         undeleting?: boolean;
         intersecting: boolean;
         failed: boolean;
+        reconciliationTrigger?: boolean;
         timestamp?: bigint | undefined;
         blockLevelMarkdown: boolean;
         isPreview?: boolean;
@@ -52,6 +60,11 @@
         onExpandMessage?: (() => void) | undefined;
         onRemovePreview?: (url: string) => void;
         onRegisterVote?: (vote: { type: "delete" | "register"; answerIndex: number }) => void;
+        onRespondToActionCard?: (
+            response: "confirm" | "cancel",
+            confirmPayloadOverride?: Uint8Array,
+            confirmationGrant?: Uint8Array,
+        ) => boolean | Promise<boolean>;
         ogPreviews?: OgPreview[];
         messagePreviews?: RehydratedMessagePreview[];
     }
@@ -75,12 +88,14 @@
         undeleting = false,
         intersecting,
         failed,
+        reconciliationTrigger = false,
         timestamp = undefined,
         blockLevelMarkdown,
         isPreview = false,
         onExpandMessage = undefined,
         onRemovePreview,
         onRegisterVote,
+        onRespondToActionCard,
         ogPreviews = [],
         messagePreviews = [],
     }: Props = $props();
@@ -98,7 +113,8 @@
         {isPreview}
         {onRemovePreview}
         {ogPreviews}
-        {messagePreviews} />
+        {messagePreviews}
+    />
 {:else if content.kind === "image_content"}
     <ImageContent
         bind:contentWidth
@@ -112,7 +128,8 @@
         {height}
         {blockLevelMarkdown}
         {isPreview}
-        {onRemovePreview} />
+        {onRemovePreview}
+    />
 {:else if content.kind === "video_content"}
     <VideoContent
         bind:contentWidth
@@ -123,7 +140,8 @@
         {reply}
         {height}
         {blockLevelMarkdown}
-        {isPreview} />
+        {isPreview}
+    />
 {:else if content.kind === "video_call_content"}
     <VideoCallContent {me} {senderId} {messageIndex} {content} {timestamp} />
 {:else if content.kind === "audio_content"}
@@ -145,11 +163,13 @@
         text={i18nKey(
             failed ? "prizes.creatingPrizeMessageFailed" : "prizes.creatingYourPrizeMessage",
         )}
-        {failed} />
+        {failed}
+    />
 {:else if content.kind === "p2p_swap_content_initial"}
     <MessageContentInitial
         text={i18nKey(failed ? "p2pSwap.failedToCreateMessage" : "p2pSwap.creatingYourMessage")}
-        {failed} />
+        {failed}
+    />
 {:else if content.kind === "prize_content"}
     <PrizeContent chatId={messageContext.chatId} {messageId} {content} {me} {intersecting} />
 {:else if content.kind === "p2p_swap_content"}
@@ -161,11 +181,23 @@
         {me}
         {reply}
         {pinned}
-        {isPreview} />
+        {isPreview}
+    />
 {:else if content.kind === "prize_winner_content"}
     <PrizeWinnerContent {content} {intersecting} />
 {:else if content.kind === "poll_content"}
     <PollContent {readonly} {me} {content} {senderId} {reply} {edited} {onRegisterVote} />
+{:else if content.kind === "action_card_content"}
+    <ActionCardContent
+        {content}
+        {readonly}
+        chatId={messageContext.chatId}
+        {messageId}
+        threadRootMessageIndex={messageContext.threadRootMessageIndex}
+        viewerId={$currentUserIdStore}
+        {reconciliationTrigger}
+        onRespond={onRespondToActionCard}
+    />
 {:else if content.kind === "giphy_content"}
     <GiphyContent
         {me}
@@ -176,7 +208,8 @@
         {reply}
         {height}
         {blockLevelMarkdown}
-        {isPreview} />
+        {isPreview}
+    />
 {:else if content.kind === "proposal_content"}
     <ProposalContent
         {content}
@@ -186,7 +219,8 @@
         {collapsed}
         {readonly}
         {reply}
-        {onExpandMessage} />
+        {onExpandMessage}
+    />
 {:else if content.kind === "message_reminder_created_content" && !content.hidden}
     <MessageReminderCreatedContent {content} />
 {:else if content.kind === "message_reminder_content"}

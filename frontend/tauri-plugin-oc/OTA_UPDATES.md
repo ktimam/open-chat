@@ -6,9 +6,9 @@ Store.
 
 ## Overview
 
-The APK ships with a bundled copy of the frontend assets. On each launch the app
-checks whether a newer version is available on the server. If so — and if the
-OTA strategy permits it — it downloads a zip of the new assets, extracts them to
+The APK ships with a bundled copy of the frontend assets. When OTA is enabled,
+the app checks whether a newer version is available on the server. If so — and
+if the OTA strategy permits it — it downloads a zip of the new assets, extracts them to
 a cache directory, and prompts the user to restart. On the next launch the cached
 assets are served instead of the bundled ones.
 
@@ -19,7 +19,13 @@ runtime remain at the version compiled into the APK.
 
 The strategy is set at build time via the `OC_OTA_UPDATES` environment variable
 and controls **which version bumps** the frontend is allowed to apply over the
-air. The check is performed in the frontend before any download begins.
+air. Rollup also writes it to the bundled `ota-policy.json`, so the native asset
+resolver can enforce the policy before any cached JavaScript runs. Missing or
+invalid native policy fails closed to `"none"`.
+
+`build_android.sh` defaults sideload APKs to `"none"` without inheriting a
+generic `OC_OTA_UPDATES` from the caller. Store/CI builds that intentionally use
+OTA must opt in with `OC_ANDROID_OTA_UPDATES=patch|minor|major`.
 
 | Strategy | Allowed OTA updates | Example (from 2.0.1973) |
 |----------|--------------------|-----------------------|
@@ -42,8 +48,9 @@ components carry fixed meanings. Note that `major` does NOT mean "big". It means
 | minor | A new user-facing feature. Any existing shell can run it. | Play update | OTA |
 | major | Web code that requires shell changes: a new plugin command, a new Rust API, a new permission. Older shells cannot run this bundle. | Play update | New APK |
 
-So the store build ships with `OC_OTA_UPDATES=patch` and the sideloaded build
-with `minor`.
+This table describes the intended compatibility boundaries for OTA-enabled
+channels, not an implicit opt-in. Local sideload builds default to `none`;
+release channels must explicitly select their allowed policy.
 
 Two consequences worth being explicit about.
 
@@ -61,8 +68,10 @@ users sitting on a stale build waiting for a store update they don't need. The
 release-train skill asks about this at tag time rather than trusting memory.
 
 The strategy is evaluated by `Version.canUpdateTo(server, strategy)` in the
-frontend. The Rust side always downloads if `server > current` — the gating
-happens in JS before `download_update` is ever called.
+frontend and is also embedded as `ota-policy.json` for the native resolver.
+Rust independently rejects incompatible downloads and cached bundles. This
+second gate is required because an install-over preserves native OTA files and
+because native commands must not rely on frontend JavaScript for authorization.
 
 The `VersionChecker` is only active when `OC_APP_TYPE === "android"` and
 `OC_OTA_UPDATES !== "none"`.
@@ -110,7 +119,7 @@ The `VersionChecker` is only active when `OC_APP_TYPE === "android"` and
 2. Scheme handler checks in-memory cache → empty (no `version.json` on disk)
 3. Falls through to bundled assets via `asset_resolver().get()`
 4. Frontend JS boots with `OC_WEBSITE_VERSION` baked in at build time
-5. `VersionChecker` calls `get_server_version` → e.g. `2.0.1975`
+5. If OTA is enabled, `VersionChecker` calls `get_server_version` → e.g. `2.0.1975`
 6. `canUpdateTo(server, strategy)` checks the OTA strategy:
    - If strategy is `"none"` → no update, app stays on bundled version
    - If the version delta exceeds what the strategy allows → no update
@@ -125,8 +134,10 @@ The `VersionChecker` is only active when `OC_APP_TYPE === "android"` and
 
 1. App starts, WebView loads `tauri://localhost/index.html`
 2. Scheme handler initialises `OnceLock`:
-   - Finds `<app_data>/updates/version.json` → loads all files from cache dir
-     into memory
+   - Reads the newly installed binary's OTA policy and embedded shell version.
+   - Accepts `<app_data>/updates/version.json` only when the cache is strictly
+     newer and compatible with that policy; `index.html` must also exist.
+   - Otherwise ignores the preserved cache and serves the bundled frontend.
 3. Serves `index.html` (and all other assets) from in-memory cache
 4. Frontend JS boots — this is now the **updated** JS (e.g. `2.0.1975`)
 5. `VersionChecker` calls `get_server_version` → `2.0.1975`
@@ -136,8 +147,12 @@ The `VersionChecker` is only active when `OC_APP_TYPE === "android"` and
 ### Subsequent launch (newer version on server)
 
 Same as "cached update available" but at step 6 the server has a newer version.
-The strategy gate is re-evaluated against the **cached** client version. If
-allowed, the update flow triggers again.
+The strategy gate is re-evaluated against the **eligible cached** client version.
+An incompatible or stale preserved cache cannot become the comparison baseline.
+If allowed, the update flow triggers again. Native `check_for_updates` returns
+without contacting the server when policy is `none` or the embedded shell
+version is missing/malformed; neither native package metadata nor `0.0.0` is a
+substitute for the bundled frontend's version.
 
 ### Strategy blocks the update
 
@@ -170,6 +185,10 @@ cached). The user must update via the Play Store to get across the boundary.
 | **Android versionName / versionCode** | APK/AAB manifest | Set by CI from `OC_ANDROID_VERSION_NAME` (the release tag version). versionCode is derived as `major*1000000 + minor*10000 + patch`. Equals the shell version above, since both come from the same tag. |
 | **tauri.conf.json** | `"version": "0.1.0"` | **NOT used** for any of the above. A stale placeholder. Do not rely on it. |
 
+`get_shell_version` reports only the binary's embedded `version` asset, never a
+cached OTA bundle or package-info fallback. Missing or malformed assets produce
+no shell version and disable cache selection/download decisions.
+
 ## Cache Directory Layout
 
 ```
@@ -199,14 +218,29 @@ must intercept the `tauri://` scheme.
 
 ### Asset resolution order
 
-1. **In-memory cache** — populated once via `OnceLock` from the disk cache on
-   first request. If `version.json` doesn't exist, the cache is empty.
+1. **Eligible in-memory cache** — populated once via `OnceLock` from the disk
+   cache on first request, but only when the bundled native policy permits it
+   and the cached version is a compatible, strictly newer update over the
+   bundled version. If policy is disabled/invalid or the cache is stale,
+   malformed, or lacks `index.html`, the cache is empty.
 2. **SPA fallback (cache)** — requests without a file extension get
    `index.html` from cache.
 3. **Bundled assets** — via `asset_resolver().get()` (Tauri's compiled-in
    assets).
 4. **SPA fallback (bundled)** — `index.html` from bundled assets.
 5. **404** — nothing matched.
+
+### Separate limitation: nested OTA asset completeness
+
+The inherited cache loader currently reads only files directly under
+`<app_data>/updates/`; it does not recursively load nested asset directories.
+The `version.json`/`index.html` checks are minimum admission checks, not a proof
+that the complete OTA build is present. If a cached page requests a missing or
+nested asset, resolution can fall back to bundled files, mixing build versions.
+Recursive loading, atomic complete-bundle selection and archive validation need
+separate review before enabling production OTA for such bundles. This merge does
+not claim to fix that loader. Local testing with OTA `none` bypasses it and uses
+the frontend bundled into the APK.
 
 ### Critical: Response Headers
 
@@ -233,9 +267,13 @@ Selected at compile time via the `store` cargo feature flag.
    Manager rejects WebAuthn assertions when the origin header is a wildcard.
    Always use the specific origin `https://tauri.localhost`.
 
-3. **Stale cached files persist across installs of the same package.** If you're
-   testing OTA, clear app data (`adb shell pm clear com.oclabs.openchat`) to reset.
-   Uninstalling also clears the data.
+3. **Cached files persist across installs of the same package.** The native
+   resolver now ignores them when the newly installed APK has OTA disabled, or
+   when they are not a compatible upgrade over the newly bundled frontend.
+   Ignoring the cache does not delete it or account/model data, and does not
+   depend on a successful deletion. Test an in-place update of `<applicationId>`
+   with retained data. Clearing app data or uninstalling is not a normal remedy
+   for stale-cache selection and would destroy the retained-account test case.
 
 4. **The scheme handler cannot be `"oc"` or any other custom scheme.** Using a
    different scheme changes the WebView origin (e.g. `http://oc.localhost`),
@@ -260,8 +298,9 @@ Selected at compile time via the `store` cargo feature flag.
    `startActivity(mainIntent)`. This fully kills the process so the `OnceLock`
    is reset and the new cached files are loaded on the next launch.
 
-8. **The OTA strategy is a frontend-only gate.** The Rust `check_for_updates`
-   always downloads if `server > current`. The strategy check in
-   `canUpdateTo()` prevents the frontend from ever calling `download_update`
-   when the version delta is too large. This means the Rust side doesn't need
-   to know about the strategy.
+8. **The OTA strategy is enforced twice.** The frontend's `canUpdateTo()`
+   avoids offering incompatible updates. Rust reads the bundled
+   `ota-policy.json`, independently rejects incompatible downloads, and refuses
+   to serve an incompatible preserved cache or one missing the minimum index
+   marker. Missing or invalid policy fails closed to the APK's bundled frontend;
+   full nested-bundle completeness remains the separate limitation above.

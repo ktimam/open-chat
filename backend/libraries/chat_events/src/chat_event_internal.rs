@@ -389,6 +389,7 @@ impl MessageInternal {
             MessageContentType::VideoCall => {
                 metrics.incr(MetricKey::VideoCalls, 1);
             }
+            MessageContentType::ActionCard => {}
             MessageContentType::Custom(_) => {
                 metrics.incr(MetricKey::CustomTypeMessages, 1);
             }

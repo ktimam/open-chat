@@ -1,6 +1,6 @@
 import type { ChatEvent, EventWrapper, Message, TimelineItem } from "@client";
-import { describe, expect, test } from "vitest";
-import { flattenTimeline, TimelineFlattener } from "./flatChatItems";
+import { describe, expect, it, test } from "vitest";
+import { eventKey, flattenTimeline, TimelineFlattener } from "./flatChatItems";
 
 const BASE = 1_700_000_000_000;
 const DAY = 24 * 60 * 60 * 1000;
@@ -99,5 +99,84 @@ describe("TimelineFlattener", () => {
         for (const tl of cases) {
             expect(f.flatten(tl)).toEqual(flattenTimeline(tl));
         }
+    });
+
+    test.each([false, true])(
+        "rekeys the same wrappers across viewer/chat/root/reply scope changes (new timeline: %s)",
+        (newTimeline) => {
+            const f = new TimelineFlattener();
+            const event = msgEv(7);
+            const timeline = timelineOf([[event]]);
+            let scope = "viewer-a:chat-a:main";
+            // Keep this callback identity fixed: its captured authority changes independently.
+            const scopeForEvent = () => scope;
+            let previous = f.flatten(timeline, scopeForEvent);
+
+            for (scope of [
+                "viewer-b:chat-a:main",
+                "viewer-b:chat-b:main",
+                "viewer-b:chat-b:thread_root",
+                "viewer-b:chat-b:thread_reply:7",
+                "viewer-b:chat-b:thread_reply:8",
+            ]) {
+                const currentTimeline = newTimeline ? timelineOf([[event]]) : timeline;
+                const next = f.flatten(currentTimeline, scopeForEvent);
+                expect(next).toEqual(flattenTimeline(currentTimeline, scopeForEvent));
+                expect(next[0].key).not.toBe(previous[0].key);
+                expect(next[0]).not.toBe(previous[0]);
+                expect(next[0].kind === "event" && next[0].event).toBe(event);
+                expect(f.flatten(currentTimeline, scopeForEvent)[0]).toBe(next[0]);
+                previous = next;
+            }
+        },
+    );
+
+    test("distinguishes colliding root/reply wrappers and rekeys when the root wrapper changes", () => {
+        const f = new TimelineFlattener();
+        const root = msgEv(7);
+        const reply = { ...root, event: { ...root.event } };
+        const timeline = timelineOf([[reply], [root]]);
+        let rootWrapper = root;
+        const scopeForEvent = (event: EventWrapper<ChatEvent>) =>
+            event === rootWrapper ? "viewer:chat:thread_root" : "viewer:chat:thread_reply:7";
+        const before = f.flatten(timeline, scopeForEvent);
+        expect(before[0].key).not.toBe(before[1].key);
+
+        rootWrapper = reply;
+        const after = f.flatten(timeline, scopeForEvent);
+        expect(after).toEqual(flattenTimeline(timeline, scopeForEvent));
+        expect(after[0]).not.toBe(before[0]);
+        expect(after[1]).not.toBe(before[1]);
+        expect(after[0].key).toBe(before[1].key);
+        expect(after[1].key).toBe(before[0].key);
+    });
+});
+
+function message(index: number, sender: string, messageId: bigint): EventWrapper<ChatEvent> {
+    return {
+        ...msgEv(index, sender),
+        event: { ...msgEv(index, sender).event, messageId },
+    };
+}
+
+describe("flat chat event identity", () => {
+    it("keeps a message key stable when its optimistic event index is confirmed", () => {
+        expect(eventKey(message(500, "viewer-a", 7n), "viewer-a:group:main")).toBe(
+            eventKey(message(12, "viewer-a", 7n), "viewer-a:group:main"),
+        );
+    });
+
+    it("distinguishes exact root/reply wrappers even when index, sender and id collide", () => {
+        const event = message(2, "viewer-a", 7n);
+        expect(eventKey(event, "viewer-a:group:thread_root")).not.toBe(
+            eventKey(event, "viewer-a:group:thread_reply:2"),
+        );
+    });
+
+    it("does not reuse a direct-chat row across viewers", () => {
+        const event = message(2, "same-other-user", 7n);
+        expect(eventKey(event, "viewer-a:direct:same-other-user:main")).not.toBe(
+            eventKey(event, "viewer-b:direct:same-other-user:main"),
+        );
     });
 });

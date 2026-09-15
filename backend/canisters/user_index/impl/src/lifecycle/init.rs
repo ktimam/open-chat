@@ -17,6 +17,7 @@ fn init(args: Args) {
     init_cycles_dispenser_client(args.cycles_dispenser_canister_id, args.test_mode);
 
     let env = Box::new(CanisterEnv::new(args.rng_seed));
+    let now = env.now();
 
     let data = Data::new(
         args.governance_principals,
@@ -38,10 +39,10 @@ fn init(args: Args) {
         args.video_call_operators,
         args.oc_secret_key_der,
         args.test_mode,
-        env.now(),
+        now,
     );
-
     init_state(env, data, args.wasm_version);
+    crate::pr2_entropy::start_after_lifecycle();
 
     crate::no_inline_anchor::anchor();
     info!(version = %args.wasm_version, "Initialization complete");

@@ -33,6 +33,7 @@ export const configKeys = {
     groupStatsSection: "openchat_group_stats_section",
     groupInviteUsersSections: "openchat_group_invite_users_section",
     groupAdvancedSection: "openchat_group_advanced_section",
+    groupAiAppsSection: "openchat_group_ai_apps_section",
     theme: "openchat_theme",
     scrollStrategy: "openchat_scrollstrategy",
     selectedAuthProvider: "openchat_selected_auth_provider",
@@ -59,4 +60,8 @@ export const configKeys = {
     linkDeviceSection: "link_account_with_native_app",
     chatListFilter: "openchat_chat_list_filter",
     modelsSection: "openchat_models_section",
+    autoProposeSuggestions: "openchat_auto_propose_suggestions",
+    autoProposeMutedChats: "openchat_auto_propose_muted_chats",
+    aiAppSurfacesShown: "openchat_ai_app_surfaces_shown",
+    myAppsSection: "openchat_my_apps_section",
 };

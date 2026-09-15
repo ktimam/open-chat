@@ -25,6 +25,7 @@
     import { portalState } from "component-lib";
     import {
         currentUserIdStore,
+        chatIdentifierToString,
         eventIndexesLoadedStore,
         eventListLastScrolled,
         eventListScrollTop,
@@ -42,6 +43,12 @@
     } from "@client";
     import { getContext, onMount, tick, untrack, type Snippet } from "svelte";
     import { isSafari, mobileOperatingSystem } from "@utils/devices";
+    import {
+        autoProposeThreadStreamMessages,
+        evaluateForAutoPropose,
+        registerAutoProposeEventBoundary,
+        type AutoProposeEventRegistration,
+    } from "@utils/autoPropose";
     import type { FlatChatItem } from "./flatChatItems";
     import { vclDebug } from "./vclDebug";
     import VirtualChatList from "./VirtualChatList.svelte";
@@ -115,6 +122,9 @@
     let destroyed = false;
     let loadingNewMessages = false;
     let loadingPrevMessages = false;
+    let autoProposeRegistration: AutoProposeEventRegistration | undefined;
+    let autoProposeRegistrationEpoch = 0;
+    let autoProposeRegisteredContextKey: string | undefined;
     // The load currently in flight, from whichever caller started it. A caller
     // that finds one running must WAIT for it, not return early: the
     // scrollToMessageIndex recursion treats a true result as "a load happened,
@@ -245,7 +255,10 @@
     function messageIndexToFlat(): Map<number, number> {
         const current = items;
         const context = messageContext;
-        if (messageIndexToFlatCache?.items === current && messageIndexToFlatCache.context === context) {
+        if (
+            messageIndexToFlatCache?.items === current &&
+            messageIndexToFlatCache.context === context
+        ) {
             return messageIndexToFlatCache.map;
         }
         const map = new Map<number, number>();
@@ -380,8 +393,7 @@
                 if (evt.kind !== "message") return "event";
                 if (
                     evt.content.kind === "text_content" &&
-                    ((evt.ogPreviews?.length ?? 0) > 0 ||
-                        (evt.messagePreviews?.length ?? 0) > 0)
+                    ((evt.ogPreviews?.length ?? 0) > 0 || (evt.messagePreviews?.length ?? 0) > 0)
                 ) {
                     return "text_preview";
                 }
@@ -400,6 +412,58 @@
                 return undefined;
         }
     }
+
+    let autoProposeContextKey = $derived(
+        JSON.stringify([
+            $currentUserIdStore,
+            chatIdentifierToString(chat.id),
+            threadRootEvent?.event.messageIndex ?? null,
+        ]),
+    );
+
+    // ChatEventList persists across some chat switches, so registration follows the semantic
+    // viewer/chat/thread context rather than component mount alone. Values which naturally change
+    // as new messages arrive are sampled untracked: they establish the activation baseline once,
+    // never keep raising it and suppressing genuine live events.
+    $effect(() => {
+        const contextKey = autoProposeContextKey;
+        const registration = untrack(() => {
+            const threadRootMessageIndex = threadRootEvent?.event.messageIndex;
+            const summaryBoundary =
+                threadRootMessageIndex === undefined
+                    ? chat.latestEventIndex
+                    : (chat.membership.latestThreads.find(
+                          (thread) => thread.threadRootMessageIndex === threadRootMessageIndex,
+                      )?.latestEventIndex ??
+                      threadSummary?.latestEventIndex ??
+                      -1);
+            const loadedBoundary = items.reduce(
+                (latest, item) =>
+                    item.kind === "event" &&
+                    !(threadRootMessageIndex !== undefined && item.event === threadRootEvent) &&
+                    item.event.index > latest
+                        ? item.event.index
+                        : latest,
+                -1,
+            );
+            return registerAutoProposeEventBoundary(
+                chat.id,
+                threadRootMessageIndex,
+                Math.max(summaryBoundary, loadedBoundary),
+            );
+        });
+        autoProposeRegistration = registration;
+        autoProposeRegisteredContextKey = contextKey;
+        autoProposeRegistrationEpoch += 1;
+        return () => {
+            registration.release();
+            if (autoProposeRegistration === registration) {
+                autoProposeRegistration = undefined;
+                autoProposeRegisteredContextKey = undefined;
+                autoProposeRegistrationEpoch += 1;
+            }
+        };
+    });
 
     onMount(() => {
         const messageObserverOptions = {
@@ -457,6 +521,7 @@
             subscribe("reactionSelected", afterReaction),
             subscribe("sendingMessage", sendingMessage),
             subscribe("sentMessage", sentMessage),
+            subscribe("sentMessageConfirmed", sentMessageConfirmed),
             subscribe("loadedMessageWindow", onMessageWindowLoaded),
             subscribe(
                 "loadedNewMessages",
@@ -520,11 +585,40 @@
     }
 
     function sentMessage(payload: { context: MessageContext; event: EventWrapper<Message> }) {
-        tick().then(() => {
-            if (messageContextsEqual(payload.context, messageContext)) {
-                afterSendMessage(payload.context, payload.event);
-            }
-        });
+        if (messageContextsEqual(payload.context, messageContext)) {
+            evaluateForAutoPropose(
+                client,
+                payload.context.chatId,
+                payload.context.threadRootMessageIndex,
+                [payload.event],
+                "sent",
+                autoProposeRegistration,
+            );
+            tick().then(() => {
+                if (messageContextsEqual(payload.context, messageContext)) {
+                    afterSendMessage(payload.context, payload.event);
+                }
+            });
+        }
+    }
+
+    function sentMessageConfirmed(payload: {
+        context: MessageContext;
+        event: EventWrapper<Message>;
+    }) {
+        if (
+            !messageContextsEqual(payload.context, messageContext) ||
+            autoProposeRegisteredContextKey !== autoProposeContextKey
+        )
+            return;
+        evaluateForAutoPropose(
+            client,
+            payload.context.chatId,
+            payload.context.threadRootMessageIndex,
+            [payload.event],
+            "sent_confirmed",
+            autoProposeRegistration,
+        );
     }
 
     async function afterReaction({
@@ -814,7 +908,11 @@
             items[0]?.key === preFirst &&
             items[items.length - 1]?.key === preLast
         ) {
-            vclDebug.log("!load-noprogress", { len: preLen, prev: shouldLoadPrev, new: shouldLoadNew });
+            vclDebug.log("!load-noprogress", {
+                len: preLen,
+                prev: shouldLoadPrev,
+                new: shouldLoadNew,
+            });
             const until = Date.now() + 5000;
             if (shouldLoadPrev) loadPrevCooldownUntil = until;
             if (shouldLoadNew) loadNewCooldownUntil = until;
@@ -1139,6 +1237,41 @@
 
     async function onLoadedNewMessages(context: MessageContext) {
         if (!messageContextsEqual(context, messageContext)) return;
+        const registration = autoProposeRegistration;
+        const registrationEpoch = autoProposeRegistrationEpoch;
+        const contextKey = autoProposeRegisteredContextKey;
+        if (
+            registration === undefined ||
+            contextKey === undefined ||
+            contextKey !== autoProposeContextKey
+        )
+            return;
+
+        // The shared list is the single desktop/mobile subscription seam. Wait for its inputs to
+        // contain the new batch, then let the session-level evaluator dedupe overlapping windows.
+        await tick();
+        if (
+            !messageContextsEqual(context, messageContext) ||
+            registration !== autoProposeRegistration ||
+            registrationEpoch !== autoProposeRegistrationEpoch ||
+            contextKey !== autoProposeRegisteredContextKey
+        )
+            return;
+        evaluateForAutoPropose(
+            client,
+            context.chatId,
+            context.threadRootMessageIndex,
+            autoProposeThreadStreamMessages(
+                items.flatMap((item) =>
+                    item.kind === "event" && item.event.event.kind === "message"
+                        ? [item.event as EventWrapper<Message>]
+                        : [],
+                ),
+                threadRootEvent,
+            ),
+            "loaded_new",
+            registration,
+        );
 
         if (
             !loadingFromUserScroll &&
@@ -1191,13 +1324,7 @@
         portalState.close();
         eventListLastScrolled.set(Date.now());
 
-        if (
-            !initialised ||
-            interrupt ||
-            loadingFromUserScroll ||
-            scrollingToMessage ||
-            !visible
-        )
+        if (!initialised || interrupt || loadingFromUserScroll || scrollingToMessage || !visible)
             return;
 
         loadMoreIfRequired(true);
@@ -1272,7 +1399,8 @@
     {timestampFor}
     {stickyDateElTop}
     bind:stickyDateTimestamp
-    row={renderRow} />
+    row={renderRow}
+/>
 
 {#snippet renderRow(item: FlatChatItem, _absIdx: number)}
     {@render row(item, {

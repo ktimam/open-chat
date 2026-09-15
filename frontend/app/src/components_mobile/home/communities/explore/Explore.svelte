@@ -25,6 +25,7 @@
         offlineStore,
         publish,
         showUnpublishedBots,
+        type AiAppRegistration,
         type BotMatch,
         type CommunityMatch,
         type OpenChat,
@@ -38,10 +39,12 @@
     import CloudOffOutline from "svelte-material-icons/CloudOffOutline.svelte";
     import EyeOutline from "svelte-material-icons/EyeOutline.svelte";
     import Filter from "svelte-material-icons/FilterVariant.svelte";
+    import AutoFix from "svelte-material-icons/AutoFix.svelte";
     import Robot from "svelte-material-icons/RobotOutline.svelte";
     import { fade } from "svelte/transition";
     import { i18nKey, interpolate } from "../../../../i18n/i18n";
     import {
+        aiAppSearchState,
         botSearchState,
         communitySearchState,
         SearchState,
@@ -51,6 +54,11 @@
     import AnonFooter from "../../AnonFooter.svelte";
     import NothingToSee from "../../NothingToSee.svelte";
     import { updateCommunityState } from "../createOrUpdate/community.svelte";
+    import type { SurfaceOpening } from "@utils/aiAppSurfaces";
+    import AiAppLinkSheet from "../../AiAppLinkSheet.svelte";
+    import AiAppSurfaceSheet from "../../AiAppSurfaceSheet.svelte";
+    import AiAppCard from "./AiAppCard.svelte";
+    import AiAppSheet from "./AiAppSheet.svelte";
     import BotCard from "./BotCard.svelte";
     import BotFilters from "./BotFilters.svelte";
     import CommunityCard from "./CommunityCard.svelte";
@@ -59,7 +67,7 @@
 
     const client = getContext<OpenChat>("client");
 
-    type View = "communities" | "bots";
+    type View = "communities" | "bots" | "aiApps";
     let searching = $state(false);
     let showFab = $state(false);
     let scrollableElement: HTMLElement | undefined;
@@ -68,14 +76,19 @@
     let showingFilters = $state(false);
     let selectedCommunity = $state<CommunityMatch>();
 
-    let searchState = $derived<SearchState<CommunityMatch | BotMatch>>(
-        view === "communities" ? communitySearchState : botSearchState,
+    let searchState = $derived<SearchState<CommunityMatch | BotMatch | AiAppRegistration>>(
+        view === "communities"
+            ? communitySearchState
+            : view === "bots"
+              ? botSearchState
+              : aiAppSearchState,
     );
 
     function clear() {
         searchState.term = "";
         communitySearchState.term = "";
         botSearchState.term = "";
+        aiAppSearchState.term = "";
         search(true);
     }
 
@@ -111,8 +124,8 @@
             .exploreCommunities(
                 communitySearchState.term === "" ? undefined : communitySearchState.term,
                 communitySearchState.index,
-                32,
-                disableRestrictedContent ? 0 : filters.flags ?? 0,
+                8,
+                disableRestrictedContent ? 0 : (filters.flags ?? 0),
                 filters.languages,
             )
             .then((results) => {
@@ -145,12 +158,66 @@
         searching = false;
     }
 
-    function search(reset = false) {
-        searching = true;
-        if (view === "communities") {
-            searchCommunities($exploreCommunitiesFiltersStore, reset);
+    // Query-driven like communities (the published AI-app directory lives on the user_index; there
+    // is no locally-synced state to filter, unlike bots).
+    function searchAiApps(reset = false) {
+        if (reset) {
+            aiAppSearchState.reset();
         } else {
+            aiAppSearchState.nextPage();
+        }
+        client
+            .exploreAiApps(
+                aiAppSearchState.term === "" ? undefined : aiAppSearchState.term,
+                aiAppSearchState.index,
+                8,
+            )
+            .then((results) => {
+                if (reset) {
+                    aiAppSearchState.results = results.matches;
+                } else {
+                    aiAppSearchState.appendResults(results.matches);
+                }
+                aiAppSearchState.total = results.total;
+            })
+            .finally(() => (searching = false));
+        // Refresh the connected set so cards can show the "Connected" badge.
+        refreshConnected();
+    }
+
+    let connectedAppIds = $state(new Set<number>());
+    // The app whose detail sheet is open, and the app whose pairing sheet is open (the two swap:
+    // Connect in the detail sheet closes it and opens the pairing sheet).
+    let selectedApp = $state<AiAppRegistration | undefined>(undefined);
+    let linkingApp = $state<AiAppRegistration | undefined>(undefined);
+    // A "sheet"-display surface being shown in the embedded in-window browser.
+    let appSurface = $state<SurfaceOpening | undefined>(undefined);
+
+    function refreshConnected() {
+        client.myAiAppKeys().then((keys) => {
+            connectedAppIds = new Set(
+                keys.filter((k) => k.publicKey.length > 0).map((k) => k.appId),
+            );
+        });
+    }
+
+    function search(reset = false) {
+        searchFor(view, reset);
+    }
+
+    // Takes the view EXPLICITLY: setView must search the TARGET view, but `view` itself is only
+    // assigned inside the view-transition callback, which runs asynchronously when the browser
+    // supports startViewTransition — reading `view` here at click time would search the OLD tab
+    // (harmless for communities/bots, whose results the onMount subscriptions populate anyway,
+    // but it left the query-driven AI-apps tab permanently empty on first open).
+    function searchFor(v: View, reset: boolean) {
+        searching = true;
+        if (v === "communities") {
+            searchCommunities($exploreCommunitiesFiltersStore, reset);
+        } else if (v === "bots") {
             searchBots($showUnpublishedBots);
+        } else {
+            searchAiApps(reset);
         }
     }
 
@@ -192,7 +259,7 @@
         transition(["fade"], () => {
             view = v;
         });
-        search(true);
+        searchFor(v, true);
     }
 
     function scrollToTop() {
@@ -242,12 +309,14 @@
                 gateConfig={community.gateConfig}
                 language={community.primaryLanguage}
                 flags={community.flags}
-                verified={community.verified} />
+                verified={community.verified}
+            />
             <Button onClick={() => goToCommunity(community)}>
                 {#snippet icon(color)}
                     <EyeOutline {color} />
                 {/snippet}
-                View community</Button>
+                View community</Button
+            >
         </Container>
     </Sheet>
 {/if}
@@ -273,7 +342,8 @@
     parentDirection={"vertical"}
     gap={"xl"}
     direction={"vertical"}
-    padding={["zero", "zero", "huge"]}>
+    padding={["zero", "zero", "huge"]}
+>
     <!-- TODO Explore does not have a hedear -->
     <SectionHeader onAction={createCommunity} onBack={() => history.back()}>
         {#snippet title()}
@@ -297,7 +367,8 @@
             <Translatable
                 resourceKey={i18nKey(
                     "Find communities that resonate with you or maybe start a community of your own. Whether it's crypto, gaming or your favourite sport - this is the place to find your people.",
-                )} />
+                )}
+            />
         </Body>
     </Container>
 
@@ -306,7 +377,8 @@
         direction={"vertical"}
         padding={["zero", "zero", "lg", "zero"]}
         gap={"lg"}
-        background={ColourVars.surface0}>
+        background={ColourVars.surface0}
+    >
         <Container padding={["zero", "lg"]}>
             <Search
                 bind:value={searchState.term}
@@ -315,14 +387,22 @@
                 onSearch={() => search(true)}
                 placeholder={interpolate(
                     $_,
-                    i18nKey(view === "communities" ? "communities.search" : "Search bots"),
-                )} />
+                    i18nKey(
+                        view === "communities"
+                            ? "communities.search"
+                            : view === "bots"
+                              ? "Search bots"
+                              : "aiApps.searchPlaceholder",
+                    ),
+                )}
+            />
         </Container>
 
         <Container padding={["zero", "xl"]} gap={"sm"}>
             <Chip
                 onClick={() => setView("communities")}
-                mode={view === "communities" ? "rounded" : "unselected"}>
+                mode={view === "communities" ? "rounded" : "unselected"}
+            >
                 {#snippet icon(color)}
                     <Account {color} />
                 {/snippet}
@@ -334,6 +414,15 @@
                 {/snippet}
                 <Translatable resourceKey={i18nKey("Bots")} />
             </Chip>
+            <Chip
+                onClick={() => setView("aiApps")}
+                mode={view === "aiApps" ? "rounded" : "unselected"}
+            >
+                {#snippet icon(color)}
+                    <AutoFix {color} />
+                {/snippet}
+                <Translatable resourceKey={i18nKey("aiApps.exploreChip")} />
+            </Chip>
         </Container>
     </Container>
 
@@ -343,7 +432,8 @@
         mainAxisAlignment={loading ? "center" : "start"}
         gap={"md"}
         direction={"vertical"}
-        padding={["zero", "lg", "md", "lg"]}>
+        padding={["zero", "lg", "md", "lg"]}
+    >
         {#if loading}
             <FancyLoader size={"4rem"} />
         {:else if searchState.results.length === 0}
@@ -352,7 +442,8 @@
                 crossAxisAlignment={"center"}
                 gap={"sm"}
                 height={"fill"}
-                direction={"vertical"}>
+                direction={"vertical"}
+            >
                 {#if $offlineStore}
                     <CloudOffOutline size={"1.8em"} />
                     <Subtitle colour={"textSecondary"} align={"center"}>
@@ -361,17 +452,31 @@
                 {:else}
                     <NothingToSee
                         reset={{
-                            onClick: view === "communities" ? createCommunity : registerBot,
-                            text: view === "communities" ? "Create a community" : "Register a bot",
+                            onClick:
+                                view === "communities"
+                                    ? createCommunity
+                                    : view === "bots"
+                                      ? registerBot
+                                      : clear,
+                            text:
+                                view === "communities"
+                                    ? "Create a community"
+                                    : view === "bots"
+                                      ? "Register a bot"
+                                      : "Clear search",
                         }}
                         subtitle={interpolate($_, i18nKey("communities.refineSearch"))}
                         title={interpolate(
                             $_,
                             i18nKey(
-                                view === "communities" ? "communities.noMatch" : "No matching bots",
+                                view === "communities"
+                                    ? "communities.noMatch"
+                                    : view === "bots"
+                                      ? "No matching bots"
+                                      : "aiApps.noMatch",
                             ),
-                        )}>
-                    </NothingToSee>
+                        )}
+                    ></NothingToSee>
                 {/if}
             </Container>
         {:else}
@@ -379,21 +484,38 @@
                 <Container
                     padding={$anonUserStore ? ["zero", "lg", "huge", "lg"] : ["zero", "lg"]}
                     direction={"vertical"}
-                    gap={"lg"}>
+                    gap={"lg"}
+                >
                     {#each communitySearchState.results as community (community.id.communityId)}
                         {@render communityCard(community)}
+                    {/each}
+                </Container>
+            {:else if view === "bots"}
+                <Container
+                    padding={$anonUserStore ? ["zero", "lg", "huge", "lg"] : ["zero", "lg"]}
+                    direction={"vertical"}
+                    gap={"lg"}
+                >
+                    {#each botSearchState.results as bot (bot.id)}
+                        <BotCard
+                            onSelect={(id) =>
+                                publish("showBot", { bot: botState.externalBots.get(id)! })}
+                            {bot}
+                        />
                     {/each}
                 </Container>
             {:else}
                 <Container
                     padding={$anonUserStore ? ["zero", "lg", "huge", "lg"] : ["zero", "lg"]}
                     direction={"vertical"}
-                    gap={"lg"}>
-                    {#each botSearchState.results as bot (bot.id)}
-                        <BotCard
-                            onSelect={(id) =>
-                                publish("showBot", { bot: botState.externalBots.get(id)! })}
-                            {bot} />
+                    gap={"lg"}
+                >
+                    {#each aiAppSearchState.results as app (app.id)}
+                        <AiAppCard
+                            {app}
+                            connected={connectedAppIds.has(app.id)}
+                            onSelect={() => (selectedApp = app)}
+                        />
                     {/each}
                 </Container>
             {/if}
@@ -403,7 +525,8 @@
                         size={"small_text"}
                         onClick={() => search(false)}
                         disabled={searching}
-                        loading={searching}>
+                        loading={searching}
+                    >
                         {#snippet icon(color, size)}
                             <LoadMore {color} {size} />
                         {/snippet}
@@ -439,6 +562,45 @@
             {/snippet}
         </FloatingButton>
     </div>
+{/if}
+
+{#if selectedApp !== undefined}
+    {@const app = selectedApp}
+    <AiAppSheet
+        {app}
+        connected={connectedAppIds.has(app.id)}
+        onDismiss={() => (selectedApp = undefined)}
+        onConnect={() => {
+            linkingApp = app;
+            selectedApp = undefined;
+        }}
+        onOpenSurface={(opening) => {
+            appSurface = opening;
+            selectedApp = undefined;
+        }}
+        onDisconnected={refreshConnected}
+    />
+{/if}
+
+{#if linkingApp !== undefined}
+    <AiAppLinkSheet
+        app={linkingApp}
+        onDismiss={() => (linkingApp = undefined)}
+        onLinked={() => {
+            linkingApp = undefined;
+            refreshConnected();
+        }}
+    />
+{/if}
+
+{#if appSurface !== undefined}
+    <AiAppSurfaceSheet
+        title={appSurface.app.manifest.name}
+        url={appSurface.url}
+        display={appSurface.surface.display}
+        dataDisclosures={appSurface.dataDisclosures}
+        onDismiss={() => (appSurface = undefined)}
+    />
 {/if}
 
 <style lang="scss">

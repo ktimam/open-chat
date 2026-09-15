@@ -10,6 +10,7 @@ pub mod c2c_name_and_members;
 pub mod c2c_summary;
 pub mod c2c_summary_updates;
 pub mod deleted_message;
+pub mod enabled_ai_apps;
 pub mod events;
 pub mod events_by_index;
 pub mod events_window;

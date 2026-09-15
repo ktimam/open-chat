@@ -34,13 +34,10 @@
         requiresLogout,
         routeForChatIdentifier,
         routeForScope,
+        startupErrorStore,
         subscribe,
     } from "@client";
-    import {
-        eventToError,
-        isIdbConnectionClosingError,
-        recordError,
-    } from "@utils/errorPostmortem";
+    import { eventToError, isIdbConnectionClosingError, recordError } from "@utils/errorPostmortem";
     import { navigate } from "@utils/navigation";
     import { warmRichTextEditor } from "@shared_components/richTextEditorLoader";
     import { onMount, setContext } from "svelte";
@@ -59,6 +56,7 @@
     import IncomingCall from "./home/video/IncomingCall.svelte";
     import VideoCallAccessRequests from "./home/video/VideoCallAccessRequests.svelte";
     import Router from "./Router.svelte";
+    import StartupFailure from "@shared_components/StartupFailure.svelte";
     import UpgradeBanner from "./UpgradeBanner.svelte";
     import { keyboard } from "@src/stores/keyboard.svelte";
 
@@ -152,7 +150,6 @@
         if (!client.isNativeApp()) {
             window.visualViewport?.addEventListener("resize", calculateHeight);
         }
-
 
         const unsubKeyboard = setupKeyboardTracking();
         return () => {
@@ -378,7 +375,8 @@
 
     <ActiveCall
         onClearSelection={() => navigate(routeForScope($chatListScopeStore))}
-        bind:this={videoCallElement} />
+        bind:this={videoCallElement}
+    />
 
     <VideoCallAccessRequests />
 
@@ -387,7 +385,9 @@
     <NotificationsBar />
 
     <!-- should we perhaps just _always_ render the router -->
-    {#if $identityStateStore.kind === "anon" || $identityStateStore.kind === "logging_in" || $identityStateStore.kind === "registering" || $identityStateStore.kind === "logged_in" || $identityStateStore.kind === "loading_user"}
+    {#if $startupErrorStore !== undefined}
+        <StartupFailure message={$startupErrorStore} />
+    {:else if $identityStateStore.kind === "anon" || $identityStateStore.kind === "logging_in" || $identityStateStore.kind === "registering" || $identityStateStore.kind === "logged_in" || $identityStateStore.kind === "loading_user"}
         {#if !$isLoading}
             <Router />
         {/if}
