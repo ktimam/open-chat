@@ -339,7 +339,6 @@ export function currentUserResponse(value: UserIndexCurrentUserResponse): Curren
     if ("Success" in value) {
         const r = value.Success;
 
-        console.log("User: ", r);
         return {
             kind: "created_user",
             userId: principalBytesToString(r.user_id),

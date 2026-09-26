@@ -1,6 +1,7 @@
 import { AnonymousIdentity } from "@icp-sdk/core/agent";
 import { assertAccountCreationAllowed } from "@shared/utils/existingAccountPolicy";
 import { assertUnofficialApiRequestAllowed } from "@shared/utils/unofficialApiPolicy";
+import { NativeBrowserSessionError, validateNativeBrowserSession } from "@shared/utils/nativeBrowserSession";
 import {
     DelegationChain,
     DelegationIdentity,
@@ -66,15 +67,37 @@ let identityAgent: IdentityAgent | undefined = undefined;
 let authPrincipalString: string | undefined = undefined;
 let logger: Logger = console;
 let agent: OpenChatAgent | undefined = undefined;
+let authRequestGeneration = 0;
 
 async function initializeAuthIdentity(
     authIdentity: JsonnableIdentityKeyAndChain | undefined,
     isIIPrincipal: boolean,
     identityCanister: string,
     icUrl: string,
+    nativeBrowserSession: SetAuthIdentity["nativeBrowserSession"],
+    requestGeneration: number,
+    policy: Pick<AgentConfig, "existingAccountOnly" | "clientOnlyApps">,
 ): Promise<GetOpenChatIdentityResponse> {
+    if (nativeBrowserSession !== undefined) {
+        const adopted = await validateNativeBrowserSession(authIdentity, nativeBrowserSession, isIIPrincipal, {
+            ...policy, identityCanister,
+        });
+        const assertCurrent = () => {
+            if (requestGeneration !== authRequestGeneration || Date.now() >= adopted.sessionExpiryMs) {
+                throw new NativeBrowserSessionError();
+            }
+        };
+        assertCurrent();
+        const adoptedIdentityAgent = await IdentityAgent.create(adopted.authIdentity, identityCanister, icUrl, false);
+        assertCurrent();
+        authPrincipalString = adopted.authIdentity.getPrincipal().toString();
+        identityAgent = adoptedIdentityAgent;
+        // Deliberately bypass cached identity lookup, delegation minting, and persistent storage.
+        return { kind: "success", identity: adopted.ocIdentity };
+    }
     if (authIdentity === undefined) {
         authPrincipalString = undefined;
+        identityAgent = undefined;
         return { kind: "auth_identity_not_found" };
     }
 
@@ -299,6 +322,9 @@ self.addEventListener("message", (msg: MessageEvent<CorrelatedWorkerRequest>) =>
                     payload.isIIPrincipal,
                     config.identityCanister,
                     config.icUrl,
+                    payload.nativeBrowserSession,
+                    ++authRequestGeneration,
+                    config,
                 ).then((resp) => {
                     const id = resp.kind === "success" ? resp.identity : anonymousIdentity;
                     const principal = id.getPrincipal().toString();
@@ -346,6 +372,9 @@ self.addEventListener("message", (msg: MessageEvent<CorrelatedWorkerRequest>) =>
         }
 
         if (kind === "logout") {
+            ++authRequestGeneration;
+            identityAgent = undefined;
+            authPrincipalString = undefined;
             executeThenReply(
                 kind,
                 correlationId,

@@ -94,11 +94,12 @@ export class IdentityClient extends SingleCanisterMsgpackAgent {
     prepareDelegation(
         sessionKey: Uint8Array,
         isIIPrincipal: boolean | undefined,
+        maxTimeToLive?: bigint,
     ): Promise<PrepareDelegationWithProofResponse> {
         const args = {
             session_key: sessionKey,
             is_ii_principal: isIIPrincipal,
-            max_time_to_live: undefined,
+            max_time_to_live: maxTimeToLive,
         };
         return this.update(
             "prepare_delegation",
@@ -106,6 +107,8 @@ export class IdentityClient extends SingleCanisterMsgpackAgent {
             prepareDelegationResponse,
             IdentityPrepareDelegationArgs,
             IdentityPrepareDelegationResponse,
+            undefined,
+            maxTimeToLive === undefined ? undefined : { sensitive: true },
         );
     }
 

@@ -311,7 +311,7 @@
     </Container>
 {/snippet}
 
-{#if client.existingAccountOnly() && !client.isNativeApp()}
+{#if client.existingAccountOnly()}
     <Container supplementalClass="login_screen" padding={["xxl", "lg"]} direction={"vertical"}>
         <ExistingAccountSignIn onSignedIn={() => navigate("/communities")} />
     </Container>

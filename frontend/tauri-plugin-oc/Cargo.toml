@@ -24,12 +24,19 @@ tauri-plugin-android-fs = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "net", "sync"] }
 zip = "2.2.2"
+bytes = { version = "1.12.1", optional = true }
+getrandom = { version = "0.3.4", optional = true }
+http-body-util = { version = "0.1.4", optional = true }
+hyper = { version = "1.11.0", features = ["server", "http1"], optional = true }
+hyper-util = { version = "0.1.20", features = ["tokio"], optional = true }
 
 [build-dependencies]
 tauri-plugin = { version = "2.4.0", features = ["build"] }
 
 [features]
 store = []
+# Restricted local-test browser transport; ordinary official builds do not include a listener.
+local-browser-auth = ["dep:bytes", "dep:getrandom", "dep:http-body-util", "dep:hyper", "dep:hyper-util", "tokio/time", "tokio/macros", "tokio/rt"]
 # Enables the on-device inference runtime (llama.cpp via llama-cpp-2). Off by default so normal/dev builds
 # stay fast and don't require the C++/cmake/libclang toolchain; the shipping app build turns it on.
 # Build note: requires cmake + a C/C++ compiler + libclang. On Windows, if a Visual Studio version newer

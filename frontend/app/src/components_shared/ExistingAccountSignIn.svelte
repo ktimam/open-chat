@@ -5,6 +5,9 @@
 
     let { onSignedIn = () => {} }: { onSignedIn?: () => void } = $props();
     const client = getContext<OpenChat>("client");
+    const localApk = client.existingAccountOnly() && client.isNativeApp();
+    let nativeController: AbortController | undefined;
+    let nativeStatus = $state("");
     let flow: BrowserAccountLinkFlow | undefined;
     let linkState = $state<BrowserAccountLinkState>({ stage: "idle", message: "Nothing has been sent.", canStartFresh: false });
     let linking = $state(false);
@@ -30,7 +33,12 @@
         signingIn = true;
         error = "";
         try {
-            await client.signInWithWebAuthn(flow?.signInExpectation());
+            if (localApk) {
+                nativeController = new AbortController();
+                await client.signInWithLocalBrowser(username, { signal: nativeController.signal, onStatus: text => { nativeStatus = text; } });
+            } else {
+                await client.signInWithWebAuthn(flow?.signInExpectation());
+            }
             onSignedIn();
         } catch (failure) {
             error = browserSignInError(failure);
@@ -49,19 +57,31 @@
         if (!busy && confirmed) await flow?.complete();
     }
 
-    onDestroy(() => { code = ""; flow?.cancel(); });
+    onDestroy(() => { code = ""; flow?.cancel(); nativeController?.abort(); });
 </script>
 
 <section class="existing-account-sign-in" aria-busy={busy}>
     <h2>Use your existing OpenChat account</h2>
     <p>This is an unofficial client connected to OpenChat. Signing in does not create a new account.</p>
-    <button class="primary" type="button" disabled={busy} onclick={signIn}>
-        {signingIn ? "Waiting for passkey sign-in…" : "Sign in with an existing passkey"}
+    {#if localApk}
+        <label>Existing OpenChat username
+            <input type="text" autocomplete="username" maxlength="100" bind:value={username} disabled={busy} />
+        </label>
+        <p class="hint">This separate local-test APK uses your browser's localhost passkey. Sign-in and optional account linking happen in that browser, then return here. This test session stays in memory and lasts at most five minutes.</p>
+    {/if}
+    <button class="primary" type="button" disabled={busy || (localApk && !username.trim())} onclick={signIn}>
+        {signingIn ? "Waiting for passkey sign-in…" : localApk ? "Continue in browser to sign in or link" : "Sign in with an existing passkey"}
     </button>
-    <p class="hint">Already linked on this hostname? Choose that existing passkey. You do not need another linking code.</p>
+    {#if localApk && signingIn}
+        <button type="button" onclick={() => nativeController?.abort()}>Cancel this sign-in</button>
+    {/if}
+    {#if nativeStatus}<p role="status">{nativeStatus}</p>{/if}
+    {#if !localApk}<p class="hint">Already linked on this hostname? Choose that existing passkey. You do not need another linking code.</p>{/if}
     {#if error}<p class="error" role="alert">{error}</p>{/if}
 
-    {#if !linking}
+    {#if localApk}
+        <p class="hint">Your official OpenChat app and its saved model downloads are not changed.</p>
+    {:else if !linking}
         <button type="button" disabled={busy} onclick={startLink}>Link this client to my account</button>
     {:else}
         <div class="link-account">

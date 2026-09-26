@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer"><title>OpenChat Fork · Local Test sign-in</title>
+  <style>
+    :root { color-scheme: light dark; font: 17px/1.5 system-ui, sans-serif; }
+    body { margin: 0 auto; padding: 1.5rem; max-width: 38rem; overflow-wrap: anywhere; }
+    h1 { font-size: 1.5rem; } button,input { box-sizing: border-box; font: inherit; padding: .7rem; }
+    button { cursor: pointer; margin: .4rem 0; width: 100%; } button:disabled { cursor: default; opacity: .55; }
+    input[type=text] { width: 100%; } label { display: block; margin: 1rem 0; }
+    .confirm { display: flex; gap: .65rem; align-items: flex-start; } .confirm input { margin-top: .45rem; flex: none; }
+    [hidden] { display: none !important; } #status { padding: .8rem; border: 1px solid #888; border-radius: .4rem; }
+  </style>
+</head>
+<body>
+  <h1>OpenChat Fork · Local Test</h1>
+  <p>This browser page signs in the separate test APK. It does not sign in this browser or create an OpenChat account.</p>
+  <p>Expected existing username: <strong id="username">Loading…</strong></p>
+  <p id="expiry"></p>
+  <p>The APK keeps its own private session key. This page returns only a signed, short-lived delegation to that key. The APK checks your existing account before opening it. This local test session lasts at most five minutes.</p>
+  <button id="sign-in" type="button" disabled>Use my existing localhost passkey</button>
+  <p>Use the passkey previously linked on this phone for localhost. A passkey saved only on another device may not be available here.</p>
+  <button id="start-link" type="button" disabled>Link a localhost passkey to my existing account</button>
+  <section id="link" hidden>
+    <h2>Explicit account linking</h2>
+    <p>Generate a fresh six-character linking code in official OpenChat. Verification consumes it. Creating a new passkey requires your separate confirmation.</p>
+    <label>Official account-linking code <input id="code" type="text" autocomplete="off" spellcheck="false" maxlength="32"></label>
+    <button id="verify-code" type="button">Verify code for the username above</button>
+    <div id="link-confirmation" hidden>
+      <label class="confirm"><input id="confirm" type="checkbox"><span>I confirm the username above is mine and want to add a localhost passkey for this unofficial test client.</span></label>
+      <button id="create-passkey" type="button" disabled>Create passkey and link this account</button>
+    </div>
+    <p id="link-status" role="status"></p>
+  </section>
+  <p id="status" role="status">Loading this APK's one-time request. No passkey has been used.</p>
+  <p>After submitting, return to the APK to finish verification. Do not share linking codes or this page's response.</p>
+  <script src="/sign-in.js" defer></script>
+</body>
+</html>

@@ -2,6 +2,7 @@ import { WebAuthnIdentity } from "@icp-sdk/core/identity";
 import type { WebAuthnKeyFull } from "@shared";
 import { authDataToCose } from "./webAuthn";
 import { browserPasskeyContext } from "./browserPasskey";
+import { browserSignInFailureMessage } from "./browserSignInDiagnostics";
 
 export type BrowserAccountLinkState = {
     stage: "idle" | "verifying" | "verified" | "linking" | "linked" | "error" | "uncertain" | "cancelled";
@@ -137,10 +138,13 @@ export async function createBrowserLinkPasskey(rpId: string, username: string): 
 }
 
 export function browserSignInError(error: unknown): string {
+    const diagnostic = browserSignInFailureMessage(error);
+    if (diagnostic !== undefined) return diagnostic;
     if (typeof error === "object" && error !== null && "code" in error && error.code === "existing_account_required") {
         return "This passkey could not open the expected existing account. If this client is not linked yet, use the explicit account-linking option below.";
     }
-    const name = error instanceof Error ? error.name : "";
+    // DOMException may not inherit this realm's Error (for example, WebView/picker boundaries).
+    const name = typeof error === "object" && error !== null && "name" in error ? error.name : "";
     if (name === "NotAllowedError" || name === "AbortError") return "Passkey sign-in was cancelled or did not finish. You can try the existing passkey again; no account link was changed.";
     if (name === "SecurityError") return "The browser rejected this client's passkey origin. No account link was changed.";
     return "Passkey sign-in could not finish. No new account was created. Try your existing passkey again, or explicitly link this client if needed.";

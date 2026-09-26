@@ -10,6 +10,7 @@ import typescript from "@rollup/plugin-typescript";
 import autoprefixer from "autoprefixer";
 import fs from "fs-extra";
 import { createHash } from "node:crypto";
+import { Principal } from "@icp-sdk/core/principal";
 import path from "path";
 import { rimrafSync } from "rimraf";
 import copy from "rollup-plugin-copy";
@@ -26,6 +27,8 @@ import { modelAssetNoticesPlugin } from "./modelAssetNotices.mjs";
 import { publicKeyBuildPlugin } from "./publicKeyBuild.mjs";
 import { queryOfficialUserIndexPublicKey } from "./officialPublicKeyQuery.mjs";
 import { localAppRelayPlugin } from "./localAppRelayBuild.mjs";
+import { localBrowserAuthBuildPlugin } from "./localBrowserAuthBuild.mjs";
+import { localApkBundleMarker } from "../unofficialLocalApkProfile.mjs";
 import {
     copyUnofficialWebPublicFiles,
     unofficialLocalWebManifest,
@@ -70,11 +73,24 @@ if (typeof dfxBuildVersion !== "string" || dfxBuildVersion.trim() === "") {
 function clean() {
     return {
         name: "clean-build",
+        buildStart() {
+            if (!localTestApk) return;
+            // Only this fixed generated frontend output is replaced. No APK or device cache is touched.
+            rimrafSync(path.join(__dirname, "build"));
+            fs.mkdirSync(path.join(__dirname, "build"));
+        },
         renderStart() {
-            if (localWebBuild) {
+            if (localClientBuild) {
                 // initEnv accepted an existing empty output. Never clean/delete a caller path.
                 fs.writeFileSync(outputPath("version"), JSON.stringify({ version }));
                 fs.writeFileSync(outputPath("ota-policy.json"), JSON.stringify({ strategy: "none" }));
+                if (localTestApk) {
+                    fs.writeFileSync(outputPath("android-rp-id"), "");
+                    fs.writeFileSync(outputPath("local-apk-profile.json"), JSON.stringify(localApkBundleMarker(
+                        process.env.OC_IDENTITY_CANISTER,
+                        Principal.fromText(process.env.OC_IDENTITY_CANISTER).toHex(),
+                    )));
+                }
                 return;
             }
             console.log("cleaning up the build directory");
@@ -121,6 +137,8 @@ function clean() {
 
 const { version, production, development, env } = initEnv();
 const localWebBuild = process.env.OC_UNOFFICIAL_WEB_BUILD === "true";
+const localTestApk = process.env.OC_UNOFFICIAL_LOCAL_APK === "true";
+const localClientBuild = localWebBuild || localTestApk;
 const outputDirectory = localWebBuild ? process.env.OC_UNOFFICIAL_WEB_OUTPUT : "build";
 const outputPath = (...segments) => path.join(outputDirectory, ...segments);
 
@@ -133,7 +151,7 @@ function unofficialWebArtifacts() {
                 source: JSON.stringify(unofficialLocalWebManifest(process.env), null, 2) });
         },
         writeBundle() {
-            if (localWebBuild) copyUnofficialWebPublicFiles(path.join(__dirname, "public"), outputDirectory);
+            if (localClientBuild) copyUnofficialWebPublicFiles(path.join(__dirname, "public"), outputDirectory);
         },
     };
 }
@@ -169,9 +187,9 @@ if (!otaUpdateStrategies.has(otaUpdateStrategy)) {
     );
 }
 
-const androidRpId = localWebBuild ? "" : (process.env.OC_ANDROID_RP_ID ?? "oc.app").trim().toLowerCase();
+const androidRpId = localClientBuild ? "" : (process.env.OC_ANDROID_RP_ID ?? "oc.app").trim().toLowerCase();
 if (
-    !localWebBuild && (!/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(androidRpId) ||
+    !localClientBuild && (!/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(androidRpId) ||
     !androidRpId.includes(".") ||
     androidRpId.includes(".."))
 ) {
@@ -349,6 +367,12 @@ export default {
     plugins: [
         resetManualChunksCache(),
         clean(),
+        // Must precede Svelte's package.json "svelte" resolver, which otherwise
+        // follows an installed file-dependency copy outside this source tree.
+        alias({ entries: [{
+            find: /^component-lib$/,
+            replacement: path.resolve(__dirname, "../component-lib/src/index.ts"),
+        }] }),
         svelte({
             preprocess: sveltePreprocess({
                 sourceMap: true,
@@ -358,7 +382,7 @@ export default {
             }),
             compilerOptions: {
                 // runes: true,
-                ...(localWebBuild ? { dev: false } : {}),
+                ...(localClientBuild ? { dev: false } : {}),
             },
             onwarn: (warning, handler) => {
                 if (warning.code.startsWith("a11y-")) return;
@@ -432,6 +456,7 @@ export default {
                 "../vite-env.d.ts",
                 "../global.d.ts",
                 "../node_modules/component-lib/src/**/*.ts",
+                "../component-lib/src/**/*.ts",
                 // The former sub-packages are now compiled from source.
                 "../openchat-shared/src/**/*",
                 "../openchat-client/src/**/*",
@@ -448,7 +473,7 @@ export default {
 
         replace({
             preventAssignment: true,
-            ...(localWebBuild ? { "process.env.NODE_ENV": JSON.stringify("production") } : {}),
+            ...(localClientBuild ? { "process.env.NODE_ENV": JSON.stringify("production") } : {}),
             // @rollup/plugin-replace matches longer keys first and its default trailing delimiter
             // prevents this bare fallback from consuming a dotted property access. Define Vite's
             // complete builtin set explicitly, keep the app-specific OC_* keys below, then erase
@@ -456,7 +481,7 @@ export default {
             "import.meta.env.MODE": JSON.stringify(env),
             "import.meta.env.DEV": JSON.stringify(development),
             "import.meta.env.PROD": JSON.stringify(!development),
-            ...(localWebBuild ? { "import.meta.env.DEV": "false", "import.meta.env.PROD": "true" } : {}),
+            ...(localClientBuild ? { "import.meta.env.DEV": "false", "import.meta.env.PROD": "true" } : {}),
             "import.meta.env.SSR": "false",
             "import.meta.env.BASE_URL": JSON.stringify("/"),
             "import.meta.env": "{}",
@@ -474,6 +499,8 @@ export default {
             ),
             "import.meta.env.OC_BUILD_ENV": JSON.stringify(process.env.OC_BUILD_ENV),
             "import.meta.env.OC_UNOFFICIAL_CLIENT": JSON.stringify(process.env.OC_UNOFFICIAL_CLIENT === "true" ? "true" : "false"),
+            "import.meta.env.OC_UNOFFICIAL_LOCAL_APK": JSON.stringify(localTestApk ? "true" : "false"),
+            "import.meta.env.OC_ANDROID_NATIVE_AUTH": JSON.stringify(process.env.OC_ANDROID_NATIVE_AUTH ?? "passkey"),
             "import.meta.env.OC_WEBAUTHN_ORIGIN": JSON.stringify(process.env.OC_WEBAUTHN_ORIGIN),
             "import.meta.env.OC_ANDROID_RP_ID": JSON.stringify(androidRpId),
             "import.meta.env.OC_INTERNET_IDENTITY_URL": JSON.stringify(
@@ -502,7 +529,7 @@ export default {
             "import.meta.env.OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY": maybeStringify(
                 process.env.OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY,
             ),
-            "import.meta.env.OC_NODE_ENV": JSON.stringify(localWebBuild ? "development" : (process.env.NODE_ENV ?? "production")),
+            "import.meta.env.OC_NODE_ENV": JSON.stringify(localClientBuild ? "development" : (process.env.NODE_ENV ?? "production")),
             "import.meta.env.OC_WEBSITE_VERSION": JSON.stringify(process.env.OC_WEBSITE_VERSION),
             "import.meta.env.OC_ROLLBAR_ACCESS_TOKEN": JSON.stringify(
                 process.env.OC_ROLLBAR_ACCESS_TOKEN,
@@ -741,7 +768,7 @@ export default {
         sourcemapNewline(),
         publicKeyBuildPlugin({
             network: process.env.OC_DFX_NETWORK ?? "local",
-            ...(localWebBuild ? { queryPublicKey: queryOfficialUserIndexPublicKey, outputPath: outputPath("public-key") } : {}),
+            ...(localClientBuild ? { queryPublicKey: queryOfficialUserIndexPublicKey, outputPath: outputPath("public-key") } : {}),
             canister: process.env.OC_USER_INDEX_CANISTER,
             dfxExecutable: process.env.OC_DFX_EXECUTABLE,
             expectedDfxVersion: dfxBuildVersion,
@@ -755,8 +782,9 @@ export default {
             hook: "buildStart",
         }),
         localAppRelayPlugin({ enabled: localWebBuild }),
+        localBrowserAuthBuildPlugin({ enabled: localTestApk, identityCanister: process.env.OC_IDENTITY_CANISTER }),
         unofficialWebArtifacts(),
-        ...(!localWebBuild ? [androidBundlePlugin({
+        ...(!localClientBuild ? [androidBundlePlugin({
             version,
             includeLocalExtractor: transformersWebGpuSpikeEnabled,
         })] : []),

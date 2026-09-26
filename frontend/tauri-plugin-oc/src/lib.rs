@@ -15,6 +15,9 @@ mod desktop;
 mod mobile;
 
 mod commands;
+mod local_browser_auth_protocol;
+#[cfg(feature = "local-browser-auth")]
+mod local_browser_auth;
 mod error;
 #[cfg(feature = "inference")]
 mod inference;
@@ -47,6 +50,10 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
         commands::open_url,
         commands::sign_up,
         commands::sign_in,
+        commands::begin_local_browser_auth,
+        commands::poll_local_browser_auth,
+        commands::cancel_local_browser_auth,
+        commands::complete_local_browser_auth,
         commands::show_notification,
         commands::svelte_ready,
         commands::release_notifications,
@@ -82,6 +89,8 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
 
     builder
         .setup(|app, api| {
+            #[cfg(feature = "local-browser-auth")]
+            app.manage(local_browser_auth::BrowserAuthBridge::default());
             #[cfg(mobile)]
             let oc = mobile::init(app, api)?;
             #[cfg(desktop)]

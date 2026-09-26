@@ -6,6 +6,7 @@ import path, { dirname } from "path";
 import { fileURLToPath } from "url";
 import { createUnofficialLocalEnvironment } from "../unofficialLocalProfile.mjs";
 import { createUnofficialLocalWebBuildEnvironment } from "../unofficialLocalWebBuild.mjs";
+import { createUnofficialLocalApkEnvironment } from "../unofficialLocalApkProfile.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 export const __dirname = dirname(__filename);
@@ -62,6 +63,10 @@ export function generateCspForScripts(inlineScripts, development = false, unoffi
 
 // Set up environment
 export function initEnv({ websiteVersion } = {}) {
+    const localApk = process.env.OC_UNOFFICIAL_LOCAL_APK === "true";
+    if (localApk && (process.env.OC_UNOFFICIAL_CLIENT !== "true" || process.env.OC_UNOFFICIAL_WEB_BUILD === "true")) {
+        throw new Error("Local APK builds require the explicit unofficial profile, without web-build mode");
+    }
     if (process.env.OC_UNOFFICIAL_WEB_BUILD === "true" && process.env.OC_UNOFFICIAL_CLIENT !== "true") {
         throw new Error("Optimized local web builds require the explicit unofficial client profile");
     }
@@ -72,7 +77,12 @@ export function initEnv({ websiteVersion } = {}) {
             layout: process.env.OC_MOBILE_LAYOUT,
             inherited: process.env,
         };
-        const profile = process.env.OC_UNOFFICIAL_WEB_BUILD === "true"
+        const profile = localApk
+            ? createUnofficialLocalApkEnvironment(canisters, {
+                inherited: process.env,
+                buildId: process.env.OC_UNOFFICIAL_APK_BUILD_ID,
+            })
+            : process.env.OC_UNOFFICIAL_WEB_BUILD === "true"
             ? createUnofficialLocalWebBuildEnvironment(canisters, {
                 ...options,
                 output: process.env.OC_UNOFFICIAL_WEB_OUTPUT,
@@ -85,7 +95,7 @@ export function initEnv({ websiteVersion } = {}) {
             if (/^(OC_|NODE_OPTIONS$|NODE_ENV$|VITE_)/i.test(key)) delete process.env[key];
         }
         Object.assign(process.env, profile);
-        if (websiteVersion !== undefined && process.env.OC_UNOFFICIAL_WEB_BUILD !== "true") {
+        if (websiteVersion !== undefined && process.env.OC_UNOFFICIAL_WEB_BUILD !== "true" && !localApk) {
             process.env.OC_WEBSITE_VERSION = websiteVersion;
         }
     } else {

@@ -1,5 +1,6 @@
 import java.io.File
 import java.util.Properties
+import groovy.json.JsonSlurper
 import org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
@@ -7,7 +8,22 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("rust")
-    id("com.google.gms.google-services")
+    id("com.google.gms.google-services") apply false
+}
+
+val unofficialLocalTest = System.getenv("OC_UNOFFICIAL_LOCAL_APK") == "true"
+val localTestApplicationId = "dev.openchatfork.localtest"
+if (!unofficialLocalTest) apply(plugin = "com.google.gms.google-services")
+if (unofficialLocalTest) {
+    require(System.getenv("OC_UNOFFICIAL_CLIENT") == "true" &&
+        System.getenv("OC_ANDROID_APPLICATION_ID") == localTestApplicationId) {
+        "Local APK requires its explicit isolated package profile"
+    }
+    val markerFile = projectDir.resolve("../../../../app/build/local-apk-profile.json").normalize()
+    require(markerFile.isFile) { "Local APK frontend profile marker is missing" }
+    val marker = JsonSlurper().parse(markerFile) as Map<*, *>
+    require(marker["applicationId"] == localTestApplicationId && marker["ota"] == "none" &&
+        marker["nativeAuthentication"] == "browser-bridge-v1") { "Local APK frontend profile mismatch" }
 }
 
 val tauriProperties = Properties().apply {
@@ -39,13 +55,13 @@ val tauriProperties = Properties().apply {
 val keystoreDir = rootProject.projectDir
 val keystoreProperties = Properties().apply {
     val propFile = File(keystoreDir, "keystore.properties")
-    if (propFile.exists()) propFile.inputStream().use { load(it) }
+    if (!unofficialLocalTest && propFile.exists()) propFile.inputStream().use { load(it) }
 }
 fun signingProperty(name: String, env: String): String? =
-    System.getenv(env)?.takeIf { it.isNotBlank() }
+    if (unofficialLocalTest) null else System.getenv(env)?.takeIf { it.isNotBlank() }
         ?: keystoreProperties.getProperty(name)?.takeIf { it.isNotBlank() }
 
-val requireReleaseSigning = System.getenv("OC_ANDROID_REQUIRE_RELEASE_SIGNING") == "true"
+val requireReleaseSigning = !unofficialLocalTest && System.getenv("OC_ANDROID_REQUIRE_RELEASE_SIGNING") == "true"
 val releaseSigningProperties = mapOf(
     "storeFile" to "OC_ANDROID_KEYSTORE_PATH",
     "storePassword" to "OC_ANDROID_KEYSTORE_PASSWORD",
@@ -110,7 +126,7 @@ val environmentOpenChatRpId = System.getenv("OC_ANDROID_RP_ID")?.trim()?.lowerca
 require(environmentOpenChatRpId == null || bundledOpenChatRpId == null || environmentOpenChatRpId == bundledOpenChatRpId) {
     "OC_ANDROID_RP_ID differs between the outer Android build and the bundled frontend"
 }
-val openChatRpId = (environmentOpenChatRpId ?: bundledOpenChatRpId ?: "oc.app").also {
+val openChatRpId = if (unofficialLocalTest) "" else (environmentOpenChatRpId ?: bundledOpenChatRpId ?: "oc.app").also {
     require(Regex("^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$").matches(it) &&
         it.contains('.') && !it.contains("..")) {
         "OC_ANDROID_RP_ID must be one valid HTTPS hostname"
@@ -126,7 +142,7 @@ android {
     namespace = "com.oclabs.openchat"
     defaultConfig {
         manifestPlaceholders["usesCleartextTraffic"] = "false"
-        applicationId = "com.oclabs.openchat"
+        applicationId = if (unofficialLocalTest) localTestApplicationId else "com.oclabs.openchat"
         minSdk = 24
         targetSdk = 36
         versionCode = releaseVersionCode
@@ -134,13 +150,18 @@ android {
         versionName = releaseVersionName
             ?: tauriProperties.getProperty("tauri.android.versionName", "1.0")
         resValue("string", "openchat_rp_id", openChatRpId)
+        resValue("bool", "openchat_local_test", unofficialLocalTest.toString())
+        buildConfigField("boolean", "UNOFFICIAL_LOCAL_TEST", unofficialLocalTest.toString())
+        if (unofficialLocalTest) resValue("string", "local_test_app_name", "OpenChat Fork · Local Test")
         resValue(
             "string",
             "asset_statements",
-            "[{\\\"include\\\":\\\"https://$openChatRpId/.well-known/assetlinks.json\\\"}]",
+            if (unofficialLocalTest) "[]" else "[{\\\"include\\\":\\\"https://$openChatRpId/.well-known/assetlinks.json\\\"}]",
         )
     }
     
+    if (unofficialLocalTest) sourceSets.getByName("main").manifest.srcFile("src/localTest/AndroidManifest.xml")
+
     signingConfigs {
         if (releaseKeystore != null) {
             create("release") {
@@ -249,7 +270,7 @@ android.applicationVariants.all {
             // val versionName = versionName
             // val versionCode = versionCode
 
-            outputImpl.outputFileName = "openchat-release.apk"
+            outputImpl.outputFileName = if (unofficialLocalTest) "openchat-fork-local-test.apk" else "openchat-release.apk"
         }
     }
 }

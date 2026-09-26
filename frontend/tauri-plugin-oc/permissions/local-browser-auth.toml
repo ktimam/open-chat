@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-local-browser-auth"
+description = "Allows the bundled local-test main window to start and consume its short-lived browser authentication attempt. The native feature and local profile are also required."
+commands.allow = ["begin_local_browser_auth", "poll_local_browser_auth", "cancel_local_browser_auth", "complete_local_browser_auth"]

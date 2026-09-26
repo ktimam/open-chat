@@ -29,7 +29,7 @@ class MyApplication: Application() {
         )
 
         // Manually init Firebase, allows us to make sure init was fine!
-        FirebaseApp.initializeApp(this)?.let {
+        if (!BuildConfig.UNOFFICIAL_LOCAL_TEST) FirebaseApp.initializeApp(this)?.let {
             Log.d(LOG_TAG, "Firebase initialized: ${it.name}")
         } ?: Log.e(LOG_TAG, "Firebase failed to initialize!")
         

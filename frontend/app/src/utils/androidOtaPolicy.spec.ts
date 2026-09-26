@@ -83,6 +83,21 @@ describe("Android bundled frontend OTA policy", () => {
         expect(workflow).not.toMatch(/^\s+OC_OTA_UPDATES:/m);
     });
 
+    it("never inherits official OTA opt-in into the separate local APK profile", async () => {
+        const { createUnofficialLocalApkEnvironment } = await import("../../../unofficialLocalApkProfile.mjs");
+        const canisters = JSON.parse(fs.readFileSync(path.join(REPOSITORY_DIR, "canister_ids.json"), "utf8"));
+        const profile = createUnofficialLocalApkEnvironment(canisters, { inherited: {
+            OC_ANDROID_OTA_UPDATES: "minor", OC_OTA_UPDATES: "patch",
+            OC_ANDROID_APPLICATION_ID: "com.oclabs.openchat",
+        } });
+        expect(profile.OC_OTA_UPDATES).toBe("none");
+        expect(profile.OC_ANDROID_OTA_UPDATES).toBe("none");
+        expect(profile.OC_ANDROID_APPLICATION_ID).toBe("dev.openchatfork.localtest");
+        const rollup = fs.readFileSync(path.join(APP_DIR, "rollup.config.mjs"), "utf8");
+        expect(rollup).toContain("...(!localClientBuild ? [androidBundlePlugin({");
+        expect(rollup).toContain('JSON.stringify({ strategy: "none" })');
+    });
+
     it("loads .env as defaults without replacing an explicit caller value", () => {
         const bash =
             process.platform === "win32"

@@ -1,5 +1,6 @@
 import { Cbor, type Signature } from "@icp-sdk/core/agent";
 import { WebAuthnIdentity } from "@icp-sdk/core/identity";
+import { BrowserSignInFailure, browserSignInStep } from "./browserSignInDiagnostics";
 
 const equal = (a: Uint8Array, b: Uint8Array) =>
     a.length === b.length && a.every((value, index) => value === b[index]);
@@ -49,6 +50,7 @@ export async function requestBrowserPasskeyAssertion(
     blob: Uint8Array,
     expectedCredentialId?: Uint8Array,
     signal?: AbortSignal,
+    userVerification: "preferred" | "required" = "preferred",
 ): Promise<{ credentialId: Uint8Array; signature: Signature }> {
     const { rpId, origin } = browserPasskeyContext(configuredRpId);
     const challenge = boundedBytes(blob, 4096);
@@ -57,12 +59,13 @@ export async function requestBrowserPasskeyAssertion(
         : boundedBytes(expectedCredentialId, 4096);
     assertNotAborted(signal);
     // Invoke before the first await so the user gesture reaches the native picker.
-    const result = await navigator.credentials.get({
+    const result = await browserSignInStep("passkey-request", () => navigator.credentials.get({
         signal,
-        publicKey: { rpId, challenge: challenge.slice(), userVerification: "preferred", timeout: 60_000 },
-    }) as PublicKeyCredential | null;
+        publicKey: { rpId, challenge: challenge.slice(), userVerification, timeout: 60_000 },
+    })) as PublicKeyCredential | null;
     assertNotAborted(signal);
-    if (result === null || result.type !== "public-key") throw new Error("Invalid passkey response");
+    if (result === null) throw new BrowserSignInFailure("passkey-request");
+    if (result.type !== "public-key") throw new Error("Invalid passkey response");
     const credentialId = boundedBytes(result.rawId, 4096);
     if (expectedId !== undefined && !equal(credentialId, expectedId)) {
         throw new Error("Choose the passkey for the account being reauthenticated");
@@ -80,6 +83,7 @@ export async function requestBrowserPasskeyAssertion(
         clientData.challenge !== base64url(challenge) ||
         (clientData.crossOrigin !== undefined && clientData.crossOrigin !== false) ||
         authenticatorData.length < 37 || !(authenticatorData[32] & 1) ||
+        (userVerification === "required" && !(authenticatorData[32] & 4)) ||
         !equal(authenticatorData.slice(0, 32), rpHash)
     ) {
         throw new Error("Invalid passkey assertion");

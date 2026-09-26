@@ -5,6 +5,7 @@ import { Cbor } from "@icp-sdk/core/agent";
 import { WebAuthnIdentity } from "@icp-sdk/core/identity";
 import { PickerWebAuthnIdentity, requestBrowserPasskeyAssertion } from "./browserPasskey";
 import { MultiWebAuthnIdentity } from "./webAuthn";
+import { browserSignInFailureMessage, browserSignInStep } from "./browserSignInDiagnostics";
 
 const origin = "https://chat.example.test";
 const rpId = "example.test";
@@ -72,6 +73,19 @@ describe("validated browser passkey picker", () => {
         expect(challenge).toEqual(Uint8Array.from({ length: 59 }, (_, index) => index + 1));
     });
 
+    it("requests and checks user verification for the native browser bridge", async () => {
+        get.mockResolvedValue(await assertion());
+        await requestBrowserPasskeyAssertion(rpId, challenge, undefined, undefined, "required");
+        expect(get.mock.calls[0][0].publicKey.userVerification).toBe("required");
+        const unverified = await assertion();
+        unverified.response.authenticatorData[32] = 1;
+        get.mockResolvedValue(unverified);
+        await expect(requestBrowserPasskeyAssertion(rpId, challenge, undefined, undefined, "required"))
+            .rejects.toThrow("Invalid passkey assertion");
+        // Keep the established browser picker policy unchanged.
+        await expect(requestBrowserPasskeyAssertion(rpId, challenge)).resolves.toBeDefined();
+    });
+
     const invalid: [string, (value: Assertion) => void][] = [
         ["another saved ID", value => { value.rawId = Uint8Array.of(9); }],
         ["empty ID", value => { value.rawId = new Uint8Array(); }],
@@ -102,11 +116,36 @@ describe("validated browser passkey picker", () => {
         expect(savedId).toEqual(credentialId);
     });
 
-    it("propagates cancellation once without credential creation or retry", async () => {
-        const error = new DOMException("Cancelled", "NotAllowedError");
+    it.each(["NotAllowedError", "AbortError", "SecurityError"])("preserves classified %s once without retry", async name => {
+        const error = new DOMException("synthetic-sensitive-provider-message", name);
         get.mockRejectedValue(error);
         await expect(new PickerWebAuthnIdentity(rpId, credentialId, cose).sign(challenge)).rejects.toBe(error);
         expect(get).toHaveBeenCalledOnce();
+    });
+
+    it.each(["sync-throw", "rejection", "null"])("labels missing browser assertion (%s) separately from validation", async failure => {
+        const error = new DOMException("synthetic-sensitive-provider-message", "UnknownError");
+        if (failure === "sync-throw") get.mockImplementation(() => { throw error; });
+        else if (failure === "rejection") get.mockRejectedValue(error);
+        else get.mockResolvedValue(null);
+        const pending = browserSignInStep("passkey", () => new PickerWebAuthnIdentity(rpId, credentialId, cose).sign(challenge));
+        expect(get).toHaveBeenCalledOnce();
+        const caught = await pending.catch(value => value);
+        expect(browserSignInFailureMessage(caught)).toContain("[SIGNIN/passkey-request]");
+        expect(caught.cause).toBeUndefined();
+        expect(caught.message).not.toContain("synthetic-sensitive");
+        expect(JSON.stringify(caught)).not.toContain("synthetic-sensitive");
+    });
+
+    it("labels an invalid returned assertion as validation, not provider rejection", async () => {
+        const returned = await assertion();
+        editClientData(returned, { challenge: "wrong-challenge" });
+        get.mockResolvedValue(returned);
+        const caught = await browserSignInStep("passkey", () =>
+            new PickerWebAuthnIdentity(rpId, credentialId, cose).sign(challenge)).catch(value => value);
+        expect(get).toHaveBeenCalledOnce();
+        expect(browserSignInFailureMessage(caught)).toContain("[SIGNIN/passkey]");
+        expect(browserSignInFailureMessage(caught)).not.toContain("passkey-request");
     });
 
     it("rejects late success after cancellation", async () => {

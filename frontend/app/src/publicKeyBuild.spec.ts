@@ -1,6 +1,7 @@
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import ts from "typescript";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import {
     extractPublicKey,
@@ -44,13 +45,36 @@ describe("public key build plugin", () => {
         );
         expect(config).toContain('import { publicKeyBuildPlugin } from "./publicKeyBuild.mjs"');
         expect(config).toMatch(
-            /publicKeyBuildPlugin\(\{\s*network: process\.env\.OC_DFX_NETWORK \?\? "local",\s*\.\.\.\(localWebBuild \? \{ queryPublicKey: queryOfficialUserIndexPublicKey, outputPath: outputPath\("public-key"\) \} : \{\}\),\s*canister: process\.env\.OC_USER_INDEX_CANISTER,\s*dfxExecutable: process\.env\.OC_DFX_EXECUTABLE,\s*expectedDfxVersion: dfxBuildVersion,\s*\}\)/,
+            /publicKeyBuildPlugin\(\{\s*network: process\.env\.OC_DFX_NETWORK \?\? "local",\s*\.\.\.\(localClientBuild \? \{ queryPublicKey: queryOfficialUserIndexPublicKey, outputPath: outputPath\("public-key"\) \} : \{\}\),\s*canister: process\.env\.OC_USER_INDEX_CANISTER,\s*dfxExecutable: process\.env\.OC_DFX_EXECUTABLE,\s*expectedDfxVersion: dfxBuildVersion,\s*\}\)/,
         );
         expect(config).toContain('new URL("../../dfx.json", import.meta.url)');
         expect(config).toContain('typeof dfxBuildVersion !== "string"');
+        // Anonymous direct query is shared by both explicit unofficial local packages only.
+        // Ordinary official builds retain their pinned dfx executable/version path above.
+        expect(config).toContain('const localWebBuild = process.env.OC_UNOFFICIAL_WEB_BUILD === "true"');
+        expect(config).toContain('const localTestApk = process.env.OC_UNOFFICIAL_LOCAL_APK === "true"');
+        expect(config).toContain("const localClientBuild = localWebBuild || localTestApk");
         expect(config).toContain("node ./build-workers.mjs");
         expect(config).not.toContain("scripts/get-public-key.sh");
         expect(config).not.toContain("> ./public/public-key");
+    });
+
+    test("Rollup compiles the checked-in component package rather than a dependency-cache copy", async () => {
+        const config = await readFile(path.resolve(import.meta.dirname, "../rollup.config.mjs"), "utf8");
+        expect(config).toContain('find: /^component-lib$/');
+        expect(config).toContain('replacement: path.resolve(__dirname, "../component-lib/src/index.ts")');
+        expect(config).toContain('"../component-lib/src/**/*.ts"');
+        expect(config).toContain('"../node_modules/component-lib/src/**/*.ts"');
+        expect(config.indexOf('find: /^component-lib$/')).toBeLessThan(config.indexOf("svelte({"));
+        const tsConfigPath = path.resolve(import.meta.dirname, "../tsconfig.json");
+        const parsed = ts.getParsedCommandLineOfConfigFile(tsConfigPath, {}, {
+            ...ts.sys, onUnRecoverableConfigFileDiagnostic: () => { throw new Error("Invalid app TypeScript config"); },
+        })!;
+        const sourceEntry = path.resolve(import.meta.dirname, "../../component-lib/src/index.ts").replaceAll("\\", "/");
+        expect(parsed.fileNames.map((name) => name.replaceAll("\\", "/"))).toContain(sourceEntry);
+        const resolved = ts.resolveModuleName("component-lib",
+            path.resolve(import.meta.dirname, "theme/themeV2.ts"), parsed.options, ts.sys).resolvedModule;
+        expect(resolved?.resolvedFileName.replaceAll("\\", "/")).toBe(sourceEntry);
     });
 
     test("uses native dfx on Unix and a WSL login shell without output redirection on Windows", () => {

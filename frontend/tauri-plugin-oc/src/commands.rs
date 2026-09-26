@@ -4,6 +4,82 @@ use crate::OcExt;
 use crate::Result;
 use crate::models::*;
 use crate::update_manager;
+use crate::local_browser_auth_protocol::{BeginRequest as LocalBrowserAuthBeginRequest, Challenge as LocalBrowserAuthChallenge, PollResult as LocalBrowserAuthPollResult};
+
+#[cfg(feature = "local-browser-auth")]
+fn require_local_browser_auth_window<R: Runtime>(window: &tauri::WebviewWindow<R>) -> std::result::Result<(), String> {
+    let url = window.url().map_err(|_| "Local browser authentication is unavailable")?;
+    if !crate::local_browser_auth_protocol::bundled_window_allowed(
+        window.label(), &url.origin().ascii_serialization(), url.username(), url.password().is_some(),
+    ) {
+        return Err("Browser authentication is available only to the bundled local APK".into());
+    }
+    Ok(())
+}
+
+#[command]
+pub(crate) async fn begin_local_browser_auth<R: Runtime>(
+    app: AppHandle<R>, window: tauri::WebviewWindow<R>, payload: LocalBrowserAuthBeginRequest,
+) -> std::result::Result<LocalBrowserAuthChallenge, String> {
+    #[cfg(feature = "local-browser-auth")]
+    {
+        use crate::local_browser_auth::{BrowserAssets, BrowserAuthBridge, BundledProfile, HTML_ASSET, JS_ASSET, PROFILE_ASSET};
+        use tauri::Manager;
+        require_local_browser_auth_window(&window)?;
+        let resolver = app.asset_resolver();
+        let profile = resolver.get(PROFILE_ASSET.into()).ok_or("Local APK authentication profile is missing")?;
+        let profile = BundledProfile::parse(&profile.bytes)?;
+        let html = resolver.get(HTML_ASSET.into()).ok_or("Bundled browser sign-in page is missing")?;
+        let script = resolver.get(JS_ASSET.into()).ok_or("Bundled browser sign-in script is missing")?;
+        app.state::<BrowserAuthBridge>().begin(payload, profile, BrowserAssets {
+            html: html.bytes, script: script.bytes,
+        }).await
+    }
+    #[cfg(not(feature = "local-browser-auth"))]
+    { let _ = (app, window, payload); Err("Local browser authentication is not included in this build".into()) }
+}
+
+#[command]
+pub(crate) async fn poll_local_browser_auth<R: Runtime>(
+    app: AppHandle<R>, window: tauri::WebviewWindow<R>, attempt_id: String,
+) -> std::result::Result<LocalBrowserAuthPollResult, String> {
+    #[cfg(feature = "local-browser-auth")]
+    {
+        use tauri::Manager;
+        require_local_browser_auth_window(&window)?;
+        app.state::<crate::local_browser_auth::BrowserAuthBridge>().poll(&attempt_id).await
+    }
+    #[cfg(not(feature = "local-browser-auth"))]
+    { let _ = (app, window, attempt_id); Err("Local browser authentication is not included in this build".into()) }
+}
+
+#[command]
+pub(crate) async fn cancel_local_browser_auth<R: Runtime>(
+    app: AppHandle<R>, window: tauri::WebviewWindow<R>, attempt_id: String,
+) -> std::result::Result<(), String> {
+    #[cfg(feature = "local-browser-auth")]
+    {
+        use tauri::Manager;
+        require_local_browser_auth_window(&window)?;
+        app.state::<crate::local_browser_auth::BrowserAuthBridge>().cancel(&attempt_id).await
+    }
+    #[cfg(not(feature = "local-browser-auth"))]
+    { let _ = (app, window, attempt_id); Err("Local browser authentication is not included in this build".into()) }
+}
+
+#[command]
+pub(crate) async fn complete_local_browser_auth<R: Runtime>(
+    app: AppHandle<R>, window: tauri::WebviewWindow<R>, attempt_id: String, accepted: bool,
+) -> std::result::Result<(), String> {
+    #[cfg(feature = "local-browser-auth")]
+    {
+        use tauri::Manager;
+        require_local_browser_auth_window(&window)?;
+        app.state::<crate::local_browser_auth::BrowserAuthBridge>().complete(&attempt_id, accepted).await
+    }
+    #[cfg(not(feature = "local-browser-auth"))]
+    { let _ = (app, window, attempt_id, accepted); Err("Local browser authentication is not included in this build".into()) }
+}
 
 #[command]
 pub(crate) async fn open_url<R: Runtime>(

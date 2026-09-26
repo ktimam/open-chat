@@ -76,7 +76,7 @@
     {/snippet}
     {#snippet body()}
         <div class="body">
-            {#if client.existingAccountOnly() && !client.isNativeApp()}
+            {#if client.existingAccountOnly()}
                 <ExistingAccountSignIn onSignedIn={onClose} />
             {:else if step === "select_mode"}
                 <ModeSelection

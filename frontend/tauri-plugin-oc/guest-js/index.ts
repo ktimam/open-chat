@@ -7,6 +7,15 @@ export { openUrl } from "./commands/openUrl";
 export { releaseNotifications } from "./commands/releaseNotifications";
 export { showNotification } from "./commands/showNotification";
 export { signIn } from "./commands/signIn";
+export {
+    beginLocalBrowserAuth,
+    pollLocalBrowserAuth,
+    cancelLocalBrowserAuth,
+    completeLocalBrowserAuth,
+    type LocalBrowserAuthChallenge,
+    type LocalBrowserAuthCandidate,
+    type LocalBrowserAuthPollResult,
+} from "./commands/localBrowserAuth";
 export { signUp } from "./commands/signUp";
 export { svelteReady } from "./commands/svelteReady";
 export {

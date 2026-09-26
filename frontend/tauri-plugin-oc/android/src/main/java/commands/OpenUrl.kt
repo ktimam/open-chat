@@ -13,6 +13,7 @@ import app.tauri.annotation.InvokeArg
 import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSObject
 import com.ocplugin.app.LOG_TAG
+import com.ocplugin.app.isUnofficialLocalTest
 import kotlin.concurrent.thread
 
 @InvokeArg
@@ -40,7 +41,8 @@ class OpenUrl(private val activity: Activity) {
             try {
                 val scheme = uri.scheme?.lowercase()
                 if (scheme == "http" || scheme == "https") {
-                    if (isOwnAppLinkHost(uri)) {
+                    if (isOwnAppLinkHost(uri) ||
+                        (isUnofficialLocalTest(activity) && uri.host == "localhost")) {
                         // Our own verified app-link domain: a plain ACTION_VIEW
                         // would resolve straight back to this app, re-firing the
                         // deep-link event in a loop, so force a browser Custom Tab.

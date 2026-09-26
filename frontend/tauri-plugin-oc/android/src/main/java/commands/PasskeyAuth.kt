@@ -27,6 +27,7 @@ import app.tauri.annotation.InvokeArg
 import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSObject
 import com.ocplugin.app.LOG_TAG
+import com.ocplugin.app.isUnofficialLocalTest
 import java.security.SecureRandom
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -56,6 +57,7 @@ internal fun normalizeCredentialIds(credentialIds: Array<String>): List<String> 
 // OC_ANDROID_RP_ID so Android Credential Manager verifies the APK against the same private HTTPS
 // origin that serves the local OpenChat environment.
 private fun resolveRpId(activity: Activity): String {
+    if (isUnofficialLocalTest(activity)) return ""
     val resourceId = activity.resources.getIdentifier(
         "openchat_rp_id",
         "string",
@@ -83,7 +85,7 @@ class SignInArgs {
 }
 
 class PasskeyAuth(private val activity: Activity) {
-    private val credentialManager = CredentialManager.create(activity)
+    private val credentialManager by lazy { CredentialManager.create(activity) }
     private val rpId = resolveRpId(activity)
 
     // Command for creating a passkey; prompts user for authentication, and
@@ -102,6 +104,10 @@ class PasskeyAuth(private val activity: Activity) {
     // - PASSKEY_CREATE_FAILED
     @SuppressLint("PublicKeyCredential")
     fun handleSignUp(invoke: Invoke) {
+        if (isUnofficialLocalTest(activity)) {
+            invoke.reject("Use the explicit browser link flow for this local test APK")
+            return
+        }
         val args = invoke.parseArgs(SignUpArgs::class.java)
 
         // Preflight check for screen lock
@@ -245,6 +251,10 @@ class PasskeyAuth(private val activity: Activity) {
     // - CREDENTIAL_ERROR
     // - PASSKEY_FETCH_FAILED
     fun handleSignIn(invoke: Invoke) {
+        if (isUnofficialLocalTest(activity)) {
+            invoke.reject("Use browser sign-in for this local test APK")
+            return
+        }
         val args = invoke.parseArgs(SignInArgs::class.java)
 
         // Challenge is passed from the svelte app
