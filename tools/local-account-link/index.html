@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OpenChat — local account-linking test</title><link rel="stylesheet" href="/styles.css"></head>
+<body><main>
+<p class="eyebrow">UNOFFICIAL · LOCAL TEST ONLY</p><h1>Same account.<br>A local passkey.</h1>
+<p>This page tests linking a <strong>localhost</strong> passkey to your existing official OpenChat account. It is not the full chat client.</p>
+<aside>Linking changes your real OpenChat account by adding a sign-in credential. It does not create an account or send chat messages. The local passkey remains linked until you remove it in official OpenChat’s account settings.</aside>
+<section aria-labelledby="link-title"><h2 id="link-title">1. Verify the account</h2>
+<p>In official OpenChat, open your profile/account settings and generate an account-linking code. Enter it here—not in a chat.</p>
+<label for="username">Your existing OpenChat username</label><input id="username" autocomplete="off" spellcheck="false" maxlength="100">
+<label for="expected-id">Existing user ID (optional extra check)</label><input id="expected-id" autocomplete="off" spellcheck="false" maxlength="100">
+<label for="code">One-time account-linking code</label><input id="code" type="text" autocomplete="off" spellcheck="false" autocapitalize="characters" aria-describedby="verify-status">
+<p class="small">Verification consumes the code. If the account name is wrong, stop and obtain a fresh code.</p>
+<button id="verify" type="button">Verify code — do not link yet</button>
+<p id="verify-status" class="verification-status" role="status" aria-live="polite">Enter your username and a fresh official code above.</p>
+<button id="reset-verification" type="button" class="secondary" hidden>Start new verification</button>
+</section>
+<section aria-labelledby="confirm-title"><h2 id="confirm-title">2. Review and link</h2>
+<p id="verified-name">No account verified.</p><p>Passkey scope: <strong>localhost</strong>. Backend: official OpenChat.</p>
+<label class="check"><input id="consent" type="checkbox">I authorize adding this localhost test passkey to the verified account.</label>
+<button id="link" type="button" disabled>Create passkey and link this account</button>
+</section>
+<section aria-labelledby="signin-title"><h2 id="signin-title">3. Test a fresh sign-in</h2>
+<p>This discards the temporary session and requests a new passkey assertion. The resulting user ID and OpenChat principal must match.</p>
+      <button id="signin" type="button" disabled>Test fresh passkey sign-in</button>
+      <p class="hint">Choose the existing localhost test passkey in the picker. A different key is rejected; this does not create or link a key.</p>
+<p id="signin-status" role="status" aria-live="polite">After linking, this checks the saved localhost passkey with a new sign-in.</p>
+<button id="local-passkey-check" type="button" class="secondary" disabled>Test saved passkey locally</button>
+<button id="local-passkey-choose" type="button" class="secondary" disabled>Choose localhost passkey locally</button>
+<p id="local-passkey-status" role="status" aria-live="polite">Diagnostic only: uses the existing key with a random challenge. No OpenChat call, new key, or account change.</p>
+<button id="clear" type="button" class="secondary">Clear temporary session</button>
+<p class="small">Only public credential details and the expected account identifiers are saved locally for reload testing. No private key, code or session token is saved.</p>
+<button id="forget" type="button" class="secondary">Forget local public credential details</button>
+</section>
+<section role="status" aria-live="polite"><h2>Result</h2><p id="status">Initializing local test…</p><dl id="profile"></dl></section>
+<p class="small">No telemetry, third-party scripts, service worker, model downloads or chat access. This does not prove final-domain or APK compatibility.</p>
+</main><script type="module" src="/app.js"></script></body></html>

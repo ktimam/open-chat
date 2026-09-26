@@ -1,0 +1,8 @@
+{
+  "name": "openchat-local-account-link-proof",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --experimental-vm-modules --test *.test.mjs", "build": "node build.mjs", "start": "node server.mjs" },
+  "dependencies": { "@icp-sdk/core": "5.4.0", "msgpackr": "1.12.1" },
+  "devDependencies": { "esbuild": "0.25.12" }
+}
