@@ -37,11 +37,12 @@ fn init(args: Args) {
         args.openai_api_key,
         args.moderation_referral_config,
         args.media_scan_config,
+        args.multi_user_canisters_enabled,
+        args.call_push_enabled,
         args.test_mode,
     );
 
     init_state(env, data, args.wasm_version);
-    crate::pr2_entropy::start_after_lifecycle();
 
     crate::no_inline_anchor::anchor();
     info!(version = %args.wasm_version, "Initialization complete");

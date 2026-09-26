@@ -2,23 +2,50 @@ use crate::{generate_msgpack_query_call, generate_msgpack_update_call, generate_
 use user_canister::*;
 
 // Queries
+generate_msgpack_query_call!(bio);
+generate_msgpack_query_call!(c2c_bot_chat_summary);
+generate_msgpack_query_call!(c2c_groups_and_communities);
 generate_msgpack_query_call!(chit_events);
+generate_msgpack_query_call!(contacts);
+generate_msgpack_query_call!(deleted_message);
 generate_msgpack_query_call!(events);
 generate_msgpack_query_call!(events_by_index);
 generate_msgpack_query_call!(events_window);
+generate_msgpack_query_call!(hot_group_exclusions);
 generate_msgpack_query_call!(initial_state);
+generate_msgpack_query_call!(local_user_index);
 generate_msgpack_query_call!(message_activity_feed);
+generate_msgpack_query_call!(messages_by_message_index);
+generate_msgpack_query_call!(public_profile);
 generate_msgpack_query_call!(saved_crypto_accounts);
+generate_msgpack_query_call!(search_messages);
+generate_msgpack_query_call!(token_swap_status);
 generate_msgpack_query_call!(updates);
 
 // Updates
 generate_msgpack_update_call!(accept_p2p_swap);
-generate_msgpack_update_call!(approve_transfer);
+generate_msgpack_update_call!(add_hot_group_exclusions);
 generate_msgpack_update_call!(add_reaction);
+generate_msgpack_update_call!(approve_transfer);
+generate_msgpack_update_call!(archive_unarchive_chats);
 generate_msgpack_update_call!(block_user);
+generate_msgpack_update_call!(c2c_charge_user_account);
+generate_msgpack_update_call!(c2c_community_canister_v2);
+generate_msgpack_update_call!(c2c_game_chit);
+generate_msgpack_update_call!(c2c_group_canister_v2);
+generate_msgpack_update_call!(c2c_install_bot);
+generate_msgpack_update_call!(c2c_local_user_index_v2);
+generate_msgpack_update_call!(c2c_notify_community_deleted);
+generate_msgpack_update_call!(c2c_notify_group_deleted);
+generate_msgpack_update_call!(c2c_pay_for_premium_item);
+generate_msgpack_update_call!(c2c_remove_from_group);
+generate_msgpack_update_call!(c2c_set_user_suspended);
+generate_msgpack_update_call!(c2c_uninstall_bot);
+generate_msgpack_update_call!(c2c_user_canister_v2);
 generate_msgpack_update_call!(cancel_message_reminder);
 generate_msgpack_update_call!(cancel_p2p_swap);
 generate_msgpack_update_call!(claim_daily_chit);
+generate_msgpack_update_call!(configure_wallet);
 generate_msgpack_update_call!(create_community);
 generate_msgpack_update_call!(create_group);
 generate_msgpack_update_call!(delete_community);
@@ -31,23 +58,33 @@ generate_update_call!(end_video_call_v2);
 generate_msgpack_update_call!(join_video_call);
 generate_msgpack_update_call!(leave_community);
 generate_msgpack_update_call!(leave_group);
+generate_msgpack_update_call!(manage_favourite_chats);
+generate_msgpack_update_call!(mark_achievements_seen);
 generate_msgpack_update_call!(mark_message_activity_feed_read);
 generate_msgpack_update_call!(mark_read);
 generate_msgpack_update_call!(mute_notifications);
-generate_msgpack_update_call!(c2c_pay_for_premium_item);
 generate_msgpack_update_call!(pay_for_streak_insurance);
+generate_msgpack_update_call!(pin_chat_v2);
 generate_msgpack_update_call!(remove_reaction);
+generate_msgpack_update_call!(report_message);
 generate_msgpack_update_call!(save_crypto_account);
 generate_msgpack_update_call!(send_message_v2);
 generate_msgpack_update_call!(send_message_with_transfer_to_channel);
 generate_msgpack_update_call!(send_message_with_transfer_to_group);
+generate_msgpack_update_call!(set_avatar);
+generate_msgpack_update_call!(set_bio);
+generate_msgpack_update_call!(set_community_indexes);
+generate_msgpack_update_call!(set_contact);
 generate_msgpack_update_call!(set_message_reminder_v2);
 generate_msgpack_update_call!(set_pin_number);
 generate_msgpack_update_call!(set_profile_background);
 generate_update_call!(start_video_call_v2);
+generate_msgpack_update_call!(swap_tokens);
 generate_msgpack_update_call!(tip_message);
 generate_msgpack_update_call!(unblock_user);
 generate_msgpack_update_call!(undelete_messages);
+generate_msgpack_update_call!(unmute_notifications);
+generate_msgpack_update_call!(unpin_chat_v2);
 generate_msgpack_update_call!(update_chat_settings);
 
 pub mod happy_path {
@@ -56,8 +93,9 @@ pub mod happy_path {
     use pocket_ic::PocketIc;
     use testing::rng::random_from_u128;
     use types::{
-        CanisterId, Chat, ChatId, CommunityId, Empty, EventIndex, EventsResponse, MessageContentInitial, MessageId,
-        MessageIndex, Milliseconds, Reaction, ReplyContext, Rules, TextContent, TimestampMillis, UserId, VideoCallType,
+        CanisterId, Chat, ChatEvent, ChatId, CommunityId, Empty, EventIndex, EventsResponse, Message, MessageContentInitial,
+        MessageId, MessageIndex, Milliseconds, Reaction, ReplyContext, Rules, TextContent, TimestampMillis, UserId,
+        VideoCallType,
     };
     use user_canister::NamedAccount;
     use user_canister::set_pin_number::PinNumberVerification;
@@ -235,6 +273,23 @@ pub mod happy_path {
         assert!(matches!(response, user_canister::add_reaction::Response::Success));
     }
 
+    pub fn mark_read(
+        env: &mut PocketIc,
+        sender: &User,
+        messages_read: Vec<user_canister::mark_read::ChatMessagesRead>,
+        community_messages_read: Vec<user_canister::mark_read::CommunityMessagesRead>,
+    ) {
+        let user_canister::mark_read::Response::Success = super::mark_read(
+            env,
+            sender.principal,
+            sender.canister(),
+            &user_canister::mark_read::Args {
+                messages_read,
+                community_messages_read,
+            },
+        );
+    }
+
     pub fn initial_state(env: &PocketIc, sender: &User) -> user_canister::initial_state::SuccessResult {
         let response = super::initial_state(
             env,
@@ -250,7 +305,7 @@ pub mod happy_path {
     pub fn events(
         env: &PocketIc,
         sender: &User,
-        user_id: UserId,
+        them: UserId,
         start_index: EventIndex,
         ascending: bool,
         max_messages: u32,
@@ -261,7 +316,8 @@ pub mod happy_path {
             sender.principal,
             sender.canister(),
             &user_canister::events::Args {
-                user_id,
+                user_id: sender.user_id,
+                them,
                 thread_root_message_index: None,
                 start_index,
                 ascending,
@@ -277,13 +333,14 @@ pub mod happy_path {
         }
     }
 
-    pub fn events_by_index(env: &PocketIc, sender: &User, user_id: UserId, events: Vec<EventIndex>) -> EventsResponse {
+    pub fn events_by_index(env: &PocketIc, sender: &User, them: UserId, events: Vec<EventIndex>) -> EventsResponse {
         let response = super::events_by_index(
             env,
             sender.principal,
             sender.canister(),
             &user_canister::events_by_index::Args {
-                user_id,
+                user_id: sender.user_id,
+                them,
                 thread_root_message_index: None,
                 events,
                 latest_known_update: None,
@@ -296,10 +353,47 @@ pub mod happy_path {
         }
     }
 
+    pub fn thread_message(
+        env: &PocketIc,
+        sender: &User,
+        them: UserId,
+        thread_root_message_index: MessageIndex,
+        message_id: MessageId,
+    ) -> Message {
+        let response = super::events(
+            env,
+            sender.principal,
+            sender.canister(),
+            &user_canister::events::Args {
+                user_id: sender.user_id,
+                them,
+                thread_root_message_index: Some(thread_root_message_index),
+                start_index: EventIndex::default(),
+                ascending: true,
+                max_messages: 100,
+                max_events: 100,
+                latest_known_update: None,
+            },
+        );
+
+        let user_canister::events::Response::Success(result) = response else {
+            panic!("'events' error: {response:?}");
+        };
+
+        result
+            .events
+            .into_iter()
+            .find_map(|e| match e.event {
+                ChatEvent::Message(m) if m.message_id == message_id => Some(*m),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("Message {message_id:?} not found in thread"))
+    }
+
     pub fn events_window(
         env: &PocketIc,
         sender: &User,
-        user_id: UserId,
+        them: UserId,
         mid_point: MessageIndex,
         max_messages: u32,
         max_events: u32,
@@ -309,7 +403,8 @@ pub mod happy_path {
             sender.principal,
             sender.canister(),
             &user_canister::events_window::Args {
-                user_id,
+                user_id: sender.user_id,
+                them,
                 thread_root_message_index: None,
                 mid_point,
                 max_messages,
@@ -430,6 +525,7 @@ pub mod happy_path {
             VIDEO_CALL_OPERATOR,
             recipient.canister_id(),
             &user_canister::start_video_call_v2::Args {
+                user_id: recipient,
                 message_id,
                 initiator: user.user_id,
                 initiator_username: user.username(),
@@ -437,6 +533,7 @@ pub mod happy_path {
                 initiator_avatar_id: None,
                 max_duration,
                 call_type: VideoCallType::Default,
+                audio_only: None,
             },
         );
 
@@ -463,7 +560,8 @@ pub mod happy_path {
             VIDEO_CALL_OPERATOR,
             recipient.canister_id(),
             &user_canister::end_video_call_v2::Args {
-                user_id: initiator,
+                user_id: recipient,
+                them: initiator,
                 message_id,
             },
         );
@@ -591,6 +689,7 @@ pub mod happy_path {
             &user_canister::pay_for_streak_insurance::Args {
                 additional_days,
                 expected_price,
+                from_account: None,
                 pin: None,
             },
         );
@@ -606,6 +705,20 @@ pub mod happy_path {
     pub fn update_chat_settings(env: &mut PocketIc, user: &User, args: &user_canister::update_chat_settings::Args) {
         let response = super::update_chat_settings(env, user.principal, user.canister(), args);
         assert!(matches!(response, user_canister::update_chat_settings::Response::Success));
+    }
+
+    pub fn set_avatar(env: &mut PocketIc, user: &User, avatar: Option<types::Document>) {
+        let response = super::set_avatar(
+            env,
+            user.principal,
+            user.canister(),
+            &user_canister::set_avatar::Args { avatar },
+        );
+
+        assert!(
+            matches!(response, user_canister::set_avatar::Response::Success),
+            "{response:?}"
+        );
     }
 
     pub fn set_profile_background(env: &mut PocketIc, user: &User, args: &user_canister::set_profile_background::Args) {

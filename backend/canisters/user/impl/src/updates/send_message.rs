@@ -1,31 +1,25 @@
-use super::c2c_send_messages::{HandleMessageArgs, handle_message_impl};
-use crate::crypto::{process_transaction_without_caller_check, validate_from_account};
+use crate::crypto::{process_transaction_without_caller_check, user_wallet, validate_from_account};
 use crate::guards::{caller_is_local_user_index, caller_is_owner};
 use crate::timer_job_types::{DeleteFileReferencesJob, MarkP2PSwapExpiredJob, NotifyEscrowCanisterOfDepositJob};
 use crate::updates::send_message_with_transfer::set_up_p2p_swap;
 use crate::{Data, RuntimeState, TimerJob, UserEventPusher, execute_update, execute_update_async, mutate_state, read_state};
-use candid::Principal;
 use canister_api_macros::update;
 use canister_tracing_macros::trace;
-use chat_events::{
-    EditMessageArgs, EditMessageSuccess, MessageContentInternal, PushMessageArgs, Reader, ReplyContextInternal,
-    TextContentInternal, ValidateNewMessageContentResult, ai_app_card_content_hash_from_initial,
-};
+use chat_events::{MessageContentInternal, PushMessageArgs, Reader, ReplyContextInternal, ValidateNewMessageContentResult};
 use constants::{MEMO_MESSAGE, OPENCHAT_BOT_USER_ID};
 use oc_error_codes::OCErrorCode;
 use rand::RngExt;
-use std::ops::Not;
 use types::{
-    BlobReference, BotCaller, BotPermissions, CanisterId, Chat, ChatId, CompletedCryptoTransaction, CryptoTransaction,
-    DirectChatUserNotificationPayload, DirectMessageNotification, EventIndex, EventWrapper, Message, MessageContent,
-    MessageContentInitial, MessageId, MessageIndex, OCResult, OgPreview, P2PSwapLocation, ReplyContext, TimestampMillis,
-    UserId, UserType,
+    BlobReference, CanisterId, Chat, ChatId, CompletedCryptoTransaction, CryptoTransaction, EventWrapper, Message,
+    MessageContent, MessageContentInitial, MessageId, MessageIndex, OCResult, OgPreview, P2PSwapLocation, ReplyContext,
+    TimestampMillis, UserId, UserType,
 };
 use user_canister::send_message_v2::{Response::*, *};
 use user_canister::{C2CReplyContext, SendMessageArgs, SendMessagesArgs, UserCanisterEvent, c2c_bot_send_message};
+use user_core::updates::c2c_bot_send_message::Sent;
 
 #[update(guard = "caller_is_owner", msgpack = true)]
-// Do not trace: an app ActionCard carries a live one-time provenance proof in its ingress args.
+#[trace]
 async fn send_message_v2(args: Args) -> Response {
     execute_update_async(|| send_message_v2_impl(args)).await
 }
@@ -36,9 +30,7 @@ async fn send_message_v2_impl(mut args: Args) -> Response {
         now,
         local_user_index_canister_id,
         maybe_recipient_type,
-        provenance,
-        app_card,
-    } = match read_state(|state| prepare(&args, false, state)) {
+    } = match read_state(|state| prepare(&args, state)) {
         Ok(ok) => ok,
         Err(error) => return Error(error),
     };
@@ -58,42 +50,6 @@ async fn send_message_v2_impl(mut args: Args) -> Response {
         }
     };
 
-    if let Some(expected) = app_card {
-        let Some(relay) = provenance else {
-            return Error(OCErrorCode::Impossible.with_message("missing prepared AI-app provenance"));
-        };
-        if !matches!(recipient_type, RecipientType::Other(UserType::User)) {
-            return Error(OCErrorCode::InitiatorNotAuthorized.with_message("AI-app cards require a human direct chat"));
-        }
-        if let Err(error) =
-            read_state(|state| revalidate_app_card_post(&args, local_user_index_canister_id, &relay, &expected, state))
-        {
-            return Error(error);
-        }
-        match local_user_index_canister_c2c_client::c2c_validate_ai_app_card_provenance(local_user_index_canister_id, &relay)
-            .await
-        {
-            Ok(local_user_index_canister::c2c_validate_ai_app_card_provenance::Response::Success) => {}
-            Ok(local_user_index_canister::c2c_validate_ai_app_card_provenance::Response::InvalidProvenance) => {
-                return Error(OCErrorCode::InvalidRequest.with_message("invalid AI-app card provenance"));
-            }
-            Ok(local_user_index_canister::c2c_validate_ai_app_card_provenance::Response::AppUnavailable) => {
-                return Error(OCErrorCode::InvalidRequest.with_message("AI app is unavailable"));
-            }
-            Ok(
-                local_user_index_canister::c2c_validate_ai_app_card_provenance::Response::InvalidRequest(error)
-                | local_user_index_canister::c2c_validate_ai_app_card_provenance::Response::Error(error),
-            ) => return Error(OCErrorCode::InvalidRequest.with_message(error)),
-            Err(error) => return Error(OCErrorCode::C2CError.with_message(format!("{error:?}"))),
-        }
-        // The provenance relay yielded through LocalUserIndex and UserIndex. Validate the exact
-        // owner, route, peer type, coordinates and raw card again in the final state mutation, then
-        // run bounds/expiry validation using the current time before setting server-only trust bits.
-        return mutate_state(|state| commit_verified_app_card(args, recipient_type, relay, expected, state));
-    } else if provenance.is_some() {
-        return Error(OCErrorCode::Impossible.with_message("missing prepared AI-app card context"));
-    }
-
     let (content, completed_transfer) =
         match MessageContentInternal::validate_new_message(args.content, true, UserType::User, args.forwarding, now) {
             ValidateNewMessageContentResult::Success(content) => (content, None),
@@ -103,11 +59,15 @@ async fn send_message_v2_impl(mut args: Args) -> Response {
                     _ => unreachable!(),
                 };
 
-                if !pending_transfer.validate_recipient(args.recipient) {
+                let recipient = match user_wallet(args.recipient, local_user_index_canister_id).await {
+                    Ok(recipient) => recipient,
+                    Err(error) => return Error(error),
+                };
+                if !pending_transfer.validate_recipient(recipient) {
                     return Error(OCErrorCode::InvalidRequest.with_message("Transaction is not to the user's account"));
                 }
 
-                if let Err(error) = mutate_state(|state| state.data.pin_number.verify(args.pin.as_mut(), now)) {
+                if let Err(error) = mutate_state(|state| state.data.user.pin_number.verify(args.pin.as_mut(), now)) {
                     return Error(error.into());
                 }
 
@@ -140,7 +100,7 @@ async fn send_message_v2_impl(mut args: Args) -> Response {
                     (
                         state.data.escrow_canister_id,
                         now,
-                        state.data.membership(now).is_diamond_member(),
+                        state.data.user.membership(now).is_diamond_member(),
                         UserId::from(state.env.canister_id()),
                     )
                 });
@@ -154,7 +114,7 @@ async fn send_message_v2_impl(mut args: Args) -> Response {
                     location: P2PSwapLocation::from_message(Chat::Direct(args.recipient.into()), None, args.message_id),
                     token0: content.token0.clone(),
                     token0_amount: content.token0_amount,
-                    token0_principal: Some(my_user_id.as_principal()),
+                    token0_principal: None,
                     token1: content.token1.clone(),
                     token1_amount: content.token1_amount,
                     token1_principal: None,
@@ -167,7 +127,7 @@ async fn send_message_v2_impl(mut args: Args) -> Response {
                     Ok((swap_id, pending_transaction)) => {
                         match process_transaction_without_caller_check(pending_transaction).await {
                             Ok(Ok(completed)) => {
-                                NotifyEscrowCanisterOfDepositJob::run(swap_id, my_user_id);
+                                NotifyEscrowCanisterOfDepositJob::run(swap_id);
                                 let content = MessageContentInternal::new_with_transfer(
                                     MessageContentInitial::P2PSwap(content),
                                     completed.clone().into(),
@@ -180,7 +140,7 @@ async fn send_message_v2_impl(mut args: Args) -> Response {
                             Err(error) => return Error(error.into()),
                         }
                     }
-                    Err(error) => return Error(error.into()),
+                    Err(error) => return Error(error),
                 }
             }
             ValidateNewMessageContentResult::Error(error) => {
@@ -214,182 +174,49 @@ fn c2c_bot_send_message(args: c2c_bot_send_message::Args) -> c2c_bot_send_messag
 }
 
 fn c2c_bot_send_message_impl(args: c2c_bot_send_message::Args, state: &mut RuntimeState) -> c2c_bot_send_message::Response {
-    let finalised = args.finalised;
-    let bot_id = args.bot_id;
-    let bot_name = args.bot_name.clone();
-    let user_message_id = args.user_message_id;
-    let bot_caller = BotCaller {
-        bot: args.bot_id,
-        initiator: args.initiator.clone(),
-    };
-
+    let now = state.env.now();
     let my_user_id = state.env.canister_id().into();
-    let args: Args = args.into();
-    let message_content: MessageContent = args.content.clone().into();
+    let bot_id = args.bot_id;
+    let message_id = args.message_id;
 
-    if !state.data.is_bot_permitted(
-        &bot_id,
-        &bot_caller.initiator,
-        BotPermissions::from_message_permission((&args.content).into()),
-    ) {
-        return c2c_bot_send_message::Response::Error(OCErrorCode::InitiatorNotAuthorized.into());
-    }
-
-    let result = match prepare(&args, true, state) {
-        Ok(ok) => ok,
+    let message = match user_core::updates::c2c_bot_send_message::prepare(&state.data.user, args, now) {
+        Ok(message) => message,
         Err(error) => return c2c_bot_send_message::Response::Error(error),
     };
 
-    let now = result.now;
+    // Drawn up front, whether or not the chat turns out to need creating, since the rng is also
+    // borrowed by the event pusher
+    let anonymized_chat_id: u128 = state.env.rng().random();
 
-    let content = match MessageContentInternal::validate_new_message(args.content, true, UserType::BotV2, args.forwarding, now)
-    {
-        ValidateNewMessageContentResult::Success(content) => content,
-        ValidateNewMessageContentResult::SuccessP2PSwap(_)
-        | ValidateNewMessageContentResult::SuccessCrypto(_)
-        | ValidateNewMessageContentResult::SuccessPrize(_) => unreachable!(),
-        ValidateNewMessageContentResult::Error(error) => {
-            return c2c_bot_send_message::Response::Error(OCErrorCode::InvalidMessageContent.with_json(&error));
-        }
+    let Sent {
+        result,
+        notification,
+        new_message,
+    } = match user_core::updates::c2c_bot_send_message::send(
+        &mut state.data.user,
+        my_user_id,
+        message,
+        || anonymized_chat_id,
+        Some(UserEventPusher {
+            now,
+            rng: state.env.rng(),
+            queue: &mut state.data.local_user_index_event_sync_queue,
+        }),
+        now,
+    ) {
+        Ok(sent) => sent,
+        Err(error) => return c2c_bot_send_message::Response::Error(error),
     };
 
-    // Check if a message with the same id already exists
-    if let Some(chat) = state.data.direct_chats.get_mut(&bot_id.into())
-        && let Some((message, _)) =
-            chat.events
-                .message_internal(EventIndex::default(), args.thread_root_message_index, args.message_id.into())
-    {
-        // If the message id of a bot message matches an existing unfinalised bot message
-        // then edit this message instead of pushing a new one
-        if let Some(bot_message) = message.bot_context()
-            && bot_caller.bot == message.sender
-            && bot_caller.initiator.user() == bot_message.command.as_ref().map(|c| c.initiator)
-            && bot_caller.initiator.command() == bot_message.command.as_ref()
-            && !bot_message.finalised
-        {
-            let edit_message_args = EditMessageArgs {
-                sender: bot_caller.bot,
-                min_visible_event_index: EventIndex::default(),
-                thread_root_message_index: args.thread_root_message_index,
-                message_id: args.message_id,
-                content,
-                block_level_markdown: Some(args.block_level_markdown),
-                og_previews: args.og_previews,
-                finalise_bot_message: finalised,
-                now,
-            };
-
-            let Ok(EditMessageSuccess {
-                message_index, event, ..
-            }) = chat.events.edit_message::<UserEventPusher>(edit_message_args, None)
-            else {
-                // Shouldn't happen
-                return c2c_bot_send_message::Response::Error(OCErrorCode::InitiatorNotAuthorized.into());
-            };
-
-            if finalised && !chat.notifications_muted.value {
-                let message_type = message_content.content_type().to_string();
-                let message_text = message_content.notification_text(&[], &[]);
-                let image_url = message_content.notification_image_url();
-
-                let notification = DirectChatUserNotificationPayload::DirectMessage(DirectMessageNotification {
-                    sender: bot_id,
-                    thread_root_message_index: args.thread_root_message_index,
-                    message_index,
-                    event_index: event.index,
-                    sender_name: bot_name,
-                    sender_display_name: None,
-                    message_type,
-                    message_text,
-                    image_url,
-                    file_name: message_content.notification_file_name(),
-                    sender_avatar_id: None,
-                    crypto_transfer: message_content.notification_crypto_transfer_details(&[]),
-                });
-                state.push_notification(Some(bot_id), my_user_id, notification);
-            }
-
-            return c2c_bot_send_message::Response::Success(SuccessResult {
-                chat_id: bot_id.into(),
-                event_index: event.index,
-                message_index,
-                expires_at: event.expires_at,
-                timestamp: now,
-            });
-        }
-
-        return c2c_bot_send_message::Response::Error(OCErrorCode::MessageAlreadyFinalized.into());
+    if let Some(notification) = notification {
+        state.push_notification(Some(bot_id), my_user_id, notification);
     }
 
-    // If the user_message_id is set, then the user is sending a direct message to the bot.
-    // In which case rather than just posting the bot's message, we should first post the user's message.
-    // This allows the user to have a more natural conversation with the bot rather than using a /command.
-    let mut user_message = false;
-    if let Some(command) = bot_caller.initiator.command()
-        && let (Some(text), Some(message_id)) = (
-            command.args.first().and_then(|a| a.value.as_string().map(String::from)),
-            user_message_id,
-        )
-    {
-        let chat = state
-            .data
-            .direct_chats
-            .get_or_create(bot_id, UserType::BotV2, || state.env.rng().random(), now);
-
-        chat.push_message::<UserEventPusher>(
-            PushMessageArgs {
-                thread_root_message_index: args.thread_root_message_index,
-                message_id,
-                sender: my_user_id,
-                content: MessageContentInternal::Text(TextContentInternal { text }),
-                mentioned: Vec::new(),
-                replies_to: None,
-                forwarded: false,
-                sender_is_bot: false,
-                block_level_markdown: args.block_level_markdown,
-                og_previews: Vec::new(),
-                now,
-                sender_context: None,
-            },
-            None,
-            None,
-        );
-
-        user_message = true;
+    if let Some((message_event, files)) = new_message {
+        register_timer_jobs(bot_id.into(), None, message_id, &message_event, files, now, &mut state.data);
     }
 
-    let event_wrapper = handle_message_impl(
-        HandleMessageArgs {
-            sender: bot_id,
-            thread_root_message_id: None,
-            message_id: Some(args.message_id),
-            sender_message_index: None,
-            sender_name: bot_name,
-            sender_display_name: None,
-            content,
-            replies_to: None,
-            forwarding: false,
-            sender_user_type: UserType::BotV2,
-            sender_avatar_id: None,
-            push_message_sent_event: true,
-            mentioned: Vec::new(),
-            mute_notification: !finalised,
-            block_level_markdown: args.block_level_markdown,
-            og_previews: args.og_previews,
-            now,
-        },
-        user_message.not().then_some(bot_caller),
-        finalised,
-        state,
-    );
-
-    c2c_bot_send_message::Response::Success(SuccessResult {
-        chat_id: bot_id.into(),
-        event_index: event_wrapper.index,
-        message_index: event_wrapper.event.message_index,
-        expires_at: event_wrapper.expires_at,
-        timestamp: now,
-    })
+    c2c_bot_send_message::Response::Success(result)
 }
 
 #[derive(Copy, Clone)]
@@ -422,28 +249,12 @@ struct PrepareOk {
     now: TimestampMillis,
     local_user_index_canister_id: CanisterId,
     maybe_recipient_type: Option<RecipientType>,
-    provenance: Option<local_user_index_canister::c2c_validate_ai_app_card_provenance::Args>,
-    app_card: Option<VerifiedAppCardPost>,
 }
 
-#[derive(Clone)]
-struct VerifiedAppCardPost {
-    ingress_owner: Principal,
-    local_user_index_canister_id: CanisterId,
-    user_id: UserId,
-    recipient: UserId,
-    app_id: types::AiAppId,
-    app_revision: TimestampMillis,
-    action_id: String,
-    content_hash: [u8; 32],
-    thread_root_message_index: Option<MessageIndex>,
-    message_id: MessageId,
-}
+fn prepare(args: &Args, state: &RuntimeState) -> OCResult<PrepareOk> {
+    state.data.user.verify_not_suspended()?;
 
-fn prepare(args: &Args, is_v2_bot: bool, state: &RuntimeState) -> OCResult<PrepareOk> {
-    state.data.verify_not_suspended()?;
-
-    if state.data.blocked_users.contains(&args.recipient) {
+    if state.data.user.blocked_users.contains(&args.recipient) {
         return Err(OCErrorCode::TargetUserBlocked.into());
     }
 
@@ -452,10 +263,10 @@ fn prepare(args: &Args, is_v2_bot: bool, state: &RuntimeState) -> OCResult<Prepa
     }
 
     let my_user_id = state.env.canister_id().into();
-    let maybe_recipient_type = if let Some(chat) = state.data.direct_chats.get(&args.recipient.into()) {
+    let maybe_recipient_type = if let Some(chat) = state.data.user.direct_chats.get(&args.recipient.into()) {
         if chat
-            .events
-            .message_already_finalised(args.thread_root_message_index, args.message_id, is_v2_bot)
+            .events()
+            .message_already_finalised(args.thread_root_message_index, args.message_id, false)
         {
             return Err(OCErrorCode::MessageIdAlreadyExists.into());
         }
@@ -467,198 +278,13 @@ fn prepare(args: &Args, is_v2_bot: bool, state: &RuntimeState) -> OCResult<Prepa
     } else {
         None
     };
-    let (provenance, app_card) = prepare_app_card_post(args, is_v2_bot, my_user_id, maybe_recipient_type, state)?;
 
     Ok(PrepareOk {
         my_user_id,
         now: state.env.now(),
         local_user_index_canister_id: state.data.local_user_index_canister_id,
         maybe_recipient_type,
-        provenance,
-        app_card,
     })
-}
-
-fn prepare_app_card_post(
-    args: &Args,
-    is_v2_bot: bool,
-    user_id: UserId,
-    maybe_recipient_type: Option<RecipientType>,
-    state: &RuntimeState,
-) -> OCResult<(
-    Option<local_user_index_canister::c2c_validate_ai_app_card_provenance::Args>,
-    Option<VerifiedAppCardPost>,
-)> {
-    let MessageContentInitial::ActionCard(card) = &args.content else {
-        return Ok((None, None));
-    };
-    let has_app_tuple = card.app_id.is_some() || card.app_revision.is_some() || card.app_provenance.is_some();
-    if !has_app_tuple {
-        return Ok((None, None));
-    }
-    let (Some(app_id), Some(app_revision), Some(provenance)) = (card.app_id, card.app_revision, card.app_provenance.clone())
-    else {
-        return Err(OCErrorCode::InvalidRequest.with_message("incomplete AI-app card provenance"));
-    };
-    if is_v2_bot || !state.is_caller_owner() {
-        return Err(OCErrorCode::InitiatorNotAuthorized.with_message("only a human chat owner may post an AI-app card"));
-    }
-    if provenance.len() != types::AI_APP_CARD_TOKEN_BYTES {
-        return Err(OCErrorCode::InvalidRequest.with_message("invalid AI-app card provenance"));
-    }
-    if args.recipient == user_id || args.recipient == OPENCHAT_BOT_USER_ID {
-        return Err(OCErrorCode::InitiatorNotAuthorized.with_message("AI-app cards require a distinct human recipient"));
-    }
-    if maybe_recipient_type.is_some_and(|recipient_type| !matches!(recipient_type, RecipientType::Other(UserType::User))) {
-        return Err(OCErrorCode::InitiatorNotAuthorized.with_message("AI-app cards require a human direct chat"));
-    }
-    let chat = Chat::Direct(args.recipient.into());
-    let content_hash = ai_app_card_content_hash_from_initial(
-        user_id,
-        chat,
-        args.thread_root_message_index,
-        args.message_id,
-        app_id,
-        app_revision,
-        card,
-    )
-    .map_err(|error| OCErrorCode::InvalidRequest.with_message(error))?;
-    let relay = local_user_index_canister::c2c_validate_ai_app_card_provenance::Args {
-        user_id,
-        chat,
-        thread_root_message_index: args.thread_root_message_index,
-        message_id: args.message_id,
-        app_id,
-        app_revision,
-        action_id: card.action_id.clone(),
-        content_hash,
-        member_user_ids: vec![user_id, args.recipient],
-        provenance,
-        // A direct User child is authorized by its exact LUI registration and current home route;
-        // it must never mint or forward GroupIndex authority.
-        authority: serde_bytes::ByteBuf::new(),
-    };
-    let expected = VerifiedAppCardPost {
-        ingress_owner: state.data.owner,
-        local_user_index_canister_id: state.data.local_user_index_canister_id,
-        user_id,
-        recipient: args.recipient,
-        app_id,
-        app_revision,
-        action_id: card.action_id.clone(),
-        content_hash,
-        thread_root_message_index: args.thread_root_message_index,
-        message_id: args.message_id,
-    };
-    Ok((Some(relay), Some(expected)))
-}
-
-fn revalidate_app_card_post(
-    args: &Args,
-    local_user_index_canister_id: CanisterId,
-    relay: &local_user_index_canister::c2c_validate_ai_app_card_provenance::Args,
-    expected: &VerifiedAppCardPost,
-    state: &RuntimeState,
-) -> OCResult {
-    state.data.verify_not_suspended()?;
-    let current_user_id: UserId = state.env.canister_id().into();
-    if state.data.owner != expected.ingress_owner
-        || current_user_id != expected.user_id
-        || local_user_index_canister_id != expected.local_user_index_canister_id
-        || state.data.local_user_index_canister_id != expected.local_user_index_canister_id
-        || args.recipient != expected.recipient
-        || args.recipient == current_user_id
-        || args.recipient == OPENCHAT_BOT_USER_ID
-        || state.data.blocked_users.contains(&args.recipient)
-    {
-        return Err(OCErrorCode::InitiatorNotAuthorized.with_message("direct-card authorization changed while validating"));
-    }
-    if let Some(chat) = state.data.direct_chats.get(&args.recipient.into()) {
-        if chat.user_type != UserType::User {
-            return Err(OCErrorCode::InitiatorNotAuthorized.with_message("AI-app cards require a human direct chat"));
-        }
-        if chat
-            .events
-            .message_already_finalised(args.thread_root_message_index, args.message_id, false)
-        {
-            return Err(OCErrorCode::MessageIdAlreadyExists.into());
-        }
-    }
-    let MessageContentInitial::ActionCard(card) = &args.content else {
-        return Err(OCErrorCode::InvalidRequest.with_message("AI-app card changed while validating"));
-    };
-    if card.app_id != Some(expected.app_id)
-        || card.app_revision != Some(expected.app_revision)
-        || card.app_provenance.as_ref() != Some(&relay.provenance)
-        || card.action_id != expected.action_id
-        || args.thread_root_message_index != expected.thread_root_message_index
-        || args.message_id != expected.message_id
-        || relay.user_id != expected.user_id
-        || relay.chat != Chat::Direct(expected.recipient.into())
-        || relay.thread_root_message_index != expected.thread_root_message_index
-        || relay.message_id != expected.message_id
-        || relay.app_id != expected.app_id
-        || relay.app_revision != expected.app_revision
-        || relay.action_id != expected.action_id
-        || relay.content_hash != expected.content_hash
-        || relay.member_user_ids != [expected.user_id, expected.recipient]
-        || !relay.authority.is_empty()
-        || !ai_app_card_content_hash_from_initial(
-            expected.user_id,
-            Chat::Direct(expected.recipient.into()),
-            args.thread_root_message_index,
-            args.message_id,
-            expected.app_id,
-            expected.app_revision,
-            card,
-        )
-        .is_ok_and(|hash| hash == expected.content_hash)
-    {
-        return Err(OCErrorCode::InvalidRequest.with_message("AI-app card changed while validating"));
-    }
-    Ok(())
-}
-
-fn commit_verified_app_card(
-    args: Args,
-    recipient_type: RecipientType,
-    relay: local_user_index_canister::c2c_validate_ai_app_card_provenance::Args,
-    expected: VerifiedAppCardPost,
-    state: &mut RuntimeState,
-) -> Response {
-    if !matches!(recipient_type, RecipientType::Other(UserType::User)) {
-        return Error(OCErrorCode::InitiatorNotAuthorized.with_message("AI-app cards require a human direct chat"));
-    }
-    if let Err(error) = revalidate_app_card_post(&args, state.data.local_user_index_canister_id, &relay, &expected, state) {
-        return Error(error);
-    }
-    let now = state.env.now();
-    let mut content =
-        match MessageContentInternal::validate_new_message(args.content, true, UserType::User, args.forwarding, now) {
-            ValidateNewMessageContentResult::Success(content) => content,
-            ValidateNewMessageContentResult::Error(error) => {
-                return Error(OCErrorCode::InvalidMessageContent.with_json(&error));
-            }
-            _ => return Error(OCErrorCode::InvalidRequest.with_message("AI-app card content is not supported")),
-        };
-    if !content.mark_ai_app_card_verified(expected.content_hash) {
-        return Error(OCErrorCode::InvalidRequest.with_message("provenance was supplied for a non-card message"));
-    }
-    send_message_impl(
-        expected.user_id,
-        args.recipient,
-        args.thread_root_message_index,
-        args.message_id,
-        content,
-        args.replies_to,
-        args.forwarding,
-        args.block_level_markdown,
-        args.message_filter_failed,
-        recipient_type,
-        None,
-        args.og_previews,
-        state,
-    )
 }
 
 #[expect(clippy::too_many_arguments)]
@@ -701,10 +327,19 @@ fn send_message_impl(
         sender_context: None,
     };
 
-    let chat = state
-        .data
-        .direct_chats
-        .get_or_create(recipient, recipient_type.into(), || state.env.rng().random(), now);
+    let chat = state.data.user.direct_chats.get_or_create(
+        my_user_id,
+        recipient,
+        recipient_type.into(),
+        || state.env.rng().random(),
+        now,
+    );
+
+    // Checked before the message is pushed, since pushing a message to a thread creates the thread
+    let thread_root_message_id = match chat.thread_root_message_id(thread_root_message_index) {
+        Ok(id) => id,
+        Err(error) => return Error(error),
+    };
 
     let message_event = chat.push_message(
         push_message_args,
@@ -718,7 +353,7 @@ fn send_message_impl(
 
     if !recipient_type.is_self() {
         let send_message_args = SendMessageArgs {
-            thread_root_message_id: thread_root_message_index.map(|i| chat.main_message_index_to_id(i)),
+            thread_root_message_id,
             message_id,
             sender_message_index: message_event.event.message_index,
             content,
@@ -726,7 +361,7 @@ fn send_message_impl(
                 if let Some((chat, thread_root_message_index)) = r.chat_if_other {
                     Some(C2CReplyContext::OtherChat(chat, thread_root_message_index, r.event_index))
                 } else {
-                    chat.events
+                    chat.events()
                         .main_events_reader()
                         .message_internal(r.event_index.into())
                         .map(|m| m.message_id)
@@ -739,23 +374,23 @@ fn send_message_impl(
             og_previews,
         };
 
-        let sender_name = state.data.username.value.clone();
-        let sender_display_name = state.data.display_name.value.clone();
+        let sender_name = state.data.user.username.value.clone();
+        let sender_display_name = state.data.user.display_name.value.clone();
 
         if recipient_type.user_type().is_bot() {
-            ic_cdk::futures::spawn_migratory(send_to_bot_canister(
+            utils::async_work::spawn_tracked(send_to_bot_canister(
                 recipient,
                 message_event.event.message_index,
                 legacy_bot_api::handle_direct_message::Args::new(send_message_args, sender_name),
             ));
         } else {
             state.push_user_canister_event(
-                recipient.canister_id(),
+                recipient,
                 UserCanisterEvent::SendMessages(Box::new(SendMessagesArgs {
                     messages: vec![send_message_args],
                     sender_name,
                     sender_display_name,
-                    sender_avatar_id: state.data.avatar.value.as_ref().map(|d| d.id),
+                    sender_avatar_id: state.data.user.avatar.id(),
                 })),
             );
         }
@@ -776,6 +411,7 @@ fn send_message_impl(
     if let Some(chat) = chat_private_replying_to {
         state
             .data
+            .user
             .direct_chats
             .mark_private_reply(recipient, chat, message_event.event.message_index);
     }
@@ -808,7 +444,7 @@ async fn send_to_bot_canister(
     match legacy_bot_c2c_client::handle_direct_message(recipient.canister_id(), &args).await {
         Ok(legacy_bot_api::handle_direct_message::Response::Success(result)) => {
             mutate_state(|state| {
-                if let Some(chat) = state.data.direct_chats.get_mut(&recipient.into()) {
+                if let Some(chat) = state.data.user.direct_chats.get_mut(&recipient.into()) {
                     let now = state.env.now();
                     for message in result.messages {
                         let push_message_args = PushMessageArgs {
@@ -836,7 +472,7 @@ async fn send_to_bot_canister(
                         );
 
                         // Mark that the bot has read the message we just sent
-                        chat.mark_read_up_to(message_index, false, now);
+                        chat.mark_read_by_them_up_to(message_index, now);
                     }
                 }
             });

@@ -1,5 +1,6 @@
 use crate::guards::caller_is_user_index;
-use crate::{CommunityEvent, GroupEvent, RuntimeState, UserEvent, UserToDelete, jobs, mutate_state};
+use crate::model::users_to_migrate::UserToMigrate;
+use crate::{CanisterToRefund, CommunityEvent, GroupEvent, RuntimeState, UserEvent, UserToDelete, jobs, mutate_state};
 use canister_api_macros::update;
 use canister_time::now_millis;
 use canister_tracing_macros::trace;
@@ -9,9 +10,10 @@ use p256_key_pair::P256KeyPair;
 use stable_memory_map::StableMemoryMap;
 use std::cell::LazyCell;
 use std::cmp::min;
+use std::collections::HashSet;
 use tracing::info;
 use types::{
-    BotEvent, BotInstallationLocation, BotLifecycleEvent, BotNotification, BotRegisteredEvent, PushIfNotContains,
+    BotEvent, BotInstallationLocation, BotLifecycleEvent, BotNotification, BotRegisteredEvent, CanisterId, PushIfNotContains,
     TimestampMillis,
 };
 use user_canister::{
@@ -214,12 +216,6 @@ fn handle_event<F: FnOnce() -> TimestampMillis>(
         UserIndexEvent::ReferralCodeAdded(ev) => {
             state.data.referral_codes.add(ev.referral_type, ev.code, ev.expiry, **now);
         }
-        UserIndexEvent::UserPrincipalUpdated(update) => {
-            state
-                .data
-                .global_users
-                .update_user_principal(update.old_principal, update.new_principal);
-        }
         UserIndexEvent::BotRemoved(ev) => {
             state.data.bots.remove(&ev.user_id);
         }
@@ -249,6 +245,20 @@ fn handle_event<F: FnOnce() -> TimestampMillis>(
         }
         UserIndexEvent::UpdateChitBalance(user_id, chit_record) => {
             state.data.global_users.insert_chit_record(user_id, chit_record);
+        }
+        UserIndexEvent::RefundDeletedUserCycles(canister_ids) => {
+            let mut queued: HashSet<CanisterId> = state.data.cycles_refund_queue.iter().map(|c| c.canister_id).collect();
+            for canister_id in canister_ids {
+                // Belt and braces, the job also refuses to touch any canister with code installed
+                if !state.data.local_users.contains(&canister_id.into()) && queued.insert(canister_id) {
+                    state.data.cycles_refund_queue.push_back(CanisterToRefund {
+                        canister_id,
+                        attempt: 0,
+                        retry_after: 0,
+                    });
+                }
+            }
+            jobs::refund_cycles::start_job_if_required(state, None);
         }
         UserIndexEvent::AddCanisterToPool(canister_id) => {
             if !state.data.canister_pool.contains(&canister_id) {
@@ -339,6 +349,49 @@ fn handle_event<F: FnOnce() -> TimestampMillis>(
         }
         UserIndexEvent::SetMediaScanConfig(config) => {
             state.data.media_scan_config = config;
+        }
+        UserIndexEvent::SetMultiUserCanistersEnabled(enabled) => {
+            state.data.multi_user_canisters_enabled = enabled;
+        }
+        UserIndexEvent::SetCallPushEnabled(enabled) => {
+            state.data.call_push_enabled = enabled;
+        }
+        UserIndexEvent::SetDailyPuzzleCanisterId(canister_id) => {
+            state.set_daily_puzzle_canister_id(canister_id);
+        }
+        UserIndexEvent::StartUserMigration(ev) => {
+            state.data.users_to_migrate.push(UserToMigrate {
+                user_id: ev.user_id,
+                multi_user_canister_id: ev.multi_user_canister_id,
+                attempt: 0,
+                not_before: 0,
+            });
+            jobs::start_user_migrations::start_job_if_required(state);
+        }
+        UserIndexEvent::UserIdMigrated(ev) => {
+            if state.data.migrated_user_ids.insert(ev.old_user_id, ev.new_user_id) {
+                for canister_id in ev.canisters_to_notify {
+                    if state.data.local_groups.get(&canister_id.into()).is_some() {
+                        state.push_event_to_group(
+                            canister_id,
+                            GroupEvent::UserIdMigrated(group_canister::UserIdMigrated {
+                                old_user_id: ev.old_user_id,
+                                new_user_id: ev.new_user_id,
+                            }),
+                            **now,
+                        );
+                    } else if state.data.local_communities.get(&canister_id.into()).is_some() {
+                        state.push_event_to_community(
+                            canister_id,
+                            CommunityEvent::UserIdMigrated(community_canister::UserIdMigrated {
+                                old_user_id: ev.old_user_id,
+                                new_user_id: ev.new_user_id,
+                            }),
+                            **now,
+                        );
+                    }
+                }
+            }
         }
     }
 }

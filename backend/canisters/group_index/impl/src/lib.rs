@@ -14,8 +14,6 @@ use constants::MINUTE_IN_MS;
 use fire_and_forget_handler::FireAndForgetHandler;
 use group_index_canister::ChildCanisterType;
 use local_user_index_canister::{GroupIndexEvent as LocalIndexEvent, ModerationFlagsChanged, NameChanged, VerifiedChanged};
-use model::ai_app_card_authority::AiAppCardAuthorityStore;
-use model::ai_app_chat_link_authority::AiAppChatLinkAuthorityStore;
 use model::local_index_event_batch::LocalIndexEventBatch;
 use model::local_index_map::LocalIndexMap;
 use rand::Rng;
@@ -30,13 +28,13 @@ use types::{
 use utils::canister::{CanistersRequiringUpgrade, FailedUpgradeCount};
 use utils::env::Environment;
 use utils::idempotency_checker::IdempotencyChecker;
+use utils::migrated_user_ids::MigratedUserIds;
 
 mod guards;
 mod jobs;
 mod lifecycle;
 mod memory;
 mod model;
-mod pr2_entropy;
 mod queries;
 mod updates;
 
@@ -326,18 +324,16 @@ struct Data {
     pub cached_hot_groups: CachedHotGroups,
     pub cached_metrics: CachedMetrics,
     pub local_index_map: LocalIndexMap,
-    #[serde(default)]
-    pub ai_app_card_authority: AiAppCardAuthorityStore,
-    #[serde(default)]
-    pub ai_app_chat_link_authority: AiAppChatLinkAuthorityStore,
-    #[serde(default)]
-    pub pr2_entropy: types::Pr2EntropyGate,
     pub fire_and_forget_handler: FireAndForgetHandler,
     pub video_call_operators: Vec<Principal>,
     pub upload_wasm_chunks_whitelist: HashSet<Principal>,
     pub rng_seed: [u8; 32],
     pub idempotency_checker: IdempotencyChecker,
     pub local_index_event_sync_queue: GroupedTimerJobQueue<LocalIndexEventBatch>,
+    // The latest ids of migrated users, as looked up from the UserIndex whenever a user's id is found to
+    // have changed
+    #[serde(default)]
+    pub migrated_user_ids: MigratedUserIds,
 }
 
 impl Data {
@@ -377,15 +373,13 @@ impl Data {
             cached_hot_groups: CachedHotGroups::default(),
             cached_metrics: CachedMetrics::default(),
             local_index_map: LocalIndexMap::default(),
-            ai_app_card_authority: AiAppCardAuthorityStore::default(),
-            ai_app_chat_link_authority: AiAppChatLinkAuthorityStore::default(),
-            pr2_entropy: types::Pr2EntropyGate::default(),
             fire_and_forget_handler: FireAndForgetHandler::default(),
             video_call_operators,
             upload_wasm_chunks_whitelist: HashSet::default(),
             rng_seed: [0; 32],
             idempotency_checker: IdempotencyChecker::default(),
             local_index_event_sync_queue: GroupedTimerJobQueue::new(10, false),
+            migrated_user_ids: MigratedUserIds::default(),
         }
     }
 
@@ -488,15 +482,13 @@ impl Default for Data {
             cached_hot_groups: CachedHotGroups::default(),
             cached_metrics: CachedMetrics::default(),
             local_index_map: LocalIndexMap::default(),
-            ai_app_card_authority: AiAppCardAuthorityStore::default(),
-            ai_app_chat_link_authority: AiAppChatLinkAuthorityStore::default(),
-            pr2_entropy: types::Pr2EntropyGate::default(),
             fire_and_forget_handler: FireAndForgetHandler::default(),
             video_call_operators: Vec::default(),
             upload_wasm_chunks_whitelist: HashSet::default(),
             rng_seed: [0; 32],
             idempotency_checker: IdempotencyChecker::default(),
             local_index_event_sync_queue: GroupedTimerJobQueue::new(10, false),
+            migrated_user_ids: MigratedUserIds::default(),
         }
     }
 }

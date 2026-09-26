@@ -30,7 +30,7 @@ fn run() {
     let actions = mutate_state(|state| state.data.expiring_member_actions.pop_batch());
 
     for action in actions {
-        ic_cdk::futures::spawn_migratory(process_action(action));
+        utils::async_work::spawn_tracked(process_action(action));
     }
 
     read_state(start_job_if_required);
@@ -91,7 +91,7 @@ fn prepare_gate_check(details: ExpiringMemberActionDetails, state: &RuntimeState
         });
 
     let check_gate_args = CheckGateArgs {
-        user_id: details.user_id,
+        user: state.member_user(details.user_id),
         diamond_membership_expires_at,
         this_canister: state.env.canister_id(),
         is_unique_person,

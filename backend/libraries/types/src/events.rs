@@ -68,7 +68,6 @@ pub enum ChatEventType {
     MessageP2pSwapCompleted,
     MessageP2pSwapCancelled,
     MessageVideoCall,
-    MessageActionCardResponse,
     MessageOther, // Not publishing a bot notification for this event
 
     // Details category
@@ -116,7 +115,6 @@ impl From<ChatEventType> for ChatEventCategory {
             | ChatEventType::MessageP2pSwapCompleted
             | ChatEventType::MessageP2pSwapCancelled
             | ChatEventType::MessageVideoCall
-            | ChatEventType::MessageActionCardResponse
             | ChatEventType::MessageOther => ChatEventCategory::Message,
             ChatEventType::Created
             | ChatEventType::NameChanged

@@ -10,19 +10,15 @@ generate_c2c_call!(c2c_lookup_user);
 generate_c2c_call!(c2c_lookup_users);
 generate_c2c_call!(c2c_user_principals);
 generate_c2c_call!(chat_events);
+generate_c2c_call!(is_user_or_multi_user_canister);
+generate_c2c_call!(migrated_user_ids);
 
 // Updates
 generate_c2c_call!(c2c_community_canister, 300);
-generate_c2c_call!(c2c_cancel_ai_app_chat_link_token);
 generate_c2c_call!(c2c_create_community);
 generate_c2c_call!(c2c_create_group);
-generate_c2c_call!(c2c_deposit_action_confirmed);
-generate_c2c_call!(c2c_consume_ai_app_card_confirmation_grant);
-generate_c2c_call!(c2c_create_ai_app_card_confirmation_grant);
-generate_c2c_call!(c2c_create_ai_app_card_capability);
-generate_c2c_call!(c2c_create_ai_app_private_match_capability);
-generate_c2c_call!(c2c_create_ai_app_chat_link_token);
-generate_c2c_call!(c2c_validate_ai_app_card_provenance);
+generate_c2c_call!(c2c_create_multi_user_canister);
+generate_c2c_call!(c2c_daily_puzzle_push);
 generate_c2c_call!(c2c_delete_community);
 generate_c2c_call!(c2c_delete_group);
 generate_c2c_call!(c2c_group_canister, 300);
@@ -38,8 +34,10 @@ generate_c2c_call!(c2c_set_max_concurrent_group_upgrades);
 generate_c2c_call!(c2c_trigger_upgrade);
 generate_c2c_call!(c2c_upgrade_community_canister_wasm);
 generate_c2c_call!(c2c_upgrade_group_canister_wasm);
+generate_c2c_call!(c2c_upgrade_multi_user_canister_wasm);
 generate_c2c_call!(c2c_upgrade_user_canister_wasm);
 generate_c2c_call!(c2c_user_canister, 300);
+generate_c2c_call!(c2c_user_canister_v2, 300);
 generate_c2c_call!(c2c_verify_sign_in_proof, 300);
 generate_c2c_call!(join_channel);
 generate_c2c_call!(join_group);
@@ -53,6 +51,19 @@ pub async fn lookup_user(
     let response = crate::c2c_lookup_user(local_user_index_canister_id, &args).await?;
 
     Ok(if let c2c_lookup_user::Response::Success(user) = response { Some(user) } else { None })
+}
+
+// The user's latest id, if they have been migrated to a MultiUser canister since having `user_id`
+pub async fn lookup_migrated_user_id(
+    user_id: UserId,
+    local_user_index_canister_id: CanisterId,
+) -> Result<Option<UserId>, C2CError> {
+    let args = migrated_user_ids::Args { user_ids: vec![user_id] };
+
+    let migrated_user_ids::Response::Success(mut user_ids) =
+        crate::migrated_user_ids(local_user_index_canister_id, &args).await?;
+
+    Ok(user_ids.remove(&user_id))
 }
 
 pub async fn push_wasm_in_chunks(

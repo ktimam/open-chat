@@ -1,19 +1,14 @@
+# `merge_group` runs these checks on the merge queue's temporary branches. Without it a PR added
+# to the queue would sit with its required checks pending and never merge.
 on:
   pull_request:
     branches:
       - master
-      - codex/pr1-local-models
-  push:
+  merge_group:
     branches:
-      - codex/pr1-local-models
-      - codex/pr2-app-chat-interfaces
-      - codex/pr2-clean-integration
-  workflow_dispatch:
+      - master
 
 name: Backend linting and unit tests
-
-permissions:
-  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -30,9 +25,6 @@ jobs:
   changes:
     name: detect backend changes
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: read
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
     steps:
@@ -76,7 +68,7 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: clippy
-          args: --locked --keep-going --workspace --exclude open-chat --exclude tauri-plugin-oc --tests -- -D warnings
+          args: --workspace --exclude open-chat --exclude tauri-plugin-oc --tests -- -D warnings
 
   unit_tests:
     name: run unit tests
@@ -88,7 +80,9 @@ jobs:
       - uses: ./.github/workflows/setup-rust
         with:
           cache: read
+      # `--tests` skips the doc tests: there are none (the single doc example is `ignore`d), but
+      # without the flag cargo still runs rustdoc for every crate, about 15 seconds
       - uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --locked --workspace --exclude integration_tests --exclude open-chat --exclude tauri-plugin-oc
+          args: --workspace --exclude integration_tests --exclude open-chat --exclude tauri-plugin-oc --tests

@@ -113,11 +113,12 @@ import type {
     VideoCallParticipant,
     VideoCallParticipantsResponse,
     VideoCallPresence,
-    VideoCallType,
     VideoContent,
     WebhookDetails,
+    WireVideoCallType,
 } from "@shared";
 import {
+    buildBlobUrl,
     ErrorCode,
     isError,
     parseBigInt,
@@ -142,6 +143,7 @@ import {
     nullMembership,
     toBigInt32,
     toBigInt64,
+    videoCallTypeFromWire,
 } from "@shared";
 import type {
     AcceptSwapSuccess,
@@ -878,6 +880,33 @@ function customContent(value: TCustomContent): MessageContent {
             kind: "user_referral_card",
         };
     }
+    if (value.kind === "daily_result") {
+        const json = new TextDecoder().decode(consolidateBytes(value.data));
+        const decoded = JSON.parse(json) as {
+            v: number;
+            gameId: string;
+            number: number;
+            userId: string;
+            solveTimeMs: number;
+            hintsUsed: number;
+            streak: number;
+            layout: string;
+            tier?: number;
+            caption?: string;
+        };
+        return {
+            kind: "daily_result",
+            gameId: decoded.gameId,
+            number: decoded.number,
+            userId: decoded.userId,
+            solveTimeMs: decoded.solveTimeMs,
+            hintsUsed: decoded.hintsUsed,
+            streak: decoded.streak,
+            layout: decoded.layout,
+            tier: decoded.tier,
+            caption: decoded.caption,
+        };
+    }
 
     throw new Error(`Unknown custom content kind received: ${value.kind}`);
 }
@@ -938,7 +967,7 @@ function videoCallContent(value: TVideoCallContent): VideoCallContent {
         kind: "video_call_content",
         ended: value.ended,
         participants: value.participants.map(videoCallParticipant),
-        callType: videoCallType(value.call_type),
+        callType: videoCallTypeFromWire(videoCallType(value.call_type), value.audio_only),
     };
 }
 
@@ -949,7 +978,7 @@ function videoCallParticipant(value: TCallParticipant): VideoCallParticipant {
     };
 }
 
-function videoCallType(value: TVideoCallType): VideoCallType {
+function videoCallType(value: TVideoCallType): WireVideoCallType {
     if (value === "Default") {
         return "default";
     }
@@ -1306,6 +1335,18 @@ export function pendingCryptoTransfer(
             memo: mapOptional(value.ICRC2.memo, bytesToBigint),
             createdAtNanos: value.ICRC2.created,
             fromAccount: formatIcrcAccount(value.ICRC2.from),
+        };
+    }
+    if ("Certified" in value) {
+        return {
+            kind: "pending",
+            ledger: principalBytesToString(value.Certified.ledger),
+            token: value.Certified.token_symbol,
+            recipient,
+            amountE8s: value.Certified.amount,
+            feeE8s: value.Certified.fee,
+            memo: mapOptional(value.Certified.memo, bytesToBigint),
+            createdAtNanos: value.Certified.created,
         };
     }
 
@@ -1727,6 +1768,27 @@ export function apiMessageContent(domain: MessageContent): TMessageContentInitia
                             url: domain.url,
                             width: domain.width,
                             height: domain.height,
+                        }),
+                    ),
+                },
+            };
+
+        case "daily_result":
+            return {
+                Custom: {
+                    kind: "daily_result",
+                    data: new TextEncoder().encode(
+                        JSON.stringify({
+                            v: 1,
+                            gameId: domain.gameId,
+                            number: domain.number,
+                            userId: domain.userId,
+                            solveTimeMs: domain.solveTimeMs,
+                            hintsUsed: domain.hintsUsed,
+                            streak: domain.streak,
+                            layout: domain.layout,
+                            tier: domain.tier,
+                            caption: domain.caption,
                         }),
                     ),
                 },
@@ -2971,15 +3033,11 @@ export function webhookDetails(
     return {
         id: webhookId,
         name: value.name,
-        avatarUrl: mapOptional(
-            value.avatar_id,
-            (avatarId) =>
-                `${blobUrlPattern
-                    .replace("{canisterId}", canisterId)
-                    .replace(
-                        "{blobType}",
-                        channelId === undefined ? "avatar" : `channel/${channelId}/avatar`,
-                    )}/${webhookId}/${avatarId}`,
+        avatarUrl: mapOptional(value.avatar_id, (avatarId) =>
+            buildBlobUrl(blobUrlPattern, canisterId, avatarId, "avatar", {
+                channelId,
+                botId: webhookId,
+            }),
         ),
     };
 }
@@ -3167,7 +3225,7 @@ export function videoCallInProgress(value: VideoCall): VideoCallInProgress {
         startedBy: principalBytesToString(value.started_by),
         messageIndex: value.message_index,
         messageId: value.message_id,
-        callType: value.call_type === "Default" ? "default" : "broadcast",
+        callType: videoCallTypeFromWire(videoCallType(value.call_type), value.audio_only),
         joinedByCurrentUser: value.joined_by_current_user,
     };
 }

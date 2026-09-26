@@ -61,10 +61,9 @@ struct PrepareResult {
 }
 
 fn prepare(args: &Args, state: &mut RuntimeState) -> OCResult<PrepareResult> {
-    state.data.verify_not_frozen()?;
-
     let now = state.env.now();
     let now_nanos = state.env.now_nanos();
+    let winner = state.member_user(args.user_id);
 
     let result = state.data.chat.reserve_prize(
         args.user_id,
@@ -76,6 +75,7 @@ fn prepare(args: &Args, state: &mut RuntimeState) -> OCResult<PrepareResult> {
         args.streak,
         args.streak_ends,
         args.user_reauthenticated,
+        &state.data.migrated_user_ids,
     )?;
 
     // Hack to ensure 2 prizes claimed by the same user in the same block don't result in "duplicate transaction" errors.
@@ -87,7 +87,7 @@ fn prepare(args: &Args, state: &mut RuntimeState) -> OCResult<PrepareResult> {
         result.ledger_canister_id,
         result.amount,
         result.fee,
-        args.user_id,
+        winner.into(),
         Some(&MEMO_PRIZE_CLAIM),
         transaction_time,
     );

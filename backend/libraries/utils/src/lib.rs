@@ -1,3 +1,4 @@
+pub mod async_work;
 pub mod canister;
 pub mod canister_event_sync_queue;
 pub mod canister_timers;
@@ -14,6 +15,7 @@ pub mod idempotency_checker;
 pub mod iterator_extensions;
 pub mod memory;
 pub mod mentions;
+pub mod migrated_user_ids;
 pub mod min_heap;
 pub mod regular_jobs;
 pub mod text_validation;

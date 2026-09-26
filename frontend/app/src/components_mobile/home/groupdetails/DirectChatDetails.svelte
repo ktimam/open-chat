@@ -19,10 +19,10 @@
     import CancelIcon from "svelte-material-icons/Cancel.svelte";
     import HeartMinus from "svelte-material-icons/HeartMinusOutline.svelte";
     import HeartPlus from "svelte-material-icons/HeartPlusOutline.svelte";
-    import Video from "svelte-material-icons/VideoOutline.svelte";
     import DisappearingDuration from "../DisappearingDuration.svelte";
     import UserProfileSummaryCard from "../user_profile/UserProfileSummaryCard.svelte";
     import AiAppsDirectSummary from "./AiAppsDirectSummary.svelte";
+    import CallButton from "../video/CallButton.svelte";
 
     const client = getContext<OpenChat>("client");
 
@@ -86,18 +86,6 @@
         }
     }
 
-    function startVideoCall() {
-        if (inCall) {
-            publish("hangup");
-        } else {
-            publish("startVideoCall", {
-                chatId: chat.id,
-                callType: "default",
-                join: videoCallInProgress,
-            });
-        }
-    }
-
     function toggleBlocked() {
         if (blocked) {
             unblockUser();
@@ -156,11 +144,12 @@
                                 {/if}
                             {/snippet}
                         </IconButton>
-                        <IconButton onclick={startVideoCall} size={"md"} mode={"dark"}>
-                            {#snippet icon(color)}
-                                <Video {color} />
-                            {/snippet}
-                        </IconButton>
+                        <CallButton
+                            chatId={chat.id}
+                            isPublic={false}
+                            {videoCallInProgress}
+                            {inCall}
+                            mode={"dark"} />
                     {/snippet}
                 </UserProfileSummaryCard>
             {/if}

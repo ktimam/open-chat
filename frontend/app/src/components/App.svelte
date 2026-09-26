@@ -87,6 +87,7 @@
             notificationsCanister: import.meta.env.OC_NOTIFICATIONS_CANISTER!,
             identityCanister: import.meta.env.OC_IDENTITY_CANISTER!,
             onlineCanister: import.meta.env.OC_ONLINE_CANISTER!,
+            dailyPuzzleCanister: import.meta.env.OC_DAILY_PUZZLE_CANISTER ?? "",
             userIndexCanister: import.meta.env.OC_USER_INDEX_CANISTER!,
             translationsCanister: import.meta.env.OC_TRANSLATIONS_CANISTER!,
             registryCanister: import.meta.env.OC_REGISTRY_CANISTER!,
@@ -168,6 +169,9 @@
             subscribe("hangup", hangup),
             subscribe("askToSpeak", askToSpeak),
             subscribe("userLoggedIn", onUserLoggedIn),
+            subscribe("sessionExpired", () => client.logout()),
+            // The current user has been migrated to a new user id, so start again under it
+            subscribe("currentUserIdChanged", () => window.location.reload()),
         ];
         window.addEventListener("orientationchange", calculateHeight);
         window.addEventListener("unhandledrejection", unhandledError);
@@ -635,7 +639,14 @@
             return;
         }
         recordError("window", err);
-        logger?.error("Unhandled error: ", err);
+        // Deliberately not reported here. Rollbar's own captureUncaught /
+        // captureUnhandledRejections already reports every event this handler sees, and
+        // installs earlier than this listener, so logging again produced two Rollbar items
+        // per rejection - one titled "Unhandled error: X" and one titled "X" - splitting
+        // every defect in two and doubling the volume. Its `checkIgnore` reads the rejection
+        // reason out of the original arguments, so worker errors - which arrive as plain
+        // objects, not Errors - are still filtered on name and code. This handler keeps the
+        // crash-log record and the logout, which Rollbar's capture does not do.
         if (ev instanceof PromiseRejectionEvent && requiresLogout(ev.reason)) {
             client.logout();
             ev.preventDefault();

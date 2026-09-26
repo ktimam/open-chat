@@ -4,6 +4,7 @@ use crate::{
 };
 use canister_api_macros::update;
 use canister_tracing_macros::trace;
+use chat_events::ChatEvents;
 use community_canister::c2c_bot_delete_channel;
 use community_canister::delete_channel::*;
 use group_community_common::Member;
@@ -33,8 +34,6 @@ fn c2c_bot_delete_channel_impl(args: c2c_bot_delete_channel::Args, state: &mut R
 }
 
 fn delete_channel_impl(channel_id: ChannelId, ext_caller: Option<Caller>, state: &mut RuntimeState) -> OCResult {
-    state.data.verify_not_frozen()?;
-
     let caller = state.verified_caller(ext_caller)?;
     let channel = state.data.channels.get_or_err(&channel_id)?;
 
@@ -70,13 +69,15 @@ fn delete_channel_impl(channel_id: ChannelId, ext_caller: Option<Caller>, state:
     state
         .data
         .stable_memory_keys_to_garbage_collect
-        .push(BaseKeyPrefix::from(ChatEventKeyPrefix::new_from_channel(channel_id, None)));
+        .extend(ChatEvents::stable_memory_key_prefixes(ChatEventKeyPrefix::new_from_channel(
+            channel_id, None,
+        )));
 
     for message_index in channel.chat.events.thread_keys() {
         state
             .data
             .stable_memory_keys_to_garbage_collect
-            .push(BaseKeyPrefix::from(ChatEventKeyPrefix::new_from_channel(
+            .extend(ChatEvents::stable_memory_key_prefixes(ChatEventKeyPrefix::new_from_channel(
                 channel_id,
                 Some(message_index),
             )));

@@ -2,12 +2,13 @@ import type {
     FromWorker,
     Init,
     Logger,
+    SyncHead,
     WorkerError,
     WorkerRequest,
     WorkerResponse,
     WorkerResult,
 } from "@shared";
-import { ONE_MINUTE_MILLIS, Stream } from "@shared";
+import { ONE_MINUTE_MILLIS, Stream, publish, requiresLogout } from "@shared";
 import type { OpenChatConfig } from "./config";
 import { snapshot } from "./snapshot.svelte";
 import { messagesRead, storageStore } from "./state";
@@ -29,9 +30,17 @@ export class WorkerAgent {
     readonly #logger: Logger;
     readonly #onFatalError: ((error: Error) => void) | undefined;
     #fatalError: Error | undefined;
+    #sessionExpired = false;
     nextCorrelationId: number = 0;
 
-    constructor(config: OpenChatConfig, onFatalError?: (error: Error) => void) {
+    // `onSyncHead` is passed in rather than published on the global pubsub because the only
+    // listener is the OpenChat instance that owns this agent: routing it globally would keep a
+    // discarded instance alive for the lifetime of the page.
+    constructor(
+        config: OpenChatConfig,
+        onFatalError?: (error: Error) => void,
+        onSyncHead: (head: SyncHead) => void = () => {},
+    ) {
         console.debug("WORKER_CLIENT: loading worker with version: ", config.websiteVersion);
         this.#logger = config.logger;
         this.#onFatalError = onFatalError;
@@ -74,6 +83,9 @@ export class WorkerAgent {
                 if (data.event.subkind === "users_loaded") {
                     userStore.addMany(data.event.users);
                 }
+                if (data.event.subkind === "sync_head") {
+                    onSyncHead({ userId: data.event.userId, version: data.event.version });
+                }
             } else if (data.kind === "worker_response") {
                 // Responses can contain short-lived app-card grants/capabilities. Log only routing
                 // metadata; never serialize the event or response body into developer/remote logs.
@@ -109,6 +121,7 @@ export class WorkerAgent {
             notificationsCanister: config.notificationsCanister,
             identityCanister: config.identityCanister,
             onlineCanister: config.onlineCanister,
+            dailyPuzzleCanister: config.dailyPuzzleCanister,
             userIndexCanister: config.userIndexCanister,
             translationsCanister: config.translationsCanister,
             registryCanister: config.registryCanister,
@@ -224,10 +237,21 @@ export class WorkerAgent {
         }
     }
 
+    // Reported once per crossing of the limit: a wedged worker sits above it for as long as the
+    // tab stays open, and a report every poll would be one item per minute saying the same thing
+    #pendingLimitReported = false;
+
     #monitorPendingRequests() {
         const pendingRequests = this.#inflightRequests.size;
         if (pendingRequests >= 100) {
-            this.#logger.error("Pending request count exceeded limit", { count: pendingRequests });
+            if (!this.#pendingLimitReported) {
+                this.#pendingLimitReported = true;
+                this.#logger.error("Pending request count exceeded limit", {
+                    count: pendingRequests,
+                });
+            }
+        } else {
+            this.#pendingLimitReported = false;
         }
     }
 
@@ -245,10 +269,23 @@ export class WorkerAgent {
     }
 
     #resolveError(data: WorkerError): void {
+        const error = JSON.parse(data.error);
+
+        // A request rejected because the session is gone only logged the user out if nobody
+        // caught it and it reached the window's unhandledrejection handler. Background pollers
+        // catch their own failures, so an expired delegation left the client polling on a timer
+        // for as long as the tab stayed open - thousands of identical failures from one client.
+        // Only once: a burst of pollers all fail together when a delegation expires, and logout
+        // ends in a page navigation.
+        if (!this.#sessionExpired && requiresLogout(error)) {
+            this.#sessionExpired = true;
+            publish("sessionExpired");
+        }
+
         const promise = this.#inflightRequests.get(data.correlationId);
         if (promise !== undefined) {
             if (promise.timeoutId !== undefined) window.clearTimeout(promise.timeoutId);
-            promise.reject(JSON.parse(data.error));
+            promise.reject(error);
             this.#inflightRequests.delete(data.correlationId);
         } else {
             this.#logUnexpected(data.requestKind, data.correlationId);

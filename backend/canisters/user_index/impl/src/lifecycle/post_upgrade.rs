@@ -1,38 +1,17 @@
-use crate::Data;
 use crate::lifecycle::init_state;
 use crate::memory::{get_stable_memory_map_memory, get_upgrades_memory};
+use crate::updates::{refund_deleted_user_cycles, set_daily_puzzle_canister_id};
+use crate::{Data, mutate_state, read_state};
 use canister_logger::LogEntry;
 use canister_tracing_macros::trace;
 use ic_cdk::post_upgrade;
 use stable_memory::get_reader;
+use std::time::Duration;
 use tracing::info;
+use types::CanisterId;
 use user_index_canister::post_upgrade::Args;
 use utils::cycles::init_cycles_dispenser_client;
 use utils::env::canister::CanisterEnv;
-
-const PR2_SENSITIVE_HISTORY_MARKERS: &[&str] = &[
-    "cancel_ai_app_link_code",
-    "create_ai_app_link_code",
-    "claim_ai_app_link_code",
-    "c2c_claim_ai_app_link_code",
-    "set_my_ai_app_key",
-    "remove_my_ai_app_key",
-    "revoke_ai_app_user_key",
-    "create_ai_app_card_provenance",
-    "c2c_validate_ai_app_card_provenance",
-    "c2c_create_ai_app_card_capability",
-    "c2c_create_ai_app_private_match_capability",
-    "c2c_redeem_ai_app_card_capability",
-    "c2c_redeem_ai_app_private_match_capability",
-    "c2c_create_ai_app_chat_link_token",
-    "c2c_cancel_ai_app_chat_link_token",
-    "c2c_redeem_ai_app_chat_link_token",
-    "cancel_ai_app_chat_link_token",
-    "c2c_create_ai_app_card_confirmation_grant",
-    "c2c_consume_ai_app_card_confirmation_grant",
-    "c2c_ai_app_confirmed_action_route",
-    "c2c_deposit_actions",
-];
 
 #[post_upgrade]
 #[trace]
@@ -42,29 +21,54 @@ fn post_upgrade(args: Args) {
     let memory = get_upgrades_memory();
     let reader = get_reader(&memory);
 
-    let (mut data, mut errors, mut logs, mut traces): (Data, Vec<LogEntry>, Vec<LogEntry>, Vec<LogEntry>) =
+    let (data, errors, logs, traces): (Data, Vec<LogEntry>, Vec<LogEntry>, Vec<LogEntry>) =
         msgpack::deserialize(reader).unwrap();
-    let purged_pr2_history =
-        canister_logger::purge_history_containing(&mut errors, &mut logs, &mut traces, PR2_SENSITIVE_HISTORY_MARKERS);
-
-    // V1 vouched only for a caller-supplied name. Treat every legacy publication as untrusted after
-    // the V2 rollout and require its owner/governance flow to republish the exact manifest binding.
-    let legacy_v1_publications = data.ai_apps.require_v2_republication(canister_time::now_millis());
 
     canister_logger::init_with_logs(data.test_mode, errors, logs, traces);
 
     let env = Box::new(CanisterEnv::new(data.rng_seed));
     init_cycles_dispenser_client(data.cycles_dispenser_canister_id, data.test_mode);
     init_state(env, data, args.wasm_version);
-    crate::pr2_entropy::start_after_lifecycle();
 
-    if legacy_v1_publications > 0 {
-        info!(legacy_v1_publications, "Unpublished legacy V1 AI apps; V2 republish required");
+    // One-off: refund the cycles still held by users deleted before cycles were refunded on
+    // deletion. The flag is only set once the canisters have been queued, so if this upgrade is
+    // followed by another before that happens, it is simply retried after the next one.
+    // The LocalUserIndexes must be upgraded first so that they can handle the refund events.
+    // TODO remove after the release containing this has been deployed
+    if !read_state(|state| state.data.deleted_user_cycles_refund_queued) {
+        ic_cdk_timers::set_timer(Duration::ZERO, async {
+            let response = refund_deleted_user_cycles::run().await;
+            info!(?response, "Queued the cycles of previously deleted users to be refunded");
+        });
     }
-    // Heap state is authoritative after restore. Scrub the disposable raw snapshot in fixed-size
-    // timer messages; this overwrites stale trailing bytes as well as the current serialized state.
-    crate::jobs::scrub_upgrade_snapshot::start_after_restore();
+
+    // One-off: move bot installations recorded under the wrong type of location back to the direct
+    // chat they were really installed into
+    // TODO remove after the release containing this has been deployed
+    mutate_state(|state| {
+        let now = state.env.now();
+        for (bot_id, from, to) in state.data.users.repair_misrecorded_direct_chat_bot_installations(now) {
+            info!(%bot_id, ?from, ?to, "Moved misrecorded bot installation");
+        }
+    });
+
+    // One-off: record the prod daily_puzzle canister id and push it to every LocalUserIndex, in
+    // place of a governance proposal. Run from a timer because the push makes c2c calls, which
+    // can't be made from post_upgrade. The LocalUserIndexes must be upgraded first so that they
+    // can handle the event.
+    // TODO remove after the release containing this has been deployed
+    if read_state(|state| !state.data.test_mode && state.data.daily_puzzle_canister_id.is_none()) {
+        ic_cdk_timers::set_timer(Duration::ZERO, async {
+            let canister_id = CanisterId::from_text("5cz5j-uiaaa-aaaaf-bsdda-cai").unwrap();
+            mutate_state(|state| {
+                set_daily_puzzle_canister_id::set_daily_puzzle_canister_id_impl(
+                    user_index_canister::set_daily_puzzle_canister_id::Args { canister_id },
+                    state,
+                )
+            });
+        });
+    }
 
     let total_instructions = ic_cdk::api::call_context_instruction_counter();
-    info!(version = %args.wasm_version, total_instructions, purged_pr2_history, "Post-upgrade complete");
+    info!(version = %args.wasm_version, total_instructions, "Post-upgrade complete");
 }

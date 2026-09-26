@@ -10,8 +10,8 @@ use types::{
     BotSubscriptions, BuildVersion, CanisterId, ChannelLatestMessageIndex, ChannelUserNotificationPayload, ChatId,
     ClassifyMessageRequest, CommunityId, CyclesTopUp, DiamondMembershipPlanDuration, GroupChatUserNotificationPayload,
     MessageContentInitial, MessageId, MessageIndex, Notification, NotifyChit, PhoneNumber, ReferralType, SuspensionDuration,
-    TimestampMillis, UniquePersonProof, UpdateUserPrincipalArgs, User, UserCanisterStreakInsuranceClaim,
-    UserCanisterStreakInsurancePayment, UserId, UserNotificationPayload, UserType, is_default,
+    TimestampMillis, UniquePersonProof, User, UserCanisterStreakInsuranceClaim, UserCanisterStreakInsurancePayment, UserId,
+    UserNotificationPayload, UserType, is_default,
 };
 
 mod lifecycle;
@@ -45,7 +45,6 @@ pub enum UserIndexEvent {
     DiamondMembershipPaymentReceived(DiamondMembershipPaymentReceived),
     OpenChatBotMessageV2(Box<OpenChatBotMessageV2>),
     ReferralCodeAdded(ReferralCodeAdded),
-    UserPrincipalUpdated(UpdateUserPrincipalArgs),
     DeleteUser(DeleteUser),
     SecretKeySet(Vec<u8>),
     NotifyUniquePersonProof(UserId, UniquePersonProof),
@@ -60,6 +59,12 @@ pub enum UserIndexEvent {
     SetOpenAIApiKey(SetOpenAIApiKey),
     SetModerationReferralConfig(SetModerationReferralConfig),
     SetMediaScanConfig(types::MediaScanConfig),
+    SetMultiUserCanistersEnabled(bool),
+    SetCallPushEnabled(bool),
+    SetDailyPuzzleCanisterId(CanisterId),
+    RefundDeletedUserCycles(Vec<CanisterId>),
+    UserIdMigrated(UserIdMigrated),
+    StartUserMigration(StartUserMigration),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -254,6 +259,29 @@ pub struct ReferralCodeAdded {
     pub expiry: Option<TimestampMillis>,
 }
 
+// A user has been migrated to a MultiUser canister, which gave them a new id
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct UserIdMigrated {
+    #[serde(rename = "o")]
+    pub old_user_id: UserId,
+    #[serde(rename = "n")]
+    pub new_user_id: UserId,
+    // The groups and communities the user is in, each of which the LocalUserIndex controlling it
+    // tells of the user's new id. Empty when sent to a LocalUserIndex added after the migration.
+    #[serde(rename = "c", default, skip_serializing_if = "Vec::is_empty")]
+    pub canisters_to_notify: Vec<CanisterId>,
+}
+
+// Tells the LocalUserIndex controlling a user's canister to start migrating the user to the given
+// MultiUser canister, first upgrading the user's canister to the latest wasm if it is behind
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct StartUserMigration {
+    #[serde(rename = "u")]
+    pub user_id: UserId,
+    #[serde(rename = "m")]
+    pub multi_user_canister_id: CanisterId,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct DeleteUser {
     pub user_id: UserId,
@@ -331,11 +359,24 @@ pub enum UserEvent<T = UserNotificationPayload> {
     Notification(Box<Notification<T>>),
 }
 
+// An event along with the user it is from, as taken by `c2c_user_canister_v2`. A User canister
+// names itself, while a MultiUser canister, which hosts many users, names whichever of its users
+// the event is from
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(bound = "T: Serialize + DeserializeOwned")]
+pub struct UserEventWithUserId<T = UserNotificationPayload> {
+    #[serde(rename = "u")]
+    pub user_id: UserId,
+    #[serde(rename = "e")]
+    pub event: UserEvent<T>,
+}
+
 #[derive(CandidType, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ChildCanisterType {
     User,
     Group,
     Community,
+    MultiUser,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq)]

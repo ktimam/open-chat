@@ -1,5 +1,6 @@
 use super::c2c_join_community::join_community_impl;
 use crate::activity_notifications::handle_activity_notification;
+use crate::external_url::validate_external_url;
 use crate::guards::{caller_is_local_user_index, caller_is_proposals_bot};
 use crate::model::channels::Channel;
 use crate::model::events::CommunityEventInternal;
@@ -13,7 +14,6 @@ use group_chat_core::GroupChatCore;
 use oc_error_codes::OCErrorCode;
 use rand::RngExt;
 use types::{BotCaller, BotPermissions, Caller, ChannelCreated, CommunityPermission, MultiUserChat, OCResult, UserType};
-use url::Url;
 use utils::document::validate_avatar;
 use utils::text_validation::{StringLengthValidationError, validate_channel_name, validate_description, validate_rules};
 
@@ -70,6 +70,7 @@ fn c2c_create_proposals_channel_impl(args: Args, state: &mut RuntimeState) -> Re
             unique_person_proof: None,
             total_chit_earned: 0,
             composite_gate_index: None,
+            previous_user_ids: Vec::new(),
         },
         Vec::new(),
         state,
@@ -95,12 +96,8 @@ fn create_channel_impl(
     ext_caller: Option<Caller>,
     state: &mut RuntimeState,
 ) -> OCResult<SuccessResult> {
-    state.data.verify_not_frozen()?;
-
-    if let Some(external_url) = &args.external_url
-        && Url::parse(external_url).is_err()
-    {
-        return Err(OCErrorCode::InvalidExternalUrl.into());
+    if let Some(external_url) = &args.external_url {
+        validate_external_url(external_url)?;
     }
 
     let caller = state.verified_caller(ext_caller)?;
@@ -177,6 +174,7 @@ fn create_channel_impl(
     let mut chat = GroupChatCore::new(
         MultiUserChat::Channel(state.env.canister_id().into(), channel_id),
         caller.agent(),
+        None,
         args.is_public,
         args.name.clone(),
         args.description,
@@ -204,7 +202,6 @@ fn create_channel_impl(
         id: channel_id,
         chat,
         date_imported: None,
-        enabled_ai_apps: std::collections::BTreeSet::new(),
     });
 
     if args.is_public {

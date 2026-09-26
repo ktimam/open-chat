@@ -22,6 +22,7 @@ import type {
     CurrentUserSummary,
     DataContent,
     DiamondMembershipStatus,
+    DirectChatSummary,
     EventWrapper,
     EventsResponse,
     EventsSuccessResult,
@@ -44,7 +45,6 @@ import type {
     UpdatedEvent,
 } from "@shared";
 import {
-    ChatMap,
     MAX_EVENTS,
     MAX_MESSAGES,
     MessageContextMap,
@@ -57,8 +57,23 @@ import {
     updateCreatedUser,
 } from "@shared";
 import { IndexedDbConnectionManager } from "./indexedDb";
+import {
+    chatRowKey,
+    chatRowsToWrite,
+    emptyTouched,
+    globalsOf,
+    nextSyncStamps,
+    removedFromTombstones,
+    stateFromRows,
+    type ChatGlobals,
+    type ChatRow,
+    type ChatsSince,
+    type ChatTombstone,
+    type SyncStamps,
+    type SyncTouched,
+} from "./sync";
 
-const CACHE_VERSION = 150;
+const CACHE_VERSION = 152;
 const MAX_INDEX = 9999999999;
 
 export type Database = Promise<IDBPDatabase<ChatSchema>>;
@@ -71,9 +86,29 @@ type EnhancedWrapper<T extends ChatEvent> = EventWrapper<T> & {
 };
 
 interface ChatSchema extends DBSchema {
+    // The chat state's global fields, one record per principal. The chats themselves are in
+    // `chat_rows`.
     chats: {
         key: string;
-        value: ChatStateFull;
+        value: ChatGlobals;
+    };
+
+    // One row per chat, keyed by `chatRowKey`, carrying the sync version it was last written at
+    chat_rows: {
+        key: string;
+        value: ChatRow;
+        indexes: {
+            version: number;
+        };
+    };
+
+    // One row per removed chat, keyed like `chat_rows`, so a sync pull can carry the removal
+    chat_tombstones: {
+        key: string;
+        value: ChatTombstone;
+        indexes: {
+            version: number;
+        };
     };
 
     bots: {
@@ -149,6 +184,13 @@ interface ChatSchema extends DBSchema {
     activityFeed: {
         key: string;
         value: MessageActivityEvent[];
+    };
+
+    // "head": the cache's one version counter; "stamps": the versions of what the head covers.
+    // See utils/sync.ts and domain/sync.ts in openchat-shared.
+    sync: {
+        key: string;
+        value: number | SyncStamps;
     };
 }
 
@@ -261,6 +303,45 @@ async function createPublicProfileStore(
     db.createObjectStore("publicProfile");
 }
 
+async function createSyncStore(
+    db: IDBPDatabase<ChatSchema>,
+    _tx: IDBPTransaction<ChatSchema, StoreNames<ChatSchema>[], "versionchange">,
+) {
+    if (db.objectStoreNames.contains("sync")) {
+        db.deleteObjectStore("sync");
+    }
+    db.createObjectStore("sync");
+}
+
+// The chats move from one record into a row each. The old record is dropped rather than split,
+// so the next load after the upgrade is a full one, as after any other migration that cleared
+// the chats. Its stamps go with it: they carried the per-chat versions the rows now hold.
+async function createChatRowStores(
+    db: IDBPDatabase<ChatSchema>,
+    tx: IDBPTransaction<ChatSchema, StoreNames<ChatSchema>[], "versionchange">,
+) {
+    for (const name of ["chat_rows", "chat_tombstones"] as const) {
+        if (db.objectStoreNames.contains(name)) {
+            db.deleteObjectStore(name);
+        }
+        db.createObjectStore(name).createIndex("version", "version");
+    }
+    await tx.objectStore("chats").clear();
+    await tx.objectStore("sync").delete("stamps");
+}
+
+type SyncStoreReader = { get(key: string): Promise<number | SyncStamps | undefined> };
+
+async function readSyncHead(store: SyncStoreReader): Promise<number> {
+    const head = await store.get("head");
+    return typeof head === "number" ? head : 0;
+}
+
+async function readSyncStamps(store: SyncStoreReader): Promise<SyncStamps | undefined> {
+    const stamps = await store.get("stamps");
+    return stamps !== undefined && typeof stamps !== "number" ? stamps : undefined;
+}
+
 export class ChatsDb {
     private readonly connectionManager: IndexedDbConnectionManager<ChatSchema>;
     private readonly principalString: string;
@@ -272,6 +353,8 @@ export class ChatsDb {
             `openchat_db_${this.principalString}`,
             [
                 { name: "chats" },
+                { name: "chat_rows", indexes: { version: "version" } },
+                { name: "chat_tombstones", indexes: { version: "version" } },
                 { name: "bots" },
                 {
                     name: "chat_events",
@@ -296,6 +379,7 @@ export class ChatsDb {
                 { name: "localUserIndex" },
                 { name: "externalAchievements" },
                 { name: "activityFeed" },
+                { name: "sync" },
             ],
             CACHE_VERSION,
         )
@@ -310,7 +394,9 @@ export class ChatsDb {
             .withMigration(146, clearEvents)
             .withMigration(147, clearCachePrimerStore)
             .withMigration(148, clearChatsStore)
-            .withMigration(149, clearChatsStore);
+            .withMigration(149, clearChatsStore)
+            .withMigration(150, createSyncStore)
+            .withMigration(151, createChatRowStores);
     }
 
     getDb(): Database {
@@ -325,41 +411,87 @@ export class ChatsDb {
         this.getDb().then((db) => db.put("bots", bots, this.principalString));
     }
 
+    // Never throws. `getUpdates` calls this from inside a `Stream` initialiser, which does not
+    // catch a rejected async initialiser: neither onResult nor onError would fire and the caller
+    // would await a load that never completes, on every launch. Returning undefined costs a full
+    // initial load; wedging the app costs everything.
     async getCachedChats(): Promise<ChatStateFull | undefined> {
-        const resolvedDb = await this.getDb();
-        const chats = await resolvedDb.get("chats", this.principalString);
+        try {
+            return await this.readCachedChats();
+        } catch (err) {
+            console.error("CACHE: unable to read cached chats, falling back to a full load", err);
+            return undefined;
+        }
+    }
 
-        if (chats && chats.latestUserCanisterUpdates < BigInt(Date.now() - 30 * ONE_DAY)) {
-            const storeNames = resolvedDb.objectStoreNames;
-            for (let i = 0; i < storeNames.length; i++) {
-                await resolvedDb.clear(storeNames[i]);
-            }
+    // Unlike `getCachedChats` this throws on a failed read, because the two callers want
+    // different things from a failure. The updates loop wants to carry on with a full load, for
+    // which "nothing cached" is the right answer. A sync pull must not be answered from it: an
+    // empty answer would move the UI's cursor past everything stamped since, and a transient
+    // IndexedDB failure would then lose those updates and removals for good.
+    private async readCachedChats(): Promise<ChatStateFull | undefined> {
+        const resolvedDb = await this.getDb();
+        // One transaction, so the rows are the ones the globals were written with
+        const tx = resolvedDb.transaction(["chats", "chat_rows"], "readonly");
+        const globals = await tx.objectStore("chats").get(this.principalString);
+
+        // `== null`: a corrupt IndexedDB has been seen returning null rather than undefined
+        if (globals == null) return undefined;
+
+        if (isStale(globals)) {
+            await tx.done;
+            await wipeKeepingSyncHead(resolvedDb);
+            return undefined;
+        }
+        const rows = await tx.objectStore("chat_rows").getAll();
+        await tx.done;
+
+        const chats = stateFromRows(globals, rows);
+        if (!cachedChatsAreUsable(chats)) {
+            // Only the globals go. The rows stay so the full load that follows can tombstone
+            // whatever it no longer finds, and it rewrites every row because the globals are gone.
+            await resolvedDb.clear("chats");
             return undefined;
         }
         return chats;
     }
 
-    async setCachedChats(
-        chatState: ChatStateFull,
-        updatedEvents: ChatMap<UpdatedEvent[]>,
-    ): Promise<void> {
-        const db = this.getDb();
-        const directChats = chatState.directChats.map(makeChatSummarySerializable);
-        const groupChats = chatState.groupChats.map(makeChatSummarySerializable);
-        const communities = chatState.communities.map(makeCommunitySerializable);
-
-        const stateToCache = {
-            ...chatState,
-            directChats,
-            groupChats,
-            communities,
-        };
-
-        const tx = (await db).transaction(["chats", "chat_events", "thread_events"], "readwrite");
+    /**
+     * Commits the chat state at the next sync version and returns that version. Only the chats
+     * `touched` names, or that have no row yet, are written; a cached chat missing from the
+     * state is removed and leaves a tombstone. The globals, the rows and the stamps are written
+     * in one transaction, so a reader either sees all of them or none.
+     */
+    async setCachedChats(chatState: ChatStateFull, touched: SyncTouched): Promise<number> {
+        const tx = (await this.getDb()).transaction(
+            ["chats", "chat_rows", "chat_tombstones", "chat_events", "thread_events", "sync"],
+            "readwrite",
+        );
         const chatsStore = tx.objectStore("chats");
+        const rowsStore = tx.objectStore("chat_rows");
+        const tombstonesStore = tx.objectStore("chat_tombstones");
         const eventsStore = tx.objectStore("chat_events");
         const threadsStore = tx.objectStore("thread_events");
+        const syncStore = tx.objectStore("sync");
 
+        const version = (await readSyncHead(syncStore)) + 1;
+        const stamps = nextSyncStamps(await readSyncStamps(syncStore), touched, version);
+        const globalsCached = (await chatsStore.get(this.principalString)) != null;
+        const cachedKeys = new Set(await rowsStore.getAllKeys());
+        const rows = chatRowsToWrite(chatState, touched, cachedKeys, !globalsCached);
+
+        const rowRequests = rows.put.flatMap(({ key, isNew, summary }) => {
+            const row = serialisableRow(summary, version);
+            const put = rowsStore.put(row, key);
+            // a chat that is back no longer needs its tombstone
+            return isNew ? [put, tombstonesStore.delete(key)] : [put];
+        });
+        const removeRequests = rows.removed.flatMap(({ key, kind, id }) => [
+            rowsStore.delete(key),
+            tombstonesStore.put({ kind, id, version }, key),
+        ]);
+
+        const updatedEvents = touched.updatedEvents;
         const markDirtyRequests = [...updatedEvents.entries()].flatMap(([chatId, indexes]) => {
             return indexes.map(async (i) => {
                 const key = createCacheKey(
@@ -375,10 +507,106 @@ export class ChatsDb {
             });
         });
 
-        const promises = [chatsStore.put(stateToCache, this.principalString), ...markDirtyRequests];
+        const promises: Promise<unknown>[] = [
+            chatsStore.put(globalsOf(chatState), this.principalString),
+            ...rowRequests,
+            ...removeRequests,
+            syncStore.put(stamps, "stamps"),
+            syncStore.put(version, "head"),
+            ...markDirtyRequests,
+        ];
 
         await Promise.all(promises);
         await tx.done;
+        return version;
+    }
+
+    /**
+     * One cached chat, read from its own row (a channel from its community's row). Only while
+     * the cache is one the full read would use: rows outlive a stale wipe and an unusable cache,
+     * and those must not count here either. Never throws, and never wipes or clears anything: it
+     * is only a hint, for checking a replica is not behind.
+     */
+    async getCachedChatSummary(chatId: ChatIdentifier): Promise<ChatSummary | undefined> {
+        try {
+            const db = await this.getDb();
+            // One transaction, so the row is one the globals were written with
+            const tx = db.transaction(["chats", "chat_rows"], "readonly");
+            const globals = await tx.objectStore("chats").get(this.principalString);
+            if (globals == null || !globalsAreUsable(globals) || isStale(globals)) {
+                return undefined;
+            }
+            const rows = tx.objectStore("chat_rows");
+            switch (chatId.kind) {
+                case "direct_chat": {
+                    const row = await rows.get(chatRowKey("direct_chat", chatId.userId));
+                    return row?.kind === "direct_chat" && directChatIsUsable(row.summary)
+                        ? row.summary
+                        : undefined;
+                }
+                case "group_chat":
+                    return (await rows.get(chatRowKey("group_chat", chatId.groupId)))?.summary as
+                        | ChatSummary
+                        | undefined;
+                case "channel": {
+                    const row = await rows.get(chatRowKey("community", chatId.communityId));
+                    return row?.kind === "community"
+                        ? row.summary.channels.find((c) => chatIdentifiersEqual(c.id, chatId))
+                        : undefined;
+                }
+            }
+        } catch (err) {
+            console.error("CACHE: unable to read a cached chat", err);
+            return undefined;
+        }
+    }
+
+    async getSyncHead(): Promise<number> {
+        const db = await this.getDb();
+        return readSyncHead({ get: (key) => db.get("sync", key) });
+    }
+
+    /**
+     * The globals, and the chats written and removed after `since`, read through the rows'
+     * version index so a pull costs what changed rather than every chat.
+     *
+     * One transaction, so the rows and stamps are the ones committed with the head read. The head
+     * is still read first: were the reads ever split, a commit racing them would then be carried
+     * twice (the fold upserts by key) rather than skipped, which would be a hole that never heals.
+     *
+     * Throws if the read fails, so the caller answers the pull with an error and the UI keeps its
+     * cursor where it is. `chats` undefined means the cache holds nothing to answer from - never
+     * written, stale or unusable - and the caller must not move the UI's cursor on the strength
+     * of it: the rows and tombstones may still hold changes the UI has not seen. Nothing is wiped
+     * here; the updates loop does that when it reads the cache.
+     */
+    async getChatsForSync(since: number): Promise<{
+        head: number;
+        chats: ChatsSince | undefined;
+        stamps: SyncStamps | undefined;
+    }> {
+        const tx = (await this.getDb()).transaction(
+            ["sync", "chats", "chat_rows", "chat_tombstones"],
+            "readonly",
+        );
+        const syncStore = tx.objectStore("sync");
+        const head = await readSyncHead(syncStore);
+        const globals = await tx.objectStore("chats").get(this.principalString);
+        if (globals == null || isStale(globals) || !globalsAreUsable(globals)) {
+            await tx.done;
+            return { head, chats: undefined, stamps: undefined };
+        }
+        const after = IDBKeyRange.lowerBound(since, true);
+        const rows = await tx.objectStore("chat_rows").index("version").getAll(after);
+        const tombstones = await tx.objectStore("chat_tombstones").index("version").getAll(after);
+        const stamps = await readSyncStamps(syncStore);
+        await tx.done;
+
+        const state = stateFromRows(globals, rows);
+        if (!state.directChats.every(directChatIsUsable)) {
+            return { head, chats: undefined, stamps: undefined };
+        }
+        return { head, chats: { state, removed: removedFromTombstones(tombstones) }, stamps };
     }
 
     async deleteEventsForChatOrCommunity(chatOrCommunityId: string) {
@@ -744,16 +972,23 @@ export class ChatsDb {
         await tx.done;
     }
 
+    /**
+     * Returns the cached proposal messages for the tallies, and the sync version the write took
+     * if any tally was newer than the cached one: a background writer the UI can only learn of
+     * through a stamp.
+     */
     async updateCachedProposalTallies(
         chatId: ChatIdentifier,
         tallies: [number, Tally][],
-    ): Promise<EventWrapper<Message>[]> {
-        const tx = (await this.getDb()).transaction(["chat_events"], "readwrite", {
+    ): Promise<{ messages: EventWrapper<Message>[]; version: number | undefined }> {
+        const tx = (await this.getDb()).transaction(["chat_events", "sync"], "readwrite", {
             durability: "relaxed",
         });
         const eventStore = tx.objectStore("chat_events");
+        const syncStore = tx.objectStore("sync");
 
         const messages: EventWrapper<Message>[] = [];
+        const updatedEvents: UpdatedEvent[] = [];
         const promises: Promise<void>[] = tallies.map(([eventIndex, tally]) => {
             const cacheKey = createCacheKey({ chatId }, eventIndex);
             return eventStore
@@ -771,6 +1006,7 @@ export class ChatsDb {
 
                         if (updated) {
                             event.event.content.proposal.tally = tally;
+                            updatedEvents.push({ eventIndex, timestamp: tally.timestamp });
                             return eventStore.put(event, cacheKey);
                         }
                     }
@@ -778,8 +1014,18 @@ export class ChatsDb {
                 .then((_) => {});
         });
         await Promise.all(promises);
+
+        let version: number | undefined = undefined;
+        if (updatedEvents.length > 0) {
+            version = (await readSyncHead(syncStore)) + 1;
+            const touched = emptyTouched();
+            touched.updatedEvents.set(chatId, updatedEvents);
+            const stamps = nextSyncStamps(await readSyncStamps(syncStore), touched, version);
+            await Promise.all([syncStore.put(stamps, "stamps"), syncStore.put(version, "head")]);
+        }
+
         await tx.done;
-        return messages;
+        return { messages, version };
     }
 
     setCachedMessageFromSendResponse(
@@ -930,12 +1176,18 @@ export class ChatsDb {
         const current = await this.getCachedCurrentUser();
         if (current) {
             const merged = updateCreatedUser(current, updated);
-            (await this.getDb()).put("currentUser", merged, this.principalString);
+            await (await this.getDb()).put("currentUser", merged, this.principalString);
         }
     }
 
-    setCachedCurrentUser(user: CreatedUser): void {
-        this.getDb().then((db) => db.put("currentUser", user, this.principalString));
+    async setCachedCurrentUser(user: CreatedUser): Promise<void> {
+        await (await this.getDb()).put("currentUser", user, this.principalString);
+    }
+
+    // Drops the cached chat state, so the next update loads the chats in full. The rows stay, so
+    // that load can tombstone whatever it no longer finds.
+    async forgetCachedChatState(): Promise<void> {
+        await (await this.getDb()).delete("chats", this.principalString);
     }
 
     async patchCachedCurrentUser(patch: Partial<CreatedUser>): Promise<void> {
@@ -962,6 +1214,11 @@ export class ChatsDb {
         return localUserIndex;
     }
 
+    // Deletes the whole database, which restarts the sync head at 0. Every caller must reload the
+    // page or sign out: a UI that kept running would hold a cursor above the restarted head and
+    // ignore every announcement from then on, so it would never pull again. If a caller that keeps
+    // the session alive is ever needed, wipe with `wipeKeepingSyncHead` instead, which takes a
+    // version of its own.
     async clearCache(): Promise<void> {
         const name = `openchat_db_${this.principalString}`;
         try {
@@ -1263,6 +1520,72 @@ function makeCommunitySerializable(community: CommunitySummary): CommunitySummar
         avatar,
         banner,
     };
+}
+
+// Stores the wipe leaves alone. The sync head keeps moving: the wipe takes a version of its own,
+// so a sync answer read before it can never pass the UI's cursor check afterwards. The chat rows
+// and tombstones stay so that a UI still running across the wipe hears about the chats removed
+// in the meantime: with the globals gone the full load that follows rewrites every row and
+// tombstones the rows whose chats it no longer finds.
+const KEPT_BY_WIPE: string[] = ["sync", "chat_rows", "chat_tombstones"];
+
+async function wipeKeepingSyncHead(db: IDBPDatabase<ChatSchema>): Promise<void> {
+    const storeNames: StoreNames<ChatSchema>[] = [];
+    for (let i = 0; i < db.objectStoreNames.length; i++) {
+        const name = db.objectStoreNames[i];
+        if (!KEPT_BY_WIPE.includes(name)) {
+            storeNames.push(name);
+        }
+    }
+    const tx = db.transaction([...storeNames, "sync"], "readwrite");
+    for (const name of storeNames) {
+        await tx.objectStore(name).clear();
+    }
+    const syncStore = tx.objectStore("sync");
+    const head = await readSyncHead(syncStore);
+    await syncStore.delete("stamps");
+    await syncStore.put(head + 1, "head");
+    await tx.done;
+}
+
+function isStale(globals: ChatGlobals): boolean {
+    return globals.latestUserCanisterUpdates < BigInt(Date.now() - 30 * ONE_DAY);
+}
+
+// The cache is the one place a chat summary enters the agent without a mapper having built it:
+// every other route comes from candid. A record written by an older build (or a partial write)
+// can therefore be missing fields the type says are always there, and the app then dies reading
+// `them.userId` or `membership.readByMeUpTo` seconds after load.
+//
+// There is no safe local repair. `membership` cannot be invented - the role, read-up-to and mute
+// state are the server's to say. Dropping just the bad record is worse than it looks: the cached
+// list is the base `mergeDirectChatUpdates` applies deltas to, so a chat removed from it stays
+// gone until the server happens to send an update mentioning it. Treat the whole cache as
+// unusable instead and let `getUpdates` fall through to `getInitialState`, which is what the
+// staleness check already does.
+function cachedChatsAreUsable(chats: ChatStateFull): boolean {
+    return globalsAreUsable(chats) && chats.directChats.every(directChatIsUsable);
+}
+
+// the staleness check compares this with `<`; against undefined that is simply false, so a
+// record with no timestamp would sail through as fresh
+function globalsAreUsable(globals: ChatGlobals): boolean {
+    return typeof globals.latestUserCanisterUpdates === "bigint";
+}
+
+function directChatIsUsable(c: DirectChatSummary): boolean {
+    return c?.id?.userId !== undefined && c?.them !== undefined && c?.membership !== undefined;
+}
+
+function serialisableRow(summary: ChatRow["summary"], version: number): ChatRow {
+    switch (summary.kind) {
+        case "direct_chat":
+            return { kind: summary.kind, version, summary: makeChatSummarySerializable(summary) };
+        case "group_chat":
+            return { kind: summary.kind, version, summary: makeChatSummarySerializable(summary) };
+        case "community":
+            return { kind: summary.kind, version, summary: makeCommunitySerializable(summary) };
+    }
 }
 
 function makeChatSummarySerializable<T extends ChatSummary>(chat: T): T {

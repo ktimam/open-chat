@@ -20,6 +20,7 @@
     import Select from "../../Select.svelte";
     import Toggle from "../../Toggle.svelte";
     import Translatable from "../../Translatable.svelte";
+    import DailyPuzzleOperator from "./DailyPuzzleOperator.svelte";
 
     type Fees = {
         token: "CHAT" | "ICP";
@@ -35,6 +36,7 @@
     let groupUpgradeConcurrency = $state("10");
     let communityUpgradeConcurrency = $state("10");
     let userUpgradeConcurrency = $state("10");
+    let multiUserCanisterLocalUserIndex = $state("");
     let busy = $state(new SvelteSet<number>());
     let governanceCanisterId = $state("");
     let stake = $state("0");
@@ -83,10 +85,16 @@
         isNaN(parseInt(communityUpgradeConcurrency, 0)),
     );
     let userUpgradeConcurrencyInvalid = $derived(isNaN(parseInt(userUpgradeConcurrency, 0)));
+    let multiUserCanisterLocalUserIndexInvalid = $derived(
+        multiUserCanisterLocalUserIndex.trim() === "" ||
+            !isValidPrincipal(multiUserCanisterLocalUserIndex.trim()),
+    );
     let exchangeIdInvalid = $derived(isNaN(parseInt(exchangeId, 0)));
     let tokenLedgerValid = $derived(tokenLedger.length > 0);
 
     let openAiKeySet = $state(false);
+    // The native call push kill switch (#9456): the toggle shows what the user index holds
+    let callPushEnabled = $state(false);
     let mediaScanEnabled = $state(false);
     let mediaScanScanners = $state("");
     let currentMediaScan = $state("");
@@ -116,7 +124,42 @@
         );
     }
 
+    function refreshCallPush() {
+        client
+            .callPushEnabled()
+            .then((enabled) => (callPushEnabled = enabled))
+            .catch(() => undefined);
+    }
+
+    // Flips the switch on the user index, which fans it out to every local user index
+    function applyCallPush(): Promise<void> {
+        busy.add(20);
+        return client
+            .setCallPushEnabled(callPushEnabled)
+            .then((resp) => {
+                if (resp.kind === "success") {
+                    toastStore.showSuccessToast(
+                        i18nKey(`Native call push ${callPushEnabled ? "enabled" : "disabled"}`),
+                    );
+                } else {
+                    toastStore.showFailureToast(
+                        i18nKey(
+                            `Failed to update native call push: ${resp.message ?? `code ${resp.code}`}`,
+                        ),
+                    );
+                }
+            })
+            .catch((err) =>
+                toastStore.showFailureToast(i18nKey("Failed to update native call push"), err),
+            )
+            .finally(() => {
+                busy.delete(20);
+                refreshCallPush();
+            });
+    }
+
     onMount(() => {
+        refreshCallPush();
         // Pre-fill the moderation config so the forms show what is actually set rather than
         // being write-only
         client.moderationConfig().then((config) => {
@@ -271,6 +314,56 @@
             })
             .finally(() => {
                 removeBusy(2);
+            });
+    }
+
+    function createMultiUserCanister(): void {
+        error = undefined;
+        const localUserIndex = multiUserCanisterLocalUserIndex.trim();
+        addBusy(15);
+        client
+            .createMultiUserCanister(localUserIndex)
+            .then((resp) => {
+                if (resp.kind === "success") {
+                    toastStore.showSuccessToast(
+                        i18nKey(`MultiUser canister created: ${resp.canisterId}`),
+                    );
+                } else {
+                    error = i18nKey(
+                        resp.kind === "local_user_index_not_found"
+                            ? `LocalUserIndex not found: ${localUserIndex}`
+                            : `Failed to create MultiUser canister: ${resp.error ?? "unknown error"}`,
+                    );
+                    toastStore.showFailureToast(error);
+                }
+            })
+            .finally(() => {
+                removeBusy(15);
+            });
+    }
+
+    // Recorded on the UserIndex and fanned out to every LocalUserIndex. There is no query for the
+    // current value (it is only surfaced in metrics), hence separate Enable / Disable buttons
+    // rather than a toggle
+    function setMultiUserCanistersEnabled(enabled: boolean): void {
+        error = undefined;
+        addBusy(16);
+        client
+            .setMultiUserCanistersEnabled(enabled)
+            .then((success) => {
+                if (success) {
+                    toastStore.showSuccessToast(
+                        i18nKey(`MultiUser canisters ${enabled ? "enabled" : "disabled"}`),
+                    );
+                } else {
+                    error = i18nKey(
+                        `Failed to ${enabled ? "enable" : "disable"} MultiUser canisters`,
+                    );
+                    toastStore.showFailureToast(error);
+                }
+            })
+            .finally(() => {
+                removeBusy(16);
             });
     }
 
@@ -642,7 +735,9 @@
 
 {#snippet proposedMediaScanView()}
     <Toggle small id="media-scan-enabled" bind:checked={mediaScanEnabled} />
-    <Input bind:value={mediaScanScanners} placeholder={i18nKey("Comma separated scanner principals")} />
+    <Input
+        bind:value={mediaScanScanners}
+        placeholder={i18nKey("Comma separated scanner principals")} />
 {/snippet}
 
 {#snippet proposedOpenAIKey()}
@@ -718,6 +813,38 @@
                 disabled={busy.has(2) || userUpgradeConcurrencyInvalid}
                 loading={busy.has(2)}
                 onClick={setUserUpgradeConcurrency}>Apply</Button>
+        </ButtonGroup>
+    </section>
+
+    <section class="operator-function">
+        <div class="title">Create MultiUser canister</div>
+        <ButtonGroup align="fill">
+            <Input
+                invalid={multiUserCanisterLocalUserIndexInvalid}
+                placeholder={i18nKey("LocalUserIndex canister id")}
+                bind:value={multiUserCanisterLocalUserIndex} />
+            <Button
+                tiny
+                disabled={busy.has(15) || multiUserCanisterLocalUserIndexInvalid}
+                loading={busy.has(15)}
+                onClick={createMultiUserCanister}>Create</Button>
+        </ButtonGroup>
+    </section>
+
+    <section class="operator-function">
+        <div class="title">MultiUser canisters</div>
+        <ButtonGroup align="fill">
+            <Button
+                tiny
+                disabled={busy.has(16)}
+                loading={busy.has(16)}
+                onClick={() => setMultiUserCanistersEnabled(true)}>Enable</Button>
+            <Button
+                tiny
+                secondary
+                disabled={busy.has(16)}
+                loading={busy.has(16)}
+                onClick={() => setMultiUserCanistersEnabled(false)}>Disable</Button>
         </ButtonGroup>
     </section>
 
@@ -946,6 +1073,19 @@
     </section>
 
     <section class="operator-function">
+        <div class="title">Native call push</div>
+        <div class="name-value">
+            <div class="label">Enabled:</div>
+            <div class="value">
+                <Toggle small id="call-push-enabled" bind:checked={callPushEnabled} />
+            </div>
+        </div>
+        <Button tiny loading={busy.has(20)} disabled={busy.has(20)} onClick={applyCallPush}>
+            Apply
+        </Button>
+    </section>
+
+    <section class="operator-function">
         <ButtonGroup align="fill">
             <h4>Pause event loop</h4>
             <Button tiny onClick={() => client.pauseEventLoop()}>Pause</Button>
@@ -958,6 +1098,8 @@
             <Button tiny onClick={() => client.resumeEventLoop()}>Resume</Button>
         </ButtonGroup>
     </section>
+
+    <DailyPuzzleOperator />
 
     <Column
         backgroundColor="color-mix(in srgb, var(--warning), transparent 90%)"

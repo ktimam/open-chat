@@ -1,9 +1,19 @@
 <script lang="ts">
-    import { chitStateStore, i18nKey, OpenChat, publish } from "@client";
+    import {
+        chitStateStore,
+        dailyPuzzleStore,
+        i18nKey,
+        OpenChat,
+        publish,
+        stateFor,
+        type DailyPuzzleUserState,
+    } from "@client";
     import SparkleBoxOutline from "@src/components_mobile/SparkleBoxOutline.svelte";
     import { now500 } from "@src/stores/time";
     import { toastStore } from "@src/stores/toast";
+    import { gameNameKey } from "@src/utils/dailyPuzzle.svelte";
     import {
+        Body,
         BodySmall,
         Button,
         ColourVars,
@@ -11,10 +21,12 @@
         CommonButton2,
         Container,
         H2,
+        Row,
         Subtitle,
     } from "component-lib";
     import { getContext } from "svelte";
     import PartyPopper from "svelte-material-icons/PartyPopper.svelte";
+    import PuzzleOutline from "svelte-material-icons/PuzzleOutline.svelte";
     import Rocket from "svelte-material-icons/RocketLaunchOutline.svelte";
     import ShieldStarOutline from "svelte-material-icons/ShieldStarOutline.svelte";
     import Progress from "../../Progress.svelte";
@@ -71,6 +83,20 @@
         client.formatTimeRemaining($now500, Number($chitStateStore.nextDailyChitClaim), true),
     );
     let busy = $state(false);
+    // one row per puzzle on today's rota (one with the weekday rotation)
+    let puzzles = $derived(
+        $dailyPuzzleStore.puzzles
+            .filter((p) => p.enabled)
+            .map((p) => ({ puzzle: p, state: stateFor($dailyPuzzleStore, p.gameId) })),
+    );
+
+    function puzzleStatusKey(state: DailyPuzzleUserState | undefined): string {
+        return state?.solved !== undefined
+            ? "dailyPuzzle.solved"
+            : state?.startedAt !== undefined
+              ? "dailyPuzzle.continue"
+              : "dailyPuzzle.play";
+    }
 
     function claim(e?: MouseEvent) {
         e?.stopPropagation();
@@ -178,6 +204,41 @@
                     <Translatable resourceKey={i18nKey("Earn more")}></Translatable>
                 </CommonButton2>
             {/if}
+            {#each puzzles as { puzzle, state } (puzzle.gameId)}
+                <Button
+                    onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        publish("dailyPuzzle", { gameId: puzzle.gameId });
+                    }}>
+                    <Column crossAxisAlignment="center">
+                        <Row width="hug" gap="md">
+                            <Subtitle width="hug" fontWeight="bold">
+                                <PuzzleOutline color="var(--txt-on-primary)" size="1rem"
+                                ></PuzzleOutline>
+                                <Translatable resourceKey={i18nKey("dailyPuzzle.todaysPuzzle")}
+                                ></Translatable>
+                                {" // "}
+                                <Translatable resourceKey={i18nKey(gameNameKey(puzzle.gameId))}
+                                ></Translatable>
+                            </Subtitle>
+                        </Row>
+                        <Row width="hug" gap="sm">
+                            <Body width="hug">
+                                <Translatable resourceKey={i18nKey(puzzleStatusKey(state))}
+                                ></Translatable>
+                                {#if (state?.streak ?? 0) > 0}
+                                    {" . "}
+                                    <Translatable
+                                        resourceKey={i18nKey("dailyPuzzle.streakDays", {
+                                            streak: state?.streak ?? 0,
+                                        })}></Translatable>
+                                {/if}
+                            </Body>
+                        </Row>
+                    </Column>
+                </Button>
+            {/each}
         </Container>
     {/if}
 {/snippet}

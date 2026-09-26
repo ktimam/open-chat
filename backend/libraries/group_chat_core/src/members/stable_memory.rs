@@ -3,6 +3,8 @@ use candid::{Deserialize, Principal};
 use serde::Serialize;
 use serde_bytes::ByteBuf;
 use stable_memory_map::{Key, KeyPrefix, StableMemoryMap, UserIdKeyPrefix, with_map, with_map_mut};
+use std::collections::HashMap;
+use std::ops::Bound;
 use types::{MultiUserChat, UserId};
 
 #[derive(Serialize, Deserialize)]
@@ -56,9 +58,49 @@ impl MembersStableStorage {
                     total_bytes += v.len();
                     total_bytes < max_bytes
                 })
-                .map(|(k, v)| (k.user_id(), ByteBuf::from(v)))
+                .map(|(k, v)| (k.user_id(), ByteBuf::from(remove_principal(v))))
                 .collect()
         })
+    }
+
+    // Reads and writes the members in batches so that each modified node is written to stable
+    // memory at most once per batch. Returns the number of members updated.
+    pub fn populate_principals(&mut self, principals: &HashMap<UserId, Principal>) -> u32 {
+        const BATCH_SIZE: usize = 1000;
+
+        let mut updated = 0;
+        let mut start = Bound::Included(self.prefix.create_key(&Principal::from_slice(&[]).into()));
+        loop {
+            let mut read = 0;
+            let mut last_user_id = None;
+            let batch: Vec<_> = with_map(|m| {
+                m.range((start.clone(), Bound::Unbounded))
+                    .take_while(|(k, _)| k.matches_prefix(&self.prefix))
+                    .take(BATCH_SIZE)
+                    .filter_map(|(key, bytes)| {
+                        let user_id = key.user_id();
+                        read += 1;
+                        last_user_id = Some(user_id);
+
+                        let principal = *principals.get(&user_id)?;
+                        let mut member = bytes_to_member(&bytes);
+                        (member.principal != Some(principal)).then(|| {
+                            member.principal = Some(principal);
+                            (key, member_to_bytes(member))
+                        })
+                    })
+                    .collect()
+            });
+
+            updated += batch.len() as u32;
+            with_map_mut(|m| m.insert_many(batch));
+
+            match last_user_id {
+                Some(user_id) if read == BATCH_SIZE => start = Bound::Excluded(self.prefix.create_key(&user_id)),
+                _ => break,
+            }
+        }
+        updated
     }
 
     #[cfg(test)]
@@ -75,17 +117,26 @@ impl MembersStableStorage {
 // Used to write all members to stable memory when migrating a group into a community
 pub fn write_members_from_bytes(chat: MultiUserChat, members: Vec<(UserId, ByteBuf)>) -> Option<UserId> {
     let prefix = UserIdKeyPrefix::new_from_chat(chat);
-    let mut latest = None;
-    with_map_mut(|m| {
-        for (user_id, byte_buf) in members {
+    let latest = members.last().map(|(user_id, _)| *user_id);
+    // The members are exported in key order, so they can be inserted in bulk efficiently
+    let entries: Vec<_> = members
+        .into_iter()
+        .map(|(user_id, byte_buf)| {
             let bytes = byte_buf.into_vec();
             // Check that the bytes are valid
             let _ = bytes_to_member(&bytes);
-            latest = Some(user_id);
-            m.insert(prefix.create_key(&user_id), bytes);
-        }
-    });
+            (prefix.create_key(&user_id), bytes)
+        })
+        .collect();
+    with_map_mut(|m| m.insert_many(entries));
     latest
+}
+
+// Principals are only stored for members of Group canisters, so they are removed when exporting members
+// into a community, where channel members have them set to None
+fn remove_principal(bytes: Vec<u8>) -> Vec<u8> {
+    let mut member = bytes_to_member(&bytes);
+    if member.principal.take().is_some() { member_to_bytes(member) } else { bytes }
 }
 
 fn member_to_bytes(member: GroupMemberStableStorage) -> Vec<u8> {

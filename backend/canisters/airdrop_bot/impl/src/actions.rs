@@ -132,7 +132,7 @@ async fn handle_transfer_action(action: AirdropTransfer) -> Result<(), Option<Mi
         )
     });
 
-    let to = Account::for_user(action.recipient);
+    let to = Account::legacy_for_user(action.recipient);
     let memo = match action.airdrop_type {
         AirdropType::Main(_) => MEMO_CHIT_FOR_CHAT_AIRDROP,
         AirdropType::Lottery(_) => MEMO_CHIT_FOR_CHAT_LOTTERY,
@@ -211,6 +211,7 @@ async fn handle_main_message_action(action: AirdropMessage) -> Result<(), Option
     };
 
     let args = user_canister::c2c_handle_bot_messages::Args {
+        user_id: action.recipient,
         bot_name: USERNAME.to_string(),
         bot_display_name: None,
         messages: vec![BotMessage {

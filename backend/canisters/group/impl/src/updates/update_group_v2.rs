@@ -96,8 +96,6 @@ struct PrepareResult {
 }
 
 fn prepare(args: &Args, state: &RuntimeState) -> OCResult<PrepareResult> {
-    state.data.verify_not_frozen()?;
-
     if let OptionUpdate::SetToSome(gate_config) = &args.gate_config
         && !gate_config.validate(state.data.test_mode)
     {
@@ -110,7 +108,7 @@ fn prepare(args: &Args, state: &RuntimeState) -> OCResult<PrepareResult> {
         .map(|gcu| gcu.into())
         .apply_to(state.data.chat.gate_config.value.clone());
 
-    let member = state.get_calling_member(true)?;
+    let member = state.get_calling_member(None, true)?;
     let permissions = args.permissions_v2.as_ref();
 
     state.data.chat.can_update(

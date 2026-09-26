@@ -88,8 +88,8 @@ describe("browser startup service-worker maintenance", () => {
     });
 
     it("routes a fatal background-worker crash to the same reload UI after startup", () => {
-        expect(openchat).toContain(
-            "new WorkerAgent(config, (error) => this.#handleStartupFailure(error))",
+        expect(openchat).toMatch(
+            /new WorkerAgent\(\s*config,\s*\(error\) => this\.#handleStartupFailure\(error\),\s*\(head\) => this\.#syncPuller\.onHead\(head\),?\s*\)/,
         );
         expect(workerAgent).toContain("this.#onFatalError?.(error)");
         expect(openchat).toContain("if (startupErrorStore.value !== undefined) return");

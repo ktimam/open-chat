@@ -1,0 +1,29 @@
+use crate::guards::caller_is_hosted_user;
+use crate::updates::remove_reaction::toggle_reaction;
+use crate::{RuntimeState, mutate_state};
+use canister_api_macros::update;
+use canister_tracing_macros::trace;
+use types::Achievement;
+use user_canister::add_reaction::*;
+
+#[update(guard = "caller_is_hosted_user", msgpack = true)]
+#[trace]
+fn add_reaction(args: Args) -> Response {
+    mutate_state(|state| add_reaction_impl(args, state)).into()
+}
+
+fn add_reaction_impl(args: Args, state: &mut RuntimeState) -> types::OCResult {
+    toggle_reaction(
+        args.user_id,
+        args.thread_root_message_index,
+        args.message_id,
+        args.reaction,
+        true,
+        state,
+    )?;
+
+    let my_index = state.caller_user_index_or_trap();
+    let now = state.env.now();
+    state.award_achievement_and_notify(my_index, Achievement::ReactedToMessage, now);
+    Ok(())
+}

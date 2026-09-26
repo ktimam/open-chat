@@ -8,16 +8,68 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- Store a map of the old to the new id of each user migrated to a MultiUser canister, sending each entry to every LocalUserIndex, including any added later ([#9536](https://github.com/open-chat-labs/open-chat/pull/9536))
+- Add the `migrated_user_ids` query, which takes a list of user ids and returns the latest id of each user in it who has been migrated to a MultiUser canister ([#9538](https://github.com/open-chat-labs/open-chat/pull/9538))
+- Include in `UserIdMigrated` the groups and communities the migrated user is in, for the LocalUserIndexes to notify ([#9543](https://github.com/open-chat-labs/open-chat/pull/9543))
+- Add `export_migrating_user`, for governance principals in test mode only, which pulls everything a user being migrated exports, as the MultiUser canister will ([#9547](https://github.com/open-chat-labs/open-chat/pull/9547))
+- Add `cancel_user_migration`, for governance principals in test mode only, which cancels a user's migration via their User canister's `c2c_cancel_migration` ([#9553](https://github.com/open-chat-labs/open-chat/pull/9553))
+- Add a one-off job which fetches the last online date of every user from the OnlineUsers canister in batches of 500, storing them in a temporary map separate from the `UserMap`, so that the users who haven't been online for the longest can be migrated first ([#9557](https://github.com/open-chat-labs/open-chat/pull/9557))
+- Accept a `user_id` in `c2c_set_avatar`, so a MultiUser canister can set the avatar id of one of its users ([#9560](https://github.com/open-chat-labs/open-chat/pull/9560))
+- One-off in `post_upgrade` which records the prod DailyPuzzle canister id and pushes it to every LocalUserIndex, in place of a governance proposal ([#9581](https://github.com/open-chat-labs/open-chat/pull/9581))
+- Add `migrate_users` which queues users to be migrated to MultiUser canisters ([#9582](https://github.com/open-chat-labs/open-chat/pull/9582))
+
+### Changed
+
+- Track the spawned tasks in progress using `utils::async_work` ([#9546](https://github.com/open-chat-labs/open-chat/pull/9546))
+- Return a user migrated to a MultiUser canister under their latest id from `users` and `user` when they are looked up by an earlier one, with the earlier ids they were looked up by as `previous_user_ids` so the client can map them to their latest id. `users` returns each such user once and in full, whether or not they have been updated since, and returns `current_user` whether or not they have been updated if the caller is looked up by an earlier id ([#9549](https://github.com/open-chat-labs/open-chat/pull/9549))
+- Make `create_multi_user_canister` callable by platform operators ([#9569](https://github.com/open-chat-labs/open-chat/pull/9569))
+- Make `set_multi_user_canisters_enabled` callable by platform operators ([#9574](https://github.com/open-chat-labs/open-chat/pull/9574))
+- Store the date created and user count of each MultiUser canister alongside its LocalUserIndex, keeping the count up to date as users are created, deleted and migrated, and include them in `metrics` ([#9575](https://github.com/open-chat-labs/open-chat/pull/9575))
+- Once enabled, route newly registering users to the MultiUser canister with the fewest users ([#9579](https://github.com/open-chat-labs/open-chat/pull/9579))
+
+### Fixed
+
+- Don't retry c2c calls to a method the callee doesn't have, which would otherwise be retried forever ([#9521](https://github.com/open-chat-labs/open-chat/pull/9521))
+- Move bot installations in a user's direct chat which were recorded under a `Group` or `Community` location back to the `User` location, since their events were being routed to a group or community that doesn't exist ([#9522](https://github.com/open-chat-labs/open-chat/pull/9522))
+
+## [[2.0.2064](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2064-user_index)] - 2026-09-23
+
+### Added
+
+- Add `refund_deleted_user_cycles` for platform operators, which sends each deleted user's canister to the LocalUserIndex on its subnet (using the NNS registry's routing table) to have the cycles it still holds refunded ([#9476](https://github.com/open-chat-labs/open-chat/pull/9476))
+- Add `set_call_push_enabled` and `call_push_enabled` for platform operators, fanning the value out to every LocalUserIndex and seeding new ones ([#9509](https://github.com/open-chat-labs/open-chat/pull/9509))
+- One-off `post_upgrade` job which queues the cycles held by previously deleted users' canisters to be refunded, running only once however many times the canister is upgraded. The LocalUserIndexes must be upgraded first ([#9511](https://github.com/open-chat-labs/open-chat/pull/9511))
+
+### Changed
+
+- Extract `deep_message_links` into its own library and drop the direct dependency on `chat_events` ([#9493](https://github.com/open-chat-labs/open-chat/pull/9493))
+- Return the account of a user's principal as their `icp_account` from `current_user` if they aren't alone in their canister, since that is their wallet ([#9505](https://github.com/open-chat-labs/open-chat/pull/9505))
+- Take the payment for an external achievement from the submitter's wallet, which for a user in a MultiUser canister is their principal's account ([#9505](https://github.com/open-chat-labs/open-chat/pull/9505))
+
+## [[2.0.2058](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2058-user_index)] - 2026-09-18
+
+### Added
+
 - Support paying for Diamond membership from external wallets using ICRC2 ([#9265](https://github.com/open-chat-labs/open-chat/pull/9265))
+- Add `upgrade_multi_user_canister_wasm` and `create_multi_user_canister` so MultiUser canisters can be installed and upgraded via the LocalUserIndexes ([#9311](https://github.com/open-chat-labs/open-chat/pull/9311))
+- Add `set_multi_user_canisters_enabled` endpoint which fans out to the LocalUserIndexes ([#9314](https://github.com/open-chat-labs/open-chat/pull/9314))
+- Add `set_daily_puzzle_canister_id` proposal endpoint which fans out the daily_puzzle canister id to the LocalUserIndexes, replayed to any added later ([#9345](https://github.com/open-chat-labs/open-chat/pull/9345))
 
 ### Changed
 
 - Encode the index of a user within their canister into `UserId`, so that a canister can hold many users ([#9259](https://github.com/open-chat-labs/open-chat/pull/9259))
+- Update `ic-stable-structures` to a fork which supports choosing the page size of a map ([#9347](https://github.com/open-chat-labs/open-chat/pull/9347))
+- Pass the target `user_id` in calls to User canisters ([#9401](https://github.com/open-chat-labs/open-chat/pull/9401))
+- Accept `c2c_report_message` from MultiUser canisters, which report on behalf of the users they hold ([#9477](https://github.com/open-chat-labs/open-chat/pull/9477))
 
 ### Removed
 
 - Remove the one-off `post_upgrade` privilege re-sync now that it has run on prod in the 2.0.2046 release ([#9255](https://github.com/open-chat-labs/open-chat/pull/9255))
 - Remove the referral reward payment handling, which has been unreachable since referrals were rewarded in CHIT ([#9289](https://github.com/open-chat-labs/open-chat/pull/9289))
+
+### Fixed
+
+- Reject upgrade filters which name canisters the index has no mapping for, rather than silently dropping them and reporting success ([#9311](https://github.com/open-chat-labs/open-chat/pull/9311))
 
 ## [[2.0.2046](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2046-user_index)] - 2026-08-26
 
@@ -30,27 +82,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- When a report is dismissed, tell the reporter the message may still break the rules of its group or community and suggest raising it with the owners ([#9175](https://github.com/open-chat-labs/open-chat/pull/9175))
 - Suspension freezes every privilege: suspended platform moderators and operators fail the role guards (including `inspect_message`), their role flags on the local user indexes and the bucket vault-reviewer allowlist are resynced on suspend/unsuspend, and lookups mask their role flags while suspended ([#9245](https://github.com/open-chat-labs/open-chat/pull/9245))
 - One-off `post_upgrade` re-sync of privileges for accounts already suspended at deploy time ([#9245](https://github.com/open-chat-labs/open-chat/pull/9245))
-- When a report is dismissed, tell the reporter the message may still break the rules of its group or community and suggest raising it with the owners ([#9175](https://github.com/open-chat-labs/open-chat/pull/9175))
+
+## [[2.0.2039](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2039-user_index)] - 2026-08-20
+
+### Changed
+
 - Bump the current terms version to 2 so users are asked to accept the updated terms naming the PhotoDNA/Microsoft media-matching processor ([#9174](https://github.com/open-chat-labs/open-chat/pull/9174))
 
 ## [[2.0.2030](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2030-user_index)] - 2026-08-20
 
 ### Added
 
-- Create a first-class resolvable moderation report, with an authority-report register entry, for every blocked attempt to re-post CSAM content: immediately due for adjudicated content, mirroring the original report's verdict for content pending review ([#9162](https://github.com/open-chat-labs/open-chat/pull/9162))
-
 - Add the `SetMediaScanConfig` protected action (dual-authorized) to register media scanner principals and enable media scanning across local user indexes ([#9161](https://github.com/open-chat-labs/open-chat/pull/9161))
 - Record media hash-match provenance (provider, source, match distance, match id) on CSAM reports and moderation alerts ([#9161](https://github.com/open-chat-labs/open-chat/pull/9161))
 - Post a notice to the internal moderation channel when a local index reports the media scan pipeline stalled, and when it recovers ([#9161](https://github.com/open-chat-labs/open-chat/pull/9161))
 - Refuse to enable media scanning while the internal moderation channel is unconfigured - detections would sanction and record reports but every alert surface would be dark ([#9161](https://github.com/open-chat-labs/open-chat/pull/9161))
+- Create a first-class resolvable moderation report, with an authority-report register entry, for every blocked attempt to re-post CSAM content: immediately due for adjudicated content, mirroring the original report's verdict for content pending review ([#9162](https://github.com/open-chat-labs/open-chat/pull/9162))
 
 ### Changed
 
+- Never send message media to the OpenAI moderation API - classification is text-only ([#9149](https://github.com/open-chat-labs/open-chat/issues/9149))
 - Automated moderation never lifts, downgrades or laterally replaces a manual moderator suspension; it may only escalate a timed one to indefinite. Enforced in the suspension primitives and re-checked when the suspension is written ([#9162](https://github.com/open-chat-labs/open-chat/pull/9162))
 - A human verdict supersedes an in-flight detection suspension: automated suspension jobs record the report which caused them and refuse to commit once it is resolved ([#9162](https://github.com/open-chat-labs/open-chat/pull/9162))
-- Never send message media to the OpenAI moderation API - classification is text-only ([#9149](https://github.com/open-chat-labs/open-chat/issues/9149))
 
 ### Fixed
 
@@ -84,7 +140,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `set_vault_legal_hold` and `destroy_vault_evidence` (platform operator) - apply or lift a preservation hold on a report's vaulted evidence, and destroy it on a law enforcement request ([#9119](https://github.com/open-chat-labs/open-chat/pull/9119))
 - Hash-match upload suspensions are recorded against the user, making them contestable (Article 22) and visible to the dismissal-safety check, and the uploader is told why they were suspended ([#9119](https://github.com/open-chat-labs/open-chat/pull/9119))
 - Reports which assert child sexual abuse content quarantine the media and delete the message immediately - the material is never viewed outside the quarantine framework - while the suspension waits for the human verdict ([#9119](https://github.com/open-chat-labs/open-chat/pull/9119))
-
 - `accept_terms` - records the user's affirmative acceptance of the platform terms (version + timestamp), returned via `current_user` so clients can show a blocking terms-updated notice ([#9119](https://github.com/open-chat-labs/open-chat/pull/9119))
 - `set_moderation_referral_config` (platform operator) - configures which classifier categories (other than sexual/minors) refer messages for human moderator review, with a score threshold per category ([#9119](https://github.com/open-chat-labs/open-chat/pull/9119))
 - `c2c_moderation_referral` - a high-scoring classifier hit for a configured category creates a resolvable report and alerts the moderators; no action is taken unless a human upholds it ([#9119](https://github.com/open-chat-labs/open-chat/pull/9119))
@@ -109,23 +164,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Expose `reported_messages` query over msgpack so the website can call it again ([#9116](https://github.com/open-chat-labs/open-chat/pull/9116))
 
-## [[2.0.1993](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.1993-user_index)] - 2026-07-21
+## [[2.0.1993](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.1993-user_index)] - 2026-07-22
 
 ### Changed
 
-- Add `c2c_csam_detected` endpoint - applies the CSAM auto-sanction and posts a moderation alert ([#9093](https://github.com/open-chat-labs/open-chat/pull/9093))
-- Add `resolve_moderation_report` so platform moderators can uphold or dismiss escalated reports ([#9095](https://github.com/open-chat-labs/open-chat/pull/9095))
 - Classify reported messages with the OpenAI Moderation API and remove Modclub ([#9092](https://github.com/open-chat-labs/open-chat/pull/9092))
 - Add `set_internal_moderation_channel` endpoint for platform operators ([#9092](https://github.com/open-chat-labs/open-chat/pull/9092))
+- Add `c2c_csam_detected` endpoint - applies the CSAM auto-sanction and posts a moderation alert ([#9093](https://github.com/open-chat-labs/open-chat/pull/9093))
+- Add `resolve_moderation_report` so platform moderators can uphold or dismiss escalated reports ([#9095](https://github.com/open-chat-labs/open-chat/pull/9095))
 - Pass in `expected_claim_type` when verifying JWT claims ([#9102](https://github.com/open-chat-labs/open-chat/pull/9102))
-
-### Fixed
-
-- Bump `date_updated` on suspension so clients receive the suspended flag ([#9092](https://github.com/open-chat-labs/open-chat/pull/9092))
 
 ### Removed
 
 - Remove deprecated `OpenChatBotMessage` event type ([#9032](https://github.com/open-chat-labs/open-chat/pull/9032))
+
+### Fixed
+
+- Bump `date_updated` on suspension so clients receive the suspended flag ([#9092](https://github.com/open-chat-labs/open-chat/pull/9092))
 
 ## [[2.0.1986](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.1986-user_index)] - 2026-05-29
 
@@ -184,8 +239,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
-- fixed post upgrade error ([#8625](https://github.com/open-chat-labs/open-chat/pull/8625))
 - sync streak data to local user indexes ([#8613](https://github.com/open-chat-labs/open-chat/pull/8613))
+- fixed post upgrade error ([#8625](https://github.com/open-chat-labs/open-chat/pull/8625))
 
 ## [[2.0.1903](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.1903-user_index)] - 2025-09-12
 
@@ -857,7 +912,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
-New `users` endpoint to handle volatile user data ([#5900](https://github.com/open-chat-labs/open-chat/pull/5900))
+- New `users` endpoint to handle volatile user data ([#5900](https://github.com/open-chat-labs/open-chat/pull/5900))
 
 ### Changed
 
@@ -1123,8 +1178,8 @@ New `users` endpoint to handle volatile user data ([#5900](https://github.com/op
 
 ### Changed
 
-- Some adjustments to modclub submissions ([#5000](https://github.com/open-chat-labs/open-chat/pull/5000))
 - Add `escrow_canister_id` to LocalUserIndex canister init args ([#4897](https://github.com/open-chat-labs/open-chat/pull/4897))
+- Some adjustments to modclub submissions ([#5000](https://github.com/open-chat-labs/open-chat/pull/5000))
 - Store Diamond membership expiry dates in LocalUserIndex canisters ([#5025](https://github.com/open-chat-labs/open-chat/pull/5025))
 - Make Diamond membership gate check synchronous ([#5027](https://github.com/open-chat-labs/open-chat/pull/5027))
 - Reduce Diamond membership fees due to ICP price increase ([#5032](https://github.com/open-chat-labs/open-chat/pull/5032))
@@ -1184,9 +1239,9 @@ New `users` endpoint to handle volatile user data ([#5900](https://github.com/op
 
 ### Added
 
+- Implement modclub integration for reporting ([#4726](https://github.com/open-chat-labs/open-chat/pull/4726))
 - Support paying in CHAT for Diamond membership ([#4748](https://github.com/open-chat-labs/open-chat/pull/4748))
 - Return Diamond membership fees from UserIndex ([#4751](https://github.com/open-chat-labs/open-chat/pull/4751))
-- Implement modclub integration for reporting ([#4726](https://github.com/open-chat-labs/open-chat/pull/4726))
 
 ### Changed
 

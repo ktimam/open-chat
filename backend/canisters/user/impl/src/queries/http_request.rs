@@ -1,18 +1,32 @@
-use crate::model::streak::Streak;
 use crate::{RuntimeState, read_state};
 use http_request::{AvatarRoute, Route, build_json_response, encode_logs, extract_route, get_document};
 use ic_cdk::query;
 use itertools::Itertools;
+use stable_memory_map::ProfileDocumentType;
 use types::{ChitEventType, HttpRequest, HttpResponse, TimestampMillis};
+use user_core::Streak;
 
 #[query]
 fn http_request(request: HttpRequest) -> HttpResponse {
     fn get_avatar_impl(route: AvatarRoute, state: &RuntimeState) -> HttpResponse {
-        get_document(route.blob_id, state.data.avatar.as_ref(), "avatar")
+        get_document(
+            route.blob_id,
+            state.data.user.avatar.get(ProfileDocumentType::Avatar).as_ref(),
+            "avatar",
+        )
     }
 
     fn get_profile_background_impl(id: Option<u128>, state: &RuntimeState) -> HttpResponse {
-        get_document(id, state.data.profile_background.as_ref(), "profile_background")
+        get_document(
+            id,
+            state
+                .data
+                .user
+                .profile_background
+                .get(ProfileDocumentType::ProfileBackground)
+                .as_ref(),
+            "profile_background",
+        )
     }
 
     fn get_errors_impl(since: Option<TimestampMillis>) -> HttpResponse {
@@ -32,13 +46,20 @@ fn http_request(request: HttpRequest) -> HttpResponse {
     }
 
     fn get_swaps(state: &RuntimeState) -> HttpResponse {
-        let swaps: Vec<_> = state.data.token_swaps.iter().sorted_unstable_by_key(|s| s.started).collect();
+        let swaps: Vec<_> = state
+            .data
+            .user
+            .token_swaps
+            .all()
+            .into_iter()
+            .sorted_unstable_by_key(|s| s.started)
+            .collect();
 
         build_json_response(&swaps)
     }
 
     fn daily_claims(state: &RuntimeState) -> HttpResponse {
-        let (chit_events, _) = state.data.chit_events.events(None, None, 0, 500, false);
+        let (chit_events, _) = state.data.user.chit_events.events(None, None, 0, 500, false);
         let claims: Vec<_> = chit_events
             .into_iter()
             .filter_map(|e| match e.reason {
@@ -48,7 +69,7 @@ fn http_request(request: HttpRequest) -> HttpResponse {
                 _ => None,
             })
             .map(|(ts, claim_type)| {
-                let offset = state.data.streak.utc_offset_mins_at_ts(ts);
+                let offset = state.data.user.streak.utc_offset_mins_at_ts(ts);
                 (Streak::timestamp_to_offset_day(ts, offset), claim_type, ts, offset)
             })
             .collect();

@@ -8,7 +8,10 @@ use chat_events::{CallParticipantInternal, MessageContentInternal, VideoCallCont
 use constants::HOUR_IN_MS;
 use group_canister::start_video_call_v2::*;
 use oc_error_codes::OCErrorCode;
-use types::{Caller, GroupChatUserNotificationPayload, GroupMessageNotification, OCResult, VideoCallPresence, VideoCallType};
+use types::{
+    CallFacts, CallKind, Caller, GroupChatUserNotificationPayload, GroupMessageNotification, OCResult, VideoCallPresence,
+    VideoCallType,
+};
 
 #[update(guard = "caller_is_video_call_operator", candid = true, msgpack = true)]
 #[trace]
@@ -17,8 +20,6 @@ fn start_video_call_v2(args: Args) -> Response {
 }
 
 fn start_video_call_impl(args: Args, state: &mut RuntimeState) -> OCResult {
-    state.data.verify_not_frozen()?;
-
     if matches!(
         (args.call_type, state.data.chat.is_public.value),
         (VideoCallType::Default, true)
@@ -26,15 +27,20 @@ fn start_video_call_impl(args: Args, state: &mut RuntimeState) -> OCResult {
         return Err(OCErrorCode::InitiatorNotAuthorized.with_message("Video call type not allowed"));
     }
 
+    // There is no such thing as an audio only broadcast
+    let Some(call_kind) = CallKind::from_wire(args.call_type, args.audio_only.unwrap_or_default()) else {
+        return Err(OCErrorCode::InitiatorNotAuthorized.with_message("Video call type not allowed"));
+    };
+
     let sender = args.initiator;
     let now = state.env.now();
 
     let result = state.data.chat.send_message(
-        &Caller::User(sender),
+        &Caller::User(state.member_user(sender)),
         None,
         args.message_id,
         MessageContentInternal::VideoCall(VideoCallContentInternal {
-            call_type: args.call_type,
+            call_type: call_kind,
             ended: None,
             participants: [(
                 sender,
@@ -60,6 +66,7 @@ fn start_video_call_impl(args: Args, state: &mut RuntimeState) -> OCResult {
         },
         true,
         Vec::new(),
+        &state.data.migrated_user_ids,
         now,
     )?;
 
@@ -90,6 +97,14 @@ fn start_video_call_impl(args: Args, state: &mut RuntimeState) -> OCResult {
         file_name: None,
         group_avatar_id: state.data.chat.avatar.as_ref().map(|d| d.id),
         crypto_transfer: None,
+        call: Some(CallFacts {
+            message_id: args.message_id,
+            call_type: call_kind.call_type(),
+            audio_only: call_kind.audio_only(),
+            started: result.message_event.timestamp,
+            is_public: state.data.chat.is_public.value,
+            member_count: state.data.chat.members.len(),
+        }),
     });
     state.push_notification(Some(sender), result.users_to_notify, notification);
     handle_activity_notification(state);

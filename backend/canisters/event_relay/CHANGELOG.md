@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [unreleased]
 
+### Changed
+
+- Update `ic-stable-structures` to a fork which supports choosing the page size of a map ([#9347](https://github.com/open-chat-labs/open-chat/pull/9347))
+- Track the spawned tasks in progress using `utils::async_work` ([#9546](https://github.com/open-chat-labs/open-chat/pull/9546))
+
 ## [[2.0.1939](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.1939-event_relay)] - 2025-12-31
 
 ### Changed
@@ -106,5 +111,5 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
-- Forward anonymised events on to the `event_sink` canister ([#5337](https://github.com/open-chat-labs/open-chat/pull/5337))
 - Initial commit ([#5334](https://github.com/open-chat-labs/open-chat/pull/5334))
+- Forward anonymised events on to the `event_sink` canister ([#5337](https://github.com/open-chat-labs/open-chat/pull/5337))

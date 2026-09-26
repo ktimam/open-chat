@@ -5,11 +5,10 @@ use std::io::Read;
 use types::{BuildVersion, CanisterWasm};
 
 lazy_static! {
-    pub static ref ACTION_INBOX: CanisterWasm = get_canister_wasm("action_inbox");
-    pub static ref AI_APP_VERIFIER_TEST: CanisterWasm = get_canister_wasm("ai_app_verifier_test");
     pub static ref AIRDROP_BOT: CanisterWasm = get_canister_wasm("airdrop_bot");
     pub static ref COMMUNITY: CanisterWasm = get_canister_wasm("community");
     pub static ref CYCLES_DISPENSER: CanisterWasm = get_canister_wasm("cycles_dispenser");
+    pub static ref DAILY_PUZZLE: CanisterWasm = get_canister_wasm("daily_puzzle");
     pub static ref ESCROW: CanisterWasm = get_canister_wasm("escrow");
     pub static ref EVENT_RELAY: CanisterWasm = get_canister_wasm("event_relay");
     pub static ref EVENT_STORE: CanisterWasm = get_canister_wasm("event_store");
@@ -19,6 +18,7 @@ lazy_static! {
     pub static ref ICRC_LEDGER: CanisterWasm = get_canister_wasm("icrc_ledger");
     pub static ref IDENTITY: CanisterWasm = get_canister_wasm("identity");
     pub static ref LOCAL_USER_INDEX: CanisterWasm = get_canister_wasm("local_user_index");
+    pub static ref MULTI_USER: CanisterWasm = get_canister_wasm("multi_user");
     pub static ref NOTIFICATIONS_INDEX: CanisterWasm = get_canister_wasm("notifications_index");
     pub static ref ONLINE_USERS: CanisterWasm = get_canister_wasm("online_users");
     pub static ref OPENCHAT_INSTALLER: CanisterWasm = get_canister_wasm("openchat_installer");
@@ -30,6 +30,8 @@ lazy_static! {
     pub static ref STORAGE_INDEX: CanisterWasm = get_canister_wasm("storage_index");
     pub static ref TRANSLATIONS: CanisterWasm = get_canister_wasm("translations");
     pub static ref USER: CanisterWasm = get_canister_wasm("user");
+    // The User canister wasm currently in production, downloaded by `run-integration-tests.sh`
+    pub static ref USER_PROD: CanisterWasm = get_canister_wasm("user_prod");
     pub static ref USER_INDEX: CanisterWasm = get_canister_wasm("user_index");
 }
 

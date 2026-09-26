@@ -7,10 +7,12 @@
         communitiesStore,
         currentUserIdStore,
         currentUserStore,
+        joinedCallType,
         NoMeetingToJoin,
         OpenChat,
         selectedChatSummaryStore,
         selectedCommunitySummaryStore,
+        startVideoOff,
         type AccessTokenType,
         type ChatIdentifier,
         type VideoCallType,
@@ -27,6 +29,12 @@
         sharing,
         type InterCallMessage,
     } from "../../../stores/video";
+    import {
+        armRingOut,
+        peerLeftEndsCall,
+        ringOutApplies,
+        type RingOutHandle,
+    } from "../../../utils/callRingOut";
     import { currentTheme } from "../../../theme/themes";
     import type { Theme } from "../../../theme/types";
     import { removeQueryStringParam } from "../../../utils/urls";
@@ -98,12 +106,22 @@
         }
     }
 
+    // Ends a direct call this client started if nobody joins within the ring window.
+    let ringOut: RingOutHandle | undefined;
+
     export async function startOrJoinVideoCall(
         chatId: ChatIdentifier,
         callType: VideoCallType,
         join: boolean,
     ) {
         if (iframeContainer === undefined) return;
+
+        if (join) {
+            callType = joinedCallType(
+                callType,
+                client.lookupChatSummary(chatId)?.videoCallInProgress?.callType,
+            );
+        }
 
         try {
             if ($activeVideoCall !== undefined) {
@@ -140,7 +158,7 @@
                 activeSpeakerMode: callType === "broadcast" ? true : $videoSpeakerView,
                 showLeaveButton: false,
                 showFullscreenButton: false,
-                startVideoOff: !$videoCameraOn,
+                startVideoOff: startVideoOff(callType, $videoCameraOn),
                 startAudioOff: !$videoMicOn,
                 iframeStyle: {
                     width: "100%",
@@ -186,8 +204,18 @@
 
             // this only fires when *I* leave the meeting
             call.on("left-meeting", () => {
+                ringOut?.cancel();
                 // at this point I have already left the meeting and so participantCount will always report 0
                 // so we can't use it.
+                activeVideoCall.endCall();
+            });
+
+            // A fatal error, such as "Meeting has ended" when the bridge deletes the room
+            // because the other side declined. The call object is finished; end the call here
+            // rather than leave Daily reporting an unhandled error.
+            call.on("error", (ev) => {
+                console.warn("Video call ended with an error", ev?.errorMsg);
+                ringOut?.cancel();
                 activeVideoCall.endCall();
             });
 
@@ -197,7 +225,13 @@
                 if (ev?.participant.owner && !ev.participant.local && callType === "broadcast") {
                     hangup();
                     hostEnded = true;
+                } else if (ev && peerLeftEndsCall(chatId, ev.participant.local)) {
+                    leave(true);
                 }
+            });
+
+            call.on("participant-joined", (ev) => {
+                if (!ev?.participant.local) ringOut?.cancel();
             });
 
             call.on("joined-meeting", (ev) => {
@@ -230,6 +264,17 @@
             await call.join();
 
             activeVideoCall.setCall(chatId, BigInt(messageId), call);
+
+            if (ringOutApplies(chatId, joining)) {
+                ringOut?.cancel();
+                ringOut = armRingOut(
+                    () => (call?.participantCounts().present ?? 1) > 1,
+                    () => {
+                        toastStore.showSuccessToast(i18nKey("videoCall.noAnswer"));
+                        hangup();
+                    },
+                );
+            }
 
             if (joining) {
                 switch (chatId.kind) {
@@ -289,13 +334,18 @@
     }
 
     export function hangup() {
+        leave(false);
+    }
+
+    // `lastOneHere` when the caller already knows nobody else is in the call (the other
+    // party of a direct call left), so the end does not depend on presence having been
+    // reported yet. Not exported: `hangup` is bound to clicks and must take no argument.
+    function leave(lastOneHere: boolean) {
         if ($activeVideoCall?.call) {
-            if ($hasPresence) {
-                const present = $activeVideoCall.call.participantCounts().present;
-                if (present === 1) {
-                    // I must be the last person left in the call
-                    client.endVideoCall($activeVideoCall.chatId, $activeVideoCall.messageId);
-                }
+            const present = $hasPresence ? $activeVideoCall.call.participantCounts().present : 0;
+            if (lastOneHere || present === 1) {
+                // I must be the last person left in the call
+                client.endVideoCall($activeVideoCall.chatId, $activeVideoCall.messageId);
             }
 
             // this will trigger the left-meeting event which will in turn end the call

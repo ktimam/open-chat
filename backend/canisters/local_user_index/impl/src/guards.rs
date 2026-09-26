@@ -40,6 +40,14 @@ pub fn caller_is_local_user_canister() -> Result<(), String> {
     }
 }
 
+pub fn caller_is_local_user_or_multi_user_canister() -> Result<(), String> {
+    if read_state(|state| state.is_caller_local_user_canister() || state.is_caller_local_multi_user_canister()) {
+        Ok(())
+    } else {
+        Err("Caller is not a local User or MultiUser canister".to_string())
+    }
+}
+
 pub fn caller_is_local_group_canister() -> Result<(), String> {
     if read_state(|state| state.is_caller_local_group_canister()) {
         Ok(())
@@ -96,13 +104,18 @@ pub fn caller_is_platform_operator() -> Result<(), String> {
     }
 }
 
-// Like caller_is_platform_operator, but also allows any caller in test mode. Used for deploy-time config
-// (e.g. set_action_inbox_canister) so a local/test deployment — which has no registered platform operators
-// yet — can wire canister ids without first provisioning an operator user.
-pub fn caller_is_platform_operator_or_test_mode() -> Result<(), String> {
-    if read_state(|state| state.data.test_mode || state.is_caller_platform_operator()) {
+pub fn caller_is_daily_puzzle_canister() -> Result<(), String> {
+    if read_state(|state| state.is_caller_daily_puzzle_canister()) {
         Ok(())
     } else {
-        Err("Caller is not a platform operator".to_string())
+        Err("Caller is not the daily_puzzle canister".to_string())
+    }
+}
+
+pub fn caller_is_video_call_operator() -> Result<(), String> {
+    if read_state(|state| state.is_caller_video_call_operator()) {
+        Ok(())
+    } else {
+        Err("Caller is not a video call operator".to_string())
     }
 }

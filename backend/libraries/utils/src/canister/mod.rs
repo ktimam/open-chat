@@ -53,6 +53,17 @@ pub fn delay_if_should_retry_failed_c2c_call(error: &C2CError) -> Option<Millise
     }
 }
 
+// For a call to a method which not every live version of the callee has yet. A missing method is
+// otherwise not retried, but here it will appear once the callee is upgraded, so keep retrying until
+// it has been.
+pub fn delay_if_should_retry_failed_c2c_call_to_new_method(error: &C2CError) -> Option<Milliseconds> {
+    if error.is_method_not_found() {
+        Some(5 * MINUTE_IN_MS)
+    } else {
+        delay_if_should_retry_failed_c2c_call(error)
+    }
+}
+
 // A canister which has been uninstalled still exists, so the call is not rejected with
 // `DestinationInvalid` - it fails with `CanisterError`, which we otherwise cannot tell apart from
 // the callee trapping. The `IC0537` code identifies it, but the IC does not expose the fine grained
@@ -63,6 +74,23 @@ pub fn is_target_canister_uninstalled_or_deleted(reject_code: RejectCode, messag
         RejectCode::DestinationInvalid => true,
         RejectCode::CanisterError => message.contains("IC0537") || message.contains("no Wasm module"),
         _ => false,
+    }
+}
+
+// Whether a call to a User canister failed in a way it does once its user has been migrated to a
+// MultiUser canister: the canister is uninstalled, then briefly installed with the cycles refunder,
+// which has none of the User canister's methods, and then uninstalled again. A caller finding this
+// checks whether the user has been migrated, so that it can send the call on to them.
+pub fn is_user_canister_possibly_migrated(error: &C2CError) -> bool {
+    is_target_canister_uninstalled_or_deleted(error.reject_code(), error.message()) || error.is_method_not_found()
+}
+
+// Rejects an update call made while the canister is frozen. It traps rather than returning an
+// error, since a trap is a `CanisterError`, which the queues sending events to the canister retry,
+// whereas a reject from a guard is a `CanisterReject`, which they drop.
+pub fn trap_if_frozen(is_frozen: bool) {
+    if is_frozen {
+        ic_cdk::trap("Canister is frozen");
     }
 }
 
@@ -131,6 +159,28 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn a_user_canister_may_have_been_migrated_if_uninstalled_deleted_or_missing_the_method() {
+        let error =
+            |reject_code, message: &str| C2CError::new(CanisterId::anonymous(), "method", reject_code, message.to_string());
+
+        assert!(is_user_canister_possibly_migrated(&error(
+            RejectCode::CanisterError,
+            NO_WASM_MODULE_REJECT_MESSAGE
+        )));
+        assert!(is_user_canister_possibly_migrated(&error(RejectCode::DestinationInvalid, "")));
+        // As when the cycles refunder is installed in place of the User canister
+        assert!(is_user_canister_possibly_migrated(&error(
+            RejectCode::CanisterError,
+            "Canister has no update method 'method_msgpack'"
+        )));
+        assert!(!is_user_canister_possibly_migrated(&error(
+            RejectCode::CanisterError,
+            "trapped explicitly: something went wrong"
+        )));
+        assert!(!is_user_canister_possibly_migrated(&error(RejectCode::CanisterReject, "")));
+    }
+
     // Which policy a given failure maps to is covered by the tests alongside
     // `C2CRetryPolicy::from_cdk_error` in the `types` crate
     #[test]
@@ -155,5 +205,25 @@ mod tests {
             delay_if_should_retry_failed_c2c_call(&error(C2CRetryPolicy::RetryAfterDelay)),
             Some(5 * MINUTE_IN_MS)
         );
+    }
+
+    #[test]
+    fn a_missing_new_method_is_retried_until_the_callee_has_it() {
+        let method_not_found = C2CError::new_with_retry_policy(
+            CanisterId::anonymous(),
+            "method",
+            RejectCode::CanisterError,
+            "Canister has no update method 'method_msgpack'".to_string(),
+            C2CRetryPolicy::DoNotRetry,
+        );
+        assert_eq!(delay_if_should_retry_failed_c2c_call(&method_not_found), None);
+        assert_eq!(
+            delay_if_should_retry_failed_c2c_call_to_new_method(&method_not_found),
+            Some(5 * MINUTE_IN_MS)
+        );
+
+        // Any other failure is treated as usual
+        let rejected = C2CError::new(CanisterId::anonymous(), "method", RejectCode::CanisterReject, String::new());
+        assert_eq!(delay_if_should_retry_failed_c2c_call_to_new_method(&rejected), None);
     }
 }

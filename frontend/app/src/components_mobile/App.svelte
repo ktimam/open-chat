@@ -2,6 +2,7 @@
     import "@styles/global.scss";
 
     import "@i18n/i18n";
+    import { invoke } from "@tauri-apps/api/core";
     import { trackedEffect } from "@src/utils/effects.svelte";
     import { detectNeedsSafeInset, setupKeyboardTracking } from "@src/utils/safe_area";
     import {
@@ -20,6 +21,12 @@
         expectPushNotifications,
         expectWindowInsetChange,
     } from "@utils/native/notification_channels";
+    import {
+        expectCallActions,
+        notifyCallJoined,
+        runCallAction,
+        setCallConfig,
+    } from "@utils/native/call_bridge";
     import { expectShareTarget, handleShareTarget } from "@utils/native/share_target";
     import { portalState } from "component-lib";
     import {
@@ -79,6 +86,7 @@
             notificationsCanister: import.meta.env.OC_NOTIFICATIONS_CANISTER!,
             identityCanister: import.meta.env.OC_IDENTITY_CANISTER!,
             onlineCanister: import.meta.env.OC_ONLINE_CANISTER!,
+            dailyPuzzleCanister: import.meta.env.OC_DAILY_PUZZLE_CANISTER ?? "",
             userIndexCanister: import.meta.env.OC_USER_INDEX_CANISTER!,
             translationsCanister: import.meta.env.OC_TRANSLATIONS_CANISTER!,
             registryCanister: import.meta.env.OC_REGISTRY_CANISTER!,
@@ -140,7 +148,22 @@
             subscribe("hangup", hangup),
             subscribe("askToSpeak", askToSpeak),
             subscribe("userLoggedIn", onUserLoggedIn),
+            subscribe("sessionExpired", () => client.logout()),
+            // The current user has been migrated to a new user id, so start again under it
+            subscribe("currentUserIdChanged", () => {
+                if (client.isNativeApp()) {
+                    invoke("plugin:oc|restart_app");
+                } else {
+                    window.location.reload();
+                }
+            }),
         ];
+        // Registered rather than called at each logout site: an expired session logs out from
+        // the worker agent now, not just from the handler below, and the previous user's
+        // shortcuts must not survive on the device either way.
+        client.onLogout(async () => {
+            if (client.isNativeApp()) clearChatShortcuts();
+        });
         window.addEventListener("orientationchange", calculateHeight);
         window.addEventListener("unhandledrejection", unhandledError);
         // visualViewport.resize fires when the iOS virtual keyboard appears/disappears
@@ -249,6 +272,16 @@
 
             // Expect FCM token refreshes
             expectNewFcmToken(addFcmToken),
+
+            // A call answered from the native ring, or a call log redial. Cold-start
+            // actions are parked by the shell and consumed by Router.svelte.
+            expectCallActions(runCallAction),
+
+            // The shell reports a decline from the native ring to the bridge itself. A build
+            // without the URL leaves whatever the shell already holds.
+            import.meta.env.OC_VIDEO_BRIDGE_URL
+                ? setCallConfig(import.meta.env.OC_VIDEO_BRIDGE_URL)
+                : Promise.resolve(),
         ]);
         listenersRegistered.then((results) => {
             results
@@ -320,9 +353,15 @@
             return;
         }
         recordError("window", err);
-        logger?.error("Unhandled error: ", err);
+        // Deliberately not reported here. Rollbar's own captureUncaught /
+        // captureUnhandledRejections already reports every event this handler sees, and
+        // installs earlier than this listener, so logging again produced two Rollbar items
+        // per rejection - one titled "Unhandled error: X" and one titled "X" - splitting
+        // every defect in two and doubling the volume. Its `checkIgnore` reads the rejection
+        // reason out of the original arguments, so worker errors - which arrive as plain
+        // objects, not Errors - are still filtered on name and code. This handler keeps the
+        // crash-log record and the logout, which Rollbar's capture does not do.
         if (ev instanceof PromiseRejectionEvent && requiresLogout(ev.reason)) {
-            if (client.isNativeApp()) clearChatShortcuts();
             client.logout();
             ev.preventDefault();
         }
@@ -343,6 +382,13 @@
         callType: VideoCallType;
         join: boolean;
     }) {
+        if (payload.join) {
+            // Joining from inside the app: the shell's native ring for this call, if any,
+            // ends as answered here.
+            const messageId = client.lookupChatSummary(payload.chatId)?.videoCallInProgress
+                ?.messageId;
+            if (messageId !== undefined) notifyCallJoined(messageId);
+        }
         videoCallElement?.startOrJoinVideoCall(payload.chatId, payload.callType, payload.join);
     }
 

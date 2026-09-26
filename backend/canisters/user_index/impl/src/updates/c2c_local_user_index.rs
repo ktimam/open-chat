@@ -15,6 +15,7 @@ use rand::Rng;
 use stable_memory_map::StableMemoryMap;
 use std::cell::LazyCell;
 use storage_index_canister::add_or_update_users::UserConfig;
+use tracing::info;
 use types::{CanisterId, IdempotentEnvelope, MessageContentInitial, TextContent, TimestampMillis, UserId, UserType};
 use user_index_canister::LocalUserIndexEvent;
 use user_index_canister::c2c_local_user_index::*;
@@ -171,6 +172,37 @@ fn handle_event<F: FnOnce() -> TimestampMillis>(
                 state,
             );
         }
+        LocalUserIndexEvent::MultiUserCanisterCreated(canister_id) => {
+            // Recorded here rather than in the `create_multi_user_canister` handler so
+            // that the mapping survives a dropped reply - the local index keeps retrying this
+            // event until it is acked, and re-adding is a no-op
+            if state.data.multi_user_canisters.add(canister_id, caller, event_timestamp) {
+                info!(%canister_id, local_user_index_canister_id = %caller, "MultiUser canister registered");
+                // Users may be queued for migration, waiting for a MultiUser canister
+                crate::jobs::start_user_migrations::run(state);
+            }
+        }
+        LocalUserIndexEvent::UserMigrationStarted(ev) => {
+            if state.data.user_migrations.mark_started(
+                ev.user_id,
+                ev.multi_user_canister_id,
+                ev.user_bytes,
+                ev.wasm_version,
+                **now,
+            ) {
+                info!(user_id = %ev.user_id, multi_user_canister_id = %ev.multi_user_canister_id, "User migration started");
+            }
+        }
+        LocalUserIndexEvent::UserMigrationFailedToStart(ev) => {
+            if state
+                .data
+                .user_migrations
+                .mark_failed(ev.user_id, ev.multi_user_canister_id, ev.error.clone(), **now)
+            {
+                info!(user_id = %ev.user_id, multi_user_canister_id = %ev.multi_user_canister_id, error = ?ev.error, "User migration failed to start");
+                crate::jobs::start_user_migrations::run(state);
+            }
+        }
         LocalUserIndexEvent::NotifyOfUserDeleted(c, u) => state.data.group_index_event_sync_queue.push(IdempotentEnvelope {
             created_at: **now,
             idempotency_id: state.env.rng().next_u64(),
@@ -236,7 +268,9 @@ fn process_new_user(
         None,
     );
 
-    state.data.local_index_map.add_user(local_user_index_canister_id, user_id);
+    if state.data.local_index_map.add_user(local_user_index_canister_id, user_id) {
+        state.data.multi_user_canisters.on_user_added(&user_id);
+    }
 
     state.push_event_to_all_local_user_indexes(
         UserIndexEvent::UserRegistered(UserRegistered {

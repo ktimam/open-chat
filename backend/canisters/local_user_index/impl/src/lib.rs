@@ -1,13 +1,20 @@
 use crate::model::community_event_batch::CommunityEventBatch;
+use crate::model::daily_puzzle_engine::{DailyPuzzleEngine, DailyPuzzleEngineMetrics};
+use crate::model::daily_puzzle_result_batch::DailyPuzzleResultBatch;
+use crate::model::game_chit_credit::{GameChitCreditRetryQueue, new_retry_queue};
 use crate::model::group_event_batch::GroupEventBatch;
+use crate::model::legacy_user_event_batch::LegacyUserEventBatch;
 use crate::model::local_community_map::LocalCommunityMap;
 use crate::model::local_group_map::LocalGroupMap;
+use crate::model::local_multi_user_canister_map::LocalMultiUserCanisterMap;
 use crate::model::media_scan_job_log::MediaScanJobLog;
 use crate::model::moderation_queue::ModerationQueue;
 use crate::model::premium_items::PremiumItems;
 use crate::model::referral_codes::{ReferralCodes, ReferralTypeMetrics};
+use crate::model::top_up_leaderboards::TopUpLeaderboards;
 use crate::model::user_event_batch::UserEventBatch;
 use crate::model::user_index_event_batch::UserIndexEventBatch;
+use crate::model::users_to_migrate::UsersToMigrate;
 use crate::model::web_push_subscriptions::WebPushSubscriptions;
 use candid::Principal;
 use canister_state_macros::canister_state;
@@ -19,7 +26,7 @@ use event_store_producer_cdk_runtime::CdkRuntime;
 use event_store_utils::EventDeduper;
 use fire_and_forget_handler::FireAndForgetHandler;
 use group_canister::LocalIndexEvent as GroupEvent;
-use jwt::{sign_bytes, verify_and_decode};
+use jwt::{Claims, sign_and_encode_token, sign_bytes, verify_and_decode};
 use local_user_index_canister::{ChildCanisterType, GlobalUser};
 use model::bots_map::BotsMap;
 use model::global_user_map::GlobalUserMap;
@@ -34,41 +41,45 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::time::Duration;
 use timer_job_queues::{BatchedTimerJobQueue, GroupedTimerJobQueue};
-use tracing::error;
+use tracing::{error, info};
 use types::{
     BotDataEncoding, BotEventPayload, BotEventWrapper, BotNotification, BotNotificationEnvelope, BuildVersion,
-    CLAIM_TYPE_DIAMOND_MEMBERSHIP, CanisterId, ChannelLatestMessageIndex, ChatId, ChildCanisterWasms,
-    CommunityCanisterChannelSummary, CommunityCanisterCommunitySummary, CommunityId, Cycles, DiamondMembershipDetails,
-    IdempotentEnvelope, MediaScanConfig, MessageContentInitial, Milliseconds, ModerationReferralConfig, Notification,
-    NotificationEnvelope, ReferralType, TimestampMillis, Timestamped, UserId, UserNotificationEnvelope,
-    VerifiedCredentialGateArgs,
+    CLAIM_TYPE_DECLINE_VIDEO_CALL, CLAIM_TYPE_DIAMOND_MEMBERSHIP, CallDismissalKind, CanisterId, ChannelLatestMessageIndex,
+    Chat, ChatId, ChildCanisterWasms, CommunityCanisterChannelSummary, CommunityCanisterCommunitySummary, CommunityId, Cycles,
+    DailyPuzzleResult, DeclineVideoCallClaims, DiamondMembershipDetails, DirectCallDismissedNotification, FcmData,
+    GroupCallDismissedNotification, IdempotentEnvelope, MediaScanConfig, MessageContentInitial, MessageId, Milliseconds,
+    ModerationReferralConfig, Notification, NotificationEnvelope, ReferralType, TimestampMillis, Timestamped, UserId,
+    UserNotificationEnvelope, UserNotificationPayload, VerifiedCredentialGateArgs,
 };
 use user_canister::LocalUserIndexEvent as UserEvent;
 use user_ids_set::UserIdsSet;
 use user_index_canister::LocalUserIndexEvent as UserIndexEvent;
 use utils::canister;
-use utils::canister::{CanistersRequiringUpgrade, FailedUpgradeCount};
+use utils::canister::{
+    CanistersRequiringUpgrade, ChunkedWasmToInstall, FailedUpgradeCount, VersionedWasmToInstall, WasmToInstall,
+};
 use utils::env::Environment;
 use utils::event_stream::EventStream;
 use utils::fcm_token_store::FcmTokenStore;
 use utils::idempotency_checker::IdempotencyChecker;
 use utils::iterator_extensions::IteratorExtensions;
+use utils::migrated_user_ids::MigratedUserIds;
 
-mod action_deposit_envelope;
 mod bots;
+mod call_push;
 mod guards;
 mod jobs;
 mod lifecycle;
 mod memory;
 mod model;
 mod no_inline_anchor;
-mod pr2_entropy;
 mod queries;
 mod updates;
 
 const CHILD_CANISTER_INITIAL_CYCLES_BALANCE: Cycles = CYCLES_REQUIRED_FOR_UPGRADE + CHILD_CANISTER_TOP_UP_AMOUNT; // 0.5T cycles
 const CHILD_CANISTER_TOP_UP_AMOUNT: Cycles = 200_000_000_000; // 0.2T cycles
 const MARK_ACTIVE_DURATION: Milliseconds = 10 * 60 * 1000; // 10 minutes
+const MULTI_USER_UPGRADE_CONCURRENCY: usize = 1;
 
 thread_local! {
     static WASM_VERSION: RefCell<Timestamped<BuildVersion>> = RefCell::default();
@@ -165,6 +176,11 @@ impl RuntimeState {
         self.data.local_users.contains(&caller.into())
     }
 
+    pub fn is_caller_local_multi_user_canister(&self) -> bool {
+        let caller = self.env.caller();
+        self.data.local_multi_user_canisters.contains(&caller)
+    }
+
     pub fn is_caller_local_group_canister(&self) -> bool {
         let caller = self.env.caller();
         self.data.local_groups.contains(&caller.into())
@@ -180,6 +196,7 @@ impl RuntimeState {
         self.data.local_users.contains(&caller.into())
             || self.data.local_groups.contains(&caller.into())
             || self.data.local_communities.contains(&caller.into())
+            || self.data.local_multi_user_canisters.contains(&caller)
     }
 
     pub fn is_caller_notification_pusher(&self) -> bool {
@@ -205,6 +222,52 @@ impl RuntimeState {
             .is_some_and(|u| u.is_platform_operator)
     }
 
+    pub fn is_caller_daily_puzzle_canister(&self) -> bool {
+        let caller = self.env.caller();
+        self.data.daily_puzzle_canister_id == Some(caller)
+    }
+
+    pub fn is_caller_video_call_operator(&self) -> bool {
+        let caller = self.env.caller();
+        self.data.video_call_operators.contains(&caller)
+    }
+
+    pub fn set_daily_puzzle_canister_id(&mut self, canister_id: CanisterId) {
+        self.data.daily_puzzle_canister_id = Some(canister_id);
+        match self.data.daily_puzzle_results_queue.as_mut() {
+            Some(queue) => queue.set_state(canister_id),
+            None => self.data.daily_puzzle_results_queue = Some(BatchedTimerJobQueue::new(canister_id, true)),
+        }
+        info!(canister_id = %canister_id, "Daily puzzle canister id set");
+        jobs::pull_daily_puzzle::pull_now();
+    }
+
+    pub fn push_daily_puzzle_result(&mut self, result: DailyPuzzleResult) {
+        if let Some(queue) = self.data.daily_puzzle_results_queue.as_mut() {
+            queue.push(result);
+        } else {
+            error!(number = result.number, user_id = %result.user_id, "Daily puzzle canister id not set, result dropped");
+        }
+    }
+
+    // A child canister's wasm to install. Its chunks are only recorded while they are in this
+    // canister's chunk store, so it is installed from the chunks if there are any, else in full
+    pub fn child_canister_wasm_to_install(&self, canister_type: ChildCanisterType) -> VersionedWasmToInstall {
+        let wasm = self.data.child_canister_wasms.get(canister_type);
+        VersionedWasmToInstall {
+            version: wasm.wasm.version,
+            wasm: if wasm.chunks.is_empty() {
+                WasmToInstall::Default(wasm.wasm.module.clone())
+            } else {
+                WasmToInstall::Chunked(ChunkedWasmToInstall {
+                    chunks: wasm.chunks.clone(),
+                    wasm_hash: wasm.wasm_hash,
+                    store_canister_id: self.env.canister_id(),
+                })
+            },
+        }
+    }
+
     pub fn push_event_to_user_index(&mut self, event: UserIndexEvent, now: TimestampMillis) {
         self.data.user_index_event_sync_queue.push(IdempotentEnvelope {
             created_at: now,
@@ -215,12 +278,12 @@ impl RuntimeState {
 
     pub fn push_event_to_user(&mut self, user_id: UserId, event: UserEvent, now: TimestampMillis) -> bool {
         if self.data.local_users.contains(&user_id) {
-            self.data.user_event_sync_queue.push(
-                user_id,
+            self.data.user_events_queue.push(
+                user_id.canister_id(),
                 IdempotentEnvelope {
                     created_at: now,
                     idempotency_id: self.env.rng().next_u64(),
-                    value: event,
+                    value: (user_id, event),
                 },
             );
             true
@@ -364,19 +427,131 @@ impl RuntimeState {
                     })
                     .collect();
 
-                if !filtered_recipients.is_empty() {
-                    self.data
-                        .notifications
-                        .add(NotificationEnvelope::User(Box::new(UserNotificationEnvelope {
-                            recipients: filtered_recipients,
-                            notification_bytes: ByteBuf::from(msgpack::serialize_then_unwrap(&user_notification.notification)),
-                            timestamp: now,
-                            fcm_data: Some(user_notification.notification.into()),
-                        })));
+                let payload = user_notification.notification;
+                let mut fcm_data: FcmData = payload.clone().into();
+
+                // Native call pushes (#9456). Off, every push is what it was before native calls
+                // and no dismissal leaves this canister. On, a call that the policy says should
+                // ring gets the call fields, and a dismissal passes only for a call that rang.
+                if let Some(rang) = call_push::dismissal_rang(&payload) {
+                    if !self.data.call_push_enabled || !rang {
+                        return;
+                    }
+                } else if self.data.call_push_enabled
+                    && let Some((facts, true)) = call_push::ringing_call(&payload)
+                {
+                    fcm_data = fcm_data.set_call(&facts);
+                }
+
+                // A dismissal is only ever a data push to a phone
+                let filtered_recipients: Vec<_> = if fcm_data.is_call_dismissal() {
+                    filtered_recipients
+                        .into_iter()
+                        .filter(|u| !self.data.fcm_token_store.get_for_user(u).is_empty())
+                        .collect()
+                } else {
+                    filtered_recipients
+                };
+
+                let notification_bytes = ByteBuf::from(msgpack::serialize_then_unwrap(&payload));
+
+                // A ring push carries a decline token signed for its one recipient (#9534), so
+                // each phone gets its own envelope. Recipients without a phone share one
+                // envelope with no token; the token never travels in a web push.
+                if let Some(call) = fcm_data.call.as_ref() {
+                    let (phones, others): (Vec<_>, Vec<_>) = filtered_recipients
+                        .into_iter()
+                        .partition(|u| !self.data.fcm_token_store.get_for_user(u).is_empty());
+                    let expiry = call.started + call_push::RING_WINDOW_MS;
+                    let message_id = call.message_id;
+                    for user_id in phones {
+                        let data =
+                            match self.sign_decline_token(user_id, fcm_data.chat_id, message_id, expiry, this_canister_id) {
+                                Some(token) => fcm_data.clone().with_decline_token(token),
+                                None => fcm_data.clone(),
+                            };
+                        self.add_user_notification(vec![user_id], notification_bytes.clone(), data, now);
+                    }
+                    if !others.is_empty() {
+                        self.add_user_notification(others, notification_bytes, fcm_data, now);
+                    }
+                } else if !filtered_recipients.is_empty() {
+                    self.add_user_notification(filtered_recipients, notification_bytes, fcm_data, now);
                 }
             }
             Notification::Bot(bot_notification) => self.push_bot_notification(bot_notification, this_canister_id, now),
         }
+    }
+
+    fn add_user_notification(
+        &mut self,
+        recipients: Vec<UserId>,
+        notification_bytes: ByteBuf,
+        fcm_data: FcmData,
+        now: TimestampMillis,
+    ) {
+        self.data
+            .notifications
+            .add(NotificationEnvelope::User(Box::new(UserNotificationEnvelope {
+                recipients,
+                notification_bytes,
+                timestamp: now,
+                fcm_data: Some(fcm_data),
+            })));
+    }
+
+    // A JWT the video bridge verifies with the OpenChat public key: this user may decline
+    // this call until the ring window ends (#9534). None when the key is not set.
+    fn sign_decline_token(
+        &mut self,
+        user_id: UserId,
+        chat_id: Chat,
+        message_id: MessageId,
+        expiry: TimestampMillis,
+        this_canister_id: CanisterId,
+    ) -> Option<String> {
+        if !self.data.oc_key_pair.is_initialised() {
+            return None;
+        }
+        let claims = Claims::new(
+            expiry,
+            CLAIM_TYPE_DECLINE_VIDEO_CALL.to_string(),
+            DeclineVideoCallClaims {
+                user_id,
+                chat_id,
+                message_id: message_id.to_string(),
+                local_user_index: this_canister_id,
+            },
+        );
+        sign_and_encode_token(self.data.oc_key_pair.secret_key_der(), claims, self.env.rng()).ok()
+    }
+
+    // The video bridge says this user declined the call: stop the ring on their other
+    // devices. Nothing is stored and nobody else hears of it (#9534). Same rules as every
+    // dismissal: only with the switch on, only to phones.
+    pub fn push_call_declined(&mut self, user_id: UserId, chat_id: Chat, message_id: MessageId, now: TimestampMillis) {
+        if !self.data.call_push_enabled || self.data.fcm_token_store.get_for_user(&user_id).is_empty() {
+            return;
+        }
+        let payload = match chat_id {
+            Chat::Direct(them) => UserNotificationPayload::DirectCallDismissed(DirectCallDismissedNotification {
+                them: them.into(),
+                message_id,
+                kind: CallDismissalKind::DeclinedElsewhere,
+            }),
+            Chat::Group(chat_id) => UserNotificationPayload::GroupCallDismissed(GroupCallDismissedNotification {
+                chat_id,
+                message_id,
+                kind: CallDismissalKind::DeclinedElsewhere,
+                is_public: false,
+                member_count: 1,
+            }),
+            // A channel never rings, so there is nothing to stop
+            Chat::Channel(..) => return,
+        };
+        let fcm_data = FcmData::call_dismissal(chat_id, message_id, CallDismissalKind::DeclinedElsewhere);
+        let notification_bytes = ByteBuf::from(msgpack::serialize_then_unwrap(&payload));
+        self.add_user_notification(vec![user_id], notification_bytes, fcm_data, now);
     }
 
     pub fn push_bot_notification(
@@ -448,6 +623,7 @@ impl RuntimeState {
         let user_upgrades_metrics = self.data.users_requiring_upgrade.metrics();
         let group_upgrades_metrics = self.data.groups_requiring_upgrade.metrics();
         let community_upgrades_metrics = self.data.communities_requiring_upgrade.metrics();
+        let multi_user_upgrades_metrics = self.data.multi_users_requiring_upgrade.metrics();
         let event_store_client_info = self.data.event_store_client.info();
         let event_relay_canister_id = event_store_client_info.event_store_canister_id;
 
@@ -464,7 +640,9 @@ impl RuntimeState {
             local_user_count: self.data.local_users.len() as u64,
             local_group_count: self.data.local_groups.len() as u64,
             local_community_count: self.data.local_communities.len() as u64,
+            local_multi_user_count: self.data.local_multi_user_canisters.len() as u64,
             global_user_count: self.data.global_users.len() as u64,
+            multi_user_canister_count: self.data.global_users.multi_user_canisters().len() as u64,
             bot_user_count: self.data.global_users.legacy_bots().len() as u64,
             oc_controlled_bots: self.data.global_users.oc_controlled_bots().iter().copied().collect(),
             platform_moderators: self.data.global_users.platform_moderators().len() as u32,
@@ -487,11 +665,19 @@ impl RuntimeState {
             community_wasm_version: self.data.child_canister_wasms.get(ChildCanisterType::Community).wasm.version,
             community_upgrade_concurrency: self.data.community_upgrade_concurrency,
             max_concurrent_community_upgrades: self.data.max_concurrent_community_upgrades,
+            multi_user_upgrades_completed: multi_user_upgrades_metrics.completed,
+            multi_user_upgrades_pending: multi_user_upgrades_metrics.pending,
+            multi_user_upgrades_in_progress: multi_user_upgrades_metrics.in_progress,
+            multi_user_wasm_version: self.data.child_canister_wasms.get(ChildCanisterType::MultiUser).wasm.version,
+            multi_user_canisters_enabled: self.data.multi_user_canisters_enabled,
+            migrated_user_ids: self.data.migrated_user_ids.len(),
+            call_push_enabled: self.data.call_push_enabled,
             user_versions: self
                 .data
                 .local_users
-                .iter()
-                .map(|u| u.1.wasm_version.to_string())
+                .iter_user_canisters()
+                .filter_map(|u| u.1.wasm_version)
+                .map(|v| v.to_string())
                 .count_per_value(),
             group_versions: self
                 .data
@@ -505,15 +691,29 @@ impl RuntimeState {
                 .iter()
                 .map(|u| u.1.wasm_version.to_string())
                 .count_per_value(),
+            multi_user_versions: self
+                .data
+                .local_multi_user_canisters
+                .iter()
+                .map(|u| u.1.wasm_version.to_string())
+                .count_per_value(),
             user_upgrades_failed: user_upgrades_metrics.failed,
             group_upgrades_failed: group_upgrades_metrics.failed,
             community_upgrades_failed: community_upgrades_metrics.failed,
+            multi_user_upgrades_failed: multi_user_upgrades_metrics.failed,
             recent_user_upgrades: user_upgrades_metrics.recently_competed,
             recent_group_upgrades: group_upgrades_metrics.recently_competed,
             recent_community_upgrades: community_upgrades_metrics.recently_competed,
-            user_events_queue_length: self.data.user_event_sync_queue.len(),
-            user_events_queue_in_progress: self.data.user_event_sync_queue.in_progress(),
+            recent_multi_user_upgrades: multi_user_upgrades_metrics.recently_competed,
+            user_events_queue_length: self.data.user_events_queue.len(),
+            user_events_queue_in_progress: self.data.user_events_queue.in_progress(),
             users_to_delete_queue_length: self.data.users_to_delete_queue.len(),
+            users_to_migrate_pending: self.data.users_to_migrate.pending(),
+            users_to_migrate_in_progress: self.data.users_to_migrate.in_progress(),
+            chunk_store: crate::jobs::refresh_chunk_store::metrics(),
+            cycles_refund_queue_length: self.data.cycles_refund_queue.len(),
+            cycles_refunded_from_deleted_users: self.data.cycles_refunded_from_deleted_users,
+            cycles_topped_up_for_refunds: self.data.cycles_topped_up_for_refunds,
             referral_codes: self.data.referral_codes.metrics(now),
             event_store_client_info,
             notification_pushers: self.data.notification_pushers.iter().copied().collect(),
@@ -532,6 +732,12 @@ impl RuntimeState {
             media_scan_last_verdict_at: self.data.media_scan_job_log.last_verdict_at(),
             media_scan_jobs_dropped: self.data.media_scan_job_log.dropped(),
             cycles_balance_check_queue_len: self.data.cycles_balance_check_queue.len() as u32,
+            daily_puzzle: DailyPuzzleMetrics {
+                canister_id: self.data.daily_puzzle_canister_id,
+                engine: self.data.daily_puzzle_engine.metrics(),
+                results_queue_len: self.data.daily_puzzle_results_queue.as_ref().map_or(0, |q| q.len()),
+                chit_credit_retry_queue_len: self.data.game_chit_credit_retry_queue.len(),
+            },
             bots: self
                 .data
                 .bots
@@ -555,6 +761,7 @@ impl RuntimeState {
                 event_relay: event_relay_canister_id,
                 internet_identity: self.data.internet_identity_canister_id,
                 website: self.data.website_canister_id,
+                daily_puzzle: self.data.daily_puzzle_canister_id,
             },
         }
     }
@@ -565,6 +772,8 @@ struct Data {
     pub local_users: LocalUserMap,
     pub local_groups: LocalGroupMap,
     pub local_communities: LocalCommunityMap,
+    #[serde(default, alias = "local_multi_users")]
+    pub local_multi_user_canisters: LocalMultiUserCanisterMap,
     pub global_users: GlobalUserMap,
     pub bots: BotsMap,
     pub child_canister_wasms: ChildCanisterWasms<ChildCanisterType>,
@@ -581,10 +790,16 @@ struct Data {
     pub users_requiring_upgrade: CanistersRequiringUpgrade,
     pub groups_requiring_upgrade: CanistersRequiringUpgrade,
     pub communities_requiring_upgrade: CanistersRequiringUpgrade,
+    #[serde(default)]
+    pub multi_users_requiring_upgrade: CanistersRequiringUpgrade,
     pub canister_pool: canister::Pool,
     pub total_cycles_spent_on_canisters: Cycles,
     pub user_index_event_sync_queue: BatchedTimerJobQueue<UserIndexEventBatch>,
-    pub user_event_sync_queue: GroupedTimerJobQueue<UserEventBatch>,
+    // Events queued before they were batched per canister, which `post_upgrade` moves into
+    // `user_events_queue`
+    pub user_event_sync_queue: GroupedTimerJobQueue<LegacyUserEventBatch>,
+    #[serde(default = "new_user_events_queue")]
+    pub user_events_queue: GroupedTimerJobQueue<UserEventBatch>,
     pub group_event_sync_queue: GroupedTimerJobQueue<GroupEventBatch>,
     pub community_event_sync_queue: GroupedTimerJobQueue<CommunityEventBatch>,
     pub test_mode: bool,
@@ -602,6 +817,12 @@ struct Data {
     pub event_store_client: EventStoreClient<CdkRuntime>,
     pub event_deduper: EventDeduper,
     pub users_to_delete_queue: VecDeque<UserToDelete>,
+    #[serde(default)]
+    pub cycles_refund_queue: VecDeque<CanisterToRefund>,
+    #[serde(default)]
+    pub cycles_refunded_from_deleted_users: Cycles,
+    #[serde(default)]
+    pub cycles_topped_up_for_refunds: Cycles,
     pub events_for_remote_users: Vec<(UserId, UserEvent)>,
     pub cycles_balance_check_queue: VecDeque<CanisterId>,
     pub fire_and_forget_handler: FireAndForgetHandler,
@@ -619,13 +840,36 @@ struct Data {
     #[serde(default)]
     pub message_moderation_queue: ModerationQueue,
     #[serde(default)]
-    pub action_inbox_canister_id: Option<CanisterId>,
-    #[serde(default)]
-    pub pr2_entropy: types::Pr2EntropyGate,
-    #[serde(default)]
     pub media_scan_config: MediaScanConfig,
     #[serde(default)]
     pub media_scan_job_log: MediaScanJobLog,
+    // Mirrors the flag on the UserIndex. While set, new users are placed in whichever MultiUser
+    // canister has the fewest users
+    #[serde(default)]
+    pub multi_user_canisters_enabled: bool,
+    // The native call push kill switch (#9456). Off until the Android shell can ring.
+    #[serde(default)]
+    pub call_push_enabled: bool,
+    #[serde(default)]
+    pub daily_puzzle_canister_id: Option<CanisterId>,
+    #[serde(default)]
+    pub daily_puzzle_engine: DailyPuzzleEngine,
+    // Created when the daily puzzle canister id is set, since the queue needs a target
+    #[serde(default)]
+    pub daily_puzzle_results_queue: Option<BatchedTimerJobQueue<DailyPuzzleResultBatch>>,
+    // Solve rewards whose credit call failed after the solve was recorded
+    #[serde(default = "new_retry_queue")]
+    pub game_chit_credit_retry_queue: GameChitCreditRetryQueue,
+    // The old id -> the new id of each user migrated to a MultiUser canister, synced from the
+    // UserIndex
+    #[serde(default)]
+    pub migrated_user_ids: MigratedUserIds,
+    // Users the UserIndex has asked this LocalUserIndex to start migrating to MultiUser canisters
+    #[serde(default)]
+    pub users_to_migrate: UsersToMigrate,
+    // Rebuilt every 5 minutes (and on start) from the child canisters' top ups, so not persisted
+    #[serde(skip)]
+    pub top_up_leaderboards: TopUpLeaderboards,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -643,7 +887,43 @@ pub struct UserToDelete {
     pub attempt: usize,
 }
 
+// A deleted user's uninstalled canister whose cycles are to be sent to the CyclesDispenser
+#[derive(Serialize, Deserialize, Clone)]
+pub struct CanisterToRefund {
+    pub canister_id: CanisterId,
+    pub attempt: usize,
+    pub retry_after: TimestampMillis,
+}
+
 impl Data {
+    // Moves the events queued before they were batched per canister into the queue which does so,
+    // pairing each with the user it was queued for
+    // TODO: Remove this, along with `user_event_sync_queue`, once it has run in every canister
+    //
+    // Processing is deferred while they are moved, since the queue otherwise flushes as soon as
+    // events are pushed, and `post_upgrade` can't make calls, so they are sent by a timer instead
+    pub fn drain_legacy_user_event_queue(&mut self) {
+        let legacy_events = self.user_event_sync_queue.take_all();
+        if legacy_events.is_empty() {
+            return;
+        }
+        self.user_events_queue.set_defer_processing(true);
+        for (user_id, events) in legacy_events {
+            self.user_events_queue.push_many(
+                user_id.canister_id(),
+                events
+                    .into_iter()
+                    .map(|event| IdempotentEnvelope {
+                        created_at: event.created_at,
+                        idempotency_id: event.idempotency_id,
+                        value: (user_id, event.value),
+                    })
+                    .collect(),
+            );
+        }
+        self.user_events_queue.set_defer_processing(false);
+    }
+
     #[expect(clippy::too_many_arguments)]
     pub fn new(
         user_index_canister_id: CanisterId,
@@ -663,12 +943,15 @@ impl Data {
         openai_api_key: Option<String>,
         moderation_referral_config: Option<ModerationReferralConfig>,
         media_scan_config: MediaScanConfig,
+        multi_user_canisters_enabled: bool,
+        call_push_enabled: bool,
         test_mode: bool,
     ) -> Self {
         Data {
             local_users: LocalUserMap::default(),
             local_groups: LocalGroupMap::default(),
             local_communities: LocalCommunityMap::default(),
+            local_multi_user_canisters: LocalMultiUserCanisterMap::default(),
             global_users: GlobalUserMap::default(),
             child_canister_wasms: ChildCanisterWasms::default(),
             user_index_canister_id,
@@ -684,9 +967,11 @@ impl Data {
             users_requiring_upgrade: CanistersRequiringUpgrade::default(),
             groups_requiring_upgrade: CanistersRequiringUpgrade::default(),
             communities_requiring_upgrade: CanistersRequiringUpgrade::default(),
+            multi_users_requiring_upgrade: CanistersRequiringUpgrade::default(),
             canister_pool: canister::Pool::new(canister_pool_target_size),
             total_cycles_spent_on_canisters: 0,
             user_event_sync_queue: GroupedTimerJobQueue::new(10, false),
+            user_events_queue: new_user_events_queue(),
             group_event_sync_queue: GroupedTimerJobQueue::new(10, false),
             community_event_sync_queue: GroupedTimerJobQueue::new(10, false),
             user_index_event_sync_queue: BatchedTimerJobQueue::new(user_index_canister_id, true),
@@ -708,6 +993,9 @@ impl Data {
                 .build(),
             event_deduper: EventDeduper::default(),
             users_to_delete_queue: VecDeque::new(),
+            cycles_refund_queue: VecDeque::new(),
+            cycles_refunded_from_deleted_users: 0,
+            cycles_topped_up_for_refunds: 0,
             events_for_remote_users: Vec::new(),
             cycles_balance_check_queue: VecDeque::new(),
             bots: BotsMap::default(),
@@ -722,10 +1010,17 @@ impl Data {
             openai_api_key,
             moderation_referral_config,
             message_moderation_queue: ModerationQueue::default(),
-            action_inbox_canister_id: None,
-            pr2_entropy: types::Pr2EntropyGate::default(),
             media_scan_config,
             media_scan_job_log: MediaScanJobLog::default(),
+            multi_user_canisters_enabled,
+            call_push_enabled,
+            daily_puzzle_canister_id: None,
+            daily_puzzle_engine: DailyPuzzleEngine::default(),
+            daily_puzzle_results_queue: None,
+            game_chit_credit_retry_queue: new_retry_queue(),
+            migrated_user_ids: MigratedUserIds::default(),
+            users_to_migrate: UsersToMigrate::default(),
+            top_up_leaderboards: TopUpLeaderboards::default(),
         }
     }
 }
@@ -743,7 +1038,9 @@ pub struct Metrics {
     pub local_user_count: u64,
     pub local_group_count: u64,
     pub local_community_count: u64,
+    pub local_multi_user_count: u64,
     pub global_user_count: u64,
+    pub multi_user_canister_count: u64,
     pub bot_user_count: u64,
     pub oc_controlled_bots: Vec<UserId>,
     pub platform_moderators: u32,
@@ -767,22 +1064,38 @@ pub struct Metrics {
     pub community_wasm_version: BuildVersion,
     pub community_upgrade_concurrency: u32,
     pub max_concurrent_community_upgrades: u32,
+    pub multi_user_upgrades_completed: u64,
+    pub multi_user_upgrades_pending: u64,
+    pub multi_user_upgrades_in_progress: u64,
+    pub multi_user_wasm_version: BuildVersion,
+    pub multi_user_canisters_enabled: bool,
+    pub migrated_user_ids: usize,
+    pub call_push_enabled: bool,
     pub user_events_queue_length: usize,
     // Batches currently mid-flight: len() alone cannot distinguish an idle queue from one
     // whose last batch is still awaiting its reply
     pub user_events_queue_in_progress: usize,
     pub users_to_delete_queue_length: usize,
+    pub users_to_migrate_pending: usize,
+    pub users_to_migrate_in_progress: usize,
+    pub chunk_store: crate::jobs::refresh_chunk_store::ChunkStoreMetrics,
+    pub cycles_refund_queue_length: usize,
+    pub cycles_refunded_from_deleted_users: Cycles,
+    pub cycles_topped_up_for_refunds: Cycles,
     pub referral_codes: HashMap<ReferralType, ReferralTypeMetrics>,
     pub event_store_client_info: EventStoreClientInfo,
     pub user_versions: BTreeMap<String, u32>,
     pub group_versions: BTreeMap<String, u32>,
     pub community_versions: BTreeMap<String, u32>,
+    pub multi_user_versions: BTreeMap<String, u32>,
     pub user_upgrades_failed: Vec<FailedUpgradeCount>,
     pub group_upgrades_failed: Vec<FailedUpgradeCount>,
     pub community_upgrades_failed: Vec<FailedUpgradeCount>,
+    pub multi_user_upgrades_failed: Vec<FailedUpgradeCount>,
     pub recent_user_upgrades: Vec<CanisterId>,
     pub recent_group_upgrades: Vec<CanisterId>,
     pub recent_community_upgrades: Vec<CanisterId>,
+    pub recent_multi_user_upgrades: Vec<CanisterId>,
     pub notification_pushers: Vec<Principal>,
     pub queued_notifications: u32,
     pub latest_notification_index: u64,
@@ -802,7 +1115,16 @@ pub struct Metrics {
     pub bots: Vec<BotMetrics>,
     pub blocked_username_patterns: Vec<String>,
     pub stable_memory_sizes: BTreeMap<u8, u64>,
+    pub daily_puzzle: DailyPuzzleMetrics,
     pub canister_ids: CanisterIds,
+}
+
+#[derive(Serialize, Debug)]
+pub struct DailyPuzzleMetrics {
+    pub canister_id: Option<CanisterId>,
+    pub engine: DailyPuzzleEngineMetrics,
+    pub results_queue_len: usize,
+    pub chit_credit_retry_queue_len: usize,
 }
 
 #[derive(Serialize, Debug)]
@@ -817,6 +1139,7 @@ pub struct CanisterIds {
     pub event_relay: CanisterId,
     pub internet_identity: CanisterId,
     pub website: CanisterId,
+    pub daily_puzzle: Option<CanisterId>,
 }
 
 #[derive(Serialize, Debug)]
@@ -824,4 +1147,8 @@ pub struct BotMetrics {
     pub user_id: UserId,
     pub name: String,
     pub commands: Vec<String>,
+}
+
+fn new_user_events_queue() -> GroupedTimerJobQueue<UserEventBatch> {
+    GroupedTimerJobQueue::new(10, false)
 }

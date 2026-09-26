@@ -43,6 +43,7 @@ import {
     ROLE_OWNER,
     Stream,
     WEBAUTHN_ORIGINATING_CANISTER,
+    ANON_USER_ID,
     anonymousUser,
     buildDelegationChain,
     canRetryMessage,
@@ -72,7 +73,6 @@ import {
     isCompositeGate,
     isCredentialGate,
     isEditableContent,
-    isMessageNotification,
     isNeuronGate,
     isPaymentGate,
     isProposalsChat,
@@ -92,8 +92,11 @@ import {
     routeForMessage,
     setMinLogLevel,
     shouldPreprocessGate,
+    rolloverDelay,
+    stateFor,
     storeEmailSignInSession,
     stripLinkDisabledMarker,
+    todaysPuzzle,
     toDer,
     toTitleCase,
     updateCreatedUser,
@@ -102,6 +105,7 @@ import {
     userOrUserGroupId,
     userOrUserGroupName,
     userStatus,
+    withUserState,
     type AcceptP2PSwapResponse,
     type AcceptedRules,
     type AccessGate,
@@ -149,6 +153,12 @@ import {
     type CkbtcMinterDepositInfo,
     type CkbtcMinterWithdrawalInfo,
     type ClaimDailyChitResponse,
+    type DailyPuzzleConfig,
+    type DailyPuzzleHintResponse,
+    type DailyPuzzleResult,
+    type DailyPuzzleStartResponse,
+    type DailyPuzzleState,
+    type DailyPuzzleSubmitResponse,
     type ClientJoinCommunityResponse,
     type ClientJoinGroupResponse,
     type CommunitiesRoute,
@@ -160,6 +170,7 @@ import {
     type CompletedCryptocurrencyTransfer,
     type CreateCommunityResponse,
     type CreateGroupResponse,
+    type CreateMultiUserCanisterResponse,
     type CreateUserGroupResponse,
     type CreatedUser,
     type CryptocurrencyContent,
@@ -225,6 +236,7 @@ import {
     type JoinVideoCallResponse,
     type Level,
     type LinkIdentitiesResponse,
+    type LinkedAuthenticationPrincipal,
     type LogLevel,
     type Logger,
     type MarkReadRequest,
@@ -346,8 +358,10 @@ import {
     type WithdrawCryptocurrencyResponse,
     type OCError,
     type ProposedProtectedAction,
+    buildBlobUrl,
     isAndroidTauriApp,
     isIosTauriApp,
+    isPrincipalValid,
     userIdToIcrcAccount,
 } from "@shared";
 import { tick } from "svelte";
@@ -370,6 +384,7 @@ import {
     chatSummariesStore,
     chatsInitialisedStore,
     chitStateStore,
+    dailyPuzzleStore,
     communitiesStore,
     communityFiltersStore,
     confirmedThreadEventIndexesLoadedStore,
@@ -478,6 +493,7 @@ import { offlineStore } from "./stores";
 import { diamondDurationToMs } from "./stores/diamond";
 import { applyTranslationCorrection } from "./stores/i18n";
 import { lastOnlineDates } from "./stores/lastOnlineDates";
+import { dailyPuzzleResultsCache } from "./stores/dailyPuzzleResults";
 import { minutesOnlineStore } from "./stores/minutesOnline";
 import { recommendedGroupExclusions } from "./stores/recommendedGroupExclusions";
 import { captureRulesAcceptanceStore } from "./stores/rules";
@@ -507,7 +523,6 @@ import {
 import {
     activeUserIdFromEvent,
     applyTranslation,
-    buildBlobUrl,
     buildCryptoTransferText,
     buildIdenticonUrl,
     buildTransactionLink,
@@ -616,6 +631,10 @@ import {
 import { mergeKeepingOnlyChanged } from "./utils/object";
 import { hasOwnerRights } from "./utils/permissions";
 import { Poller } from "./utils/poller";
+import { watchForResume, type ResumeReason } from "./utils/resumeDetector";
+import { answerTouchesChat } from "./utils/answerTouchesChat";
+import { SyncPuller } from "./utils/syncPuller";
+import { passkeyProviderName } from "./utils/passkeyProvider";
 import { showTrace } from "./utils/profiling";
 import { indexIsInRanges } from "./utils/range";
 import { RecentlyActiveUsersTracker } from "./utils/recentlyActiveUsersTracker";
@@ -645,6 +664,7 @@ import {
     compareUsername,
     formatLastOnlineDate,
     missingUserIds,
+    shouldRestartForNewUserId,
     nullUser,
     userAvatarUrl,
 } from "./utils/user";
@@ -661,16 +681,34 @@ const CHAT_UPDATE_IDLE_INTERVAL = ONE_MINUTE_MILLIS;
 const BOT_UPDATE_INTERVAL = ONE_MINUTE_MILLIS;
 const BOT_UPDATE_IDLE_INTERVAL = 5 * ONE_MINUTE_MILLIS;
 const USER_UPDATE_INTERVAL = ONE_MINUTE_MILLIS;
+// The daily puzzle changes at rollover and when an operator regenerates or enables it; an
+// installed app never reloads, so this is how it learns (#9334 invariants 56 and 57)
+const DAILY_PUZZLE_UPDATE_INTERVAL = ONE_MINUTE_MILLIS;
+const DAILY_PUZZLE_UPDATE_IDLE_INTERVAL = 5 * ONE_MINUTE_MILLIS;
 const REGISTRY_UPDATE_INTERVAL = 2 * ONE_MINUTE_MILLIS;
 const EXCHANGE_RATE_UPDATE_INTERVAL = 5 * ONE_MINUTE_MILLIS;
 const MAX_USERS_TO_UPDATE_PER_BATCH = 500;
 const MAX_INT32 = Math.pow(2, 31) - 1;
+
+// Diagnostic reports carried "[object Object]" wherever the thrown value was a plain object
+// rather than an Error, which is most of them once an error has crossed the worker boundary.
+function describeError(err: unknown): string {
+    if (typeof err === "string") return err;
+    const message = (err as { message?: unknown })?.message;
+    if (typeof message === "string" && message.length > 0) return message;
+    try {
+        return JSON.stringify(err) ?? String(err);
+    } catch {
+        return String(err);
+    }
+}
 
 export class OpenChat {
     #mobileLayout: "v1" | "v2";
     #worker: WorkerAgent;
     #authIdentityStorage: IdentityStorage;
     #authPrincipal: string | undefined;
+    #ocIdentityPrincipal: string | undefined;
     #authClient: Promise<AuthClient>;
     #webAuthnKey: WebAuthnKey | undefined = undefined;
     #userLocation: string | undefined;
@@ -683,11 +721,21 @@ export class OpenChat {
     #emptyChatIncidents = new Set<number>();
     #lastOnlineDatesPending = new Set<string>();
     #lastOnlineDatesPromise: Promise<Record<string, number>> | undefined;
+    #dailyResultsPending = new Map<
+        string,
+        { userIds: Set<string>; promise: Promise<Record<string, DailyPuzzleResult>> }
+    >();
     #membershipCheck: number | undefined;
+    #currentUserIdChangedPublished = false;
     #referralCode: string | undefined = undefined;
     #userLookupForMentions: Record<string, UserOrUserGroup> | undefined = undefined;
     #chatsPoller: Poller | undefined = undefined;
+    #stopWatchingForResume: (() => void) | undefined = undefined;
+    readonly #syncPuller: SyncPuller;
     #botsPoller: Poller | undefined = undefined;
+    #dailyPuzzlePoller: Poller | undefined = undefined;
+    #dailyPuzzleRolloverTimer: number | undefined = undefined;
+    #dailyPuzzleVisibilityListener: (() => void) | undefined = undefined;
     #registryPoller: Poller | undefined = undefined;
     #onlinePoller: Poller | undefined = undefined;
     #btcBalancePoller: Poller | undefined = undefined;
@@ -719,7 +767,16 @@ export class OpenChat {
 
     constructor(private config: OpenChatConfig) {
         this.#logger = config.logger;
-        this.#worker = new WorkerAgent(config, (error) => this.#handleStartupFailure(error));
+        this.#syncPuller = new SyncPuller({
+            pull: (since) => this.#worker.send({ kind: "syncSince", since }),
+            fold: (updates) => this.#handleChatsResponse(undefined, false, updates),
+            log: (message, err) => this.#logger.error(message, err as Error),
+        });
+        this.#worker = new WorkerAgent(
+            config,
+            (error) => this.#handleStartupFailure(error),
+            (head) => this.#syncPuller.onHead(head),
+        );
 
         this.#mobileLayout = config.mobileLayout;
         this.#vapidPublicKey = config.vapidPublicKey;
@@ -765,6 +822,15 @@ export class OpenChat {
             throw new Error("Trying to access the _authPrincipal before it has been set up");
         }
         return this.#authPrincipal;
+    }
+
+    // The principal of the OpenChat identity, which is the caller of every canister call the
+    // worker makes (and so the principal to hot-key neurons to). Distinct from the auth principal.
+    public get OcIdentityPrincipal(): string {
+        if (this.#ocIdentityPrincipal === undefined) {
+            throw new Error("Trying to access the OC identity principal before it has been set up");
+        }
+        return this.#ocIdentityPrincipal;
     }
 
     isNativeAndroid() {
@@ -823,6 +889,17 @@ export class OpenChat {
         }
     }
 
+    // Whether the details held for this group or channel are missing or older than its summary
+    #chatDetailsBehind(serverChat: ChatSummary): boolean {
+        if (serverChat.kind === "direct_chat") return false;
+        const details = selectedServerChatStore.value;
+        return (
+            details === undefined ||
+            !chatIdentifiersEqual(details.chatId, serverChat.id) ||
+            details.timestamp < serverChat.lastUpdated
+        );
+    }
+
     #chatUpdated(chatId: ChatIdentifier, updatedEvents: UpdatedEvent[]): void {
         if (
             selectedChatIdStore.value === undefined ||
@@ -875,10 +952,16 @@ export class OpenChat {
               );
         // Stop the chats poller until we have finished loading the new identity
         this.#chatsPoller?.stop();
+        this.#stopWatchingForResume?.();
+        this.#stopWatchingForResume = undefined;
+        this.#dailyPuzzlePoller?.stop();
+        if (typeof window !== "undefined") window.clearTimeout(this.#dailyPuzzleRolloverTimer);
         currentUserStore.set(anonymousUser());
         chatsInitialisedStore.set(false);
+        this.#syncPuller.clear();
         const authPrincipal = identity.getPrincipal().toString();
         this.#authPrincipal = anon ? undefined : authPrincipal;
+        this.#ocIdentityPrincipal = undefined;
         this.updateIdentityState(anon ? { kind: "anon" } : { kind: "loading_user", registering });
 
         const setAuthIdentityResponse = await this.#worker.send({
@@ -913,6 +996,7 @@ export class OpenChat {
             }
 
             if (ocIdentity !== undefined) {
+                this.#ocIdentityPrincipal = ocIdentity.ocIdentityPrincipal;
                 this.#startSession(ocIdentity.ocIdentityPrincipal, ocIdentity.ocIdentityExpiry);
             }
 
@@ -953,8 +1037,23 @@ export class OpenChat {
     }
 
     // Runs once the initial load of a selected chat has settled: if it is still the selected
-    // chat and nothing reached the event store, report it along with what the selection did.
-    #checkForEmptyChat(chatId: ChatIdentifier, path: string): void {
+    // chat and nothing reached the event store, recover it and report what happened.
+    //
+    // Four paths through loadPreviousMessages arrive here having loaded nothing AND thrown
+    // nothing, and the original report could not tell them apart:
+    //
+    //   - the chat is absent from allServerChatsStore (the summary read here comes from
+    //     chatSummariesStore, and those two diverge for previews and uninitialised direct chats)
+    //   - it is a private preview
+    //   - #previousMessagesCriteria concludes there is nothing left to fetch
+    //   - the events stream completes without emitting, so .aggregate falls back to
+    //     emptyEventsResponse(), which is a SUCCESS carrying zero events - indistinguishable
+    //     from a genuinely empty chat
+    //
+    // Whichever it was, a chat with history rendering nothing is wrong, and nothing retries
+    // until the user reselects it. So load the latest events directly instead of only filing a
+    // report. The extra fields identify which path it was, for when we come to remove this.
+    async #checkForEmptyChat(chatId: ChatIdentifier, path: string): Promise<void> {
         const chat = chatSummariesStore.value.get(chatId);
         if (
             chat === undefined ||
@@ -966,13 +1065,52 @@ export class OpenChat {
         ) {
             return;
         }
-        this.#reportEmptyChat("still_empty_after_load", {
+
+        const serverChat = allServerChatsStore.value.get(chatId);
+        const context = {
             chatId: chatIdentifierToString(chatId),
             chatKind: chat.kind,
             path,
             latestEventIndex: chat.latestEventIndex,
             minVisibleEventIndex: this.earliestAvailableEventIndex(chat),
+            hasServerChat: serverChat !== undefined,
+            privatePreview: serverChat !== undefined && this.#isPrivatePreview(serverChat),
+            earliestLoadedIndex: this.#earliestLoadedIndex(chatId),
+        };
+
+        const recovered = await this.#recoverEmptyChat(chatId, serverChat);
+        this.#reportEmptyChat("still_empty_after_load", { ...context, recovered });
+    }
+
+    // Load the latest events straight from the server chat, bypassing
+    // #previousMessagesCriteria, which is one of the things that may have decided there was
+    // nothing to fetch. Deliberately does NOT go through loadPreviousMessages, so it cannot
+    // re-enter #checkForEmptyChat however it turns out.
+    async #recoverEmptyChat(
+        chatId: ChatIdentifier,
+        serverChat: ChatSummary | undefined,
+    ): Promise<boolean> {
+        if (serverChat === undefined) return false;
+
+        const seq = this.#chatSelectionSeq;
+        const startIndex = serverChat.latestEventIndex;
+        const resp = await this.#loadEvents(serverChat, startIndex, false);
+
+        // The user may have moved on while that was in flight.
+        if (
+            seq !== this.#chatSelectionSeq ||
+            !chatIdentifiersEqual(chatId, selectedChatIdStore.value) ||
+            !isSuccessfulEventsResponse(resp)
+        ) {
+            return false;
+        }
+
+        this.#fillLoadedEventGaps(serverChat, resp, startIndex, false);
+        publish("loadedPreviousMessages", {
+            context: { chatId, threadRootMessageIndex: undefined },
+            initialLoad: true,
         });
+        return serverEventsStore.value.length > 0;
     }
 
     // The initial load is the only thing that loads a freshly selected chat or thread: if it
@@ -1193,6 +1331,9 @@ export class OpenChat {
         this.#startChatsPoller();
         this.#startBotsPoller();
         this.#startUserUpdatePoller();
+        this.#stopWatchingForResume ??= watchForResume((reason, suspendedMs) =>
+            this.#onResume(reason, suspendedMs),
+        );
         this.#worker.send({ kind: "getAllCachedUsers" }).then((u) => userStore.addMany(u));
 
         initNotificationStores();
@@ -1200,6 +1341,7 @@ export class OpenChat {
             this.#startOnlinePoller();
             this.#startBtcBalanceUpdateJob();
             this.#startOneSecBalanceUpdateJob();
+            this.#startDailyPuzzlePoller();
             this.#worker
                 .send({ kind: "getUserStorageLimits" })
                 .then((storage) => {
@@ -1241,6 +1383,32 @@ export class OpenChat {
         this.#startChatsPoller();
     }
 
+    #startDailyPuzzlePoller() {
+        this.#dailyPuzzlePoller?.stop();
+        if (anonUserStore.value) return;
+        this.#dailyPuzzlePoller = new Poller(
+            () => this.dailyPuzzleFetch(),
+            DAILY_PUZZLE_UPDATE_INTERVAL,
+            DAILY_PUZZLE_UPDATE_IDLE_INTERVAL,
+            true,
+        );
+        // Coming back to a backgrounded app is the moment a stale puzzle would show
+        if (typeof document !== "undefined" && this.#dailyPuzzleVisibilityListener === undefined) {
+            this.#dailyPuzzleVisibilityListener = () => {
+                if (document.visibilityState === "visible") this.dailyPuzzleFetch();
+            };
+            document.addEventListener("visibilitychange", this.#dailyPuzzleVisibilityListener);
+        }
+    }
+
+    #scheduleDailyPuzzleRollover(state: DailyPuzzleState) {
+        if (typeof window === "undefined") return;
+        window.clearTimeout(this.#dailyPuzzleRolloverTimer);
+        const delay = rolloverDelay(state, Date.now());
+        if (delay === undefined) return;
+        this.#dailyPuzzleRolloverTimer = window.setTimeout(() => this.dailyPuzzleFetch(), delay);
+    }
+
     #startBotsPoller() {
         this.#botsPoller?.stop();
         this.#botsPoller = new Poller(
@@ -1249,6 +1417,22 @@ export class OpenChat {
             BOT_UPDATE_IDLE_INTERVAL,
             true,
         );
+    }
+
+    // Coming back after the device slept or the tab sat in the background, queries sent before
+    // the suspension are often stuck on a connection that died meanwhile. The chats poller runs
+    // one pass at a time, so a pass holding such a query kept the next from starting until the
+    // browser gave up on the connection, which could take many seconds. Aborting the stuck
+    // queries makes the agent resend them, and the triggered run fetches anything that changed
+    // after the pass in flight had already read it.
+    #onResume(reason: ResumeReason, suspendedMs: number) {
+        console.debug(`Resumed (${reason}) after ${Math.round(suspendedMs / 1000)}s`);
+        this.#worker
+            .send({ kind: "abortInFlightQueries" })
+            .catch((err) => console.warn("Unable to abort in-flight queries", err));
+        // Deferred so that the poller has seen the visibility change first. A hidden app
+        // ignores triggers.
+        window.setTimeout(() => this.#chatsPoller?.triggerNow(), 0);
     }
 
     #startChatsPoller() {
@@ -1325,7 +1509,20 @@ export class OpenChat {
         );
     }
 
-    async logout(): Promise<void> {
+    #logoutPromise: Promise<void> | undefined;
+
+    // Idempotent. An expired session now reaches this twice, deterministically: the worker agent
+    // publishes sessionExpired and then rejects the request, and if nothing catches that the
+    // window's unhandledrejection handler calls logout again. A second run sent a second worker
+    // logout, cleared the agent and navigated within milliseconds - while the first was still in
+    // its pre-logout window removing the push token, which then failed with "Worker has no agent"
+    // and left the Android token registered to a signed-out user.
+    logout(): Promise<void> {
+        this.#logoutPromise ??= this.#doLogout();
+        return this.#logoutPromise;
+    }
+
+    async #doLogout(): Promise<void> {
         // Run any registered pre-logout tasks (e.g. push-token cleanup) while
         // the identity is still valid. Best-effort: Promise.resolve().then wraps
         // each task so a synchronous throw becomes a rejection that allSettled
@@ -1339,10 +1536,42 @@ export class OpenChat {
             5000,
         );
 
-        await Promise.all([
+        // The navigation is what actually ends the session for the user, so it must happen
+        // whatever the teardown does. `finally` alone is not enough: the worker's logout awaits
+        // three sequential IndexedDB deletes with no timeout, so a wedged IndexedDB - the very
+        // case this path exists for - leaves the Promise pending and `finally` never runs. Cap
+        // it the same way the pre-logout tasks are capped.
+        // Known edge: if IndexedDB is blocked for longer than the cap, navigating can cut the
+        // auth client's delegation delete short, and startup may sign the user back in from the
+        // surviving delegation. Narrow, and no worse than the manual reload it replaces, but
+        // it is a consequence of choosing "always navigate" over "sometimes never".
+        // allSettled so one step failing cannot stop the other, but never silently: a failed
+        // delegation delete means the user navigates away with the delegation still on disk, and
+        // that used to reach the error tracker as an unhandled rejection.
+        const teardown = Promise.allSettled([
             this.#worker.send({ kind: "logout" }),
             this.#authClient.then((c) => c.logout()),
-        ]).then(() => window.location.replace("/"));
+        ]).then((results) => {
+            const names = ["worker logout", "auth client logout"];
+            results.forEach((r, i) => {
+                if (r.status === "rejected") {
+                    this.#logger.error(`Logout: ${names[i]} failed`, r.reason);
+                }
+            });
+        });
+        try {
+            let settled = false;
+            teardown.finally(() => (settled = true));
+            await this.#withTimeout(teardown, 5000);
+            if (!settled) {
+                this.#logger.error(
+                    "Logout: teardown did not settle within 5s, navigating anyway",
+                    new Error("logout teardown timed out"),
+                );
+            }
+        } finally {
+            window.location.replace("/");
+        }
     }
 
     unreadThreadMessageCount(
@@ -2777,7 +3006,9 @@ export class OpenChat {
 
         const chatId = chat.id;
         const threadRootMessageIndex = threadRootEvent.event.messageIndex;
+        const context = { chatId, threadRootMessageIndex };
 
+        publish("loadingMessageWindow", { context, messageIndex });
         const eventsResponse: EventsResponse<ChatEvent> = await this.#worker
             .stream({
                 kind: "chatEventsWindow",
@@ -2793,17 +3024,14 @@ export class OpenChat {
             .catch(CommonResponses.failure);
 
         if (!isSuccessfulEventsResponse(eventsResponse)) {
+            publish("loadedMessageWindow", { context, messageIndex: undefined, initialLoad });
             if (initialLoad) {
                 await this.#fallBackToPreviousMessages(chatId, threadRootEvent);
             }
             return undefined;
         }
 
-        publish("loadedMessageWindow", {
-            context: { chatId, threadRootMessageIndex: threadRootEvent.event.messageIndex },
-            messageIndex,
-            initialLoad,
-        });
+        publish("loadedMessageWindow", { context, messageIndex, initialLoad });
 
         return messageIndex;
     }
@@ -2837,6 +3065,8 @@ export class OpenChat {
             }
 
             const range = indexRangeForChat(clientChat);
+            const context = { chatId: clientChat.id, threadRootMessageIndex: undefined };
+            publish("loadingMessageWindow", { context, messageIndex });
             const eventsResponse: EventsResponse<ChatEvent> = await this.#worker
                 .stream({
                     kind: "chatEventsWindow",
@@ -2856,27 +3086,21 @@ export class OpenChat {
                         this.#reportEmptyChat("window_load_failed", {
                             chatId: chatIdentifierToString(chatId),
                             messageIndex,
-                            error: (err as { message?: string })?.message ?? String(err),
+                            error: describeError(err),
                         });
                     }
                     return CommonResponses.failure();
                 });
 
             if (!isSuccessfulEventsResponse(eventsResponse)) {
+                publish("loadedMessageWindow", { context, messageIndex: undefined, initialLoad });
                 if (initialLoad) {
                     await this.#fallBackToPreviousMessages(chatId);
                 }
                 return undefined;
             }
 
-            publish("loadedMessageWindow", {
-                context: {
-                    chatId: clientChat.id,
-                    threadRootMessageIndex: threadRootEvent?.event.messageIndex,
-                },
-                messageIndex,
-                initialLoad,
-            });
+            publish("loadedMessageWindow", { context, messageIndex, initialLoad });
 
             return messageIndex;
         }
@@ -3115,7 +3339,11 @@ export class OpenChat {
                 return false;
             }
         }
-        localUpdates.addUninitialisedDirectChat(chatId);
+        // The placeholder would shadow the real chat in allServerChatsStore, making it appear empty.
+        // This must be checked after the await above, since the chat may have arrived in the meantime.
+        if (!serverDirectChatsStore.value.has(chatId)) {
+            localUpdates.addUninitialisedDirectChat(chatId);
+        }
         return true;
     }
 
@@ -3312,7 +3540,7 @@ export class OpenChat {
                         ? this.loadEventWindow(chatId, messageIndex, undefined, true)
                         : this.loadPreviousMessages(chatId, undefined, true);
                 load.then(() => {
-                    this.#checkForEmptyChat(chatId, path);
+                    void this.#checkForEmptyChat(chatId, path);
                     if (serverChat !== undefined) {
                         this.#loadChatDetails(serverChat);
                     }
@@ -3564,6 +3792,21 @@ export class OpenChat {
         return threadEventsStore.value.length === 0 ? undefined : threadEventsStore.value[0].index;
     }
 
+    // Thread events start at index 0, so a thread whose latest event index is 0 holds one event
+    // at most. When that event is our own unconfirmed message, the send that creates the thread
+    // on the server is still in flight: the local summary written by `afterSendMessage` is what
+    // made the thread exist here, and asking the server for its events now gets ThreadNotFound.
+    // Once the send lands the event is confirmed and there is still nothing older to fetch.
+    #firstThreadReplyInFlight(
+        chatId: ChatIdentifier,
+        threadRootEvent: EventWrapper<Message>,
+    ): boolean {
+        const thread = threadRootEvent.event.thread;
+        if (thread === undefined || thread.latestEventIndex > 0) return false;
+        const context = { chatId, threadRootMessageIndex: threadRootEvent.event.messageIndex };
+        return localUpdates.unconfirmedMessages(context).length > 0;
+    }
+
     previousThreadMessagesCriteria(thread: ThreadSummary): [number, boolean] | undefined {
         const minLoadedEventIndex = this.earliestLoadedThreadIndex();
         if (minLoadedEventIndex === undefined) {
@@ -3590,6 +3833,7 @@ export class OpenChat {
         }
 
         if (threadRootEvent !== undefined && threadRootEvent.event.thread !== undefined) {
+            if (this.#firstThreadReplyInFlight(chatId, threadRootEvent)) return;
             const thread = threadRootEvent.event.thread;
             const threadCriteria = this.previousThreadMessagesCriteria(thread);
             if (threadCriteria === undefined) {
@@ -3715,6 +3959,19 @@ export class OpenChat {
             return undefined;
         }
 
+        // An uninitialised direct chat is a local placeholder for someone we have never
+        // messaged (localUpdates.addUninitialisedDirectChat), carrying latestEventIndex 0 and
+        // no latestMessage. There is no event 0 to fetch: asking the user canister for one
+        // returns ChatNotFound, which was filing a previous_load_failed report for every new
+        // conversation anyone started.
+        if (
+            serverChat.kind === "direct_chat" &&
+            serverChat.latestEventIndex === 0 &&
+            serverChat.latestMessage === undefined
+        ) {
+            return undefined;
+        }
+
         const minLoadedEventIndex = this.#earliestLoadedIndex(serverChat.id);
         if (minLoadedEventIndex === undefined) {
             return [serverChat.latestEventIndex, false];
@@ -3778,6 +4035,7 @@ export class OpenChat {
         threadRootEvent?: EventWrapper<Message>,
     ): boolean {
         if (threadRootEvent !== undefined) {
+            if (this.#firstThreadReplyInFlight(chatId, threadRootEvent)) return false;
             const earliestIndex = this.earliestLoadedThreadIndex();
             return earliestIndex === undefined || earliestIndex > 0;
         }
@@ -4806,12 +5064,10 @@ export class OpenChat {
         text: string | undefined,
         captioned: CaptionedContent | undefined,
     ): MessageContent {
-        return captioned
-            ? { ...captioned, caption: text }
-            : ({
-                  kind: "text_content",
-                  text: text ?? "",
-              } as MessageContent);
+        if (captioned === undefined) {
+            return { kind: "text_content", text: text ?? "" };
+        }
+        return { ...captioned, caption: text };
     }
 
     #onSendMessageFailure(
@@ -5030,84 +5286,30 @@ export class OpenChat {
             });
     }
 
+    /**
+     * Every notification means its chat has changed on the server, so the chat is brought up to
+     * date now rather than at the next poll (up to a minute in the background). Everything else
+     * follows from the updated summary as it would from a poll: the chat list, unread counts and
+     * latest message, a video call starting or ending, and the selected chat's new messages.
+     *
+     * A group or channel is refreshed on its own, with one query. A direct chat's summary comes
+     * only from the User canister, and being added to a channel changes User canister state too,
+     * so those, and a refresh that can't be done on its own, run a full updates pass instead.
+     */
     notificationReceived(notification: Notification): void {
-        let chatId: ChatIdentifier;
-        let threadRootMessageIndex: number | undefined = undefined;
-        let eventIndex: number;
-        switch (notification.kind) {
-            case "direct_notification":
-            case "direct_reaction":
-            case "direct_message_tipped":
-            case "group_notification":
-            case "group_reaction":
-            case "group_message_tipped":
-            case "channel_notification":
-            case "channel_reaction":
-            case "channel_message_tipped": {
-                chatId = notification.chatId;
-                eventIndex = notification.messageEventIndex;
-                if ("threadRootMessageIndex" in notification) {
-                    threadRootMessageIndex = notification.threadRootMessageIndex;
-                }
-                break;
-            }
-
-            case "added_to_channel_notification":
-                return;
-        }
-
-        const serverChat = allServerChatsStore.value.get(chatId);
-        if (serverChat === undefined) {
+        const chatId = notification.chatId;
+        if (
+            notification.kind === "added_to_channel_notification" ||
+            chatId.kind === "direct_chat"
+        ) {
+            this.#chatsPoller?.triggerNow();
             return;
         }
-
-        if (!isMessageNotification(notification)) {
-            // TODO first clear the existing cache entry
-            return;
-        }
-
-        const minVisibleEventIndex =
-            serverChat.kind === "direct_chat" ? 0 : serverChat.minVisibleEventIndex;
-        const latestEventIndex = Math.max(eventIndex, serverChat.latestEventIndex);
-
-        // Load the event
         this.#worker
-            .stream({
-                kind: "chatEvents",
-                chatType: serverChat.kind,
-                chatId,
-                eventIndexRange: [minVisibleEventIndex, latestEventIndex],
-                startIndex: eventIndex,
-                ascending: false,
-                threadRootMessageIndex,
-                latestKnownUpdate: serverChat.lastUpdated,
-            })
-            .aggregate(mergeEventStreamResponses, emptyEventsResponse())
-            .toPromise()
-            .then((resp) => {
-                if (!isSuccessfulEventsResponse(resp)) return resp;
-                if (!this.isChatPrivate(serverChat)) return resp;
-
-                const ev = resp.events.find((e) => e.index === eventIndex);
-                if (ev !== undefined) {
-                    if (
-                        ev.event.kind === "message" &&
-                        ev.event.content.kind === "video_call_content"
-                    ) {
-                        this.#publishRemoteVideoCallStarted({
-                            chatId,
-                            userId: ev.event.sender,
-                            messageId: ev.event.messageId,
-                            currentUserIsParticipant: false,
-                            callType: ev.event.content.callType,
-                            timestamp: ev.timestamp,
-                        });
-                    }
-                }
-                return resp;
-            })
-            .catch(() => {
-                console.warn("Failed to load event from notification");
+            .send({ kind: "refreshChat", chatId })
+            .catch(() => false)
+            .then((refreshed) => {
+                if (!refreshed) this.#chatsPoller?.triggerNow();
             });
     }
 
@@ -5528,12 +5730,15 @@ export class OpenChat {
     captureReferralCode(): boolean {
         const code = this.#extractReferralCodeFromPath();
         let captured = false;
-        if (code) {
+        // A referral code is the referrer's user id; anything else (a username typed into the
+        // link) would fail Principal.fromText the moment we looked the referrer up
+        if (code && isPrincipalValid(code)) {
             gaTrack("captured_referral_code", "registration");
             localStorage.setItem("openchat_referredby", code);
             captured = true;
         }
-        this.#referralCode = localStorage.getItem("openchat_referredby") ?? undefined;
+        const stored = localStorage.getItem("openchat_referredby");
+        this.#referralCode = stored !== null && isPrincipalValid(stored) ? stored : undefined;
         return captured;
     }
 
@@ -5645,7 +5850,8 @@ export class OpenChat {
             let resolved = false;
             this.#worker.stream({ kind: "getCurrentUser" }).subscribe({
                 onResult: (user) => {
-                    if (user.kind === "created_user") {
+                    // If the id has changed, the session restarts under the new one
+                    if (user.kind === "created_user" && !this.#currentUserIdChanged(user.userId)) {
                         userCreatedStore.set(true);
                         currentUserStore.set(user);
                         this.#setDiamondStatus(user.diamondStatus);
@@ -5907,6 +6113,9 @@ export class OpenChat {
     registerProposalVote(
         chatId: MultiUserChatIdentifier,
         messageIndex: number,
+        governanceCanisterId: string,
+        proposalId: bigint,
+        isNns: boolean,
         adopt: boolean,
     ): Promise<RegisterProposalVoteResponse> {
         return this.#worker
@@ -5914,6 +6123,9 @@ export class OpenChat {
                 kind: "registerProposalVote",
                 chatId,
                 messageIndex,
+                governanceCanisterId,
+                proposalId,
+                isNns,
                 adopt,
             })
             .catch(CommonResponses.failure);
@@ -6247,16 +6459,21 @@ export class OpenChat {
             })
             .then((resp) => {
                 const deletedUsers = [...resp.deletedUserIds].map(deletedUser);
+                // Users requested by an id from before they were migrated to a MultiUser canister
+                // are returned under their latest id, but are still looked up by the earlier one
+                if (resp.migratedUserIds !== undefined) {
+                    userStore.addMigratedUserIds(resp.migratedUserIds);
+                }
                 userStore.addMany([...resp.users, ...deletedUsers]);
                 if (resp.serverTimestamp !== undefined) {
                     // If we went to the server, all users not returned are still up to date, so we mark them as such
                     const usersReturned = new Set<string>(resp.users.map((u) => u.userId));
                     const allOtherUsers = userArgs.userGroups.flatMap((g) =>
-                        g.users.filter((u) => !usersReturned.has(u)),
+                        g.users.filter((u) => !usersReturned.has(userStore.latestUserId(u))),
                     );
                     userStore.setUpdated(allOtherUsers, resp.serverTimestamp);
                 }
-                if (resp.currentUser) {
+                if (resp.currentUser && !this.#currentUserIdChanged(resp.currentUser.userId)) {
                     currentUserStore.set(
                         updateCreatedUser(currentUserStore.value, resp.currentUser),
                     );
@@ -6267,19 +6484,12 @@ export class OpenChat {
     }
 
     getUser(userId: string, allowStale = false): Promise<UserSummary | undefined> {
-        return this.#worker
-            .send({
-                kind: "getUser",
-                userId,
-                allowStale,
-            })
-            .then((resp) => {
-                if (resp !== undefined) {
-                    userStore.addUser(resp);
-                }
-                return resp;
-            })
-            .catch(() => undefined);
+        // Via getUsers, which adds the user to the store, including under the id they were asked
+        // for if that's one from before they were migrated to a MultiUser canister
+        return this.getUsers(
+            { userGroups: [{ users: [userId], updatedSince: BigInt(0) }] },
+            allowStale,
+        ).then((resp) => resp.users.find((u) => u.userId === userStore.latestUserId(userId)));
     }
 
     getUserStatus(userId: string, now: number): Promise<UserStatus> {
@@ -6715,6 +6925,22 @@ export class OpenChat {
             .catch(() => false);
     }
 
+    // Platform operators only
+    createMultiUserCanister(
+        localUserIndexCanisterId: string,
+    ): Promise<CreateMultiUserCanisterResponse> {
+        return this.#worker
+            .send({ kind: "createMultiUserCanister", localUserIndexCanisterId })
+            .catch((err) => ({ kind: "internal_error", error: String(err) }));
+    }
+
+    // Platform operators only
+    setMultiUserCanistersEnabled(enabled: boolean): Promise<boolean> {
+        return this.#worker
+            .send({ kind: "setMultiUserCanistersEnabled", enabled })
+            .catch(() => false);
+    }
+
     markLocalGroupIndexFull(canisterId: string, full: boolean): Promise<boolean> {
         return this.#worker
             .send({ kind: "markLocalGroupIndexFull", canisterId, full })
@@ -6793,7 +7019,7 @@ export class OpenChat {
         const webhooks = new Set<string>();
         chats.forEach((chat) => {
             if (chat.kind === "direct_chat") {
-                userIds.add(chat.them.userId);
+                userIds.add(chat.them?.userId ?? chat.id.userId);
             } else if (chat.latestMessage?.event !== undefined) {
                 const sender = chat.latestMessage.event.sender;
                 if (chat.latestMessage.event.senderContext?.kind === "webhook") {
@@ -6908,6 +7134,9 @@ export class OpenChat {
 
         await this.getMissingUsers(userIds);
 
+        // Held so the fold's answer can be compared with it: see `answerTouchesChat`
+        const selectedBeforeFold = selectedServerChatSummaryStore.value;
+
         withPausedStores(() => {
             this.#updateReadUpToStore(chatsAddedUpdated);
 
@@ -7000,15 +7229,41 @@ export class OpenChat {
             );
         });
 
-        if (selectedChatIdStore.value !== undefined) {
-            if (chatSummariesStore.value.get(selectedChatIdStore.value) === undefined) {
+        const selectedChatId = selectedChatIdStore.value;
+        if (selectedChatId !== undefined) {
+            if (chatSummariesStore.value.get(selectedChatId) === undefined) {
                 publish("selectedChatInvalid");
             } else {
-                const updatedEvents = ChatMap.fromMap(chatsResponse.updatedEvents);
-                this.#chatUpdated(
-                    selectedChatIdStore.value,
-                    updatedEvents.get(selectedChatIdStore.value) ?? [],
-                );
+                const updatedEvents =
+                    ChatMap.fromMap(chatsResponse.updatedEvents).get(selectedChatId) ?? [];
+                // An answer that did not change the selected chat (a CHIT balance, another
+                // chat's message, another channel in its community) has nothing new for it: no
+                // latest message to confirm, no events to refresh
+                if (
+                    answerTouchesChat(
+                        selectedChatId,
+                        selectedBeforeFold,
+                        chatsAddedUpdated,
+                        updatedEvents.length,
+                    )
+                ) {
+                    this.#chatUpdated(selectedChatId, updatedEvents);
+                } else {
+                    // Every answer used to reload the details, which is what retried a load that
+                    // failed (offline, say) or came from a lagging replica. Only a retry is
+                    // needed here, so only when the details held are not this chat's latest.
+                    const serverChat = selectedServerChatSummaryStore.value;
+                    if (serverChat !== undefined && this.#chatDetailsBehind(serverChat)) {
+                        this.#loadChatDetails(serverChat);
+                    }
+                    // Still published: the timeline answers it by loading any new messages it
+                    // is missing, and does nothing if there are none, so a load that failed
+                    // earlier gets another go
+                    publish("chatUpdated", {
+                        chatId: selectedChatId,
+                        threadRootMessageIndex: undefined,
+                    });
+                }
             }
         }
 
@@ -7157,14 +7412,20 @@ export class OpenChat {
         if (premiumItems !== undefined) {
             premiumItemsStore.set(premiumItems);
         }
-        if (chitState !== undefined && chitState.streakEnds >= chitStateStore.value.streakEnds) {
-            chitStateStore.set(chitState);
-            userStore.updateUser(currentUserIdStore.value, (user) => ({
-                ...user,
-                chitBalance: chitState.chitBalance,
-                streak: chitState.streak,
-                maxStreak: chitState.maxStreak,
-            }));
+        if (chitState !== undefined) {
+            // The balances are authoritative whatever the streak says: the streakEnds gate
+            // exists so a stale streak (eg. from a response that raced a local claim) cannot
+            // roll the streak back, but a stale balance was never protected by it, only left
+            // to drift. Apply the balances unconditionally and gate only the streak fields.
+            OpenChat.#setChitBalance(chitState.chitBalance, chitState.totalChitEarned);
+            if (chitState.streakEnds >= chitStateStore.value.streakEnds) {
+                chitStateStore.set(chitState);
+                userStore.updateUser(currentUserIdStore.value, (user) => ({
+                    ...user,
+                    streak: chitState.streak,
+                    maxStreak: chitState.maxStreak,
+                }));
+            }
         }
     }
 
@@ -7192,34 +7453,55 @@ export class OpenChat {
                 });
         });
     }
+
+    // Runs one pass of the updates loop in the worker. On an initial load the worker answers
+    // with a snapshot of its cache which seeds the sync cursor; everything after that reaches
+    // the UI by pulling (see SyncPuller), so the pass itself resolves nothing.
     async #loadChats() {
         const initialLoad = !chatsInitialisedStore.value;
 
         const updateRegistryTask = initialLoad ? this.#updateRegistry() : undefined;
+        // Taken before the load starts: if the identity changes while it is in flight, the
+        // snapshot it delivers belongs to the old session and the puller drops it
+        const generation = this.#syncPuller.generation;
 
         return new Promise<void>((resolve) => {
+            // The stream ends without waiting for an async onResult, so the pass is only done
+            // once the snapshot it delivered has been folded. Otherwise the poller would count
+            // it finished, and could start the next, while the fold is still running.
+            let folding: Promise<void> = Promise.resolve();
+            const done = () => folding.then(resolve);
             this.#worker
                 .stream({
                     kind: "getUpdates",
                     initialLoad,
                 })
                 .subscribe({
-                    onResult: async (resp) => {
-                        if (resp !== undefined) {
-                            await this.#handleChatsResponse(
-                                updateRegistryTask,
-                                initialLoad,
-                                resp as UpdatesResult,
-                            );
-                        }
-                        latestSuccessfulUpdatesLoop.set(Date.now());
+                    onResult: (snapshot) => {
+                        folding = folding
+                            .then(async () => {
+                                if (snapshot !== undefined) {
+                                    await this.#syncPuller.seed(
+                                        snapshot,
+                                        (updates) =>
+                                            this.#handleChatsResponse(
+                                                updateRegistryTask,
+                                                initialLoad,
+                                                updates,
+                                            ),
+                                        generation,
+                                    );
+                                }
+                                latestSuccessfulUpdatesLoop.set(Date.now());
+                            })
+                            .catch((err) => console.warn("Failed to fold the chats snapshot", err));
                     },
                     onError: (err) => {
                         console.warn("getUpdates threw an error: ", err);
-                        resolve();
+                        done();
                     },
                     onEnd: () => {
-                        resolve();
+                        done();
                     },
                 });
         });
@@ -7286,7 +7568,7 @@ export class OpenChat {
                 } else {
                     messagesRead.syncWithServer(
                         chat.id,
-                        chat.membership.readByMeUpTo,
+                        chat.membership?.readByMeUpTo,
                         [],
                         undefined,
                     );
@@ -7531,6 +7813,36 @@ export class OpenChat {
         });
     }
 
+    // When the current user is migrated to a MultiUser canister, they get a new user id. The session
+    // (the user client, the chats and everything else keyed by user id) was built for the old one,
+    // so rather than swap the id out from under it, we have the app restart under the new one.
+    // Returns whether the id has changed.
+    #currentUserIdChanged(userId: string): boolean {
+        const currentUserId = currentUserStore.value.userId;
+        if (currentUserId === ANON_USER_ID || currentUserId === userId) return false;
+
+        if (!this.#currentUserIdChangedPublished) {
+            this.#currentUserIdChangedPublished = true;
+            if (shouldRestartForNewUserId(currentUserId, userId)) {
+                this.#logger.log("Current user id changed, restarting the session", {
+                    from: currentUserId,
+                    to: userId,
+                });
+                publish("currentUserIdChanged");
+            } else {
+                // We've already restarted for this change, yet the session started under the old
+                // id again, so caching the new one must have failed. The session carries on under
+                // the old id rather than restarting over and over.
+                this.#logger.error(
+                    "Current user id changed again after restarting for it",
+                    new Error("Current user id changed"),
+                    { from: currentUserId, to: userId },
+                );
+            }
+        }
+        return true;
+    }
+
     #setDiamondStatus(status: DiamondMembershipStatus): void {
         const now = Date.now();
         this.#updateDiamondStatusInUserStore(status);
@@ -7545,7 +7857,9 @@ export class OpenChat {
                     () => {
                         this.getCurrentUser().then((user) => {
                             if (user.kind === "created_user") {
-                                currentUserStore.set(user);
+                                if (!this.#currentUserIdChanged(user.userId)) {
+                                    currentUserStore.set(user);
+                                }
                             } else {
                                 this.logout();
                             }
@@ -8685,6 +8999,41 @@ export class OpenChat {
                 console.error(`Unable to get end meeting: ${res.status}, ${res.statusText}`);
             }
         });
+    }
+
+    // Declining a ringing call (#9534). For a direct call the bridge ends it for both sides;
+    // for a group call it only stops the ring on this user's other devices. Nothing records
+    // that the user declined, and a failure is logged and otherwise ignored.
+    declineVideoCall(chatId: ChatIdentifier): Promise<void> {
+        const chat = allChatsStore.value.get(chatId);
+        if (chat === undefined) {
+            return Promise.resolve();
+        }
+        return this.#getLocalUserIndex(chat)
+            .then((localUserIndex) =>
+                this.#worker.send({
+                    kind: "getAccessToken",
+                    accessTokenType: { kind: "join_video_call", chatId },
+                    localUserIndex,
+                }),
+            )
+            .then((token) => {
+                if (token === undefined) {
+                    throw new Error("Didn't get an access token");
+                }
+                const headers = new Headers();
+                headers.append("x-auth-jwt", token);
+                return fetch(`${this.config.videoBridgeUrl}/room/decline`, {
+                    method: "POST",
+                    headers,
+                });
+            })
+            .then((res) => {
+                if (!res.ok) {
+                    console.error(`Unable to decline the call: ${res.status}, ${res.statusText}`);
+                }
+            })
+            .catch((err) => console.error("Unable to decline the call", err));
     }
 
     endVideoCall(chatId: ChatIdentifier, messageId?: bigint) {
@@ -10662,21 +11011,22 @@ export class OpenChat {
         });
     }
 
-    getAuthenticationPrincipals(): Promise<
-        (AuthenticationPrincipal & { provider: AuthProvider })[]
-    > {
+    getAuthenticationPrincipals(): Promise<LinkedAuthenticationPrincipal[]> {
         return this.#worker
             .send({
                 kind: "getAuthenticationPrincipals",
             })
-            .then((principals) => {
-                return principals.map((p) => {
-                    return {
+            .then((principals) =>
+                Promise.all(
+                    principals.map(async (p) => ({
                         ...p,
                         provider: this.#authProviderFromAuthPrincipal(p),
-                    };
-                });
-            });
+                        passkeyProvider: p.webAuthnKey
+                            ? await passkeyProviderName(p.webAuthnKey.aaguid)
+                            : undefined,
+                    })),
+                ),
+            );
     }
 
     getLinkedIIPrincipal(): Promise<string | undefined> {
@@ -10846,6 +11196,264 @@ export class OpenChat {
         });
     }
 
+    // The daily puzzle. Everything per user goes through the local user index; the daily
+    // canister is only asked for the public puzzle and for result verification.
+
+    dailyPuzzleFetch(): Promise<DailyPuzzleState> {
+        if (anonUserStore.value) return Promise.resolve(dailyPuzzleStore.value);
+        return this.#worker
+            .send({ kind: "dailyPuzzleFetch", userId: currentUserIdStore.value })
+            .then((resp) => {
+                if ("kind" in resp) {
+                    console.warn("Daily puzzle fetch failed", resp);
+                    return dailyPuzzleStore.value;
+                }
+                const next: DailyPuzzleState = {
+                    puzzles: resp.puzzles,
+                    states: resp.states,
+                    lastFetched: Date.now(),
+                };
+                dailyPuzzleStore.set(next);
+                this.#scheduleDailyPuzzleRollover(next);
+                return next;
+            })
+            .catch((err) => {
+                console.warn("Daily puzzle fetch failed", err);
+                return dailyPuzzleStore.value;
+            });
+    }
+
+    // Sets the CHIT stores from balances the server reported. Never guess a delta client-side:
+    // a debit the user canister answered AlreadyAdded charges nothing, and a credit can be queued
+    // for retry, so a guessed delta drifts from the real balance.
+    static #setChitBalance(chitBalance: number, totalChitEarned: number) {
+        withPausedStores(() => {
+            chitStateStore.update((chit) => {
+                chit.chitBalance = chitBalance;
+                chit.totalChitEarned = totalChitEarned;
+                return chit;
+            });
+            currentUserStore.update((user) => {
+                user.chitBalance = chitBalance;
+                user.totalChitEarned = totalChitEarned;
+                return user;
+            });
+            userStore.updateUser(currentUserIdStore.value, (u) => ({
+                ...u,
+                chitBalance,
+                totalChitEarned,
+            }));
+        });
+    }
+
+    static #setChitBalanceFrom(resp: { chitBalance?: number; totalChitEarned?: number }) {
+        if (resp.chitBalance !== undefined && resp.totalChitEarned !== undefined) {
+            OpenChat.#setChitBalance(resp.chitBalance, resp.totalChitEarned);
+        }
+    }
+
+    dailyPuzzleStart(gameId: string, expectedFee: number): Promise<DailyPuzzleStartResponse> {
+        const puzzle = todaysPuzzle(dailyPuzzleStore.value, gameId);
+        if (puzzle === undefined) {
+            return Promise.resolve({ kind: "error", code: -1, message: "No daily puzzle" });
+        }
+        return this.#worker
+            .send({
+                kind: "dailyPuzzleStart",
+                userId: currentUserIdStore.value,
+                gameId: puzzle.gameId,
+                number: puzzle.number,
+                expectedEntryFee: expectedFee,
+            })
+            .then((resp) => {
+                if (resp.kind === "success") {
+                    dailyPuzzleStore.update((s) => withUserState(s, resp.state));
+                    OpenChat.#setChitBalanceFrom(resp);
+                    this.dailyPuzzleFetch();
+                }
+                return resp;
+            });
+    }
+
+    dailyPuzzleSubmit(gameId: string, grid: Uint8Array): Promise<DailyPuzzleSubmitResponse> {
+        const puzzle = todaysPuzzle(dailyPuzzleStore.value, gameId);
+        if (puzzle === undefined) {
+            return Promise.resolve({ kind: "error", code: -1, message: "No daily puzzle" });
+        }
+        return this.#worker
+            .send({
+                kind: "dailyPuzzleSubmit",
+                userId: currentUserIdStore.value,
+                gameId: puzzle.gameId,
+                number: puzzle.number,
+                grid,
+            })
+            .then((resp) => {
+                if (resp.kind === "success") {
+                    dailyPuzzleStore.update((s) => {
+                        const state = stateFor(s, gameId);
+                        return state === undefined
+                            ? s
+                            : withUserState(s, {
+                                  ...state,
+                                  solved: resp.solved,
+                                  streak: resp.solved.streak,
+                                  hasSolvedBefore: true,
+                              });
+                    });
+                    OpenChat.#setChitBalanceFrom(resp.solved);
+                    this.dailyPuzzleFetch();
+                }
+                return resp;
+            });
+    }
+
+    dailyPuzzleHint(
+        gameId: string,
+        level: number,
+        filled: [number, number][],
+        expectedPrice: number,
+    ): Promise<DailyPuzzleHintResponse> {
+        const puzzle = todaysPuzzle(dailyPuzzleStore.value, gameId);
+        if (puzzle === undefined) {
+            return Promise.resolve({ kind: "error", code: -1, message: "No daily puzzle" });
+        }
+        return this.#worker
+            .send({
+                kind: "dailyPuzzleHint",
+                userId: currentUserIdStore.value,
+                gameId: puzzle.gameId,
+                number: puzzle.number,
+                level,
+                filled,
+                expectedPrice,
+            })
+            .then((resp) => {
+                if (resp.kind === "success") {
+                    dailyPuzzleStore.update((s) => withUserState(s, resp.state));
+                    OpenChat.#setChitBalanceFrom(resp);
+                    this.dailyPuzzleFetch();
+                }
+                return resp;
+            });
+    }
+
+    // Operator endpoints on the daily_puzzle canister. Every answer is the server's own: a
+    // refusal comes back as an OCError for the caller to show, never swallowed.
+    dailyPuzzleConfig(): Promise<DailyPuzzleConfig | OCError> {
+        return this.#worker.send({ kind: "dailyPuzzleConfig" });
+    }
+
+    dailyPuzzleSetEnabled(enabled: boolean): Promise<Success | OCError> {
+        return this.#worker.send({ kind: "dailyPuzzleSetEnabled", enabled });
+    }
+
+    // The native call push kill switch (#9456), platform operators only
+    callPushEnabled(): Promise<boolean> {
+        return this.#worker.send({ kind: "callPushEnabled" });
+    }
+
+    setCallPushEnabled(enabled: boolean): Promise<Success | OCError> {
+        return this.#worker.send({ kind: "setCallPushEnabled", enabled });
+    }
+    dailyPuzzleRegenerateToday(gameId: string | undefined): Promise<Success | OCError> {
+        return this.#worker.send({ kind: "dailyPuzzleRegenerateToday", gameId });
+    }
+    dailyPuzzleSaveGrid(gameId: string, grid: Uint8Array): Promise<boolean> {
+        const puzzle = todaysPuzzle(dailyPuzzleStore.value, gameId);
+        if (puzzle === undefined) return Promise.resolve(false);
+        return this.#worker
+            .send({
+                kind: "dailyPuzzleSaveGrid",
+                userId: currentUserIdStore.value,
+                gameId: puzzle.gameId,
+                number: puzzle.number,
+                grid,
+            })
+            .then((resp) => resp.kind === "success")
+            .catch(() => false);
+    }
+
+    // Result cards check themselves against the daily canister's results index. Calls made
+    // within 50ms of each other for the same puzzle are coalesced into one query, and answers
+    // (including "no row") are cached for a few minutes.
+    verifyDailyResults(
+        gameId: string,
+        number: number,
+        userIds: string[],
+    ): Promise<Record<string, DailyPuzzleResult>> {
+        const now = Date.now();
+        const verified: Record<string, DailyPuzzleResult> = {};
+        const missing: string[] = [];
+        for (const userId of userIds) {
+            const cached = dailyPuzzleResultsCache.get(gameId, number, userId, now);
+            if (cached === undefined) {
+                missing.push(userId);
+            } else if (cached.result !== undefined) {
+                verified[userId] = cached.result;
+            }
+        }
+        if (missing.length === 0) return Promise.resolve(verified);
+        return this.#verifyDailyResultsBatched(gameId, number, missing).then((fetched) => ({
+            ...verified,
+            ...fetched,
+        }));
+    }
+
+    #verifyDailyResultsBatched(
+        gameId: string,
+        number: number,
+        userIds: string[],
+    ): Promise<Record<string, DailyPuzzleResult>> {
+        const key = `${gameId}:${number}`;
+        let pending = this.#dailyResultsPending.get(key);
+        if (pending === undefined) {
+            const batch = new Set<string>();
+            const promise = new Promise<void>((resolve) => window.setTimeout(resolve, 50)).then(
+                () => {
+                    this.#dailyResultsPending.delete(key);
+                    return this.#processDailyResultsQueue(gameId, number, [...batch]);
+                },
+            );
+            pending = { userIds: batch, promise };
+            this.#dailyResultsPending.set(key, pending);
+        }
+        userIds.forEach((u) => pending.userIds.add(u));
+        return pending.promise;
+    }
+
+    async #processDailyResultsQueue(
+        gameId: string,
+        number: number,
+        userIds: string[],
+    ): Promise<Record<string, DailyPuzzleResult>> {
+        const byUser: Record<string, DailyPuzzleResult> = {};
+        try {
+            // the canister caps user_ids at 200 per call
+            for (let i = 0; i < userIds.length; i += 200) {
+                const chunk = userIds.slice(i, i + 200);
+                const rows = await this.#worker.send({
+                    kind: "dailyPuzzleResults",
+                    gameId,
+                    number,
+                    userIds: chunk,
+                });
+                for (const row of rows) {
+                    byUser[row.userId] = row;
+                }
+                dailyPuzzleResultsCache.set(
+                    gameId,
+                    number,
+                    chunk.map((u) => [u, byUser[u]]),
+                    Date.now(),
+                );
+            }
+        } catch (err) {
+            console.warn("Daily puzzle result verification failed", err);
+        }
+        return byUser;
+    }
+
     payForPremiumItem(item: PremiumItem): Promise<PayForPremiumItemResponse> {
         return this.#worker
             .send({
@@ -10856,21 +11464,7 @@ export class OpenChat {
             .then((resp) => {
                 if (resp.kind === "success") {
                     withPausedStores(() => {
-                        chitStateStore.update((chit) => {
-                            chit.chitBalance = resp.chitBalance;
-                            chit.totalChitEarned = resp.totalChitEarned;
-                            return chit;
-                        });
-                        currentUserStore.update((user) => {
-                            user.chitBalance = resp.chitBalance;
-                            user.totalChitEarned = resp.totalChitEarned;
-                            return user;
-                        });
-                        userStore.updateUser(currentUserIdStore.value, (u) => ({
-                            ...u,
-                            chitBalance: resp.chitBalance,
-                            totalChitEarned: resp.totalChitEarned,
-                        }));
+                        OpenChat.#setChitBalance(resp.chitBalance, resp.totalChitEarned);
                         premiumItemsStore.add(item);
                     });
                 } else {
@@ -10960,15 +11554,13 @@ export class OpenChat {
             return false;
         }
 
-        if (import.meta.env.OC_BUILD_ENV !== "development") {
-            // Register a service worker if it hasn't already been done
-            const registration = await this.#registerServiceWorker();
-            if (registration == null) {
-                return false;
-            }
-            // Ensure the service worker is updated to the latest version
-            registration.update();
+        // Register a service worker if it hasn't already been done
+        const registration = await this.#registerServiceWorker();
+        if (registration == null) {
+            return false;
         }
+        // Ensure the service worker is updated to the latest version
+        registration.update();
 
         navigator.serviceWorker.addEventListener("message", (event) => {
             if (event.data.type === "NOTIFICATION_RECEIVED") {
@@ -11137,8 +11729,11 @@ export class OpenChat {
         }
     }
 
+    // The VAPID public key may be standard base64 (prod) or base64url (the dev key, and what
+    // most key generators emit); atob only takes the former
     #toUint8Array(base64String: string): Uint8Array {
-        return Uint8Array.from(atob(base64String), (c) => c.charCodeAt(0));
+        const base64 = base64String.replace(/-/g, "+").replace(/_/g, "/");
+        return Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
     }
 
     async #unsubscribeNotifications(): Promise<void> {

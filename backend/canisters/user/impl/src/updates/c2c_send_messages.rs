@@ -2,13 +2,13 @@ use crate::updates::send_message::register_timer_jobs;
 use crate::{RuntimeState, UserEventPusher, execute_update_async, mutate_state, read_state};
 use canister_tracing_macros::trace;
 use chat_events::{MessageContentInternal, PushMessageArgs, Reader, ReplyContextInternal, ValidateNewMessageContentResult};
+use direct_chat::DirectChat;
 use ic_cdk::update;
 use oc_error_codes::OCErrorCode;
 use rand::RngExt;
 use types::{
-    BotCaller, BotMessageContext, CanisterId, Chat, ContentValidationError, DirectChatUserNotificationPayload,
-    DirectMessageNotification, EventWrapper, Message, MessageContent, MessageId, MessageIndex, OgPreview, SenderContext,
-    TimestampMillis, User, UserId, UserType,
+    CanisterId, Chat, ContentValidationError, DirectChatUserNotificationPayload, DirectMessageNotification, EventWrapper,
+    Message, MessageContent, MessageId, MessageIndex, OCResult, OgPreview, TimestampMillis, User, UserId, UserType,
 };
 use user_canister::{C2CReplyContext, MessageActivity, MessageActivityEvent};
 
@@ -61,10 +61,16 @@ async fn c2c_handle_bot_messages_impl(
     mutate_state(|state| {
         let now = state.env.now();
         for (message, content) in messages {
+            let Ok(thread_root_message_index) = thread_root_message_index(
+                state.data.user.direct_chats.get(&sender.into()),
+                message.thread_root_message_id,
+            ) else {
+                continue;
+            };
             handle_message_impl(
                 HandleMessageArgs {
                     sender,
-                    thread_root_message_id: message.thread_root_message_id,
+                    thread_root_message_index,
                     message_id: message.message_id,
                     sender_message_index: None,
                     sender_name: args.bot_name.clone(),
@@ -81,8 +87,6 @@ async fn c2c_handle_bot_messages_impl(
                     og_previews: message.og_previews.unwrap_or_default(),
                     now,
                 },
-                None,
-                false,
                 state,
             );
         }
@@ -90,9 +94,24 @@ async fn c2c_handle_bot_messages_impl(
     user_canister::c2c_handle_bot_messages::Response::Success
 }
 
+// The index in our copy of the chat of the thread a message received from another canister is in,
+// given the id of the thread root there (message ids are the same in both users' copies of a chat
+// while the indexes are not). Fails if there is no such message visible in the chat, including
+// when there is no chat with the sender yet.
+pub(crate) fn thread_root_message_index(
+    chat: Option<&DirectChat>,
+    thread_root_message_id: Option<MessageId>,
+) -> OCResult<Option<MessageIndex>> {
+    match chat {
+        Some(chat) => chat.thread_root_message_index(thread_root_message_id),
+        None if thread_root_message_id.is_none() => Ok(None),
+        None => Err(OCErrorCode::ThreadNotFound.into()),
+    }
+}
+
 pub(crate) struct HandleMessageArgs {
     pub sender: UserId,
-    pub thread_root_message_id: Option<MessageId>,
+    pub thread_root_message_index: Option<MessageIndex>,
     pub message_id: Option<MessageId>,
     pub sender_message_index: Option<MessageIndex>,
     pub sender_name: String,
@@ -117,11 +136,13 @@ pub(crate) enum SenderStatus {
 }
 
 pub(crate) fn get_sender_status(state: &RuntimeState) -> SenderStatus {
-    let sender = state.env.caller().into();
+    get_status_of_sender(state.env.caller().into(), state)
+}
 
-    if state.data.blocked_users.contains(&sender) {
+pub(crate) fn get_status_of_sender(sender: UserId, state: &RuntimeState) -> SenderStatus {
+    if state.data.user.blocked_users.contains(&sender) {
         SenderStatus::Blocked
-    } else if let Some(user_type) = state.data.direct_chats.get(&sender.into()).map(|c| c.user_type) {
+    } else if let Some(user_type) = state.data.user.direct_chats.get(&sender.into()).map(|c| c.user_type) {
         SenderStatus::Ok(sender, user_type)
     } else {
         SenderStatus::UnknownUser(state.data.local_user_index_canister_id, sender)
@@ -143,22 +164,20 @@ pub(crate) async fn verify_user(local_user_index_canister_id: CanisterId, user_i
     }
 }
 
-pub(crate) fn handle_message_impl(
-    args: HandleMessageArgs,
-    bot_caller: Option<BotCaller>,
-    finalised: bool,
-    state: &mut RuntimeState,
-) -> EventWrapper<Message> {
+pub(crate) fn handle_message_impl(args: HandleMessageArgs, state: &mut RuntimeState) -> EventWrapper<Message> {
     let chat_id = args.sender.into();
     let replies_to = convert_reply_context(args.replies_to, args.sender, state);
     let files = args.content.blob_references();
 
-    let chat = state
-        .data
-        .direct_chats
-        .get_or_create(args.sender, args.sender_user_type, || state.env.rng().random(), args.now);
+    let chat = state.data.user.direct_chats.get_or_create(
+        state.env.canister_id().into(),
+        args.sender,
+        args.sender_user_type,
+        || state.env.rng().random(),
+        args.now,
+    );
 
-    let thread_root_message_index = args.thread_root_message_id.map(|id| chat.main_message_id_to_index(id));
+    let thread_root_message_index = args.thread_root_message_index;
 
     let chat_private_replying_to = if let Some((chat, None)) = replies_to.as_ref().and_then(|r| r.chat_if_other) {
         Some(chat)
@@ -180,7 +199,7 @@ pub(crate) fn handle_message_impl(
         block_level_markdown: args.block_level_markdown,
         og_previews: args.og_previews,
         now: args.now,
-        sender_context: bot_caller.map(|bot| SenderContext::Bot(BotMessageContext::from(&bot, finalised))),
+        sender_context: None,
     };
 
     let message_event = chat.push_message(
@@ -196,10 +215,10 @@ pub(crate) fn handle_message_impl(
     let content = &message_event.event.content;
 
     if args.sender_user_type.is_bot() {
-        chat.mark_read_up_to(message_event.event.message_index, false, args.now);
+        chat.mark_read_by_them_up_to(message_event.event.message_index, args.now);
     }
 
-    if !args.mute_notification && !chat.notifications_muted.value && !state.data.suspended.value {
+    if !args.mute_notification && !chat.notifications_muted.value && !state.data.user.suspended.value {
         let message_type = content.content_type().to_string();
         let message_text = content.notification_text(&args.mentioned, &[]);
         let image_url = content.notification_image_url();
@@ -217,6 +236,7 @@ pub(crate) fn handle_message_impl(
             file_name: content.notification_file_name(),
             sender_avatar_id: args.sender_avatar_id,
             crypto_transfer: content.notification_crypto_transfer_details(&[]),
+            call: None,
         });
         let recipient = state.env.canister_id().into();
 
@@ -224,7 +244,7 @@ pub(crate) fn handle_message_impl(
     }
 
     if matches!(content, MessageContent::Crypto(_)) {
-        state.data.push_message_activity(
+        state.data.user.push_message_activity(
             MessageActivityEvent {
                 chat: Chat::Direct(chat_id),
                 thread_root_message_index,
@@ -252,6 +272,7 @@ pub(crate) fn handle_message_impl(
     if let Some(chat) = chat_private_replying_to {
         state
             .data
+            .user
             .direct_chats
             .mark_private_reply(args.sender, chat, message_event.event.message_index);
     }
@@ -269,9 +290,10 @@ fn convert_reply_context(
             let chat_id = sender.into();
             state
                 .data
+                .user
                 .direct_chats
                 .get(&chat_id)
-                .and_then(|chat| chat.events.main_events_reader().event_index(message_id.into()))
+                .and_then(|chat| chat.main_events_reader().event_index(message_id.into()))
                 .map(|event_index| ReplyContextInternal {
                     chat_if_other: None,
                     event_index,

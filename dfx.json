@@ -37,6 +37,12 @@
       "wasm": "wasms/local_user_index.wasm.gz",
       "build": "./scripts/generate-wasm.sh local_user_index"
     },
+    "multi_user": {
+      "type": "custom",
+      "candid": "backend/canisters/multi_user/api/can.did",
+      "wasm": "wasms/multi_user.wasm.gz",
+      "build": "./scripts/generate-wasm.sh multi_user"
+    },
     "neuron_controller": {
       "type": "custom",
       "candid": "backend/canisters/neuron_controller/api/can.did",
@@ -114,6 +120,12 @@
       "candid": "backend/canisters/market_maker/api/can.did",
       "wasm": "wasms/market_maker.wasm.gz",
       "build": "./scripts/generate-wasm.sh market_maker"
+    },
+    "daily_puzzle": {
+      "type": "custom",
+      "candid": "backend/canisters/daily_puzzle/api/can.did",
+      "wasm": "wasms/daily_puzzle.wasm.gz",
+      "build": "./scripts/generate-wasm.sh daily_puzzle"
     },
     "escrow": {
       "type": "custom",

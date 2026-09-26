@@ -52,6 +52,15 @@ This table describes the intended compatibility boundaries for OTA-enabled
 channels, not an implicit opt-in. Local sideload builds default to `none`;
 release channels must explicitly select their allowed policy.
 
+**Where that value actually comes from.** `override` in `rollup.config.mjs` compiles
+`import.meta.env.OC_OTA_UPDATES` to `(window.OC_CONFIG?.OC_OTA_UPDATES ?? "<build-time value>")`,
+and `rollup-plugin-android-bundle.mjs` injects `window.OC_CONFIG` into the `index.html`
+inside each OTA zip. So the build-time value only governs a shell's own bundled assets,
+i.e. a fresh install; from a client's first over-the-air update onwards the zip's value
+wins. The two must agree, and the zip is the one that matters. The plugin skips this
+injection entirely when `OC_APP_TYPE` is `android` or `ios`, which is why an APK build
+keeps its compiled value.
+
 Two consequences worth being explicit about.
 
 A shell change on its own bumps nothing. What forces a major bump is the web
@@ -61,6 +70,36 @@ frontend code calls yet and every existing install is still fine.
 A one-line shell dependency is still a major bump, however small the diff. The
 size of the change is irrelevant; the question is only whether an installed
 shell can run the new bundle.
+
+### Shell-only releases
+
+A release that changes only native code — a dependency removed, a permission
+dropped, a Kotlin fix nothing calls yet — is a **patch**. There is no
+compatibility signal to send, because no web code behaves differently.
+
+That leaves a practical problem: `versionCode` is derived from the version name,
+which is the website's version, so a shell-only release has no number of its own.
+It cannot reuse the last one, since Play requires `versionCode` to increase, and
+there is no reason to cut a website release just to move a number.
+
+**Take the next number in the sequence and let the website skip it.** Tag
+`v2.0.NNNN-android` with no matching `-website` tag; the website's next release
+takes NNNN+1. Website versions are their own line and do not have to be
+contiguous, exactly like the canister sequence.
+
+The app then bundles assets labelled NNNN while the server still serves NNNN-1.
+`isGreaterThan` is false, so `VersionChecker` reports up to date and does nothing
+until the website passes it.
+
+> **Never let a website release reuse a number an Android build has claimed.**
+> Every app bundling that version would see `server == client` and silently
+> refuse a genuine update, permanently. An Android release consumes a number from
+> the shared sequence whether or not a website release accompanies it.
+
+One consequence worth knowing: tagging master head means the APK bundles whatever
+frontend code has landed since the last website release, so a shell-only build can
+ship web code the website has not served yet. That is normal and resolves at the
+next website deploy.
 
 Getting this wrong in the permissive direction means shipping a feature to store
 users without Play ever seeing it. Getting it wrong in the other direction means

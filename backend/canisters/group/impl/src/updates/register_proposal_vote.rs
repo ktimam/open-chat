@@ -1,11 +1,10 @@
-use crate::activity_notifications::handle_activity_notification;
 use crate::{RuntimeState, execute_update_async, mutate_state, read_state};
 use canister_api_macros::update;
 use canister_tracing_macros::trace;
 use chat_events::{MessageContentInternal, Reader};
 use group_canister::register_proposal_vote::*;
 use oc_error_codes::OCErrorCode;
-use types::{CanisterId, EventIndex, OCResult, ProposalId, UserId};
+use types::{CanisterId, OCResult, ProposalId, UserId};
 
 #[update(msgpack = true)]
 #[trace]
@@ -25,6 +24,7 @@ async fn register_proposal_vote_impl(args: Args) -> Response {
     };
 
     let c2c_args = user_canister::c2c_vote_on_proposal::Args {
+        user_id,
         is_nns,
         governance_canister_id,
         proposal_id,
@@ -48,9 +48,16 @@ struct PrepareResult {
 }
 
 fn prepare(args: &Args, state: &RuntimeState) -> OCResult<PrepareResult> {
-    state.data.verify_not_frozen()?;
+    let member = state.get_calling_member(None, true)?;
 
-    let member = state.get_calling_member(true)?;
+    // This votes via the member's User canister, which a MultiUser canister can't do on its users'
+    // behalf, since they share its principal. They vote from the frontend with their own neurons
+    // instead, then record the vote via `register_proposal_vote_v2`.
+    if member.user_id().is_indexed() {
+        return Err(OCErrorCode::InvalidRequest
+            .with_message("Users in MultiUser canisters must record their votes via register_proposal_vote_v2"));
+    }
+
     let min_visible_event_index = member.min_visible_event_index();
 
     if let Some(proposal) = state
@@ -61,7 +68,7 @@ fn prepare(args: &Args, state: &RuntimeState) -> OCResult<PrepareResult> {
         .message_internal(args.message_index.into())
         .and_then(|m| if let MessageContentInternal::GovernanceProposal(p) = m.content { Some(p) } else { None })
     {
-        if proposal.votes.contains_key(&member.user_id()) {
+        if proposal.vote(member.user_id(), &state.data.migrated_user_ids).is_some() {
             Err(OCErrorCode::NoChange.into())
         } else {
             Ok(PrepareResult {
@@ -77,13 +84,19 @@ fn prepare(args: &Args, state: &RuntimeState) -> OCResult<PrepareResult> {
 }
 
 fn commit(user_id: UserId, args: Args, state: &mut RuntimeState) -> OCResult {
+    // Re-resolve the member as their state may have changed during the c2c call
+    let member = state.data.chat.members.get_verified_member(user_id)?;
+    let min_visible_event_index = member.min_visible_event_index();
     let now = state.env.now();
 
-    state
-        .data
-        .chat
-        .events
-        .record_proposal_vote(user_id, EventIndex::default(), args.message_index, args.adopt, now)?;
+    state.data.chat.events.record_proposal_vote(
+        user_id,
+        min_visible_event_index,
+        args.message_index,
+        args.adopt,
+        now,
+        &state.data.migrated_user_ids,
+    )?;
 
     state
         .data
@@ -91,6 +104,6 @@ fn commit(user_id: UserId, args: Args, state: &mut RuntimeState) -> OCResult {
         .members
         .register_proposal_vote(&user_id, args.message_index, now);
 
-    handle_activity_notification(state);
+    state.mark_activity_for_user(user_id);
     Ok(())
 }

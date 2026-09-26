@@ -3,6 +3,8 @@ import {
     ROLE_ADMIN,
     ROLE_MEMBER,
     ROLE_MODERATOR,
+    type ChatEvent,
+    type EventWrapper,
     type GroupChatSummary,
     type PollConfig,
     type PollContent,
@@ -13,9 +15,12 @@ import {
 import { localUpdates } from "../state";
 import {
     addVoteToPoll,
+    buildUserAvatarUrl,
+    buildUserBackgroundUrl,
     getMembersString,
     mergeChatMetrics,
     mergeUnconfirmedThreadsIntoSummary,
+    sortByTimestampThenEventIndex,
 } from "./chat";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
@@ -367,5 +372,54 @@ describe("get members string for group chat", () => {
     test("with more than 5 members", () => {
         const members = getMembersString(user, lookup, withMoreThanSix, "Unknown User", "You");
         expect(members).toEqual("8 members");
+    });
+});
+
+describe("sortByTimestampThenEventIndex", () => {
+    const ev = (index: number, timestamp: bigint | number) =>
+        ({ index, timestamp, event: { kind: "empty" } }) as unknown as EventWrapper<ChatEvent>;
+
+    test("orders by timestamp, then by event index", () => {
+        expect([ev(3, 20n), ev(2, 10n), ev(1, 10n)].sort(sortByTimestampThenEventIndex)).toEqual([
+            ev(1, 10n),
+            ev(2, 10n),
+            ev(3, 20n),
+        ]);
+    });
+
+    // Invariant: the sort never throws. An event carrying a number timestamp (source still
+    // unknown) hit `a.timestamp - b.timestamp` and took the whole events store down with
+    // "Cannot mix BigInt and other types" (Rollbar #31919).
+    test("tolerates a number timestamp among bigints", () => {
+        expect([ev(2, 20n), ev(1, 10), ev(3, 30n)].sort(sortByTimestampThenEventIndex)).toEqual([
+            ev(1, 10),
+            ev(2, 20n),
+            ev(3, 30n),
+        ]);
+    });
+});
+
+describe("user avatar and background urls", () => {
+    const pattern = "https://{canisterId}.raw.icp0.io/{blobType}";
+    const canisterId = "dfdal-2uaaa-aaaaa-qaama-cai";
+    // `UserId::new_indexed(canisterId, 1000)`
+    const indexedUserId = "svgk6-q4aaa-aaaaa-qaamo-ray";
+
+    test("a user alone in their canister is served at its root", () => {
+        expect(buildUserAvatarUrl(pattern, canisterId, 5n)).toBe(
+            `https://${canisterId}.raw.icp0.io/avatar/5`,
+        );
+        expect(buildUserBackgroundUrl(pattern, canisterId, 6n)).toBe(
+            `https://${canisterId}.raw.icp0.io/profile_background/6`,
+        );
+    });
+
+    test("a user in a MultiUser canister is served by it under their index", () => {
+        expect(buildUserAvatarUrl(pattern, indexedUserId, 5n)).toBe(
+            `https://${canisterId}.raw.icp0.io/user/1000/avatar/5`,
+        );
+        expect(buildUserBackgroundUrl(pattern, indexedUserId, 6n)).toBe(
+            `https://${canisterId}.raw.icp0.io/user/1000/profile_background/6`,
+        );
     });
 });

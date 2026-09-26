@@ -32,4 +32,7 @@ permissions = [
     "allow-delete-model",
     "allow-inference-runtime-available",
     "allow-infer",
+    "allow-get-pending-call-action",
+    "allow-call-ring-handled",
+    "allow-set-call-config",
 ]

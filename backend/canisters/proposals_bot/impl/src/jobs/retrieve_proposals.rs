@@ -36,9 +36,9 @@ pub fn start_job(state: &RuntimeState) {
 pub fn run() {
     for (governance_canister_id, is_nns) in mutate_state(start_next_sync) {
         if is_nns {
-            ic_cdk::futures::spawn_migratory(get_and_process_nns_proposals(governance_canister_id));
+            utils::async_work::spawn_tracked(get_and_process_nns_proposals(governance_canister_id));
         } else {
-            ic_cdk::futures::spawn_migratory(get_and_process_sns_proposals(governance_canister_id));
+            utils::async_work::spawn_tracked(get_and_process_sns_proposals(governance_canister_id));
         }
     }
 }
@@ -193,6 +193,7 @@ fn handle_proposals_response<R: RawProposal>(governance_canister_id: CanisterId,
                         if proposal.adopted {
                             let job = ProcessUserRefundJob {
                                 user_id: proposal.user_id,
+                                principal: proposal.principal,
                                 ledger_canister_id,
                                 amount,
                                 fee,
@@ -276,7 +277,7 @@ The [OpenChat named neuron](https://dashboard.internetcomputer.org/neuron/176821
                 payload,
             }),
         },
-        user_id_and_payment: None,
+        user_and_payment: None,
         linked_nns_proposal: Some(LinkedNnsProposal {
             nns_governance_canister_id,
             nns_neuron_id,

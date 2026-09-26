@@ -251,17 +251,21 @@
     bind:value={targetAccount}
     countdown={false}
     maxlength={100}
+    disabled={busy}
     error={targetAccount.length > 0 && !targetAccountValid}
     placeholder={interpolate($_, i18nKey("cryptoAccount.sendTarget"))}>
     {#snippet iconButtons(color)}
-        {#if $namedAccountsStore.length > 0}
-            <InputIconButton onClick={() => (showAddressBook = true)}>
-                <Account {color} />
+        <!-- The target can't change mid-send, since the success sheet shows it as the recipient -->
+        {#if !busy}
+            {#if $namedAccountsStore.length > 0}
+                <InputIconButton onClick={() => (showAddressBook = true)}>
+                    <Account {color} />
+                </InputIconButton>
+            {/if}
+            <InputIconButton onClick={scan}>
+                <QrcodeScan {color} />
             </InputIconButton>
         {/if}
-        <InputIconButton onClick={scan}>
-            <QrcodeScan {color} />
-        </InputIconButton>
     {/snippet}
     {#snippet subtext()}
         <Translatable
@@ -329,12 +333,12 @@
                 background={ColourVars.surface2}>
                 <BodySmall colour={"textSecondary"}>
                     <Translatable resourceKey={i18nKey("Recipient")} />
-                    {#if account}
-                        ({account})
+                    {#if namedAccount}
+                        ({namedAccount.name})
                     {/if}
                 </BodySmall>
                 <Body fontWeight={"bold"}>
-                    {account}
+                    {targetAccount}
                 </Body>
             </Container>
             <Container
@@ -392,7 +396,12 @@
             </Container>
         </Container>
         <Container gap={"sm"} direction={"vertical"} padding={["sm", "xl", "zero", "xl"]}>
-            {#if namedAccount === undefined}
+            <!-- Saved recipients are IC accounts only (principal, ICRC-1 account or ICP account
+                 identifier - what save_crypto_account accepts). A BTC or EVM address would open
+                 the recipient form with a save button that never enables and no way to see why.
+                 Keyed on the selected network, not the token: BTC sent over the ckBTC network
+                 goes to an IC principal, which can be saved. -->
+            {#if namedAccount === undefined && !isBtcNetwork && !isOneSecNetwork}
                 <Button secondary onClick={saveAddress}>
                     {#snippet icon(color)}
                         <Account {color} />

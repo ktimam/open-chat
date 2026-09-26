@@ -58,11 +58,25 @@ const REQWEST_NOISE_PATTERN = /error decoding response body/i;
 
 const RETRY_EXHAUSTED_PATTERN = /retry strategy exhausted after \d+ attempts/i;
 
+const AGENT_FETCH_FAILED_PATTERN = /^failed to fetch http request/i;
+
+// Every HttpError subclass overwrites `name` with its own, so a bare `name === "HttpError"` test
+// misses them. `code` only means an HTTP status on one of these.
+const HTTP_ERROR_NAMES = new Set<string>([
+    "HttpError",
+    "AuthError",
+    "DestinationInvalidError",
+    "CanisterUnavailableError",
+    "ResponseTooLargeError",
+]);
+
 function isTransientNetworkError(error: unknown): boolean {
     // Structural checks rather than instanceof: errors which crossed the worker boundary
     // arrive as plain objects where only name/message/code survive
     const name = errorName(error);
-    if (name === "HttpError") {
+    if (HTTP_ERROR_NAMES.has(name)) {
+        // 503 also covers CanisterUnavailableError: a frozen or uninstalled canister cannot
+        // recover inside one request, and server-side monitoring owns the incident.
         const code = Number((error as { code?: unknown }).code);
         if (code >= 502 && code <= 504) return true;
     }
@@ -73,6 +87,9 @@ function isTransientNetworkError(error: unknown): boolean {
     // The IC agent gave up after its fetch retries: every attempt failed at the transport
     // layer (a replica rejection is thrown immediately, without retrying)
     if (name === "HttpError" && RETRY_EXHAUSTED_PATTERN.test(message)) return true;
+    // The agent wraps a fetch that threw (no response at all) as an HttpError with this prefix
+    // and the browser's own text after it. Same network weather, different envelope.
+    if (HTTP_ERROR_NAMES.has(name) && AGENT_FETCH_FAILED_PATTERN.test(message)) return true;
     // Only for the browser's own TypeError: our code also throws Errors whose text happens to
     // start "Failed to fetch ...", and those must stay reportable. A bare string carries no
     // name, so it can never satisfy this and is reported like any other unrecognised failure.
@@ -100,8 +117,26 @@ const ENVIRONMENT_NOISE_PATTERNS: RegExp[] = [
     /get a record from database without an in-progress transaction/i,
     // Safari / Firefox-on-iOS dropping the IndexedDB connection; only a reload recovers it
     /connection to indexed database server lost/i,
-    // The client's clock is wrong, so the replica certificate looks like it is from the future
-    /certificate is signed more than 5 minutes in the future/i,
+    // Safari's IndexedDB failing internally, or the user (or the OS reclaiming space) wiping
+    // the site's storage from under an open connection
+    /internal error was encountered in the indexed database server/i,
+    /database deleted by request of the user/i,
+    // Safari's in-app browser bridge complaining about its own injected script
+    /wkwebview api client did not respond to this postmessage/i,
+    // The client's clock is wrong, so the replica certificate looks like it is from the future;
+    // or the device slept mid-request and the certificate is stale by the time it is checked
+    /certificate is signed more than 5 minutes in the (future|past)/i,
+    // The agent gave up polling for an update's result: the network, not our code
+    /request timed out after \d+ msec/i,
+    /backoff strategy exhausted/i,
+    // Two tabs on different IndexedDB schema versions: the older one's transaction names a
+    // store the upgrade removed. Resolves itself on reload.
+    /one of the specified object stores was not found/i,
+    // The same wrong clock seen from the other side: the ingress expiry the agent computed from
+    // Date.now() falls outside the window the replica will accept. Devices weeks or months out of
+    // date produce these in storms, and because the replica echoes the timestamps back in the
+    // message, every skewed device mints a new error item rather than joining an existing one.
+    /invalid request expiry/i,
     // Safari's built-in media controls script, no frame of ours involved
     /can't find variable: EmptyRanges/i,
     // Benign browser warning surfaced as an error event
@@ -128,8 +163,12 @@ function thrownByExtension(error: unknown): boolean {
     if (error == null || typeof error !== "object" || !("stack" in error)) return false;
     if (typeof error.stack !== "string") return false;
     // V8 puts "Name: message" on the first line and frames below ("    at fn (url)"); JSC and
-    // Gecko start with frames ("fn@url"). Either way the first frame line is the throw site.
-    const frame = error.stack.split("\n").find((line) => /^\s*at |@/.test(line));
+    // Gecko start with frames ("fn@url"). The throw site is the first frame that names a script:
+    // a builtin throwing on the extension's behalf (Object.defineProperty, JSON.parse, ...) shows
+    // up first as "(<anonymous>)" or "[native code]" and says nothing about whose code it was.
+    const frame = error.stack
+        .split("\n")
+        .find((line) => /^\s*at |@/.test(line) && /[a-z-]+:\/\//i.test(line));
     return frame !== undefined && EXTENSION_FRAME_PATTERN.test(frame);
 }
 
@@ -146,7 +185,8 @@ function isEnvironmentNoise(error: unknown): boolean {
 // code (100-106) which `assertSuccessfulEventsResponse` turns into a thrown Error embedding the
 // response JSON. Expected client state, not a defect.
 // ChatNotFound is the same race for a chat that no longer exists on the server (a deleted
-// direct chat partner, say) while the local summary still does.
+// direct chat partner, say) while the local summary still does, and ThreadNotFound the same for
+// a thread whose root message was deleted, or whose first reply has not reached the server yet.
 // Deliberately scoped to that one message: a NotAuthorized code reaching us from anywhere else -
 // a mutation, say - means our local view of the user's permissions is wrong, which is a defect.
 const EVENTS_RESPONSE_ERROR_PREFIX = "Events response error:";
@@ -158,7 +198,8 @@ function isExpectedAccessError(error: unknown): boolean {
     const code = Number(match[1]);
     return (
         (code >= ErrorCode.InitiatorNotFound && code <= ErrorCode.InitiatorBlocked) ||
-        code === ErrorCode.ChatNotFound
+        code === ErrorCode.ChatNotFound ||
+        code === ErrorCode.ThreadNotFound
     );
 }
 

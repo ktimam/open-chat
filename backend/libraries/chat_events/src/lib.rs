@@ -3,13 +3,15 @@ use event_store_types::Event;
 mod chat_event_internal;
 mod chat_events;
 mod chat_events_list;
-pub mod deep_message_links;
 mod events_map;
 mod expiring_events;
 mod hybrid_map;
 mod last_updated_timestamps;
 mod message_content_internal;
+mod message_event_indexes;
+mod message_ids;
 mod metrics;
+mod per_user_metrics;
 mod search_index;
 mod stable_memory;
 

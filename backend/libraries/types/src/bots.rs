@@ -1,9 +1,9 @@
 use crate::bitflags::{decode_from_bitflags, encode_as_bitflags};
 use crate::{
-    ActionCardContentInitial, AudioContent, CanisterId, Chat, ChatEventCategory, ChatEventType, ChatId, ChatPermission,
-    CommunityEventCategory, CommunityEventType, CommunityId, CommunityOrGroup, CommunityPermission, FileContent, GiphyContent,
-    GroupRole, ImageContent, MessageContentInitial, MessageId, MessagePermission, OgPreview, OptionUpdate, PollContent,
-    TextContent, TimestampMillis, UserId, VideoContent, is_default,
+    AudioContent, CanisterId, Chat, ChatEventCategory, ChatEventType, ChatId, ChatPermission, CommunityEventCategory,
+    CommunityEventType, CommunityId, CommunityOrGroup, CommunityPermission, FileContent, GiphyContent, GroupRole, ImageContent,
+    MessageContentInitial, MessageId, MessagePermission, OgPreview, OptionUpdate, PollContent, TextContent, TimestampMillis,
+    UserId, VideoContent, is_default,
 };
 use candid::CandidType;
 use serde::{Deserialize, Serialize};
@@ -233,7 +233,6 @@ impl BotPermissions {
                 MessagePermission::Prize,
                 MessagePermission::P2pSwap,
                 MessagePermission::VideoCall,
-                MessagePermission::ActionCard,
             ]))
     }
 
@@ -409,7 +408,8 @@ impl BotInstallationLocation {
         match self {
             BotInstallationLocation::Community(c) => (*c).into(),
             BotInstallationLocation::Group(g) => (*g).into(),
-            BotInstallationLocation::User(u) => (*u).into(),
+            // A user's canister is not their id if they are one of many in a MultiUser canister
+            BotInstallationLocation::User(u) => UserId::from(*u).canister_id(),
         }
     }
 }
@@ -452,7 +452,6 @@ pub enum BotMessageContent {
     File(FileContent),
     Poll(PollContent),
     Giphy(GiphyContent),
-    ActionCard(ActionCardContentInitial),
 }
 
 #[ts_export]
@@ -488,7 +487,6 @@ impl From<BotMessageContent> for MessageContentInitial {
             BotMessageContent::File(c) => MessageContentInitial::File(c),
             BotMessageContent::Poll(c) => MessageContentInitial::Poll(c),
             BotMessageContent::Giphy(c) => MessageContentInitial::Giphy(c),
-            BotMessageContent::ActionCard(c) => MessageContentInitial::ActionCard(c),
         }
     }
 }

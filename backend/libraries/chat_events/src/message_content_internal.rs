@@ -9,21 +9,21 @@ use serde_bytes::ByteBuf;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use types::icrc1::{Account, CryptoAccount};
 use types::{
-    ActionCardContent, ActionCardContentInitial, ActionCardRow, ActionCardState, AiAppId, AudioContent, BlobReference,
-    CallParticipant, CanisterId, CompletedCryptoTransaction, ContentValidationError, ContentWithCaptionEventPayload,
-    CryptoContent, CryptoContentEventPayload, CryptoTransaction, Cryptocurrency, CustomContent, EncryptedContent,
-    EncryptedContentEventPayload, EncryptedMessageContentType, EncryptionKey, FileContent, FileContentEventPayload,
-    GiphyContent, GiphyImageVariant, GovernanceProposalContentEventPayload, ImageContent, ImageOrVideoContentEventPayload,
-    MAX_TEXT_LENGTH, MAX_TEXT_LENGTH_USIZE, MessageContent, MessageContentEventPayload, MessageContentInitial,
-    MessageContentType, MessageIndex, MessageReminderContent, MessageReminderContentEventPayload,
+    AudioContent, BlobReference, CallKind, CallParticipant, CanisterId, CompletedCryptoTransaction, ContentValidationError,
+    ContentWithCaptionEventPayload, CryptoContent, CryptoContentEventPayload, CryptoTransaction, Cryptocurrency, CustomContent,
+    EncryptedContent, EncryptedContentEventPayload, EncryptedMessageContentType, EncryptionKey, FileContent,
+    FileContentEventPayload, GiphyContent, GiphyImageVariant, GovernanceProposalContentEventPayload, ImageContent,
+    ImageOrVideoContentEventPayload, MAX_TEXT_LENGTH, MAX_TEXT_LENGTH_USIZE, MessageContent, MessageContentEventPayload,
+    MessageContentInitial, MessageContentType, MessageIndex, MessageReminderContent, MessageReminderContentEventPayload,
     MessageReminderCreatedContent, MessageReport, Milliseconds, ModerationInput, ModerationReportContent, P2PSwapAccepted,
     P2PSwapCancelled, P2PSwapCompleted, P2PSwapContent, P2PSwapContentEventPayload, P2PSwapContentInitial, P2PSwapExpired,
     P2PSwapReserved, P2PSwapStatus, PendingCryptoTransaction, PollConfig, PollContent, PollContentEventPayload, PollVotes,
     PrizeContent, PrizeContentEventPayload, PrizeContentInitial, PrizeWinnerContent, PrizeWinnerContentEventPayload, Proposal,
     ProposalContent, RegisterVoteResult, ReportedMessage, ReportedMessageContentEventPayload, TextContent,
     TextContentEventPayload, ThumbnailData, TimestampMillis, TimestampNanos, TokenInfo, TotalVotes, TransactionHash, UserId,
-    UserType, VideoCallContent, VideoCallPresence, VideoCallType, VideoContent, VoteOperation, is_default,
+    UserIdAndPrincipal, UserType, VideoCallContent, VideoCallPresence, VideoContent, VoteOperation, is_default,
 };
+use utils::migrated_user_ids::MigratedUserIds;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum MessageContentInternal {
@@ -67,77 +67,9 @@ pub enum MessageContentInternal {
     Encrypted(EncryptedContentInternal),
     #[serde(rename = "cu")]
     Custom(CustomContentInternal),
-    #[serde(rename = "ac")]
-    ActionCard(ActionCardContentInternal),
-}
-
-const MAX_ACTION_CARD_BYTES: usize = 64 * 1024;
-const MAX_ACTION_CARD_ROWS: usize = 32;
-const MAX_ACTION_CARD_RECIPIENTS: usize = 8;
-const MAX_ACTION_CARD_PAYLOAD_BYTES: usize = 16_384;
-
-fn action_card_within_bounds(card: &ActionCardContentInitial, sender_user_type: UserType, now: TimestampMillis) -> bool {
-    fn chars_between(value: &str, min: usize, max: usize) -> bool {
-        let length = value.chars().count();
-        (min..=max).contains(&length) && (min == 0 || !value.trim().is_empty())
-    }
-
-    let app_tuple_all_present = card.app_id.is_some() && card.app_revision.is_some() && card.app_provenance.is_some();
-    let app_tuple_all_absent = card.app_id.is_none() && card.app_revision.is_none() && card.app_provenance.is_none();
-    if (!app_tuple_all_absent && (!app_tuple_all_present || !matches!(sender_user_type, UserType::User)))
-        || card
-            .app_provenance
-            .as_ref()
-            .is_some_and(|value| value.len() != types::AI_APP_CARD_TOKEN_BYTES)
-        || !chars_between(&card.title, 1, 200)
-        || !chars_between(&card.confirm_label, 1, 80)
-        || !chars_between(&card.cancel_label, 1, 80)
-        || !chars_between(&card.action_id, 1, 128)
-        || card.rows.is_empty()
-        || card.rows.len() > MAX_ACTION_CARD_ROWS
-        || card.disclosure.as_ref().is_some_and(|value| value.chars().count() > 1_000)
-        || card.expires_at.is_some_and(|expires_at| expires_at <= now)
-        || card
-            .confirm_payload
-            .as_ref()
-            .is_some_and(|payload| payload.is_empty() || payload.len() > MAX_ACTION_CARD_PAYLOAD_BYTES)
-    {
-        return false;
-    }
-    if card
-        .rows
-        .iter()
-        .any(|row| !chars_between(&row.label, 1, 128) || row.value.chars().count() > 4_096)
-    {
-        return false;
-    }
-    let mut recipients = Vec::new();
-    for key in card.recipient_public_key.iter().chain(card.recipient_public_keys.iter()) {
-        if key.is_empty() || key.chars().count() > 2_000 {
-            return false;
-        }
-        if !recipients.contains(key) {
-            recipients.push(key.clone());
-        }
-    }
-    if recipients.len() > MAX_ACTION_CARD_RECIPIENTS {
-        return false;
-    }
-    msgpack::serialize_to_vec(card).is_ok_and(|encoded| encoded.len() <= MAX_ACTION_CARD_BYTES)
 }
 
 impl MessageContentInternal {
-    /// Called only by a chat update after UserIndex consumed a one-time proof whose content hash was
-    /// vouched by the exact registered app canister and recomputed from raw message ingress.
-    pub fn mark_ai_app_card_verified(&mut self, content_hash: [u8; 32]) -> bool {
-        if let MessageContentInternal::ActionCard(card) = self {
-            card.mark_app_verified(content_hash);
-            true
-        } else {
-            false
-        }
-    }
-
     pub fn validate_new_message(
         content: MessageContentInitial,
         is_direct_chat: bool,
@@ -151,9 +83,7 @@ impl MessageContentInternal {
             let invalid_type_for_forwarding = contains_crypto_transfer
                 || matches!(
                     &content,
-                    MessageContentInitial::Poll(_)
-                        | MessageContentInitial::GovernanceProposal(_)
-                        | MessageContentInitial::ActionCard(_)
+                    MessageContentInitial::Poll(_) | MessageContentInitial::GovernanceProposal(_)
                 );
 
             if invalid_type_for_forwarding {
@@ -163,12 +93,6 @@ impl MessageContentInternal {
 
         // Allow GovernanceProposal messages to exceed the max length since they are collapsed on the UI
         if content.text_length() > MAX_TEXT_LENGTH_USIZE && !matches!(&content, MessageContentInitial::GovernanceProposal(_)) {
-            return ValidateNewMessageContentResult::Error(ContentValidationError::TextTooLong(MAX_TEXT_LENGTH));
-        }
-
-        if let MessageContentInitial::ActionCard(card) = &content
-            && !action_card_within_bounds(card, sender_user_type, now)
-        {
             return ValidateNewMessageContentResult::Error(ContentValidationError::TextTooLong(MAX_TEXT_LENGTH));
         }
 
@@ -202,7 +126,6 @@ impl MessageContentInternal {
             MessageContentInitial::Prize(p) => p.prizes_v2.is_empty(),
             MessageContentInitial::Encrypted(e) => e.encrypted_data.is_empty(),
             MessageContentInitial::Deleted(_) => true,
-            MessageContentInitial::ActionCard(a) => a.rows.is_empty(),
             MessageContentInitial::Crypto(_)
             | MessageContentInitial::Giphy(_)
             | MessageContentInitial::GovernanceProposal(_)
@@ -263,29 +186,28 @@ impl MessageContentInternal {
         }
     }
 
-    pub fn hydrate(self, my_user_id: Option<UserId>) -> MessageContent {
+    pub fn hydrate(self, my_user: Option<UserIdAndPrincipal>) -> MessageContent {
         match self {
-            MessageContentInternal::Text(t) => MessageContent::Text(t.hydrate(my_user_id)),
-            MessageContentInternal::Image(i) => MessageContent::Image(i.hydrate(my_user_id)),
-            MessageContentInternal::Video(v) => MessageContent::Video(v.hydrate(my_user_id)),
-            MessageContentInternal::Audio(a) => MessageContent::Audio(a.hydrate(my_user_id)),
-            MessageContentInternal::File(f) => MessageContent::File(f.hydrate(my_user_id)),
-            MessageContentInternal::Poll(p) => MessageContent::Poll(p.hydrate(my_user_id)),
-            MessageContentInternal::Crypto(c) => MessageContent::Crypto(c.hydrate(my_user_id)),
+            MessageContentInternal::Text(t) => MessageContent::Text(t.hydrate(my_user)),
+            MessageContentInternal::Image(i) => MessageContent::Image(i.hydrate(my_user)),
+            MessageContentInternal::Video(v) => MessageContent::Video(v.hydrate(my_user)),
+            MessageContentInternal::Audio(a) => MessageContent::Audio(a.hydrate(my_user)),
+            MessageContentInternal::File(f) => MessageContent::File(f.hydrate(my_user)),
+            MessageContentInternal::Poll(p) => MessageContent::Poll(p.hydrate(my_user)),
+            MessageContentInternal::Crypto(c) => MessageContent::Crypto(c.hydrate(my_user)),
             MessageContentInternal::Deleted(d) => MessageContent::Deleted(d.hydrate()),
-            MessageContentInternal::Giphy(g) => MessageContent::Giphy(g.hydrate(my_user_id)),
-            MessageContentInternal::GovernanceProposal(p) => MessageContent::GovernanceProposal(p.hydrate(my_user_id)),
-            MessageContentInternal::PrizeWinner(c) => MessageContent::PrizeWinner(c.hydrate(my_user_id)),
-            MessageContentInternal::Prize(p) => MessageContent::Prize(p.hydrate(my_user_id)),
-            MessageContentInternal::MessageReminderCreated(r) => MessageContent::MessageReminderCreated(r.hydrate(my_user_id)),
-            MessageContentInternal::MessageReminder(r) => MessageContent::MessageReminder(r.hydrate(my_user_id)),
-            MessageContentInternal::ReportedMessage(r) => MessageContent::ReportedMessage(r.hydrate(my_user_id)),
+            MessageContentInternal::Giphy(g) => MessageContent::Giphy(g.hydrate(my_user)),
+            MessageContentInternal::GovernanceProposal(p) => MessageContent::GovernanceProposal(p.hydrate(my_user)),
+            MessageContentInternal::PrizeWinner(c) => MessageContent::PrizeWinner(c.hydrate(my_user)),
+            MessageContentInternal::Prize(p) => MessageContent::Prize(p.hydrate(my_user)),
+            MessageContentInternal::MessageReminderCreated(r) => MessageContent::MessageReminderCreated(r.hydrate(my_user)),
+            MessageContentInternal::MessageReminder(r) => MessageContent::MessageReminder(r.hydrate(my_user)),
+            MessageContentInternal::ReportedMessage(r) => MessageContent::ReportedMessage(r.hydrate(my_user)),
             MessageContentInternal::ModerationReport(r) => MessageContent::ModerationReport(*r.clone()),
-            MessageContentInternal::P2PSwap(p) => MessageContent::P2PSwap(p.hydrate(my_user_id)),
+            MessageContentInternal::P2PSwap(p) => MessageContent::P2PSwap(p.hydrate(my_user)),
             MessageContentInternal::VideoCall(c) => MessageContent::VideoCall(c.hydrate()),
-            MessageContentInternal::Encrypted(e) => MessageContent::Encrypted(e.hydrate(my_user_id)),
-            MessageContentInternal::Custom(c) => MessageContent::Custom(c.hydrate(my_user_id)),
-            MessageContentInternal::ActionCard(a) => MessageContent::ActionCard(a.hydrate(my_user_id)),
+            MessageContentInternal::Encrypted(e) => MessageContent::Encrypted(e.hydrate(my_user)),
+            MessageContentInternal::Custom(c) => MessageContent::Custom(c.hydrate(my_user)),
         }
     }
 
@@ -304,7 +226,6 @@ impl MessageContentInternal {
             MessageContentInternal::MessageReminderCreated(r) => r.notes.as_deref(),
             MessageContentInternal::MessageReminder(r) => r.notes.as_deref(),
             MessageContentInternal::P2PSwap(p) => p.caption.as_deref(),
-            MessageContentInternal::ActionCard(c) => Some(c.title.as_str()),
             MessageContentInternal::PrizeWinner(_)
             | MessageContentInternal::Deleted(_)
             | MessageContentInternal::ReportedMessage(_)
@@ -441,8 +362,7 @@ impl MessageContentInternal {
             | MessageContentInternal::P2PSwap(_)
             | MessageContentInternal::VideoCall(_)
             | MessageContentInternal::Encrypted(_)
-            | MessageContentInternal::Custom(_)
-            | MessageContentInternal::ActionCard(_) => {}
+            | MessageContentInternal::Custom(_) => {}
         }
 
         references
@@ -535,10 +455,9 @@ impl MessageContentInternal {
                 content_type: MessageContentType::from(e.content_type.clone()).to_string(),
                 encrypted_length: e.encrypted_data.len() as u32,
             }),
-            MessageContentInternal::Deleted(_)
-            | MessageContentInternal::VideoCall(_)
-            | MessageContentInternal::Custom(_)
-            | MessageContentInternal::ActionCard(_) => MessageContentEventPayload::Empty,
+            MessageContentInternal::Deleted(_) | MessageContentInternal::VideoCall(_) | MessageContentInternal::Custom(_) => {
+                MessageContentEventPayload::Empty
+            }
         }
     }
 
@@ -625,8 +544,7 @@ impl From<&MessageContentInternal> for Document {
             | MessageContentInternal::ReportedMessage(_)
             | MessageContentInternal::Deleted(_)
             | MessageContentInternal::VideoCall(_)
-            | MessageContentInternal::Encrypted(_)
-            | MessageContentInternal::ActionCard(_) => {}
+            | MessageContentInternal::Encrypted(_) => {}
         }
 
         document
@@ -636,7 +554,7 @@ impl From<&MessageContentInternal> for Document {
 pub(crate) trait MessageContentInternalSubtype {
     type ContentType;
 
-    fn hydrate(self, my_user_id: Option<UserId>) -> Self::ContentType;
+    fn hydrate(self, my_user: Option<UserIdAndPrincipal>) -> Self::ContentType;
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -654,7 +572,7 @@ impl From<TextContent> for TextContentInternal {
 impl MessageContentInternalSubtype for TextContentInternal {
     type ContentType = TextContent;
 
-    fn hydrate(self, _my_user_id: Option<UserId>) -> Self::ContentType {
+    fn hydrate(self, _my_user: Option<UserIdAndPrincipal>) -> Self::ContentType {
         TextContent { text: self.text }
     }
 }
@@ -691,7 +609,7 @@ impl From<ImageContent> for ImageContentInternal {
 impl MessageContentInternalSubtype for ImageContentInternal {
     type ContentType = ImageContent;
 
-    fn hydrate(self, _my_user_id: Option<UserId>) -> Self::ContentType {
+    fn hydrate(self, _my_user: Option<UserIdAndPrincipal>) -> Self::ContentType {
         ImageContent {
             width: self.width,
             height: self.height,
@@ -738,7 +656,7 @@ impl From<VideoContent> for VideoContentInternal {
 impl MessageContentInternalSubtype for VideoContentInternal {
     type ContentType = VideoContent;
 
-    fn hydrate(self, _my_user_id: Option<UserId>) -> Self::ContentType {
+    fn hydrate(self, _my_user: Option<UserIdAndPrincipal>) -> Self::ContentType {
         VideoContent {
             width: self.width,
             height: self.height,
@@ -780,7 +698,7 @@ impl From<AudioContent> for AudioContentInternal {
 impl MessageContentInternalSubtype for AudioContentInternal {
     type ContentType = AudioContent;
 
-    fn hydrate(self, _my_user_id: Option<UserId>) -> Self::ContentType {
+    fn hydrate(self, _my_user: Option<UserIdAndPrincipal>) -> Self::ContentType {
         AudioContent {
             caption: self.caption,
             mime_type: self.mime_type,
@@ -820,7 +738,7 @@ impl From<FileContent> for FileContentInternal {
 impl MessageContentInternalSubtype for FileContentInternal {
     type ContentType = FileContent;
 
-    fn hydrate(self, _my_user_id: Option<UserId>) -> Self::ContentType {
+    fn hydrate(self, _my_user: Option<UserIdAndPrincipal>) -> Self::ContentType {
         FileContent {
             name: self.name,
             caption: self.caption,
@@ -854,9 +772,9 @@ impl From<PollContent> for PollContentInternal {
 impl MessageContentInternalSubtype for PollContentInternal {
     type ContentType = PollContent;
 
-    fn hydrate(self, my_user_id: Option<UserId>) -> Self::ContentType {
+    fn hydrate(self, my_user: Option<UserIdAndPrincipal>) -> Self::ContentType {
         PollContent {
-            votes: self.votes(my_user_id),
+            votes: self.votes(my_user.map(|u| u.user_id)),
             config: self.config.into(),
             ended: self.ended,
         }
@@ -864,6 +782,33 @@ impl MessageContentInternalSubtype for PollContentInternal {
 }
 
 impl PollContentInternal {
+    // Moves any votes left under a user's earlier ids, from before they were migrated to a MultiUser
+    // canister, over to their current id, so that they count as the user's own
+    pub fn change_voter_ids(&mut self, user_id: UserId, migrated_user_ids: &MigratedUserIds) {
+        if migrated_user_ids.is_empty() {
+            return;
+        }
+        let latest = migrated_user_ids.latest(user_id);
+        let is_earlier_id = |u: &UserId| *u != user_id && migrated_user_ids.latest(*u) == latest;
+
+        // Where only one vote per user is allowed, a vote the user has already cast under their
+        // current id stands, and otherwise their vote under the lowest option index is kept
+        let single_vote = !self.config.allow_multiple_votes_per_user;
+        let mut has_vote = single_vote && self.votes.values().any(|votes| votes.contains(&user_id));
+
+        let mut option_indexes: Vec<_> = self.votes.keys().copied().collect();
+        option_indexes.sort();
+        for option_index in option_indexes {
+            let votes = self.votes.get_mut(&option_index).unwrap();
+            let len = votes.len();
+            votes.retain(|u| !is_earlier_id(u));
+            if votes.len() < len && !has_vote && !votes.contains(&user_id) {
+                votes.push(user_id);
+                has_vote = single_vote;
+            }
+        }
+    }
+
     pub fn register_vote(&mut self, user_id: UserId, option_index: u32, operation: VoteOperation) -> RegisterVoteResult {
         if self.ended {
             RegisterVoteResult::PollEnded
@@ -1010,7 +955,7 @@ pub struct CryptoContentInternal {
 impl MessageContentInternalSubtype for CryptoContentInternal {
     type ContentType = CryptoContent;
 
-    fn hydrate(self, _my_user_id: Option<UserId>) -> Self::ContentType {
+    fn hydrate(self, _my_user: Option<UserIdAndPrincipal>) -> Self::ContentType {
         CryptoContent {
             recipient: self.recipient,
             transfer: CryptoTransaction::Completed(self.transfer.into()),
@@ -1595,7 +1540,7 @@ impl From<&GiphyImageVariantInternal> for GiphyImageVariant {
 impl MessageContentInternalSubtype for GiphyContentInternal {
     type ContentType = GiphyContent;
 
-    fn hydrate(self, _my_user_id: Option<UserId>) -> Self::ContentType {
+    fn hydrate(self, _my_user: Option<UserIdAndPrincipal>) -> Self::ContentType {
         GiphyContent {
             caption: self.caption,
             title: self.title,
@@ -1615,6 +1560,23 @@ pub struct ProposalContentInternal {
     pub votes: BTreeMap<UserId, bool>,
 }
 
+impl ProposalContentInternal {
+    // The user's vote, including one recorded under an earlier id, from before they were migrated
+    // to a MultiUser canister
+    pub fn vote(&self, user_id: UserId, migrated_user_ids: &MigratedUserIds) -> Option<bool> {
+        if let Some(vote) = self.votes.get(&user_id) {
+            return Some(*vote);
+        }
+        if migrated_user_ids.is_empty() {
+            return None;
+        }
+        let latest = migrated_user_ids.latest(user_id);
+        self.votes
+            .iter()
+            .find_map(|(u, vote)| (migrated_user_ids.latest(*u) == latest).then_some(*vote))
+    }
+}
+
 impl From<ProposalContent> for ProposalContentInternal {
     fn from(value: ProposalContent) -> Self {
         ProposalContentInternal {
@@ -1628,11 +1590,11 @@ impl From<ProposalContent> for ProposalContentInternal {
 impl MessageContentInternalSubtype for ProposalContentInternal {
     type ContentType = ProposalContent;
 
-    fn hydrate(self, my_user_id: Option<UserId>) -> Self::ContentType {
+    fn hydrate(self, my_user: Option<UserIdAndPrincipal>) -> Self::ContentType {
         ProposalContent {
             governance_canister_id: self.governance_canister_id,
             proposal: self.proposal,
-            my_vote: my_user_id.and_then(|u| self.votes.get(&u)).copied(),
+            my_vote: my_user.and_then(|u| self.votes.get(&u.user_id)).copied(),
         }
     }
 }
@@ -1671,6 +1633,12 @@ pub struct PrizeContentInternal {
     pub requires_captcha: bool,
     #[serde(rename = "mc", default, skip_serializing_if = "is_default")]
     pub min_chit_earned: u32,
+    // The sender's principal, which along with their user id determines the wallet any refund is
+    // paid to. Recorded when the prize is sent, as the sender may have left the chat by the time
+    // it ends. Anonymous for prizes sent before it was recorded, which is fine as their senders are
+    // all alone in their canisters, so are refunded at their user id.
+    #[serde(rename = "pr", default = "Principal::anonymous")]
+    pub principal: Principal,
 }
 
 impl PrizeContentInternal {
@@ -1692,6 +1660,8 @@ impl PrizeContentInternal {
             fee_percent: PRIZE_FEE_PERCENT,
             requires_captcha: content.requires_captcha,
             min_chit_earned: content.min_chit_earned,
+            // Set by the chat from the sender's member record when the prize is sent
+            principal: Principal::anonymous(),
         }
     }
 
@@ -1735,7 +1705,7 @@ impl PrizeContentInternal {
                 ledger,
                 refund - transaction_fee,
                 transaction_fee,
-                sender,
+                UserIdAndPrincipal::new(sender, self.principal).into(),
                 Some(&MEMO_PRIZE_REFUND),
                 now_nanos,
             ));
@@ -1748,12 +1718,12 @@ impl PrizeContentInternal {
 impl MessageContentInternalSubtype for PrizeContentInternal {
     type ContentType = PrizeContent;
 
-    fn hydrate(self, my_user_id: Option<UserId>) -> Self::ContentType {
+    fn hydrate(self, my_user: Option<UserIdAndPrincipal>) -> Self::ContentType {
         PrizeContent {
             prizes_remaining: self.prizes_remaining.len() as u32,
             prizes_pending: self.reservations.len() as u32,
             winner_count: self.winners.len() as u32,
-            user_is_winner: my_user_id.map(|u| self.winners.contains(&u)).unwrap_or_default(),
+            user_is_winner: my_user.map(|u| self.winners.contains(&u.user_id)).unwrap_or_default(),
             winners: Vec::new(),
             token_symbol: self.transaction.token_symbol().to_string(),
             ledger: self.transaction.ledger_canister_id(),
@@ -1790,7 +1760,7 @@ pub struct PrizeWinnerContentInternal {
 impl MessageContentInternalSubtype for PrizeWinnerContentInternal {
     type ContentType = PrizeWinnerContent;
 
-    fn hydrate(self, my_user_id: Option<UserId>) -> Self::ContentType {
+    fn hydrate(self, my_user: Option<UserIdAndPrincipal>) -> Self::ContentType {
         PrizeWinnerContent {
             winner: self.winner,
             transaction: CompletedCryptoTransaction::ICRC1(types::icrc1::CompletedCryptoTransaction {
@@ -1802,8 +1772,9 @@ impl MessageContentInternalSubtype for PrizeWinnerContentInternal {
                     subaccount: None,
                 }
                 .into(),
-                to: my_user_id
-                    .map(types::icrc1::Account::for_user)
+                // The winner's wallet
+                to: my_user
+                    .map(types::icrc1::Account::from)
                     .unwrap_or(types::icrc1::Account {
                         owner: Principal::anonymous(),
                         subaccount: None,
@@ -1845,7 +1816,7 @@ impl From<MessageReminderCreatedContent> for MessageReminderCreatedContentIntern
 impl MessageContentInternalSubtype for MessageReminderCreatedContentInternal {
     type ContentType = MessageReminderCreatedContent;
 
-    fn hydrate(self, _my_user_id: Option<UserId>) -> Self::ContentType {
+    fn hydrate(self, _my_user: Option<UserIdAndPrincipal>) -> Self::ContentType {
         MessageReminderCreatedContent {
             reminder_id: self.reminder_id,
             remind_at: self.remind_at,
@@ -1875,7 +1846,7 @@ impl From<MessageReminderContent> for MessageReminderContentInternal {
 impl MessageContentInternalSubtype for MessageReminderContentInternal {
     type ContentType = MessageReminderContent;
 
-    fn hydrate(self, _my_user_id: Option<UserId>) -> Self::ContentType {
+    fn hydrate(self, _my_user: Option<UserIdAndPrincipal>) -> Self::ContentType {
         MessageReminderContent {
             reminder_id: self.reminder_id,
             notes: self.notes,
@@ -1915,6 +1886,10 @@ pub struct P2PSwapContentInternal {
     pub token0_txn_in: u64,
     #[serde(rename = "s", alias = "status")]
     pub status: P2PSwapStatus,
+    // The owner of the wallet of the user who reserved the swap, by which the escrow canister names
+    // them once they accept it. None for swaps reserved before this was recorded.
+    #[serde(rename = "rp", default, skip_serializing_if = "Option::is_none")]
+    pub reserved_by_principal: Option<Principal>,
 }
 
 impl P2PSwapContentInternal {
@@ -1934,13 +1909,15 @@ impl P2PSwapContentInternal {
             caption: content.caption,
             token0_txn_in,
             status: P2PSwapStatus::Open,
+            reserved_by_principal: None,
         }
     }
 
-    pub fn reserve(&mut self, user_id: UserId, now: TimestampMillis) -> bool {
+    pub fn reserve(&mut self, user_id: UserId, principal: Principal, now: TimestampMillis) -> bool {
         if let P2PSwapStatus::Open = self.status {
             if now < self.expires_at {
                 self.status = P2PSwapStatus::Reserved(P2PSwapReserved { reserved_by: user_id });
+                self.reserved_by_principal = Some(principal);
                 return true;
             } else {
                 self.status = P2PSwapStatus::Expired(P2PSwapExpired { token0_txn_out: None });
@@ -1950,11 +1927,25 @@ impl P2PSwapContentInternal {
         false
     }
 
+    // The user the escrow canister names by the owner of their wallet, if they reserved the swap
+    pub fn reserved_by(&self, principal: Principal) -> Option<UserId> {
+        if self.reserved_by_principal != Some(principal) {
+            return None;
+        }
+        match &self.status {
+            P2PSwapStatus::Reserved(r) => Some(r.reserved_by),
+            P2PSwapStatus::Accepted(a) => Some(a.accepted_by),
+            P2PSwapStatus::Completed(c) => Some(c.accepted_by),
+            _ => None,
+        }
+    }
+
     pub fn unreserve(&mut self, user_id: UserId) -> bool {
         if let P2PSwapStatus::Reserved(r) = &self.status
             && r.reserved_by == user_id
         {
             self.status = P2PSwapStatus::Open;
+            self.reserved_by_principal = None;
             return true;
         }
         false
@@ -2011,7 +2002,7 @@ impl P2PSwapContentInternal {
 impl MessageContentInternalSubtype for P2PSwapContentInternal {
     type ContentType = P2PSwapContent;
 
-    fn hydrate(self, _my_user_id: Option<UserId>) -> Self::ContentType {
+    fn hydrate(self, _my_user: Option<UserIdAndPrincipal>) -> Self::ContentType {
         self.into()
     }
 }
@@ -2044,6 +2035,7 @@ impl From<P2PSwapContent> for P2PSwapContentInternal {
             caption: value.caption,
             token0_txn_in: value.token0_txn_in,
             status: value.status,
+            reserved_by_principal: None,
         }
     }
 }
@@ -2051,7 +2043,7 @@ impl From<P2PSwapContent> for P2PSwapContentInternal {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct VideoCallContentInternal {
     #[serde(rename = "t", default, skip_serializing_if = "is_default")]
-    pub call_type: VideoCallType,
+    pub call_type: CallKind,
     #[serde(rename = "e", default, skip_serializing_if = "is_default")]
     pub ended: Option<TimestampMillis>,
     #[serde(rename = "p", default)]
@@ -2074,7 +2066,8 @@ impl VideoCallContentInternal {
         }
 
         VideoCallContent {
-            call_type: self.call_type,
+            call_type: self.call_type.call_type(),
+            audio_only: self.call_type.audio_only(),
             ended: self.ended,
             participants,
             hidden_participants,
@@ -2095,7 +2088,7 @@ pub struct CallParticipantInternal {
 impl MessageContentInternalSubtype for ReportedMessageInternal {
     type ContentType = ReportedMessage;
 
-    fn hydrate(self, _my_user_id: Option<UserId>) -> Self::ContentType {
+    fn hydrate(self, _my_user: Option<UserIdAndPrincipal>) -> Self::ContentType {
         ReportedMessage {
             count: self.reports.len() as u32,
             reports: self.reports.into_iter().take(10).collect(),
@@ -2132,7 +2125,7 @@ impl From<EncryptedContent> for EncryptedContentInternal {
 impl MessageContentInternalSubtype for EncryptedContentInternal {
     type ContentType = EncryptedContent;
 
-    fn hydrate(self, _my_user_id: Option<UserId>) -> Self::ContentType {
+    fn hydrate(self, _my_user: Option<UserIdAndPrincipal>) -> Self::ContentType {
         EncryptedContent {
             version: self.version,
             content_type: self.content_type,
@@ -2163,7 +2156,7 @@ impl From<CustomContent> for CustomContentInternal {
 impl MessageContentInternalSubtype for CustomContentInternal {
     type ContentType = CustomContent;
 
-    fn hydrate(self, _my_user_id: Option<UserId>) -> Self::ContentType {
+    fn hydrate(self, _my_user: Option<UserIdAndPrincipal>) -> Self::ContentType {
         CustomContent {
             kind: self.kind,
             data: self.data,
@@ -2197,345 +2190,6 @@ impl From<BlobReference> for BlobReferenceInternal {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct ActionCardContentInternal {
-    #[serde(rename = "ti")]
-    pub title: String,
-    #[serde(rename = "r")]
-    pub rows: Vec<ActionCardRow>,
-    #[serde(rename = "cl")]
-    pub confirm_label: String,
-    #[serde(rename = "xl")]
-    pub cancel_label: String,
-    #[serde(rename = "ai")]
-    pub action_id: String,
-    // The owning directory app (set at post time). Distinct from the server-only routing fields below:
-    // this IS hydrated to clients so a recipient binds card-surface resolution to the exact producing
-    // app rather than the non-namespaced action_id. Absent on legacy cards.
-    #[serde(rename = "aid", default, skip_serializing_if = "Option::is_none")]
-    pub app_id: Option<AiAppId>,
-    #[serde(rename = "arv", default, skip_serializing_if = "Option::is_none")]
-    pub app_revision: Option<TimestampMillis>,
-    // Set only after the chat canister consumes a UserIndex proposal proof that binds the directory
-    // app coordinates before storing the card. It does not attest app authorship of rows/payload.
-    #[serde(rename = "av", default, skip_serializing_if = "std::ops::Not::not")]
-    pub app_verified: bool,
-    // Full-card content attestation is deliberately distinct from directory-coordinate provenance.
-    // It defaults false across upgrades and raw message ingress; only the trusted app-attestation
-    // path may set it true after binding the exact canonical content hash. Browser-authored fields
-    // cannot opt into trusted rendering.
-    #[serde(rename = "acv", default, skip_serializing_if = "std::ops::Not::not")]
-    pub app_content_verified: bool,
-    // Server-only exact canonical content commitment. Never hydrated to clients; capabilities and
-    // final-confirmation grants bind to it so neither a copied app id nor a different card can reuse
-    // the attestation.
-    #[serde(rename = "ach", default, skip_serializing_if = "Option::is_none")]
-    pub app_content_hash: Option<[u8; 32]>,
-    #[serde(rename = "d", default, skip_serializing_if = "Option::is_none")]
-    pub disclosure: Option<String>,
-    #[serde(rename = "s")]
-    pub state: ActionCardState,
-    #[serde(rename = "e", default, skip_serializing_if = "Option::is_none")]
-    pub expires_at: Option<TimestampMillis>,
-    #[serde(rename = "rb", default, skip_serializing_if = "Option::is_none")]
-    pub responded_by: Option<UserId>,
-    #[serde(rename = "ra", default, skip_serializing_if = "Option::is_none")]
-    pub responded_at: Option<TimestampMillis>,
-    // Internal durable confirmation reservation. It is never hydrated to clients. Reserving before
-    // the inter-canister await fixes the actor and payload for every retry. Because sibling calls
-    // can reuse one lease, async handlers preserve it until exact completion or an explicitly
-    // proven same-execution release.
-    #[serde(rename = "crb", default, skip_serializing_if = "Option::is_none")]
-    pub confirmation_reserved_by: Option<UserId>,
-    #[serde(rename = "cra", default, skip_serializing_if = "Option::is_none")]
-    pub confirmation_reserved_at: Option<TimestampMillis>,
-    /// Monotonic durable attempt generation. It survives upgrades and lets the encrypted envelope
-    /// identify which persisted lease produced a delivery without weakening card-level dedupe.
-    #[serde(rename = "crg", default)]
-    pub confirmation_lease_generation: u64,
-    /// Exact payload digest locked to the current lease. An ambiguous outbound result may be
-    /// retried only with these same bytes; a different edit can never overwrite a possibly-stored
-    /// action for the same card.
-    #[serde(rename = "crh", default, skip_serializing_if = "Option::is_none")]
-    pub confirmation_payload_hash: Option<[u8; 32]>,
-    /// Domain-separated digest of the one-use confirmation grant consumed for the current exact
-    /// lease. It lets an ambiguous inbox delivery retry the same bearer without weakening UIX's
-    /// one-use token semantics. Server-only and cleared whenever the lease ends.
-    #[serde(rename = "cgh", default, skip_serializing_if = "Option::is_none")]
-    pub confirmation_grant_hash: Option<[u8; 32]>,
-    // Legacy sender-carried routing, stored only for wire compatibility and ignored by the current
-    // authoritative confirmation path. Server-only: not hydrated to clients.
-    #[serde(rename = "rpk", default, skip_serializing_if = "Option::is_none")]
-    pub recipient_public_key: Option<String>,
-    // Legacy sender-carried fan-out data; ignored by the current confirmation path.
-    #[serde(rename = "rpks", default, skip_serializing_if = "Vec::is_empty")]
-    pub recipient_public_keys: Vec<String>,
-    #[serde(rename = "cp", default, skip_serializing_if = "Option::is_none")]
-    pub confirm_payload: Option<ByteBuf>,
-    // Legacy sender-carried inbox data; ignored by the current confirmation path.
-    #[serde(rename = "ici", default, skip_serializing_if = "Option::is_none")]
-    pub inbox_canister_id: Option<CanisterId>,
-}
-
-impl ActionCardContentInternal {
-    pub fn mark_app_verified(&mut self, content_hash: [u8; 32]) {
-        // Sender-carried routing fields are legacy wire compatibility only. Once provenance binds
-        // the card to a directory app, retain no untrusted routing material in chat storage; confirm
-        // resolves the exact current route and per-user key from UserIndex.
-        self.recipient_public_key = None;
-        self.recipient_public_keys.clear();
-        self.inbox_canister_id = None;
-        self.app_verified = true;
-        self.app_content_verified = true;
-        self.app_content_hash = Some(content_hash);
-    }
-    // Transition Pending -> Confirmed (idempotent). Returns true only on the transition, so callers
-    // forward the payload exactly once. An expired card cannot be confirmed.
-    pub fn confirm(&mut self, user_id: UserId, now: TimestampMillis) -> bool {
-        if self.is_expired(now) {
-            self.state = ActionCardState::Expired;
-            return false;
-        }
-        if matches!(self.state, ActionCardState::Pending) && self.confirmation_reserved_by.is_none() {
-            self.state = ActionCardState::Confirmed;
-            self.responded_by = Some(user_id);
-            self.responded_at = Some(now);
-            true
-        } else {
-            false
-        }
-    }
-
-    // Transition Pending -> Cancelled (idempotent). Returns true only on the transition.
-    pub fn cancel(&mut self, user_id: UserId, now: TimestampMillis) -> bool {
-        if matches!(self.state, ActionCardState::Pending) && self.confirmation_reserved_by.is_none() {
-            self.state = ActionCardState::Cancelled;
-            self.responded_by = Some(user_id);
-            self.responded_at = Some(now);
-            true
-        } else {
-            false
-        }
-    }
-
-    pub(crate) fn is_expired(&self, now: TimestampMillis) -> bool {
-        self.expires_at.is_some_and(|e| now > e)
-    }
-
-    /// Atomically reserves a pending card to one immutable confirmation attempt before delivery.
-    ///
-    /// Once present, a reservation never times out or changes generation: an outbound reply may
-    /// have been lost after the inbox committed. Only an exact retry by the same actor with the same
-    /// payload commitment is admitted. A handler may release it only when it can prove that its own
-    /// atomic execution created the lease and no sibling request could already be in flight.
-    pub fn reserve_confirmation(&mut self, user_id: UserId, payload_hash: [u8; 32], now: TimestampMillis) -> bool {
-        if !matches!(self.state, ActionCardState::Pending) {
-            return false;
-        }
-        if let Some(reserved_by) = self.confirmation_reserved_by {
-            return reserved_by == user_id
-                && self.confirmation_payload_hash == Some(payload_hash)
-                && self.confirmation_reserved_at.is_some();
-        }
-        if self.is_expired(now) {
-            return false;
-        }
-        let Some(generation) = self.confirmation_lease_generation.checked_add(1) else {
-            return false;
-        };
-        self.confirmation_lease_generation = generation;
-        self.confirmation_reserved_by = Some(user_id);
-        self.confirmation_reserved_at = Some(now);
-        self.confirmation_payload_hash = Some(payload_hash);
-        self.confirmation_grant_hash = None;
-        true
-    }
-
-    pub fn confirmation_grant_consumed_for_lease(
-        &self,
-        user_id: UserId,
-        lease_generation: u64,
-        payload_hash: [u8; 32],
-        grant_hash: [u8; 32],
-    ) -> bool {
-        matches!(self.state, ActionCardState::Pending)
-            && self.confirmation_reserved_by == Some(user_id)
-            && self.confirmation_reserved_at.is_some()
-            && self.confirmation_lease_generation == lease_generation
-            && self.confirmation_payload_hash == Some(payload_hash)
-            && self.confirmation_grant_hash == Some(grant_hash)
-    }
-
-    /// Records a successful one-use grant consumption only for the exact durable lease. The marker
-    /// is idempotent for the same bearer and cannot be rebound: once an outbound deposit may have
-    /// started, a different grant must never take over that ambiguous lease.
-    pub fn mark_confirmation_grant_consumed_for_lease(
-        &mut self,
-        user_id: UserId,
-        lease_generation: u64,
-        payload_hash: [u8; 32],
-        grant_hash: [u8; 32],
-    ) -> bool {
-        if !matches!(self.state, ActionCardState::Pending)
-            || self.confirmation_reserved_by != Some(user_id)
-            || self.confirmation_reserved_at.is_none()
-            || self.confirmation_lease_generation != lease_generation
-            || self.confirmation_payload_hash != Some(payload_hash)
-        {
-            return false;
-        }
-        match self.confirmation_grant_hash {
-            None => {
-                self.confirmation_grant_hash = Some(grant_hash);
-                true
-            }
-            Some(existing) => existing == grant_hash,
-        }
-    }
-
-    /// Commits only the lease holder's successful delivery.
-    pub fn complete_confirmation(&mut self, user_id: UserId, now: TimestampMillis) -> bool {
-        if self.confirmation_reserved_by != Some(user_id) || !matches!(self.state, ActionCardState::Pending) {
-            return false;
-        }
-        // Expiry gates the reservation, not its completion. Once delivery succeeded, turning the card
-        // Expired here would claim no action occurred and invite a retry even though the inbox stored it.
-        let reserved_at = self.confirmation_reserved_at.unwrap_or(now);
-        self.confirmation_reserved_by = None;
-        self.confirmation_reserved_at = None;
-        self.confirmation_grant_hash = None;
-        self.state = ActionCardState::Confirmed;
-        self.responded_by = Some(user_id);
-        self.responded_at = Some(reserved_at);
-        true
-    }
-
-    /// Commits only the exact durable lease that was authorized before an outbound delivery.
-    /// This is used after a definite downstream Success, when re-running mutable chat/member
-    /// authorization would be both too late and capable of stranding an already-delivered action.
-    pub fn complete_confirmation_for_lease(
-        &mut self,
-        user_id: UserId,
-        lease_generation: u64,
-        payload_hash: [u8; 32],
-        now: TimestampMillis,
-    ) -> bool {
-        if self.confirmation_reserved_by != Some(user_id)
-            || self.confirmation_lease_generation != lease_generation
-            || self.confirmation_payload_hash != Some(payload_hash)
-            || !matches!(self.state, ActionCardState::Pending)
-        {
-            return false;
-        }
-        let reserved_at = self.confirmation_reserved_at.unwrap_or(now);
-        self.confirmation_reserved_by = None;
-        self.confirmation_reserved_at = None;
-        self.confirmation_grant_hash = None;
-        self.state = ActionCardState::Confirmed;
-        self.responded_by = Some(user_id);
-        self.responded_at = Some(reserved_at);
-        true
-    }
-
-    /// Unscoped release retained for synchronous legacy callers. This is safe only in the same
-    /// atomic execution that created the reservation; it must never be used after an await.
-    pub fn abort_confirmation(&mut self, user_id: UserId) -> bool {
-        if self.confirmation_reserved_by != Some(user_id) || !matches!(self.state, ActionCardState::Pending) {
-            return false;
-        }
-        self.confirmation_reserved_by = None;
-        self.confirmation_reserved_at = None;
-        self.confirmation_payload_hash = None;
-        self.confirmation_grant_hash = None;
-        true
-    }
-
-    /// Releases only the exact lease generation and payload. This prevents erasing a newer lease,
-    /// but it does not distinguish concurrent sibling requests sharing this exact lease; callers
-    /// must additionally prove that no sibling can be in flight (in practice, do not call after an
-    /// await).
-    pub fn abort_confirmation_for_lease(&mut self, user_id: UserId, lease_generation: u64, payload_hash: [u8; 32]) -> bool {
-        if self.confirmation_reserved_by != Some(user_id)
-            || self.confirmation_lease_generation != lease_generation
-            || self.confirmation_payload_hash != Some(payload_hash)
-            || !matches!(self.state, ActionCardState::Pending)
-        {
-            return false;
-        }
-        self.confirmation_reserved_by = None;
-        self.confirmation_reserved_at = None;
-        self.confirmation_payload_hash = None;
-        self.confirmation_grant_hash = None;
-        true
-    }
-
-    /// All delivery recipients for this card: the legacy single key plus the fan-out list,
-    /// deduped preserving order (legacy first). Empty when the card carries no routing.
-    pub fn all_recipient_keys(&self) -> Vec<String> {
-        let mut out: Vec<String> = Vec::new();
-        for k in self.recipient_public_key.iter().chain(self.recipient_public_keys.iter()) {
-            if !k.is_empty() && !out.contains(k) {
-                out.push(k.clone());
-            }
-        }
-        out
-    }
-}
-
-impl From<ActionCardContentInitial> for ActionCardContentInternal {
-    fn from(value: ActionCardContentInitial) -> Self {
-        ActionCardContentInternal {
-            title: value.title,
-            rows: value.rows,
-            confirm_label: value.confirm_label,
-            cancel_label: value.cancel_label,
-            action_id: value.action_id,
-            app_id: value.app_id,
-            app_revision: value.app_revision,
-            app_verified: false,
-            app_content_verified: false,
-            app_content_hash: None,
-            disclosure: value.disclosure,
-            state: ActionCardState::Pending,
-            expires_at: value.expires_at,
-            responded_by: None,
-            responded_at: None,
-            confirmation_reserved_by: None,
-            confirmation_reserved_at: None,
-            confirmation_lease_generation: 0,
-            confirmation_payload_hash: None,
-            confirmation_grant_hash: None,
-            recipient_public_key: value.recipient_public_key,
-            recipient_public_keys: value.recipient_public_keys,
-            confirm_payload: value.confirm_payload,
-            inbox_canister_id: value.inbox_canister_id,
-        }
-    }
-}
-
-impl MessageContentInternalSubtype for ActionCardContentInternal {
-    type ContentType = ActionCardContent;
-
-    fn hydrate(self, _my_user_id: Option<UserId>) -> Self::ContentType {
-        ActionCardContent {
-            title: self.title,
-            rows: self.rows,
-            confirm_label: self.confirm_label,
-            cancel_label: self.cancel_label,
-            action_id: self.action_id,
-            app_id: self.app_verified.then_some(self.app_id).flatten(),
-            app_revision: self.app_verified.then_some(self.app_revision).flatten(),
-            app_verified: self.app_verified,
-            app_content_verified: self.app_content_verified,
-            disclosure: self.disclosure,
-            state: self.state,
-            responded_by: self.responded_by,
-            responded_at: self.responded_at,
-            expires_at: self.expires_at,
-        }
-    }
-}
-
 impl From<MessageContentInitial> for MessageContentInternal {
     fn from(value: MessageContentInitial) -> Self {
         match value {
@@ -2552,7 +2206,6 @@ impl From<MessageContentInitial> for MessageContentInternal {
             MessageContentInitial::MessageReminder(r) => MessageContentInternal::MessageReminder(r.into()),
             MessageContentInitial::Encrypted(e) => MessageContentInternal::Encrypted(e.into()),
             MessageContentInitial::Custom(c) => MessageContentInternal::Custom(c.into()),
-            MessageContentInitial::ActionCard(a) => MessageContentInternal::ActionCard(a.into()),
             MessageContentInitial::Crypto(c) => c
                 .try_into()
                 .map(MessageContentInternal::Crypto)
@@ -2587,7 +2240,6 @@ impl From<&MessageContentInternal> for MessageContentType {
             MessageContentInternal::VideoCall(_) => MessageContentType::VideoCall,
             MessageContentInternal::Encrypted(e) => e.content_type.clone().into(),
             MessageContentInternal::Custom(c) => MessageContentType::Custom(c.kind.clone()),
-            MessageContentInternal::ActionCard(_) => MessageContentType::ActionCard,
         }
     }
 }
@@ -2623,371 +2275,179 @@ impl From<TokenInfoCombined> for TokenInfo {
 }
 
 #[cfg(test)]
-mod action_card_security_tests {
+mod video_call_tests {
     use super::*;
-    use candid::Principal;
+    use types::VideoCallType;
 
-    fn user(byte: u8) -> UserId {
-        Principal::from_slice(&[byte]).into()
+    // The call content exactly as it was stored before audio calls existed (#9455). Frozen on
+    // purpose. Do not update it when VideoCallContentInternal changes.
+    #[derive(Serialize)]
+    struct PreviousVideoCallContentInternal {
+        #[serde(rename = "t", default, skip_serializing_if = "is_default")]
+        call_type: VideoCallType,
+        #[serde(rename = "e", default, skip_serializing_if = "is_default")]
+        ended: Option<TimestampMillis>,
+        #[serde(rename = "p", default)]
+        participants: BTreeMap<UserId, CallParticipantInternal>,
     }
 
-    fn initial_card() -> ActionCardContentInitial {
-        ActionCardContentInitial {
-            title: "Approve operation".to_string(),
-            rows: vec![ActionCardRow {
-                label: "Value".to_string(),
-                value: "42".to_string(),
-            }],
-            confirm_label: "Confirm".to_string(),
-            cancel_label: "Cancel".to_string(),
-            action_id: "sample.action".to_string(),
-            app_id: Some(7),
-            app_revision: Some(11),
-            app_provenance: Some(ByteBuf::from(vec![1; 32])),
-            disclosure: None,
-            expires_at: None,
-            recipient_public_key: Some("test-key".to_string()),
-            recipient_public_keys: Vec::new(),
-            confirm_payload: Some(ByteBuf::from(br#"{"value":42}"#.to_vec())),
-            inbox_canister_id: None,
+    // #9455 invariant 6: stable state written before this change decodes unchanged, with every
+    // existing call read as video or broadcast as before. A video call was stored with no "t"
+    // key at all, so what it reads back as is decided by the default of the stored type.
+    #[test]
+    fn invariant_6_a_call_stored_before_audio_calls_reads_back_as_the_same_kind() {
+        for (old, expected) in [
+            (VideoCallType::Default, CallKind::Video),
+            (VideoCallType::Broadcast, CallKind::Broadcast),
+        ] {
+            let bytes = msgpack::serialize_then_unwrap(PreviousVideoCallContentInternal {
+                call_type: old,
+                ended: Some(1),
+                participants: BTreeMap::new(),
+            });
+            let decoded: VideoCallContentInternal = msgpack::deserialize_then_unwrap(&bytes);
+
+            assert_eq!(decoded.call_type, expected);
+            assert_eq!(decoded.hydrate().call_type, old);
+            assert!(!decoded.hydrate().audio_only);
+        }
+    }
+}
+
+#[cfg(test)]
+mod p2p_swap_tests {
+    use super::*;
+
+    fn token(symbol: &str) -> TokenInfo {
+        TokenInfo {
+            symbol: symbol.to_string(),
+            ledger: Principal::from_slice(&[1]),
+            decimals: 8,
+            fee: 10_000,
         }
     }
 
-    fn card() -> ActionCardContentInternal {
-        initial_card().into()
-    }
-
-    #[test]
-    fn confirmation_reservation_is_single_flight() {
-        let mut card = card();
-        assert!(card.reserve_confirmation(user(1), [1; 32], 10));
-        assert!(!card.reserve_confirmation(user(2), [1; 32], 11));
-        assert!(!card.confirm(user(2), 11));
-        assert!(!card.cancel(user(2), 11));
-        assert!(card.complete_confirmation(user(1), 12));
-        assert!(matches!(card.state, ActionCardState::Confirmed));
-    }
-
-    #[test]
-    fn failed_delivery_releases_reservation_for_retry() {
-        let mut card = card();
-        assert!(card.reserve_confirmation(user(1), [1; 32], 10));
-        assert!(!card.abort_confirmation(user(2)));
-        assert!(card.abort_confirmation(user(1)));
-        assert!(card.reserve_confirmation(user(2), [1; 32], 11));
-    }
-
-    #[test]
-    fn ambiguous_confirmation_is_retried_only_as_the_same_immutable_attempt() {
-        let mut card = card();
-        assert!(card.reserve_confirmation(user(1), [1; 32], 10));
-        let generation = card.confirmation_lease_generation;
-        assert!(card.reserve_confirmation(user(1), [1; 32], 11));
-        assert!(!card.reserve_confirmation(user(2), [1; 32], 300_010));
-        assert!(!card.reserve_confirmation(user(1), [2; 32], 300_011));
-        assert!(card.reserve_confirmation(user(1), [1; 32], 300_011));
-        assert_eq!(card.confirmation_lease_generation, generation);
-        assert_eq!(card.confirmation_reserved_at, Some(10));
-        assert!(card.complete_confirmation(user(1), 300_012));
-        assert!(matches!(card.state, ActionCardState::Confirmed));
-    }
-
-    #[test]
-    fn malformed_reservation_without_a_complete_commitment_fails_closed() {
-        let mut card = card();
-        card.confirmation_reserved_by = Some(user(1));
-        card.confirmation_reserved_at = None;
-        assert!(!card.reserve_confirmation(user(2), [1; 32], 20));
-        assert!(!card.reserve_confirmation(user(1), [1; 32], 20));
-        assert_eq!(card.confirmation_reserved_by, Some(user(1)));
-        assert_eq!(card.confirmation_reserved_at, None);
-    }
-
-    #[test]
-    fn expiry_after_reservation_does_not_undo_successful_delivery() {
-        let mut card = card();
-        card.expires_at = Some(10);
-        assert!(card.reserve_confirmation(user(1), [1; 32], 10));
-        assert!(card.complete_confirmation(user(1), 11));
-        assert!(matches!(card.state, ActionCardState::Confirmed));
-        assert_eq!(
-            card.responded_at,
-            Some(10),
-            "the response time is the accepted reservation time"
-        );
-    }
-
-    #[test]
-    fn delivered_completion_is_bound_to_the_exact_generation_and_payload() {
-        let mut card = card();
-        let payload_hash = [7; 32];
-        assert!(card.reserve_confirmation(user(1), payload_hash, 10));
-        let generation = card.confirmation_lease_generation;
-        assert!(!card.complete_confirmation_for_lease(user(1), generation + 1, payload_hash, 11));
-        assert!(!card.complete_confirmation_for_lease(user(1), generation, [8; 32], 11));
-        assert!(card.complete_confirmation_for_lease(user(1), generation, payload_hash, 11));
-        assert!(matches!(card.state, ActionCardState::Confirmed));
-    }
-
-    #[test]
-    fn consumed_grant_marker_is_durable_and_bound_to_the_exact_pending_lease() {
-        let mut leased = card();
-        let payload_hash = [7; 32];
-        let grant_hash = [8; 32];
-        assert!(leased.reserve_confirmation(user(1), payload_hash, 10));
-        let generation = leased.confirmation_lease_generation;
-
-        assert!(!leased.confirmation_grant_consumed_for_lease(user(1), generation, payload_hash, grant_hash));
-        assert!(leased.mark_confirmation_grant_consumed_for_lease(user(1), generation, payload_hash, grant_hash));
-        assert!(leased.mark_confirmation_grant_consumed_for_lease(user(1), generation, payload_hash, grant_hash));
-        assert!(
-            !leased.mark_confirmation_grant_consumed_for_lease(user(1), generation, payload_hash, [10; 32]),
-            "an ambiguous lease must never be rebound to a different consumed grant"
-        );
-        assert!(leased.confirmation_grant_consumed_for_lease(user(1), generation, payload_hash, grant_hash));
-        assert!(!leased.confirmation_grant_consumed_for_lease(user(2), generation, payload_hash, grant_hash));
-        assert!(!leased.confirmation_grant_consumed_for_lease(user(1), generation + 1, payload_hash, grant_hash));
-        assert!(!leased.confirmation_grant_consumed_for_lease(user(1), generation, [9; 32], grant_hash));
-        assert!(!leased.confirmation_grant_consumed_for_lease(user(1), generation, payload_hash, [10; 32]));
-
-        let encoded = msgpack::serialize_to_vec(&leased).unwrap();
-        let mut restored: ActionCardContentInternal = msgpack::deserialize_then_unwrap(&encoded);
-        assert!(restored.confirmation_grant_consumed_for_lease(user(1), generation, payload_hash, grant_hash));
-        assert!(restored.reserve_confirmation(user(1), payload_hash, 300_011));
-        assert!(restored.confirmation_grant_consumed_for_lease(user(1), generation, payload_hash, grant_hash));
-
-        assert!(restored.abort_confirmation(user(1)));
-        assert!(!restored.confirmation_grant_consumed_for_lease(user(1), generation, payload_hash, grant_hash));
-        assert!(restored.reserve_confirmation(user(1), payload_hash, 300_012));
-        assert_ne!(restored.confirmation_lease_generation, generation);
-        assert!(!restored.confirmation_grant_consumed_for_lease(
-            user(1),
-            restored.confirmation_lease_generation,
-            payload_hash,
-            grant_hash,
-        ));
-
-        let mut completed = card();
-        assert!(completed.reserve_confirmation(user(1), payload_hash, 20));
-        let completed_generation = completed.confirmation_lease_generation;
-        assert!(completed.mark_confirmation_grant_consumed_for_lease(user(1), completed_generation, payload_hash, grant_hash,));
-        assert!(completed.complete_confirmation_for_lease(user(1), completed_generation, payload_hash, 21,));
-        assert_eq!(completed.confirmation_grant_hash, None);
-    }
-
-    #[test]
-    fn exact_abort_cannot_release_a_different_generation_or_payload() {
-        let mut card = card();
-        let payload_hash = [7; 32];
-        assert!(card.reserve_confirmation(user(1), payload_hash, 10));
-        let generation = card.confirmation_lease_generation;
-
-        assert!(!card.abort_confirmation_for_lease(user(1), generation + 1, payload_hash));
-        assert!(!card.abort_confirmation_for_lease(user(1), generation, [8; 32]));
-        assert_eq!(card.confirmation_reserved_by, Some(user(1)));
-        assert!(card.abort_confirmation_for_lease(user(1), generation, payload_hash));
-        assert_eq!(card.confirmation_reserved_by, None);
-    }
-
-    #[test]
-    fn current_card_state_round_trip_preserves_attestation_and_confirmation_lease() {
-        let mut before = card();
-        let content_hash = [6; 32];
-        let payload_hash = [7; 32];
-        before.mark_app_verified(content_hash);
-        assert!(before.reserve_confirmation(user(1), payload_hash, 10));
-        let generation = before.confirmation_lease_generation;
-
-        let encoded = msgpack::serialize_to_vec(&before).unwrap();
-        let mut after: ActionCardContentInternal = msgpack::deserialize_then_unwrap(&encoded);
-
-        assert!(after.app_verified);
-        assert!(after.app_content_verified);
-        assert_eq!(after.app_content_hash, Some(content_hash));
-        assert_eq!(after.confirmation_reserved_by, Some(user(1)));
-        assert_eq!(after.confirmation_reserved_at, Some(10));
-        assert_eq!(after.confirmation_lease_generation, generation);
-        assert_eq!(after.confirmation_payload_hash, Some(payload_hash));
-        assert!(after.reserve_confirmation(user(1), payload_hash, 300_011));
-        assert_eq!(after.confirmation_lease_generation, generation);
-        assert_eq!(after.confirmation_reserved_at, Some(10));
-        assert!(after.complete_confirmation_for_lease(user(1), generation, payload_hash, 11));
-        assert!(matches!(after.state, ActionCardState::Confirmed));
-    }
-
-    fn is_rejected(card: ActionCardContentInitial) -> bool {
-        matches!(
-            MessageContentInternal::validate_new_message(
-                MessageContentInitial::ActionCard(card),
-                false,
-                UserType::User,
-                false,
-                10,
-            ),
-            ValidateNewMessageContentResult::Error(_)
+    fn swap() -> P2PSwapContentInternal {
+        P2PSwapContentInternal::new(
+            1,
+            P2PSwapContentInitial {
+                token0: token("ICP"),
+                token0_amount: 100,
+                token1: token("CHAT"),
+                token1_amount: 1_000,
+                expires_in: 1_000,
+                caption: None,
+                from_account: None,
+            },
+            0,
+            0,
         )
     }
 
+    // The escrow canister names the acceptor by the owner of their wallet, which is resolved to
+    // them through what the swap recorded when they reserved it, for as long as it is theirs
     #[test]
-    fn action_card_wire_fields_and_total_work_are_bounded() {
-        assert!(!is_rejected(initial_card()));
+    fn the_user_who_reserved_a_swap_is_found_by_the_owner_of_their_wallet() {
+        let user_id: UserId = Principal::from_slice(&[2]).into();
+        let wallet_owner = Principal::from_slice(&[3]);
+        let mut swap = swap();
 
-        let mut card = initial_card();
-        card.rows = (0..33)
-            .map(|i| ActionCardRow {
-                label: format!("Row {i}"),
-                value: i.to_string(),
-            })
-            .collect();
-        assert!(is_rejected(card));
+        assert!(swap.reserve(user_id, wallet_owner, 1));
+        assert_eq!(swap.reserved_by(wallet_owner), Some(user_id));
+        assert_eq!(swap.reserved_by(user_id.as_principal()), None);
 
-        let mut card = initial_card();
-        card.rows[0].value = "v".repeat(4_097);
-        assert!(is_rejected(card));
+        assert!(swap.accept(user_id, 7));
+        assert_eq!(swap.reserved_by(wallet_owner), Some(user_id));
+        assert!(swap.complete(user_id, 8, 9).is_some());
+        assert_eq!(swap.reserved_by(wallet_owner), Some(user_id));
 
-        let mut card = initial_card();
-        card.recipient_public_keys = (0..9).map(|i| format!("KEY-{i}")).collect();
-        assert!(is_rejected(card));
+        // Freed again, it is no longer theirs
+        let mut swap = self::swap();
+        assert!(swap.reserve(user_id, wallet_owner, 1));
+        assert!(swap.unreserve(user_id));
+        assert_eq!(swap.reserved_by(wallet_owner), None);
+    }
+}
 
-        let mut card = initial_card();
-        card.confirm_payload = Some(ByteBuf::from(vec![0; 16_385]));
-        assert!(is_rejected(card));
+#[cfg(test)]
+mod poll_tests {
+    use super::*;
+    use types::PollConfig;
+
+    fn user_id(i: u8) -> UserId {
+        Principal::from_slice(&[i]).into()
     }
 
-    #[test]
-    fn every_app_provenance_tuple_is_validated_for_each_sender_kind() {
-        for sender in [
-            UserType::User,
-            UserType::Bot,
-            UserType::BotV2,
-            UserType::OcControlledBot,
-            UserType::Webhook,
-        ] {
-            for mask in 0..8 {
-                let mut candidate = initial_card();
-                candidate.app_id = (mask & 1 != 0).then_some(7);
-                candidate.app_revision = (mask & 2 != 0).then_some(11);
-                candidate.app_provenance = (mask & 4 != 0).then(|| ByteBuf::from(vec![1; types::AI_APP_CARD_TOKEN_BYTES]));
+    fn migrated(old_user_id: UserId, new_user_id: UserId) -> MigratedUserIds {
+        let mut migrated_user_ids = MigratedUserIds::default();
+        migrated_user_ids.insert(old_user_id, new_user_id);
+        migrated_user_ids
+    }
 
-                let accepted = match mask {
-                    0 => true,
-                    7 => matches!(sender, UserType::User),
-                    _ => false,
-                };
-                assert_eq!(
-                    action_card_within_bounds(&candidate, sender, 10),
-                    accepted,
-                    "unexpected provenance authorization for tuple mask {mask} and sender {sender:?}"
-                );
+    fn poll(allow_user_to_change_vote: bool) -> PollContentInternal {
+        PollContentInternal {
+            config: PollConfig {
+                text: None,
+                options: vec!["a".to_string(), "b".to_string()],
+                end_date: None,
+                anonymous: false,
+                show_votes_before_end_date: true,
+                allow_multiple_votes_per_user: false,
+                allow_user_to_change_vote,
             }
+            .into(),
+            votes: HashMap::new(),
+            ended: false,
         }
     }
 
     #[test]
-    fn provenance_verification_discards_sender_carried_routing() {
-        let mut card = card();
-        card.recipient_public_key = Some("attacker-single".to_string());
-        card.recipient_public_keys = vec!["attacker-one".to_string(), "attacker-two".to_string()];
-        card.inbox_canister_id = Some(Principal::from_slice(&[99]));
-        let payload = card.confirm_payload.clone();
+    fn vote_under_an_earlier_id_counts_as_the_users_own() {
+        let old_user_id = user_id(1);
+        let new_user_id = user_id(2);
 
-        card.mark_app_verified([1; 32]);
+        let mut poll = poll(false);
+        poll.register_vote(old_user_id, 0, VoteOperation::RegisterVote);
 
-        assert!(card.app_verified);
-        assert_eq!(card.recipient_public_key, None);
-        assert!(card.recipient_public_keys.is_empty());
-        assert_eq!(card.inbox_canister_id, None);
-        assert_eq!(card.confirm_payload, payload, "the opaque action payload remains frozen");
+        poll.change_voter_ids(new_user_id, &migrated(old_user_id, new_user_id));
+
+        assert_eq!(poll.votes.get(&0), Some(&vec![new_user_id]));
+        // The user already voted, so can't vote again for another option
+        assert!(matches!(
+            poll.register_vote(new_user_id, 1, VoteOperation::RegisterVote),
+            RegisterVoteResult::UserCannotChangeVote
+        ));
+        assert!(matches!(
+            poll.register_vote(new_user_id, 0, VoteOperation::RegisterVote),
+            RegisterVoteResult::SuccessNoChange
+        ));
     }
 
     #[test]
-    fn direct_human_app_card_enters_unverified_until_trusted_provenance_marks_it() {
-        let mut content = match MessageContentInternal::validate_new_message(
-            MessageContentInitial::ActionCard(initial_card()),
-            true,
-            UserType::User,
-            false,
-            10,
-        ) {
-            ValidateNewMessageContentResult::Success(content) => content,
-            _ => panic!("a structurally valid direct app card must reach the trusted provenance verifier"),
-        };
+    fn vote_under_the_current_id_stands_where_only_one_is_allowed() {
+        let old_user_id = user_id(1);
+        let new_user_id = user_id(2);
 
-        let MessageContentInternal::ActionCard(raw) = &content else {
-            unreachable!();
-        };
-        assert!(!raw.app_verified);
-        assert!(!raw.app_content_verified);
-        assert_eq!(raw.app_content_hash, None);
+        let mut poll = poll(true);
+        poll.votes.insert(0, vec![old_user_id]);
+        poll.votes.insert(1, vec![new_user_id]);
 
-        let MessageContent::ActionCard(hydrated_raw) = content.clone().hydrate(None) else {
-            unreachable!();
-        };
-        assert_eq!(
-            hydrated_raw.app_id, None,
-            "raw sender coordinates must not be exposed as trusted"
-        );
-        assert_eq!(
-            hydrated_raw.app_revision, None,
-            "raw sender coordinates must not be exposed as trusted"
-        );
-        assert!(!hydrated_raw.app_verified);
-        assert!(!hydrated_raw.app_content_verified);
+        poll.change_voter_ids(new_user_id, &migrated(old_user_id, new_user_id));
 
-        let content_hash = [0xA5; 32];
-        assert!(content.mark_ai_app_card_verified(content_hash));
-        let MessageContentInternal::ActionCard(verified) = &content else {
-            unreachable!();
-        };
-        assert!(verified.app_verified);
-        assert!(verified.app_content_verified);
-        assert_eq!(verified.app_content_hash, Some(content_hash));
-
-        let MessageContent::ActionCard(hydrated_verified) = content.hydrate(None) else {
-            unreachable!();
-        };
-        assert_eq!(hydrated_verified.app_id, Some(7));
-        assert_eq!(hydrated_verified.app_revision, Some(11));
-        assert!(hydrated_verified.app_verified);
-        assert!(hydrated_verified.app_content_verified);
+        assert_eq!(poll.votes.get(&0), Some(&Vec::new()));
+        assert_eq!(poll.votes.get(&1), Some(&vec![new_user_id]));
     }
 
     #[test]
-    fn bot_or_webhook_cannot_supply_an_app_provenance_tuple_in_any_chat_kind() {
-        for is_direct_chat in [true, false] {
-            for sender_user_type in [UserType::Bot, UserType::BotV2, UserType::OcControlledBot, UserType::Webhook] {
-                assert!(matches!(
-                    MessageContentInternal::validate_new_message(
-                        MessageContentInitial::ActionCard(initial_card()),
-                        is_direct_chat,
-                        sender_user_type,
-                        false,
-                        10,
-                    ),
-                    ValidateNewMessageContentResult::Error(_)
-                ));
-            }
-        }
-    }
+    fn votes_under_both_ids_are_merged() {
+        let old_user_id = user_id(1);
+        let new_user_id = user_id(2);
 
-    #[test]
-    fn trusted_direct_card_mirror_round_trip_preserves_server_only_attestation() {
-        let mut before = MessageContentInternal::ActionCard(card());
-        let content_hash = [0x5A; 32];
-        assert!(before.mark_ai_app_card_verified(content_hash));
+        let mut poll = poll(true);
+        poll.votes.insert(0, vec![old_user_id, new_user_id, user_id(3)]);
 
-        // SendMessageArgs transports MessageContentInternal between the two User canisters. Its
-        // msgpack round-trip must retain the trust bits/hash; re-validating it as raw browser input
-        // on the recipient would erase the only trustworthy provenance boundary.
-        let encoded = msgpack::serialize_to_vec(&before).unwrap();
-        let after: MessageContentInternal = msgpack::deserialize_then_unwrap(&encoded);
-        let MessageContentInternal::ActionCard(after) = after else {
-            unreachable!();
-        };
-        assert!(after.app_verified);
-        assert!(after.app_content_verified);
-        assert_eq!(after.app_content_hash, Some(content_hash));
-        assert_eq!(after.app_id, Some(7));
-        assert_eq!(after.app_revision, Some(11));
+        poll.change_voter_ids(new_user_id, &migrated(old_user_id, new_user_id));
+
+        assert_eq!(poll.votes.get(&0), Some(&vec![new_user_id, user_id(3)]));
     }
 }

@@ -30,6 +30,9 @@ const COMMANDS: &[&str] = &[
     "delete_model",
     "inference_runtime_available",
     "infer",
+    "get_pending_call_action",
+    "call_ring_handled",
+    "set_call_config",
 ];
 
 fn main() {

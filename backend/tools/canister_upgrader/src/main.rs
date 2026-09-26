@@ -7,8 +7,6 @@ use types::{BuildVersion, CanisterId};
 async fn main() {
     let opts = Opts::parse();
 
-    set_expected_wasm_sha256(&opts.expected_wasm_sha256).expect("Invalid --expected-wasm-sha256 value");
-
     let identity = get_dfx_identity(&opts.controller);
 
     match opts.canister_to_upgrade {
@@ -16,6 +14,12 @@ async fn main() {
         CanisterName::Community => upgrade_community_canister(identity, opts.url, opts.group_index, opts.version).await,
         CanisterName::CyclesDispenser => {
             upgrade_cycles_dispenser_canister(identity, opts.url, opts.cycles_dispenser, opts.version).await
+        }
+        CanisterName::DailyPuzzle => {
+            let canister_id = opts
+                .daily_puzzle
+                .expect("--daily-puzzle is required to upgrade the daily_puzzle canister");
+            upgrade_daily_puzzle_canister(identity, opts.url, canister_id, opts.version).await
         }
         CanisterName::Escrow => upgrade_escrow_canister(identity, opts.url, opts.escrow, opts.version).await,
         CanisterName::EventRelay => upgrade_event_relay_canister(identity, opts.url, opts.event_relay, opts.version).await,
@@ -55,6 +59,7 @@ async fn main() {
         CanisterName::SignInWithEmail => {
             upgrade_sign_in_with_email_canister(identity, opts.url, opts.sign_in_with_email, opts.version).await
         }
+        CanisterName::MultiUser => upgrade_multi_user_canister(identity, opts.url, opts.user_index, opts.version).await,
         CanisterName::SignInWithEthereum | CanisterName::SignInWithSolana => unimplemented!(),
     };
 }
@@ -97,6 +102,10 @@ struct Opts {
     #[arg(long)]
     cycles_dispenser: CanisterId,
 
+    /// Not yet created on every network, so only required when upgrading daily_puzzle itself
+    #[arg(long)]
+    daily_puzzle: Option<CanisterId>,
+
     #[arg(long)]
     registry: CanisterId,
 
@@ -126,7 +135,4 @@ struct Opts {
 
     #[arg(long)]
     version: BuildVersion,
-
-    #[arg(long)]
-    expected_wasm_sha256: String,
 }

@@ -15,11 +15,10 @@ then
 fi
 
 CANISTERS=(
-  action_inbox
-  ai_app_verifier_test
   airdrop_bot
   community
   cycles_dispenser
+  daily_puzzle
   escrow
   event_relay
   group
@@ -27,6 +26,7 @@ CANISTERS=(
   identity
   local_user_index
   market_maker
+  multi_user
   neuron_controller
   notifications_index
   online_users
@@ -43,11 +43,13 @@ CANISTERS=(
 )
 
 # Install ic-wasm before RUSTFLAGS is set below: those flags are for the wasm target only, and
-# the `getrandom_backend="custom"` cfg in particular makes a native build fail to link.
-if ! cargo install --list | grep -Fxq "ic-wasm v0.9.11:"
+# the `getrandom_backend="custom"` cfg in particular makes a native build fail to link. This checks
+# the binary itself rather than `cargo install --list`, since the Dockerfile installs the release
+# binary directly; `--force` then replaces any other version there, however it was installed.
+if [ "$(${CARGO_HOME}/bin/ic-wasm --version 2>/dev/null)" != "ic-wasm 0.9.11" ]
 then
   echo Installing ic-wasm
-  cargo install --version 0.9.11 ic-wasm || exit 1
+  cargo install --force --version 0.9.11 ic-wasm || exit 1
 fi
 
 echo Building wasms

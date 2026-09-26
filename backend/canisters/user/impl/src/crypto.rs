@@ -1,15 +1,25 @@
 use crate::read_state;
-use constants::{MEMO_P2P_SWAP_ACCEPT, NANOS_PER_MILLISECOND};
-use escrow_canister::deposit_subaccount;
-use icrc_ledger_types::icrc1::account::Account as LedgerAccount;
-use icrc_ledger_types::icrc1::transfer::{TransferArg, TransferError};
-use icrc_ledger_types::icrc2::transfer_from::TransferFromArgs;
 use oc_error_codes::{OCError, OCErrorCode};
-use types::icrc2::TransferFromError;
 use types::{
-    C2CError, CanisterId, CompletedCryptoTransaction, FailedCryptoTransaction, OCResult, PendingCryptoTransaction,
-    TimestampMillis, TokenInfo, UserId, icrc1,
+    C2CError, CanisterId, CompletedCryptoTransaction, FailedCryptoTransaction, OCResult, PendingCryptoTransaction, UserId,
+    UserIdAndPrincipal, icrc1,
 };
+
+pub use ledger_utils::icrc2_transfer_from;
+
+// The user's wallet. A user alone in their canister, or a bot, holds their funds in the account of
+// their user id, which a bot's principal is too. A user in a MultiUser canister holds their own funds
+// in their principal's account, which is looked up.
+pub async fn user_wallet(user_id: UserId, local_user_index_canister_id: CanisterId) -> OCResult<UserIdAndPrincipal> {
+    if !user_id.is_indexed() {
+        return Ok(UserIdAndPrincipal::new(user_id, user_id.as_principal()));
+    }
+    match local_user_index_canister_c2c_client::lookup_user(user_id.as_principal(), local_user_index_canister_id).await? {
+        // The lookup also resolves the principal a user signs in with, which isn't their user id
+        Some(user) if user.user_id == user_id => Ok(UserIdAndPrincipal::new(user_id, user.principal)),
+        _ => Err(OCErrorCode::TargetUserNotFound.into()),
+    }
+}
 
 pub async fn process_transaction(
     transaction: PendingCryptoTransaction,
@@ -32,90 +42,19 @@ async fn process_transaction_internal(
     transaction: PendingCryptoTransaction,
     check_caller: bool,
 ) -> Result<Result<CompletedCryptoTransaction, (FailedCryptoTransaction, OCError)>, C2CError> {
-    let my_user_id = read_state(|state| {
-        if check_caller && state.env.caller() != state.data.owner {
+    let me = read_state(|state| {
+        if check_caller && state.env.caller() != state.data.user.principal {
             panic!("Only the owner can transfer cryptocurrency");
         }
 
-        UserId::from(state.env.canister_id())
+        UserIdAndPrincipal::new(state.env.canister_id().into(), state.data.user.principal)
     });
 
-    ledger_utils::process_transaction(transaction, Some(my_user_id), false).await
+    ledger_utils::process_transaction(transaction, Some(me), false).await
 }
 
-// Pulling from our own account would need an approval we had granted ourselves, so this is always
-// a client bug. Reject it rather than let the ledger fail with an allowance error.
+// The user's own account is the canister's default account, so any account the canister holds is
+// theirs
 pub(crate) fn validate_from_account(from_account: Option<icrc1::Account>, my_user_id: UserId) -> OCResult {
-    if from_account.is_some_and(|a| LedgerAccount::from(a) == my_user_id.into()) {
-        Err(OCErrorCode::InvalidRequest.with_message("`from_account` cannot be the user's own account"))
-    } else {
-        Ok(())
-    }
-}
-
-// Both of the P2P swap accept paths deposit token1 into the same escrow subaccount, differing only
-// in where the funds come from. Returns the ledger block index.
-pub(crate) async fn deposit_to_accept_p2p_swap(
-    escrow_canister_id: CanisterId,
-    my_user_id: UserId,
-    swap_id: u32,
-    token1: &TokenInfo,
-    token1_amount: u128,
-    now: TimestampMillis,
-    from_account: Option<icrc1::Account>,
-) -> OCResult<u64> {
-    let to = LedgerAccount {
-        owner: escrow_canister_id,
-        subaccount: Some(deposit_subaccount(my_user_id.as_principal(), swap_id)),
-    };
-    let amount = (token1_amount + token1.fee).into();
-    let fee = Some(token1.fee.into());
-    let created_at_time = Some(now * NANOS_PER_MILLISECOND);
-    let memo = Some(MEMO_P2P_SWAP_ACCEPT.to_vec().into());
-    // Whichever account we spend from, the owner is this canister, so only the subaccount is ours
-    // to choose. For ICRC-2 it picks which approval is spent rather than which account is debited.
-    let subaccount = icrc1::Account::for_user(my_user_id).subaccount;
-
-    let block_index = match from_account {
-        // The allowance is what authorises this - the ledger only lets us pull from an account
-        // which has approved this canister as spender - so there is nothing for us to check here.
-        Some(from) => icrc_ledger_canister_c2c_client::icrc2_transfer_from(
-            token1.ledger,
-            &TransferFromArgs {
-                spender_subaccount: subaccount,
-                from: from.into(),
-                to,
-                amount,
-                fee,
-                memo,
-                created_at_time,
-            },
-        )
-        .await?
-        .map_err(|error| match error {
-            TransferFromError::InsufficientFunds { .. } => OCErrorCode::InsufficientFunds.into(),
-            // The likeliest failure when funding from a wallet - the user approved too little, or
-            // the approval has already been spent - so it gets its own code to report on.
-            TransferFromError::InsufficientAllowance { .. } => OCErrorCode::InsufficientAllowance.into(),
-            error => OCErrorCode::TransferFailed.with_json(&error),
-        })?,
-        None => icrc_ledger_canister_c2c_client::icrc1_transfer(
-            token1.ledger,
-            &TransferArg {
-                from_subaccount: subaccount,
-                to,
-                fee,
-                created_at_time,
-                memo,
-                amount,
-            },
-        )
-        .await?
-        .map_err(|error| match error {
-            TransferError::InsufficientFunds { .. } => OCErrorCode::InsufficientFunds.into(),
-            error => OCErrorCode::TransferFailed.with_json(&error),
-        })?,
-    };
-
-    Ok(block_index.0.try_into().unwrap())
+    ledger_utils::validate_from_account(from_account, my_user_id.canister_id())
 }

@@ -1,4 +1,5 @@
 use crate::model::referral_codes::{ReferralCode, ReferralCodeError};
+use crate::updates::c2c_create_multi_user_canister::create_multi_user_canister;
 use crate::{CHILD_CANISTER_INITIAL_CYCLES_BALANCE, RuntimeState, UserEvent, UserIndexEvent, mutate_state};
 use candid::Principal;
 use canister_api_macros::update;
@@ -7,13 +8,14 @@ use constants::{CREATE_CANISTER_CYCLES_FEE, USER_LIMIT, min_cycles_balance};
 use email_address::EmailAddress;
 use local_user_index_canister::ChildCanisterType;
 use local_user_index_canister::register_user::{Response::*, *};
+use oc_error_codes::{OCError, OCErrorCode};
 use rand::RngExt;
 use tracing::error;
-use types::{BuildVersion, CanisterId, CanisterWasm, Cycles, MessageContentInitial, TextContent, UserId, UserType};
+use types::{BuildVersion, CanisterId, Cycles, MAX_USER_INDEX, MessageContentInitial, TextContent, UserId, UserType};
 use user_canister::ReferredUserRegistered;
 use user_canister::init::Args as InitUserCanisterArgs;
 use user_index_canister::UserRegistered;
-use utils::canister;
+use utils::canister::{self, VersionedWasmToInstall};
 use utils::text_validation::{UsernameValidationError, validate_username};
 use x509_parser::prelude::{FromDer, SubjectPublicKeyInfo};
 
@@ -23,31 +25,32 @@ async fn register_user(args: Args) -> Response {
     // Check the principal is derived from Internet Identity + check the username is valid
     let PrepareOk {
         caller,
-        canister_id,
-        canister_wasm,
-        cycles_to_use,
         referred_by,
         is_from_identity_canister,
-        init_canister_args,
+        target,
     } = match mutate_state(|state| prepare(&args, state)) {
         Ok(ok) => ok,
         Err(response) => return response,
     };
 
-    let wasm_version = canister_wasm.version;
+    let result = match target {
+        Target::UserCanister {
+            canister_id,
+            canister_wasm,
+            cycles_to_use,
+            init_canister_args,
+        } => create_user_canister(canister_id, canister_wasm, cycles_to_use, init_canister_args)
+            .await
+            .map(|(user_id, wasm_version)| (user_id, Some(wasm_version))),
+        Target::MultiUserCanister(existing) => {
+            create_user_in_multi_user_canister(existing, caller, args.username.clone(), referred_by)
+                .await
+                .map(|user_id| (user_id, None))
+        }
+    };
 
-    match canister::create_and_install(
-        canister_id,
-        None,
-        canister_wasm,
-        candid::encode_one(&init_canister_args).unwrap(),
-        cycles_to_use,
-        on_canister_created,
-    )
-    .await
-    {
-        Ok(canister_id) => {
-            let user_id = canister_id.into();
+    match result {
+        Ok((user_id, wasm_version)) => {
             mutate_state(|state| {
                 commit(
                     caller,
@@ -62,13 +65,38 @@ async fn register_user(args: Args) -> Response {
             });
             Success(SuccessResult {
                 user_id,
-                icp_account: user_id.into(),
+                icp_account: types::UserIdAndPrincipal::new(user_id, caller).into(),
             })
         }
+        Err(error) => {
+            mutate_state(|state| state.data.local_users.mark_registration_failed(&caller));
+            Error(error)
+        }
+    }
+}
+
+async fn create_user_canister(
+    canister_id: Option<CanisterId>,
+    canister_wasm: VersionedWasmToInstall,
+    cycles_to_use: Cycles,
+    init_canister_args: Box<InitUserCanisterArgs>,
+) -> Result<(UserId, BuildVersion), OCError> {
+    let wasm_version = canister_wasm.version;
+
+    match canister::create_and_install(
+        canister_id,
+        None,
+        canister_wasm,
+        candid::encode_one(&init_canister_args).unwrap(),
+        cycles_to_use,
+        on_canister_created,
+    )
+    .await
+    {
+        Ok(canister_id) => Ok((canister_id.into(), wasm_version)),
         Err((canister_id, error)) => {
-            mutate_state(|state| {
-                state.data.local_users.mark_registration_failed(&caller);
-                if let Some(id) = canister_id {
+            if let Some(id) = canister_id {
+                mutate_state(|state| {
                     // If this canister is not controlled by the LocalUserIndex then installs into
                     // it can never succeed, so drop it from the pool and let the topup job replace
                     // it, else registrations would keep pulling the same unusable canisters out of
@@ -79,21 +107,76 @@ async fn register_user(args: Args) -> Response {
                     } else {
                         state.data.canister_pool.push(id);
                     }
-                }
-            });
-            Error(error.into())
+                });
+            }
+            Err(error.into())
         }
+    }
+}
+
+async fn create_user_in_multi_user_canister(
+    mut existing: Option<CanisterId>,
+    principal: Principal,
+    username: String,
+    referred_by: Option<UserId>,
+) -> Result<UserId, OCError> {
+    while let Some(canister_id) = existing {
+        match c2c_create_user(canister_id, principal, username.clone(), referred_by).await {
+            // The canister is full, so stop offering it and try whichever has the fewest users
+            // now, only creating a new one once there are none left. Each canister is only tried
+            // once, since each one found to be full is excluded from then on
+            Err(error) if error.matches_code(OCErrorCode::UserLimitReached) => {
+                existing = mutate_state(|state| {
+                    state.data.local_multi_user_canisters.mark_full(&canister_id);
+                    state.data.local_multi_user_canisters.canister_for_new_user()
+                });
+            }
+            result => return result,
+        }
+    }
+
+    let (canister_id, _) = create_multi_user_canister().await?;
+    c2c_create_user(canister_id, principal, username, referred_by).await
+}
+
+async fn c2c_create_user(
+    canister_id: CanisterId,
+    principal: Principal,
+    username: String,
+    referred_by: Option<UserId>,
+) -> Result<UserId, OCError> {
+    match multi_user_canister_c2c_client::c2c_create_user(
+        canister_id,
+        &multi_user_canister::c2c_create_user::Args {
+            principal,
+            username,
+            referred_by,
+        },
+    )
+    .await?
+    {
+        multi_user_canister::c2c_create_user::Response::Success(user_id) => Ok(user_id),
+        multi_user_canister::c2c_create_user::Response::Error(error) => Err(error),
     }
 }
 
 struct PrepareOk {
     caller: Principal,
-    canister_id: Option<CanisterId>,
-    canister_wasm: CanisterWasm,
-    cycles_to_use: Cycles,
     referred_by: Option<UserId>,
     is_from_identity_canister: bool,
-    init_canister_args: InitUserCanisterArgs,
+    target: Target,
+}
+
+enum Target {
+    UserCanister {
+        canister_id: Option<CanisterId>,
+        canister_wasm: VersionedWasmToInstall,
+        cycles_to_use: Cycles,
+        init_canister_args: Box<InitUserCanisterArgs>,
+    },
+    // The canister to add the user to, being the one with the fewest users. If it is full, whichever
+    // has the fewest users next is tried, and a new one is only created once none remain
+    MultiUserCanister(Option<CanisterId>),
 }
 
 fn prepare(args: &Args, state: &mut RuntimeState) -> Result<PrepareOk, Response> {
@@ -102,6 +185,22 @@ fn prepare(args: &Args, state: &mut RuntimeState) -> Result<PrepareOk, Response>
     if state.data.global_users.get_by_principal(&caller).is_some() {
         return Err(AlreadyRegistered);
     }
+
+    let multi_user_canister_requested =
+        args.use_multi_user_canister.unwrap_or_default() || args.multi_user_canister_id.is_some();
+    if multi_user_canister_requested && !state.data.test_mode {
+        return Err(Error(
+            OCErrorCode::InvalidRequest.with_message("MultiUser canisters can only be requested in test mode"),
+        ));
+    }
+    if let Some(canister_id) = args.multi_user_canister_id
+        && !state.data.local_multi_user_canisters.contains(&canister_id)
+    {
+        return Err(Error(
+            OCErrorCode::InvalidRequest.with_message("MultiUser canister not found on this LocalUserIndex"),
+        ));
+    }
+    let use_multi_user_canister = multi_user_canister_requested || state.data.multi_user_canisters_enabled;
 
     let now = state.env.now();
     if !state.data.local_users.mark_registration_in_progress(caller, now) {
@@ -142,11 +241,28 @@ fn prepare(args: &Args, state: &mut RuntimeState) -> Result<PrepareOk, Response>
         return Err(EmailInvalid);
     }
 
-    let openchat_bot_messages = if referral_code
+    let is_btc_miami = referral_code
         .as_ref()
         .filter(|c| matches!(c, ReferralCode::BtcMiami(_)))
-        .is_some()
-    {
+        .is_some();
+
+    let referred_by = referral_code
+        .and_then(|c| c.user())
+        .filter(|user_id| state.data.global_users.contains(user_id));
+
+    if use_multi_user_canister {
+        return Ok(PrepareOk {
+            caller,
+            referred_by,
+            is_from_identity_canister,
+            target: Target::MultiUserCanister(
+                args.multi_user_canister_id
+                    .or_else(|| state.data.local_multi_user_canisters.canister_for_new_user()),
+            ),
+        });
+    }
+
+    let openchat_bot_messages = if is_btc_miami {
         vec![
             MessageContentInitial::Text(TextContent {
                 text: "Welcome to OpenChat!!".to_string(),
@@ -173,11 +289,7 @@ fn prepare(args: &Args, state: &mut RuntimeState) -> Result<PrepareOk, Response>
     };
 
     let canister_id = state.data.canister_pool.pop();
-    let canister_wasm = state.data.child_canister_wasms.get(ChildCanisterType::User).wasm.clone();
-
-    let referred_by = referral_code
-        .and_then(|c| c.user())
-        .filter(|user_id| state.data.global_users.contains(user_id));
+    let canister_wasm = state.child_canister_wasm_to_install(ChildCanisterType::User);
 
     #[expect(deprecated)]
     let init_canister_args = InitUserCanisterArgs {
@@ -203,12 +315,14 @@ fn prepare(args: &Args, state: &mut RuntimeState) -> Result<PrepareOk, Response>
 
     Ok(PrepareOk {
         caller,
-        canister_id,
-        canister_wasm,
-        cycles_to_use,
         referred_by,
         is_from_identity_canister,
-        init_canister_args,
+        target: Target::UserCanister {
+            canister_id,
+            canister_wasm,
+            cycles_to_use,
+            init_canister_args: Box::new(init_canister_args),
+        },
     })
 }
 
@@ -218,7 +332,7 @@ fn commit(
     user_id: UserId,
     username: String,
     email: Option<String>,
-    wasm_version: BuildVersion,
+    wasm_version: Option<BuildVersion>,
     referred_by: Option<UserId>,
     is_from_identity_canister: bool,
     state: &mut RuntimeState,
@@ -227,6 +341,15 @@ fn commit(
 
     state.data.local_users.add(user_id, principal, wasm_version, now);
     state.data.global_users.add(principal, user_id, UserType::User);
+    if user_id.index() != 0 {
+        let canister_id = user_id.canister_id();
+        state.data.local_multi_user_canisters.on_user_added(&canister_id);
+        // Indexes aren't reused, so once the last one is given out the canister can take no more
+        // users. Marking it now saves the next registration from trying it
+        if user_id.index() == MAX_USER_INDEX {
+            state.data.local_multi_user_canisters.mark_full(&canister_id);
+        }
+    }
 
     state.push_event_to_user_index(
         UserIndexEvent::UserRegistered(Box::new(UserRegistered {

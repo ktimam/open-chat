@@ -6,7 +6,9 @@ generate_msgpack_query_call!(access_token_v2);
 generate_query_call!(bot_chat_events);
 generate_query_call!(bot_community_events);
 generate_msgpack_query_call!(chat_events);
+generate_msgpack_query_call!(daily_puzzle_fetch);
 generate_msgpack_query_call!(group_and_community_summary_updates_v2);
+generate_msgpack_query_call!(is_user_or_multi_user_canister);
 generate_query_call!(latest_notification_index);
 generate_query_call!(media_scan_jobs);
 generate_query_call!(notifications);
@@ -15,18 +17,26 @@ generate_query_call!(notifications);
 generate_update_call!(bot_create_channel);
 generate_update_call!(bot_delete_channel);
 generate_update_call!(bot_send_message);
+generate_msgpack_update_call!(c2c_daily_puzzle_push);
 generate_msgpack_update_call!(claim_prize);
+generate_msgpack_update_call!(daily_puzzle_hint);
+generate_msgpack_update_call!(daily_puzzle_save_grid);
+generate_msgpack_update_call!(daily_puzzle_start);
+generate_msgpack_update_call!(daily_puzzle_submit);
 generate_msgpack_update_call!(install_bot);
 generate_msgpack_update_call!(invite_users_to_channel);
 generate_msgpack_update_call!(invite_users_to_community);
 generate_msgpack_update_call!(invite_users_to_group);
 generate_msgpack_update_call!(join_channel);
+generate_msgpack_update_call!(set_call_push_enabled);
 generate_msgpack_update_call!(join_community);
 generate_msgpack_update_call!(join_group);
 generate_msgpack_update_call!(pay_for_premium_item);
 generate_msgpack_update_call!(register_user);
+generate_msgpack_update_call!(set_daily_puzzle_canister_id);
 generate_update_call!(submit_media_scan_verdicts);
 generate_msgpack_update_call!(uninstall_bot);
+generate_msgpack_update_call!(video_call_declined);
 
 pub mod happy_path {
     use crate::User;
@@ -40,7 +50,7 @@ pub mod happy_path {
     };
 
     pub fn register_user(env: &mut PocketIc, principal: Principal, canister_id: CanisterId, public_key: Vec<u8>) -> User {
-        register_user_with_referrer(env, principal, canister_id, public_key, None)
+        register_user_with_referrer(env, principal, canister_id, public_key, None, false, None)
     }
 
     pub fn register_user_with_referrer(
@@ -49,6 +59,8 @@ pub mod happy_path {
         canister_id: CanisterId,
         public_key: Vec<u8>,
         referral_code: Option<String>,
+        use_multi_user_canister: bool,
+        multi_user_canister_id: Option<CanisterId>,
     ) -> User {
         let response = super::register_user(
             env,
@@ -59,6 +71,8 @@ pub mod happy_path {
                 referral_code,
                 public_key: public_key.clone(),
                 email: None,
+                use_multi_user_canister: Some(use_multi_user_canister),
+                multi_user_canister_id,
             },
         );
 

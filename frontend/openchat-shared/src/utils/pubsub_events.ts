@@ -8,6 +8,7 @@ import type {
     CommandDefinition,
     CommunityIdentifier,
     CommunitySummary,
+    DailyResultContent,
     DirectChatIdentifier,
     DirectChatSummary,
     EnhancedReplyContext,
@@ -87,6 +88,8 @@ export type PubSubEvents = {
     profile: undefined;
     userProfileModels: undefined;
     claimDailyChit: undefined;
+    dailyPuzzle: { gameId?: string };
+    shareDailyResult: DailyResultContent;
     joinGroup: {
         group: MultiUserChat;
         select: boolean;
@@ -122,6 +125,9 @@ export type PubSubEvents = {
     userLoggedIn: string;
     reactionSelected: { messageId: bigint; kind: "add" | "remove" };
     userSuspensionChanged: undefined;
+    // The current user has been migrated to a MultiUser canister, so has a new user id
+    currentUserIdChanged: undefined;
+    sessionExpired: undefined;
     selectedChatInvalid: undefined;
     chitEarned: ChitEvent[];
     sendMessageFailed: boolean;
@@ -133,9 +139,17 @@ export type PubSubEvents = {
     updateWebhook: { chat: MultiUserChat; hook: FullWebhookDetails };
     regenerateWebhook: { chat: MultiUserChat; hook: FullWebhookDetails };
     deleteWebhook: undefined;
-    loadedMessageWindow: {
+    // Published before a message window load applies any of its events, so the
+    // list can position on the target in the same flush the events render
+    loadingMessageWindow: {
         context: MessageContext;
         messageIndex: number;
+    };
+    loadedMessageWindow: {
+        context: MessageContext;
+        // undefined: the load ended without a window (failed, or fell back to
+        // the latest messages)
+        messageIndex: number | undefined;
         initialLoad: boolean;
     };
     loadedNewMessages: MessageContext;

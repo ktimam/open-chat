@@ -11,11 +11,11 @@ use serde_bytes::ByteBuf;
 use stable_memory_map::StableMemoryMap;
 use std::cell::OnceCell;
 use std::cmp::max;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::Deref;
 use types::{
     BotNotification, EventIndex, GroupMember, GroupRole, MessageIndex, MultiUserChat, OCResult, TimestampMillis, Timestamped,
-    UserId, UserType, Version, is_default,
+    UserId, UserIdAndPrincipal, UserType, Version, is_default,
 };
 use utils::timestamped_set::TimestampedSet;
 
@@ -44,9 +44,16 @@ pub struct GroupMembers {
 }
 
 impl GroupMembers {
-    pub fn new(creator_user_id: UserId, user_type: UserType, chat: MultiUserChat, now: TimestampMillis) -> GroupMembers {
+    pub fn new(
+        creator_user_id: UserId,
+        creator_principal: Option<Principal>,
+        user_type: UserType,
+        chat: MultiUserChat,
+        now: TimestampMillis,
+    ) -> GroupMembers {
         let member = GroupMemberInternal {
             user_id: creator_user_id,
+            principal: creator_principal,
             date_added: now,
             role: Timestamped::new(GroupRoleInternal::Owner, now),
             min_visible_event_index: EventIndex::default(),
@@ -97,9 +104,11 @@ impl GroupMembers {
         stable_memory::write_members_from_bytes(chat, members)
     }
 
+    #[expect(clippy::too_many_arguments)]
     pub fn add(
         &mut self,
         user_id: UserId,
+        principal: Option<Principal>,
         now: TimestampMillis,
         min_visible_event_index: EventIndex,
         min_visible_message_index: MessageIndex,
@@ -113,6 +122,7 @@ impl GroupMembers {
         } else if self.member_ids.insert(user_id) {
             let member = GroupMemberInternal {
                 user_id,
+                principal,
                 date_added: now,
                 role: Timestamped::new(GroupRoleInternal::Member, 0),
                 min_visible_event_index,
@@ -148,6 +158,13 @@ impl GroupMembers {
     }
 
     pub fn remove(&mut self, user_id: UserId, now: TimestampMillis) -> Option<GroupMemberInternal> {
+        let member = self.take_member(user_id)?;
+        self.prune_then_insert_member_update(user_id, MemberUpdate::Removed, now);
+        Some(member)
+    }
+
+    // Removes the member without recording an update
+    fn take_member(&mut self, user_id: UserId) -> Option<GroupMemberInternal> {
         let member = self.members_map.remove(&user_id)?.into_value();
         match member.role.value {
             GroupRoleInternal::Owner => self.owners.remove(&user_id),
@@ -171,8 +188,71 @@ impl GroupMembers {
             self.suspended.remove(&user_id);
         }
         self.member_ids.remove(&user_id);
-        self.prune_then_insert_member_update(user_id, MemberUpdate::Removed, now);
         Some(member)
+    }
+
+    // Moves the membership and block of a user migrated to a MultiUser canister onto their new id.
+    // Returns whether anything changed.
+    pub fn migrate_user_id(&mut self, old_user_id: UserId, new_user_id: UserId, now: TimestampMillis) -> bool {
+        if old_user_id == new_user_id {
+            return false;
+        }
+
+        let mut updated = false;
+        if self.member_ids.contains(&old_user_id) {
+            if self.blocked.contains(&new_user_id) {
+                // The user has been blocked under their new id, so their membership under the old id
+                // is dropped
+                self.remove(old_user_id, now);
+            } else {
+                // If the user has also joined under their new id since being migrated, that membership
+                // is replaced by their membership under the old id, which holds their role, the threads
+                // they follow, etc. No update is recorded for its removal, since the user remains a
+                // member and clients are told of them being added under their new id.
+                self.take_member(new_user_id);
+                let mut member = self.take_member(old_user_id).unwrap();
+                member.user_id = new_user_id;
+                self.insert_member(member);
+                self.prune_then_insert_member_update(old_user_id, MemberUpdate::Removed, now);
+                self.prune_then_insert_member_update(new_user_id, MemberUpdate::Added, now);
+            }
+            updated = true;
+        }
+        if self.unblock(old_user_id, now) {
+            if !self.member_ids.contains(&new_user_id) {
+                self.block(new_user_id, now);
+            }
+            updated = true;
+        }
+        updated
+    }
+
+    // Inserts an existing member's record, as it was before they were migrated to a new id
+    fn insert_member(&mut self, member: GroupMemberInternal) {
+        let user_id = member.user_id;
+        self.member_ids.insert(user_id);
+        match member.role.value {
+            GroupRoleInternal::Owner => self.owners.insert(user_id),
+            GroupRoleInternal::Admin => self.admins.insert(user_id),
+            GroupRoleInternal::Moderator => self.moderators.insert(user_id),
+            GroupRoleInternal::Member => false,
+        };
+        if member.user_type.is_bot() {
+            self.bots.insert(user_id, member.user_type);
+        }
+        if !member.notifications_muted.value {
+            self.notifications_unmuted.insert(user_id);
+        }
+        if member.at_everyone_muted.value {
+            self.at_everyone_muted.insert(user_id);
+        }
+        if member.lapsed.value {
+            self.lapsed.insert(user_id);
+        }
+        if member.suspended.value {
+            self.suspended.insert(user_id);
+        }
+        self.members_map.insert(user_id, member);
     }
 
     pub fn block(&mut self, user_id: UserId, now: TimestampMillis) -> bool {
@@ -234,6 +314,9 @@ impl GroupMembers {
         user_id: &UserId,
         update_fn: F,
     ) -> Option<bool> {
+        // `update_fn` comes from the caller and could read anything, including another value in the
+        // stable memory map, so the member is read and written in 2 separate lookups rather than
+        // via `StableMemoryMap::update`, which would hold the map borrowed while `update_fn` runs
         let mut member = self.members_map.get(user_id)?;
 
         let updated = update_fn(&mut member);
@@ -241,6 +324,11 @@ impl GroupMembers {
             self.members_map.insert(member.user_id, member);
         }
         Some(updated)
+    }
+
+    // Returns the number of members whose principal was set
+    pub fn populate_principals(&mut self, principals: &HashMap<UserId, Principal>) -> u32 {
+        self.members_map.populate_principals(principals)
     }
 
     pub fn is_blocked(&self, user_id: &UserId) -> bool {
@@ -270,32 +358,50 @@ impl GroupMembers {
         new_role: GroupRoleInternal,
         now: TimestampMillis,
     ) -> OCResult<GroupRoleInternal> {
-        let member = match self.members_map.get(&user_id) {
-            Some(p) => p,
-            None => return Err(OCErrorCode::TargetUserNotFound.into()),
-        };
+        let mut result: OCResult<GroupRoleInternal> = Err(OCErrorCode::TargetUserNotFound.into());
+        let mut unlapsed = false;
 
-        // The caller must be the same or senior to the target's current role, otherwise eg. an
-        // admin could demote an owner. `None` means the change is not on behalf of a member (ie.
-        // an autonomous bot) in which case this check does not apply.
-        if changed_by_role.is_some_and(|role| !role.is_same_or_senior(member.role.value)) {
-            return Err(OCErrorCode::InitiatorNotAuthorized.into());
-        }
+        // The member is validated and updated within a single lookup in stable memory
+        self.members_map.update(&user_id, |member| {
+            // The caller must be the same or senior to the target's current role, otherwise eg. an
+            // admin could demote an owner. `None` means the change is not on behalf of a member (ie.
+            // an autonomous bot) in which case this check does not apply.
+            if changed_by_role.is_some_and(|role| !role.is_same_or_senior(member.role.value)) {
+                result = Err(OCErrorCode::InitiatorNotAuthorized.into());
+                return false;
+            }
 
-        // It is not possible to change the role of the last owner
-        if member.role.is_owner() && self.owners.len() <= 1 {
-            return Err(OCErrorCode::InvalidRoleChange.into());
-        }
-        // It is not currently possible to make a bot an owner
-        if member.user_type.is_3rd_party_bot() && new_role.is_owner() {
-            return Err(OCErrorCode::InvalidRoleChange.into());
-        }
+            // It is not possible to change the role of the last owner
+            if member.role.is_owner() && self.owners.len() <= 1 {
+                result = Err(OCErrorCode::InvalidRoleChange.into());
+                return false;
+            }
+            // It is not currently possible to make a bot an owner
+            if member.user_type.is_3rd_party_bot() && new_role.is_owner() {
+                result = Err(OCErrorCode::InvalidRoleChange.into());
+                return false;
+            }
 
-        let prev_role = member.role.value;
+            let prev_role = member.role.value;
 
-        if prev_role == new_role {
-            return Err(OCErrorCode::NoChange.into());
-        }
+            if prev_role == new_role {
+                result = Err(OCErrorCode::NoChange.into());
+                return false;
+            }
+
+            member.role = Timestamped::new(new_role, now);
+
+            // Owners can't be lapsed
+            if new_role.is_owner() && member.lapsed.value && self.lapsed.contains(&user_id) {
+                member.set_lapsed(false, now);
+                unlapsed = true;
+            }
+
+            result = Ok(prev_role);
+            true
+        });
+
+        let prev_role = result?;
 
         match prev_role {
             GroupRoleInternal::Owner => self.owners.remove(&user_id),
@@ -304,18 +410,13 @@ impl GroupMembers {
             _ => false,
         };
 
-        self.update_member(&user_id, |m| {
-            m.role = Timestamped::new(new_role, now);
-            true
-        });
+        if unlapsed {
+            self.lapsed.remove(&user_id);
+            self.prune_then_insert_member_update(user_id, MemberUpdate::Unlapsed, now);
+        }
 
         match new_role {
-            GroupRoleInternal::Owner => {
-                if member.lapsed.value {
-                    self.update_lapsed(user_id, false, now);
-                }
-                self.owners.insert(user_id)
-            }
+            GroupRoleInternal::Owner => self.owners.insert(user_id),
             GroupRoleInternal::Admin => self.admins.insert(user_id),
             GroupRoleInternal::Moderator => self.moderators.insert(user_id),
             _ => false,
@@ -603,6 +704,7 @@ pub struct AddMemberSuccess {
 #[derive(Clone)]
 pub struct GroupMemberInternal {
     user_id: UserId,
+    principal: Option<Principal>,
     date_added: TimestampMillis,
     role: Timestamped<GroupRoleInternal>,
     notifications_muted: Timestamped<bool>,
@@ -623,6 +725,16 @@ pub struct GroupMemberInternal {
 impl GroupMemberInternal {
     pub fn user_id(&self) -> UserId {
         self.user_id
+    }
+
+    pub fn principal(&self) -> Option<Principal> {
+        self.principal
+    }
+
+    // The member and their principal, which is anonymous for a channel member in a community, whose
+    // principal is on their community member instead
+    pub fn user(&self) -> UserIdAndPrincipal {
+        UserIdAndPrincipal::new(self.user_id, self.principal.unwrap_or_else(Principal::anonymous))
     }
 
     pub fn date_added(&self) -> TimestampMillis {
@@ -825,6 +937,8 @@ pub enum VerifyMemberError {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct GroupMemberStableStorage {
+    #[serde(rename = "pi", default, skip_serializing_if = "Option::is_none")]
+    principal: Option<Principal>,
     #[serde(rename = "d")]
     date_added: TimestampMillis,
     #[serde(rename = "r", default, skip_serializing_if = "is_default")]
@@ -865,6 +979,7 @@ impl GroupMemberStableStorage {
     pub fn hydrate(self, user_id: UserId) -> GroupMemberInternal {
         GroupMemberInternal {
             user_id,
+            principal: self.principal,
             date_added: self.date_added,
             role: self.role,
             notifications_muted: self.notifications_muted,
@@ -887,6 +1002,7 @@ impl GroupMemberStableStorage {
 impl From<GroupMemberInternal> for GroupMemberStableStorage {
     fn from(value: GroupMemberInternal) -> Self {
         GroupMemberStableStorage {
+            principal: value.principal,
             date_added: value.date_added,
             role: value.role,
             notifications_muted: value.notifications_muted,
@@ -927,6 +1043,7 @@ mod tests {
         }
 
         let member1 = GroupMemberStableStorage {
+            principal: None,
             date_added: 1732874138000,
             role: Timestamped::default(),
             notifications_muted: default_notifications_muted(),
@@ -963,6 +1080,7 @@ mod tests {
         mentions.add(Some(1.into()), 1.into(), 1u64.into(), 1);
 
         let member = GroupMemberStableStorage {
+            principal: Some(Principal::from_text("4bkt6-4aaaa-aaaaf-aaaiq-cai").unwrap()),
             date_added: 1732874138000,
             role: Timestamped::new(GroupRoleInternal::Owner, 1),
             notifications_muted: Timestamped::new(true, 1),
@@ -983,8 +1101,182 @@ mod tests {
         let member_bytes = msgpack::serialize_then_unwrap(&member);
         let member_bytes_len = member_bytes.len();
 
-        assert_eq!(member_bytes_len, 167);
+        assert_eq!(member_bytes_len, 184);
 
         let _deserialized: GroupMemberStableStorage = msgpack::deserialize_then_unwrap(&member_bytes);
+    }
+
+    #[test]
+    fn populate_principals() {
+        use ic_stable_structures::DefaultMemoryImpl;
+        use ic_stable_structures::memory_manager::{MemoryId, MemoryManager};
+
+        let memory = MemoryManager::init(DefaultMemoryImpl::default());
+        stable_memory_map::init(memory.get(MemoryId::new(1)));
+
+        let user_id: UserId = Principal::from_slice(&[1]).into();
+        let principal = Principal::from_slice(&[2]);
+        let mut members = GroupMembers::new(
+            user_id,
+            None,
+            UserType::User,
+            MultiUserChat::Group(Principal::from_slice(&[3]).into()),
+            0,
+        );
+
+        assert_eq!(members.populate_principals(&[(user_id, principal)].into_iter().collect()), 1);
+        assert_eq!(members.get(&user_id).unwrap().principal(), Some(principal));
+        assert_eq!(members.populate_principals(&[(user_id, principal)].into_iter().collect()), 0);
+    }
+
+    #[test]
+    fn migrate_user_id_moves_membership_and_block() {
+        let mut members = members_for_migration_tests();
+        let [old, new, blocked_old, blocked_new]: [UserId; 4] = [2, 3, 4, 5].map(test_user_id);
+        let principal = Principal::from_slice(&[100]);
+
+        members.add(old, Some(principal), 1, 5.into(), 3.into(), true, UserType::User);
+        set_role(&mut members, old, GroupRoleInternal::Admin);
+        members.block(blocked_old, 3);
+
+        assert!(members.migrate_user_id(old, new, 10));
+        assert!(!members.contains(&old));
+        assert!(members.get(&old).is_none());
+        let member = members.get(&new).unwrap();
+        assert_eq!(member.user_id, new);
+        assert_eq!(member.principal, Some(principal));
+        assert_eq!(member.date_added, 1);
+        assert_eq!(member.role.value, GroupRoleInternal::Admin);
+        assert!(member.notifications_muted.value);
+        assert_eq!(member.min_visible_event_index, 5.into());
+        assert!(members.admins.contains(&new));
+        assert!(!members.notifications_unmuted.contains(&new));
+
+        assert!(members.migrate_user_id(blocked_old, blocked_new, 10));
+        assert!(!members.is_blocked(&blocked_old));
+        assert!(members.is_blocked(&blocked_new));
+
+        // Clients are told of each change
+        assert_eq!(
+            latest_updates(&members, 9),
+            [
+                (old, MemberUpdate::Removed),
+                (new, MemberUpdate::Added),
+                (blocked_old, MemberUpdate::Unblocked),
+                (blocked_new, MemberUpdate::Blocked),
+            ]
+            .into_iter()
+            .collect()
+        );
+
+        // Nothing is left under the old ids
+        for (old, new) in [(old, new), (blocked_old, blocked_new)] {
+            assert!(!members.migrate_user_id(old, new, 11));
+        }
+        members.check_invariants();
+    }
+
+    #[test]
+    fn migrate_user_id_keeps_old_membership_if_also_member_under_new_id() {
+        let mut members = members_for_migration_tests();
+        let [old, new]: [UserId; 2] = [2, 3].map(test_user_id);
+        members.add(old, None, 1, 0.into(), 0.into(), false, UserType::User);
+        set_role(&mut members, old, GroupRoleInternal::Owner);
+        members.add(new, None, 5, 0.into(), 0.into(), false, UserType::User);
+
+        assert!(members.migrate_user_id(old, new, 10));
+        assert!(!members.contains(&old));
+        let member = members.get(&new).unwrap();
+        assert_eq!(member.date_added, 1);
+        assert_eq!(member.role.value, GroupRoleInternal::Owner);
+        assert!(members.owners.contains(&new));
+
+        // Clients are told the user was added under their new id, not removed
+        assert_eq!(
+            latest_updates(&members, 9),
+            [(old, MemberUpdate::Removed), (new, MemberUpdate::Added)]
+                .into_iter()
+                .collect()
+        );
+        members.check_invariants();
+    }
+
+    #[test]
+    fn migrate_user_id_drops_old_membership_if_blocked_under_new_id() {
+        let mut members = members_for_migration_tests();
+        let [old, new]: [UserId; 2] = [2, 3].map(test_user_id);
+        members.add(old, None, 1, 0.into(), 0.into(), false, UserType::User);
+        members.block(new, 5);
+
+        assert!(members.migrate_user_id(old, new, 10));
+        assert!(!members.contains(&old));
+        assert!(!members.contains(&new));
+        assert!(members.is_blocked(&new));
+        members.check_invariants();
+    }
+
+    fn members_for_migration_tests() -> GroupMembers {
+        use ic_stable_structures::DefaultMemoryImpl;
+        use ic_stable_structures::memory_manager::{MemoryId, MemoryManager};
+
+        let memory = MemoryManager::init(DefaultMemoryImpl::default());
+        stable_memory_map::init(memory.get(MemoryId::new(1)));
+
+        GroupMembers::new(
+            test_user_id(1),
+            None,
+            UserType::User,
+            MultiUserChat::Group(Principal::from_slice(&[101]).into()),
+            0,
+        )
+    }
+
+    fn set_role(members: &mut GroupMembers, user_id: UserId, role: GroupRoleInternal) {
+        members.update_member(&user_id, |m| {
+            m.role = Timestamped::new(role, 2);
+            true
+        });
+        match role {
+            GroupRoleInternal::Owner => members.owners.insert(user_id),
+            GroupRoleInternal::Admin => members.admins.insert(user_id),
+            _ => unimplemented!(),
+        };
+    }
+
+    // Each user's latest update, as clients are told of them
+    fn latest_updates(members: &GroupMembers, since: TimestampMillis) -> HashMap<UserId, MemberUpdate> {
+        let mut updates = HashMap::new();
+        for (user_id, update) in members.iter_latest_updates(since) {
+            updates.entry(user_id).or_insert(update);
+        }
+        updates
+    }
+
+    fn test_user_id(i: u8) -> UserId {
+        Principal::from_slice(&[i]).into()
+    }
+
+    #[test]
+    fn principals_removed_when_exporting_members_into_channel() {
+        use ic_stable_structures::DefaultMemoryImpl;
+        use ic_stable_structures::memory_manager::{MemoryId, MemoryManager};
+
+        let memory = MemoryManager::init(DefaultMemoryImpl::default());
+        stable_memory_map::init(memory.get(MemoryId::new(1)));
+
+        let principal = Principal::from_slice(&[1]);
+        let user_id: UserId = Principal::from_slice(&[2]).into();
+        let group = MultiUserChat::Group(Principal::from_slice(&[3]).into());
+        let channel = MultiUserChat::Channel(Principal::from_slice(&[4]).into(), 1u32.into());
+
+        let group_members = GroupMembers::new(user_id, Some(principal), UserType::User, group, 0);
+        assert_eq!(group_members.get(&user_id).unwrap().principal(), Some(principal));
+
+        let bytes = group_members.read_members_as_bytes_from_stable_memory(None);
+        GroupMembers::write_members_from_bytes_to_stable_memory(channel, bytes);
+
+        let mut channel_members = group_members;
+        channel_members.set_chat(channel);
+        assert_eq!(channel_members.get(&user_id).unwrap().principal(), None);
     }
 }

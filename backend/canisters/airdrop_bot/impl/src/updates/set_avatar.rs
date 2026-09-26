@@ -24,12 +24,15 @@ fn set_avatar_impl(args: Args, state: &mut RuntimeState) -> Response {
     state.data.avatar = Timestamped::new(args.avatar, now);
 
     let user_index_canister_id = state.data.user_index_canister_id;
-    ic_cdk::futures::spawn_migratory(update_index_canister(user_index_canister_id, id));
+    utils::async_work::spawn_tracked(update_index_canister(user_index_canister_id, id));
 
     Success
 }
 
 async fn update_index_canister(user_index_canister_id: CanisterId, avatar_id: Option<u128>) {
-    let args = user_index_canister::c2c_set_avatar::Args { avatar_id };
+    let args = user_index_canister::c2c_set_avatar::Args {
+        avatar_id,
+        user_id: None,
+    };
     let _ = user_index_canister_c2c_client::c2c_set_avatar(user_index_canister_id, &args).await;
 }

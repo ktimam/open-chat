@@ -19,13 +19,13 @@ fn add_reaction_impl(args: Args, state: &mut RuntimeState) -> OCResult {
         return Err(OCErrorCode::InvalidReaction.into());
     }
 
-    state.data.verify_not_suspended()?;
+    state.data.user.verify_not_suspended()?;
 
-    let chat = state.data.direct_chats.get_mut_or_err(&args.user_id.into())?;
+    let chat = state.data.user.direct_chats.get_mut_or_err(&args.user_id.into())?;
     let my_user_id = state.env.canister_id().into();
     let now = state.env.now();
 
-    chat.events.add_reaction(
+    chat.add_reaction(
         AddRemoveReactionArgs {
             user_id: my_user_id,
             min_visible_event_index: EventIndex::default(),
@@ -34,6 +34,7 @@ fn add_reaction_impl(args: Args, state: &mut RuntimeState) -> OCResult {
             reaction: args.reaction.clone(),
             now,
         },
+        &state.data.migrated_user_ids,
         Some(UserEventPusher {
             now,
             rng: state.env.rng(),
@@ -41,18 +42,18 @@ fn add_reaction_impl(args: Args, state: &mut RuntimeState) -> OCResult {
         }),
     )?;
 
-    let thread_root_message_id = args.thread_root_message_index.map(|i| chat.main_message_index_to_id(i));
+    let thread_root_message_id = chat.thread_root_message_id(args.thread_root_message_index)?;
 
     state.push_user_canister_event(
-        args.user_id.canister_id(),
+        args.user_id,
         UserCanisterEvent::ToggleReaction(Box::new(ToggleReactionArgs {
             thread_root_message_id,
             message_id: args.message_id,
             reaction: args.reaction,
             added: true,
-            username: state.data.username.value.clone(),
-            display_name: state.data.display_name.value.clone(),
-            user_avatar_id: state.data.avatar.value.as_ref().map(|d| d.id),
+            username: state.data.user.username.value.clone(),
+            display_name: state.data.user.display_name.value.clone(),
+            user_avatar_id: state.data.user.avatar.id(),
         })),
     );
 

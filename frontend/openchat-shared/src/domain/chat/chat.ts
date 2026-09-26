@@ -111,6 +111,7 @@ export type MessageContent =
     | ReportedMessageContent
     | UserReferralCard
     | MemeFighterContent
+    | DailyResultContent
     | VideoCallContent
     | EncryptedContent;
 
@@ -130,8 +131,51 @@ export type VideoCallContent = {
     callType: VideoCallType;
 };
 
-export const VideoCallTypeSchema = Type.Union([Type.Literal("broadcast"), Type.Literal("default")]);
+// A "default" call is a video call. An audio call stays an audio call: nobody in it can turn a
+// camera on.
+export const VideoCallTypeSchema = Type.Union([
+    Type.Literal("broadcast"),
+    Type.Literal("default"),
+    Type.Literal("audio"),
+]);
 export type VideoCallType = Static<typeof VideoCallTypeSchema>;
+
+// How a call's type travels to and from the canisters and the video bridge. Websites that
+// predate audio calls validate canister responses against these two values, so an audio call
+// travels as "default" with a separate audio only flag. That pair can say "audio only
+// broadcast", which does not exist, so it is converted to a VideoCallType wherever it arrives
+// and nothing else is passed around.
+export type WireVideoCallType = Exclude<VideoCallType, "audio">;
+
+export function videoCallTypeFromWire(
+    callType: WireVideoCallType,
+    audioOnly?: boolean,
+): VideoCallType {
+    return callType === "default" && audioOnly === true ? "audio" : callType;
+}
+
+export function videoCallTypeToWire(callType: VideoCallType): {
+    callType: WireVideoCallType;
+    audioOnly: boolean;
+} {
+    return callType === "audio"
+        ? { callType: "default", audioOnly: true }
+        : { callType, audioOnly: false };
+}
+
+// A call that is already running keeps the type it was started with, whatever the button that
+// joins it asked for
+export function joinedCallType(
+    requested: VideoCallType,
+    inProgress?: VideoCallType,
+): VideoCallType {
+    return inProgress ?? requested;
+}
+
+// An audio call is joined with the camera off whatever the user's camera setting says
+export function startVideoOff(callType: VideoCallType, cameraOn: boolean): boolean {
+    return callType === "audio" || !cameraOn;
+}
 
 export interface PrizeContentInitial {
     kind: "prize_content_initial";
@@ -188,7 +232,8 @@ export type AttachmentContent =
     | GiphyContent
     | CryptocurrencyContent
     | PrizeContentInitial
-    | P2PSwapContentInitial;
+    | P2PSwapContentInitial
+    | DailyResultContent;
 
 export function isAttachmentContent(content: MessageContent): content is AttachmentContent {
     switch (content.kind) {
@@ -200,6 +245,7 @@ export function isAttachmentContent(content: MessageContent): content is Attachm
         case "crypto_content":
         case "p2p_swap_content_initial":
         case "prize_content_initial":
+        case "daily_result":
             return true;
         default:
             return false;
@@ -680,6 +726,22 @@ export const MemeFighterContentSchema = Type.Object({
     url: Type.String(),
 });
 export type MemeFighterContent = Static<typeof MemeFighterContentSchema>;
+
+// Result card for a solved daily puzzle. `layout` is the hex-encoded puzzle description bytes
+// (version, width, height, cells) so the card can draw the grid without fetching the puzzle.
+export const DailyResultContentSchema = Type.Object({
+    kind: Type.Literal("daily_result"),
+    gameId: Type.String(),
+    number: Type.Number(),
+    userId: Type.String(),
+    solveTimeMs: Type.Number(),
+    hintsUsed: Type.Number(),
+    streak: Type.Number(),
+    layout: Type.String(),
+    tier: Type.Optional(Type.Number()),
+    caption: Type.Optional(Type.String()),
+});
+export type DailyResultContent = Static<typeof DailyResultContentSchema>;
 
 export const VideoContentSchema = Type.Object({
     kind: Type.Literal("video_content"),
@@ -2671,7 +2733,7 @@ export type VideoCallInProgress = {
     startedBy: string;
     messageIndex: number;
     messageId: bigint;
-    callType: "default" | "broadcast";
+    callType: VideoCallType;
     joinedByCurrentUser: boolean;
 };
 

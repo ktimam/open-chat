@@ -147,6 +147,7 @@ import {
     CommunityEnabledAiAppsArgs,
     CommunityEnabledAiAppsResponse,
     CommunityRegisterProposalVoteArgs,
+    CommunityRegisterProposalVoteV2Args,
     CommunityRegisterWebhookArgs,
     CommunityRegisterWebhookResponse,
     CommunityRemoveMemberArgs,
@@ -870,7 +871,7 @@ export class CommunityClient
     ): Promise<GroupChatDetailsResponse> {
         const cacheKey = `${chatId.communityId}_${chatId.channelId}`;
         const fromCache = await this.chatsDb.getCachedGroupDetails(cacheKey);
-        if (fromCache !== undefined) {
+        if (fromCache != null) {
             if (fromCache.timestamp >= chatLastUpdated || offline()) {
                 return fromCache;
             } else {
@@ -1250,7 +1251,14 @@ export class CommunityClient
             summaryResponse,
             CommunitySummaryArgs,
             TCommunitySummaryResponse,
-        );
+        ).catch((err) => {
+            // The community canister has been deleted: a stale link or cached reference,
+            // not a defect. channelSummary maps the same rejection the same way.
+            if (err instanceof DestinationInvalidError) {
+                return { kind: "failure" } as CommunitySummaryResponse;
+            }
+            throw err;
+        });
     }
 
     exploreChannels(
@@ -1376,6 +1384,25 @@ export class CommunityClient
             },
             unitResult,
             CommunityRegisterProposalVoteArgs,
+            UnitResult,
+        );
+    }
+
+    registerProposalVoteV2(
+        chatId: ChannelIdentifier,
+        messageIdx: number,
+        adopt: boolean,
+    ): Promise<RegisterProposalVoteResponse> {
+        return this.update(
+            chatId.communityId,
+            "register_proposal_vote_v2",
+            {
+                channel_id: toBigInt32(chatId.channelId),
+                adopt,
+                message_index: messageIdx,
+            },
+            unitResult,
+            CommunityRegisterProposalVoteV2Args,
             UnitResult,
         );
     }

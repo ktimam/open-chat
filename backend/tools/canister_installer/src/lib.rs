@@ -249,22 +249,21 @@ async fn install_service_canisters_impl(
         test_mode,
     };
 
-    let market_maker_canister_wasm = get_canister_wasm(CanisterName::MarketMaker, version);
-    let market_maker_init_args = market_maker_canister::init::Args {
-        user_index_canister_id: canister_ids.user_index,
-        cycles_dispenser_canister_id: canister_ids.cycles_dispenser,
-        icp_ledger_canister_id: canister_ids.nns_ledger,
-        chat_ledger_canister_id: CHAT_LEDGER_CANISTER_ID,
-        wasm_version: version,
-        test_mode,
-    };
-
     let neuron_controller_canister_wasm = get_canister_wasm(CanisterName::NeuronController, version);
     let neuron_controller_init_args = neuron_controller_canister::init::Args {
         governance_principals: vec![principal],
         nns_governance_canister_id: canister_ids.nns_governance,
         nns_ledger_canister_id: canister_ids.nns_ledger,
         cycles_minting_canister_id: canister_ids.nns_cmc,
+        cycles_dispenser_canister_id: canister_ids.cycles_dispenser,
+        wasm_version: version,
+        test_mode,
+    };
+
+    let daily_puzzle_canister_wasm = get_canister_wasm(CanisterName::DailyPuzzle, version);
+    let daily_puzzle_init_args = daily_puzzle_canister::init::Args {
+        registry_canister_id: canister_ids.registry,
+        user_index_canister_id: canister_ids.user_index,
         cycles_dispenser_canister_id: canister_ids.cycles_dispenser,
         wasm_version: version,
         test_mode,
@@ -365,15 +364,15 @@ async fn install_service_canisters_impl(
         ),
         install_wasm(
             management_canister,
-            &canister_ids.market_maker,
-            &market_maker_canister_wasm.module,
-            Encode!(&market_maker_init_args).unwrap(),
-        ),
-        install_wasm(
-            management_canister,
             &canister_ids.neuron_controller,
             &neuron_controller_canister_wasm.module,
             Encode!(&neuron_controller_init_args).unwrap(),
+        ),
+        install_wasm(
+            management_canister,
+            &canister_ids.daily_puzzle,
+            &daily_puzzle_canister_wasm.module,
+            Encode!(&daily_puzzle_init_args).unwrap(),
         ),
         install_wasm(
             management_canister,
@@ -430,8 +429,9 @@ async fn install_service_canisters_impl(
     let group_canister_wasm = get_canister_wasm(CanisterName::Group, version);
     let community_canister_wasm = get_canister_wasm(CanisterName::Community, version);
     let local_user_index_canister_wasm = get_canister_wasm(CanisterName::LocalUserIndex, version);
+    let multi_user_canister_wasm = get_canister_wasm(CanisterName::MultiUser, version);
 
-    futures::future::try_join4(
+    futures::future::try_join5(
         user_index_canister_client::upload_wasm_in_chunks(
             agent,
             &canister_ids.user_index,
@@ -443,6 +443,12 @@ async fn install_service_canisters_impl(
             &canister_ids.user_index,
             &user_canister_wasm.module,
             user_index_canister::ChildCanisterType::User,
+        ),
+        user_index_canister_client::upload_wasm_in_chunks(
+            agent,
+            &canister_ids.user_index,
+            &multi_user_canister_wasm.module,
+            user_index_canister::ChildCanisterType::MultiUser,
         ),
         group_index_canister_client::upload_wasm_in_chunks(
             agent,
@@ -472,13 +478,22 @@ async fn install_service_canisters_impl(
     .await
     .unwrap();
 
-    futures::future::try_join3(
+    futures::future::try_join4(
         user_index_canister_client::upgrade_user_canister_wasm(
             agent,
             &canister_ids.user_index,
             &user_index_canister::upgrade_user_canister_wasm::Args {
                 version,
                 wasm_hash: sha256(&user_canister_wasm.module),
+                filter: None,
+            },
+        ),
+        user_index_canister_client::upgrade_multi_user_canister_wasm(
+            agent,
+            &canister_ids.user_index,
+            &user_index_canister::upgrade_multi_user_canister_wasm::Args {
+                version,
+                wasm_hash: sha256(&multi_user_canister_wasm.module),
                 filter: None,
             },
         ),
@@ -500,6 +515,16 @@ async fn install_service_canisters_impl(
                 filter: None,
             },
         ),
+    )
+    .await
+    .unwrap();
+
+    user_index_canister_client::set_daily_puzzle_canister_id(
+        agent,
+        &canister_ids.user_index,
+        &user_index_canister::set_daily_puzzle_canister_id::Args {
+            canister_id: canister_ids.daily_puzzle,
+        },
     )
     .await
     .unwrap();

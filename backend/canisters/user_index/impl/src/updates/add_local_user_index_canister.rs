@@ -1,10 +1,11 @@
 use crate::guards::caller_is_registry_canister;
+use crate::updates::upgrade_multi_user_canister_wasm::upgrade_multi_user_wasm_in_local_user_index;
 use crate::updates::upgrade_user_canister_wasm::upgrade_user_wasm_in_local_user_index;
 use crate::{RuntimeState, mutate_state};
 use canister_api_macros::update;
 use canister_tracing_macros::trace;
 use ic_cdk_management_canister::{CanisterInfoArgs, CanisterInstallMode};
-use local_user_index_canister::{SetPremiumItemCost, UserDetailsFull, UserIndexEvent};
+use local_user_index_canister::{SetPremiumItemCost, UserDetailsFull, UserIdMigrated, UserIndexEvent};
 use rand::RngExt;
 use tracing::info;
 use types::{BuildVersion, CanisterId, CanisterWasm, Hash};
@@ -74,12 +75,26 @@ async fn add_local_user_index_canister(args: Args) -> Response {
             )
             .await
             {
-                InternalError(format!("Failed to install user canister wasm: {error:?}"))
-            } else {
-                let response = mutate_state(|state| commit(args.canister_id, wasm_version, state));
-                info!(canister_id = %args.canister_id, "local user index canister added");
-                response
+                return InternalError(format!("Failed to install user canister wasm: {error:?}"));
             }
+
+            // The MultiUser wasm is only pushed once one has been uploaded to the UserIndex, else
+            // the new LocalUserIndex would reject the empty wasm with a hash mismatch
+            if !result.multi_user_canister_wasm.module.is_empty()
+                && let Err(error) = upgrade_multi_user_wasm_in_local_user_index(
+                    args.canister_id,
+                    &result.multi_user_canister_wasm,
+                    result.multi_user_canister_wasm_hash,
+                    None,
+                )
+                .await
+            {
+                return InternalError(format!("Failed to install multi user canister wasm: {error:?}"));
+            }
+
+            let response = mutate_state(|state| commit(args.canister_id, wasm_version, state));
+            info!(canister_id = %args.canister_id, "local user index canister added");
+            response
         }
         Err(response) => response,
     }
@@ -91,6 +106,8 @@ struct PrepareResult {
     canister_wasm_hash: Hash,
     user_canister_wasm: CanisterWasm,
     user_canister_wasm_hash: Hash,
+    multi_user_canister_wasm: CanisterWasm,
+    multi_user_canister_wasm_hash: Hash,
     init_args: local_user_index_canister::init::Args,
 }
 
@@ -100,12 +117,16 @@ fn prepare(args: &Args, state: &mut RuntimeState) -> Result<PrepareResult, Respo
 
         let user_canister_wasm = state.data.child_canister_wasms.get(ChildCanisterType::User);
 
+        let multi_user_canister_wasm = state.data.child_canister_wasms.get(ChildCanisterType::MultiUser);
+
         Ok(PrepareResult {
             this_canister_id: state.env.canister_id(),
             canister_wasm: canister_wasm.wasm.clone(),
             canister_wasm_hash: canister_wasm.wasm_hash,
             user_canister_wasm: user_canister_wasm.wasm.clone(),
             user_canister_wasm_hash: user_canister_wasm.wasm_hash,
+            multi_user_canister_wasm: multi_user_canister_wasm.wasm.clone(),
+            multi_user_canister_wasm_hash: multi_user_canister_wasm.wasm_hash,
             init_args: local_user_index_canister::init::Args {
                 wasm_version: canister_wasm.wasm.version,
                 user_index_canister_id: state.env.canister_id(),
@@ -126,6 +147,8 @@ fn prepare(args: &Args, state: &mut RuntimeState) -> Result<PrepareResult, Respo
                 openai_api_key: state.data.openai_api_key.clone(),
                 moderation_referral_config: state.data.moderation_referral_config.clone(),
                 media_scan_config: state.data.media_scan_config.clone(),
+                multi_user_canisters_enabled: state.data.multi_user_canisters_enabled,
+                call_push_enabled: state.data.call_push_enabled,
                 test_mode: state.data.test_mode,
             },
         })
@@ -158,6 +181,22 @@ fn commit(canister_id: CanisterId, wasm_version: BuildVersion, state: &mut Runti
                 canister_id,
                 UserIndexEvent::SetPremiumItemCost(SetPremiumItemCost { item_id, chit_cost }),
             )
+        }
+        if let Some(daily_puzzle_canister_id) = state.data.daily_puzzle_canister_id {
+            state.data.user_index_event_sync_queue.push(
+                canister_id,
+                UserIndexEvent::SetDailyPuzzleCanisterId(daily_puzzle_canister_id),
+            );
+        }
+        for (old_user_id, new_user_id) in state.data.migrated_user_ids.iter() {
+            state.data.user_index_event_sync_queue.push(
+                canister_id,
+                UserIndexEvent::UserIdMigrated(UserIdMigrated {
+                    old_user_id,
+                    new_user_id,
+                    canisters_to_notify: Vec::new(),
+                }),
+            );
         }
         crate::jobs::sync_events_to_local_user_index_canisters::try_run_now(state);
         Success

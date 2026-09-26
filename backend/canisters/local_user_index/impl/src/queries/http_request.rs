@@ -39,11 +39,20 @@ fn http_request(request: HttpRequest) -> HttpResponse {
         })
     }
 
+    fn get_top_up_leaderboard(state: &RuntimeState) -> HttpResponse {
+        build_json_response(&state.data.top_up_leaderboards)
+    }
+
     fn get_user_canister_versions(state: &RuntimeState) -> HttpResponse {
         let mut map = BTreeMap::new();
-        for (user_id, user) in state.data.local_users.iter() {
-            let version = map.entry(user.wasm_version).or_insert(UserCanisterVersion {
-                version: user.wasm_version,
+        for (user_id, wasm_version) in state
+            .data
+            .local_users
+            .iter_user_canisters()
+            .filter_map(|(user_id, user)| user.wasm_version.map(|v| (user_id, v)))
+        {
+            let version = map.entry(wasm_version).or_insert(UserCanisterVersion {
+                version: wasm_version,
                 count: 0,
                 users: Vec::new(),
             });
@@ -75,6 +84,7 @@ fn http_request(request: HttpRequest) -> HttpResponse {
         Route::Logs(since) => get_logs_impl(since),
         Route::Traces(since) => get_traces_impl(since),
         Route::Metrics => read_state(get_metrics_impl),
+        Route::Other(p, _) if p == "top_up_leaderboard" => read_state(get_top_up_leaderboard),
         Route::Other(p, qs) if p == "top_ups" => read_state(|state| get_top_ups(qs, state)),
         Route::Other(p, _) if p == "user_canister_versions" => read_state(get_user_canister_versions),
         Route::Other(p, qs) if p == "remote_user_events" => read_state(|state| get_remote_user_events(qs, state)),

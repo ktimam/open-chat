@@ -26,5 +26,9 @@ pub struct Args {
     pub moderation_referral_config: Option<ModerationReferralConfig>,
     #[serde(default)]
     pub media_scan_config: MediaScanConfig,
+    #[serde(default)]
+    pub multi_user_canisters_enabled: bool,
+    #[serde(default)]
+    pub call_push_enabled: bool,
     pub test_mode: bool,
 }

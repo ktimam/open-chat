@@ -1,10 +1,10 @@
-use crate::{RuntimeState, UserIndexEvent, UserToDelete, mutate_state};
+use crate::{CanisterToRefund, RuntimeState, UserIndexEvent, UserToDelete, jobs, mutate_state};
 use constants::SECOND_IN_MS;
 use ic_cdk_timers::TimerId;
 use std::cell::Cell;
 use std::time::Duration;
 use tracing::trace;
-use types::{C2CError, CanisterId, Empty, Milliseconds};
+use types::{C2CError, CanisterId, Milliseconds};
 
 thread_local! {
     static TIMER_ID: Cell<Option<TimerId>> = Cell::default();
@@ -25,7 +25,7 @@ fn run() {
     TIMER_ID.set(None);
 
     if let Some(user) = mutate_state(get_next) {
-        ic_cdk::futures::spawn_migratory(process_user(user));
+        utils::async_work::spawn_tracked(process_user(user));
     }
 }
 
@@ -42,7 +42,22 @@ async fn process_user(user: UserToDelete) {
         match result {
             Ok(DeleteUserSuccess::Deleted(canisters_to_notify)) => {
                 state.data.global_users.remove(&user_id);
-                state.data.local_users.remove(&user_id);
+                let removed = state.data.local_users.remove(&user_id);
+                state.data.daily_puzzle_engine.remove_user(user_id);
+                // Only decrement once, even if a duplicate DeleteUser event queued the user twice
+                if removed && user_id.index() != 0 {
+                    state.data.local_multi_user_canisters.on_user_removed(&user_id.canister_id());
+                }
+
+                // The user's canister has been uninstalled but still holds its cycles
+                if removed && user_id.index() == 0 {
+                    state.data.cycles_refund_queue.push_back(CanisterToRefund {
+                        canister_id: user_id.canister_id(),
+                        attempt: 0,
+                        retry_after: 0,
+                    });
+                    jobs::refund_cycles::start_job_if_required(state, None);
+                }
 
                 let now = state.env.now();
                 for canister_id in canisters_to_notify {
@@ -69,11 +84,20 @@ async fn process_user_inner(user: &UserToDelete) -> Result<DeleteUserSuccess, C2
     let user_id = user.user_id;
     let canister_id = user_id.canister_id();
 
-    let (groups, communities) = user_canister_c2c_client::c2c_groups_and_communities(canister_id, &Empty {})
-        .await
-        .map(|r| (r.groups, r.communities))?;
+    let (groups, communities) = user_canister_c2c_client::c2c_groups_and_communities(
+        canister_id,
+        &user_canister::c2c_groups_and_communities::Args { user_id },
+    )
+    .await
+    .map(|r| (r.groups, r.communities))?;
 
-    utils::canister::uninstall(canister_id).await?;
+    if user_id.index() == 0 {
+        utils::canister::uninstall(canister_id).await?;
+    } else {
+        // A user held in a MultiUser canister shares it with other users, so only they are removed
+        multi_user_canister_c2c_client::c2c_delete_user(canister_id, &multi_user_canister::c2c_delete_user::Args { user_id })
+            .await?;
+    }
 
     Ok(DeleteUserSuccess::Deleted(
         groups

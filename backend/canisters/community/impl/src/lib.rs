@@ -7,7 +7,7 @@ use crate::timer_job_types::{DeleteFileReferencesJob, MakeTransferJob, RemoveExp
 use activity_notification_state::ActivityNotificationState;
 use canister_state_macros::canister_state;
 use canister_timer_jobs::{Job, TimerJobs};
-use chat_events::{ChatEventInternal, ChatMetricsInternal, EventPusher, ExpiredThread};
+use chat_events::{ChatEventInternal, ChatEvents, ChatMetricsInternal, EventPusher, ExpiredThread};
 use community_canister::add_members_to_channel::UserFailedError;
 use constants::{ICP_LEDGER_CANISTER_ID, OPENCHAT_BOT_USER_ID};
 use event_store_types::Event;
@@ -15,13 +15,15 @@ use fire_and_forget_handler::FireAndForgetHandler;
 use gated_groups::{GatePayment, calculate_gate_payments};
 use group_chat_core::{AccessRulesInternal, AddResult};
 use group_community_common::{
-    Achievements, AiAppChatLinkAdmission, ExpiringMember, ExpiringMemberActions, ExpiringMembers, Members, PaymentReceipts,
-    PendingPaymentsQueue, UserCache,
+    Achievements, ExpiringMember, ExpiringMemberActions, ExpiringMembers, Members, PaymentReceipts, PendingPaymentsQueue,
+    UserCache,
 };
 use ic_principal::Principal;
 use installed_bots::InstalledBots;
 use instruction_counts_log::{InstructionCountEntry, InstructionCountFunctionId, InstructionCountsLog};
+use ledger_utils::certified::CertifiedTransfers;
 use model::events::CommunityEventInternal;
+use model::legacy_user_event_batch::LegacyUserEventBatch;
 use model::user_event_batch::UserEventBatch;
 use model::{events::CommunityEvents, invited_users::InvitedUsers, members::CommunityMemberInternal};
 use oc_error_codes::OCErrorCode;
@@ -38,18 +40,20 @@ use types::{
     BotInitiator, BotNotification, BotPermissions, BotUpdated, BuildVersion, Caller, CanisterId, ChannelCreated, ChannelId,
     ChannelUserNotificationPayload, ChatMetrics, ChatPermission, CommunityCanisterCommunitySummary, CommunityEvent,
     CommunityMembership, CommunityPermissions, Cycles, Document, EventIndex, EventsCaller, FrozenGroupInfo, GroupRole,
-    IdempotentEnvelope, MembersAdded, MessageId, MessageIndex, Milliseconds, Notification, PendingCryptoTransaction, Rules,
-    TimestampMillis, Timestamped, UserId, UserNotification, UserType,
+    IdempotentEnvelope, MembersAdded, MessageId, MessageIndex, Milliseconds, Notification, OCResult, PendingCryptoTransaction,
+    Rules, TimestampMillis, Timestamped, UserId, UserIdAndPrincipal, UserNotification, UserType, icrc1,
 };
 use types::{BotSubscriptions, CommunityId};
 use user_canister::CommunityCanisterEvent;
+use utils::async_work::AsyncWorkGuard;
+use utils::canister::trap_if_frozen;
 use utils::env::Environment;
 use utils::idempotency_checker::IdempotencyChecker;
+use utils::migrated_user_ids::MigratedUserIds;
 use utils::regular_jobs::RegularJobs;
 
 mod activity_notifications;
-mod ai_app_card_authority;
-mod ai_app_chat_link_authority;
+mod external_url;
 mod guards;
 mod jobs;
 mod lifecycle;
@@ -75,6 +79,13 @@ struct RuntimeState {
 impl RuntimeState {
     pub fn new(env: Box<dyn Environment>, data: Data, regular_jobs: RegularJobs<Data>) -> RuntimeState {
         RuntimeState { env, data, regular_jobs }
+    }
+
+    // The regular jobs are skipped while the canister is frozen
+    pub fn run_regular_jobs(&mut self) {
+        if !self.data.is_frozen() {
+            self.regular_jobs.run(self.env.deref(), &mut self.data);
+        }
     }
 
     pub fn is_caller_user_index(&self) -> bool {
@@ -114,6 +125,35 @@ impl RuntimeState {
         }
     }
 
+    // The calling user and their principal, as recorded on their member record
+    pub fn get_caller_user(&self) -> Result<UserIdAndPrincipal, OCErrorCode> {
+        let user_id = self.get_caller_user_id()?;
+        Ok(self.member_user(user_id))
+    }
+
+    // The member's wallet, for paying them. A user sharing a MultiUser canister with others holds
+    // their funds under the principal held for them, and everyone else under their user id.
+    pub fn member_wallet(&self, user_id: UserId) -> OCResult<icrc1::Account> {
+        if !user_id.is_indexed() {
+            return Ok(user_id.as_principal().into());
+        }
+        let user = self.member_user(user_id);
+        if user.principal == Principal::anonymous() {
+            Err(OCErrorCode::TargetUserNotFound.into())
+        } else {
+            Ok(user.into())
+        }
+    }
+
+    // The user and their principal, as recorded on their member record, or with the principal
+    // anonymous if they aren't a member
+    pub fn member_user(&self, user_id: UserId) -> UserIdAndPrincipal {
+        self.data
+            .members
+            .get_by_user_id(&user_id)
+            .map_or(UserIdAndPrincipal::new(user_id, Principal::anonymous()), |m| m.user())
+    }
+
     pub fn get_member(&self, verify: bool, user_id_or_principal: Principal) -> Result<CommunityMemberInternal, OCErrorCode> {
         let member = self
             .data
@@ -126,9 +166,25 @@ impl RuntimeState {
         Ok(member)
     }
 
-    pub fn get_calling_member(&self, verify: bool) -> Result<CommunityMemberInternal, OCErrorCode> {
+    // The calling member, or when `user_id` is given, that member, whom the caller must hold (a
+    // MultiUser canister acting for one of its users, or a User canister for its own user)
+    pub fn get_calling_member(&self, user_id: Option<UserId>, verify: bool) -> Result<CommunityMemberInternal, OCErrorCode> {
         let caller = self.env.caller();
-        self.get_member(verify, caller)
+        let Some(user_id) = user_id else {
+            return self.get_member(verify, caller);
+        };
+        if user_id.canister_id() != caller {
+            return Err(OCErrorCode::InitiatorNotAuthorized);
+        }
+        let member = self
+            .data
+            .members
+            .get_by_user_id(&user_id)
+            .ok_or(OCErrorCode::InitiatorNotInCommunity)?;
+        if verify {
+            member.verify()?;
+        }
+        Ok(member)
     }
 
     pub fn push_notification(
@@ -239,7 +295,8 @@ impl RuntimeState {
     }
 
     pub fn queue_access_gate_payments(&mut self, payment: GatePayment) {
-        for payment in calculate_gate_payments(payment, self.data.members.owners()) {
+        let owners = self.data.members.owners().iter().map(|u| self.member_user(*u)).collect();
+        for payment in calculate_gate_payments(payment, owners) {
             self.data.pending_payments_queue.push(payment);
         }
 
@@ -272,7 +329,7 @@ impl RuntimeState {
                 .channels_for_member(m.user_id)
                 .iter()
                 .filter_map(|c| self.data.channels.get(c))
-                .filter_map(|c| c.summary(Some(m.user_id), data.is_public.value, &data.members))
+                .filter_map(|c| c.summary(Some(m.user()), data.is_public.value, &data.members))
                 .collect();
 
             (channels, Some(membership))
@@ -401,9 +458,12 @@ impl RuntimeState {
     ) {
         for (channel_id, threads) in threads_to_delete {
             for thread in threads {
-                self.data.stable_memory_keys_to_garbage_collect.push(BaseKeyPrefix::from(
-                    ChatEventKeyPrefix::new_from_channel(channel_id, Some(thread.root_message_index)),
-                ));
+                self.data
+                    .stable_memory_keys_to_garbage_collect
+                    .extend(ChatEvents::stable_memory_key_prefixes(ChatEventKeyPrefix::new_from_channel(
+                        channel_id,
+                        Some(thread.root_message_index),
+                    )));
             }
         }
 
@@ -436,12 +496,14 @@ impl RuntimeState {
     }
 
     pub fn push_event_to_user(&mut self, user_id: UserId, event: CommunityCanisterEvent, now: TimestampMillis) {
-        self.data.user_event_sync_queue.push(
-            user_id,
+        // Sent to the user's latest id if they are known to have been migrated since having `user_id`
+        let user_id = self.data.migrated_user_ids.latest(user_id);
+        self.data.user_events_queue.push(
+            user_id.canister_id(),
             IdempotentEnvelope {
                 created_at: now,
                 idempotency_id: self.env.rng().next_u64(),
-                value: event,
+                value: (user_id, event),
             },
         );
     }
@@ -473,7 +535,7 @@ impl RuntimeState {
             groups_being_imported: self.data.groups_being_imported.summaries(),
             instruction_counts: self.data.instruction_counts_log.iter().collect(),
             timer_jobs: self.data.timer_jobs.len() as u32,
-            queued_user_events: self.data.user_event_sync_queue.len() as u32,
+            queued_user_events: self.data.user_events_queue.len() as u32,
             queued_local_index_events: self.data.local_user_index_event_sync_queue.len() as u32,
             stable_memory_sizes: memory::memory_sizes(),
             canister_ids: CanisterIds {
@@ -519,7 +581,7 @@ impl RuntimeState {
         let member = self.data.members.get_verified_member(caller)?;
 
         match member.user_type {
-            UserType::User => Ok(Caller::User(member.user_id)),
+            UserType::User => Ok(Caller::User(member.user())),
             UserType::Bot => Ok(Caller::Bot(member.user_id)),
             UserType::OcControlledBot => Ok(Caller::OCBot(member.user_id)),
             UserType::BotV2 | UserType::Webhook => Err(OCErrorCode::InitiatorNotFound),
@@ -583,7 +645,11 @@ struct Data {
     expiring_members: ExpiringMembers,
     expiring_member_actions: ExpiringMemberActions,
     user_cache: UserCache,
-    user_event_sync_queue: GroupedTimerJobQueue<UserEventBatch>,
+    // Events queued before they were batched per canister, which `post_upgrade` moves into
+    // `user_events_queue`
+    user_event_sync_queue: GroupedTimerJobQueue<LegacyUserEventBatch>,
+    #[serde(default = "new_user_events_queue")]
+    user_events_queue: GroupedTimerJobQueue<UserEventBatch>,
     local_user_index_event_sync_queue: BatchedTimerJobQueue<LocalUserIndexEventBatch>,
     stable_memory_keys_to_garbage_collect: Vec<BaseKeyPrefix>,
     bots: InstalledBots,
@@ -593,10 +659,33 @@ struct Data {
     idempotency_checker: IdempotencyChecker,
     public_channel_list_updated: TimestampMillis,
     #[serde(default)]
-    ai_app_chat_link_admission: AiAppChatLinkAdmission,
+    certified_transfers: CertifiedTransfers,
+    // The latest ids of migrated users, as looked up from the LocalUserIndex whenever a user's id is found to
+    // have changed
+    #[serde(default)]
+    migrated_user_ids: MigratedUserIds,
 }
 
 impl Data {
+    // Moves the events queued before they were batched per canister into the queue which does so,
+    // pairing each with the user it was queued for
+    // TODO: Remove this, along with `user_event_sync_queue`, once it has run in every canister
+    pub fn drain_legacy_user_event_queue(&mut self) {
+        for (user_id, events) in self.user_event_sync_queue.take_all() {
+            self.user_events_queue.push_many(
+                user_id.canister_id(),
+                events
+                    .into_iter()
+                    .map(|event| IdempotentEnvelope {
+                        created_at: event.created_at,
+                        idempotency_id: event.idempotency_id,
+                        value: (user_id, event.value),
+                    })
+                    .collect(),
+            );
+        }
+    }
+
     #[expect(clippy::too_many_arguments)]
     fn new(
         community_id: CommunityId,
@@ -698,23 +787,21 @@ impl Data {
             expiring_member_actions: ExpiringMemberActions::default(),
             user_cache: UserCache::default(),
             user_event_sync_queue: GroupedTimerJobQueue::new(5, true),
+            user_events_queue: new_user_events_queue(),
             local_user_index_event_sync_queue: BatchedTimerJobQueue::new(local_user_index_canister_id, true),
             stable_memory_keys_to_garbage_collect: Vec::new(),
             bots: InstalledBots::default(),
             verified: Timestamped::default(),
             moderation_flags: Timestamped::default(),
             idempotency_checker: IdempotencyChecker::default(),
+            certified_transfers: CertifiedTransfers::default(),
+            migrated_user_ids: MigratedUserIds::default(),
             public_channel_list_updated: now,
-            ai_app_chat_link_admission: AiAppChatLinkAdmission::default(),
         }
     }
 
     pub fn is_frozen(&self) -> bool {
         self.frozen.is_some()
-    }
-
-    pub fn verify_not_frozen(&self) -> Result<(), OCErrorCode> {
-        if self.is_frozen() { Err(OCErrorCode::CommunityFrozen) } else { Ok(()) }
     }
 
     pub fn is_accessible(&self, caller: Principal, invite_code: Option<u64>) -> bool {
@@ -804,13 +891,71 @@ impl Data {
         principal: Option<Principal>,
         now: TimestampMillis,
     ) -> Option<CommunityMemberInternal> {
-        let removed = self.members.remove(user_id, principal, now);
+        let removed = self.members.remove(user_id, principal, false, now);
         self.channels.leave_all_channels(user_id, now);
         self.expiring_members.remove_member(user_id, None);
         self.expiring_member_actions.remove_member(user_id, None);
         self.achievements.remove_user(&user_id);
         self.user_cache.delete(user_id);
         removed
+    }
+
+    // Moves everything held under the previous ids of a user migrated to a MultiUser canister (their
+    // membership of the community and its channels, block, invitations, metrics, etc) onto their
+    // latest id, stepping through each migration in turn, so that from then on they only need to be
+    // looked up by their latest id. `previous_user_ids` must be ordered oldest first. `principal` is
+    // the user's principal, if known, which is needed to update the lookup of an invited user who
+    // isn't a member. If anything was held under a previous id, the migrations are also cached, since
+    // events may refer to the user by their previous ids. Returns whether anything was moved.
+    pub fn migrate_user_ids(
+        &mut self,
+        previous_user_ids: &[UserId],
+        user_id: UserId,
+        principal: Option<Principal>,
+        now: TimestampMillis,
+    ) -> bool {
+        let next_ids = previous_user_ids.iter().skip(1).chain([&user_id]);
+        let mut migrated = false;
+        for (&old_user_id, &new_user_id) in previous_user_ids.iter().zip(next_ids) {
+            migrated |= self.migrate_user_id(old_user_id, new_user_id, principal, now);
+        }
+        if migrated {
+            self.migrated_user_ids.insert_previous_ids(previous_user_ids, user_id);
+        }
+        migrated
+    }
+
+    fn migrate_user_id(
+        &mut self,
+        old_user_id: UserId,
+        new_user_id: UserId,
+        principal: Option<Principal>,
+        now: TimestampMillis,
+    ) -> bool {
+        if old_user_id == new_user_id {
+            return false;
+        }
+
+        let was_member = self.members.contains(&old_user_id);
+        let mut migrated = self.members.migrate_user_id(old_user_id, new_user_id, principal, now);
+        if was_member && !self.members.contains(&new_user_id) {
+            // The user has been blocked under their new id, so their membership under the old id was
+            // dropped, and they are removed from the community's channels as well
+            self.channels.leave_all_channels(old_user_id, now);
+            self.expiring_members.remove_member(old_user_id, None);
+            self.expiring_member_actions.remove_member(old_user_id, None);
+            self.achievements.remove_user(&old_user_id);
+            self.user_cache.delete(old_user_id);
+        }
+        for channel in self.channels.iter_mut() {
+            migrated |= channel.chat.migrate_user_id(old_user_id, new_user_id, now);
+        }
+        self.invited_users.migrate_user_id(old_user_id, new_user_id, now);
+        self.expiring_members.migrate_user_id(old_user_id, new_user_id);
+        self.expiring_member_actions.migrate_user_id(old_user_id, new_user_id);
+        self.achievements.migrate_user_id(old_user_id, new_user_id);
+        self.user_cache.migrate_user_id(old_user_id, new_user_id);
+        migrated
     }
 
     pub fn remove_user_from_channel(&mut self, user_id: UserId, channel_id: ChannelId, now: TimestampMillis) {
@@ -942,7 +1087,7 @@ impl Data {
                 }
             }
 
-            Ok(member.map_or(EventsCaller::Unknown, |m| EventsCaller::User(m.user_id)))
+            Ok(member.map_or(EventsCaller::Unknown, |m| EventsCaller::User(m.user())))
         }
     }
 
@@ -969,6 +1114,7 @@ impl Data {
             for (user_id, user_type) in users_to_add {
                 match channel.chat.members.add(
                     user_id,
+                    None,
                     now,
                     min_visible_event_index,
                     min_visible_message_index,
@@ -1260,7 +1406,7 @@ impl Data {
     }
 
     pub fn flush_pending_events(&mut self) {
-        self.user_event_sync_queue.flush();
+        self.user_events_queue.flush();
         self.local_user_index_event_sync_queue.flush();
     }
 }
@@ -1281,9 +1427,16 @@ impl EventPusher for CommunityEventPusher<'_> {
     }
 }
 
+// Runs an update call, trapping if the canister is frozen. Endpoints which must keep working while
+// frozen use `execute_update_even_if_frozen` instead.
 fn execute_update<F: FnOnce(&mut RuntimeState) -> R, R>(f: F) -> R {
+    read_state(|state| trap_if_frozen(state.data.is_frozen()));
+    execute_update_even_if_frozen(f)
+}
+
+fn execute_update_even_if_frozen<F: FnOnce(&mut RuntimeState) -> R, R>(f: F) -> R {
     mutate_state(|state| {
-        state.regular_jobs.run(state.env.deref(), &mut state.data);
+        state.run_regular_jobs();
         let result = f(state);
         state.data.flush_pending_events();
         result
@@ -1291,6 +1444,12 @@ fn execute_update<F: FnOnce(&mut RuntimeState) -> R, R>(f: F) -> R {
 }
 
 async fn execute_update_async<F: FnOnce() -> Fut, Fut: Future<Output = R>, R>(f: F) -> R {
+    read_state(|state| trap_if_frozen(state.data.is_frozen()));
+    execute_update_async_even_if_frozen(f).await
+}
+
+async fn execute_update_async_even_if_frozen<F: FnOnce() -> Fut, Fut: Future<Output = R>, R>(f: F) -> R {
+    let _guard = AsyncWorkGuard::new();
     run_regular_jobs();
     let result = f().await;
     flush_pending_events();
@@ -1298,7 +1457,7 @@ async fn execute_update_async<F: FnOnce() -> Fut, Fut: Future<Output = R>, R>(f:
 }
 
 fn run_regular_jobs() {
-    mutate_state(|state| state.regular_jobs.run(state.env.deref(), &mut state.data));
+    mutate_state(|state| state.run_regular_jobs());
 }
 
 fn flush_pending_events() {
@@ -1358,4 +1517,8 @@ pub enum CallerResult {
     NotFound,
     Suspended,
     Lapsed,
+}
+
+fn new_user_events_queue() -> GroupedTimerJobQueue<UserEventBatch> {
+    GroupedTimerJobQueue::new(5, true)
 }

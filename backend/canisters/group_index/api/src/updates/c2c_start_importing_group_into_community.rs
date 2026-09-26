@@ -1,7 +1,6 @@
 use oc_error_codes::OCError;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
-use types::{AiAppId, ChatId, UserId};
+use types::{ChatId, UserId};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Args {
@@ -11,7 +10,7 @@ pub struct Args {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Response {
-    Success(SuccessResult),
+    Success(u64),
     GroupNotFound,
     AlreadyImportingToAnotherCommunity,
     UserNotInGroup,
@@ -21,13 +20,4 @@ pub enum Response {
     ChatFrozen,
     InternalError(String),
     Error(OCError),
-}
-
-#[derive(Serialize, Deserialize, Debug, Default)]
-pub struct SuccessResult {
-    pub total_bytes: u64,
-    // Enabled AI apps forwarded from the source group so the imported channel
-    // inherits them. `#[serde(default)]` for rollout compat (see group api).
-    #[serde(default)]
-    pub enabled_ai_apps: BTreeSet<AiAppId>,
 }

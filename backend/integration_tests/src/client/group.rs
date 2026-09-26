@@ -16,11 +16,9 @@ generate_msgpack_query_call!(selected_updates_v2);
 generate_msgpack_query_call!(summary);
 generate_msgpack_query_call!(summary_updates);
 generate_msgpack_query_call!(webhook);
-generate_msgpack_query_call!(enabled_ai_apps);
 
 // Updates
 generate_msgpack_update_call!(accept_p2p_swap);
-generate_msgpack_update_call!(set_ai_app_enabled);
 generate_msgpack_update_call!(add_reaction);
 generate_msgpack_update_call!(block_user);
 generate_msgpack_update_call!(cancel_p2p_swap);
@@ -34,12 +32,14 @@ generate_update_call!(end_video_call_v2);
 generate_msgpack_update_call!(join_video_call);
 generate_msgpack_update_call!(pin_message_v2);
 generate_msgpack_update_call!(register_poll_vote);
+generate_msgpack_update_call!(register_proposal_vote);
 generate_msgpack_update_call!(register_webhook);
 generate_msgpack_update_call!(remove_participant);
 generate_msgpack_update_call!(report_message);
 generate_msgpack_update_call!(remove_reaction);
 generate_msgpack_update_call!(send_message_v2);
 generate_update_call!(start_video_call_v2);
+generate_msgpack_update_call!(tip_message);
 generate_msgpack_update_call!(toggle_mute_notifications);
 generate_msgpack_update_call!(unblock_user);
 generate_msgpack_update_call!(undelete_messages);
@@ -448,6 +448,7 @@ pub mod happy_path {
                 initiator_display_name: None,
                 max_duration,
                 call_type: VideoCallType::Broadcast,
+                audio_only: None,
             },
         );
 
@@ -575,27 +576,6 @@ pub mod happy_path {
             super::local_user_index(env, Principal::anonymous(), group_id.into(), &Empty {});
 
         local_user_index
-    }
-
-    pub fn set_ai_app_enabled(env: &mut PocketIc, sender: Principal, group_id: ChatId, app_id: types::AiAppId, enabled: bool) {
-        let response = super::set_ai_app_enabled(
-            env,
-            sender,
-            group_id.into(),
-            &group_canister::set_ai_app_enabled::Args { app_id, enabled },
-        );
-        match response {
-            group_canister::set_ai_app_enabled::Response::Success => (),
-            response => panic!("'set_ai_app_enabled' error: {response:?}"),
-        }
-    }
-
-    pub fn enabled_ai_apps(env: &PocketIc, sender: Principal, group_id: ChatId) -> Vec<types::AiAppId> {
-        let response = super::enabled_ai_apps(env, sender, group_id.into(), &group_canister::enabled_ai_apps::Args {});
-        match response {
-            group_canister::enabled_ai_apps::Response::Success(result) => result.app_ids,
-            response => panic!("'enabled_ai_apps' error: {response:?}"),
-        }
     }
 
     pub fn register_webhook(env: &mut PocketIc, caller: Principal, group_id: ChatId, name: String, avatar: Option<String>) {

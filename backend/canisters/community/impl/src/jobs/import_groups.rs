@@ -1,4 +1,5 @@
 use crate::activity_notifications::extract_activity;
+use crate::jobs::migrate_chat_events_to_stable_memory;
 use crate::model::channels::Channel;
 use crate::model::events::{CommunityEventInternal, GroupImportedInternal};
 use crate::model::groups_being_imported::{GroupToImport, GroupToImportAction};
@@ -10,14 +11,14 @@ use crate::updates::c2c_join_channel::join_channel_unchecked;
 use crate::{RuntimeState, mutate_state, read_state};
 use chat_events::ChatEvents;
 use constants::OPENCHAT_BOT_USER_ID;
-use group_canister::c2c_export_group::{Args, Response};
+use group_canister::c2c_export_group::{Args, ExportExtras, Response};
 use group_chat_core::{GroupChatCore, GroupMembers};
 use ic_cdk::call::RejectCode;
 use ic_cdk_timers::TimerId;
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::time::Duration;
-use tracing::{info, trace};
+use tracing::{error, info, trace};
 use types::{
     C2CError, Caller, ChannelId, ChannelLatestMessageIndex, Chat, ChatId, CommunityUsersBlocked, Empty, MultiUserChat, UserId,
     UserType,
@@ -45,7 +46,7 @@ fn run() {
 
     let batch = mutate_state(next_batch);
     if !batch.is_empty() {
-        ic_cdk::futures::spawn_migratory(import_groups(batch));
+        utils::async_work::spawn_tracked(import_groups(batch));
     }
 }
 
@@ -189,9 +190,35 @@ pub(crate) fn finalize_group_import(group_id: ChatId) {
             let community_id = state.env.canister_id().into();
             let channel_id = group.channel_id();
 
-            let mut chat: GroupChatCore = msgpack::deserialize_then_unwrap(group.bytes());
+            let mut bytes = group.bytes();
+            let mut chat: GroupChatCore = msgpack::deserialize(&mut bytes).unwrap();
+            // Groups on earlier versions export their `GroupChatCore` alone. The extras are not
+            // essential to the import, and this also runs in `post_upgrade`, so failing to
+            // deserialize them must not trap.
+            let extras: ExportExtras = if bytes.is_empty() {
+                ExportExtras::default()
+            } else {
+                msgpack::deserialize(bytes).unwrap_or_else(|error| {
+                    error!(%group_id, ?error, "Failed to deserialize the group's export extras");
+                    ExportExtras::default()
+                })
+            };
+            // The channel's events refer to the group's former members, so they are recorded as the
+            // community's former members too
+            state.data.members.add_former_members(extras.former_members);
+            for (old_user_id, new_user_id) in extras.migrated_user_ids {
+                state.data.migrated_user_ids.insert(old_user_id, new_user_id);
+            }
+
             chat.events.set_chat(Chat::Channel(community_id, channel_id));
             chat.members.set_chat(MultiUserChat::Channel(community_id, channel_id));
+            // The message ids and expiring events were written to stable memory as the events were
+            // imported. The imported messages were also added to the search index, but any messages
+            // still in the group's legacy search index on the heap are left there to be re-indexed
+            // under the channel's prefix by `migrate_chat_events_to_stable_memory`, in case some
+            // events were imported by a version of this canister which didn't index them.
+            chat.events.discard_message_ids_on_heap();
+            chat.events.discard_expiring_events_on_heap();
 
             let blocked: Vec<_> = chat.members.blocked();
             if !blocked.is_empty() {
@@ -221,11 +248,11 @@ pub(crate) fn finalize_group_import(group_id: ChatId) {
                 id: channel_id,
                 chat,
                 date_imported: None, // This is only set once everything is complete
-                // Carry over the AI apps that were enabled on the source group so
-                // the imported channel keeps them (empty for the convert-to-new-
-                // community path, which doesn't snapshot the set).
-                enabled_ai_apps: group_community_common::bounded_enabled_ai_apps(group.enabled_ai_apps().iter().copied()),
             });
+
+            // Moves the imported group's data which is still on the heap (eg. its users' metrics)
+            // into stable memory under the channel's prefixes
+            migrate_chat_events_to_stable_memory::start_job_if_required(state);
 
             state.data.timer_jobs.enqueue_job(
                 TimerJob::ProcessGroupImportChannelMembers(ProcessGroupImportChannelMembersJob {

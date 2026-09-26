@@ -1,9 +1,8 @@
 mod achievements;
-mod ai_app_chat_link_admission;
-mod enabled_ai_apps;
 mod expiring_member_actions;
 mod expiring_members;
 mod member;
+mod member_transfers;
 pub mod openai_moderation;
 mod payment_locks;
 mod payment_receipts;
@@ -11,11 +10,10 @@ mod pending_payments_queue;
 mod user_cache;
 
 pub use achievements::*;
-pub use ai_app_chat_link_admission::*;
-pub use enabled_ai_apps::*;
 pub use expiring_member_actions::*;
 pub use expiring_members::*;
 pub use member::*;
+pub use member_transfers::*;
 pub use payment_locks::*;
 pub use payment_receipts::*;
 pub use pending_payments_queue::*;

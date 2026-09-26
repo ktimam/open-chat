@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [unreleased]
 
+### Added
+
+- Add `last_90_days`, `last_year` and `last_2_years` to the active users metrics ([#9443](https://github.com/open-chat-labs/open-chat/pull/9443), [#9445](https://github.com/open-chat-labs/open-chat/pull/9445))
+- Add an `online_since` http route which returns how many users have been online since a given timestamp ([#9566](https://github.com/open-chat-labs/open-chat/pull/9566))
+
+### Changed
+
+- Update `ic-stable-structures` to a fork which supports choosing the page size of a map ([#9347](https://github.com/open-chat-labs/open-chat/pull/9347))
+- Track the spawned tasks in progress using `utils::async_work` ([#9546](https://github.com/open-chat-labs/open-chat/pull/9546))
+
+### Fixed
+
+- Don't retry c2c calls to a method the callee doesn't have, which would otherwise be retried forever ([#9521](https://github.com/open-chat-labs/open-chat/pull/9521))
+
+## [[2.0.2052](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2052-online_users)] - 2026-09-08
+
 ### Changed
 
 - Encode the index of a user within their canister into `UserId`, so that a canister can hold many users ([#9259](https://github.com/open-chat-labs/open-chat/pull/9259))

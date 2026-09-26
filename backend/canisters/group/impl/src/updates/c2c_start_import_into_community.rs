@@ -10,12 +10,12 @@ use types::OCResult;
 #[trace]
 fn c2c_start_import_into_community(args: Args) -> Response {
     match execute_update(|state| c2c_start_import_into_community_impl(args, state)) {
-        Ok(result) => Success(result),
+        Ok(total_bytes) => Success(total_bytes),
         Err(error) => Error(error),
     }
 }
 
-fn c2c_start_import_into_community_impl(args: Args, state: &mut RuntimeState) -> OCResult<SuccessResult> {
+fn c2c_start_import_into_community_impl(args: Args, state: &mut RuntimeState) -> OCResult<u64> {
     if args.user_id != state.data.proposals_bot_user_id {
         let member = state.data.chat.members.get_verified_member(args.user_id)?;
         if !member.role().is_owner() {
@@ -23,13 +23,7 @@ fn c2c_start_import_into_community_impl(args: Args, state: &mut RuntimeState) ->
         }
     }
 
-    // Snapshot the enabled AI apps before the import freezes the group, so the
-    // imported channel can inherit them (freeze doesn't clear the set).
-    let enabled_ai_apps = group_community_common::bounded_enabled_ai_apps(state.data.enabled_ai_apps.iter().copied());
     state
         .start_importing_into_community(CommunityBeingImportedInto::Existing(args.community_id))
-        .map(|result| SuccessResult {
-            total_bytes: result.total_bytes,
-            enabled_ai_apps,
-        })
+        .map(|result| result.total_bytes)
 }

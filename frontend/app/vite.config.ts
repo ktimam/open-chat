@@ -76,10 +76,12 @@ const localAndroidAssetLinks = resolveLocalAndroidAssetLinksConfig(process.env);
 // directly from their TypeScript source via `ocPackageAliases` — see
 // ./oc-package-aliases.mjs, the single source shared with build-workers.mjs.
 
-// Directory (gitignored, under node_modules) where the dev web worker bundle is
-// emitted before being served at /worker.js.
+// Directory (gitignored, under node_modules) where the dev worker bundles are
+// emitted before being served at /worker.js, /transcode_worker.js and
+// /service_worker.js.
 const workerBuildDir = path.resolve(__dirname, "node_modules/.oc-worker");
 const workerEntry = path.resolve(__dirname, "../openchat-worker/src/worker.ts");
+const serviceWorkerPath = "/service_worker.js";
 const transformersWebGpuWorkerEntry = path.resolve(
     __dirname,
     "./src/workers/transformersWebGpuInference.worker.ts",
@@ -91,6 +93,11 @@ const transformersWebGpuOrtJspiAlias = {
 const transformersWebGpuSpikeEnabled = transformersWebGpuFeatureEnabled(process.env);
 const workerTargets = [
     { entry: workerEntry, fileName: "worker.js", sequentialWebGpuSessions: false },
+    {
+        entry: path.resolve(__dirname, "../openchat-service-worker/src/service_worker.ts"),
+        fileName: "service_worker.js",
+        sequentialWebGpuSessions: false,
+    },
     {
         entry: path.resolve(__dirname, "../openchat-worker/src/transcodeWorker.ts"),
         fileName: "transcode_worker.js",
@@ -225,7 +232,11 @@ function developmentServiceWorkerCleanupPlugin(): Plugin {
     return {
         name: "development-service-worker-cleanup",
         configureServer(server) {
-            server.middlewares.use(handleDevelopmentServiceWorkerRequest);
+            // Local-replica testing must retire stale production shells. Against the
+            // official backend keep upstream's development web-push worker available.
+            if (process.env.OC_DFX_NETWORK === "local") {
+                server.middlewares.use(handleDevelopmentServiceWorkerRequest);
+            }
         },
     };
 }
@@ -531,9 +542,9 @@ function qwen3Vl2bModelOverridesPlugin(): Plugin {
         },
     };
 }
-// Builds the web worker from TypeScript source — reusing the sub-package
-// aliases so it pulls agent/shared from source too — and serves it at
-// /worker.js, rebuilding and triggering a full reload when worker/agent/shared
+// Builds the workers from TypeScript source — reusing the sub-package
+// aliases so they pull agent/shared from source too — and serves them at
+// /worker.js etc, rebuilding and triggering a full reload when worker/agent/shared
 // source changes. Replaces serving the Turbo-compiled
 // openchat-worker/lib/worker.js together with the chokidar poll that waited for
 // those lib files to appear.
@@ -634,6 +645,7 @@ function ocWorkerPlugin(): Plugin {
             // bundles) changes, then full-reload the page.
             const watchDirs = [
                 "../openchat-worker/src",
+                "../openchat-service-worker/src",
                 "../openchat-agent/src",
                 "../openchat-shared/src",
                 "./src/workers/transformersWebGpuInference.worker.ts",
@@ -682,6 +694,7 @@ export default defineConfig({
         "import.meta.env.OC_DEV_ALLOWED_HOST":
             devAllowedHost === undefined ? "undefined" : JSON.stringify(devAllowedHost),
         "import.meta.env.OC_WEBSITE_VERSION": JSON.stringify(version),
+        "import.meta.env.OC_SERVICE_WORKER_PATH": JSON.stringify(serviceWorkerPath),
     },
     // Prebundling can otherwise give svelte-material-icons a private Svelte runtime whose DOM
     // getters are still uninitialized when the first mobile icon renders during startup. The

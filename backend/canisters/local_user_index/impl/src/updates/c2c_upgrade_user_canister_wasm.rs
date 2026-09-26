@@ -1,4 +1,5 @@
 use crate::guards::caller_is_user_index;
+use crate::jobs::refresh_chunk_store;
 use crate::{Data, RuntimeState, mutate_state, read_state};
 use canister_api_macros::update;
 use canister_tracing_macros::trace;
@@ -32,9 +33,16 @@ async fn c2c_upgrade_user_canister_wasm(args: Args) -> Response {
         None
     };
 
+    let clear_count = refresh_chunk_store::clear_count();
     let chunks = upload_wasm_in_chunks(&wasm.module, this_canister_id).await.unwrap();
+    // If the chunk store was cleared while uploading, the chunks may have been removed, so the
+    // wasm is installed in full until its chunks are uploaded again when the store is refreshed
+    let chunks = if refresh_chunk_store::clear_count() == clear_count { chunks } else { Vec::new() };
 
-    mutate_state(|state| commit(args, wasm, chunks, active_users_filter, state))
+    let response = mutate_state(|state| commit(args, wasm, chunks, active_users_filter, state));
+    // If there are no canisters to upgrade, the old wasm's chunks can be removed straight away
+    refresh_chunk_store::remove_stale_chunks_if_no_pending_upgrades();
+    response
 }
 
 struct PrepareResult {
@@ -82,16 +90,12 @@ fn commit(
     for canister_id in state
         .data
         .local_users
-        .iter()
+        .iter_user_canisters()
         .filter(|(user_id, _)| active_users_filter.as_ref().is_none_or(|a| a.contains(user_id)))
         .filter(|(user_id, user)| {
-            should_perform_upgrade(
-                user_id.canister_id(),
-                user.wasm_version,
-                version,
-                &filter,
-                state.data.test_mode,
-            ) && !state.data.global_users.is_bot(user_id)
+            user.wasm_version.is_some_and(|wasm_version| {
+                should_perform_upgrade(user_id.canister_id(), wasm_version, version, &filter, state.data.test_mode)
+            }) && !state.data.global_users.is_bot(user_id)
         })
         .map(|(user_id, _)| user_id.canister_id())
         .sorted_by_key(|&c| Reverse(state.data.global_users.diamond_membership_expiry_date(&c.into())))
@@ -112,7 +116,10 @@ fn commit(
 }
 
 fn min_canister_version(data: &Data) -> Option<BuildVersion> {
-    data.local_users.iter().map(|(_, u)| u.wasm_version).min()
+    data.local_users
+        .iter_user_canisters()
+        .filter_map(|(_, u)| u.wasm_version)
+        .min()
 }
 
 // Compiles the list of users who have been active since the specified timestamp.
@@ -125,7 +132,7 @@ async fn get_users_active_since(since: TimestampMillis) -> Result<HashSet<UserId
             state
                 .data
                 .local_users
-                .iter()
+                .iter_user_canisters()
                 .filter(|(_, u)| u.date_created < since)
                 .map(|(u, _)| *u)
                 .collect::<Vec<_>>(),
@@ -158,7 +165,7 @@ async fn get_users_active_since(since: TimestampMillis) -> Result<HashSet<UserId
             state
                 .data
                 .local_users
-                .iter()
+                .iter_user_canisters()
                 .filter(|(_, u)| u.date_created >= since)
                 .map(|(u, _)| *u),
         );

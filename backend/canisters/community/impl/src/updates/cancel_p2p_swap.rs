@@ -18,15 +18,19 @@ fn cancel_p2p_swap(args: Args) -> Response {
 }
 
 fn cancel_p2p_swap_impl(args: Args, state: &mut RuntimeState) -> OCResult<u32> {
-    state.data.verify_not_frozen()?;
-
-    let member = state.get_calling_member(false)?;
+    let member = state.get_calling_member(None, false)?;
     let channel = state.data.channels.get_mut_or_err(&args.channel_id)?;
     let now = state.env.now();
 
     channel
         .chat
-        .cancel_p2p_swap(member.user_id, args.thread_root_message_index, args.message_id, now)
+        .cancel_p2p_swap(
+            member.user_id,
+            args.thread_root_message_index,
+            args.message_id,
+            now,
+            &state.data.migrated_user_ids,
+        )
         .map(|result| {
             state.push_bot_notification(result.bot_notification);
             result.value

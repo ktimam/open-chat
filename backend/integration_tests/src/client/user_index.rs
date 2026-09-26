@@ -3,6 +3,7 @@ use user_index_canister::*;
 
 // Queries
 generate_msgpack_query_call!(check_username);
+generate_msgpack_query_call!(call_push_enabled);
 generate_msgpack_query_call!(moderation_config);
 generate_msgpack_query_call!(protected_actions);
 generate_msgpack_query_call!(current_user);
@@ -22,7 +23,10 @@ generate_msgpack_query_call!(explore_bots);
 generate_update_call!(add_local_user_index_canister);
 generate_update_call!(add_platform_moderator);
 generate_update_call!(add_platform_operator);
+generate_update_call!(refund_deleted_user_cycles);
 generate_update_call!(assign_platform_moderators_group);
+generate_msgpack_update_call!(create_multi_user_canister);
+generate_msgpack_update_call!(set_multi_user_canisters_enabled);
 generate_msgpack_update_call!(pay_for_diamond_membership);
 generate_msgpack_update_call!(remove_bot);
 generate_msgpack_update_call!(contest_moderation_sanction);
@@ -37,54 +41,44 @@ generate_msgpack_update_call!(confirm_protected_action);
 generate_msgpack_update_call!(cancel_protected_action);
 generate_msgpack_update_call!(accept_terms);
 generate_msgpack_update_call!(set_moderation_referral_config);
-generate_update_call!(remove_ai_app);
 generate_update_call!(remove_platform_moderator);
+generate_msgpack_update_call!(set_call_push_enabled);
 generate_msgpack_update_call!(set_display_name);
 generate_msgpack_update_call!(set_premium_item_cost);
 generate_msgpack_update_call!(set_username);
+generate_msgpack_update_call!(migrate_users);
+generate_msgpack_query_call!(user_migration);
+generate_msgpack_update_call!(set_user_migration_concurrency);
+generate_msgpack_update_call!(set_user_upgrade_concurrency);
+generate_msgpack_update_call!(cancel_user_migration);
+generate_msgpack_update_call!(export_migrating_user);
 generate_msgpack_update_call!(suspend_user);
 generate_msgpack_update_call!(update_diamond_membership_subscription);
 generate_msgpack_update_call!(unsuspend_user);
 generate_update_call!(upgrade_local_user_index_canister_wasm);
+generate_update_call!(upgrade_multi_user_canister_wasm);
 generate_update_call!(upgrade_user_canister_wasm);
 generate_update_call!(upload_wasm_chunk);
 generate_msgpack_update_call!(register_bot);
 generate_msgpack_update_call!(publish_bot);
 generate_msgpack_update_call!(update_bot);
-generate_msgpack_update_call!(register_ai_app);
 
 pub mod happy_path {
+    use crate::CanisterIds;
     use crate::utils::tick_many;
     use candid::Principal;
     use constants::{CHAT_LEDGER_CANISTER_ID, CHUNK_STORE_CHUNK_SIZE, ICP_LEDGER_CANISTER_ID};
     use pocket_ic::PocketIc;
     use sha256::sha256;
     use std::collections::HashMap;
+    use std::time::Duration;
     use testing::rng::random_principal;
     use types::{
         BotDefinition, BotInstallationLocation, CanisterId, CanisterWasm, Chit, DiamondMembershipFees,
-        DiamondMembershipPlanDuration, Empty, OptionUpdate, TimestampMillis, UserId, UserSummary,
+        DiamondMembershipPlanDuration, Empty, OptionUpdate, TimestampMillis, UpgradesFilter, UserId, UserSummary,
     };
     use user_index_canister::ChildCanisterType;
     use user_index_canister::users::UserGroup;
-
-    pub fn register_ai_app(
-        env: &mut PocketIc,
-        sender: Principal,
-        user_index_canister_id: CanisterId,
-        manifest: types::AiAppManifest,
-    ) -> types::AiAppId {
-        let response = super::register_ai_app(
-            env,
-            sender,
-            user_index_canister_id,
-            &user_index_canister::register_ai_app::Args { manifest },
-        );
-        match response {
-            user_index_canister::register_ai_app::Response::Success(registration) => registration.id,
-            response => panic!("'register_ai_app' error: {response:?}"),
-        }
-    }
 
     // Dual-authorized operator actions (#9136): propose with one operator, confirm with a
     // different one. Both principals must be platform operators.
@@ -278,6 +272,98 @@ pub mod happy_path {
             response,
             user_index_canister::upgrade_user_canister_wasm::Response::Success
         ));
+    }
+
+    // Registers a new user and makes them a platform operator, since only platform operators
+    // can call `create_multi_user_canister`
+    pub fn create_multi_user_canister(
+        env: &mut PocketIc,
+        controller: Principal,
+        canister_ids: &CanisterIds,
+        local_user_index_canister_id: CanisterId,
+    ) -> CanisterId {
+        let operator = crate::client::register_user(env, canister_ids);
+        add_platform_operator(env, controller, canister_ids.user_index, operator.user_id);
+
+        // New users go to the LocalUserIndex's most recently created MultiUser canister, with ties
+        // on the (millisecond) creation time broken by canister id. PocketIC time barely moves
+        // unless advanced, so step past any canister created earlier in this env to ensure the new
+        // one is the canister which new users are placed in
+        env.advance_time(Duration::from_millis(1));
+
+        let response = super::create_multi_user_canister(
+            env,
+            operator.principal,
+            canister_ids.user_index,
+            &user_index_canister::create_multi_user_canister::Args {
+                local_user_index_canister_id,
+            },
+        );
+
+        match response {
+            user_index_canister::create_multi_user_canister::Response::Success(canister_id) => canister_id,
+            response => panic!("'create_multi_user_canister' error: {response:?}"),
+        }
+    }
+
+    pub fn set_multi_user_canisters_enabled(
+        env: &mut PocketIc,
+        sender: Principal,
+        user_index_canister_id: CanisterId,
+        enabled: bool,
+    ) {
+        let response = super::set_multi_user_canisters_enabled(
+            env,
+            sender,
+            user_index_canister_id,
+            &user_index_canister::set_multi_user_canisters_enabled::Args { enabled },
+        );
+
+        assert!(matches!(
+            response,
+            user_index_canister::set_multi_user_canisters_enabled::Response::Success
+        ));
+    }
+
+    pub fn upgrade_multi_user_canister_wasm(
+        env: &mut PocketIc,
+        sender: Principal,
+        user_index_canister_id: CanisterId,
+        wasm: CanisterWasm,
+    ) {
+        let response = upgrade_multi_user_canister_wasm_with_filter(env, sender, user_index_canister_id, wasm, None);
+
+        assert!(matches!(
+            response,
+            user_index_canister::upgrade_multi_user_canister_wasm::Response::Success
+        ));
+    }
+
+    pub fn upgrade_multi_user_canister_wasm_with_filter(
+        env: &mut PocketIc,
+        sender: Principal,
+        user_index_canister_id: CanisterId,
+        wasm: CanisterWasm,
+        filter: Option<UpgradesFilter>,
+    ) -> user_index_canister::upgrade_multi_user_canister_wasm::Response {
+        upload_wasm_in_chunks(
+            env,
+            sender,
+            user_index_canister_id,
+            &wasm.module,
+            ChildCanisterType::MultiUser,
+        );
+
+        super::upgrade_multi_user_canister_wasm(
+            env,
+            sender,
+            user_index_canister_id,
+            &user_index_canister::upgrade_multi_user_canister_wasm::Args {
+                version: wasm.version,
+                wasm_hash: sha256(&wasm.module),
+                filter,
+            },
+        )
     }
 
     pub fn public_key(env: &mut PocketIc, user_index_canister_id: CanisterId) -> String {

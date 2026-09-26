@@ -1,11 +1,8 @@
 use crate::guards::caller_is_owner;
-use crate::{RuntimeState, execute_update_async, mutate_state, read_state};
+use crate::{execute_update_async, mutate_state, read_state};
 use canister_api_macros::update;
 use canister_tracing_macros::trace;
-use constants::ONE_SEC_MINTER_CANISTER_ID;
-use ic_principal::Principal;
-use oc_error_codes::OCErrorCode;
-use types::Timestamped;
+use types::{Timestamped, UserIdAndPrincipal};
 use user_canister::generate_one_sec_address::{Response::*, *};
 
 #[update(guard = "caller_is_owner", msgpack = true)]
@@ -15,33 +12,21 @@ async fn generate_one_sec_address(_args: Args) -> Response {
 }
 
 async fn generate_one_sec_address_impl() -> Response {
-    let canister_id = match read_state(try_get_cached) {
-        Ok(address) => return Success(address),
-        Err(id) => id,
-    };
-
-    match one_sec_minter_canister_c2c_client::get_forwarding_address(
-        ONE_SEC_MINTER_CANISTER_ID,
-        &one_sec_minter_canister::IcpAccount::ICRC(icrc_ledger_types::icrc1::account::Account {
-            owner: canister_id,
-            subaccount: None,
-        }),
-    )
-    .await
-    {
-        Ok(Ok(one_sec_address)) => {
-            mutate_state(|state| state.data.one_sec_address = Some(Timestamped::new(one_sec_address.clone(), state.env.now())));
-            Success(one_sec_address)
-        }
-        Ok(Err(error)) => Error(OCErrorCode::Unknown.with_message(error)),
-        Err(error) => Error(error.into()),
+    let (cached, me) = read_state(|state| {
+        (
+            state.data.user.one_sec_address.as_ref().map(|a| a.value.clone()),
+            UserIdAndPrincipal::new(state.env.canister_id().into(), state.data.user.principal),
+        )
+    });
+    if let Some(address) = cached {
+        return Success(address);
     }
-}
 
-fn try_get_cached(state: &RuntimeState) -> Result<String, Principal> {
-    if let Some(address) = state.data.one_sec_address.as_ref() {
-        Ok(address.to_string())
-    } else {
-        Err(state.env.canister_id())
+    match user_core::updates::generate_one_sec_address::fetch_one_sec_address(me).await {
+        Ok(address) => {
+            mutate_state(|state| state.data.user.one_sec_address = Some(Timestamped::new(address.clone(), state.env.now())));
+            Success(address)
+        }
+        Err(error) => Error(error),
     }
 }

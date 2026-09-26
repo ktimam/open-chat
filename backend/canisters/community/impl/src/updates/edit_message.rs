@@ -1,19 +1,19 @@
 use crate::{CommunityEventPusher, RuntimeState, activity_notifications::handle_activity_notification, execute_update};
 use canister_api_macros::update;
+use canister_tracing_macros::trace;
 use chat_events::EditMessageArgs;
 use community_canister::edit_message::*;
 use oc_error_codes::OCErrorCode;
 use types::{Achievement, EventIndex, OCResult};
 
 #[update(msgpack = true)]
+#[trace]
 fn edit_message(args: Args) -> Response {
     execute_update(|state| edit_message_impl(args, state)).into()
 }
 
 fn edit_message_impl(args: Args, state: &mut RuntimeState) -> OCResult {
-    state.data.verify_not_frozen()?;
-
-    let member = state.get_calling_member(true)?;
+    let member = state.get_calling_member(None, true)?;
     let now = state.env.now();
 
     let Some(channel) = state.data.channels.get_mut(&args.channel_id) else {
@@ -35,6 +35,7 @@ fn edit_message_impl(args: Args, state: &mut RuntimeState) -> OCResult {
             finalise_bot_message: false,
             now,
         },
+        &state.data.migrated_user_ids,
         Some(CommunityEventPusher {
             now,
             rng: state.env.rng(),

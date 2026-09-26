@@ -49,6 +49,8 @@ fn register_user_with_duplicate_username_appends_suffix() {
                 email: None,
                 referral_code: None,
                 public_key,
+                use_multi_user_canister: None,
+                multi_user_canister_id: None,
             },
         );
         if let local_user_index_canister::register_user::Response::Success(res) = response {

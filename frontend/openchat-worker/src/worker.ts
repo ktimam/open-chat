@@ -7,6 +7,7 @@ import {
 } from "@icp-sdk/core/identity";
 import { Principal } from "@icp-sdk/core/principal";
 import {
+    abortInFlightQueries,
     getBotDefinition,
     IdentityAgent,
     OpenChatAgent,
@@ -25,6 +26,7 @@ import {
     shouldReportWorkerError,
     StorageUpdated,
     Stream,
+    SyncHeadMoved,
     UsersLoaded,
     type CorrelatedWorkerRequest,
     type CreateOpenChatIdentity,
@@ -149,6 +151,15 @@ function handleAgentEvent(ev: Event): void {
             },
         });
     }
+    if (ev instanceof SyncHeadMoved) {
+        sendEvent({
+            event: {
+                subkind: "sync_head",
+                userId: ev.detail.userId,
+                version: ev.detail.version,
+            },
+        });
+    }
 }
 
 function redactedWorkerError(error: unknown): Error {
@@ -264,6 +275,14 @@ self.addEventListener("message", (msg: MessageEvent<CorrelatedWorkerRequest>) =>
         const config = agentConfig;
         if (config === undefined) {
             throw new Error("Worker not initialised");
+        }
+
+        // Needs no agent: the queries belong to whichever agents exist
+        if (kind === "abortInFlightQueries") {
+            const aborted = abortInFlightQueries();
+            logger.debug(`WORKER: aborted ${aborted} in-flight queries after resuming`);
+            sendResponse(kind, correlationId, undefined);
+            return;
         }
 
         if (kind === "setAuthIdentity") {
@@ -390,6 +409,12 @@ function getAction(
 
         case "getUpdates":
             return agent.getUpdates(payload.initialLoad);
+
+        case "syncSince":
+            return agent.syncSince(payload.since);
+
+        case "refreshChat":
+            return agent.refreshChat(payload.chatId);
 
         case "getBots":
             return agent.getBots(payload.initialLoad);
@@ -657,7 +682,14 @@ function getAction(
             return agent.changeRole(payload.chatId, payload.userId, payload.newRole);
 
         case "registerProposalVote":
-            return agent.registerProposalVote(payload.chatId, payload.messageIndex, payload.adopt);
+            return agent.registerProposalVote(
+                payload.chatId,
+                payload.messageIndex,
+                payload.governanceCanisterId,
+                payload.proposalId,
+                payload.isNns,
+                payload.adopt,
+            );
 
         case "getRecommendedGroups":
             return agent.getRecommendedGroups(payload.exclusions);
@@ -854,6 +886,12 @@ function getAction(
 
         case "setUserUpgradeConcurrency":
             return agent.setUserUpgradeConcurrency(payload.value);
+
+        case "createMultiUserCanister":
+            return agent.createMultiUserCanister(payload.localUserIndexCanisterId);
+
+        case "setMultiUserCanistersEnabled":
+            return agent.setMultiUserCanistersEnabled(payload.enabled);
 
         case "markLocalGroupIndexFull":
             return agent.markLocalGroupIndexFull(payload.canisterId, payload.full);
@@ -1605,6 +1643,62 @@ function getAction(
 
         case "payForPremiumItem":
             return agent.payForPremiumItem(payload.userId, payload.item);
+
+        case "dailyPuzzleFetch":
+            return agent.dailyPuzzleFetch(payload.userId);
+
+        case "dailyPuzzleStart":
+            return agent.dailyPuzzleStart(
+                payload.userId,
+                payload.gameId,
+                payload.number,
+                payload.expectedEntryFee,
+            );
+
+        case "dailyPuzzleSubmit":
+            return agent.dailyPuzzleSubmit(
+                payload.userId,
+                payload.gameId,
+                payload.number,
+                payload.grid,
+            );
+
+        case "dailyPuzzleHint":
+            return agent.dailyPuzzleHint(
+                payload.userId,
+                payload.gameId,
+                payload.number,
+                payload.level,
+                payload.filled,
+                payload.expectedPrice,
+            );
+
+        case "dailyPuzzleSaveGrid":
+            return agent.dailyPuzzleSaveGrid(
+                payload.userId,
+                payload.gameId,
+                payload.number,
+                payload.grid,
+            );
+
+        case "dailyPuzzleCurrent":
+            return agent.dailyPuzzleCurrent();
+
+        case "dailyPuzzleResults":
+            return agent.dailyPuzzleResults(payload.gameId, payload.number, payload.userIds);
+
+        case "dailyPuzzleConfig":
+            return agent.dailyPuzzleConfig();
+
+        case "dailyPuzzleSetEnabled":
+            return agent.dailyPuzzleSetEnabled(payload.enabled);
+        case "callPushEnabled":
+            return agent.callPushEnabled();
+        case "setCallPushEnabled":
+            return agent.setCallPushEnabled(payload.enabled);
+
+        case "dailyPuzzleRegenerateToday":
+            return agent.dailyPuzzleRegenerateToday(payload.gameId);
 
         case "setPremiumItemCost":
             return agent.setPremiumItemCost(payload.item, payload.chitCost);

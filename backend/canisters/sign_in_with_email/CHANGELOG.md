@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [unreleased]
 
+### Changed
+
+- Update `ic-stable-structures` to a fork which supports choosing the page size of a map ([#9347](https://github.com/open-chat-labs/open-chat/pull/9347))
+
 ## [[0.14.0](https://github.com/open-chat-labs/ic-sign-in-with-email/releases/tag/v0.14.0)] - 2025-11-25
 
 ### Added
@@ -76,8 +80,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Start collecting basic stats per account ([#10](https://github.com/open-chat-labs/ic-sign-in-with-email/pull/10))
 - Pass up session key when generating verification code ([#12](https://github.com/open-chat-labs/ic-sign-in-with-email/pull/12))
-- Allow specifying the RNG salt for tests ([#14](https://github.com/open-chat-labs/ic-sign-in-with-email/pull/14))
 - Use magic links rather than verification codes ([#13](https://github.com/open-chat-labs/ic-sign-in-with-email/pull/13))
+- Allow specifying the RNG salt for tests ([#14](https://github.com/open-chat-labs/ic-sign-in-with-email/pull/14))
 - Keep track of active magic links ([#16](https://github.com/open-chat-labs/ic-sign-in-with-email/pull/16))
 - Include `identity_canister_id` when pushing magic links ([#19](https://github.com/open-chat-labs/ic-sign-in-with-email/pull/19))
 - Move `EmailSenderConfig` into `api` package so that it is public ([#22](https://github.com/open-chat-labs/ic-sign-in-with-email/pull/22))

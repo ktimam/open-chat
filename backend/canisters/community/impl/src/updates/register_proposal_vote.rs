@@ -24,6 +24,7 @@ async fn register_proposal_vote_impl(args: Args) -> Response {
     };
 
     let c2c_args = user_canister::c2c_vote_on_proposal::Args {
+        user_id,
         is_nns,
         governance_canister_id,
         proposal_id,
@@ -53,9 +54,16 @@ struct PrepareResult {
 }
 
 fn prepare(args: &Args, state: &RuntimeState) -> OCResult<PrepareResult> {
-    state.data.verify_not_frozen()?;
+    let member = state.get_calling_member(None, true)?;
 
-    let member = state.get_calling_member(true)?;
+    // This votes via the member's User canister, which a MultiUser canister can't do on its users'
+    // behalf, since they share its principal. They vote from the frontend with their own neurons
+    // instead, then record the vote via `register_proposal_vote_v2`.
+    if member.user_id.is_indexed() {
+        return Err(OCErrorCode::InvalidRequest
+            .with_message("Users in MultiUser canisters must record their votes via register_proposal_vote_v2"));
+    }
+
     let channel = state.data.channels.get_or_err(&args.channel_id)?;
     let channel_member = channel.chat.members.get_verified_member(member.user_id)?;
     let min_visible_event_index = channel_member.min_visible_event_index();
@@ -67,7 +75,7 @@ fn prepare(args: &Args, state: &RuntimeState) -> OCResult<PrepareResult> {
         .message_internal(args.message_index.into())
         .and_then(|m| if let MessageContentInternal::GovernanceProposal(p) = m.content { Some(p) } else { None })
     {
-        if proposal.votes.contains_key(&member.user_id) {
+        if proposal.vote(member.user_id, &state.data.migrated_user_ids).is_some() {
             Err(OCErrorCode::NoChange.into())
         } else {
             Ok(PrepareResult {
@@ -88,10 +96,14 @@ fn commit(channel_id: ChannelId, user_id: UserId, args: Args, state: &mut Runtim
     let min_visible_event_index = member.min_visible_event_index();
     let now = state.env.now();
 
-    channel
-        .chat
-        .events
-        .record_proposal_vote(user_id, min_visible_event_index, args.message_index, args.adopt, now)?;
+    channel.chat.events.record_proposal_vote(
+        user_id,
+        min_visible_event_index,
+        args.message_index,
+        args.adopt,
+        now,
+        &state.data.migrated_user_ids,
+    )?;
 
     channel.chat.members.register_proposal_vote(&user_id, args.message_index, now);
 

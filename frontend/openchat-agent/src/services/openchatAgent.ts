@@ -148,6 +148,7 @@ import type {
     RegisterPollVoteResponse,
     RespondToActionCardResponse,
     RegisterProposalVoteResponse,
+    ManageNeuronResponse,
     RegisterUserResponse,
     RegistryValue,
     RemoveHotGroupExclusionResponse,
@@ -170,6 +171,7 @@ import type {
     SetMessageReminderResponse,
     SetPinNumberResponse,
     SetUserUpgradeConcurrencyResponse,
+    CreateMultiUserCanisterResponse,
     SetUsernameResponse,
     SetVideoCallPresenceResponse,
     SiwePrepareLoginResponse,
@@ -200,7 +202,6 @@ import type {
     UpdateMarketMakerConfigArgs,
     UpdateMarketMakerConfigResponse,
     UpdateUserGroupResponse,
-    UpdatedEvent,
     UpdatedRules,
     UpdatesResult,
     UpdatesSuccessResponse,
@@ -225,6 +226,14 @@ import type {
     ProposedProtectedAction,
     Success,
     OCError,
+    DailyPuzzleConfig,
+    DailyPuzzleFetchResult,
+    DailyPuzzleHintResponse,
+    DailyPuzzleResult,
+    DailyPuzzleStartResponse,
+    DailyPuzzleSubmitResponse,
+    PublicDailyPuzzle,
+    SyncSinceResponse,
 } from "@shared";
 import {
     ANON_USER_ID,
@@ -236,12 +245,14 @@ import {
     MAX_ACTIVITY_EVENTS,
     ONE_MINUTE_MILLIS,
     Stream,
+    SyncHeadMoved,
     UnsupportedValueError,
     applyOptionUpdate,
+    buildBlobUrl,
     chatIdentifiersEqual,
     emptyEventsResponse,
-    getOrAdd,
     isError,
+    isMultiUserCanisterUser,
     isSuccessfulEventsResponse,
     mergeEventStreamResponses,
     messageContextToString,
@@ -253,14 +264,24 @@ import {
 import type { AgentConfig } from "../config";
 import { CachePrimer } from "../utils/cachePrimer";
 import {
-    buildBlobUrl,
     buildUserAvatarUrl,
     getUpdatedEvents,
+    isExpired,
     mergeDirectChatUpdates,
     mergeGroupChatUpdates,
     mergeGroupChats,
 } from "../utils/chat";
 import { ChatsDb } from "../utils/chatsDb";
+import { mergeWaitAllResults, summaryUpdatesArgsByLocalUserIndex } from "../utils/summaryUpdates";
+import { CacheWriteQueue } from "../utils/cacheWriteQueue";
+import { applyRefresh, refreshArgs, refreshTarget } from "../utils/refreshChat";
+import {
+    emptySyncStamps,
+    emptyUpdatesResult,
+    snapshotOf,
+    touchedFields,
+    updatesSince,
+} from "../utils/sync";
 import {
     isSuccessfulCommunitySummaryResponse,
     mergeCommunities,
@@ -306,6 +327,7 @@ import { NotificationsClient } from "./notifications/notifications.client";
 import { OneSecForwarderClient } from "./oneSecForwarder/oneSecForwarder.client";
 import { OneSecMinterClient } from "./oneSecMinter/oneSecMinter.client";
 import { OnlineClient } from "./online/online.client";
+import { DailyPuzzleClient } from "./dailyPuzzle/dailyPuzzle.client";
 import { ProposalsBotClient } from "./proposalsBot/proposalsBot.client";
 import { RegistryClient } from "./registry/registry.client";
 import { SignInWithEmailClient } from "./signInWithEmail/signInWithEmail.client";
@@ -327,11 +349,14 @@ function emptyResolvedMessagePreviews(): ResolvedMessagePreviews {
     return { messages: new AsyncMessageContextMap(), previews: new Map() };
 }
 
+const NNS_ERROR_TYPE_NEURON_ALREADY_VOTED = 19;
+
 export class OpenChatAgent extends EventTarget {
     private _agent: HttpAgent;
     private _userIndexClient: UserIndexClient;
     private _storageBucketClients: Map<string, StorageBucketClient> = new Map();
     private _onlineClient: OnlineClient;
+    private _dailyPuzzleClient: Lazy<DailyPuzzleClient>;
     private _groupIndexClient: GroupIndexClient;
     private _userClient: UserClient | AnonUserClient;
     private _notificationClient: NotificationsClient;
@@ -348,6 +373,8 @@ export class OpenChatAgent extends EventTarget {
     private _registryValue: RegistryValue | undefined;
     private _logger: Logger;
     private _cachePrimer: CachePrimer | undefined = undefined;
+    #cacheWrites = new CacheWriteQueue();
+    #queuedRefreshes: Map<string, Promise<boolean>> = new Map();
     private _chatEventsReader: CachedChatEventsReader;
     private _chatsDb: ChatsDb;
     private _userDb: UserDb;
@@ -468,6 +495,9 @@ export class OpenChatAgent extends EventTarget {
         );
         this._oneSecMinterClient = new Lazy(
             () => new OneSecMinterClient(identity, this._agent, config.oneSecMinterCanister),
+        );
+        this._dailyPuzzleClient = new Lazy(
+            () => new DailyPuzzleClient(identity, this._agent, config.dailyPuzzleCanister),
         );
     }
 
@@ -1301,11 +1331,13 @@ export class OpenChatAgent extends EventTarget {
                 blobUrl:
                     ref?.blobId === undefined
                         ? "/assets/bot_avatar.svg"
-                        : `${this.config.blobUrlPattern
-                              .replace("{canisterId}", this.config.userIndexCanister)
-                              .replace("{blobType}", "avatar")}/${userSummary.userId}/${
-                              ref?.blobId
-                          }`,
+                        : buildBlobUrl(
+                              this.config.blobUrlPattern,
+                              this.config.userIndexCanister,
+                              ref.blobId,
+                              "avatar",
+                              { botId: userSummary.userId },
+                          ),
             };
         }
         return userSummary.blobUrl
@@ -1351,7 +1383,7 @@ export class OpenChatAgent extends EventTarget {
                       ref.canisterId,
                       ref.blobId,
                       blobType,
-                      channelId,
+                      { channelId: channelId?.channelId },
                   ),
               }
             : dataContent;
@@ -1540,10 +1572,12 @@ export class OpenChatAgent extends EventTarget {
         }
     }
 
+    // Fetches the updates since `current`, writes the new state to the cache and returns it
+    // (undefined when nothing changed). The UI learns of the changes by pulling from the cache.
     private async _getUpdates(
         current: ChatStateFull | undefined,
         initialLoad: boolean,
-    ): Promise<UpdatesResult | undefined> {
+    ): Promise<ChatStateFull | undefined> {
         const start = performance.now();
         let totalQueryCount = 0;
 
@@ -1607,6 +1641,15 @@ export class OpenChatAgent extends EventTarget {
                 });
             }
         };
+
+        const previousUpdatesTimestamp = mapOptional(current?.latestUserCanisterUpdates, Number);
+        // Summary updates for the groups and communities already cached, started before the User
+        // canister call rather than after it: they only need what is cached, and waiting for the
+        // User canister first put a whole extra round trip in front of every pass. Chats the User
+        // canister reports as added are fetched once it has answered.
+        let cachedSummaryUpdates:
+            | Promise<WaitAllResult<GroupAndCommunitySummaryUpdatesResponseBatch>>
+            | undefined = undefined;
 
         // `== null`: a corrupt IndexedDB has been seen returning null rather than undefined
         if (current == null) {
@@ -1681,6 +1724,17 @@ export class OpenChatAgent extends EventTarget {
             streakInsurance = new UpdatableOption(current.streakInsurance);
             premiumItems = new Updatable(current.premiumItems);
 
+            // A chat the User canister goes on to report as removed is queried for nothing, as it
+            // was before; the removal filter below drops whatever comes back for it
+            cachedSummaryUpdates = this.#getSummaryUpdatesFromLocalUserIndexes(
+                summaryUpdatesArgsByLocalUserIndex(currentGroups, currentCommunities),
+                previousUpdatesTimestamp,
+            );
+            // Nothing awaits this until the User canister has answered, so a rejection meanwhile
+            // would be reported as unhandled, and would stay unhandled if this pass threw before
+            // reaching the await. The await below still sees the rejection.
+            cachedSummaryUpdates.catch(() => undefined);
+
             try {
                 totalQueryCount++;
                 const userResponse = await this.userClient.getUpdates(
@@ -1725,6 +1779,9 @@ export class OpenChatAgent extends EventTarget {
                     processAchievementsResponse(userResponse.achievements);
                     if (
                         userResponse.totalChitEarned !== chitState.value.totalChitEarned ||
+                        // A debit (daily puzzle entry or hint) moves the balance without
+                        // touching the total earned, so the balance must be compared too
+                        userResponse.chitBalance !== chitState.value.chitBalance ||
                         userResponse.streakEnds !== chitState.value.streakEnds ||
                         // TODO remove this once User canisters have been upgraded
                         userResponse.nextDailyClaim !== chitState.value.nextDailyChitClaim
@@ -1779,49 +1836,13 @@ export class OpenChatAgent extends EventTarget {
             );
         }
 
-        const byLocalUserIndex: Map<string, GroupAndCommunitySummaryUpdatesArgs[]> = new Map();
-
-        for (const group of groupsAdded) {
-            getOrAdd(byLocalUserIndex, group.localUserIndex, []).push({
-                canisterId: group.id.groupId,
-                isCommunity: false,
-                inviteCode: undefined,
-                updatesSince: undefined,
-            });
-        }
-
-        for (const community of communitiesAdded) {
-            getOrAdd(byLocalUserIndex, community.localUserIndex, []).push({
-                canisterId: community.id.communityId,
-                isCommunity: true,
-                inviteCode: undefined,
-                updatesSince: undefined,
-            });
-        }
-
-        for (const group of currentGroups) {
-            getOrAdd(byLocalUserIndex, group.localUserIndex, []).push({
-                canisterId: group.id.groupId,
-                isCommunity: false,
-                inviteCode: undefined,
-                updatesSince: group.lastUpdated,
-            });
-        }
-
-        for (const community of currentCommunities) {
-            getOrAdd(byLocalUserIndex, community.localUserIndex, []).push({
-                canisterId: community.id.communityId,
-                isCommunity: true,
-                inviteCode: undefined,
-                updatesSince: community.lastUpdated,
-            });
-        }
-
-        const previousUpdatesTimestamp = mapOptional(current?.latestUserCanisterUpdates, Number);
-        const summaryUpdatesResponsePromises = this.#getSummaryUpdatesFromLocalUserIndexes(
-            byLocalUserIndex,
-            previousUpdatesTimestamp,
-        );
+        const addedSummaryUpdates =
+            groupsAdded.length > 0 || communitiesAdded.length > 0
+                ? this.#getSummaryUpdatesFromLocalUserIndexes(
+                      summaryUpdatesArgsByLocalUserIndex(groupsAdded, communitiesAdded),
+                      previousUpdatesTimestamp,
+                  )
+                : undefined;
 
         if (initialLoad) {
             // Set up the cache primer on the first iteration but don't process anything until the
@@ -1830,7 +1851,9 @@ export class OpenChatAgent extends EventTarget {
             this.#initializeCachePrimer(userCanisterLocalUserIndex);
         }
 
-        const summaryUpdatesResponses = await summaryUpdatesResponsePromises;
+        const summaryUpdatesResponses = mergeWaitAllResults(
+            await Promise.all([cachedSummaryUpdates, addedSummaryUpdates]),
+        );
 
         totalQueryCount += summaryUpdatesResponses.success.length;
         totalQueryCount += summaryUpdatesResponses.errors.length;
@@ -1919,9 +1942,16 @@ export class OpenChatAgent extends EventTarget {
                     ),
             );
 
-        this.removeExpiredLatestMessages(directChats, start);
-        this.removeExpiredLatestMessages(groupChats, start);
-        communities.forEach((c) => this.removeExpiredLatestMessages(c.channels, start));
+        // The chats cache only rewrites the chats it is told were touched, so the chats it
+        // changes in place are counted as touched below. expiresAt is an epoch-millis
+        // timestamp, so compare against wall-clock time rather than `start`, which is a
+        // performance.now() reading used only for timing
+        const now = Date.now();
+        const expiredDirectChats = this.removeExpiredLatestMessages(directChats, now);
+        const expiredGroupChats = this.removeExpiredLatestMessages(groupChats, now);
+        const expiredCommunities = communities.filter(
+            (c) => this.removeExpiredLatestMessages(c.channels, now).length > 0,
+        );
 
         const state = {
             userCanisterLocalUserIndex,
@@ -1951,44 +1981,68 @@ export class OpenChatAgent extends EventTarget {
 
         const updatedEvents = getUpdatedEvents(directChatUpdates, groupUpdates, communityUpdates);
 
-        if (this.userClient.userId !== ANON_USER_ID) {
-            this._chatsDb.setCachedChats(state, updatedEvents);
-        }
-
         const directChatsAddedUpdatedIds = new Set([
             ...directChatsAdded.map((c) => c.id.userId),
             ...directChatUpdates.map((c) => c.id.userId),
+            ...expiredDirectChats.map((c) => c.id.userId),
         ]);
-        const directChatsAddedUpdated = directChats
-            .filter((c) => directChatsAddedUpdatedIds.has(c.id.userId))
-            .map((c) => this.hydrateChatSummary(c));
-
         const groupsAddedUpdatedIds = new Set([
             ...groupsAdded.map((g) => g.id.groupId),
             ...groupUpdates.map((g) => g.id.groupId),
             ...userCanisterGroupUpdates.map((g) => g.id.groupId),
+            ...expiredGroupChats.map((g) => g.id.groupId),
         ]);
-        const groupsAddedUpdated = groupChats
-            .filter((g) => groupsAddedUpdatedIds.has(g.id.groupId))
-            .map((c) => this.hydrateChatSummary(c));
-
         const communitiesAddedUpdatedIds = new Set([
             ...communitiesAdded.map((c) => c.id.communityId),
             ...communityUpdates.map((c) => c.id.communityId),
             ...userCanisterCommunityUpdates.map((c) => c.id.communityId),
+            ...expiredCommunities.map((c) => c.id.communityId),
         ]);
-        const communitiesAddedUpdated = communities
-            .filter((c) => communitiesAddedUpdatedIds.has(c.id.communityId))
-            .map((c) => this.hydrateCommunity(c));
+
+        if (this.userClient.userId !== ANON_USER_ID) {
+            try {
+                await this._chatsDb.setCachedChats(state, {
+                    directChats: directChatsAddedUpdatedIds,
+                    groupChats: groupsAddedUpdatedIds,
+                    communities: communitiesAddedUpdatedIds,
+                    fields: touchedFields({
+                        avatarId,
+                        blockedUsers,
+                        pinnedChats,
+                        pinnedFavouriteChats,
+                        pinnedChannels,
+                        favouriteChats,
+                        pinNumberSettings,
+                        achievements,
+                        chitState,
+                        referrals,
+                        walletConfig,
+                        messageActivitySummary,
+                        installedBots,
+                        bitcoinAddress,
+                        oneSecAddress,
+                        streakInsurance,
+                        premiumItems,
+                    }),
+                    updatedEvents,
+                    chitEvents: newAchievements.value,
+                    suspensionChanged: suspensionChanged !== undefined,
+                });
+            } catch (err) {
+                // The cache still holds the previous state, so the next pass fetches these updates
+                // again and gets another go at writing them
+                this._logger.error("Failed to write the chats cache", err);
+            }
+        }
 
         if (!initialLoad && cachePrimer !== undefined) {
             if (cachePrimer.isFirstIteration) {
                 cachePrimer.processUpdates(directChats, groupChats, communities, updatedEvents);
             } else {
                 cachePrimer.processUpdates(
-                    directChatsAddedUpdated,
-                    groupsAddedUpdated,
-                    communitiesAddedUpdated,
+                    directChats.filter((c) => directChatsAddedUpdatedIds.has(c.id.userId)),
+                    groupChats.filter((g) => groupsAddedUpdatedIds.has(g.id.groupId)),
+                    communities.filter((c) => communitiesAddedUpdatedIds.has(c.id.communityId)),
                     updatedEvents,
                     directChatsRemoved,
                     groupsRemoved,
@@ -2002,34 +2056,7 @@ export class OpenChatAgent extends EventTarget {
             `GetUpdates completed in ${duration}ms. Number of queries: ${totalQueryCount}`,
         );
 
-        return {
-            directChatsAddedUpdated,
-            directChatsRemoved,
-            groupsAddedUpdated,
-            groupsRemoved,
-            communitiesAddedUpdated,
-            communitiesRemoved,
-            updatedEvents: updatedEvents.toMap() as Map<string, UpdatedEvent[]>,
-            avatarId: avatarId.toOptionUpdate(),
-            blockedUsers: blockedUsers.valueIfUpdated(),
-            pinnedChats: pinnedChats.valueIfUpdated(),
-            pinnedChannels: pinnedChannels.valueIfUpdated(),
-            pinnedFavouriteChats: pinnedFavouriteChats.valueIfUpdated(),
-            favouriteChats: favouriteChats.valueIfUpdated(),
-            pinNumberSettings: pinNumberSettings.toOptionUpdate(),
-            achievements: achievements.valueIfUpdated(),
-            newAchievements: newAchievements.valueIfUpdated() ?? [],
-            chitState: chitState.valueIfUpdated(),
-            referrals: referrals.valueIfUpdated(),
-            walletConfig: walletConfig.valueIfUpdated(),
-            messageActivitySummary: messageActivitySummary.valueIfUpdated(),
-            installedBots: installedBots.valueIfUpdated(),
-            bitcoinAddress: bitcoinAddress.valueIfUpdated(),
-            oneSecAddress: oneSecAddress.valueIfUpdated(),
-            streakInsurance: streakInsurance.toOptionUpdate(),
-            suspensionChanged,
-            premiumItems: premiumItems.valueIfUpdated(),
-        };
+        return state;
     }
 
     // Called when this agent instance is replaced or discarded so that background timers do not keep it alive
@@ -2080,14 +2107,7 @@ export class OpenChatAgent extends EventTarget {
             );
         }
 
-        const results = await Promise.all(promises);
-        const success: GroupAndCommunitySummaryUpdatesResponseBatch[] = [];
-        const errors = [];
-        for (const result of results) {
-            success.push(...result.success);
-            errors.push(...result.errors);
-        }
-        return { success, errors };
+        return mergeWaitAllResults(await Promise.all(promises));
     }
 
     async #getSummaryUpdatesFromLocalUserIndex(
@@ -2129,64 +2149,239 @@ export class OpenChatAgent extends EventTarget {
         return { success, errors };
     }
 
-    getUpdates(initialLoad: boolean): Stream<UpdatesResult | undefined> {
+    getUpdates(initialLoad: boolean): Stream<SyncSinceResponse | undefined> {
         return new Stream(async (resolve, reject) => {
-            const cachedState = await this._chatsDb.getCachedChats();
-            const isOffline = offline();
-            if (cachedState && initialLoad) {
-                resolve(
-                    {
-                        ...cachedState,
-                        directChatsAddedUpdated: this.hydrateChatSummaries(cachedState.directChats),
-                        directChatsRemoved: [],
-                        groupsAddedUpdated: this.hydrateChatSummaries(cachedState.groupChats),
-                        groupsRemoved: [],
-                        communitiesAddedUpdated: cachedState.communities.map((c) =>
-                            this.hydrateCommunity(c),
-                        ),
-                        communitiesRemoved: [],
-                        updatedEvents: new Map(),
-                        suspensionChanged: undefined,
-                        newAchievements: [],
-                        avatarId:
-                            cachedState.avatarId !== undefined
-                                ? { value: cachedState.avatarId }
-                                : undefined,
-                        pinNumberSettings:
-                            cachedState.pinNumberSettings !== undefined
-                                ? { value: cachedState.pinNumberSettings }
-                                : undefined,
-                        streakInsurance:
-                            cachedState.streakInsurance !== undefined
-                                ? { value: cachedState.streakInsurance }
-                                : undefined,
-                    },
-                    isOffline,
-                );
-            }
-            if (!isOffline) {
+            const userId = this.userClient.userId;
+
+            if (userId === ANON_USER_ID) {
+                // The anonymous user's state never reaches the cache (the cache may belong to a
+                // signed-in identity), so it never announces a head and can never be pulled.
+                // Every pass therefore resolves the whole state it just fetched: that snapshot is
+                // the anonymous session's only channel, so it cannot be limited to the first load.
                 try {
-                    const updates = await this._getUpdates(cachedState, initialLoad);
-                    resolve(updates, true);
+                    const state = await this._getUpdates(undefined, initialLoad);
+                    resolve(
+                        state === undefined ? undefined : this.#snapshot(userId, 0, state),
+                        true,
+                    );
                 } catch (err) {
                     reject(err);
                 }
+                return;
             }
+
+            // Queued behind any other pass or single-chat refresh: each reads the cache, fetches
+            // and writes the result back, so one running across another would undo its write
+            await this.#cacheWrites.run(async () => {
+                // The head is read before the rows so the snapshot's version never overstates it
+                const head = await this.#syncHeadOrZero();
+                const cachedState = await this._chatsDb.getCachedChats();
+                const isOffline = offline();
+                let snapshotSent = false;
+                if (cachedState && initialLoad) {
+                    resolve(this.#snapshot(userId, head, cachedState), isOffline);
+                    snapshotSent = true;
+                }
+                if (!isOffline) {
+                    let error: unknown = undefined;
+                    let passState: ChatStateFull | undefined = undefined;
+                    try {
+                        passState = await this._getUpdates(cachedState, initialLoad);
+                    } catch (err) {
+                        error = err;
+                    }
+                    // Announced after failed passes too: the head says nothing about reachability
+                    await this.#announceSyncHead();
+                    if (error !== undefined) {
+                        reject(error);
+                    } else if (initialLoad && !snapshotSent) {
+                        resolve(await this.#coldSnapshot(userId, head, passState), true);
+                    } else {
+                        resolve(undefined, true);
+                    }
+                }
+            });
         });
     }
 
-    private removeExpiredLatestMessages(
-        chats: { latestMessage?: EventWrapper<Message>; latestMessageIndex: number | undefined }[],
-        now: number,
-    ) {
+    /**
+     * Brings one cached group, or the community holding a channel, up to date with a single
+     * summary-updates query, and writes just that chat back to the cache. Much cheaper than a full
+     * updates pass, which also asks the User canister and every other group and community.
+     *
+     * Resolves false when this can't be done on its own and a full pass is needed instead: the
+     * chat isn't cached, the cache is empty, or the answer is one only a full pass handles (the
+     * canister not found, an error, a full summary). Never rejects.
+     *
+     * Refreshes of the same chat that are waiting their turn share one query.
+     */
+    refreshChat(chatId: GroupChatIdentifier | ChannelIdentifier): Promise<boolean> {
+        if (this.userClient.userId === ANON_USER_ID) return Promise.resolve(false);
+        // Canister ids, so a group's and a community's never collide
+        const key = chatId.kind === "group_chat" ? chatId.groupId : chatId.communityId;
+        const queued = this.#queuedRefreshes.get(key);
+        if (queued !== undefined) return queued;
+        const refresh = this.#cacheWrites.run(() => {
+            // From here on a new request must queue again: this one may already have read
+            this.#queuedRefreshes.delete(key);
+            return this.#refreshChat(chatId);
+        });
+        this.#queuedRefreshes.set(key, refresh);
+        return refresh;
+    }
+
+    async #refreshChat(chatId: GroupChatIdentifier | ChannelIdentifier): Promise<boolean> {
+        try {
+            const state = await this._chatsDb.getCachedChats();
+            // `== null`: a corrupt IndexedDB has been seen returning null rather than undefined
+            if (state == null) return false;
+            const target = refreshTarget(state, chatId);
+            if (target === undefined) return false;
+
+            const batch = await this._localUserIndexClient.groupAndCommunitySummaryUpdates(
+                target.chat.localUserIndex,
+                [refreshArgs(target)],
+                1,
+            );
+            const result = applyRefresh(state, target, batch);
+            if (result.kind === "needs_full_pass") return false;
+            if (result.kind === "unchanged") return true;
+
+            const version = await this._chatsDb.setCachedChats(result.state, result.touched);
+            await this.#announceSyncHead(version);
+
+            const cachePrimer = this._cachePrimer;
+            if (cachePrimer !== undefined && !cachePrimer.isFirstIteration) {
+                cachePrimer.processUpdates(
+                    [],
+                    result.chat.kind === "group" ? [result.chat.chat] : [],
+                    result.chat.kind === "community" ? [result.chat.chat] : [],
+                    result.touched.updatedEvents,
+                );
+            }
+            return true;
+        } catch (err) {
+            this._logger.error("Failed to refresh a single chat", err);
+            return false;
+        }
+    }
+
+    // Never throws, for the reason `getCachedChats` never does: this runs inside a `Stream`
+    // initialiser, where a rejection reaches neither onResult nor onError and the load would hang.
+    // Zero is the safe answer for a head that cannot be read. A snapshot seeded at zero leaves the
+    // cursor behind everything, so the first pull carries the lot again - a duplicate, which the
+    // fold absorbs, where too high a version would be a hole.
+    async #syncHeadOrZero(): Promise<number> {
+        try {
+            return await this._chatsDb.getSyncHead();
+        } catch (err) {
+            this._logger.error("Failed to read the sync head, seeding from zero", err);
+            return 0;
+        }
+    }
+
+    #snapshot(userId: string, version: number, state: ChatStateFull): SyncSinceResponse {
+        return { userId, version, updates: this.#hydrateUpdates(snapshotOf(state)) };
+    }
+
+    /**
+     * The boot snapshot for a load that found nothing cached: whatever the pass just wrote, read
+     * back as a pull since `since` (the head read before the pass started).
+     *
+     * A pull rather than `snapshotOf` because the pass also stamps things that are not part of the
+     * state - the chit events behind the achievement toasts, and a suspension change. `snapshotOf`
+     * reports none of those, and they are stamped at exactly the version the snapshot seeds the
+     * cursor with, so no later pull would carry them either and they would be lost.
+     */
+    async #coldSnapshot(
+        userId: string,
+        since: number,
+        passState: ChatStateFull | undefined,
+    ): Promise<SyncSinceResponse | undefined> {
+        try {
+            const { head, chats, stamps } = await this._chatsDb.getChatsForSync(since);
+            if (chats !== undefined) {
+                return {
+                    userId,
+                    version: head,
+                    updates: this.#hydrateUpdates(
+                        updatesSince(chats, stamps ?? emptySyncStamps(), since),
+                    ),
+                };
+            }
+        } catch (err) {
+            this._logger.error("Failed to read the chats cache back after a cold load", err);
+        }
+        // Nothing to read back, or the read failed, means the cache write failed (`_getUpdates`
+        // logs and continues) or the cache is unreadable. Fall back to the state the pass fetched
+        // so the app still boots - without this the UI never marks the chats initialised and
+        // sits on the loading screen for as long as the cache stays unusable. Version 0 so the
+        // first head announcement after a successful write pulls everything.
+        return passState === undefined ? undefined : this.#snapshot(userId, 0, passState);
+    }
+
+    #hydrateUpdates(updates: UpdatesResult): UpdatesResult {
+        return {
+            ...updates,
+            directChatsAddedUpdated: this.hydrateChatSummaries(updates.directChatsAddedUpdated),
+            groupsAddedUpdated: this.hydrateChatSummaries(updates.groupsAddedUpdated),
+            communitiesAddedUpdated: updates.communitiesAddedUpdated.map((c) =>
+                this.hydrateCommunity(c),
+            ),
+        };
+    }
+
+    /**
+     * Everything stamped in the cache after `since`, with the version it was read at. Answers
+     * come from the cache alone: a `sync_head` says only that there may be something past the
+     * UI's cursor.
+     */
+    async syncSince(since: number): Promise<SyncSinceResponse> {
+        const userId = this.userClient.userId;
+        if (userId === ANON_USER_ID) {
+            return { userId, version: 0, updates: emptyUpdatesResult() };
+        }
+        const { head, chats, stamps } = await this._chatsDb.getChatsForSync(since);
+        if (chats === undefined) {
+            // Nothing to answer from, which is not the same as nothing having changed: a cache
+            // found unusable has its globals cleared with its rows left in place, so that the
+            // full load which follows can tombstone what has gone. Answering at `head` would carry the
+            // UI's cursor past everything stamped since `since` with none of it delivered. The
+            // cursor stays where it is instead, and the write that refills the cache announces
+            // a head the UI then pulls to from here.
+            return { userId, version: Math.min(since, head), updates: emptyUpdatesResult() };
+        }
+        const updates = updatesSince(chats, stamps ?? emptySyncStamps(), since);
+        return { userId, version: head, updates: this.#hydrateUpdates(updates) };
+    }
+
+    // Tells the UI where the cache's version counter is so it can pull what it has not seen.
+    // Called after every updates pass and by any request that moved the head.
+    async #announceSyncHead(version?: number): Promise<void> {
+        try {
+            const head = version ?? (await this._chatsDb.getSyncHead());
+            this.dispatchEvent(new SyncHeadMoved(this.userClient.userId, head));
+        } catch (err) {
+            console.warn("Unable to announce the sync head", err);
+        }
+    }
+
+    // Returns the chats it changed
+    private removeExpiredLatestMessages<
+        T extends { latestMessage?: EventWrapper<Message>; latestMessageIndex: number | undefined },
+    >(chats: T[], now: number): T[] {
+        const changed: T[] = [];
         for (const chat of chats) {
             if (
-                chat.latestMessage?.event.messageIndex !== chat.latestMessageIndex ||
-                (chat.latestMessage?.expiresAt !== undefined && chat.latestMessage.expiresAt < now)
+                chat.latestMessage !== undefined &&
+                (chat.latestMessage.event.messageIndex !== chat.latestMessageIndex ||
+                    isExpired(chat.latestMessage, now))
             ) {
                 chat.latestMessage = undefined;
+                changed.push(chat);
             }
         }
+        return changed;
     }
 
     async getCommunitySummary(communityId: string): Promise<CommunitySummaryResponse> {
@@ -3256,18 +3451,126 @@ export class OpenChatAgent extends EventTarget {
         return this.userClient.unarchiveChat(chatId);
     }
 
-    registerProposalVote(
+    async registerProposalVote(
         chatId: MultiUserChatIdentifier,
         messageIndex: number,
+        governanceCanisterId: string,
+        proposalId: bigint,
+        isNns: boolean,
         adopt: boolean,
     ): Promise<RegisterProposalVoteResponse> {
-        if (offline()) return Promise.resolve(CommonResponses.offline());
+        if (offline()) return CommonResponses.offline();
+
+        // A User canister votes with the neurons hot-keyed to it. A MultiUser canister can't, since
+        // its users share its principal, so for them vote with the neurons hot-keyed to their own
+        // principal from here, then record the vote against the message.
+        if (isMultiUserCanisterUser(this._userClient.userId)) {
+            const voteResponse = await this.voteWithNeurons(
+                governanceCanisterId,
+                proposalId,
+                isNns,
+                adopt,
+            );
+            if (voteResponse.kind !== "success") return voteResponse;
+
+            switch (chatId.kind) {
+                case "group_chat":
+                    return this._groupClient.registerProposalVoteV2(
+                        chatId.groupId,
+                        messageIndex,
+                        adopt,
+                    );
+                case "channel":
+                    return this._communityClient.registerProposalVoteV2(
+                        chatId,
+                        messageIndex,
+                        adopt,
+                    );
+            }
+        }
 
         switch (chatId.kind) {
             case "group_chat":
                 return this._groupClient.registerProposalVote(chatId.groupId, messageIndex, adopt);
             case "channel":
                 return this._communityClient.registerProposalVote(chatId, messageIndex, adopt);
+        }
+    }
+
+    // Lists the neurons the user's principal controls or is hot-keyed to, then votes with each of
+    // them in parallel. The vote counts as cast if any neuron's vote is accepted, or if any neuron
+    // had already voted (eg. via the NNS dapp), so that the vote still gets recorded in OpenChat.
+    // Other neurons will typically have failed because they are not eligible for this proposal.
+    private async voteWithNeurons(
+        governanceCanisterId: string,
+        proposalId: bigint,
+        isNns: boolean,
+        adopt: boolean,
+    ): Promise<RegisterProposalVoteResponse> {
+        let votes: PromiseSettledResult<ManageNeuronResponse>[];
+        if (isNns) {
+            const client = new NnsGovernanceClient(
+                this.identity,
+                this._agent,
+                governanceCanisterId,
+            );
+            const neuronIds = await client.listNeurons();
+            if (neuronIds.length === 0) return noEligibleNeurons();
+            votes = await Promise.allSettled(
+                neuronIds.map((id) => client.registerVote(id, proposalId, adopt)),
+            );
+        } else {
+            const client = new SnsGovernanceClient(
+                this.identity,
+                this._agent,
+                governanceCanisterId,
+            );
+            const neuronIds = await client.listNeurons();
+            if (neuronIds.length === 0) return noEligibleNeurons();
+            votes = await Promise.allSettled(
+                neuronIds.map((id) => client.registerVote(id, proposalId, adopt)),
+            );
+        }
+
+        const outcomes: ManageNeuronResponse[] = votes.map((v) =>
+            v.status === "fulfilled"
+                ? v.value
+                : { kind: "error", type: -1, message: String(v.reason) },
+        );
+
+        if (outcomes.some((o) => o.kind === "success" || isAlreadyVoted(o, isNns))) {
+            return CommonResponses.success();
+        }
+
+        this.config.logger.error("Failed to vote with any neuron", outcomes);
+        const first = outcomes.find((o) => o.kind === "error");
+        return {
+            kind: "error",
+            code:
+                first !== undefined && isNotAcceptingVotes(first)
+                    ? ErrorCode.ProposalNotAcceptingVotes
+                    : ErrorCode.Unknown,
+            message: first?.kind === "error" ? first.message : undefined,
+        };
+
+        function noEligibleNeurons(): RegisterProposalVoteResponse {
+            return { kind: "error", code: ErrorCode.NoEligibleNeurons, message: undefined };
+        }
+
+        // NNS governance has a dedicated error type for this, SNS governance reports it as a
+        // precondition failure, so fall back to the message both of them use
+        function isAlreadyVoted(outcome: ManageNeuronResponse, isNns: boolean): boolean {
+            if (outcome.kind !== "error") return false;
+            if (isNns && outcome.type === NNS_ERROR_TYPE_NEURON_ALREADY_VOTED) return true;
+            return /already voted/i.test(outcome.message);
+        }
+
+        // Best effort: both canisters report a closed proposal as a precondition failure whose
+        // message mentions the deadline
+        function isNotAcceptingVotes(outcome: ManageNeuronResponse): boolean {
+            return (
+                outcome.kind === "error" && /deadline|not accepting votes/i.test(outcome.message)
+            );
         }
     }
 
@@ -3586,6 +3889,16 @@ export class OpenChatAgent extends EventTarget {
         if (offline()) return Promise.resolve("offline");
 
         return this._userIndexClient.setUserUpgradeConcurrency(value);
+    }
+
+    createMultiUserCanister(
+        localUserIndexCanisterId: string,
+    ): Promise<CreateMultiUserCanisterResponse> {
+        return this._userIndexClient.createMultiUserCanister(localUserIndexCanisterId);
+    }
+
+    setMultiUserCanistersEnabled(enabled: boolean): Promise<boolean> {
+        return this._userIndexClient.setMultiUserCanistersEnabled(enabled);
     }
 
     markLocalGroupIndexFull(canisterId: string, full: boolean): Promise<boolean> {
@@ -5006,7 +5319,14 @@ export class OpenChatAgent extends EventTarget {
             return [];
         }
 
-        return await this._chatsDb.updateCachedProposalTallies(chatId, response);
+        const { messages, version } = await this._chatsDb.updateCachedProposalTallies(
+            chatId,
+            response,
+        );
+        if (version !== undefined) {
+            await this.#announceSyncHead(version);
+        }
+        return messages;
     }
 
     async #updateCachedProposalTallies(localUserIndex: string, chatIds: MultiUserChatIdentifier[]) {
@@ -5015,8 +5335,13 @@ export class OpenChatAgent extends EventTarget {
             chatIds,
         );
 
+        let head: number | undefined = undefined;
         for (const [chatId, tallies] of response) {
-            await this._chatsDb.updateCachedProposalTallies(chatId, tallies);
+            const { version } = await this._chatsDb.updateCachedProposalTallies(chatId, tallies);
+            head = version ?? head;
+        }
+        if (head !== undefined) {
+            await this.#announceSyncHead(head);
         }
     }
 
@@ -5025,6 +5350,97 @@ export class OpenChatAgent extends EventTarget {
         return this._localUserIndexClient.payForPremiumItem(localUserIndex, item);
     }
 
+    async dailyPuzzleFetch(userId: string): Promise<DailyPuzzleFetchResult | OCError> {
+        const localUserIndex = await this.getLocalUserIndexForUser(userId);
+        return this._localUserIndexClient.dailyPuzzleFetch(localUserIndex);
+    }
+
+    async dailyPuzzleStart(
+        userId: string,
+        gameId: string,
+        number: number,
+        expectedEntryFee: number,
+    ): Promise<DailyPuzzleStartResponse> {
+        const localUserIndex = await this.getLocalUserIndexForUser(userId);
+        return this._localUserIndexClient.dailyPuzzleStart(
+            localUserIndex,
+            gameId,
+            number,
+            expectedEntryFee,
+        );
+    }
+
+    async dailyPuzzleSubmit(
+        userId: string,
+        gameId: string,
+        number: number,
+        grid: Uint8Array,
+    ): Promise<DailyPuzzleSubmitResponse> {
+        const localUserIndex = await this.getLocalUserIndexForUser(userId);
+        return this._localUserIndexClient.dailyPuzzleSubmit(localUserIndex, gameId, number, grid);
+    }
+
+    async dailyPuzzleHint(
+        userId: string,
+        gameId: string,
+        number: number,
+        level: number,
+        filled: [number, number][],
+        expectedPrice: number,
+    ): Promise<DailyPuzzleHintResponse> {
+        const localUserIndex = await this.getLocalUserIndexForUser(userId);
+        return this._localUserIndexClient.dailyPuzzleHint(
+            localUserIndex,
+            gameId,
+            number,
+            level,
+            filled,
+            expectedPrice,
+        );
+    }
+
+    async dailyPuzzleSaveGrid(
+        userId: string,
+        gameId: string,
+        number: number,
+        grid: Uint8Array,
+    ): Promise<Success | OCError> {
+        const localUserIndex = await this.getLocalUserIndexForUser(userId);
+        return this._localUserIndexClient.dailyPuzzleSaveGrid(localUserIndex, gameId, number, grid);
+    }
+
+    dailyPuzzleCurrent(): Promise<PublicDailyPuzzle[]> {
+        if (!this.config.dailyPuzzleCanister) return Promise.resolve([]);
+        return this._dailyPuzzleClient.get().currentPuzzles();
+    }
+
+    dailyPuzzleResults(
+        gameId: string,
+        number: number,
+        userIds: string[],
+    ): Promise<DailyPuzzleResult[]> {
+        if (!this.config.dailyPuzzleCanister) return Promise.resolve([]);
+        return this._dailyPuzzleClient.get().results(gameId, number, userIds);
+    }
+
+    dailyPuzzleConfig(): Promise<DailyPuzzleConfig | OCError> {
+        return this._dailyPuzzleClient.get().config();
+    }
+
+    dailyPuzzleSetEnabled(enabled: boolean): Promise<Success | OCError> {
+        return this._dailyPuzzleClient.get().setEnabled(enabled);
+    }
+
+    callPushEnabled(): Promise<boolean> {
+        return this._userIndexClient.callPushEnabled();
+    }
+
+    setCallPushEnabled(enabled: boolean): Promise<Success | OCError> {
+        return this._userIndexClient.setCallPushEnabled(enabled);
+    }
+    dailyPuzzleRegenerateToday(gameId: string | undefined): Promise<Success | OCError> {
+        return this._dailyPuzzleClient.get().regenerateToday(gameId);
+    }
     setPremiumItemCost(item: PremiumItem, chitCost: number): Promise<void> {
         return this._userIndexClient.setPremiumItemCost(item, chitCost);
     }

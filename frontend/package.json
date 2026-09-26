@@ -23,7 +23,9 @@
         "lint": "eslint . --fix",
         "lint:check": "eslint .",
         "test": "vitest --run",
-        "build:ci": "npm run typecheck && npm run typecheck:agent && npm run lint:check && npm run test && npm run build:prod",
+        "update:passkey-providers": "node openchat-client/scripts/update-passkey-providers.mjs",
+        "check:ci": "npm run lint:check && node ./build-ci.mjs typecheck typecheck:agent test",
+        "build:ci": "npm run check:ci && npm run build:prod",
         "changelog": "auto-changelog --tag-pattern '-website' --file-pattern '^frontend'",
         "tauri": "tauri",
         "mobile": "node ../scripts/android_dev.mjs"
@@ -54,7 +56,7 @@
         "@tauri-apps/plugin-notification": "^2.3.1",
         "@tesseract.js-data/ara": "1.0.0",
         "@tesseract.js-data/eng": "1.0.0",
-        "@tiptap/core": "^3.30.4",
+        "@tiptap/core": "^3.30.5",
         "@tiptap/extension-code-block-lowlight": "^3.30.4",
         "@tiptap/extension-link": "^3.30.4",
         "@tiptap/starter-kit": "^3.30.4",
@@ -179,7 +181,7 @@
         "util": "0.12.5",
         "vite": "^6.4.3",
         "vite-plugin-html": "^3.2.2",
-        "vitest": "^4.1.8",
+        "vitest": "^4.1.11",
         "wait-on": "^7.0.1"
     },
     "packageManager": "npm@10.8.2",

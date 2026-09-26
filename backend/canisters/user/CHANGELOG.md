@@ -8,23 +8,121 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- Record P2P swaps the user creates directly in groups and communities ([#9563](https://github.com/open-chat-labs/open-chat/pull/9563))
 - Support leaving tips from external wallets using ICRC2 ([#9263](https://github.com/open-chat-labs/open-chat/pull/9263))
 - Support funding P2P swaps from external wallets using ICRC2 ([#9264](https://github.com/open-chat-labs/open-chat/pull/9264))
 - Return a distinct `InsufficientAllowance` error when an ICRC-2 transfer exceeds the approval ([#9264](https://github.com/open-chat-labs/open-chat/pull/9264))
 - Support paying for Diamond membership from external wallets using ICRC2 ([#9265](https://github.com/open-chat-labs/open-chat/pull/9265))
+- Add `c2c_game_chit` endpoint for crediting and debiting CHIT from games, with per-key idempotency ([#9345](https://github.com/open-chat-labs/open-chat/pull/9345))
+- Bound the `c2c_game_chit` amount by range rather than `abs()`, which wraps for `i32::MIN` and let that one value past both the limit and the balance check ([#9345](https://github.com/open-chat-labs/open-chat/pull/9345))
+- Support paying for streak insurance and swapping tokens from external wallets using ICRC2 ([#9402](https://github.com/open-chat-labs/open-chat/pull/9402))
+- Add `c2c_group_canister_v2`, `c2c_community_canister_v2` and `c2c_local_user_index_v2`, which take each event paired with the user it is for, applying only those for this canister's user ([#9452](https://github.com/open-chat-labs/open-chat/pull/9452))
+- Add `c2c_user_canister_v2`, taking events which each name their sender and recipient, so that a MultiUser canister can send direct chat events on behalf of its users ([#9457](https://github.com/open-chat-labs/open-chat/pull/9457))
+- Include the call facts (message id, call type, `audio_only`, start time) in the notification when a call starts, and send the owner an `answered_elsewhere` dismissal on join and an `answered_elsewhere` or `ended` dismissal when the call ends ([#9509](https://github.com/open-chat-labs/open-chat/pull/9509))
+- Add a `frozen` state, which rejects every update call except `wallet_receive` while set and leaves queries unaffected. Nothing sets it yet ([#9533](https://github.com/open-chat-labs/open-chat/pull/9533))
+- Add a cache of the latest ids of users migrated to MultiUser canisters, which nothing fills yet ([#9540](https://github.com/open-chat-labs/open-chat/pull/9540))
+- Add `c2c_try_start_migration` for the UserIndex, which checks the canister has no work outstanding, then freezes it and stores the user serialized, for the given MultiUser canister to pull, returning its size ([#9544](https://github.com/open-chat-labs/open-chat/pull/9544))
+- Add `c2c_export_user` and `c2c_export_user_stable_memory`, through which the MultiUser canister a user is being migrated to pulls, in pages, the user as serialized when the migration started and the raw entries of the stable memory map ([#9547](https://github.com/open-chat-labs/open-chat/pull/9547))
+- Retry sending events for migrated users to their new canister ([#9551](https://github.com/open-chat-labs/open-chat/pull/9551))
+- Add `c2c_cancel_migration`, through which the UserIndex or the MultiUser canister the user is being migrated to cancels the migration to that canister, unfreezing the canister and scheduling again the timer jobs cancelled when it started ([#9553](https://github.com/open-chat-labs/open-chat/pull/9553))
+- Don't migrate users who have created or accepted P2P swaps ([#9561](https://github.com/open-chat-labs/open-chat/pull/9561))
+- Only allow the LocalUserIndex to call `c2c_try_start_migration`, rather than the UserIndex ([#9582](https://github.com/open-chat-labs/open-chat/pull/9582))
 
 ### Changed
 
 - Encode the index of a user within their canister into `UserId`, so that a canister can hold many users ([#9259](https://github.com/open-chat-labs/open-chat/pull/9259))
 - Take the user a transfer is being made for rather than the sending canister, so that transfers can be sent from a subaccount ([#9260](https://github.com/open-chat-labs/open-chat/pull/9260))
 - Support P2P swaps for users whose wallets use subaccounts (to support multiple users per canister) ([#9273](https://github.com/open-chat-labs/open-chat/pull/9273))
+- Update `ic-stable-structures` to a fork which supports choosing the page size of a map ([#9347](https://github.com/open-chat-labs/open-chat/pull/9347))
+- Route stable memory map entries by key type to either the main map or a map with 256 byte pages for small entries ([#9348](https://github.com/open-chat-labs/open-chat/pull/9348))
+- Move each chat's `MessageId` to `EventIndex` map from the heap into the stable memory map for small entries ([#9349](https://github.com/open-chat-labs/open-chat/pull/9349))
+- Move each chat's expiring events from the heap into the stable memory map for small entries ([#9350](https://github.com/open-chat-labs/open-chat/pull/9350))
+- Move the timestamps of when each chat's events were last updated from the heap into the stable memory map for small entries ([#9351](https://github.com/open-chat-labs/open-chat/pull/9351))
+- Move each chat's per-user metrics from the heap into the stable memory map for small entries ([#9352](https://github.com/open-chat-labs/open-chat/pull/9352))
+- Use `insert_many` for bulk writes to the stable memory map, writing each modified node once rather than once per entry ([#9353](https://github.com/open-chat-labs/open-chat/pull/9353))
+- Stop storing the other user's metrics in direct chats (other than a user's chat with themselves), since only the user's own metrics are ever read ([#9354](https://github.com/open-chat-labs/open-chat/pull/9354))
+- Move each chat's MessageIndex -> EventIndex map from the heap into stable memory, in chunks of LEB128 encoded deltas ([#9376](https://github.com/open-chat-labs/open-chat/pull/9376))
+- Move each chat's search index from the heap into the stable memory map for small entries, as an inverted index which also supports languages written without spaces, such as Chinese, Japanese and Thai ([#9377](https://github.com/open-chat-labs/open-chat/pull/9377))
+- Move the message activity feed events from the heap into the stable memory map for small entries ([#9379](https://github.com/open-chat-labs/open-chat/pull/9379))
+- Move the CHIT events from the heap into the stable memory map for small entries ([#9380](https://github.com/open-chat-labs/open-chat/pull/9380))
+- Move how far the user has read each thread in each group and channel from the heap into the stable memory map for small entries ([#9381](https://github.com/open-chat-labs/open-chat/pull/9381))
+- Move the token swaps into the main stable memory map ([#9382](https://github.com/open-chat-labs/open-chat/pull/9382))
+- Move the referrals into the stable memory map for small entries ([#9383](https://github.com/open-chat-labs/open-chat/pull/9383))
+- Move the P2P swaps into the main stable memory map ([#9384](https://github.com/open-chat-labs/open-chat/pull/9384))
+- Move the streak insurance payments and claims into the stable memory map for small entries ([#9385](https://github.com/open-chat-labs/open-chat/pull/9385))
+- Use a per-chat `key_id` in place of the user id in new direct chats' stable memory keys ([#9389](https://github.com/open-chat-labs/open-chat/pull/9389))
+- Assign a `key_id` to every existing direct chat and move its events to the `key_id` based stable memory keys ([#9391](https://github.com/open-chat-labs/open-chat/pull/9391))
+- Move the contacts into the main stable memory map ([#9392](https://github.com/open-chat-labs/open-chat/pull/9392))
+- Move the blocked users into the stable memory map for small entries ([#9393](https://github.com/open-chat-labs/open-chat/pull/9393))
+- Move each direct chat's unread message index map into stable memory ([#9394](https://github.com/open-chat-labs/open-chat/pull/9394))
+- Move the lists of removed direct chats, groups and communities into stable memory ([#9395](https://github.com/open-chat-labs/open-chat/pull/9395))
+- Move the avatar and profile background into the main stable memory map ([#9397](https://github.com/open-chat-labs/open-chat/pull/9397))
+- Move the private replies to groups into the stable memory map for small entries ([#9399](https://github.com/open-chat-labs/open-chat/pull/9399))
+- Add a `user_id` to the args of every endpoint which is not restricted to the owner, since a canister hosting multiple users cannot derive it from the caller, and rename the direct chat peer in `events`, `events_by_index`, `events_window` and `end_video_call_v2` to `them` ([#9401](https://github.com/open-chat-labs/open-chat/pull/9401))
+- Move the direct chat model into the `direct_chat_core` library and split each chat into a shareable core (events and both read positions) plus per-user state, so two users in one canister can share a chat ([#9408](https://github.com/open-chat-labs/open-chat/pull/9408))
+- Generalise `DirectChat` over owned or borrowed parts so a core can be shared between two users' views of a chat, each with its own minimum visible event index ([#9409](https://github.com/open-chat-labs/open-chat/pull/9409))
+- Have `DirectChat` supply the minimum visible event index to every operation itself, read events only through its filtered readers, and move `date_created` from the chat's core to the user's state ([#9409](https://github.com/open-chat-labs/open-chat/pull/9409))
+- Fail with `ThreadNotFound` rather than trapping when a thread root is not found while translating it for the other user's canister, and check it before pushing a message ([#9409](https://github.com/open-chat-labs/open-chat/pull/9409))
+- Mark the user's chat with themselves as such, so that messages they send to themselves are read on both sides ([#9409](https://github.com/open-chat-labs/open-chat/pull/9409))
+- Check the thread root of a P2P swap being accepted before making the transfer, and look the swap up in that thread rather than in the main list ([#9409](https://github.com/open-chat-labs/open-chat/pull/9409))
+- Move the blocked users, contacts, favourite chats and profile document models into the `user_state` library, shared with the MultiUser canister ([#9414](https://github.com/open-chat-labs/open-chat/pull/9414))
+- Collapse `DirectChat` back into a single struct holding its events and both read positions ([#9415](https://github.com/open-chat-labs/open-chat/pull/9415))
+- Send events to the LocalUserIndex over `c2c_user_canister_v2`, the endpoint the MultiUser canister also uses, rather than `c2c_user_canister` ([#9436](https://github.com/open-chat-labs/open-chat/pull/9436))
+- Move the CHIT events and streak models into the `user_state` library, shared with the MultiUser canister ([#9437](https://github.com/open-chat-labs/open-chat/pull/9437))
+- Move the game CHIT keys model and `c2c_game_chit` argument validation into the `user_state` library, shared with the MultiUser canister ([#9440](https://github.com/open-chat-labs/open-chat/pull/9440))
+- Move the group and community models (`GroupChats`, `Communities` and `ThreadsRead`) into the `user_state` library, shared with the MultiUser canister ([#9447](https://github.com/open-chat-labs/open-chat/pull/9447))
+- Move `Membership` and `COMMUNITY_CREATION_LIMIT` into the `user_state` library, shared with the MultiUser canister ([#9450](https://github.com/open-chat-labs/open-chat/pull/9450))
+- Queue direct chat events per canister, paired with their recipient, and send those for users in a MultiUser canister via its `c2c_user_canister_v2` ([#9457](https://github.com/open-chat-labs/open-chat/pull/9457))
+- Verify the caller of `c2c_user_canister_v2` once per call rather than each sender, by asking the LocalUserIndex, which must be upgraded first, caching the MultiUser canisters it confirms, and skip events from blocked senders ([#9459](https://github.com/open-chat-labs/open-chat/pull/9459))
+- Move the referrals model into the `user_state` library, shared with the MultiUser canister ([#9464](https://github.com/open-chat-labs/open-chat/pull/9464))
+- Hold the user's state, including their token and P2P swaps, BTC and 1sec addresses, bots and premium items, in the `User` struct shared with the MultiUser canister via the `user_state` library, nested within `Data` as `user`, migrating the previous layout on upgrade ([#9467](https://github.com/open-chat-labs/open-chat/pull/9467))
+- Build `initial_state` and `updates` from the shared `User`, so the MultiUser canister serves the same ([#9469](https://github.com/open-chat-labs/open-chat/pull/9469))
+- Rename the `user_state` library to `user_core`, with the state under `model` and one module per shared endpoint under `queries` and `updates` ([#9470](https://github.com/open-chat-labs/open-chat/pull/9470))
+- Take the texts of the OpenChat bot's messages from `user_core`, shared with the MultiUser canister, which adds the missing space after the first sentence of the streak insurance message ([#9471](https://github.com/open-chat-labs/open-chat/pull/9471))
+- Validate `create_group` and `create_community` via `user_core`, shared with the MultiUser canister ([#9472](https://github.com/open-chat-labs/open-chat/pull/9472))
+- Implement `archive_unarchive_chats`, `pin_chat_v2`, `unpin_chat_v2`, `set_contact`, `public_profile`, `contacts`, `chit_events`, `deleted_message` and `messages_by_message_index` via `user_core`, shared with the MultiUser canister ([#9473](https://github.com/open-chat-labs/open-chat/pull/9473))
+- Implement the `events`, `events_window` and `events_by_index` queries via `user_core`, shared with the MultiUser canister ([#9474](https://github.com/open-chat-labs/open-chat/pull/9474))
+- Implement `hot_group_exclusions`, `message_activity_feed`, `c2c_groups_and_communities`, `mute_notifications`, `save_crypto_account`, `add_hot_group_exclusions`, `set_community_indexes` and `c2c_set_user_suspended` via `user_core`, shared with the MultiUser canister ([#9475](https://github.com/open-chat-labs/open-chat/pull/9475))
+- Implement `c2c_pay_for_premium_item`, `c2c_notify_achievement` and `report_message` via `user_core`, shared with the MultiUser canister ([#9477](https://github.com/open-chat-labs/open-chat/pull/9477))
+- Implement `token_swap_status`, `token_swaps`, `c2c_bot_chat_summary` and `c2c_can_issue_access_token_v2` via `user_core`, shared with the MultiUser canister ([#9478](https://github.com/open-chat-labs/open-chat/pull/9478))
+- Implement `c2c_install_bot`, `c2c_uninstall_bot`, `update_bot` and `join_video_call` via `user_core`, shared with the MultiUser canister ([#9479](https://github.com/open-chat-labs/open-chat/pull/9479))
+- Move the NNS and SNS governance clients into the `governance_clients` library and the P2P swap deposit and `from_account` validation into `ledger_utils`, shared with the MultiUser canister, and charge user accounts via `user_core` ([#9480](https://github.com/open-chat-labs/open-chat/pull/9480))
+- Implement the BTC and OneSec address, balance, approval and withdrawal endpoints via `user_core`, which derives the account from the user id, shared with the MultiUser canister ([#9481](https://github.com/open-chat-labs/open-chat/pull/9481))
+- Implement `claim_daily_chit` via `user_core`, shared with the MultiUser canister ([#9482](https://github.com/open-chat-labs/open-chat/pull/9482))
+- Apply LocalUserIndex events via `user_core`, shared with the MultiUser canister, which hands back the side effects to perform ([#9483](https://github.com/open-chat-labs/open-chat/pull/9483))
+- Handle `c2c_notify_group_deleted` via `user_core`, shared with the MultiUser canister ([#9484](https://github.com/open-chat-labs/open-chat/pull/9484))
+- Share `c2c_game_chit`, `set_bio`, `set_profile_background`, `manage_favourite_chats` and `pay_for_streak_insurance` with the MultiUser canister via `user_core` ([#9486](https://github.com/open-chat-labs/open-chat/pull/9486))
+- Apply edits, deletes, reactions and TTL changes from other users via `user_core`, shared with the MultiUser canister ([#9487](https://github.com/open-chat-labs/open-chat/pull/9487))
+- Share the video call handling with the MultiUser canister via `user_core` ([#9500](https://github.com/open-chat-labs/open-chat/pull/9500))
+- Stop naming the depositing user to the escrow canister for P2P swaps, reverting [#9273](https://github.com/open-chat-labs/open-chat/pull/9273), since the caller identifies them ([#9505](https://github.com/open-chat-labs/open-chat/pull/9505))
+- Share the `tip_message` checks and the handling of tips received with the MultiUser canister via `user_core` ([#9528](https://github.com/open-chat-labs/open-chat/pull/9528))
+- Resolve the offerer of a P2P swap in a direct chat by their principal via the LocalUserIndex when they aren't alone in their canister, and the acceptor by the principal recorded on the swap ([#9529](https://github.com/open-chat-labs/open-chat/pull/9529))
+- Share P2P swap acceptance, cancellation and status changes with the MultiUser canister via `user_core` ([#9531](https://github.com/open-chat-labs/open-chat/pull/9531))
+- Share the checks and handling of `c2c_bot_send_message` with the MultiUser canister via `user_core` ([#9532](https://github.com/open-chat-labs/open-chat/pull/9532))
+- Pass in the canister's cache of migrated user ids when interacting with the chat events ([#9541](https://github.com/open-chat-labs/open-chat/pull/9541))
+- Track the spawned tasks in progress using `utils::async_work` ([#9546](https://github.com/open-chat-labs/open-chat/pull/9546))
+- Skip running the regular jobs while frozen ([#9548](https://github.com/open-chat-labs/open-chat/pull/9548))
+- Also retry sending events for migrated users to their new canister while the cycles refunder is installed in their old one ([#9558](https://github.com/open-chat-labs/open-chat/pull/9558))
+
+### Removed
+
+- Remove the unused `User` variant of `UserOrAccount`, leaving an NNS transfer only for an ICP withdrawal to an account identifier, as users are paid via ICRC1 or ICRC2 ([#9505](https://github.com/open-chat-labs/open-chat/pull/9505))
 
 ### Fixed
 
 - Validate the whole recipient account rather than only its owner when sending crypto ([#9259](https://github.com/open-chat-labs/open-chat/pull/9259))
 - Clamp events queries to the caller's min visible event index instead of trapping when the start index is below it ([#9291](https://github.com/open-chat-labs/open-chat/pull/9291))
+- Restrict `update_bot` to the canister owner ([#9401](https://github.com/open-chat-labs/open-chat/pull/9401))
+- Make `user_id` optional in `c2c_user_canister` args, since old User canisters don't send it ([#9410](https://github.com/open-chat-labs/open-chat/pull/9410))
+- Cancel the pending hard delete of a message's content when it is undeleted, so a message deleted again gets the full 5 minutes to be undeleted ([#9430](https://github.com/open-chat-labs/open-chat/pull/9430))
+- Apply `thread_root_message_index` to the sender's own copy of a direct chat when editing or deleting a thread reply ([#9431](https://github.com/open-chat-labs/open-chat/pull/9431))
+- Move the message activity feed model into the shared `user_state` library, so the MultiUser canister can hold one per user ([#9433](https://github.com/open-chat-labs/open-chat/pull/9433))
+- Move the PIN number, hot group exclusions and saved crypto accounts models into the shared `user_state` library, so the MultiUser canister can hold them per user ([#9434](https://github.com/open-chat-labs/open-chat/pull/9434))
+- Reject paying for streak insurance which would take the days insured over 30, the most the UI allows, since the price and the count of days overflow otherwise ([#9441](https://github.com/open-chat-labs/open-chat/pull/9441))
+- Don't retry c2c calls to a method the callee doesn't have, which would otherwise be retried forever ([#9521](https://github.com/open-chat-labs/open-chat/pull/9521))
+- Ignore swap status notifications whose swap id doesn't match the swap on the message they name, since anyone can create a swap in the escrow canister naming any message and then cancel it ([#9530](https://github.com/open-chat-labs/open-chat/pull/9530))
 
-## [[2.0.2015](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2015-user)] - 2026-08-13
+## [[2.0.2015](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2015-user)] - 2026-08-12
 
 ### Changed
 
@@ -33,9 +131,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
-- Only push reaction activity in direct chats if the reaction is on one of your messages ([#9126](https://github.com/open-chat-labs/open-chat/pull/9126))
 - Enforce Diamond membership server-side when initiating a P2P swap ([#9098](https://github.com/open-chat-labs/open-chat/pull/9098))
 - Fix detection of when to retry c2c calls ([#9106](https://github.com/open-chat-labs/open-chat/pull/9106))
+- Only push reaction activity in direct chats if the reaction is on one of your messages ([#9126](https://github.com/open-chat-labs/open-chat/pull/9126))
 
 ## [[2.0.1990-user](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.1990-user)] - 2026-07-07
 
@@ -45,8 +143,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
-- Suspend "verified user" (unique person) prize gating - every user is now eligible ([#9061](https://github.com/open-chat-labs/open-chat/pull/9061))
 - Remove option to verify using delegation when updating PIN ([#8811](https://github.com/open-chat-labs/open-chat/pull/8811))
+- Suspend "verified user" (unique person) prize gating - every user is now eligible ([#9061](https://github.com/open-chat-labs/open-chat/pull/9061))
 
 ### Removed
 
@@ -132,9 +230,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Store Identity canisterId in each User canister ([8220](https://github.com/open-chat-labs/open-chat/pull/8220))
 - Expose more details about daily claims ([8255](https://github.com/open-chat-labs/open-chat/pull/8255))
+- Updated the `FcmData` interface ([8261](https://github.com/open-chat-labs/open-chat/pull/8261))
 - Use MessagePack to serialize upgrade args ([#8269](https://github.com/open-chat-labs/open-chat/pull/8269))
 - Remove duplication by removing `MessageContent::message_type` function ([#8293](https://github.com/open-chat-labs/open-chat/pull/8293))
-- Updated the `FcmData` interface ([8261](https://github.com/open-chat-labs/open-chat/pull/8261))
 - Re-enabled fcm_data ([8298](https://github.com/open-chat-labs/open-chat/pull/8298))
 - Send user a message each time a day of streak insurance is used up ([8315](https://github.com/open-chat-labs/open-chat/pull/8315))
 - Expose `liquid_cycles_balance` in metrics ([#8350](https://github.com/open-chat-labs/open-chat/pull/8350))
@@ -285,9 +383,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Changed
 
 - Remove the `Cryptocurrency` type from public APIs (part 2) ([#7592](https://github.com/open-chat-labs/open-chat/pull/7592))
+- Support bot `direct message` scenario ([#7607](https://github.com/open-chat-labs/open-chat/pull/7607))
 - Return `btc_address` in user canister updates ([#7608](https://github.com/open-chat-labs/open-chat/pull/7608))
 - Remove `cached_btc_address` and rename `generate_btc_address` ([#7609](https://github.com/open-chat-labs/open-chat/pull/7609))
-- Support bot `direct message` scenario ([#7607](https://github.com/open-chat-labs/open-chat/pull/7607))
 - Rename `retrieve_btc` to `withdraw_btc` ([#7620](https://github.com/open-chat-labs/open-chat/pull/7620))
 
 ### Removed
@@ -325,11 +423,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Add `sender` to notifications to support blocking notifications from blocked users ([#7330](https://github.com/open-chat-labs/open-chat/pull/7330))
 - Sync blocked users to LocalUserIndex ([#7333](https://github.com/open-chat-labs/open-chat/pull/7333))
 - One time job to sync existing blocked users to LocalUserIndex ([#7352](https://github.com/open-chat-labs/open-chat/pull/7352))
+- Support bots used directly by users ([#7397](https://github.com/open-chat-labs/open-chat/pull/7397))
 - Expose recent daily CHIT claims ([#7413](https://github.com/open-chat-labs/open-chat/pull/7413))
 - Serialize notifications using MessagePack rather than Candid ([#7445](https://github.com/open-chat-labs/open-chat/pull/7445))
 - Reduce the size of notifications when serialized ([#7448](https://github.com/open-chat-labs/open-chat/pull/7448))
 - Move new message validation to `MessageContentInternal` ([#7452](https://github.com/open-chat-labs/open-chat/pull/7452))
-- Support bots used directly by users ([#7397](https://github.com/open-chat-labs/open-chat/pull/7397))
 - On `user::c2c_install_bot` create a direct chat ([#7489](https://github.com/open-chat-labs/open-chat/pull/7489))
 - Add `max_streak` to user summary updates ([#7495](https://github.com/open-chat-labs/open-chat/pull/7495))
 - Remove the `Cryptocurrency` type from public APIs (part 1) ([#7510](https://github.com/open-chat-labs/open-chat/pull/7510))
@@ -388,8 +486,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Implement new lightweight search index for searching messages ([#7029](https://github.com/open-chat-labs/open-chat/pull/7029))
 - Make `MessageId` comparisons use their 64bit representation ([#7030](https://github.com/open-chat-labs/open-chat/pull/7030))
 - Notify CHIT updates via LocalUserIndex ([#7033](https://github.com/open-chat-labs/open-chat/pull/7033))
-- Log error if end video call job fails ([#7066](https://github.com/open-chat-labs/open-chat/pull/7066))
 - 2-stage bot messages + bot context in messages ([#7060](https://github.com/open-chat-labs/open-chat/pull/7060))
+- Log error if end video call job fails ([#7066](https://github.com/open-chat-labs/open-chat/pull/7066))
 - Support submitting `MintSnsTokens` and `AdvanceSnsTargetVersion` proposals ([#7128](https://github.com/open-chat-labs/open-chat/pull/7128))
 - Log error if tip fails due to recipient mismatch ([#7151](https://github.com/open-chat-labs/open-chat/pull/7151))
 - Introduce `StableMemoryMap` trait to simplify storing in stable memory ([#7176](https://github.com/open-chat-labs/open-chat/pull/7176))
@@ -500,8 +598,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
-- Add ability to reclaim tokens from failed swaps ([#6381](https://github.com/open-chat-labs/open-chat/pull/6381))
 - Add `ReferredByMember` access gate ([#6377](https://github.com/open-chat-labs/open-chat/pull/6377))
+- Add ability to reclaim tokens from failed swaps ([#6381](https://github.com/open-chat-labs/open-chat/pull/6381))
 - Add MessagePack version of `send_message` ([#6418](https://github.com/open-chat-labs/open-chat/pull/6418))
 
 ## [[2.0.1343](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.1343-user)] - 2024-09-10
@@ -574,8 +672,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Changed
 
 - Added lots more achievements to enum ([#6020](https://github.com/open-chat-labs/open-chat/pull/6020))
-- Added support for a bunch more achievements ([#6033](https://github.com/open-chat-labs/open-chat/pull/6033))
 - Store `unique_person_proof` in User canisters ([#6029](https://github.com/open-chat-labs/open-chat/pull/6029))
+- Added support for a bunch more achievements ([#6033](https://github.com/open-chat-labs/open-chat/pull/6033))
 - Re-enable notifying of user accounts that are empty and dormant ([#6046](https://github.com/open-chat-labs/open-chat/pull/6046))
 
 ### Removed
@@ -591,8 +689,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
-- Disable notifying about empty users until known empty users deleted ([#5996](https://github.com/open-chat-labs/open-chat/pull/5996))
 - Delete user accounts that are empty and dormant ([#5985](https://github.com/open-chat-labs/open-chat/pull/5985))
+- Disable notifying about empty users until known empty users deleted ([#5996](https://github.com/open-chat-labs/open-chat/pull/5996))
 
 ### Fixed
 
@@ -931,8 +1029,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Changed
 
 - Don't set expiry on `EventsTimeToLiveUpdated` events ([#4616](https://github.com/open-chat-labs/open-chat/pull/4616))
-- Avoid setting expiry for some event types ([#4647](https://github.com/open-chat-labs/open-chat/pull/4647))
 - Return expired event + message ranges when getting events ([#4646](https://github.com/open-chat-labs/open-chat/pull/4646))
+- Avoid setting expiry for some event types ([#4647](https://github.com/open-chat-labs/open-chat/pull/4647))
 
 ## [[2.0.890](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.890-user)] - 2023-10-19
 
@@ -1090,6 +1188,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Add `ledger` to pending crypto transactions ([#3866](https://github.com/open-chat-labs/open-chat/pull/3866))
 - Switch to the new `OtherChat` reply context when calling c2c ([#3875](https://github.com/open-chat-labs/open-chat/pull/3875))
+- Add `ledger` field to completed crypto transactions ([#3912](https://github.com/open-chat-labs/open-chat/pull/3912))
 - Remove dependency on `ic-sns-governance` ([#3965](https://github.com/open-chat-labs/open-chat/pull/3965))
 - Call into ICP ledger via the new `icp_ledger_canister_c2c_client` ([#3966](https://github.com/open-chat-labs/open-chat/pull/3966))
 - Stop using `transaction_hash` field on SNS transactions ([#3967](https://github.com/open-chat-labs/open-chat/pull/3967))
@@ -1097,7 +1196,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Update favourites when a group is deleted or imported into a community ([#3977](https://github.com/open-chat-labs/open-chat/pull/3977))
 - Use `canister_client` for making all c2c calls ([#3979](https://github.com/open-chat-labs/open-chat/pull/3979))
 - Avoid using `candid::Func` type directly ([#3983](https://github.com/open-chat-labs/open-chat/pull/3983))
-- Add `ledger` field to completed crypto transactions ([#3912](https://github.com/open-chat-labs/open-chat/pull/3912))
 
 ## [[2.0.736](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.736-user)] - 2023-06-27
 
@@ -1164,9 +1262,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Changed
 
 - Short circuit query calls prior to calling `ic0.time()` where possible ([#3542](https://github.com/open-chat-labs/open-chat/pull/3542))
+- Allow registered bot accounts to start conversations with OC users ([#3591](https://github.com/open-chat-labs/open-chat/pull/3591))
 - Added `moderator` role and removed `add_members` permission ([#3592](https://github.com/open-chat-labs/open-chat/pull/3592))
 - Put back `add_members` permission with serde default ([#3599](https://github.com/open-chat-labs/open-chat/pull/3599))
-- Allow registered bot accounts to start conversations with OC users ([#3591](https://github.com/open-chat-labs/open-chat/pull/3591))
 
 ### Removed
 
@@ -1186,8 +1284,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
-- Switch replies over to the new `event_list_if_other` field ([#3465](https://github.com/open-chat-labs/open-chat/pull/3465))
 - Use hardcoded ledger ids ([#3452](https://github.com/open-chat-labs/open-chat/pull/3452))
+- Switch replies over to the new `event_list_if_other` field ([#3465](https://github.com/open-chat-labs/open-chat/pull/3465))
 - Added `created` to pending transactions ([#3494](https://github.com/open-chat-labs/open-chat/pull/3494))
 - Skip c2c calls to the OpenChat bot ([#3508](https://github.com/open-chat-labs/open-chat/pull/3508))
 - Pass OpenChat bot messages in user canister init args ([#3517](https://github.com/open-chat-labs/open-chat/pull/3517))
@@ -1200,8 +1298,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
-- Added `set_message_reminder` ([#3417](https://github.com/open-chat-labs/open-chat/pull/3417))
 - Implement 'Gated Groups' ([#3406](https://github.com/open-chat-labs/open-chat/pull/3406))
+- Added `set_message_reminder` ([#3417](https://github.com/open-chat-labs/open-chat/pull/3417))
 - Added `Empty` event type ([#3439](https://github.com/open-chat-labs/open-chat/pull/3439))
 - Added new message content types for reminders ([#3440](https://github.com/open-chat-labs/open-chat/pull/3440))
 - Added new `Custom` message content type ([#3445](https://github.com/open-chat-labs/open-chat/pull/3445))
@@ -1229,15 +1327,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
-- Update group chat summary cache in small batches ([#3341](https://github.com/open-chat-labs/open-chat/pull/3341))
 - Don't allow platform moderators to be removed from a group ([#3340](https://github.com/open-chat-labs/open-chat/pull/3340))
+- Update group chat summary cache in small batches ([#3341](https://github.com/open-chat-labs/open-chat/pull/3341))
 
 ### Removed
 
 - Removed code only needed for previous upgrade ([#3248](https://github.com/open-chat-labs/open-chat/pull/3248)) & ([#3251](https://github.com/open-chat-labs/open-chat/pull/3251))
 - Removed unused timer job type (`RetrySendingFailedMessage`) ([#3263](https://github.com/open-chat-labs/open-chat/pull/3263))
-- Removed `affected_events` from event responses ([#3322](https://github.com/open-chat-labs/open-chat/pull/3322))
 - Removed super_admin role from groups([#3319](https://github.com/open-chat-labs/open-chat/pull/3319))
+- Removed `affected_events` from event responses ([#3322](https://github.com/open-chat-labs/open-chat/pull/3322))
 - Remove owner_id from group summary ([#3340](https://github.com/open-chat-labs/open-chat/pull/3340))
 
 ### Fixed
@@ -1296,22 +1394,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- Increase pinned chats limit ([#2998](https://github.com/open-chat-labs/open-chat/pull/2998))
 - Refactor and simplify `chat_events` ([#3013](https://github.com/open-chat-labs/open-chat/pull/3013))
 - Renamed `disappears_at` to `expires_at` ([#3023](https://github.com/open-chat-labs/open-chat/pull/3023))
 - Use `MemoryManager` so that we can use stable memory at run time ([#3040](https://github.com/open-chat-labs/open-chat/pull/3040))
-- Increase pinned chats limit ([#2998](https://github.com/open-chat-labs/open-chat/pull/2998))
+
+### Removed
+
+- Remove one time fix to user date created ([#2994](https://github.com/open-chat-labs/open-chat/pull/2994))
+- Removed code only needed for the previous upgrade ([#3003](https://github.com/open-chat-labs/open-chat/pull/3003))
+- Removed `c2c_send_message` ([#3005](https://github.com/open-chat-labs/open-chat/pull/3005))
+- Removed `events_range` ([#3011](https://github.com/open-chat-labs/open-chat/pull/3011))
 
 ### Fixed
 
 - One time job to fix incorrect ICP transaction hashes ([#3035](https://github.com/open-chat-labs/open-chat/pull/3035))
 - Fix 'double borrowing' error when hard deleting files ([#3051](https://github.com/open-chat-labs/open-chat/pull/3051))
-
-### Removed
-
-- Removed code only needed for the previous upgrade ([#3003](https://github.com/open-chat-labs/open-chat/pull/3003))
-- Removed `c2c_send_message` ([#3005](https://github.com/open-chat-labs/open-chat/pull/3005))
-- Removed `events_range` ([#3011](https://github.com/open-chat-labs/open-chat/pull/3011))
-- Remove one time fix to user date created ([#2994](https://github.com/open-chat-labs/open-chat/pull/2994))
 
 ## [[2.0.555](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.555-user)] - 2023-01-20
 
@@ -1341,9 +1439,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- Allow admins and senders to see deleted message content ([#2922](https://github.com/open-chat-labs/open-chat/pull/2922))
 - Added `UserJoinedGroup` event type for supporting the new `join_group` flow ([#2955](https://github.com/open-chat-labs/open-chat/pull/2955))
 - Added `c2c_notify_events` which deprecates `c2c_notify_user_events` ([#2955](https://github.com/open-chat-labs/open-chat/pull/2955))
-- Allow admins and senders to see deleted message content ([#2922](https://github.com/open-chat-labs/open-chat/pull/2922))
 
 ### Changed
 

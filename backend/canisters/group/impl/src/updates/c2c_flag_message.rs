@@ -1,6 +1,6 @@
 use crate::activity_notifications::handle_activity_notification;
 use crate::guards::caller_is_user_index;
-use crate::{RuntimeState, execute_update};
+use crate::{RuntimeState, execute_update_even_if_frozen};
 use canister_api_macros::update;
 use canister_tracing_macros::trace;
 use constants::OPENCHAT_BOT_USER_ID;
@@ -11,7 +11,7 @@ use types::{Caller, ModerationCategories, OCResult};
 #[update(guard = "caller_is_user_index", msgpack = true)]
 #[trace]
 fn c2c_flag_message(args: Args) -> Response {
-    execute_update(|state| c2c_flag_message_impl(args, state)).into()
+    execute_update_even_if_frozen(|state| c2c_flag_message_impl(args, state)).into()
 }
 
 fn c2c_flag_message_impl(args: Args, state: &mut RuntimeState) -> OCResult {
@@ -42,6 +42,7 @@ fn c2c_flag_message_impl(args: Args, state: &mut RuntimeState) -> OCResult {
             vec![args.message_id],
             true,
             now,
+            &state.data.migrated_user_ids,
         )?;
         for result in results.into_iter().filter_map(|(_, result)| result.ok()) {
             state.push_bot_notification(result.bot_notification);

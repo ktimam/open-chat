@@ -109,6 +109,45 @@ describe("shouldReportError", () => {
         expect(shouldReportError(lost)).toBe(false);
     });
 
+    // Invariant: agent-side network weather is never reported. Each message below was a live
+    // Rollbar item (#31014 certificate in the past, #31131/#31934 polling timeout, #31936
+    // backoff exhausted, #31918 a stale tab's IndexedDB schema).
+    test("silences polling timeouts, stale certificates and a stale IDB schema", () => {
+        for (const message of [
+            "Certificate is signed more than 5 minutes in the past. Certificate time: " +
+                "2026-09-15T06:29:39.289Z Current time: 2026-09-15T07:11:21.800Z Clock drift: 0ms",
+            "Request timed out after 300000 msec\n  Request ID: d975f6\n  Request status: unknown",
+            "Backoff strategy exhausted after 1 attempts.\n  Request ID: c6fc51",
+            "Failed to execute 'transaction' on 'IDBDatabase': One of the specified object " +
+                "stores was not found.",
+        ]) {
+            expect(shouldReportError(new HttpError(500, new Error(message)))).toBe(false);
+            expect(shouldReportError(new Error(message))).toBe(false);
+        }
+    });
+
+    test("silences a wrong client clock in both directions", () => {
+        // the client's clock is ahead, so the certificate the replica signed looks like the future
+        expect(
+            shouldReportError(
+                new Error("Certificate is signed more than 5 minutes in the future."),
+            ),
+        ).toBe(false);
+        // the client's clock is behind, so the expiry it computed is outside the replica's window
+        expect(
+            shouldReportError(
+                new HttpError(
+                    400,
+                    new Error(
+                        "Invalid request expiry: Minimum allowed expiry: 2026-09-08 01:43:31 UTC, " +
+                            "Maximum allowed expiry: 2026-09-08 01:49:01 UTC, " +
+                            "Provided expiry: 2026-08-26 04:23:00 UTC.",
+                    ),
+                ),
+            ),
+        ).toBe(false);
+    });
+
     test("silences the IC agent giving up after its fetch retries", () => {
         expect(
             shouldReportError(
@@ -135,10 +174,56 @@ describe("shouldReportError", () => {
             "Error: boom\n" +
             "    at fn (https://oc.app/main.js:1:2)\n" +
             "    at hook (chrome-extension://abc/inject.js:1:2)";
+        // a builtin threw on the extension's behalf: the first frame with a script is theirs
+        const viaBuiltin = new TypeError("Cannot redefine property: ethereum");
+        viaBuiltin.stack =
+            "TypeError: Cannot redefine property: ethereum\n" +
+            "    at Function.defineProperty (<anonymous>)\n" +
+            "    at r.inject (chrome-extension://bfnaelmomeimhlpmgjnjophhpkkoljpa/evmAsk.js:15:5093)";
+        const viaNative = new TypeError("boom");
+        viaNative.stack =
+            "parse@[native code]\n" +
+            "inject@safari-web-extension://abc/inject.js:25:10\n" +
+            "run@https://oc.app/main.js:1:2";
+        const oursViaBuiltin = new TypeError("boom");
+        oursViaBuiltin.stack =
+            "TypeError: boom\n" +
+            "    at JSON.parse (<anonymous>)\n" +
+            "    at fn (https://oc.app/main.js:1:2)\n" +
+            "    at hook (chrome-extension://abc/inject.js:1:2)";
 
         expect(shouldReportError(v8)).toBe(false);
         expect(shouldReportError(gecko)).toBe(false);
+        expect(shouldReportError(viaBuiltin)).toBe(false);
+        expect(shouldReportError(viaNative)).toBe(false);
         expect(shouldReportError(ours)).toBe(true);
+        expect(shouldReportError(oursViaBuiltin)).toBe(true);
+    });
+
+    test("silences the agent's own wrapper around a fetch that threw", () => {
+        expect(
+            shouldReportError(
+                new HttpError(0, new Error("Failed to fetch HTTP request: Failed to fetch")),
+            ),
+        ).toBe(false);
+        expect(
+            shouldReportError(new HttpError(0, new Error("Failed to fetch HTTP request: Load failed"))),
+        ).toBe(false);
+        // the same words from a plain Error are still a signal
+        expect(shouldReportError(new Error("Failed to fetch HTTP request: Failed to fetch"))).toBe(
+            true,
+        );
+    });
+
+    test("silences Safari storage and in-app browser bridge failures", () => {
+        for (const message of [
+            "Database deleted by request of the user",
+            "An internal error was encountered in the Indexed Database server",
+            "WKWebView API client did not respond to this postMessage",
+        ]) {
+            expect(shouldReportError(new Error(message))).toBe(false);
+            expect(shouldReportMessage("Error", message)).toBe(false);
+        }
     });
 });
 
@@ -197,6 +282,9 @@ describe("shouldReportMessage", () => {
                 "Error",
                 'Events response error: {"kind":"error","code":103,"message":null}',
             ),
+        ).toBe(false);
+        expect(
+            shouldReportMessage("Error", 'Events response error: {"kind":"error","code":203}'),
         ).toBe(false);
     });
 

@@ -1,23 +1,24 @@
 #!/bin/bash
 
-set -e
+SCRIPT=$(readlink -f "$0")
+SCRIPT_DIR=$(dirname "$SCRIPT")
+cd "$SCRIPT_DIR/.." || exit 1
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR/.."
+# Build every generator in one go (see the comments in the script). Sets CANDID_FILES and TARGET_DIR.
+source ./scripts/build-candid-generators.sh || exit 1
 
-generated_candid=$(mktemp "${TMPDIR:-/tmp}/openchat-candid.XXXXXXXXXX") || exit 1
-trap 'rm -f -- "$generated_candid"' EXIT
-
-for canister_path in ./backend/*canisters/*/
+# Run the binaries directly rather than via `cargo run -p`: cargo resolves dependency features per
+# invocation, so a single-package `cargo run` would want a different build of the shared
+# dependencies from the one the batched build just produced, and rebuild them.
+for candid in "${CANDID_FILES[@]}"
 do
-  canister_path=${canister_path%*/}
+  canister_path=$(dirname "$(dirname "$candid")")
   canister_name=${canister_path##*/}
-  candid=${canister_path}/api/can.did
 
-  if test -f "$candid"; then
-    echo "validating ${candid}"
-    cargo run --locked -p "${canister_name}_canister" > "$generated_candid" || exit 1
-    didc check --strict "$candid" "$generated_candid" || exit 1
-    didc check --strict "$generated_candid" "$candid" || exit 1
-  fi
+  echo validating ${candid}
+  "${TARGET_DIR}/debug/${canister_name}_canister" > temp.did || exit 1
+  didc check --strict "${candid}" temp.did || exit 1
+  didc check --strict temp.did "${candid}" || exit 1
 done
+
+rm temp.did

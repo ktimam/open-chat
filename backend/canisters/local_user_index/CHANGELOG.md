@@ -8,12 +8,99 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
-- Expose the user-event sync queue's in-flight batch count in metrics, alongside the existing queued length ([#9177](https://github.com/open-chat-labs/open-chat/pull/9177))
+- Add the `use_multi_user_canister` flag to `register_user`, which in test mode registers the user in a MultiUser canister (creating one if there are none) rather than in a canister of their own ([#9524](https://github.com/open-chat-labs/open-chat/pull/9524))
+- Store the map of the old to the new id of each user migrated to a MultiUser canister, synced from the UserIndex ([#9536](https://github.com/open-chat-labs/open-chat/pull/9536))
+- Add the `migrated_user_ids` query, which takes a list of user ids and returns the latest id of each user in it who has been migrated to a MultiUser canister ([#9538](https://github.com/open-chat-labs/open-chat/pull/9538))
+- Sign a decline token into each phone's ring push and add the `video_call_declined` endpoint for the video bridge, which dismisses the ring on the decliner's other phones ([#9542](https://github.com/open-chat-labs/open-chat/pull/9542))
+- Pass `UserIdMigrated` on to each of the listed groups and communities which this LocalUserIndex controls ([#9543](https://github.com/open-chat-labs/open-chat/pull/9543))
+- Pass a joining user's previous ids to the group or community they are joining ([#9565](https://github.com/open-chat-labs/open-chat/pull/9565))
+- Handle `StartUserMigration` from the UserIndex by upgrading the user's canister to the latest wasm if it is behind, then calling its `c2c_try_start_migration`, and reporting back to the UserIndex whether the migration started ([#9582](https://github.com/open-chat-labs/open-chat/pull/9582))
 
 ### Changed
 
-- Encode the index of a user within their canister into `UserId`, so that a canister can hold many users ([#9259](https://github.com/open-chat-labs/open-chat/pull/9259))
+- Track the spawned tasks in progress using `utils::async_work` ([#9546](https://github.com/open-chat-labs/open-chat/pull/9546))
+- Once enabled, register new users in whichever MultiUser canister has the fewest users ([#9579](https://github.com/open-chat-labs/open-chat/pull/9579))
+- Once the last upgrade in a series completes, and on start up, clear the chunk store then upload the chunks of the current User, Group, Community and MultiUser wasms again, rather than leaving the store empty, and install new canisters from those chunks ([#9583](https://github.com/open-chat-labs/open-chat/pull/9583))
+
+### Fixed
+
+- Reject `install_bot` and `uninstall_bot` calls whose location is the wrong type, eg. a user's own direct chat given as a `Group`, which led to the installation's events being queued for delivery to a group that doesn't exist ([#9520](https://github.com/open-chat-labs/open-chat/pull/9520))
+- Don't retry c2c calls to a method the callee doesn't have, which would otherwise be retried forever ([#9521](https://github.com/open-chat-labs/open-chat/pull/9521))
+- Send `c2c_bot_send_message` for a direct chat to the canister holding the user, rather than to their user id, which for a user in a MultiUser canister is not a canister id ([#9532](https://github.com/open-chat-labs/open-chat/pull/9532))
+
+## [[2.0.2063](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2063-local_user_index)] - 2026-09-23
+
+### Added
+
+- Add `c2c_user_canister_v2`, taking events from both User and MultiUser canisters, each naming the user it is from, which must be the calling User canister or one of the users hosted by the calling MultiUser canister ([#9435](https://github.com/open-chat-labs/open-chat/pull/9435))
+- Aggregate child canister cycle top ups every 5 minutes and expose the 100 most topped up canisters over the last 7, 30, 90 and 365 days via `http_request` at `/top_up_leaderboard` ([#9444](https://github.com/open-chat-labs/open-chat/pull/9444))
+- Track this LocalUserIndex's MultiUser canisters plus those elsewhere holding a registered user, and record when each local MultiUser canister was created and how many users it holds ([#9460](https://github.com/open-chat-labs/open-chat/pull/9460))
+- Add `is_user_or_multi_user_canister` so User and MultiUser canisters can authenticate callers ([#9461](https://github.com/open-chat-labs/open-chat/pull/9461))
+- Refund the cycles held by a deleted user's canister to the CyclesDispenser, by briefly installing the `cycles_refunder` wasm once the canister has been uninstalled, and handle the UserIndex's `RefundDeletedUserCycles` event to do the same for users deleted previously ([#9476](https://github.com/open-chat-labs/open-chat/pull/9476))
+- Add call push: when a call starts in a direct chat or a private group of eight or fewer members, add the call fields to the FCM data so a phone can ring, and forward the `ended` and `answered_elsewhere` dismissals that stop it ringing. Behind the `call_push_enabled` switch, default off, set by the UserIndex or by a platform operator via `set_call_push_enabled` ([#9509](https://github.com/open-chat-labs/open-chat/pull/9509))
+
+### Changed
+
+- Delete users held in a MultiUser canister via its `c2c_delete_user` ([#9451](https://github.com/open-chat-labs/open-chat/pull/9451))
+- Queue user events per canister, and send a MultiUser canister's in a single call via the v2 endpoint, while User canisters are still sent theirs via the original endpoint ([#9453](https://github.com/open-chat-labs/open-chat/pull/9453))
+- Stop filtering out `BotUpdated` events for User canisters, which all now handle them ([#9453](https://github.com/open-chat-labs/open-chat/pull/9453))
+- Build the `icp_account` returned from `register_user` from the user's id and principal ([#9505](https://github.com/open-chat-labs/open-chat/pull/9505))
+
+### Removed
+
+- Remove the unused `UserPrincipalUpdated` event ([#9508](https://github.com/open-chat-labs/open-chat/pull/9508))
+
+### Fixed
+
+- Don't uninstall a MultiUser canister when deleting one of its users, which would delete every user it holds ([#9450](https://github.com/open-chat-labs/open-chat/pull/9450))
+- Serve a daily puzzle hint step at level 1 until it has been served, whatever level is asked for, so a client still climbing a finished step's ladder is not sold a new step's answer ([#9535](https://github.com/open-chat-labs/open-chat/pull/9535))
+
+## [[2.0.2059](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2059-local_user_index)] - 2026-09-18
+
+### Added
+
+- Expose the user-event sync queue's in-flight batch count in metrics, alongside the existing queued length ([#9177](https://github.com/open-chat-labs/open-chat/pull/9177))
+- Add `c2c_create_multi_user_canister` and `c2c_upgrade_multi_user_canister_wasm` plus a rolling upgrade job for MultiUser canisters ([#9311](https://github.com/open-chat-labs/open-chat/pull/9311))
+- Add the `multi_user_canisters_enabled` flag, set by the UserIndex and surfaced in metrics ([#9314](https://github.com/open-chat-labs/open-chat/pull/9314))
+- Add the daily puzzle game engine: `daily_puzzle_fetch`, `daily_puzzle_start`, `daily_puzzle_submit`, `daily_puzzle_hint` and `daily_puzzle_save_grid` for users, `c2c_daily_puzzle_push` for the daily_puzzle canister, `set_daily_puzzle_canister_id` for platform operators, with CHIT entry fees, hints and rewards settled via `c2c_game_chit` and solves relayed to the daily_puzzle canister ([#9345](https://github.com/open-chat-labs/open-chat/pull/9345))
+- Hold the daily puzzles as a set keyed by game: `c2c_daily_puzzle_push` takes `puzzles`, `daily_puzzle_fetch` returns `puzzles` and `states`, streaks are series-level (a day counts once however many games were solved), CHIT keys are `{game_id}:{number}:...`, and today's set is pulled via `c2c_pull_puzzles` ([#9345](https://github.com/open-chat-labs/open-chat/pull/9345))
+- Drop a user's daily puzzle record per game when a push for the same number replaces that game's puzzle (new description, or the game is no longer in the set), so a `regenerate_today` does not show the old puzzle's start or solve against the new one; solved days stay credited ([#9345](https://github.com/open-chat-labs/open-chat/pull/9345))
+- Serve daily puzzle hints in three priced tiers: level 1 highlights the region the deduction looked at, level 2 adds the technique and the keys its sentence points at, level 3 adds the conclusions. No tier is free, an upgrade costs the difference between the levels, and the reward penalty applies to every step served ([#9345](https://github.com/open-chat-labs/open-chat/pull/9345))
+- Answer a daily puzzle mistake check with the single lowest wrong key rather than every disagreement, so a board-sized `filled` cannot return the solution in one call ([#9345](https://github.com/open-chat-labs/open-chat/pull/9345))
+- Keep a daily puzzle solve faster than `min_carded_solve_ms` out of the results index; it is still paid and still counts for the streak, but can back no card and move no published aggregate ([#9345](https://github.com/open-chat-labs/open-chat/pull/9345))
+- Reserve the daily puzzle start and hint step before debiting the CHIT rather than after, and release the reservation if the debit fails, so overlapping requests cannot exceed `max_hints` and a failed or raced debit cannot take a fee without giving a game ([#9345](https://github.com/open-chat-labs/open-chat/pull/9345))
+- Withhold a daily puzzle hint from state until its debit lands, so `daily_puzzle_fetch` cannot serve the conclusions to a caller whose debit is about to be refused; a release now undoes only the reservation that call made, leaving a hint another call has since paid for ([#9345](https://github.com/open-chat-labs/open-chat/pull/9345))
+- Refuse every daily puzzle call on a record whose entry fee is still in flight, so a submit racing the start call cannot collect the reward on a game whose fee is then refused ([#9345](https://github.com/open-chat-labs/open-chat/pull/9345))
+- Bound a submitted daily puzzle grid and a `filled` set by the puzzle's own solution rather than a fixed 400, which was smaller than a legitimate 14x14 loopy board ([#9345](https://github.com/open-chat-labs/open-chat/pull/9345))
+- Waive the daily puzzle entry fee for a user who has never started rather than one who has never solved, so a player who never solves does not play free forever ([#9345](https://github.com/open-chat-labs/open-chat/pull/9345))
+- Ignore an empty daily puzzle push rather than reading it as a day change, which would clear every puzzle and every in-progress record, entry fees included ([#9345](https://github.com/open-chat-labs/open-chat/pull/9345))
+- Zero a daily puzzle reward the user canister refuses outright, rather than reporting CHIT that was never credited ([#9345](https://github.com/open-chat-labs/open-chat/pull/9345))
+- Zero a daily puzzle reward from the retry queue too, not just from the call that recorded the solve, so a credit the user canister refuses or that gives up retrying stops being reported as paid ([#9345](https://github.com/open-chat-labs/open-chat/pull/9345))
+- Return the fee a user would pay in `DailyPuzzleUserState`, so the client can send it as `expected_entry_fee`. The free first play hangs off history the client cannot see, and a player who started once and never solved could not be told apart from one who had never played ([#9345](https://github.com/open-chat-labs/open-chat/pull/9345))
+- Keep a daily puzzle free first play tied to the day it was spent on, so a `regenerate_today` restart is free rather than charging the full fee to the one player who had not paid ([#9345](https://github.com/open-chat-labs/open-chat/pull/9345))
+- Charge a daily puzzle hint penalty, and publish a hint count, only for hints actually paid for: the reward and the results row are both written before a hint debit is known to have landed ([#9345](https://github.com/open-chat-labs/open-chat/pull/9345))
+- Bound the free outcomes of `daily_puzzle_hint` with `max_free_checks`, reported back as `free_checks` on the state and `max_free_checks` on the puzzle so the client can stop offering the check rather than let it come back throttled. The mistake check answers "is this key right?" for a client-chosen key, so it was an unmetered oracle: one call per key read the whole solution without spending CHIT or a submit. Every outcome that serves no paid hint is counted, and all of them refuse the same way once the budget is gone ([#9345](https://github.com/open-chat-labs/open-chat/pull/9345))
+- Refuse a second daily puzzle hint reservation on a step whose debit is still in flight, rather than overwriting it; the overwrite dropped whichever hint the first call was paying for ([#9345](https://github.com/open-chat-labs/open-chat/pull/9345))
+- Ignore a daily puzzle push carrying an older number than the one held, rather than reading it as a day change and clearing every in-progress record on the subnet, entry fees included ([#9345](https://github.com/open-chat-labs/open-chat/pull/9345))
+- Hold each user's daily puzzle history as the last number solved and the run ending there, rather than the set of every day ever solved ([#9345](https://github.com/open-chat-labs/open-chat/pull/9345))
+- Re-check for a missed daily puzzle push every 15 minutes, so a subnet that misses the rollover does not hold yesterday's puzzle until its next upgrade ([#9345](https://github.com/open-chat-labs/open-chat/pull/9345))
+- Drop `#[trace]` from `daily_puzzle_start`, `daily_puzzle_hint` and `daily_puzzle_save_grid`, whose args and responses carry hints and completed grids ([#9345](https://github.com/open-chat-labs/open-chat/pull/9345))
+- Handle the `SetDailyPuzzleCanisterId` event from the UserIndex, the same path as the platform-operator `set_daily_puzzle_canister_id` endpoint ([#9345](https://github.com/open-chat-labs/open-chat/pull/9345))
+- Pass the GroupIndex, Identity and Escrow canister ids and the video call operators when creating a MultiUser canister ([#9407](https://github.com/open-chat-labs/open-chat/pull/9407))
+
+### Changed
+
 - Harden the message-classification job against API throttling: rate-limit and outage rejections no longer count towards the drop-after-3-attempts limit (queue residency is bounded at 24h instead), the API's Retry-After is honoured, error bodies are logged so throttle and quota failures are distinguishable, and batches are token-capped and paced to stay under the moderation model's tokens-per-minute limit while a deep queue drains ([#9176](https://github.com/open-chat-labs/open-chat/pull/9176))
+- Encode the index of a user within their canister into `UserId`, so that a canister can hold many users ([#9259](https://github.com/open-chat-labs/open-chat/pull/9259))
+- Update `ic-stable-structures` to a fork which supports choosing the page size of a map ([#9347](https://github.com/open-chat-labs/open-chat/pull/9347))
+- Pass the target `user_id` in calls to User canisters ([#9401](https://github.com/open-chat-labs/open-chat/pull/9401))
+
+### Fixed
+
+- Include MultiUser canisters in the cycles top up paths, so they can report a low balance and are picked up by the weekly balance sweep ([#9311](https://github.com/open-chat-labs/open-chat/pull/9311))
+- Include Group and Community canisters in the weekly cycles balance sweep - they were queued up but never selected, so the sweep silently skipped them ([#9313](https://github.com/open-chat-labs/open-chat/pull/9313))
+- Key the daily puzzle entry fee and solve reward on the puzzle number alone (`{number}:entry`, `{number}:solve`), so a `regenerate_today` - with the same game or another - is a free restart for anyone mid-game and pays a day's reward once; hint keys still name the game and step ([#9345](https://github.com/open-chat-labs/open-chat/pull/9345))
+- Check `daily_puzzle_hint` mistakes against the puzzle's `solution_pairs` rather than indexing the solution bytes by hint key, which was wrong for games whose keys are edges (bridges, loopy); a filled key the puzzle does not have is a mistake, and a puzzle pushed without pairs still indexes the bytes ([#9345](https://github.com/open-chat-labs/open-chat/pull/9345))
 
 ## [[2.0.2033](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2033-local_user_index)] - 2026-08-20
 
@@ -40,8 +127,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
-- Forward `GroupModerationFlagsChanged` events from group_index to groups ([#9089](https://github.com/open-chat-labs/open-chat/pull/9089))
 - Forward `CommunityModerationFlagsChanged` events from group_index to communities ([#9088](https://github.com/open-chat-labs/open-chat/pull/9088))
+- Forward `GroupModerationFlagsChanged` events from group_index to groups ([#9089](https://github.com/open-chat-labs/open-chat/pull/9089))
 - Add `Translate` access token type for the translation proxy, issued to diamond members and platform moderators ([#9100](https://github.com/open-chat-labs/open-chat/pull/9100))
 
 ### Changed
@@ -135,13 +222,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [[2.0.1897](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.1897-local_user_index)] - 2025-09-11
 
-### Fix
+### Fixed
 
 - Fix User canister init args for new user creation ([#8606](https://github.com/open-chat-labs/open-chat/pull/8606))
 
 ## [[2.0.1896](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.1896-local_user_index)] - 2025-09-11
 
-### Fix
+### Fixed
 
 - Don't trap for unsupported bot data encoding ([#8604](https://github.com/open-chat-labs/open-chat/pull/8604))
 
@@ -210,14 +297,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
-- Add 'min_chit_earned' prize message criterion ([#8413](https://github.com/open-chat-labs/open-chat/pull/8413))
-
-## [[2.0.1844](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.1844-local_user_index)] - 2025-07-29
-
-### Changed
-
 - `token:Cryptocurrency` -> `token_symbol:String` ([#8368](https://github.com/open-chat-labs/open-chat/pull/8368))
 - Use full names for bot event notification fields ([#8389](https://github.com/open-chat-labs/open-chat/pull/8389))
+- Add 'min_chit_earned' prize message criterion ([#8413](https://github.com/open-chat-labs/open-chat/pull/8413))
 
 ## [[2.0.1837](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.1837-local_user_index)] - 2025-07-21
 
@@ -549,26 +631,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Reduce message Ids to 64 bits down from 128 bits ([#7232](https://github.com/open-chat-labs/open-chat/pull/7232))
 - Reduce channel Ids to 32 bits down from 128 bits ([#7233](https://github.com/open-chat-labs/open-chat/pull/7233))
+- Verified flag added to group/community summary updates ([#7240](https://github.com/open-chat-labs/open-chat/pull/7240))
 - Sync platform moderators/operators to LocalUserIndexes ([#7248](https://github.com/open-chat-labs/open-chat/pull/7248))
 - Support updating bot principal but not name ([#7253](https://github.com/open-chat-labs/open-chat/pull/7253))
 - Handle `RemoveBot` event ([#7254](https://github.com/open-chat-labs/open-chat/pull/7254))
-- Verified flag added to group/community summary updates ([#7240](https://github.com/open-chat-labs/open-chat/pull/7240))
 
 ## [[2.0.1567](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.1567-local_user_index)] - 2025-01-14
 
 ### Changed
 
-- Withdraw from ICPSwap via LocalUserIndex so authentication happens first ([#7217](https://github.com/open-chat-labs/open-chat/pull/7217))
-- Use macro to create grouped timer job types ([#7224](https://github.com/open-chat-labs/open-chat/pull/7224))
-
-## [[2.0.1567](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.1567-local_user_index)] - 2025-01-14
-
-### Changed
-
+- Use typed command in `BotCommandClaims` ([#7113](https://github.com/open-chat-labs/open-chat/pull/7113))
 - Add optional `placeholder` field to `SlashCommandSchema` ([#7172](https://github.com/open-chat-labs/open-chat/pull/7172))
 - Introduce `StableMemoryMap` trait to simplify storing in stable memory ([#7176](https://github.com/open-chat-labs/open-chat/pull/7176))
-- Use typed command in `BotCommandClaims` ([#7113](https://github.com/open-chat-labs/open-chat/pull/7113))
 - Sync platform operators to LocalUserIndexes ([#7210](https://github.com/open-chat-labs/open-chat/pull/7210))
+- Withdraw from ICPSwap via LocalUserIndex so authentication happens first ([#7217](https://github.com/open-chat-labs/open-chat/pull/7217))
+- Use macro to create grouped timer job types ([#7224](https://github.com/open-chat-labs/open-chat/pull/7224))
 
 ## [[2.0.1547](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.1547-local_user_index)] - 2025-01-06
 
@@ -579,7 +656,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Use `StringChat` in `BotCommandClaims` ([#7133](https://github.com/open-chat-labs/open-chat/pull/7133))
 - Handle bot name/definition update ([#7135](https://github.com/open-chat-labs/open-chat/pull/7135))
 
-### Fixes
+### Fixed
 
 - Fix unit of claims expiry ([#7106](https://github.com/open-chat-labs/open-chat/pull/7106))
 - Sync full user details to new LocalUserIndexes ([#7153](https://github.com/open-chat-labs/open-chat/pull/7153))
@@ -607,16 +684,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- Set the derivation origin when checking verifiable credentials ([#6703](https://github.com/open-chat-labs/open-chat/pull/6703))
 - Expose size of each virtual stable memory in metrics ([#6981](https://github.com/open-chat-labs/open-chat/pull/6981))
 - Use `summary` instead of `c2c_summary` so that `c2c_summary` can be removed ([#6988](https://github.com/open-chat-labs/open-chat/pull/6988))
-- Set the derivation origin when checking verifiable credentials ([#6703](https://github.com/open-chat-labs/open-chat/pull/6703))
 - Ensure bot has permission to execute given action ([#7014](https://github.com/open-chat-labs/open-chat/pull/7014))
 - Switch to using `PrincipalToStableMemoryMap` ([#7023](https://github.com/open-chat-labs/open-chat/pull/7023))
 - Make `MessageId` comparisons use their 64bit representation ([#7030](https://github.com/open-chat-labs/open-chat/pull/7030))
 - Notify CHIT updates via LocalUserIndex ([#7033](https://github.com/open-chat-labs/open-chat/pull/7033))
 - Include the total cycles topped up ([#7056](https://github.com/open-chat-labs/open-chat/pull/7056))
 
-### Fixes
+### Fixed
 
 - Fixes to `access_token` and `execute_bot_command` ([#7031](https://github.com/open-chat-labs/open-chat/pull/7031))
 
@@ -947,8 +1024,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 
 - Add `LifetimeDiamondMembership` access gate ([#5986](https://github.com/open-chat-labs/open-chat/pull/5986))
-- Add `UniquePerson` access gate ([#5993](https://github.com/open-chat-labs/open-chat/pull/5993))
 - Support composite access gates ([#5988](https://github.com/open-chat-labs/open-chat/pull/5988))
+- Add `UniquePerson` access gate ([#5993](https://github.com/open-chat-labs/open-chat/pull/5993))
 
 ### Changed
 
@@ -1491,8 +1568,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Removed
 
-- Removed code only needed for the previous upgrade ([#3003](https://github.com/open-chat-labs/open-chat/pull/3003))
 - Remove one time fix to user date created ([#2994](https://github.com/open-chat-labs/open-chat/pull/2994))
+- Removed code only needed for the previous upgrade ([#3003](https://github.com/open-chat-labs/open-chat/pull/3003))
 
 ## [[2.0.563](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.563-local_user_index)] - 2023-01-23
 

@@ -8,11 +8,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- Accept a `user_id` in `c2c_create_group` and `c2c_create_community`, so a MultiUser canister can act for one of its users ([#9448](https://github.com/open-chat-labs/open-chat/pull/9448))
+- Add a cache of the latest ids of users migrated to MultiUser canisters, which nothing fills yet ([#9540](https://github.com/open-chat-labs/open-chat/pull/9540))
+- Retry sending group and community deleted notifications for migrated users to their new canister ([#9558](https://github.com/open-chat-labs/open-chat/pull/9558))
+
+### Changed
+
+- Track the spawned tasks in progress using `utils::async_work` ([#9546](https://github.com/open-chat-labs/open-chat/pull/9546))
+
+### Fixed
+
+- Don't retry c2c calls to a method the callee doesn't have, which would otherwise be retried forever ([#9521](https://github.com/open-chat-labs/open-chat/pull/9521))
+
+## [[2.0.2057](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2057-group_index)] - 2026-09-18
+
+### Added
+
 - Expose count of failed community-deleted notifications in metrics ([#9245](https://github.com/open-chat-labs/open-chat/pull/9245))
 
 ### Changed
 
 - Encode the index of a user within their canister into `UserId`, so that a canister can hold many users ([#9259](https://github.com/open-chat-labs/open-chat/pull/9259))
+- Update `ic-stable-structures` to a fork which supports choosing the page size of a map ([#9347](https://github.com/open-chat-labs/open-chat/pull/9347))
+- Pass the target `user_id` in calls to User canisters ([#9401](https://github.com/open-chat-labs/open-chat/pull/9401))
+
+### Fixed
+
+- Reject upgrade filters which name canisters the index has no mapping for, rather than silently dropping them and reporting success ([#9311](https://github.com/open-chat-labs/open-chat/pull/9311))
 
 ## [[2.0.2034](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2034-group_index)] - 2026-08-20
 
@@ -28,20 +50,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- Add `set_group_moderation_flags` endpoint and filter group search by moderation flags ([#9089](https://github.com/open-chat-labs/open-chat/pull/9089))
+- Add `c2c_csam_detected` endpoint forwarding CSAM detections from groups/communities to user_index ([#9093](https://github.com/open-chat-labs/open-chat/pull/9093))
 - Forward the CSAM assertion flag on reports so quarantine and deletion apply immediately (the suspension waits for the human verdict) ([#9119](https://github.com/open-chat-labs/open-chat/pull/9119))
 - `c2c_moderation_referral` - forwards moderation referrals from group/community canisters to the user_index ([#9119](https://github.com/open-chat-labs/open-chat/pull/9119))
-- Add `c2c_csam_detected` endpoint forwarding CSAM detections from groups/communities to user_index ([#9093](https://github.com/open-chat-labs/open-chat/pull/9093))
-- Add `set_group_moderation_flags` endpoint and filter group search by moderation flags ([#9089](https://github.com/open-chat-labs/open-chat/pull/9089))
 
 ### Changed
 
-- Forward blob references with CSAM detections so the evidence vault can quarantine media ([#9119](https://github.com/open-chat-labs/open-chat/pull/9119))
 - Sync community moderation flags to the community canisters ([#9088](https://github.com/open-chat-labs/open-chat/pull/9088))
+- Forward blob references with CSAM detections so the evidence vault can quarantine media ([#9119](https://github.com/open-chat-labs/open-chat/pull/9119))
 
 ### Fixed
 
-- Defer the moderation-flag back-fill to a timer: pushing to the local-index event queue makes an inter-canister call, which is forbidden during post-upgrade and failed the 2.0.2017 upgrade ([#9155](https://github.com/open-chat-labs/open-chat/pull/9155))
 - Fix detection of when to retry c2c calls ([#9106](https://github.com/open-chat-labs/open-chat/pull/9106))
+- Defer the moderation-flag back-fill to a timer: pushing to the local-index event queue makes an inter-canister call, which is forbidden during post-upgrade and failed the 2.0.2017 upgrade ([#9155](https://github.com/open-chat-labs/open-chat/pull/9155))
 
 ## [[2.0.1932](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.1932-group_index)] - 2025-12-04
 
@@ -737,7 +759,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Added `events_ttl` field to `c2c_create_group` args for setting the 'time to live' for disappearing messages ([#3029](https://github.com/open-chat-labs/open-chat/pull/3029))
 - Added `set_service_principals` for setting which principals have admin control ([#3038](https://github.com/open-chat-labs/open-chat/pull/3038))
 
-# Changed
+### Changed
 
 - Use `MemoryManager` so that we can use stable memory at run time ([#3040](https://github.com/open-chat-labs/open-chat/pull/3040))
 

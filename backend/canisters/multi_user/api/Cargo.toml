@@ -1,0 +1,12 @@
+[package]
+name = "multi_user_canister"
+version.workspace = true
+edition.workspace = true
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+candid = { workspace = true }
+oc_error_codes = { path = "../../../libraries/error_codes" }
+serde = { workspace = true }
+types = { path = "../../../libraries/types" }

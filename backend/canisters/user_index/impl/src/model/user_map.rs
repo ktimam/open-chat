@@ -5,6 +5,7 @@ use crate::model::user::User;
 use candid::Principal;
 use search::weighted::{Document as SearchDocument, Query};
 use serde::{Deserialize, Serialize};
+use std::collections::hash_map::Entry::Vacant;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::RangeFrom;
 use tracing::info;
@@ -23,11 +24,6 @@ pub struct UserMap {
     bots: HashMap<UserId, Bot>,
     suspected_bots: BTreeSet<UserId>,
     deleted_users: HashMap<UserId, TimestampMillis>,
-    /// Monotonic deletion generation for stable user ids. A value survives account removal and
-    /// recreation, so an async operation admitted for an earlier account incarnation cannot mint
-    /// private app/card authority for the replacement account.
-    #[serde(default)]
-    account_lifecycle_epochs: HashMap<UserId, u64>,
     bot_updates: BTreeSet<(TimestampMillis, BotUpdate)>,
     suspended_or_unsuspended_users: BTreeSet<(TimestampMillis, UserId)>,
     unique_person_proofs_submitted: u32,
@@ -129,6 +125,73 @@ impl Bot {
             }));
 
         Some(removed)
+    }
+
+    // Before the LocalUserIndex validated the type of an installation's location, a user could
+    // install a bot into their own direct chat under a `Group` or `Community` location holding their
+    // own user id. Such an installation's events were then routed into the LocalUserIndex's group or
+    // community event queues, where they could never be delivered. A group or community's id is
+    // never a user's id, so an installation made by the user whose id is its location is one of
+    // these, and is moved to the `User` location it was really installed into.
+    // The move is recorded as installation events too, so that bots which sync their installations
+    // incrementally pick it up.
+    // This only finds those made by a user alone in their canister, since a user in a MultiUser
+    // canister would have had to give the canister's id rather than their own, but MultiUser
+    // canisters were not yet live when the LocalUserIndex started validating locations.
+    // If the user later uninstalled the bot under the `User` location, that uninstall found nothing
+    // to remove here, so the bot is moved to an installation it no longer has. That can't be
+    // detected from here, but is harmless: the user's canister ignores updates for a bot it doesn't
+    // have, and removing one only clears any chat left with it.
+    // TODO remove once the release containing this has been deployed
+    pub fn repair_misrecorded_direct_chat_installations(
+        &mut self,
+        now: TimestampMillis,
+    ) -> Vec<(BotInstallationLocation, BotInstallationLocation)> {
+        let mut misrecorded: Vec<_> = self
+            .installations
+            .iter()
+            .filter_map(|(location, details)| {
+                let location_id: Principal = match location {
+                    BotInstallationLocation::Group(chat_id) => (*chat_id).into(),
+                    BotInstallationLocation::Community(community_id) => (*community_id).into(),
+                    BotInstallationLocation::User(_) => return None,
+                };
+                (UserId::from(location_id) == details.installed_by).then_some((details.updated_at, *location))
+            })
+            .collect();
+        // Most recently updated first, so that if the bot was misrecorded under both a `Group` and
+        // a `Community` location for the same user, the latest of them is the one moved
+        misrecorded.sort_unstable_by(|a, b| b.cmp(a));
+
+        let mut repaired = Vec::new();
+        for (_, location) in misrecorded {
+            let details = self.installations.remove(&location).unwrap();
+            let user_location = BotInstallationLocation::User(details.installed_by.into());
+
+            self.installation_events
+                .push(BotInstallationEvent::Uninstalled(BotUninstalled {
+                    location,
+                    uninstalled_by: details.installed_by,
+                    timestamp: now,
+                }));
+
+            // If the bot has since been installed under the correct location, that record is
+            // already up to date
+            if let Vacant(e) = self.installations.entry(user_location) {
+                self.installation_events.push(BotInstallationEvent::Installed(BotInstalled {
+                    location: user_location,
+                    api_gateway: details.local_user_index,
+                    granted_permissions: details.granted_permissions.clone(),
+                    granted_autonomous_permissions: details.granted_autonomous_permissions.clone(),
+                    installed_by: details.installed_by,
+                    timestamp: now,
+                }));
+                e.insert(details);
+            }
+
+            repaired.push((location, user_location));
+        }
+        repaired
     }
 
     pub fn to_schema(&self, id: UserId) -> BotDetails {
@@ -482,23 +545,7 @@ impl UserMap {
             self.username_to_user_id.remove(&user.username);
         }
         self.deleted_users.insert(user_id, now);
-        let next_epoch = self
-            .account_lifecycle_epochs
-            .get(&user_id)
-            .copied()
-            .unwrap_or_default()
-            .saturating_add(1);
-        self.account_lifecycle_epochs.insert(user_id, next_epoch);
         Some(user)
-    }
-
-    /// Returns the lifecycle epoch only while the account currently exists. Legacy accounts begin
-    /// at epoch zero; every successful deletion advances the durable tombstone before the same id
-    /// can be registered again.
-    pub fn account_lifecycle_epoch(&self, user_id: &UserId) -> Option<u64> {
-        self.users
-            .contains_key(user_id)
-            .then(|| self.account_lifecycle_epochs.get(user_id).copied().unwrap_or_default())
     }
 
     #[expect(clippy::too_many_arguments)]
@@ -546,6 +593,20 @@ impl UserMap {
         self.botname_to_user_id.remove(&bot.name);
         self.bot_updates.insert((now, BotUpdate::Removed(bot_id)));
         Some(bot)
+    }
+
+    // TODO remove once the release containing this has been deployed
+    pub fn repair_misrecorded_direct_chat_bot_installations(
+        &mut self,
+        now: TimestampMillis,
+    ) -> Vec<(UserId, BotInstallationLocation, BotInstallationLocation)> {
+        let mut repaired = Vec::new();
+        for (bot_id, bot) in self.bots.iter_mut() {
+            for (from, to) in bot.repair_misrecorded_direct_chat_installations(now) {
+                repaired.push((*bot_id, from, to));
+            }
+        }
+        repaired
     }
 
     pub fn iter_bots(&self) -> impl Iterator<Item = (&UserId, &Bot)> {
@@ -1005,8 +1066,6 @@ struct UserMapTrimmed {
     bots: HashMap<UserId, Bot>,
     suspected_bots: BTreeSet<UserId>,
     deleted_users: HashMap<UserId, TimestampMillis>,
-    #[serde(default)]
-    account_lifecycle_epochs: HashMap<UserId, u64>,
     bot_updates: BTreeSet<(TimestampMillis, BotUpdate)>,
     suspended_or_unsuspended_users: BTreeSet<(TimestampMillis, UserId)>,
     unique_person_proofs_submitted: u32,
@@ -1018,7 +1077,6 @@ impl From<UserMapTrimmed> for UserMap {
             users: value.users,
             suspected_bots: value.suspected_bots,
             deleted_users: value.deleted_users,
-            account_lifecycle_epochs: value.account_lifecycle_epochs,
             bot_updates: value.bot_updates,
             suspended_or_unsuspended_users: value.suspended_or_unsuspended_users,
             unique_person_proofs_submitted: value.unique_person_proofs_submitted,
@@ -1082,71 +1140,155 @@ pub enum ContestUploadSanctionResult {
 mod tests {
     use super::*;
     use itertools::Itertools;
+    use std::collections::HashSet;
 
-    #[test]
-    fn account_lifecycle_epoch_survives_deletion_recreation_and_stable_roundtrip() {
-        let principal = Principal::from_slice(&[42]);
-        let user_id: UserId = principal.into();
-        let mut user_map = UserMap::default();
-        user_map.add_test_user(User {
-            principal,
-            user_id,
-            username: "first-account".to_string(),
-            ..Default::default()
-        });
-        assert_eq!(user_map.account_lifecycle_epoch(&user_id), Some(0));
-
-        assert!(user_map.delete_user(user_id, 10).is_some());
-        assert_eq!(user_map.account_lifecycle_epoch(&user_id), None);
-        user_map.add_test_user(User {
-            principal,
-            user_id,
-            username: "replacement-account".to_string(),
-            ..Default::default()
-        });
-        assert_eq!(user_map.account_lifecycle_epoch(&user_id), Some(1));
-
-        let bytes = msgpack::serialize_to_vec(&user_map).unwrap();
-        let restored: UserMap = msgpack::deserialize_then_unwrap(&bytes);
-        assert_eq!(restored.account_lifecycle_epoch(&user_id), Some(1));
+    fn test_bot() -> Bot {
+        Bot {
+            name: "bot".to_string(),
+            avatar: None,
+            owner: Principal::from_slice(&[9]).into(),
+            endpoint: "https://my.bot.xyz/".to_string(),
+            definition: BotDefinition {
+                description: "bot".to_string(),
+                commands: Vec::new(),
+                autonomous_config: None,
+                default_subscriptions: None,
+                data_encoding: None,
+                restricted_locations: None,
+            },
+            last_updated: 0,
+            installations: HashMap::new(),
+            installation_events: Vec::new(),
+            registration_status: BotRegistrationStatus::Public,
+        }
     }
 
     #[test]
-    fn legacy_user_map_without_lifecycle_epochs_starts_live_accounts_at_zero() {
-        #[derive(Serialize)]
-        struct LegacyUserMap {
-            users: HashMap<UserId, User>,
-            bots: HashMap<UserId, Bot>,
-            suspected_bots: BTreeSet<UserId>,
-            deleted_users: HashMap<UserId, TimestampMillis>,
-            bot_updates: BTreeSet<(TimestampMillis, BotUpdate)>,
-            suspended_or_unsuspended_users: BTreeSet<(TimestampMillis, UserId)>,
-            unique_person_proofs_submitted: u32,
+    fn misrecorded_direct_chat_installations_are_moved_to_the_user_location() {
+        let user_id: UserId = Principal::from_slice(&[3, 1]).into();
+        let other_user_id: UserId = Principal::from_slice(&[3, 2]).into();
+        let group_id = Principal::from_slice(&[4, 1]);
+        let local_user_index = Principal::from_slice(&[5, 1]);
+
+        let misrecorded_as_group = BotInstallationLocation::Group(user_id.into());
+        let misrecorded_as_community = BotInstallationLocation::Community(other_user_id.as_principal().into());
+        let real_group = BotInstallationLocation::Group(group_id.into());
+
+        let mut bot = test_bot();
+        bot.add_installation(
+            misrecorded_as_group,
+            local_user_index,
+            BotPermissions::text_only(),
+            BotPermissions::default(),
+            user_id,
+            1,
+        );
+        bot.add_installation(
+            misrecorded_as_community,
+            local_user_index,
+            BotPermissions::text_only(),
+            BotPermissions::default(),
+            other_user_id,
+            2,
+        );
+        // Installed into a real group, so left alone
+        bot.add_installation(
+            real_group,
+            local_user_index,
+            BotPermissions::text_only(),
+            BotPermissions::default(),
+            user_id,
+            3,
+        );
+        // Already installed under the correct location too, so that record is kept as it is
+        let other_user_location = BotInstallationLocation::User(other_user_id.into());
+        bot.add_installation(
+            other_user_location,
+            local_user_index,
+            BotPermissions::default(),
+            BotPermissions::default(),
+            other_user_id,
+            4,
+        );
+        let events_before = bot.installation_events.len();
+
+        let repaired: HashSet<_> = bot.repair_misrecorded_direct_chat_installations(10).into_iter().collect();
+
+        let user_location = BotInstallationLocation::User(user_id.into());
+        assert_eq!(
+            repaired,
+            HashSet::from([
+                (misrecorded_as_group, user_location),
+                (misrecorded_as_community, other_user_location)
+            ])
+        );
+        assert_eq!(
+            bot.installations.keys().copied().collect::<HashSet<_>>(),
+            HashSet::from([user_location, other_user_location, real_group])
+        );
+        let moved = &bot.installations[&user_location];
+        assert_eq!(moved.installed_by, user_id);
+        assert_eq!(moved.installed_at, 1);
+        assert_eq!(moved.granted_permissions, BotPermissions::text_only());
+        assert_eq!(bot.installations[&other_user_location].installed_at, 4);
+
+        // Two uninstalls plus one install, the other user's install being already recorded
+        let new_events = &bot.installation_events[events_before..];
+        assert_eq!(new_events.len(), 3);
+        assert!(
+            new_events
+                .iter()
+                .any(|e| matches!(e, BotInstallationEvent::Installed(i) if i.location == user_location && i.timestamp == 10))
+        );
+        for location in [misrecorded_as_group, misrecorded_as_community] {
+            assert!(
+                new_events
+                    .iter()
+                    .any(|e| matches!(e, BotInstallationEvent::Uninstalled(u) if u.location == location && u.timestamp == 10))
+            );
         }
 
-        let principal = Principal::from_slice(&[43]);
-        let user_id: UserId = principal.into();
-        let bytes = msgpack::serialize_to_vec(&LegacyUserMap {
-            users: HashMap::from([(
-                user_id,
-                User {
-                    principal,
-                    user_id,
-                    username: "legacy-account".to_string(),
-                    ..Default::default()
-                },
-            )]),
-            bots: HashMap::new(),
-            suspected_bots: BTreeSet::new(),
-            deleted_users: HashMap::new(),
-            bot_updates: BTreeSet::new(),
-            suspended_or_unsuspended_users: BTreeSet::new(),
-            unique_person_proofs_submitted: 0,
-        })
-        .unwrap();
-        let restored: UserMap = msgpack::deserialize_then_unwrap(&bytes);
+        // Running it again changes nothing
+        assert!(bot.repair_misrecorded_direct_chat_installations(11).is_empty());
+        assert_eq!(bot.installation_events.len(), events_before + 3);
+    }
 
-        assert_eq!(restored.account_lifecycle_epoch(&user_id), Some(0));
+    #[test]
+    fn the_latest_of_several_misrecorded_installations_for_a_user_is_the_one_moved() {
+        let user_id: UserId = Principal::from_slice(&[3, 1]).into();
+        let local_user_index = Principal::from_slice(&[5, 1]);
+        let as_group = BotInstallationLocation::Group(user_id.into());
+        let as_community = BotInstallationLocation::Community(user_id.as_principal().into());
+
+        // Whichever order they were recorded in, the most recently updated wins
+        for (earlier, later) in [(as_group, as_community), (as_community, as_group)] {
+            let mut bot = test_bot();
+            bot.add_installation(
+                earlier,
+                local_user_index,
+                BotPermissions::default(),
+                BotPermissions::default(),
+                user_id,
+                1,
+            );
+            bot.add_installation(
+                later,
+                local_user_index,
+                BotPermissions::text_only(),
+                BotPermissions::default(),
+                user_id,
+                2,
+            );
+
+            let repaired = bot.repair_misrecorded_direct_chat_installations(10);
+
+            let user_location = BotInstallationLocation::User(user_id.into());
+            assert_eq!(repaired, vec![(later, user_location), (earlier, user_location)]);
+            assert_eq!(bot.installations.len(), 1);
+            let moved = &bot.installations[&user_location];
+            assert_eq!(moved.updated_at, 2);
+            assert_eq!(moved.granted_permissions, BotPermissions::text_only());
+        }
     }
 
     #[test]

@@ -9,8 +9,8 @@ use community_canister::start_video_call_v2::*;
 use constants::HOUR_IN_MS;
 use oc_error_codes::OCErrorCode;
 use types::{
-    Caller, ChannelMessageNotification, ChannelUserNotificationPayload, CommunityId, OCResult, UserId, VideoCallPresence,
-    VideoCallType,
+    CallFacts, CallKind, Caller, ChannelMessageNotification, ChannelUserNotificationPayload, CommunityId, OCResult, UserId,
+    VideoCallPresence, VideoCallType,
 };
 
 #[update(guard = "caller_is_video_call_operator", candid = true, msgpack = true)]
@@ -20,8 +20,8 @@ fn start_video_call_v2(args: Args) -> Response {
 }
 
 fn start_video_call_impl(args: Args, state: &mut RuntimeState) -> OCResult {
-    state.data.verify_not_frozen()?;
-
+    // Looked up before the channel is borrowed
+    let sender = state.member_user(args.initiator);
     let channel = state.data.channels.get_mut_or_err(&args.channel_id)?;
 
     if matches!(
@@ -31,7 +31,11 @@ fn start_video_call_impl(args: Args, state: &mut RuntimeState) -> OCResult {
         return Err(OCErrorCode::InitiatorNotAuthorized.with_message("Video call type not allowed"));
     }
 
-    let sender = args.initiator;
+    // There is no such thing as an audio only broadcast
+    let Some(call_kind) = CallKind::from_wire(args.call_type, args.audio_only.unwrap_or_default()) else {
+        return Err(OCErrorCode::InitiatorNotAuthorized.with_message("Video call type not allowed"));
+    };
+
     let now = state.env.now();
 
     let result = channel.chat.send_message(
@@ -39,10 +43,10 @@ fn start_video_call_impl(args: Args, state: &mut RuntimeState) -> OCResult {
         None,
         args.message_id,
         MessageContentInternal::VideoCall(VideoCallContentInternal {
-            call_type: args.call_type,
+            call_type: call_kind,
             ended: None,
             participants: [(
-                sender,
+                sender.user_id,
                 CallParticipantInternal {
                     joined: now,
                     last_updated: None,
@@ -65,6 +69,7 @@ fn start_video_call_impl(args: Args, state: &mut RuntimeState) -> OCResult {
         },
         true,
         Vec::new(),
+        &state.data.migrated_user_ids,
         now,
     )?;
 
@@ -88,7 +93,7 @@ fn start_video_call_impl(args: Args, state: &mut RuntimeState) -> OCResult {
         thread_root_message_index: None,
         message_index,
         event_index,
-        sender,
+        sender: sender.user_id,
         sender_name: args.initiator_username,
         sender_display_name: args.initiator_display_name,
         message_type: result.message_event.event.content.content_type().to_string(),
@@ -100,9 +105,18 @@ fn start_video_call_impl(args: Args, state: &mut RuntimeState) -> OCResult {
         channel_name: channel.chat.name.value.clone(),
         community_avatar_id: state.data.avatar.as_ref().map(|d| d.id),
         channel_avatar_id,
+        // a channel never rings; the facts are still sent so the policy stays in one place
+        call: Some(CallFacts {
+            message_id: args.message_id,
+            call_type: call_kind.call_type(),
+            audio_only: call_kind.audio_only(),
+            started: result.message_event.timestamp,
+            is_public: channel.chat.is_public.value,
+            member_count: channel.chat.members.len(),
+        }),
     });
 
-    state.push_notification(Some(sender), users_to_notify, notification);
+    state.push_notification(Some(sender.user_id), users_to_notify, notification);
     handle_activity_notification(state);
 
     if let Some(expiry) = expires_at {

@@ -91,11 +91,11 @@ import type {
     UnfreezeGroupResponse,
     UnpinMessageResponse,
     UpdateGroupResponse,
-    UpdatesResult,
     VideoCallParticipantsResponse,
     VideoCallPresence,
     WithdrawCryptocurrencyResponse,
 } from "./chat";
+import type { SyncSinceResponse } from "./sync";
 import type {
     ChitEventsRequest,
     ChitEventsResponse,
@@ -106,6 +106,15 @@ import type {
     PayForStreakInsuranceResponse,
     PremiumItem,
 } from "./chit";
+import type {
+    DailyPuzzleConfig,
+    DailyPuzzleFetchResult,
+    DailyPuzzleHintResponse,
+    DailyPuzzleResult,
+    DailyPuzzleStartResponse,
+    DailyPuzzleSubmitResponse,
+    PublicDailyPuzzle,
+} from "./dailyPuzzle";
 import type {
     AddMembersToChannelResponse,
     BlockCommunityUserResponse,
@@ -243,6 +252,7 @@ import type {
     SetMessageReminderResponse,
     SetUsernameResponse,
     SetUserUpgradeConcurrencyResponse,
+    CreateMultiUserCanisterResponse,
     SubmitProofOfUniquePersonhoodResponse,
     SubmitProposalResponse,
     SuspendUserResponse,
@@ -365,6 +375,8 @@ export type WorkerRequest =
     | SuspendUser
     | UnsuspendUser
     | GetUpdates
+    | SyncSince
+    | RefreshChat
     | GetBots
     | GetDeletedGroupMessage
     | GetDeletedDirectMessage
@@ -377,6 +389,8 @@ export type WorkerRequest =
     | SetGroupUpgradeConcurrency
     | SetCommunityUpgradeConcurrency
     | SetUserUpgradeConcurrency
+    | CreateMultiUserCanister
+    | SetMultiUserCanistersEnabled
     | MarkLocalGroupIndexFull
     | SetDiamondMembershipFees
     | StakeNeuronForSubmittingProposals
@@ -544,13 +558,31 @@ export type WorkerRequest =
     | FinaliseAccountLinkingWithCode
     | GetSignInProof
     | PayForPremiumItem
+    | DailyPuzzleFetch
+    | DailyPuzzleStart
+    | DailyPuzzleSubmit
+    | DailyPuzzleHint
+    | DailyPuzzleSaveGrid
+    | DailyPuzzleCurrent
+    | DailyPuzzleResults
+    | DailyPuzzleGetConfig
+    | DailyPuzzleSetEnabled
+    | DailyPuzzleRegenerateToday
+    | CallPushEnabled
+    | SetCallPushEnabled
     | SetPremiumItemCost
     | OneSecEnableForwarding
     | OneSecGetTransferFees
     | OneSecForwardEvmToIcp
     | OneSecGetForwardingStatus
     | UpdateBlockedUsernamePatterns
-    | MarkNotificationSubscriptionActive;
+    | MarkNotificationSubscriptionActive
+    | AbortInFlightQueries;
+
+// Sent when the app resumes after being suspended, see `abortInFlightQueries` in openchat-agent
+type AbortInFlightQueries = {
+    kind: "abortInFlightQueries";
+};
 
 type MarkNotificationSubscriptionActive = {
     kind: "markNotificationSubscriptionActive";
@@ -601,6 +633,76 @@ type PayForPremiumItem = {
     userId: string;
 };
 
+type DailyPuzzleFetch = {
+    kind: "dailyPuzzleFetch";
+    userId: string;
+};
+
+type DailyPuzzleStart = {
+    kind: "dailyPuzzleStart";
+    userId: string;
+    gameId: string;
+    number: number;
+    expectedEntryFee: number;
+};
+
+type DailyPuzzleSubmit = {
+    kind: "dailyPuzzleSubmit";
+    userId: string;
+    gameId: string;
+    number: number;
+    grid: Uint8Array;
+};
+
+type DailyPuzzleHint = {
+    kind: "dailyPuzzleHint";
+    userId: string;
+    gameId: string;
+    number: number;
+    level: number;
+    filled: [number, number][];
+    expectedPrice: number;
+};
+
+type DailyPuzzleSaveGrid = {
+    kind: "dailyPuzzleSaveGrid";
+    userId: string;
+    gameId: string;
+    number: number;
+    grid: Uint8Array;
+};
+
+type DailyPuzzleCurrent = {
+    kind: "dailyPuzzleCurrent";
+};
+
+type DailyPuzzleResults = {
+    kind: "dailyPuzzleResults";
+    gameId: string;
+    number: number;
+    userIds: string[];
+};
+
+type DailyPuzzleGetConfig = {
+    kind: "dailyPuzzleConfig";
+};
+
+type DailyPuzzleSetEnabled = {
+    kind: "dailyPuzzleSetEnabled";
+    enabled: boolean;
+};
+// The native call push kill switch (#9456), platform operators only
+type CallPushEnabled = {
+    kind: "callPushEnabled";
+};
+type SetCallPushEnabled = {
+    kind: "setCallPushEnabled";
+    enabled: boolean;
+};
+type DailyPuzzleRegenerateToday = {
+    kind: "dailyPuzzleRegenerateToday";
+    gameId: string | undefined;
+};
 export type SetAuthIdentity = {
     kind: "setAuthIdentity";
     identity: JsonnableIdentityKeyAndChain | undefined;
@@ -1266,6 +1368,9 @@ type GetRecommendedGroups = {
 type RegisterProposalVote = {
     chatId: MultiUserChatIdentifier;
     messageIndex: number;
+    governanceCanisterId: string;
+    proposalId: bigint;
+    isNns: boolean;
     adopt: boolean;
     kind: "registerProposalVote";
 };
@@ -1724,6 +1829,16 @@ type SetUserUpgradeConcurrency = {
     kind: "setUserUpgradeConcurrency";
 };
 
+type CreateMultiUserCanister = {
+    localUserIndexCanisterId: string;
+    kind: "createMultiUserCanister";
+};
+
+type SetMultiUserCanistersEnabled = {
+    enabled: boolean;
+    kind: "setMultiUserCanistersEnabled";
+};
+
 type MarkLocalGroupIndexFull = {
     canisterId: string;
     full: boolean;
@@ -1771,6 +1886,16 @@ type CreateUserClient = {
 type GetUpdates = {
     kind: "getUpdates";
     initialLoad: boolean;
+};
+
+type SyncSince = {
+    kind: "syncSince";
+    since: number;
+};
+
+type RefreshChat = {
+    kind: "refreshChat";
+    chatId: GroupChatIdentifier | ChannelIdentifier;
 };
 
 type GetBots = {
@@ -2064,7 +2189,7 @@ export type WorkerResponseInner =
     | RemoveMessageFilter
     | SuspendUserResponse
     | UnsuspendUserResponse
-    | UpdatesResult
+    | SyncSinceResponse
     | BotsResponse
     | DeletedDirectMessageResponse
     | DeletedGroupMessageResponse
@@ -2157,6 +2282,13 @@ export type WorkerResponseInner =
     | VerifyAccountLinkingCodeResponse
     | FinaliseAccountLinkingResponse
     | PayForPremiumItemResponse
+    | DailyPuzzleFetchResult
+    | DailyPuzzleStartResponse
+    | DailyPuzzleSubmitResponse
+    | DailyPuzzleHintResponse
+    | PublicDailyPuzzle[]
+    | DailyPuzzleResult[]
+    | DailyPuzzleConfig
     | OneSecTransferFees[]
     | OneSecForwardingStatus;
 
@@ -2181,7 +2313,8 @@ type WorkerEventCommon<T> = {
 export type WorkerEvent =
     | RelayedMessagesReadFromServer
     | RelayedStorageUpdated
-    | RelayedUsersLoaded;
+    | RelayedUsersLoaded
+    | RelayedSyncHead;
 
 export type RelayedMessagesReadFromServer = WorkerEventCommon<{
     subkind: "messages_read_from_server";
@@ -2197,6 +2330,11 @@ export type RelayedStorageUpdated = WorkerEventCommon<{
 export type RelayedUsersLoaded = WorkerEventCommon<{
     subkind: "users_loaded";
     users: UserSummary[];
+}>;
+export type RelayedSyncHead = WorkerEventCommon<{
+    subkind: "sync_head";
+    userId: string;
+    version: number;
 }>;
 
 type LoadFailedMessages = {
@@ -2567,7 +2705,11 @@ export type WorkerResult<T> = T extends Init
     : T extends UnpinMessage
     ? UnpinMessageResponse
     : T extends GetUpdates
-    ? UpdatesResult | undefined
+    ? SyncSinceResponse | undefined
+    : T extends SyncSince
+    ? SyncSinceResponse
+    : T extends RefreshChat
+    ? boolean
     : T extends GetBots
     ? BotsResponse
     : T extends GetDeletedDirectMessage
@@ -2772,6 +2914,10 @@ export type WorkerResult<T> = T extends Init
     ? SetGroupUpgradeConcurrencyResponse
     : T extends SetUserUpgradeConcurrency
     ? SetUserUpgradeConcurrencyResponse
+    : T extends CreateMultiUserCanister
+    ? CreateMultiUserCanisterResponse
+    : T extends SetMultiUserCanistersEnabled
+    ? boolean
     : T extends MarkLocalGroupIndexFull
     ? boolean
     : T extends SetDiamondMembershipFees
@@ -3082,6 +3228,30 @@ export type WorkerResult<T> = T extends Init
     ? EventWrapper<Message>[]
     : T extends PayForPremiumItem
     ? PayForPremiumItemResponse
+    : T extends DailyPuzzleFetch
+    ? DailyPuzzleFetchResult | OCError
+    : T extends DailyPuzzleStart
+    ? DailyPuzzleStartResponse
+    : T extends DailyPuzzleSubmit
+    ? DailyPuzzleSubmitResponse
+    : T extends DailyPuzzleHint
+    ? DailyPuzzleHintResponse
+    : T extends DailyPuzzleSaveGrid
+    ? Success | OCError
+    : T extends DailyPuzzleCurrent
+    ? PublicDailyPuzzle[]
+    : T extends DailyPuzzleResults
+    ? DailyPuzzleResult[]
+    : T extends DailyPuzzleGetConfig
+    ? DailyPuzzleConfig | OCError
+    : T extends DailyPuzzleSetEnabled
+    ? Success | OCError
+    : T extends DailyPuzzleRegenerateToday
+    ? Success | OCError
+    : T extends CallPushEnabled
+    ? boolean
+    : T extends SetCallPushEnabled
+    ? Success | OCError
     : T extends SetPremiumItemCost
     ? void
     : T extends CreateAccountLinkingCode
@@ -3101,5 +3271,7 @@ export type WorkerResult<T> = T extends Init
     : T extends UpdateBlockedUsernamePatterns
     ? void
     : T extends MarkNotificationSubscriptionActive
+    ? void
+    : T extends AbortInFlightQueries
     ? void
     : never;

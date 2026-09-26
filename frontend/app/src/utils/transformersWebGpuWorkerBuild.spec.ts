@@ -170,6 +170,9 @@ describe("development model worker build dependency closure", () => {
             const prod = productionTargets(enabled);
             for (const targets of [dev, prod]) {
                 expect(targets.filter(({ fileName }) => fileName === "worker.js")).toHaveLength(1);
+                expect(targets.filter(({ fileName }) => fileName === "service_worker.js")).toEqual([
+                    expect.objectContaining({ sequentialWebGpuSessions: false }),
+                ]);
                 expect(
                     targets.filter(({ fileName }) => fileName === "transcode_worker.js"),
                 ).toEqual([expect.objectContaining({ sequentialWebGpuSessions: false })]);
@@ -182,7 +185,7 @@ describe("development model worker build dependency closure", () => {
                 );
             }
             expect(prod.map(({ fileName }) => fileName).sort()).toEqual(
-                [...dev.map(({ fileName }) => fileName), "service_worker.js"].sort(),
+                dev.map(({ fileName }) => fileName).sort(),
             );
         }
     });
@@ -230,7 +233,7 @@ describe("development model worker build dependency closure", () => {
             expect(test.runtime.current()).toBe(`1000.0.test.webgpu.${index + 2}`);
             expect(test.plugin.transformIndexHtml()[0].attrs.content).toBe(test.runtime.current());
         }
-        expect(test.build).toHaveBeenCalledTimes(3 * (helperFiles.length + 1));
+        expect(test.build).toHaveBeenCalledTimes(4 * (helperFiles.length + 1));
         for (const file of [
             path.join(test.directory, "transformersWebGpuSequentialSessions.mjs"),
             path.join(test.directory, "transformersWebGpuOrtSessionConfig.mjs"),
@@ -241,7 +244,7 @@ describe("development model worker build dependency closure", () => {
             expect(test.isWatched(file)).toBe(false);
             await test.change(file);
         }
-        expect(test.build).toHaveBeenCalledTimes(3 * (helperFiles.length + 1));
+        expect(test.build).toHaveBeenCalledTimes(4 * (helperFiles.length + 1));
         expect(test.error).not.toHaveBeenCalled();
     });
 

@@ -63,8 +63,6 @@ struct PrepareResult {
 }
 
 fn prepare(args: &Args, state: &mut RuntimeState) -> OCResult<PrepareResult> {
-    state.data.verify_not_frozen()?;
-
     let member = state.get_member(true, args.user_id.as_principal())?;
     let channel = state.data.channels.get_mut_or_err(&args.channel_id)?;
     let now = state.env.now();
@@ -80,6 +78,7 @@ fn prepare(args: &Args, state: &mut RuntimeState) -> OCResult<PrepareResult> {
         args.streak,
         args.streak_ends,
         args.user_reauthenticated,
+        &state.data.migrated_user_ids,
     )?;
 
     // Hack to ensure 2 prizes claimed by the same user in the same block don't result in "duplicate transaction" errors.
@@ -91,7 +90,7 @@ fn prepare(args: &Args, state: &mut RuntimeState) -> OCResult<PrepareResult> {
         result.ledger_canister_id,
         result.amount,
         result.fee,
-        user_id,
+        member.user().into(),
         Some(&MEMO_PRIZE_CLAIM),
         transaction_time,
     );

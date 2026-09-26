@@ -14,13 +14,11 @@ fn unblock_user(args: Args) -> Response {
 }
 
 fn unblock_user_impl(args: Args, state: &mut RuntimeState) -> OCResult {
-    state.data.verify_not_frozen()?;
-
     if !state.data.is_public.value {
         return Err(OCErrorCode::CommunityNotPublic.into());
     }
 
-    let caller_member = state.get_calling_member(true)?;
+    let caller_member = state.get_calling_member(None, true)?;
 
     if caller_member.user_id == args.user_id {
         Err(OCErrorCode::CannotBlockSelf.into())

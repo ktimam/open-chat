@@ -36,13 +36,11 @@ struct PrepareResult {
 }
 
 fn prepare(args: &Args, state: &RuntimeState) -> OCResult<PrepareResult> {
-    state.data.verify_not_frozen()?;
-
     if state.data.is_public.value {
         return Err(OCErrorCode::CommunityPublic.into());
     }
 
-    let member = state.get_calling_member(true)?;
+    let member = state.get_calling_member(None, true)?;
     let user_id = member.user_id;
     let channel = state.data.channels.get_or_err(&args.channel_id)?;
 

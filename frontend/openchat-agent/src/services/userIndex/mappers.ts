@@ -1,4 +1,5 @@
 import type {
+    UsersArgs,
     AutonomousBotConfig,
     BotDefinition,
     BotInstallationLocation,
@@ -45,7 +46,13 @@ import type {
     AiAppUserKey,
     ExploreAiAppsResponse,
 } from "@shared";
-import { aiAppFromRegistration, CommonResponses, UnsupportedValueError } from "@shared";
+import {
+    aiAppFromRegistration,
+    buildBlobUrl,
+    CommonResponses,
+    UnsupportedValueError,
+    isPrincipalValid,
+} from "@shared";
 import type {
     BotDefinition as ApiBotDefinition,
     BotInstallationLocation as ApiBotInstallationLocation,
@@ -163,12 +170,8 @@ export function botSchema(
         kind: "external_bot",
         id: botId,
         name: bot.name,
-        avatarUrl: mapOptional(
-            bot.avatar_id,
-            (id) =>
-                `${blobUrlPattern
-                    .replace("{canisterId}", canisterId)
-                    .replace("{blobType}", "avatar")}/${botId}/${id}`,
+        avatarUrl: mapOptional(bot.avatar_id, (id) =>
+            buildBlobUrl(blobUrlPattern, canisterId, id, "avatar", { botId }),
         ),
         ownerId: principalBytesToString(bot.owner),
         endpoint: bot.endpoint,
@@ -276,6 +279,9 @@ export function userSummaryUpdate(value: TUserSummaryV2): UserSummaryUpdate {
             maxStreak: v.max_streak,
             totalChitEarned: v.total_chit_earned,
         })),
+        previousUserIds: mapOptional(value.previous_user_ids, (ids) =>
+            ids.map(principalBytesToString),
+        ),
     };
 }
 
@@ -1095,12 +1101,8 @@ export function externalBotMatch(
     return {
         kind: "bot_match",
         name: match.name,
-        avatarUrl: mapOptional(
-            match.avatar_id,
-            (id) =>
-                `${blobUrlPattern
-                    .replace("{canisterId}", canisterId)
-                    .replace("{blobType}", "avatar")}/${botId}/${id}`,
+        avatarUrl: mapOptional(match.avatar_id, (id) =>
+            buildBlobUrl(blobUrlPattern, canisterId, id, "avatar", { botId }),
         ),
         id: botId,
         ownerId: principalBytesToString(match.owner),
@@ -1136,4 +1138,16 @@ export function exploreBotsResponse(
         return ocError(value.Error);
     }
     throw new UnsupportedValueError("Unexpected ExploreBotsResponse type received", value);
+}
+
+// Filters out user ids that could never be principals; `Principal.fromText` would throw on them
+// and fail the whole batch.
+export function dropInvalidUserIds(users: UsersArgs): UsersArgs {
+    return {
+        ...users,
+        userGroups: users.userGroups.map((g) => ({
+            ...g,
+            users: g.users.filter(isPrincipalValid),
+        })),
+    };
 }

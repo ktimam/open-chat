@@ -2,222 +2,50 @@ use crate::activity_notifications::handle_activity_notification;
 use crate::guards::caller_is_local_user_index;
 use crate::model::members::CommunityMembers;
 use crate::model::user_groups::UserGroup;
-use crate::timer_job_types::{DeleteFileReferencesJob, EndPollJob, FinalPrizePaymentsJob, MarkP2PSwapExpiredJob, TimerJob};
-use crate::{CommunityEventPusher, Data, RuntimeState, execute_update, read_state};
+use crate::timer_job_types::{
+    CancelP2PSwapInEscrowCanisterJob, DeleteFileReferencesJob, EndPollJob, FinalPrizePaymentsJob, MakeTransferJob,
+    MarkP2PSwapExpiredJob, NotifyEscrowCanisterOfSwapFundedJob, TimerJob,
+};
+use crate::{CommunityEventPusher, Data, RuntimeState, execute_update, execute_update_async, mutate_state};
+use candid::Principal;
 use canister_api_macros::update;
+use canister_timer_jobs::Job;
 use canister_tracing_macros::trace;
-use chat_events::{MessageContentInternal, ValidateNewMessageContentResult, ai_app_card_content_hash_from_initial};
+use chat_events::{MessageContentInternal, ValidateNewMessageContentResult};
 use community_canister::c2c_bot_send_message;
 use community_canister::c2c_send_message::{Args as C2CArgs, Response as C2CResponse};
 use community_canister::send_message::{Response::*, *};
+use constants::{MEMO_MESSAGE, MEMO_PRIZE};
 use group_chat_core::SendMessageSuccess;
+use group_community_common::{NewP2PSwap, prize_refund, validate_prize};
 use itertools::Itertools;
 use lazy_static::lazy_static;
+use ledger_utils::UserTransfer;
 use oc_error_codes::OCErrorCode;
-use rand::Rng;
 use regex_lite::Regex;
 use std::str::FromStr;
+use tracing::error;
 use types::{
-    Achievement, BotCaller, BotPermissions, Caller, ChannelId, ChannelMessageNotification, ChannelUserNotificationPayload,
-    Chat, CommunityId, EventIndex, EventWrapper, IdempotentEnvelope, Message, MessageContent, MessageContentInitial,
-    MessageIndex, OCResult, TimestampMillis, User, UserId, UserType, Version,
+    Achievement, BotCaller, BotPermissions, Caller, CanisterId, ChannelId, ChannelMessageNotification,
+    ChannelUserNotificationPayload, Chat, CommunityId, CompletedCryptoTransaction, EventIndex, EventWrapper, Message,
+    MessageContent, MessageContentInitial, MessageContentType, MessageIndex, OCResult, P2PSwapLocation, TimestampMillis, User,
+    UserId, UserIdAndPrincipal, UserType, Version, icrc1, icrc2,
 };
 use user_canister::{CommunityCanisterEvent, MessageActivity, MessageActivityEvent};
 
 #[update(msgpack = true)]
+#[trace]
 async fn send_message(args: Args) -> Response {
-    // Do not trace: an app ActionCard carries a live one-time provenance proof in its ingress args.
-    let mut prepared = match read_state(|state| prepare_app_card_post(&args, state)) {
-        Ok(value) => value,
-        Err(error) => return Error(error),
-    };
-    if let Some(relay) = prepared.provenance.as_ref() {
-        let chat_key = match relay.chat {
-            Chat::Channel(community_id, channel_id) => format!("channel:{community_id}:{channel_id}"),
-            _ => return Error(OCErrorCode::InvalidRequest.with_message("invalid channel card authority route")),
-        };
-        let binding = group_index_canister::ai_app_card_authority::AiAppCardAuthorityBindingV1 {
-            local_user_index_canister_id: prepared.local_user_index_canister_id,
-            context: types::AiAppCardContext {
-                user_id: relay.user_id,
-                chat: relay.chat,
-                chat_key,
-                thread_root_message_index: relay.thread_root_message_index,
-                message_id: relay.message_id,
-                app_id: relay.app_id,
-                app_revision: relay.app_revision,
-                action_id: relay.action_id.clone(),
-            },
-            content_hash: relay.content_hash,
-            operation: group_index_canister::ai_app_card_authority::AiAppCardAuthorityOperationV1::ValidateProvenance {
-                provenance_hash: group_index_canister::ai_app_card_authority::opaque_hash_v1(
-                    group_index_canister::ai_app_card_authority::OpaqueHashPurposeV1::Provenance,
-                    &relay.provenance,
-                ),
-            },
-        };
-        let authority = match crate::ai_app_card_authority::issue(prepared.group_index_canister_id, binding).await {
-            Ok(token) => token,
-            Err(error) => return Error(error),
-        };
-        if let Err(error) = read_state(|state| revalidate_app_card_post(&prepared, state)) {
-            return Error(error);
-        }
-        prepared.provenance.as_mut().unwrap().authority = authority;
-    }
-    let app_verified = if let Some(relay) = prepared.provenance.as_ref() {
-        match local_user_index_canister_c2c_client::c2c_validate_ai_app_card_provenance(
-            prepared.local_user_index_canister_id,
-            relay,
-        )
-        .await
-        {
-            Ok(local_user_index_canister::c2c_validate_ai_app_card_provenance::Response::Success) => true,
-            Ok(local_user_index_canister::c2c_validate_ai_app_card_provenance::Response::InvalidProvenance) => {
-                return Error(OCErrorCode::InvalidRequest.with_message("invalid AI-app card provenance"));
-            }
-            Ok(local_user_index_canister::c2c_validate_ai_app_card_provenance::Response::AppUnavailable) => {
-                return Error(OCErrorCode::InvalidRequest.with_message("AI app is unavailable"));
-            }
-            Ok(
-                local_user_index_canister::c2c_validate_ai_app_card_provenance::Response::InvalidRequest(error)
-                | local_user_index_canister::c2c_validate_ai_app_card_provenance::Response::Error(error),
-            ) => {
-                return Error(OCErrorCode::InvalidRequest.with_message(error));
-            }
-            Err(error) => return Error(OCErrorCode::C2CError.with_message(format!("{error:?}"))),
-        }
+    let result = if args.content.has_transfer_to_make() {
+        execute_update_async(|| send_message_with_transfer(args)).await
     } else {
-        false
+        execute_update(|state| send_message_impl(args, None, true, state))
     };
-    // The provenance relay yielded through LocalUserIndex and UserIndex after the earlier
-    // GroupIndex issuance check. Recheck the exact ingress caller, membership, local routes and app
-    // enablement once more before committing the message.
-    if app_verified && let Err(error) = read_state(|state| revalidate_app_card_post(&prepared, state)) {
-        return Error(error);
-    }
-    let verified_app_card = app_verified.then_some(prepared.app_card).flatten();
-    match execute_update(|state| send_message_impl_for_caller(args, prepared.caller, true, verified_app_card, state)) {
+
+    match result {
         Ok(result) => Success(result),
         Err(error) => Error(error),
     }
-}
-
-struct AppCardPostPreparation {
-    caller: Caller,
-    local_user_index_canister_id: types::CanisterId,
-    group_index_canister_id: types::CanisterId,
-    provenance: Option<local_user_index_canister::c2c_validate_ai_app_card_provenance::Args>,
-    app_card: Option<VerifiedAppCardPost>,
-}
-
-#[derive(Clone)]
-struct VerifiedAppCardPost {
-    ingress_caller: candid::Principal,
-    principal_mapping_generation: u64,
-    channel_id: ChannelId,
-    user_id: UserId,
-    app_id: types::AiAppId,
-    app_revision: TimestampMillis,
-    action_id: String,
-    content_hash: [u8; 32],
-    thread_root_message_index: Option<MessageIndex>,
-    message_id: types::MessageId,
-}
-
-fn prepare_app_card_post(args: &Args, state: &RuntimeState) -> OCResult<AppCardPostPreparation> {
-    let ingress_caller = state.env.caller();
-    let caller = state.verified_caller(None)?;
-    let (provenance, app_card) = match &args.content {
-        MessageContentInitial::ActionCard(card)
-            if card.app_id.is_some() || card.app_revision.is_some() || card.app_provenance.is_some() =>
-        {
-            let (Some(app_id), Some(app_revision), Some(provenance)) =
-                (card.app_id, card.app_revision, card.app_provenance.clone())
-            else {
-                return Err(OCErrorCode::InvalidRequest.with_message("incomplete AI-app card provenance"));
-            };
-            if provenance.len() != 32 {
-                return Err(OCErrorCode::InvalidRequest.with_message("invalid AI-app card provenance"));
-            }
-            let channel = state.data.channels.get_or_err(&args.channel_id)?;
-            if !matches!(&caller, Caller::User(_)) || !channel.enabled_ai_apps.contains(&app_id) {
-                return Err(OCErrorCode::InitiatorNotAuthorized.into());
-            }
-            let user_id = caller.agent();
-            let chat = Chat::Channel(state.env.canister_id().into(), args.channel_id);
-            let content_hash = ai_app_card_content_hash_from_initial(
-                user_id,
-                chat,
-                args.thread_root_message_index,
-                args.message_id,
-                app_id,
-                app_revision,
-                card,
-            )
-            .map_err(|error| OCErrorCode::InvalidRequest.with_message(error))?;
-            let verified = VerifiedAppCardPost {
-                ingress_caller,
-                principal_mapping_generation: state.data.members.principal_mapping_generation(),
-                channel_id: args.channel_id,
-                user_id,
-                app_id,
-                app_revision,
-                action_id: card.action_id.clone(),
-                content_hash,
-                thread_root_message_index: args.thread_root_message_index,
-                message_id: args.message_id,
-            };
-            (
-                Some(local_user_index_canister::c2c_validate_ai_app_card_provenance::Args {
-                    user_id,
-                    chat,
-                    thread_root_message_index: args.thread_root_message_index,
-                    message_id: args.message_id,
-                    app_id,
-                    app_revision,
-                    action_id: card.action_id.clone(),
-                    content_hash,
-                    member_user_ids: vec![user_id],
-                    provenance,
-                    authority: serde_bytes::ByteBuf::new(),
-                }),
-                Some(verified),
-            )
-        }
-        _ => (None, None),
-    };
-    Ok(AppCardPostPreparation {
-        caller,
-        local_user_index_canister_id: state.data.local_user_index_canister_id,
-        group_index_canister_id: state.data.group_index_canister_id,
-        provenance,
-        app_card,
-    })
-}
-
-fn revalidate_app_card_post(prepared: &AppCardPostPreparation, state: &RuntimeState) -> OCResult {
-    state.data.verify_not_frozen()?;
-    if state.data.local_user_index_canister_id != prepared.local_user_index_canister_id
-        || state.data.group_index_canister_id != prepared.group_index_canister_id
-    {
-        return Err(OCErrorCode::C2CError.with_message("card authority route changed"));
-    }
-    if let Some(card) = &prepared.app_card {
-        let channel = state.data.channels.get_or_err(&card.channel_id)?;
-        if state.data.members.principal_mapping_generation() != card.principal_mapping_generation
-            || state.data.members.lookup_user_id(card.ingress_caller) != Some(card.user_id)
-            || !channel.enabled_ai_apps.contains(&card.app_id)
-        {
-            return Err(OCErrorCode::InitiatorNotAuthorized.into());
-        }
-        let member = state.data.members.get_verified_member(card.ingress_caller)?;
-        if member.user_id != card.user_id || member.user_type != UserType::User {
-            return Err(OCErrorCode::InitiatorNotAuthorized.into());
-        }
-        channel.chat.members.get_verified_member(card.user_id)?;
-    }
-    Ok(())
 }
 
 #[update(msgpack = true)]
@@ -266,69 +94,15 @@ pub(crate) fn send_message_impl(
 ) -> OCResult<SuccessResult> {
     let caller = state.verified_caller(ext_caller)?;
 
-    send_message_impl_for_caller(args, caller, finalised, None, state)
-}
-
-fn send_message_impl_for_caller(
-    args: Args,
-    caller: Caller,
-    finalised: bool,
-    verified_app_card: Option<VerifiedAppCardPost>,
-    state: &mut RuntimeState,
-) -> OCResult<SuccessResult> {
-    // App-card ingress awaited UserIndex validation. Recheck every mutable authorization input and
-    // the immutable context snapshot immediately before the local channel mutation.
-    if let Some(expected) = &verified_app_card {
-        if !matches!(&caller, Caller::User(user_id) if *user_id == expected.user_id)
-            || state.data.members.principal_mapping_generation() != expected.principal_mapping_generation
-        {
-            return Err(OCErrorCode::InitiatorNotAuthorized.into());
-        }
-        let member = state.data.members.get_verified_member(expected.ingress_caller)?;
-        if member.user_id != expected.user_id || member.user_type != UserType::User {
-            return Err(OCErrorCode::InitiatorNotAuthorized.into());
-        }
-        let channel = state.data.channels.get_or_err(&expected.channel_id)?;
-        channel.chat.members.get_verified_member(expected.user_id)?;
-        if !channel.enabled_ai_apps.contains(&expected.app_id) {
-            return Err(OCErrorCode::InitiatorNotAuthorized.with_message("AI app was disabled while validating"));
-        }
-        match &args.content {
-            MessageContentInitial::ActionCard(card)
-                if args.channel_id == expected.channel_id
-                    && card.app_id == Some(expected.app_id)
-                    && card.app_revision == Some(expected.app_revision)
-                    && card.action_id == expected.action_id
-                    && args.thread_root_message_index == expected.thread_root_message_index
-                    && args.message_id == expected.message_id
-                    && ai_app_card_content_hash_from_initial(
-                        expected.user_id,
-                        Chat::Channel(state.env.canister_id().into(), expected.channel_id),
-                        args.thread_root_message_index,
-                        args.message_id,
-                        expected.app_id,
-                        expected.app_revision,
-                        card,
-                    )
-                    .is_ok_and(|hash| hash == expected.content_hash) => {}
-            _ => return Err(OCErrorCode::InvalidRequest.with_message("AI-app card changed while validating")),
-        }
-    }
-
     let display_name = prepare(&caller, args.community_rules_accepted, state)?;
 
     let now = state.env.now();
-    let mut content =
+    let content =
         match MessageContentInternal::validate_new_message(args.content, false, (&caller).into(), args.forwarding, now) {
             ValidateNewMessageContentResult::Success(content) => content,
             ValidateNewMessageContentResult::Error(error) => return Err(error.into()),
             _ => return Err(OCErrorCode::InvalidRequest.with_message("Message type not supported")),
         };
-    if let Some(verified) = &verified_app_card
-        && !content.mark_ai_app_card_verified(verified.content_hash)
-    {
-        return Err(OCErrorCode::InvalidRequest.with_message("provenance was supplied for a non-card message"));
-    }
 
     let channel = state.data.channels.get_mut_or_err(&args.channel_id)?;
     if channel.chat.external_url.is_some() {
@@ -355,6 +129,7 @@ fn send_message_impl_for_caller(
         },
         finalised,
         args.og_previews,
+        &state.data.migrated_user_ids,
         now,
     )?;
 
@@ -377,22 +152,42 @@ fn send_message_impl_for_caller(
 fn c2c_send_message_impl(args: C2CArgs, state: &mut RuntimeState) -> OCResult<SuccessResult> {
     let caller = state.verified_caller(None)?;
 
-    let display_name = prepare(&caller, args.community_rules_accepted, state)?;
-
     // Bots can't call this c2c endpoint since it skips the validation
     if matches!(caller, Caller::Bot(_) | Caller::BotV2(_)) {
         return Err(OCErrorCode::InitiatorNotAuthorized.into());
     }
 
+    send_message_with_completed_transfer(&caller, args, false, state)
+}
+
+// Sends a message whose content has been validated already, and whose transfer, if it holds one,
+// has been made
+pub(crate) fn send_message_with_completed_transfer(
+    caller: &Caller,
+    args: C2CArgs,
+    new_achievement: bool,
+    state: &mut RuntimeState,
+) -> OCResult<SuccessResult> {
+    let display_name = prepare(caller, args.community_rules_accepted, state)?;
+
+    let mut content = args.content;
+    // Recorded so the prize can be refunded to the sender's wallet even if they have left
+    if let MessageContentInternal::Prize(prize) = &mut content {
+        prize.principal = match caller {
+            Caller::User(user) => user.principal,
+            _ => state.member_user(caller.agent()).principal,
+        };
+    }
+
     if let Some(channel) = state.data.channels.get_mut(&args.channel_id) {
         let now = state.env.now();
-        let users_mentioned = extract_users_mentioned(args.mentioned, args.content.text(), &state.data.members);
+        let users_mentioned = extract_users_mentioned(args.mentioned, content.text(), &state.data.members);
 
         let result = channel.chat.send_message(
-            &caller,
+            caller,
             args.thread_root_message_index,
             args.message_id,
-            args.content,
+            content,
             args.replies_to,
             &users_mentioned.all_users_mentioned,
             args.forwarding,
@@ -406,12 +201,13 @@ fn c2c_send_message_impl(args: C2CArgs, state: &mut RuntimeState) -> OCResult<Su
             },
             true,
             args.og_previews,
+            &state.data.migrated_user_ids,
             now,
         )?;
 
         Ok(process_send_message_result(
             result,
-            &caller,
+            caller,
             args.sender_name,
             display_name.or(args.sender_display_name),
             channel.id,
@@ -419,7 +215,7 @@ fn c2c_send_message_impl(args: C2CArgs, state: &mut RuntimeState) -> OCResult<Su
             channel.chat.avatar.as_ref().map(|d| d.id),
             args.thread_root_message_index,
             users_mentioned,
-            false,
+            new_achievement,
             now,
             state,
         ))
@@ -428,11 +224,12 @@ fn c2c_send_message_impl(args: C2CArgs, state: &mut RuntimeState) -> OCResult<Su
     }
 }
 
-fn prepare(caller: &Caller, community_rules_accepted: Option<Version>, state: &mut RuntimeState) -> OCResult<Option<String>> {
-    if state.data.is_frozen() {
-        return Err(OCErrorCode::CommunityFrozen.into());
-    }
-
+// Checks the community isn't frozen and the sender has accepted its rules, returning their display name
+pub(crate) fn prepare(
+    caller: &Caller,
+    community_rules_accepted: Option<Version>,
+    state: &mut RuntimeState,
+) -> OCResult<Option<String>> {
     let now = state.env.now();
     let sender = caller.agent();
 
@@ -523,6 +320,7 @@ fn process_send_message_result(
             community_avatar_id: state.data.avatar.as_ref().map(|d| d.id),
             channel_avatar_id,
             crypto_transfer: content.notification_crypto_transfer_details(&users_mentioned.mentioned_directly),
+            call: None,
         });
         state.push_notification(Some(sender), result.users_to_notify, notification);
 
@@ -584,22 +382,19 @@ fn process_send_message_result(
         }
 
         for (user_id, activity) in activity_events {
-            state.data.user_event_sync_queue.push(
+            state.push_event_to_user(
                 user_id,
-                IdempotentEnvelope {
-                    created_at: now,
-                    idempotency_id: state.env.rng().next_u64(),
-                    value: CommunityCanisterEvent::MessageActivity(MessageActivityEvent {
-                        chat: Chat::Channel(community_id, channel_id),
-                        thread_root_message_index,
-                        message_index,
-                        message_id,
-                        event_index,
-                        activity,
-                        timestamp: now,
-                        user_id: Some(sender),
-                    }),
-                },
+                CommunityCanisterEvent::MessageActivity(MessageActivityEvent {
+                    chat: Chat::Channel(community_id, channel_id),
+                    thread_root_message_index,
+                    message_index,
+                    message_id,
+                    event_index,
+                    activity,
+                    timestamp: now,
+                    user_id: Some(sender),
+                }),
+                now,
             );
         }
     }
@@ -613,6 +408,7 @@ fn process_send_message_result(
         message_index,
         timestamp: now,
         expires_at,
+        transfer: None,
     }
 }
 
@@ -716,4 +512,254 @@ fn extract_user_groups_mentioned<'a>(text: Option<&'a str>, members: &'a Communi
     }
 
     Vec::new()
+}
+
+// Sends a message holding a transfer the sender makes from their own funds, making the transfer
+// first. See `send_message::Args` for which transfers are accepted.
+async fn send_message_with_transfer(args: Args) -> OCResult<SuccessResult> {
+    let (user, prepared) = mutate_state(|state| prepare_transfer(&args, state))?;
+
+    match prepared {
+        // The transfer was certified, so the message has been sent already
+        PrepareTransferResult::Sent(result) => Ok(result),
+        PrepareTransferResult::Icrc2(transfer) => {
+            let from = transfer.from;
+            let completed: CompletedCryptoTransaction = match ledger_utils::icrc2::process_transaction_for_user(
+                transfer,
+                ledger_utils::spender_subaccount(user.principal),
+            )
+            .await
+            {
+                Ok(Ok(completed)) => completed.into(),
+                Ok(Err((_, error))) => return Err(error),
+                Err(error) => return Err(error.into()),
+            };
+
+            let (result, now) = mutate_state(|state| {
+                (
+                    send_message_holding_transfer(user, &args, completed.clone(), None, state),
+                    state.env.now(),
+                )
+            });
+            if let Err(error) = &result {
+                error!(?error, "Failed to send message after making its transfer");
+                if matches!(args.content, MessageContentInitial::Prize(_))
+                    && let Some(refund) = prize_refund(&completed, from, now)
+                {
+                    MakeTransferJob {
+                        pending_transaction: refund,
+                        attempt: 0,
+                    }
+                    .execute();
+                }
+            }
+            result
+        }
+        PrepareTransferResult::P2PSwap(swap) => {
+            let offered_by = swap.swap.offered_by();
+            let result = swap
+                .swap
+                .create(swap.escrow_canister_id, swap.local_user_index_canister_id, swap.now)
+                .await;
+
+            // Once the swap exists it may pay out or refund to the member's wallet, so it is recorded
+            // against them in their canister, just as a swap created via their canister is
+            if let Some(swap_id) = match &result {
+                Ok((swap_id, _)) => Some(*swap_id),
+                Err((_, swap_id)) => *swap_id,
+            } {
+                mutate_state(|state| {
+                    let now = state.env.now();
+                    state.push_event_to_user(
+                        user.user_id,
+                        CommunityCanisterEvent::P2PSwapCreated(Box::new(swap.swap.created(swap_id, swap.now))),
+                        now,
+                    )
+                });
+            }
+
+            let (swap_id, completed) = match result {
+                Ok(ok) => ok,
+                Err((error, swap_id)) => {
+                    if let Some(swap_id) = swap_id {
+                        cancel_p2p_swap(swap_id, offered_by);
+                    }
+                    return Err(error);
+                }
+            };
+
+            let result = mutate_state(|state| send_message_holding_transfer(user, &args, completed, Some(swap_id), state));
+            match &result {
+                Ok(_) => NotifyEscrowCanisterOfSwapFundedJob::run(swap_id, offered_by),
+                Err(error) => {
+                    error!(?error, "Failed to send message after funding its P2P swap");
+                    cancel_p2p_swap(swap_id, offered_by);
+                }
+            }
+            result
+        }
+    }
+}
+
+// Cancels a swap which may have been funded. The Escrow canister is only notified of the funding once
+// the swap is cancelled, so that it refunds any deposit. Were it notified first, it could record the
+// deposit as received after the cancellation, which refunds nothing not yet received.
+fn cancel_p2p_swap(swap_id: u32, offered_by: Principal) {
+    CancelP2PSwapInEscrowCanisterJob::run(swap_id);
+    NotifyEscrowCanisterOfSwapFundedJob::run(swap_id, offered_by);
+}
+
+enum PrepareTransferResult {
+    Sent(SuccessResult),
+    Icrc2(icrc2::PendingCryptoTransaction),
+    P2PSwap(Box<P2PSwapToCreate>),
+}
+
+struct P2PSwapToCreate {
+    swap: NewP2PSwap,
+    escrow_canister_id: CanisterId,
+    local_user_index_canister_id: CanisterId,
+    now: TimestampMillis,
+}
+
+fn prepare_transfer(args: &Args, state: &mut RuntimeState) -> OCResult<(UserIdAndPrincipal, PrepareTransferResult)> {
+    let caller = state.verified_caller(None)?;
+    let Caller::User(user) = caller else {
+        return Err(OCErrorCode::InitiatorNotAuthorized.into());
+    };
+    let user_id = user.user_id;
+
+    prepare(&caller, args.community_rules_accepted, state)?;
+
+    if state.data.channels.get_or_err(&args.channel_id)?.chat.external_url.is_some() {
+        return Err(OCErrorCode::InitiatorNotAuthorized.into());
+    }
+
+    let now = state.env.now();
+    let this_canister_id = state.env.canister_id();
+
+    let (content_type, memo, transfer, recipient) =
+        match MessageContentInternal::validate_new_message(args.content.clone(), false, UserType::User, args.forwarding, now) {
+            ValidateNewMessageContentResult::SuccessCrypto(c) => {
+                if c.recipient == user_id {
+                    return Err(OCErrorCode::TransferCannotBeToSelf.into());
+                }
+                let recipient = state.member_wallet(c.recipient)?;
+                (MessageContentType::Crypto, MEMO_MESSAGE.as_slice(), c.transfer, recipient)
+            }
+            ValidateNewMessageContentResult::SuccessPrize(p) => {
+                validate_prize(&p, args.thread_root_message_index)?;
+                // The community holds the prize, paying out each winner's share from its own account
+                let recipient = icrc1::Account::from(this_canister_id);
+                (MessageContentType::Prize, MEMO_PRIZE.as_slice(), p.transfer, recipient)
+            }
+            ValidateNewMessageContentResult::SuccessP2PSwap(p) => {
+                state
+                    .data
+                    .channels
+                    .get_or_err(&args.channel_id)?
+                    .chat
+                    .check_can_send_message(
+                        user_id,
+                        args.thread_root_message_index,
+                        args.message_id,
+                        MessageContentType::P2PSwap,
+                        args.channel_rules_accepted,
+                    )?;
+                let location = P2PSwapLocation::from_message(
+                    Chat::Channel(this_canister_id.into(), args.channel_id),
+                    args.thread_root_message_index,
+                    args.message_id,
+                );
+                let swap = NewP2PSwap::new(
+                    &p,
+                    location,
+                    user_id,
+                    ledger_utils::spender_subaccount(user.principal),
+                    state.member_wallet(user_id)?,
+                    this_canister_id,
+                    now,
+                )?;
+                return Ok((
+                    user,
+                    PrepareTransferResult::P2PSwap(Box::new(P2PSwapToCreate {
+                        swap,
+                        escrow_canister_id: state.data.escrow_canister_id,
+                        local_user_index_canister_id: state.data.local_user_index_canister_id,
+                        now,
+                    })),
+                ));
+            }
+            ValidateNewMessageContentResult::Error(error) => return Err(error.into()),
+            ValidateNewMessageContentResult::Success(_) => {
+                return Err(OCErrorCode::InvalidRequest.with_message("Message must include a crypto transfer"));
+            }
+        };
+
+    let transfer = UserTransfer::new(transfer, recipient, memo, this_canister_id)?;
+
+    state
+        .data
+        .channels
+        .get_or_err(&args.channel_id)?
+        .chat
+        .check_can_send_message(
+            user_id,
+            args.thread_root_message_index,
+            args.message_id,
+            content_type,
+            args.channel_rules_accepted,
+        )?;
+
+    match transfer {
+        UserTransfer::Icrc2(transfer) => Ok((user, PrepareTransferResult::Icrc2(transfer))),
+        UserTransfer::Certified(transfer) => {
+            let completed = state.data.certified_transfers.verify(
+                transfer,
+                state.env.caller(),
+                memo,
+                this_canister_id,
+                &state.env.ic_root_key(),
+                now,
+            )?;
+            let result = send_message_holding_transfer(user, args, completed.clone().into(), None, state)?;
+            state.data.certified_transfers.mark_used(&completed, now);
+            Ok((user, PrepareTransferResult::Sent(result)))
+        }
+    }
+}
+
+fn send_message_holding_transfer(
+    user: UserIdAndPrincipal,
+    args: &Args,
+    transfer: CompletedCryptoTransaction,
+    p2p_swap_id: Option<u32>,
+    state: &mut RuntimeState,
+) -> OCResult<SuccessResult> {
+    let now = state.env.now();
+    let content = MessageContentInternal::new_with_transfer(args.content.clone(), transfer.clone().into(), p2p_swap_id, now);
+
+    let c2c_args = C2CArgs {
+        channel_id: args.channel_id,
+        thread_root_message_index: args.thread_root_message_index,
+        message_id: args.message_id,
+        content,
+        sender_name: args.sender_name.clone(),
+        sender_display_name: args.sender_display_name.clone(),
+        replies_to: args.replies_to.clone(),
+        mentioned: args.mentioned.clone(),
+        forwarding: false,
+        block_level_markdown: args.block_level_markdown,
+        og_previews: args.og_previews.clone(),
+        community_rules_accepted: args.community_rules_accepted,
+        channel_rules_accepted: args.channel_rules_accepted,
+        message_filter_failed: args.message_filter_failed,
+    };
+
+    let result = send_message_with_completed_transfer(&Caller::User(user), c2c_args, args.new_achievement, state)?;
+
+    Ok(SuccessResult {
+        transfer: Some(transfer),
+        ..result
+    })
 }

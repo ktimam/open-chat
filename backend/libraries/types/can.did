@@ -1,7 +1,6 @@
 import "../../external_canisters/icrc_ledger/api/can.did";
 
 type AccessorId = principal;
-type AiAppId = nat32;
 type AccountIdentifier = blob;
 type BlockIndex = nat64;
 type CanisterId = principal;
@@ -586,7 +585,6 @@ type MessageContentInitial = variant {
     MessageReminder : MessageReminder;
     Encrypted : EncryptedContent;
     Custom : CustomMessageContent;
-    ActionCard : ActionCardContentInitial;
 };
 
 type MessageContent = variant {
@@ -610,53 +608,6 @@ type MessageContent = variant {
     Encrypted : EncryptedContent;
     Custom : CustomMessageContent;
     ReportedMessage : ReportedMessage;
-    ActionCard : ActionCardContent;
-};
-
-type ActionCardRow = record {
-    label : text;
-    value : text;
-};
-
-type ActionCardState = variant {
-    Pending;
-    Confirmed;
-    Cancelled;
-    Expired;
-};
-
-type ActionCardContentInitial = record {
-    title : text;
-    rows : vec ActionCardRow;
-    confirm_label : text;
-    cancel_label : text;
-    action_id : text;
-    app_id : opt AiAppId;
-    app_revision : opt TimestampMillis;
-    app_provenance : opt blob;
-    disclosure : opt text;
-    expires_at : opt TimestampMillis;
-    recipient_public_key : opt text;
-    recipient_public_keys : vec text;
-    confirm_payload : opt blob;
-    inbox_canister_id : opt CanisterId;
-};
-
-type ActionCardContent = record {
-    title : text;
-    rows : vec ActionCardRow;
-    confirm_label : text;
-    cancel_label : text;
-    action_id : text;
-    app_id : opt AiAppId;
-    app_revision : opt TimestampMillis;
-    app_verified : bool;
-    app_content_verified : bool;
-    disclosure : opt text;
-    state : ActionCardState;
-    responded_by : opt UserId;
-    responded_at : opt TimestampMillis;
-    expires_at : opt TimestampMillis;
 };
 
 type MessageMatch = record {
@@ -916,6 +867,7 @@ type UserSummary = record {
     max_streak : nat16;
     is_unique_person : bool;
     hide_online_status : bool;
+    previous_user_ids : vec UserId;
 };
 
 type BuildVersion = record {
@@ -943,6 +895,7 @@ type PendingCryptoTransaction = variant {
     NNS : NnsPendingCryptoTransaction;
     ICRC1 : Icrc1PendingCryptoTransaction;
     ICRC2 : Icrc2PendingCryptoTransaction;
+    Certified : CertifiedPendingCryptoTransaction;
 };
 
 type CompletedCryptoTransaction = variant {
@@ -994,7 +947,6 @@ type NnsFailedCryptoTransaction = record {
 };
 
 type NnsUserOrAccount = variant {
-    User : UserId;
     Account : AccountIdentifier;
 };
 
@@ -1045,6 +997,24 @@ type Icrc1FailedCryptoTransaction = record {
     memo : opt Memo;
     created : TimestampNanos;
     error_message : text;
+};
+
+type CertifiedPendingCryptoTransaction = record {
+    ledger : CanisterId;
+    token_symbol : text;
+    amount : nat;
+    to : Icrc1Account;
+    fee : nat;
+    memo : opt Memo;
+    created : TimestampNanos;
+    call : CertifiedCall;
+};
+
+type CertifiedCall = record {
+    arg : blob;
+    ingress_expiry : nat64;
+    nonce : opt blob;
+    certificate : blob;
 };
 
 type Icrc2PendingCryptoTransaction = record {
@@ -1625,6 +1595,7 @@ type VideoCallContentInitial = record {
 
 type VideoCallContent = record {
     call_type : VideoCallType;
+    audio_only : bool;
     ended : opt TimestampMillis;
     participants : vec CallParticipant;
     hidden_participants : nat32;
@@ -1751,6 +1722,7 @@ type VideoCall = record {
     message_index : MessageIndex;
     message_id : MessageId;
     call_type : VideoCallType;
+    audio_only : bool;
     joined_by_current_user : bool;
 };
 
@@ -1804,6 +1776,7 @@ type UserSummaryV2 = record {
     user_id : UserId;
     stable : opt UserSummaryStable;
     volatile : opt UserSummaryVolatile;
+    previous_user_ids : vec UserId;
 };
 
 type UserSummaryStable = record {
@@ -2158,7 +2131,6 @@ type ChatEventType = variant {
     MessageP2pSwapCompleted;
     MessageP2pSwapCancelled;
     MessageVideoCall;
-    MessageActionCardResponse;
     MessageOther;
 
     // Details category

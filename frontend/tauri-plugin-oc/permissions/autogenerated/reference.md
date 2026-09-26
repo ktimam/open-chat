@@ -35,6 +35,9 @@ Default permissions for the plugin
 - `allow-delete-model`
 - `allow-inference-runtime-available`
 - `allow-infer`
+- `allow-get-pending-call-action`
+- `allow-call-ring-handled`
+- `allow-set-call-config`
 
 ## Permission Table
 
@@ -44,6 +47,32 @@ Default permissions for the plugin
 <th>Description</th>
 </tr>
 
+
+<tr>
+<td>
+
+`oc:allow-call-ring-handled`
+
+</td>
+<td>
+
+Enables the call_ring_handled command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`oc:deny-call-ring-handled`
+
+</td>
+<td>
+
+Denies the call_ring_handled command without any pre-configured scope.
+
+</td>
+</tr>
 
 <tr>
 <td>
@@ -275,6 +304,32 @@ Enables the get_fcm_token command without any pre-configured scope.
 <td>
 
 Denies the get_fcm_token command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`oc:allow-get-pending-call-action`
+
+</td>
+<td>
+
+Enables the get_pending_call_action command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`oc:deny-get-pending-call-action`
+
+</td>
+<td>
+
+Denies the get_pending_call_action command without any pre-configured scope.
 
 </td>
 </tr>
@@ -691,6 +746,32 @@ Enables the save_media command without any pre-configured scope.
 <td>
 
 Denies the save_media command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`oc:allow-set-call-config`
+
+</td>
+<td>
+
+Enables the set_call_config command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`oc:deny-set-call-config`
+
+</td>
+<td>
+
+Denies the set_call_config command without any pre-configured scope.
 
 </td>
 </tr>

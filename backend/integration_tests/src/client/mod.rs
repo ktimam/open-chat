@@ -13,10 +13,10 @@ use types::{CanisterId, CanisterWasm, DiamondMembershipPlanDuration, HttpRequest
 
 mod macros;
 
-pub mod action_inbox;
 pub mod airdrop_bot;
 pub mod community;
 pub mod cycles_dispenser;
+pub mod daily_puzzle;
 pub mod escrow;
 pub mod event_store;
 pub mod group;
@@ -24,6 +24,7 @@ pub mod group_index;
 pub mod identity;
 pub mod ledger;
 pub mod local_user_index;
+pub mod multi_user;
 pub mod notifications_index;
 pub mod online_users;
 pub mod openchat_installer;
@@ -129,20 +130,105 @@ pub fn register_user(env: &mut PocketIc, canister_ids: &CanisterIds) -> User {
     register_user_with_referrer(env, canister_ids, None)
 }
 
+// Registers the user in a MultiUser canister rather than in a canister of their own
+pub fn register_user_in_multi_user_canister(env: &mut PocketIc, canister_ids: &CanisterIds) -> User {
+    register_user_with_options(env, canister_ids, None, true)
+}
+
+// Registers the user in the given MultiUser canister on the given LocalUserIndex
+pub fn register_user_in_multi_user_canister_on(
+    env: &mut PocketIc,
+    canister_ids: &CanisterIds,
+    local_user_index: CanisterId,
+    multi_user_canister_id: CanisterId,
+    referral_code: Option<String>,
+) -> User {
+    let (auth_principal, public_key) = random_internet_identity_principal();
+    register_user_internal(
+        env,
+        canister_ids,
+        referral_code,
+        auth_principal,
+        public_key,
+        Some(local_user_index),
+        true,
+        Some(multi_user_canister_id),
+    )
+    .0
+}
+
 pub fn register_user_on_subnet(env: &mut PocketIc, canister_ids: &CanisterIds, subnet: Principal) -> User {
     let (auth_principal, public_key) = random_internet_identity_principal();
-    register_user_internal(env, canister_ids, None, auth_principal, public_key, Some(subnet)).0
+    let local_user_index = canister_ids
+        .subnets
+        .iter()
+        .find(|s| s.subnet_id == subnet)
+        .unwrap()
+        .local_user_index;
+    register_user_internal(
+        env,
+        canister_ids,
+        None,
+        auth_principal,
+        public_key,
+        Some(local_user_index),
+        false,
+        None,
+    )
+    .0
 }
 
 pub fn register_user_with_referrer(env: &mut PocketIc, canister_ids: &CanisterIds, referral_code: Option<String>) -> User {
+    register_user_with_options(env, canister_ids, referral_code, false)
+}
+
+pub fn register_user_with_options(
+    env: &mut PocketIc,
+    canister_ids: &CanisterIds,
+    referral_code: Option<String>,
+    use_multi_user_canister: bool,
+) -> User {
     let (auth_principal, public_key) = random_internet_identity_principal();
-    register_user_internal(env, canister_ids, referral_code, auth_principal, public_key, None).0
+    register_user_internal(
+        env,
+        canister_ids,
+        referral_code,
+        auth_principal,
+        public_key,
+        None,
+        use_multi_user_canister,
+        None,
+    )
+    .0
 }
 
 pub fn register_user_and_include_auth(env: &mut PocketIc, canister_ids: &CanisterIds) -> (User, UserAuth) {
+    register_user_and_include_auth_with_options(env, canister_ids, false)
+}
+
+pub fn register_user_in_multi_user_canister_and_include_auth(
+    env: &mut PocketIc,
+    canister_ids: &CanisterIds,
+) -> (User, UserAuth) {
+    register_user_and_include_auth_with_options(env, canister_ids, true)
+}
+
+fn register_user_and_include_auth_with_options(
+    env: &mut PocketIc,
+    canister_ids: &CanisterIds,
+    use_multi_user_canister: bool,
+) -> (User, UserAuth) {
     let (auth_principal, auth_public_key, auth_delegation) = sign_in_with_email(env, canister_ids);
-    let (user, oc_public_key, oc_delegation) =
-        register_user_internal(env, canister_ids, None, auth_principal, auth_public_key.clone(), None);
+    let (user, oc_public_key, oc_delegation) = register_user_internal(
+        env,
+        canister_ids,
+        None,
+        auth_principal,
+        auth_public_key.clone(),
+        None,
+        use_multi_user_canister,
+        None,
+    );
 
     let user_auth = UserAuth {
         auth_public_key,
@@ -189,13 +275,16 @@ pub fn upgrade_user(
     tick_many(env, 4);
 }
 
+#[expect(clippy::too_many_arguments)]
 fn register_user_internal(
     env: &mut PocketIc,
     canister_ids: &CanisterIds,
     referral_code: Option<String>,
     auth_principal: Principal,
     public_key: Vec<u8>,
-    subnet: Option<Principal>,
+    local_user_index: Option<CanisterId>,
+    use_multi_user_canister: bool,
+    multi_user_canister_id: Option<CanisterId>,
 ) -> (User, Vec<u8>, SignedDelegation) {
     let session_key = random::<[u8; 32]>().to_vec();
     let create_identity_result = identity::happy_path::create_identity(
@@ -215,16 +304,8 @@ fn register_user_internal(
         create_identity_result.expiration,
     );
 
-    let local_user_index = subnet
-        .map(|sid| {
-            canister_ids
-                .subnets
-                .iter()
-                .find(|s| s.subnet_id == sid)
-                .unwrap()
-                .local_user_index
-        })
-        .unwrap_or_else(|| user_index::happy_path::user_registration_canister(env, canister_ids.user_index));
+    let local_user_index =
+        local_user_index.unwrap_or_else(|| user_index::happy_path::user_registration_canister(env, canister_ids.user_index));
 
     let user = local_user_index::happy_path::register_user_with_referrer(
         env,
@@ -232,6 +313,8 @@ fn register_user_internal(
         local_user_index,
         create_identity_result.user_key.clone(),
         referral_code,
+        use_multi_user_canister,
+        multi_user_canister_id,
     );
 
     (user, create_identity_result.user_key, delegation)

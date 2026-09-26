@@ -1,7 +1,7 @@
 use crate::guards::caller_is_user_index_or_local_user_index;
 use crate::model::channels::Channel;
 use crate::model::members::CommunityMembers;
-use crate::updates::c2c_join_community::join_community;
+use crate::updates::c2c_join_community::{join_community, migrate_previous_user_ids};
 use crate::{RuntimeState, activity_notifications::handle_activity_notification, mutate_state, read_state};
 use crate::{execute_update_async, jobs};
 use canister_api_macros::update;
@@ -28,6 +28,8 @@ async fn c2c_join_channel(args: Args) -> Response {
 }
 
 async fn c2c_join_channel_impl(mut args: Args) -> Response {
+    migrate_previous_user_ids(args.user_id, args.principal, &args.previous_user_ids);
+
     if read_state(|state| {
         state
             .data
@@ -50,6 +52,7 @@ async fn c2c_join_channel_impl(mut args: Args) -> Response {
             unique_person_proof: args.unique_person_proof.clone(),
             total_chit_earned: args.total_chit_earned,
             composite_gate_index: None,
+            previous_user_ids: args.previous_user_ids.clone(),
         })
         .await
         {
@@ -183,10 +186,6 @@ fn is_permitted_to_join(
     composite_gate_index: Option<u8>,
     state: &RuntimeState,
 ) -> Result<Option<(AccessGateConfigInternal, CheckGateArgs)>, Response> {
-    if state.data.is_frozen() {
-        return Err(Error(OCErrorCode::CommunityFrozen.into()));
-    }
-
     if let Some(member) = state.data.members.get(user_principal) {
         if member.suspended().value {
             return Err(Error(OCErrorCode::InitiatorSuspended.into()));
@@ -197,11 +196,7 @@ fn is_permitted_to_join(
                 if !member.lapsed().value && !channel_member.lapsed().value {
                     return Err(AlreadyInChannel(Box::new(
                         channel
-                            .summary(
-                                Some(channel_member.user_id()),
-                                state.data.is_public.value,
-                                &state.data.members,
-                            )
+                            .summary(Some(member.user()), state.data.is_public.value, &state.data.members)
                             .unwrap(),
                     )));
                 }
@@ -219,7 +214,7 @@ fn is_permitted_to_join(
                 (
                     g.clone(),
                     CheckGateArgs {
-                        user_id: member.user_id,
+                        user: member.user(),
                         diamond_membership_expires_at,
                         this_canister: state.env.canister_id(),
                         is_unique_person: unique_person_proof.is_some(),
@@ -261,6 +256,7 @@ fn commit(
     };
 
     let user_id = member.user_id;
+    let user = member.user();
     let Some(channel) = state.data.channels.get_mut(&channel_id) else {
         return Error(OCErrorCode::ChatNotFound.into());
     };
@@ -278,7 +274,7 @@ fn commit(
     ) {
         AddResult::Success(result) => {
             let summary = channel
-                .summary(Some(user_id), state.data.is_public.value, &state.data.members)
+                .summary(Some(user), state.data.is_public.value, &state.data.members)
                 .unwrap();
 
             if let Some(gate_expiry) = channel.chat.gate_config.value.as_ref().and_then(|gc| gc.expiry()) {
@@ -314,7 +310,7 @@ fn commit(
             channel.chat.members.update_lapsed(user_id, false, now);
 
             let summary = channel
-                .summary(Some(user_id), state.data.is_public.value, &state.data.members)
+                .summary(Some(user), state.data.is_public.value, &state.data.members)
                 .unwrap();
             AlreadyInChannel(Box::new(summary))
         }
@@ -353,6 +349,7 @@ pub(crate) fn join_channel_unchecked(
 
     let mut result = channel.chat.members.add(
         user_id,
+        None,
         now,
         min_visible_event_index,
         min_visible_message_index,

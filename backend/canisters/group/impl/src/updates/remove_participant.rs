@@ -79,8 +79,6 @@ fn prepare(
     ext_caller: Option<Caller>,
     state: &RuntimeState,
 ) -> OCResult<Option<PrepareResult>> {
-    state.data.verify_not_frozen()?;
-
     if block && !state.data.chat.is_public.value {
         return Err(OCErrorCode::ChatNotPublic.into());
     }
@@ -170,6 +168,7 @@ fn remove_membership_from_user_canister(
     fire_and_forget_handler: &mut FireAndForgetHandler,
 ) {
     let args = c2c_remove_from_group::Args {
+        user_id: user_to_remove,
         removed_by,
         blocked,
         group_name,

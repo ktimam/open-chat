@@ -13,8 +13,15 @@ use types::{BotCaller, BotPermissions, Caller, ChannelId, ChatPermission, OCResu
 #[update(guard = "caller_is_local_user_index", msgpack = true)]
 #[trace]
 fn c2c_invite_users_to_channel(args: Args) -> Response {
-    execute_update(|state| c2c_invite_users_to_channel_impl(args.channel_id, args.users, Caller::User(args.caller), state))
-        .unwrap_or_else(Error)
+    execute_update(|state| {
+        c2c_invite_users_to_channel_impl(
+            args.channel_id,
+            args.users,
+            Caller::User(state.member_user(args.caller)),
+            state,
+        )
+    })
+    .unwrap_or_else(Error)
 }
 
 #[update(guard = "caller_is_local_user_index", msgpack = true)]
@@ -40,8 +47,6 @@ fn c2c_invite_users_to_channel_impl(
     ext_caller: Caller,
     state: &mut RuntimeState,
 ) -> OCResult<Response> {
-    state.data.verify_not_frozen()?;
-
     if let Caller::BotV2(bot_caller) = &ext_caller
         && !state.data.is_bot_permitted(
             &bot_caller.bot,

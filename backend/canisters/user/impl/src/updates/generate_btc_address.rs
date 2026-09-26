@@ -2,8 +2,7 @@ use crate::guards::caller_is_owner;
 use crate::{execute_update_async, mutate_state, read_state};
 use canister_api_macros::update;
 use canister_tracing_macros::trace;
-use ckbtc_minter_canister::CKBTC_MINTER_CANISTER_ID;
-use types::Timestamped;
+use types::{Timestamped, UserIdAndPrincipal};
 use user_canister::generate_btc_address::{Response::*, *};
 
 #[update(guard = "caller_is_owner", msgpack = true)]
@@ -13,18 +12,19 @@ async fn generate_btc_address(_args: Args) -> Response {
 }
 
 async fn generate_btc_address_impl() -> Response {
-    if let Some(btc_address) = read_state(|state| state.data.btc_address.as_ref().map(|a| a.value.clone())) {
+    let (cached, me) = read_state(|state| {
+        (
+            state.data.user.btc_address.as_ref().map(|a| a.value.clone()),
+            UserIdAndPrincipal::new(state.env.canister_id().into(), state.data.user.principal),
+        )
+    });
+    if let Some(btc_address) = cached {
         return Success(btc_address);
     }
 
-    match ckbtc_minter_canister_c2c_client::get_btc_address(
-        CKBTC_MINTER_CANISTER_ID,
-        &ckbtc_minter_canister::get_btc_address::Args::default(),
-    )
-    .await
-    {
+    match user_core::updates::generate_btc_address::fetch_btc_address(me).await {
         Ok(btc_address) => {
-            mutate_state(|state| state.data.btc_address = Some(Timestamped::new(btc_address.clone(), state.env.now())));
+            mutate_state(|state| state.data.user.btc_address = Some(Timestamped::new(btc_address.clone(), state.env.now())));
             Success(btc_address)
         }
         Err(error) => Error(error.into()),

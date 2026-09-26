@@ -11,7 +11,7 @@ use group_canister::c2c_join_group::{Response::*, *};
 use group_chat_core::AddResult;
 use group_community_common::{ExpiringMember, PaymentLockGuard};
 use oc_error_codes::OCErrorCode;
-use types::{AccessGate, GroupCanisterGroupChatSummary, MemberJoinedInternal, OCResult, UsersUnblocked};
+use types::{AccessGate, GroupCanisterGroupChatSummary, MemberJoinedInternal, OCResult, UserIdAndPrincipal, UsersUnblocked};
 
 #[update(guard = "caller_is_user_index_or_local_user_index", msgpack = true)]
 #[trace]
@@ -20,6 +20,20 @@ async fn c2c_join_group(args: Args) -> Response {
 }
 
 async fn c2c_join_group_impl(args: Args) -> Response {
+    // Anything held under the user's previous ids, such as a membership or block, is moved onto their
+    // current id, so that the checks below only need to look at their current id
+    if !args.previous_user_ids.is_empty() {
+        mutate_state(|state| {
+            let now = state.env.now();
+            if state
+                .data
+                .migrate_user_ids(&args.previous_user_ids, args.user_id, Some(args.principal), now)
+            {
+                handle_activity_notification(state);
+            }
+        });
+    }
+
     let payments = match read_state(|state| is_permitted_to_join(&args, state)) {
         Ok(IsPermittedToJoinSuccess::NoGate) => Vec::new(),
         Ok(IsPermittedToJoinSuccess::RequiresGate(gate, check_gate_args)) => {
@@ -50,8 +64,6 @@ enum IsPermittedToJoinSuccess {
 }
 
 fn is_permitted_to_join(args: &Args, state: &RuntimeState) -> OCResult<IsPermittedToJoinSuccess> {
-    state.data.verify_not_frozen()?;
-
     if let Some(member) = state.data.chat.members.get(&args.user_id) {
         if !member.lapsed().value {
             let summary = state.summary(&member);
@@ -71,7 +83,7 @@ fn is_permitted_to_join(args: &Args, state: &RuntimeState) -> OCResult<IsPermitt
         IsPermittedToJoinSuccess::RequiresGate(
             gate_config.gate.clone(),
             Box::new(CheckGateArgs {
-                user_id: args.user_id,
+                user: UserIdAndPrincipal::new(args.user_id, args.principal),
                 diamond_membership_expires_at: args.diamond_membership_expires_at,
                 this_canister: state.env.canister_id(),
                 is_unique_person: args.unique_person_proof.is_some(),

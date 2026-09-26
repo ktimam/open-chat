@@ -1,56 +1,40 @@
-use crate::model::chit_events::ChitEvents;
-use crate::model::communities::Communities;
-use crate::model::community::Community;
-use crate::model::direct_chats::DirectChats;
-use crate::model::group_chat::GroupChat;
-use crate::model::group_chats::GroupChats;
-use crate::model::hot_group_exclusions::HotGroupExclusions;
+use crate::model::legacy_user_canister_event_batch::LegacyUserCanisterEventBatch;
 use crate::model::local_user_index_event_batch::LocalUserIndexEventBatch;
-use crate::model::p2p_swaps::P2PSwaps;
-use crate::model::pin_number::PinNumber;
-use crate::model::premium_items::PremiumItems;
-use crate::model::token_swaps::TokenSwaps;
 use crate::model::user_canister_event_batch::UserCanisterEventBatch;
 use crate::timer_job_types::{ClaimOrResetStreakInsuranceJob, DeleteFileReferencesJob, RemoveExpiredEventsJob, TimerJob};
 use canister_state_macros::canister_state;
 use canister_timer_jobs::{Job, TimerJobs};
-use chat_events::{ChatEventInternal, EventPusher};
-use constants::{ICP_LEDGER_CANISTER_ID, LIFETIME_DIAMOND_TIMESTAMP, OPENCHAT_BOT_USER_ID};
+use chat_events::EventPusher;
+use constants::{ICP_LEDGER_CANISTER_ID, OPENCHAT_BOT_USER_ID};
 use event_store_types::{Event, EventBuilder};
 use fire_and_forget_handler::FireAndForgetHandler;
 use ic_principal::Principal;
-use installed_bots::InstalledBots;
-use itertools::Itertools;
 use local_user_index_canister::UserEvent as LocalUserIndexEvent;
-use model::contacts::Contacts;
-use model::favourite_chats::FavouriteChats;
-use model::message_activity_events::MessageActivityEvents;
-use model::referrals::Referrals;
-use model::streak::Streak;
 use oc_error_codes::OCErrorCode;
 use rand::Rng;
 use rand::prelude::StdRng;
 use serde::{Deserialize, Serialize};
-use stable_memory_map::{BaseKeyPrefix, ChatEventKeyPrefix};
+use stable_memory_map::BaseKeyPrefix;
 use std::cell::RefCell;
-use std::cmp::Reverse;
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::hash::Hash;
+use std::collections::{BTreeMap, HashSet};
 use std::ops::Deref;
 use timer_job_queues::{BatchedTimerJobQueue, GroupedTimerJobQueue};
 use types::{
-    Achievement, BotDefinitionUpdate, BotInitiator, BotNotification, BotPermissions, BotUpdated, BuildVersion, CanisterId,
-    Chat, ChatId, ChatMetrics, ChitEvent, ChitEventType, CommunityId, Cycles, DirectChatUserNotificationPayload, Document,
-    IdempotentEnvelope, Notification, NotifyChit, TimestampMillis, Timestamped, UniquePersonProof,
-    UserCanisterStreakInsuranceClaim, UserCanisterStreakInsurancePayment, UserId, UserNotification,
+    Achievement, BotNotification, BuildVersion, CanisterId, ChatId, ChatMetrics, ChitEvent, ChitEventType, CommunityId, Cycles,
+    DirectChatUserNotificationPayload, FrozenUserInfo, IdempotentEnvelope, Notification, NotifyChit, OCResult, TimestampMillis,
+    Timestamped, UserCanisterStreakInsuranceClaim, UserCanisterStreakInsurancePayment, UserId, UserNotification,
 };
-use user_canister::{MessageActivityEvent, NamedAccount, UserCanisterEvent, WalletConfig};
+use user_canister::UserCanisterEvent;
+use user_core::{Community, GroupChat, User};
+use utils::async_work::{AsyncWorkGuard, async_work_in_progress};
+use utils::canister::trap_if_frozen;
 use utils::env::Environment;
 use utils::idempotency_checker::IdempotencyChecker;
+use utils::migrated_user_ids::MigratedUserIds;
 use utils::regular_jobs::RegularJobs;
 
 mod crypto;
-mod governance_clients;
+mod data_previous;
 mod guards;
 mod jobs;
 mod lifecycle;
@@ -63,7 +47,9 @@ mod timer_job_types;
 mod token_swaps;
 mod updates;
 
-pub const COMMUNITY_CREATION_LIMIT: u32 = 10;
+// The most exported in a single page when the user is being migrated to a MultiUser canister,
+// leaving room within the 2MB limit on a reply
+const PAGE_SIZE: u32 = 19 * 102 * 1024; // Roughly 1.9MB (1.9 * 1024 * 1024)
 
 thread_local! {
     static WASM_VERSION: RefCell<Timestamped<BuildVersion>> = RefCell::default();
@@ -82,12 +68,26 @@ impl RuntimeState {
         RuntimeState { env, data, regular_jobs }
     }
 
+    // The regular jobs are skipped while the canister is frozen
+    pub fn run_regular_jobs(&mut self) {
+        if !self.data.is_frozen() {
+            self.regular_jobs.run(self.env.deref(), &mut self.data);
+        }
+    }
+
     pub fn is_caller_owner(&self) -> bool {
-        self.env.caller() == self.data.owner
+        self.env.caller() == self.data.user.principal
     }
 
     pub fn is_caller_user_index(&self) -> bool {
         self.env.caller() == self.data.user_index_canister_id
+    }
+
+    pub fn is_caller_multi_user_canister_migrating_to(&self) -> bool {
+        self.data
+            .migration
+            .as_ref()
+            .is_some_and(|m| m.multi_user_canister_id == self.env.caller())
     }
 
     pub fn is_caller_local_user_index(&self) -> bool {
@@ -104,12 +104,12 @@ impl RuntimeState {
 
     pub fn is_caller_known_group_canister(&self) -> bool {
         let caller = self.env.caller();
-        self.data.group_chats.exists(&caller.into())
+        self.data.user.group_chats.exists(&caller.into())
     }
 
     pub fn is_caller_known_community_canister(&self) -> bool {
         let caller = self.env.caller();
-        self.data.communities.exists(&caller.into())
+        self.data.user.communities.exists(&caller.into())
     }
 
     pub fn is_caller_video_call_operator(&self) -> bool {
@@ -138,43 +138,56 @@ impl RuntimeState {
         let now = self.env.now();
         let mut next_event_expiry = None;
         let mut files_to_delete = Vec::new();
-        for chat in self.data.direct_chats.iter_mut() {
-            let result = chat.events.remove_expired_events(now);
-            if let Some(expiry) = chat.events.next_event_expiry()
+        for chat in self.data.user.direct_chats.iter_mut() {
+            let result = chat.remove_expired_events(now);
+            if let Some(expiry) = chat.events().next_event_expiry()
                 && next_event_expiry.is_none_or(|current| expiry < current)
             {
                 next_event_expiry = Some(expiry);
             }
             files_to_delete.extend(result.files);
+            // Threads aren't currently enabled for direct chats, but if a thread's root message
+            // expires then its entries in stable memory must be garbage collected
+            for thread in result.threads {
+                self.data
+                    .stable_memory_keys_to_garbage_collect
+                    .extend(chat.events().thread_stable_memory_key_prefixes(thread.root_message_index));
+            }
         }
+
+        jobs::garbage_collect_stable_memory::start_job_if_required(&self.data);
 
         if !files_to_delete.is_empty() {
             let delete_files_job = DeleteFileReferencesJob { files: files_to_delete };
             delete_files_job.execute();
         }
-        self.data.next_event_expiry = next_event_expiry;
-        if let Some(expiry) = self.data.next_event_expiry {
+        self.data.user.next_event_expiry = next_event_expiry;
+        if let Some(expiry) = self.data.user.next_event_expiry {
             self.data
                 .timer_jobs
                 .enqueue_job(TimerJob::RemoveExpiredEvents(RemoveExpiredEventsJob), expiry, now);
         }
     }
 
-    pub fn push_user_canister_event(&mut self, canister_id: CanisterId, event: UserCanisterEvent) {
-        if canister_id != OPENCHAT_BOT_USER_ID.canister_id() && canister_id != self.env.canister_id() {
-            self.data.user_canister_events_queue.push(
-                canister_id.into(),
+    // Queues an event for `recipient`, batched with the others for the canister holding them
+    pub fn push_user_canister_event(&mut self, recipient: UserId, event: UserCanisterEvent) {
+        if recipient != OPENCHAT_BOT_USER_ID && recipient != self.env.canister_id().into() {
+            // Sent to the recipient's latest id if they are known to have been migrated since
+            // having `recipient`
+            let recipient = self.data.migrated_user_ids.latest(recipient);
+            self.data.user_canister_events_by_canister.push(
+                recipient.canister_id(),
                 IdempotentEnvelope {
                     created_at: self.env.now(),
                     idempotency_id: self.env.rng().next_u64(),
-                    value: event,
+                    value: (recipient, event),
                 },
             );
         }
     }
 
     pub fn mark_streak_insurance_payment(&mut self, payment: UserCanisterStreakInsurancePayment) {
-        self.data.streak.mark_streak_insurance_payment(payment.clone());
+        self.data.user.streak.mark_streak_insurance_payment(payment.clone());
         self.set_up_streak_insurance_timer_job();
         let user_id: UserId = self.env.canister_id().into();
         let events = vec![
@@ -191,7 +204,7 @@ impl RuntimeState {
     }
 
     pub fn mark_streak_insurance_claim(&mut self, claim: UserCanisterStreakInsuranceClaim) {
-        self.data.chit_events.push(ChitEvent {
+        self.data.user.chit_events.push(ChitEvent {
             amount: 0,
             timestamp: claim.timestamp,
             reason: ChitEventType::StreakInsuranceClaim,
@@ -210,12 +223,8 @@ impl RuntimeState {
             LocalUserIndexEvent::NotifyStreakInsuranceClaim(claim),
         ];
         self.push_local_user_index_canister_events(events, self.env.now());
-        let days_remaining_text = if days_remaining == 1 { "1 day".to_string() } else { format!("{days_remaining} days") };
         openchat_bot::send_text_message(
-            format!(
-                "One day of streak insurance was just used up to protect your streak from being lost.\
-Your streak is now {new_streak} days and you have {days_remaining_text} of streak insurance remaining."
-            ),
+            user_core::openchat_bot::streak_insurance_claimed_text(new_streak, days_remaining),
             Vec::new(),
             false,
             self,
@@ -223,14 +232,14 @@ Your streak is now {new_streak} days and you have {days_remaining_text} of strea
     }
 
     pub fn set_up_streak_insurance_timer_job(&mut self) {
-        if self.data.streak.days_insured() > 0 {
+        if self.data.user.streak.days_insured() > 0 {
             self.data
                 .timer_jobs
                 .cancel_jobs(|j| matches!(j, TimerJob::ClaimOrResetStreakInsurance(_)));
 
             self.data.timer_jobs.enqueue_job(
                 TimerJob::ClaimOrResetStreakInsurance(ClaimOrResetStreakInsuranceJob),
-                self.data.streak.ends(),
+                self.data.user.streak.ends(),
                 self.env.now(),
             );
         }
@@ -280,7 +289,7 @@ Your streak is now {new_streak} days and you have {days_remaining_text} of strea
         let mut awarded = false;
 
         for achievement in achievements {
-            awarded |= self.data.award_achievement(achievement, now);
+            awarded |= self.data.user.award_achievement(achievement, now);
         }
 
         if awarded {
@@ -289,24 +298,8 @@ Your streak is now {new_streak} days and you have {days_remaining_text} of strea
     }
 
     pub fn award_achievement_and_notify(&mut self, achievement: Achievement, now: TimestampMillis) {
-        if self.data.award_achievement(achievement, now) {
+        if self.data.user.award_achievement(achievement, now) {
             self.notify_user_index_of_chit(now);
-        }
-    }
-
-    pub fn award_external_achievement(&mut self, name: String, chit_reward: u32, now: TimestampMillis) -> bool {
-        if self.data.external_achievements.insert(name.clone()) {
-            self.data.chit_events.push(ChitEvent {
-                amount: chit_reward as i32,
-                timestamp: now,
-                reason: ChitEventType::ExternalAchievement(name),
-            });
-
-            self.notify_user_index_of_chit(now);
-
-            true
-        } else {
-            false
         }
     }
 
@@ -314,58 +307,26 @@ Your streak is now {new_streak} days and you have {days_remaining_text} of strea
         self.push_local_user_index_canister_event(
             LocalUserIndexEvent::NotifyChit(NotifyChit {
                 timestamp: now,
-                total_chit_earned: self.data.chit_events.total_chit_earned(),
-                chit_balance: self.data.chit_events.balance_for_month_by_timestamp(now),
-                chit_balance_v2: self.data.chit_events.chit_balance(),
-                streak: self.data.streak.days(now),
-                streak_ends: self.data.streak.ends(),
+                total_chit_earned: self.data.user.chit_events.total_chit_earned(),
+                chit_balance: self.data.user.chit_events.balance_for_month_by_timestamp(now),
+                chit_balance_v2: self.data.user.chit_events.chit_balance(),
+                streak: self.data.user.streak.days(now),
+                streak_ends: self.data.user.streak.ends(),
             }),
             now,
         )
     }
 
     pub fn block_user(&mut self, user_id: UserId, now: TimestampMillis) {
-        if self.data.blocked_users.value.insert(user_id) {
-            self.data.blocked_users.timestamp = now;
+        if self.data.user.blocked_users.block(user_id, now) {
             self.push_local_user_index_canister_event(LocalUserIndexEvent::UserBlocked(user_id), now);
         }
     }
 
     pub fn unblock_user(&mut self, user_id: UserId, now: TimestampMillis) {
-        if self.data.blocked_users.value.remove(&user_id) {
-            self.data.blocked_users.timestamp = now;
+        if self.data.user.blocked_users.unblock(user_id, now) {
             self.push_local_user_index_canister_event(LocalUserIndexEvent::UserUnblocked(user_id), now);
         }
-    }
-
-    pub fn reinstate_missed_daily_claims(&mut self, days_to_reinstate: Vec<u16>) {
-        let now = self.env.now();
-
-        let daily_claims = self.data.chit_events.iter_daily_claims().collect();
-
-        let new_events = self
-            .data
-            .streak
-            .reinstate_missed_daily_claims(days_to_reinstate, daily_claims, now);
-
-        let count = new_events.len();
-        for event in new_events {
-            self.data.chit_events.push(event);
-        }
-        let new_streak = self.data.streak.days(now);
-
-        let first_line = if count == 1 {
-            "missed daily claim has been reinstated."
-        } else {
-            "missed daily claims have been reinstated."
-        };
-        let message = format!(
-            "{count} {first_line}
-Your streak is now {new_streak} days!"
-        );
-
-        openchat_bot::send_text_message(message, Vec::new(), false, self);
-        self.notify_user_index_of_chit(now);
     }
 
     pub fn metrics(&self) -> Metrics {
@@ -378,26 +339,30 @@ Your streak is now {new_streak} days!"
             liquid_cycles_balance: self.env.liquid_cycles_balance(),
             wasm_version: WASM_VERSION.with_borrow(|v| **v),
             git_commit_id: git_commit_id::git_commit_id().to_string(),
-            direct_chats: self.data.direct_chats.len() as u32,
-            group_chats: self.data.group_chats.len() as u32,
-            communities: self.data.communities.len() as u32,
-            groups_created: self.data.group_chats.groups_created(),
-            blocked_users: self.data.blocked_users.len() as u32,
-            created: self.data.user_created,
-            direct_chat_metrics: self.data.direct_chats.metrics().hydrate(),
+            direct_chats: self.data.user.direct_chats.len() as u32,
+            // TODO: Remove this once every user canister has been migrated
+            direct_chats_with_legacy_events: jobs::migrate_direct_chat_events_to_key_id_keys::direct_chats_with_legacy_events(
+                self,
+            ) as u32,
+            group_chats: self.data.user.group_chats.len() as u32,
+            communities: self.data.user.communities.len() as u32,
+            groups_created: self.data.user.group_chats.groups_created(),
+            blocked_users: self.data.user.blocked_users.len() as u32,
+            created: self.data.user.user_created,
+            direct_chat_metrics: self.data.user.direct_chats.metrics().hydrate(),
             video_call_operators: self.data.video_call_operators.clone(),
             timer_jobs: self.data.timer_jobs.len() as u32,
-            queued_user_events: self.data.user_canister_events_queue.len() as u32,
+            queued_user_events: self.data.user_canister_events_by_canister.len() as u32,
             queued_local_index_events: self.data.local_user_index_event_sync_queue.len() as u32,
-            total_chit_earned: self.data.chit_events.total_chit_earned(),
-            chit_balance: self.data.chit_events.chit_balance(),
-            streak: self.data.streak.days(now),
-            streak_ends: self.data.streak.ends(),
-            max_streak: self.data.streak.max_streak(),
-            next_daily_claim: self.data.streak.next_claim(),
-            achievements: self.data.achievements.iter().cloned().collect(),
-            unique_person_proof: self.data.unique_person_proof.is_some(),
-            referred_by: self.data.referred_by,
+            total_chit_earned: self.data.user.chit_events.total_chit_earned(),
+            chit_balance: self.data.user.chit_events.chit_balance(),
+            streak: self.data.user.streak.days(now),
+            streak_ends: self.data.user.streak.ends(),
+            max_streak: self.data.user.streak.max_streak(),
+            next_daily_claim: self.data.user.streak.next_claim(),
+            achievements: self.data.user.achievements.iter().cloned().collect(),
+            unique_person_proof: self.data.user.unique_person_proof.is_some(),
+            referred_by: self.data.user.referred_by,
             stable_memory_sizes: memory::memory_sizes(),
             canister_ids: CanisterIds {
                 user_index: self.data.user_index_canister_id,
@@ -411,7 +376,7 @@ Your streak is now {new_streak} days!"
     }
 
     pub fn delete_direct_chat(&mut self, user_id: UserId, block_user: bool, now: TimestampMillis) -> bool {
-        let Some(chat) = self.data.direct_chats.remove(user_id.into(), now) else {
+        let Some(chat) = self.data.user.direct_chats.remove(user_id.into(), now) else {
             return false;
         };
 
@@ -421,84 +386,197 @@ Your streak is now {new_streak} days!"
 
         self.data
             .stable_memory_keys_to_garbage_collect
-            .push(BaseKeyPrefix::from(ChatEventKeyPrefix::new_from_direct_chat(user_id, None)));
+            .extend(chat.stable_memory_key_prefixes());
 
-        for message_index in chat.events.thread_keys() {
-            self.data.stable_memory_keys_to_garbage_collect.push(BaseKeyPrefix::from(
-                ChatEventKeyPrefix::new_from_direct_chat(user_id, Some(message_index)),
-            ));
-        }
-
-        jobs::garbage_collect_stable_memory::start_job_if_required(self);
+        jobs::garbage_collect_stable_memory::start_job_if_required(&self.data);
         true
     }
 
-    pub fn uninstall_bot(&mut self, bot_id: UserId) {
-        let now = self.env.now();
-
-        self.data.bots.remove(bot_id, now);
-
-        self.delete_direct_chat(bot_id, false, now);
+    // Queues the entries under the prefixes for removal from the stable memory map
+    pub fn garbage_collect_stable_memory_keys(&mut self, prefixes: Vec<BaseKeyPrefix>) {
+        self.data.stable_memory_keys_to_garbage_collect.extend(prefixes);
+        jobs::garbage_collect_stable_memory::start_job_if_required(&self.data);
     }
 }
 
 #[derive(Serialize, Deserialize)]
 struct Data {
-    pub owner: Principal,
-    pub direct_chats: DirectChats,
-    pub group_chats: GroupChats,
-    pub communities: Communities,
-    pub favourite_chats: FavouriteChats,
-    pub blocked_users: Timestamped<HashSet<UserId>>,
+    // The user this canister holds. Canisters upgraded from a version which held these fields
+    // directly in `Data` are read via `DataPrevious`.
+    pub user: User,
     pub user_index_canister_id: CanisterId,
     pub local_user_index_canister_id: CanisterId,
     pub group_index_canister_id: CanisterId,
     pub identity_canister_id: CanisterId,
     pub escrow_canister_id: CanisterId,
-    pub avatar: Timestamped<Option<Document>>,
-    pub profile_background: Timestamped<Option<Document>>,
     pub test_mode: bool,
-    pub is_platform_moderator: bool,
-    pub hot_group_exclusions: HotGroupExclusions,
-    pub username: Timestamped<String>,
-    pub display_name: Timestamped<Option<String>>,
-    pub bio: Timestamped<String>,
-    pub storage_limit: u64,
-    pub phone_is_verified: bool,
-    pub user_created: TimestampMillis,
-    pub suspended: Timestamped<bool>,
     pub timer_jobs: TimerJobs<TimerJob>,
-    pub contacts: Contacts,
-    pub diamond_membership_expires_at: Option<TimestampMillis>,
     pub fire_and_forget_handler: FireAndForgetHandler,
-    pub saved_crypto_accounts: Vec<NamedAccount>,
-    pub next_event_expiry: Option<TimestampMillis>,
-    pub token_swaps: TokenSwaps,
-    pub p2p_swaps: P2PSwaps,
-    pub user_canister_events_queue: GroupedTimerJobQueue<UserCanisterEventBatch>,
+    // Events queued before they were batched per canister, which `post_upgrade` moves into
+    // `user_canister_events_by_canister`
+    pub user_canister_events_queue: GroupedTimerJobQueue<LegacyUserCanisterEventBatch>,
+    #[serde(default = "new_user_canister_events_by_canister")]
+    pub user_canister_events_by_canister: GroupedTimerJobQueue<UserCanisterEventBatch>,
     pub video_call_operators: Vec<Principal>,
-    pub pin_number: PinNumber,
-    pub btc_address: Option<Timestamped<String>>,
-    pub one_sec_address: Option<Timestamped<String>>,
-    pub chit_events: ChitEvents,
-    pub streak: Streak,
-    pub achievements: HashSet<Achievement>,
-    pub external_achievements: HashSet<String>,
-    pub achievements_last_seen: TimestampMillis,
-    pub unique_person_proof: Option<UniquePersonProof>,
-    pub wallet_config: Timestamped<WalletConfig>,
     pub rng_seed: [u8; 32],
-    pub referred_by: Option<UserId>,
-    pub referrals: Referrals,
-    pub message_activity_events: MessageActivityEvents,
     pub stable_memory_keys_to_garbage_collect: Vec<BaseKeyPrefix>,
     pub local_user_index_event_sync_queue: BatchedTimerJobQueue<LocalUserIndexEventBatch>,
     pub idempotency_checker: IdempotencyChecker,
-    pub bots: InstalledBots,
-    pub premium_items: PremiumItems,
+    // The MultiUser canisters the UserIndex has confirmed, which may send events on behalf of any of
+    // their users
+    #[serde(default)]
+    pub known_multi_user_canisters: HashSet<CanisterId>,
+    // The latest ids of migrated users, as looked up from the LocalUserIndex whenever a user's id is found to
+    // have changed
+    #[serde(default)]
+    pub migrated_user_ids: MigratedUserIds,
+    // Set while the canister's state must not change, during which every update call is rejected.
+    // Queries are still served.
+    #[serde(default)]
+    pub frozen: Option<FrozenUserInfo>,
+    // Set when the user starts being migrated to a MultiUser canister. The canister's state must not
+    // change from then on, so it is treated as frozen.
+    #[serde(default)]
+    pub migration: Option<Migration>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Migration {
+    pub multi_user_canister_id: CanisterId,
+    pub started: TimestampMillis,
+    // The user as they were when the migration started, serialized with msgpack, for the MultiUser
+    // canister to pull
+    #[serde(with = "serde_bytes")]
+    pub user: Vec<u8>,
+    // The version of the wasm which serialized the user, which may since have been upgraded
+    pub wasm_version: BuildVersion,
 }
 
 impl Data {
+    pub fn is_frozen(&self) -> bool {
+        self.frozen.is_some() || self.migration.is_some()
+    }
+
+    pub fn is_migrating(&self) -> bool {
+        self.migration.is_some()
+    }
+
+    // Starts migrating the user to the given MultiUser canister, if the canister is ready, storing
+    // the user serialized for the MultiUser canister to pull. From then on the canister is frozen,
+    // and its remaining timer jobs are cancelled, since the MultiUser canister schedules them again
+    // from the user's state. A repeated call for the same MultiUser canister returns the same
+    // migration again.
+    pub fn try_start_migration(&mut self, multi_user_canister_id: CanisterId, now: TimestampMillis) -> OCResult<&Migration> {
+        match &self.migration {
+            Some(migration) if migration.multi_user_canister_id == multi_user_canister_id => {}
+            Some(_) => return Err(OCErrorCode::AlreadyInProgress.into()),
+            None => {
+                if let Some(reason) = self.reason_not_ready_for_migration() {
+                    return Err(OCErrorCode::NotReadyForMigration.with_message(reason));
+                }
+
+                self.timer_jobs.cancel_jobs(|_| true);
+                self.migration = Some(Migration {
+                    multi_user_canister_id,
+                    started: now,
+                    user: msgpack::serialize_then_unwrap(&self.user),
+                    wasm_version: WASM_VERSION.with_borrow(|v| **v),
+                });
+            }
+        }
+        Ok(self.migration.as_ref().unwrap())
+    }
+
+    // Cancels the user's migration to the given MultiUser canister, if there is one, unfreezing the
+    // canister and scheduling again the timer jobs which were cancelled when the migration started.
+    // Returns whether there was one. A migration to another MultiUser canister is left in place.
+    //
+    // If the canister was upgraded during the migration, `post_upgrade` skipped that upgrade's data
+    // migrations, and they only run once the canister is upgraded again.
+    pub fn cancel_migration(&mut self, multi_user_canister_id: CanisterId, now: TimestampMillis) -> OCResult<bool> {
+        match &self.migration {
+            Some(migration) if migration.multi_user_canister_id == multi_user_canister_id => self.migration = None,
+            Some(_) => return Err(OCErrorCode::AlreadyInProgress.with_message("Migrating to another canister")),
+            None => return Ok(false),
+        }
+
+        if let Some(expiry) = self.user.next_event_expiry {
+            self.timer_jobs
+                .enqueue_job(TimerJob::RemoveExpiredEvents(RemoveExpiredEventsJob), expiry, now);
+        }
+        if self.user.streak.days_insured() > 0 {
+            self.timer_jobs.enqueue_job(
+                TimerJob::ClaimOrResetStreakInsurance(ClaimOrResetStreakInsuranceJob),
+                self.user.streak.ends(),
+                now,
+            );
+        }
+        Ok(true)
+    }
+
+    // The user is migrated along with their entries in the stable memory map, so the canister must
+    // have no work outstanding which would change or read them, nor anything else which isn't
+    // carried over. Only the timer jobs which the MultiUser canister schedules again from the user's
+    // state may remain.
+    fn reason_not_ready_for_migration(&self) -> Option<&'static str> {
+        if self.frozen.is_some() {
+            Some("Canister is frozen")
+        } else if !self.user.p2p_swaps.is_empty() {
+            // The Escrow pays out and refunds swaps to this canister's account, and funds from a swap
+            // may still be there even once it has been settled, so for now a user who has created or
+            // accepted a swap isn't migrated
+            Some("User has P2P swaps")
+        } else if async_work_in_progress() {
+            Some("Async work is in progress")
+        } else if self.timer_jobs.iter().any(|(_, wrapper)| {
+            // A job which has already run leaves an empty entry behind
+            wrapper.deref().borrow().as_ref().is_some_and(|job| {
+                !matches!(
+                    job,
+                    TimerJob::RemoveExpiredEvents(_) | TimerJob::ClaimOrResetStreakInsurance(_)
+                )
+            })
+        }) {
+            Some("Timer jobs are pending")
+        } else if !self.user_canister_events_queue.is_idle() || !self.user_canister_events_by_canister.is_idle() {
+            Some("Events for other users are pending")
+        } else if !self.local_user_index_event_sync_queue.is_idle() {
+            Some("Events for the LocalUserIndex are pending")
+        } else if !self.fire_and_forget_handler.is_empty() {
+            Some("Calls to other canisters are pending")
+        } else if !self.stable_memory_keys_to_garbage_collect.is_empty() {
+            Some("Stable memory is still being garbage collected")
+        } else if self
+            .user
+            .direct_chats
+            .iter()
+            .any(|c| c.events().has_legacy_events() || c.events().heap_entries_to_migrate_count() > 0)
+        {
+            Some("Direct chat events are still being migrated")
+        } else {
+            None
+        }
+    }
+
+    // Moves the events queued before they were batched per canister into the queue which does so,
+    // pairing each with the user it was queued for
+    // TODO: Remove this, along with `user_canister_events_queue`, once it has run in every canister
+    pub fn drain_legacy_user_canister_events_queue(&mut self) {
+        for (recipient, events) in self.user_canister_events_queue.take_all() {
+            self.user_canister_events_by_canister.push_many(
+                recipient.canister_id(),
+                events
+                    .into_iter()
+                    .map(|event| IdempotentEnvelope {
+                        created_at: event.created_at,
+                        idempotency_id: event.idempotency_id,
+                        value: (recipient, event.value),
+                    })
+                    .collect(),
+            );
+        }
+    }
+
     #[expect(clippy::too_many_arguments)]
     pub fn new(
         owner: Principal,
@@ -514,90 +592,55 @@ impl Data {
         now: TimestampMillis,
     ) -> Data {
         Data {
-            owner,
-            direct_chats: DirectChats::default(),
-            group_chats: GroupChats::default(),
-            communities: Communities::default(),
-            favourite_chats: FavouriteChats::default(),
-            blocked_users: Timestamped::default(),
+            user: User::new(owner, username, referred_by, now),
             user_index_canister_id,
             local_user_index_canister_id,
             group_index_canister_id,
             identity_canister_id,
             escrow_canister_id,
-            avatar: Timestamped::default(),
-            profile_background: Timestamped::default(),
             test_mode,
-            is_platform_moderator: false,
-            hot_group_exclusions: HotGroupExclusions::default(),
-            username: Timestamped::new(username, now),
-            display_name: Timestamped::default(),
-            bio: Timestamped::new("".to_string(), now),
-            storage_limit: 0,
-            phone_is_verified: false,
-            user_created: now,
-            suspended: Timestamped::default(),
             timer_jobs: TimerJobs::default(),
-            contacts: Contacts::default(),
-            diamond_membership_expires_at: None,
             fire_and_forget_handler: FireAndForgetHandler::default(),
-            saved_crypto_accounts: Vec::new(),
-            next_event_expiry: None,
-            token_swaps: TokenSwaps::default(),
-            p2p_swaps: P2PSwaps::default(),
             user_canister_events_queue: GroupedTimerJobQueue::new(10, true),
+            user_canister_events_by_canister: new_user_canister_events_by_canister(),
             video_call_operators,
-            pin_number: PinNumber::default(),
-            btc_address: None,
-            one_sec_address: None,
-            chit_events: ChitEvents::default(),
-            streak: Streak::default(),
-            achievements: HashSet::new(),
-            external_achievements: HashSet::new(),
-            achievements_last_seen: 0,
-            unique_person_proof: None,
             rng_seed: [0; 32],
-            wallet_config: Timestamped::default(),
-            referred_by,
-            referrals: Referrals::default(),
-            message_activity_events: MessageActivityEvents::default(),
             stable_memory_keys_to_garbage_collect: Vec::new(),
             local_user_index_event_sync_queue: BatchedTimerJobQueue::new(local_user_index_canister_id, true),
             idempotency_checker: IdempotencyChecker::default(),
-            bots: InstalledBots::default(),
-            premium_items: PremiumItems::default(),
+            known_multi_user_canisters: HashSet::new(),
+            migrated_user_ids: MigratedUserIds::default(),
+            frozen: None,
+            migration: None,
         }
-    }
-
-    pub fn membership(&self, now: TimestampMillis) -> Membership {
-        match self.diamond_membership_expires_at {
-            Some(ts) if ts > LIFETIME_DIAMOND_TIMESTAMP => Membership::LifetimeDiamond,
-            Some(ts) if ts > now => Membership::Diamond,
-            _ => Membership::Basic,
-        }
-    }
-
-    pub fn verify_not_suspended(&self) -> Result<(), OCErrorCode> {
-        if self.suspended.value { Err(OCErrorCode::InitiatorSuspended) } else { Ok(()) }
     }
 
     pub fn remove_group(&mut self, chat_id: ChatId, now: TimestampMillis) -> Option<GroupChat> {
-        self.favourite_chats.remove(&Chat::Group(chat_id), now);
-        self.hot_group_exclusions.add(chat_id, None, now);
-        self.group_chats.remove(chat_id, now)
+        let (group, prefix) = self.user.remove_group(chat_id, now)?;
+        self.garbage_collect_now_or_later(prefix);
+        Some(group)
     }
 
     pub fn remove_community(&mut self, community_id: CommunityId, now: TimestampMillis) -> Option<Community> {
-        let community = self.communities.remove(community_id, now)?;
-        for channel_id in community.channels.keys() {
-            self.favourite_chats.remove(&Chat::Channel(community_id, *channel_id), now);
+        let (community, prefixes) = self.user.remove_community(community_id, now)?;
+        for prefix in prefixes {
+            self.garbage_collect_now_or_later(prefix);
         }
         Some(community)
     }
 
+    // A chat only has a small number of entries, so they can be removed immediately. If they can't
+    // all be removed within this message, the rest are left for the garbage collection job.
+    pub fn garbage_collect_now_or_later(&mut self, prefix: BaseKeyPrefix) {
+        if stable_memory_map::garbage_collect(prefix.clone()).is_err() {
+            self.stable_memory_keys_to_garbage_collect.push(prefix);
+            jobs::garbage_collect_stable_memory::start_job_if_required(self);
+        }
+    }
+
     pub fn handle_event_expiry(&mut self, expiry: TimestampMillis, now: TimestampMillis) {
-        if self.next_event_expiry.is_none_or(|ex| expiry < ex) {
-            self.next_event_expiry = Some(expiry);
+        if self.user.next_event_expiry.is_none_or(|ex| expiry < ex) {
+            self.user.next_event_expiry = Some(expiry);
 
             let timer_jobs = &mut self.timer_jobs;
             timer_jobs.cancel_jobs(|j| matches!(j, TimerJob::RemoveExpiredEvents(_)));
@@ -605,101 +648,9 @@ impl Data {
         }
     }
 
-    pub fn award_achievement(&mut self, achievement: Achievement, now: TimestampMillis) -> bool {
-        if self.achievements.insert(achievement) {
-            let amount = achievement.chit_reward() as i32;
-            self.chit_events.push(ChitEvent {
-                amount,
-                timestamp: now,
-                reason: ChitEventType::Achievement(achievement),
-            });
-            true
-        } else {
-            false
-        }
-    }
-
-    pub fn push_message_activity(&mut self, event: MessageActivityEvent, now: TimestampMillis) {
-        if event.user_id.is_none_or(|user_id| !self.blocked_users.contains(&user_id)) {
-            self.message_activity_events.push(event, now);
-        }
-    }
-
-    pub fn is_bot_permitted(&self, bot_id: &UserId, initiator: &BotInitiator, required: BotPermissions) -> bool {
-        // Try to get the installed bot
-        let Some(bot) = self.bots.get(bot_id) else {
-            return false;
-        };
-
-        // Get the granted permissions when initiated by command or API key
-        let granted = match initiator {
-            BotInitiator::Command(_) => {
-                &BotPermissions::union(&bot.permissions, &bot.autonomous_permissions.clone().unwrap_or_default())
-            }
-            BotInitiator::Autonomous => match bot.autonomous_permissions.as_ref() {
-                Some(permissions) => permissions,
-                None => return false,
-            },
-        };
-
-        // The permissions required must be a subset of the permissions granted to the bot
-        required.is_subset(granted)
-    }
-
     pub fn flush_pending_events(&mut self) {
-        self.user_canister_events_queue.flush();
+        self.user_canister_events_by_canister.flush();
         self.local_user_index_event_sync_queue.flush();
-    }
-
-    pub fn handle_bot_definition_updated(&mut self, update: BotDefinitionUpdate, now: TimestampMillis) {
-        let bot_id = update.bot_id;
-
-        if self.bots.update_from_definition(update, now) {
-            self.apply_bot_update(bot_id, Some(OPENCHAT_BOT_USER_ID), now);
-        }
-    }
-
-    pub fn update_bot_permissions(
-        &mut self,
-        bot_id: UserId,
-        command_permissions: BotPermissions,
-        autonomous_permissions: Option<BotPermissions>,
-        now: TimestampMillis,
-    ) -> bool {
-        if self
-            .bots
-            .update_permissions(bot_id, command_permissions, autonomous_permissions, now)
-        {
-            self.apply_bot_update(bot_id, None, now);
-            true
-        } else {
-            false
-        }
-    }
-
-    fn apply_bot_update(&mut self, bot_id: UserId, updated_by: Option<UserId>, now: TimestampMillis) {
-        let chat = self.direct_chats.get_mut(&bot_id.into()).unwrap();
-
-        // Push a chat event
-        if let Some(updated_by) = updated_by {
-            chat.events.push_main_event(
-                ChatEventInternal::BotUpdated(Box::new(BotUpdated {
-                    user_id: bot_id,
-                    updated_by,
-                })),
-                now,
-            );
-        }
-
-        // Re-apply event subscriptions given the changes to permissions and/or subscriptions
-        let bot = self.bots.get(&bot_id).unwrap();
-
-        let permissions = &bot.autonomous_permissions.clone().unwrap_or_default();
-        let permitted_categories = permissions.permitted_chat_event_categories_to_read();
-        let subscriptions = bot.default_subscriptions.clone().unwrap_or_default();
-
-        chat.events
-            .subscribe_bot_to_events(bot_id, subscriptions.chat, &permitted_categories);
     }
 }
 
@@ -729,6 +680,7 @@ pub struct Metrics {
     pub wasm_version: BuildVersion,
     pub git_commit_id: String,
     pub direct_chats: u32,
+    pub direct_chats_with_legacy_events: u32,
     pub group_chats: u32,
     pub communities: u32,
     pub groups_created: u32,
@@ -752,9 +704,16 @@ pub struct Metrics {
     pub canister_ids: CanisterIds,
 }
 
+// Runs an update call, trapping if the canister is frozen. Endpoints which must keep working while
+// frozen use `execute_update_even_if_frozen` instead.
 fn execute_update<F: FnOnce(&mut RuntimeState) -> R, R>(f: F) -> R {
+    read_state(|state| trap_if_frozen(state.data.is_frozen()));
+    execute_update_even_if_frozen(f)
+}
+
+fn execute_update_even_if_frozen<F: FnOnce(&mut RuntimeState) -> R, R>(f: F) -> R {
     mutate_state(|state| {
-        state.regular_jobs.run(state.env.deref(), &mut state.data);
+        state.run_regular_jobs();
         let result = f(state);
         state.data.flush_pending_events();
         result
@@ -762,6 +721,12 @@ fn execute_update<F: FnOnce(&mut RuntimeState) -> R, R>(f: F) -> R {
 }
 
 async fn execute_update_async<F: FnOnce() -> Fut, Fut: Future<Output = R>, R>(f: F) -> R {
+    read_state(|state| trap_if_frozen(state.data.is_frozen()));
+    execute_update_async_even_if_frozen(f).await
+}
+
+async fn execute_update_async_even_if_frozen<F: FnOnce() -> Fut, Fut: Future<Output = R>, R>(f: F) -> R {
+    let _guard = AsyncWorkGuard::new();
     run_regular_jobs();
     let result = f().await;
     flush_pending_events();
@@ -769,29 +734,11 @@ async fn execute_update_async<F: FnOnce() -> Fut, Fut: Future<Output = R>, R>(f:
 }
 
 fn run_regular_jobs() {
-    mutate_state(|state| state.regular_jobs.run(state.env.deref(), &mut state.data));
+    mutate_state(|state| state.run_regular_jobs());
 }
 
 fn flush_pending_events() {
     mutate_state(|state| state.data.flush_pending_events());
-}
-
-fn sorted_pinned<T: Clone>(map: &HashMap<T, TimestampMillis>) -> Vec<T> {
-    map.iter()
-        .map(|(key, &ts)| (key.clone(), ts))
-        .sorted_by_key(|(_, ts)| Reverse(*ts))
-        .map(|(key, _)| key)
-        .collect()
-}
-
-fn merge_maps<K, V>(a: &HashMap<K, V>, b: &HashMap<K, V>) -> HashMap<K, V>
-where
-    K: Eq + Hash + Clone,
-    V: Clone,
-{
-    let mut merged = a.clone();
-    merged.extend(b.iter().map(|(k, v)| (k.clone(), v.clone())));
-    merged
 }
 
 #[derive(Serialize, Debug)]
@@ -804,22 +751,35 @@ pub struct CanisterIds {
     pub icp_ledger: CanisterId,
 }
 
-pub enum Membership {
-    Basic,
-    Diamond,
-    LifetimeDiamond,
+fn new_user_canister_events_by_canister() -> GroupedTimerJobQueue<UserCanisterEventBatch> {
+    GroupedTimerJobQueue::new(10, true)
 }
 
-impl Membership {
-    pub fn is_diamond_member(&self) -> bool {
-        matches!(self, Membership::Diamond | Membership::LifetimeDiamond)
-    }
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    pub fn group_creation_limit(&self) -> u32 {
-        match self {
-            Membership::Basic => 5,
-            Membership::Diamond => 40,
-            Membership::LifetimeDiamond => 100,
-        }
+    #[test]
+    fn data_round_trips() {
+        let data = Data::new(
+            Principal::from_slice(&[1]),
+            Principal::from_slice(&[2]),
+            Principal::from_slice(&[3]),
+            Principal::from_slice(&[4]),
+            Principal::from_slice(&[5]),
+            Principal::from_slice(&[6]),
+            Vec::new(),
+            "username".to_string(),
+            true,
+            None,
+            1,
+        );
+
+        let bytes = msgpack::serialize_then_unwrap(&data);
+        let deserialized: Data = msgpack::deserialize_then_unwrap(&bytes);
+
+        assert_eq!(deserialized.user.principal, data.user.principal);
+        assert_eq!(deserialized.user.username.value, "username");
+        assert_eq!(deserialized.user_index_canister_id, data.user_index_canister_id);
     }
 }

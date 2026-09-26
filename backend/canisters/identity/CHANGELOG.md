@@ -6,14 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [unreleased]
 
+### Changed
+
+- Update `ic-stable-structures` to a fork which supports choosing the page size of a map ([#9347](https://github.com/open-chat-labs/open-chat/pull/9347))
+- Track the spawned tasks in progress using `utils::async_work` ([#9546](https://github.com/open-chat-labs/open-chat/pull/9546))
+
+## [[2.0.2055](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2055-identity)] - 2026-09-13
+
+### Removed
+
+- Remove the one-off WebAuthn key repair now that it has run in production ([#9323](https://github.com/open-chat-labs/open-chat/pull/9323))
+
 ### Fixed
 
-- Repair WebAuthn keys stored with trailing extension bytes and remap their auth principals ([#9279](https://github.com/open-chat-labs/open-chat/pull/9279))
+- Remove WebAuthn keys when a passkey is unlinked or its user deleted, and drop orphaned keys on upgrade ([#9324](https://github.com/open-chat-labs/open-chat/pull/9324))
+- Decrement the originating canister count when an auth principal is unlinked ([#9324](https://github.com/open-chat-labs/open-chat/pull/9324))
+
+## [[2.0.2053](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2053-identity)] - 2026-09-07
 
 ### Changed
 
-- Validate WebAuthn keys at registration and reject any the IC would not accept ([#9280](https://github.com/open-chat-labs/open-chat/pull/9280))
 - Encode the index of a user within their canister into `UserId`, so that a canister can hold many users ([#9259](https://github.com/open-chat-labs/open-chat/pull/9259))
+- Validate WebAuthn keys at registration and reject any the IC would not accept ([#9280](https://github.com/open-chat-labs/open-chat/pull/9280))
+
+### Fixed
+
+- Repair WebAuthn keys stored with trailing extension bytes and remap their auth principals ([#9279](https://github.com/open-chat-labs/open-chat/pull/9279))
 
 ## [[2.0.1979](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.1979-identity)] - 2026-04-10
 
@@ -223,8 +241,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
-- Sync userIds to Identity canister ([#6027](https://github.com/open-chat-labs/open-chat/pull/6027))
 - Support linking multiple auth principals to an OC account ([#5852](https://github.com/open-chat-labs/open-chat/pull/5852))
+- Sync userIds to Identity canister ([#6027](https://github.com/open-chat-labs/open-chat/pull/6027))
 
 ## [[2.0.1209](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.1209-identity)] - 2024-06-20
 

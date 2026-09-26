@@ -12,6 +12,7 @@ fn main() {
     generate_ts_method!(local_user_index, access_token_v2);
     generate_ts_method!(local_user_index, chat_events);
     generate_ts_method!(local_user_index, group_and_community_summary_updates_v2);
+    generate_ts_method!(local_user_index, migrated_user_ids);
 
     generate_ts_method!(local_user_index, bot_add_reaction);
     generate_ts_method!(local_user_index, bot_change_role);
@@ -27,6 +28,11 @@ fn main() {
     generate_ts_method!(local_user_index, bot_members);
     generate_ts_method!(local_user_index, bot_send_message);
     generate_ts_method!(local_user_index, claim_prize);
+    generate_ts_method!(local_user_index, daily_puzzle_fetch);
+    generate_ts_method!(local_user_index, daily_puzzle_hint);
+    generate_ts_method!(local_user_index, daily_puzzle_save_grid);
+    generate_ts_method!(local_user_index, daily_puzzle_start);
+    generate_ts_method!(local_user_index, daily_puzzle_submit);
     generate_ts_method!(local_user_index, install_bot);
     generate_ts_method!(local_user_index, invite_users_to_channel);
     generate_ts_method!(local_user_index, invite_users_to_community);

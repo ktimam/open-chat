@@ -71,12 +71,55 @@ impl<T: TimerJobItemGroup> GroupedTimerJobQueue<T> {
         self.within_lock(|i| i.items_map.values().map(|v| v.len()).sum())
     }
 
+    // Removes and returns every queued item, grouped by key. Items in a batch which is already
+    // being processed are unaffected.
+    pub fn take_all(&mut self) -> Vec<(T::Key, Vec<T::Item>)> {
+        self.within_lock(|i| {
+            i.queue.clear();
+            std::mem::take(&mut i.items_map)
+                .into_iter()
+                .map(|(key, items)| (key, items.into()))
+                .collect()
+        })
+    }
+
+    // Removes and returns the items queued for `grouping_key`, in order. Items in a batch which is
+    // already being processed are unaffected.
+    pub fn take(&mut self, grouping_key: &T::Key) -> Vec<T::Item> {
+        self.within_lock(|i| {
+            let items = i.items_map.remove(grouping_key).map(Vec::from).unwrap_or_default();
+            if !items.is_empty() {
+                i.queue.retain(|key| key != grouping_key);
+            }
+            items
+        })
+    }
+
+    // Removes the queued items for which `f` returns false. Items in a batch which is already
+    // being processed are unaffected.
+    pub fn retain(&mut self, f: impl Fn(&T::Item) -> bool) {
+        self.within_lock(|i| {
+            i.items_map.retain(|_, items| {
+                items.retain(|item| f(item));
+                !items.is_empty()
+            });
+            let items_map = &i.items_map;
+            i.queue.retain(|key| items_map.contains_key(key));
+        })
+    }
+
     pub fn is_empty(&self) -> bool {
         self.within_lock(|i| i.queue.is_empty())
     }
 
     pub fn in_progress(&self) -> usize {
         self.within_lock(|i| i.in_progress.len())
+    }
+
+    // Whether no items are queued or being processed. Unlike `is_empty`, this includes items queued
+    // for a key whose batch is already being processed.
+    pub fn is_idle(&self) -> bool {
+        self.within_lock(|i| i.items_map.is_empty() && i.in_progress.is_empty())
     }
 
     fn within_lock<F: FnOnce(&mut GroupedTimerJobQueueInner<T::SharedState, T::Key, T::Item>) -> R, R>(&self, f: F) -> R {

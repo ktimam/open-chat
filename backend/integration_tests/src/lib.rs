@@ -8,44 +8,45 @@ use std::fmt::{Debug, Formatter};
 use types::{CanisterId, Cycles, SignedDelegation, UserId};
 
 mod account_linking_tests;
-mod action_card_inbox_routing_tests;
-mod action_inbox_lifecycle_tests;
-mod ai_app_link_code_tests;
-mod ai_app_registry_tests;
-mod ai_app_revoke_throttle_tests;
 mod airdrop_bot_tests;
 mod batched_summary_and_event_tests;
 mod bot_tests;
+mod call_push_tests;
 mod change_group_role_tests;
 mod chit_tests;
+mod chunk_store_tests;
 mod client;
 mod communities;
 mod cycles_dispenser_tests;
+mod cycles_refunder_tests;
+mod daily_puzzle_engine_tests;
+mod daily_puzzle_flow_tests;
+mod daily_puzzle_tests;
 mod delete_direct_chat_tests;
 mod delete_group_tests;
 mod delete_history_tests;
 mod delete_message_tests;
 mod delete_user_tests;
 mod diamond_membership_tests;
+mod direct_transfer_tests;
 mod disappearing_message_tests;
 mod edit_message_tests;
 mod env;
 mod escrow_tests;
-mod fan_out_delivery_tests;
 mod fire_and_forget_handler_tests;
 mod freeze_group_tests;
+mod game_chit_tests;
 mod gated_group_tests;
 mod group_and_community_verification_tests;
 mod identity_tests;
 mod join_group_tests;
 mod mentions_tests;
 mod message_activity_tests;
-mod model_catalog_tests;
 mod moderation_tests;
+mod multi_user_canister_tests;
 mod notification_tests;
 mod online_users_tests;
 mod p2p_swap_tests;
-mod per_user_key_isolation_tests;
 mod pin_number_tests;
 mod poll_tests;
 mod prize_message_tests;
@@ -59,13 +60,17 @@ mod set_message_reminder_tests;
 mod setup;
 mod sign_in_with_email_tests;
 mod stable_memory;
+mod stable_memory_map_upgrade_tests;
 mod storage;
 mod storage_tests;
 mod suspend_user_tests;
+mod swap_tokens_tests;
+mod threads_read_tests;
 mod tip_message_tests;
-mod two_phase_confirm_idempotency_tests;
 mod update_group_tests;
 mod update_profile_tests;
+mod upgrade_from_prod_tests;
+mod user_migration_tests;
 mod utils;
 mod video_call_tests;
 mod wasms;
@@ -134,6 +139,7 @@ pub struct CanisterIds {
     pub airdrop_bot: CanisterId,
     pub storage_index: CanisterId,
     pub cycles_dispenser: CanisterId,
+    pub daily_puzzle: CanisterId,
     pub registry: CanisterId,
     pub escrow: CanisterId,
     pub translations: CanisterId,
@@ -169,6 +175,7 @@ impl Debug for CanisterIds {
         w.field("airdrop_bot", &self.airdrop_bot.to_string());
         w.field("storage_index", &self.storage_index.to_string());
         w.field("cycles_dispenser", &self.cycles_dispenser.to_string());
+        w.field("daily_puzzle", &self.daily_puzzle.to_string());
         w.field("registry", &self.registry.to_string());
         w.field("escrow", &self.escrow.to_string());
         w.field("translations", &self.translations.to_string());
