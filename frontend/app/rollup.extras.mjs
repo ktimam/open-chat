@@ -5,6 +5,7 @@ import { sha256 } from "js-sha256";
 import path, { dirname } from "path";
 import { fileURLToPath } from "url";
 import { createUnofficialLocalEnvironment } from "../unofficialLocalProfile.mjs";
+import { createUnofficialLocalWebBuildEnvironment } from "../unofficialLocalWebBuild.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 export const __dirname = dirname(__filename);
@@ -61,19 +62,32 @@ export function generateCspForScripts(inlineScripts, development = false, unoffi
 
 // Set up environment
 export function initEnv({ websiteVersion } = {}) {
+    if (process.env.OC_UNOFFICIAL_WEB_BUILD === "true" && process.env.OC_UNOFFICIAL_CLIENT !== "true") {
+        throw new Error("Optimized local web builds require the explicit unofficial client profile");
+    }
     if (process.env.OC_UNOFFICIAL_CLIENT === "true") {
         const canisters = JSON.parse(fs.readFileSync(path.join(__dirname, "../../canister_ids.json")));
-        const profile = createUnofficialLocalEnvironment(canisters, {
+        const options = {
             port: process.env.OC_DEV_PORT,
             layout: process.env.OC_MOBILE_LAYOUT,
             inherited: process.env,
-        });
+        };
+        const profile = process.env.OC_UNOFFICIAL_WEB_BUILD === "true"
+            ? createUnofficialLocalWebBuildEnvironment(canisters, {
+                ...options,
+                output: process.env.OC_UNOFFICIAL_WEB_OUTPUT,
+                buildId: process.env.OC_UNOFFICIAL_WEB_BUILD_ID,
+                repositoryRoot: path.join(__dirname, "../.."),
+            })
+            : createUnofficialLocalEnvironment(canisters, options);
         // A stale env file or inherited local deployment setting must not retarget this client.
         for (const key of Object.keys(process.env)) {
             if (/^(OC_|NODE_OPTIONS$|NODE_ENV$|VITE_)/i.test(key)) delete process.env[key];
         }
         Object.assign(process.env, profile);
-        if (websiteVersion !== undefined) process.env.OC_WEBSITE_VERSION = websiteVersion;
+        if (websiteVersion !== undefined && process.env.OC_UNOFFICIAL_WEB_BUILD !== "true") {
+            process.env.OC_WEBSITE_VERSION = websiteVersion;
+        }
     } else {
         dotenv.config({ path: path.join(__dirname, "../.env") });
     }

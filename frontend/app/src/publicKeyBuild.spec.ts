@@ -44,7 +44,7 @@ describe("public key build plugin", () => {
         );
         expect(config).toContain('import { publicKeyBuildPlugin } from "./publicKeyBuild.mjs"');
         expect(config).toMatch(
-            /publicKeyBuildPlugin\(\{\s*network: process\.env\.OC_DFX_NETWORK \?\? "local",\s*canister: process\.env\.OC_USER_INDEX_CANISTER,\s*dfxExecutable: process\.env\.OC_DFX_EXECUTABLE,\s*expectedDfxVersion: dfxBuildVersion,\s*\}\)/,
+            /publicKeyBuildPlugin\(\{\s*network: process\.env\.OC_DFX_NETWORK \?\? "local",\s*\.\.\.\(localWebBuild \? \{ queryPublicKey: queryOfficialUserIndexPublicKey, outputPath: outputPath\("public-key"\) \} : \{\}\),\s*canister: process\.env\.OC_USER_INDEX_CANISTER,\s*dfxExecutable: process\.env\.OC_DFX_EXECUTABLE,\s*expectedDfxVersion: dfxBuildVersion,\s*\}\)/,
         );
         expect(config).toContain('new URL("../../dfx.json", import.meta.url)');
         expect(config).toContain('typeof dfxBuildVersion !== "string"');

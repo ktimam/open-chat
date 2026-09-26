@@ -1102,6 +1102,7 @@ function transformersWebGpuBuildEnvironment() {
     return {
         OC_BUILD_ENV: import.meta.env.OC_BUILD_ENV,
         OC_DFX_NETWORK: import.meta.env.OC_DFX_NETWORK,
+        OC_UNOFFICIAL_CLIENT: import.meta.env.OC_UNOFFICIAL_CLIENT,
         OC_TRANSFORMERS_WEBGPU_IMAGE_SPIKE: import.meta.env.OC_TRANSFORMERS_WEBGPU_IMAGE_SPIKE,
         OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY: import.meta.env
             .OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY,

@@ -24,6 +24,13 @@ import { androidBundlePlugin } from "./rollup-plugin-android-bundle.mjs";
 import { wasmUrlAsset } from "./rollup-plugin-wasm-url.mjs";
 import { modelAssetNoticesPlugin } from "./modelAssetNotices.mjs";
 import { publicKeyBuildPlugin } from "./publicKeyBuild.mjs";
+import { queryOfficialUserIndexPublicKey } from "./officialPublicKeyQuery.mjs";
+import { localAppRelayPlugin } from "./localAppRelayBuild.mjs";
+import {
+    copyUnofficialWebPublicFiles,
+    unofficialLocalWebManifest,
+    UNOFFICIAL_LOCAL_WEB_MANIFEST,
+} from "../unofficialLocalWebBuild.mjs";
 import { transformersWebGpuFeatureEnabled } from "./transformersWebGpuFeatureFlag.mjs";
 import { TRANSFORMERS_WEBGPU_RUNTIME_ASSETS } from "./src/utils/transformersWebGpuRuntimeAssets.ts";
 import { patchQwen3Vl2bDecoderGraph } from "./transformersWebGpuDecoderGraph.mjs";
@@ -64,6 +71,12 @@ function clean() {
     return {
         name: "clean-build",
         renderStart() {
+            if (localWebBuild) {
+                // initEnv accepted an existing empty output. Never clean/delete a caller path.
+                fs.writeFileSync(outputPath("version"), JSON.stringify({ version }));
+                fs.writeFileSync(outputPath("ota-policy.json"), JSON.stringify({ strategy: "none" }));
+                return;
+            }
             console.log("cleaning up the build directory");
             rimrafSync(path.join(__dirname, "build"));
             fs.mkdirSync("build");
@@ -107,6 +120,23 @@ function clean() {
 }
 
 const { version, production, development, env } = initEnv();
+const localWebBuild = process.env.OC_UNOFFICIAL_WEB_BUILD === "true";
+const outputDirectory = localWebBuild ? process.env.OC_UNOFFICIAL_WEB_OUTPUT : "build";
+const outputPath = (...segments) => path.join(outputDirectory, ...segments);
+
+function unofficialWebArtifacts() {
+    return {
+        name: "unofficial-local-web-artifacts",
+        generateBundle() {
+            if (!localWebBuild) return;
+            this.emitFile({ type: "asset", fileName: UNOFFICIAL_LOCAL_WEB_MANIFEST,
+                source: JSON.stringify(unofficialLocalWebManifest(process.env), null, 2) });
+        },
+        writeBundle() {
+            if (localWebBuild) copyUnofficialWebPublicFiles(path.join(__dirname, "public"), outputDirectory);
+        },
+    };
+}
 
 // Vite substitutes import.meta.env built-ins while serving the browser app. Native packages use
 // this Rollup build instead, so every built-in consumed by shared UI code must be replaced here as
@@ -139,11 +169,11 @@ if (!otaUpdateStrategies.has(otaUpdateStrategy)) {
     );
 }
 
-const androidRpId = (process.env.OC_ANDROID_RP_ID ?? "oc.app").trim().toLowerCase();
+const androidRpId = localWebBuild ? "" : (process.env.OC_ANDROID_RP_ID ?? "oc.app").trim().toLowerCase();
 if (
-    !/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(androidRpId) ||
+    !localWebBuild && (!/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(androidRpId) ||
     !androidRpId.includes(".") ||
-    androidRpId.includes("..")
+    androidRpId.includes(".."))
 ) {
     throw new Error("OC_ANDROID_RP_ID must be one valid HTTPS hostname");
 }
@@ -185,31 +215,31 @@ const localExtractorCopyTargets = localExtractorEnabled
     ? [
           {
               src: "../node_modules/tesseract.js/dist/{worker.min.js,worker.min.js.LICENSE.txt}",
-              dest: "build/assets/local-extractor/v7.0.0",
+              dest: outputPath("assets/local-extractor/v7.0.0"),
           },
           {
               src: "../node_modules/tesseract.js-core/{tesseract-core-relaxedsimd-lstm.wasm.js,tesseract-core-simd-lstm.wasm.js,tesseract-core-lstm.wasm.js}",
-              dest: "build/assets/local-extractor/v7.0.0/core",
+              dest: outputPath("assets/local-extractor/v7.0.0/core"),
           },
           {
               src: "../node_modules/@tesseract.js-data/eng/4.0.0_best_int/eng.traineddata.gz",
-              dest: "build/assets/local-extractor/v7.0.0/lang",
+              dest: outputPath("assets/local-extractor/v7.0.0/lang"),
           },
           {
               src: "../node_modules/@tesseract.js-data/ara/4.0.0_best_int/ara.traineddata.gz",
-              dest: "build/assets/local-extractor/v7.0.0/lang",
+              dest: outputPath("assets/local-extractor/v7.0.0/lang"),
           },
           {
               src: "../src-tauri/THIRD_PARTY_NOTICES.md",
-              dest: "build/assets/licenses",
+              dest: outputPath("assets/licenses"),
           },
           {
               src: "../src-tauri/THIRD_PARTY_LICENSES/{Apache-2.0.txt,MIT.txt}",
-              dest: "build/assets/licenses/THIRD_PARTY_LICENSES",
+              dest: outputPath("assets/licenses/THIRD_PARTY_LICENSES"),
           },
           {
               src: "../node_modules/ieee754/LICENSE",
-              dest: "build/assets/licenses/THIRD_PARTY_LICENSES",
+              dest: outputPath("assets/licenses/THIRD_PARTY_LICENSES"),
               rename: "ieee754-BSD-3-Clause.txt",
           },
       ]
@@ -221,15 +251,15 @@ const transformersWebGpuCopyTargets =
         : [
               {
                   src: "../openchat-worker/lib/transformers_webgpu_worker.js*",
-                  dest: "build",
+                  dest: outputDirectory,
               },
               {
                   src: "../node_modules/onnxruntime-web/dist/{ort-wasm-simd-threaded.jspi.mjs,ort-wasm-simd-threaded.jspi.wasm}",
-                  dest: "build/assets/transformers-webgpu/ort-1.29.0-dev.20260723-1b1e1db7bc",
+                  dest: outputPath("assets/transformers-webgpu/ort-1.29.0-dev.20260723-1b1e1db7bc"),
               },
               {
                   src: "../node_modules/@huggingface/transformers/LICENSE",
-                  dest: "build/assets/licenses/THIRD_PARTY_LICENSES",
+                  dest: outputPath("assets/licenses/THIRD_PARTY_LICENSES"),
                   rename: "huggingface-transformers-Apache-2.0.txt",
               },
           ];
@@ -312,7 +342,7 @@ export default {
         sourcemap: true,
         format: "es",
         name: "app",
-        dir: "build",
+        dir: outputDirectory,
         entryFileNames: "[name]-[hash].js",
         manualChunks,
     },
@@ -328,6 +358,7 @@ export default {
             }),
             compilerOptions: {
                 // runes: true,
+                ...(localWebBuild ? { dev: false } : {}),
             },
             onwarn: (warning, handler) => {
                 if (warning.code.startsWith("a11y-")) return;
@@ -393,6 +424,7 @@ export default {
         }),
         commonjs(),
         typescript({
+            ...(localWebBuild ? { outDir: outputPath("out") } : {}),
             include: [
                 "./src/**/*",
                 // Imported by src/utils/publicImageDisplay.ts for local-replica image URLs.
@@ -416,6 +448,7 @@ export default {
 
         replace({
             preventAssignment: true,
+            ...(localWebBuild ? { "process.env.NODE_ENV": JSON.stringify("production") } : {}),
             // @rollup/plugin-replace matches longer keys first and its default trailing delimiter
             // prevents this bare fallback from consuming a dotted property access. Define Vite's
             // complete builtin set explicitly, keep the app-specific OC_* keys below, then erase
@@ -423,6 +456,7 @@ export default {
             "import.meta.env.MODE": JSON.stringify(env),
             "import.meta.env.DEV": JSON.stringify(development),
             "import.meta.env.PROD": JSON.stringify(!development),
+            ...(localWebBuild ? { "import.meta.env.DEV": "false", "import.meta.env.PROD": "true" } : {}),
             "import.meta.env.SSR": "false",
             "import.meta.env.BASE_URL": JSON.stringify("/"),
             "import.meta.env": "{}",
@@ -439,6 +473,7 @@ export default {
                 JSON.stringify(otaUpdateStrategy),
             ),
             "import.meta.env.OC_BUILD_ENV": JSON.stringify(process.env.OC_BUILD_ENV),
+            "import.meta.env.OC_UNOFFICIAL_CLIENT": JSON.stringify(process.env.OC_UNOFFICIAL_CLIENT === "true" ? "true" : "false"),
             "import.meta.env.OC_WEBAUTHN_ORIGIN": JSON.stringify(process.env.OC_WEBAUTHN_ORIGIN),
             "import.meta.env.OC_ANDROID_RP_ID": JSON.stringify(androidRpId),
             "import.meta.env.OC_INTERNET_IDENTITY_URL": JSON.stringify(
@@ -467,7 +502,7 @@ export default {
             "import.meta.env.OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY": maybeStringify(
                 process.env.OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY,
             ),
-            "import.meta.env.OC_NODE_ENV": JSON.stringify(process.env.NODE_ENV ?? "production"),
+            "import.meta.env.OC_NODE_ENV": JSON.stringify(localWebBuild ? "development" : (process.env.NODE_ENV ?? "production")),
             "import.meta.env.OC_WEBSITE_VERSION": JSON.stringify(process.env.OC_WEBSITE_VERSION),
             "import.meta.env.OC_ROLLBAR_ACCESS_TOKEN": JSON.stringify(
                 process.env.OC_ROLLBAR_ACCESS_TOKEN,
@@ -688,15 +723,15 @@ export default {
                     // The all-WebGPU model worker is copied only by the explicit feature-flagged target below;
                     // an old local artifact can therefore never leak into a release build.
                     src: "../openchat-worker/lib/worker.js*",
-                    dest: "build",
+                    dest: outputDirectory,
                 },
                 {
                     src: "../openchat-worker/lib/transcode_worker.js*",
-                    dest: "build",
+                    dest: outputDirectory,
                 },
                 {
                     src: "../openchat-service-worker/lib/*",
-                    dest: "build",
+                    dest: outputDirectory,
                 },
                 ...localExtractorCopyTargets,
                 ...transformersWebGpuCopyTargets,
@@ -706,6 +741,7 @@ export default {
         sourcemapNewline(),
         publicKeyBuildPlugin({
             network: process.env.OC_DFX_NETWORK ?? "local",
+            ...(localWebBuild ? { queryPublicKey: queryOfficialUserIndexPublicKey, outputPath: outputPath("public-key") } : {}),
             canister: process.env.OC_USER_INDEX_CANISTER,
             dfxExecutable: process.env.OC_DFX_EXECUTABLE,
             expectedDfxVersion: dfxBuildVersion,
@@ -718,10 +754,12 @@ export default {
             ],
             hook: "buildStart",
         }),
-        androidBundlePlugin({
+        localAppRelayPlugin({ enabled: localWebBuild }),
+        unofficialWebArtifacts(),
+        ...(!localWebBuild ? [androidBundlePlugin({
             version,
             includeLocalExtractor: transformersWebGpuSpikeEnabled,
-        }),
+        })] : []),
     ],
     watch: {
         clearScreen: false,

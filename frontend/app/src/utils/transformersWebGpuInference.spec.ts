@@ -1339,6 +1339,42 @@ describe("Transformers.js Qwen WebGPU spike", () => {
         }
     });
 
+    it("passes the unofficial local profile through the actual mobile runtime admission check", () => {
+        const originalUserAgent = navigator.userAgent;
+        vi.stubEnv("OC_BUILD_ENV", "development");
+        vi.stubEnv("OC_DFX_NETWORK", "ic");
+        vi.stubEnv("OC_UNOFFICIAL_CLIENT", "true");
+        vi.stubEnv("OC_TRANSFORMERS_WEBGPU_IMAGE_SPIKE", "true");
+        vi.stubEnv("OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY", "immutable-hub-v1");
+        try {
+            Object.defineProperty(navigator, "userAgent", {
+                configurable: true,
+                value: "Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 Chrome/150 Mobile",
+            });
+            expect(transformersWebGpuClientEnabled()).toBe(true);
+            vi.stubEnv("OC_UNOFFICIAL_CLIENT", undefined);
+            expect(transformersWebGpuClientEnabled()).toBe(false);
+            vi.stubEnv("OC_UNOFFICIAL_CLIENT", "false");
+            expect(transformersWebGpuClientEnabled()).toBe(false);
+            vi.stubEnv("OC_UNOFFICIAL_CLIENT", "true");
+            vi.stubEnv("OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY", "local");
+            expect(transformersWebGpuClientEnabled()).toBe(false);
+            vi.stubEnv("OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY", "immutable-hub-v1");
+            expect(transformersWebGpuClientEnabled()).toBe(true);
+            Object.defineProperty(navigator, "userAgent", {
+                configurable: true,
+                value: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/150",
+            });
+            expect(transformersWebGpuClientEnabled()).toBe(false);
+        } finally {
+            Object.defineProperty(navigator, "userAgent", {
+                configurable: true,
+                value: originalUserAgent,
+            });
+            vi.unstubAllEnvs();
+        }
+    });
+
     it("creates a one-shot worker lazily, transfers an exact image copy, and releases it on success", async () => {
         const worker = new FakeWorker();
         const factory = vi.fn(() => worker);

@@ -53,6 +53,7 @@ const targets = [
 for (const target of targets) {
     await build({
         configFile: false,
+        envDir: process.env.OC_UNOFFICIAL_CLIENT === "true" ? false : undefined,
         logLevel: "warn",
         // Without this Vite copies frontend/app/public into the lib/ outDir,
         // which the app build then sweeps into build/, clashing with dfx's

@@ -2,16 +2,8 @@ import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { build } from "vite";
 
-export const LOCAL_APP_RELAY_CSP = "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
-export const LOCAL_APP_RELAY_HEADERS = Object.freeze({
-    "Content-Security-Policy": LOCAL_APP_RELAY_CSP,
-    "Cross-Origin-Opener-Policy": "unsafe-none",
-    "Cross-Origin-Embedder-Policy": "unsafe-none",
-    "Cross-Origin-Resource-Policy": "same-origin",
-    "Referrer-Policy": "no-referrer",
-    "Cache-Control": "no-store",
-    "X-Content-Type-Options": "nosniff",
-});
+import { LOCAL_APP_RELAY_HEADERS } from "./localAppRelayHeaders.mjs";
+export { LOCAL_APP_RELAY_CSP, LOCAL_APP_RELAY_HEADERS } from "./localAppRelayHeaders.mjs";
 
 /** Fixed, non-isolated first-party handoff page only. The model page's headers never change. */
 export function localAppRelayPlugin({ enabled = false } = {}) {
