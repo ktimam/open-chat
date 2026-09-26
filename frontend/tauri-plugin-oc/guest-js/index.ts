@@ -56,3 +56,6 @@ export {
 } from "./commands/updateChatShortcuts";
 export * from "./models/credentials";
 export * from "./models/error";
+export { beginLocalAppHandoff, pollLocalAppHandoff, cancelLocalAppHandoff,
+    type LocalAppHandoffStart, type LocalAppHandoffStatus, type LocalAppHandoffPhase,
+} from "./commands/localAppHandoff";

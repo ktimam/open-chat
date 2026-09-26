@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createLocalAppHandoffSession } from "./localAppHandoff";
 import type { LocalDraftDeliveryRequest } from "./localAppDrafts";
 
-function fixture() {
+function fixture(authorizeOffer?: () => Promise<boolean>) {
     const receiver = {};
     const send = vi.fn();
     const onOutcome = vi.fn();
@@ -12,13 +12,52 @@ function fixture() {
         recipient: "Review in the app", idempotencyKey: "B".repeat(42) + "A",
         payload: Object.freeze({ reading: 42, note: "private-marker" }),
     });
-    const session = createLocalAppHandoffSession({ receiver, send, onOutcome, sessionNonce, request });
+    const session = createLocalAppHandoffSession({ receiver, send, onOutcome, sessionNonce, request, authorizeOffer });
     const event = (type: string, rest: object = {}) => ({ origin: "https://app.example", source: receiver,
         data: { type: `oc:app-import:${type}`, version: 1, sessionNonce, ...rest } });
     return { receiver, send, onOutcome, request, session, event };
 }
 
 describe("explicit private app handoff", () => {
+    it("authorizes once after ready, and releases nothing while authorization is pending", async () => {
+        let resolve!: (allowed: boolean) => void;
+        const authorize = vi.fn(() => new Promise<boolean>(r => { resolve = r; }));
+        const f = fixture(authorize);
+        f.session.start();
+        expect(authorize).not.toHaveBeenCalled();
+        f.session.receive(f.event("ready")); f.session.receive(f.event("ready"));
+        f.session.receive(f.event("received", { importId: f.request.idempotencyKey, status: "pending-review" }));
+        expect(authorize).toHaveBeenCalledTimes(1);
+        expect(f.send).toHaveBeenCalledTimes(1);
+        expect(f.onOutcome).not.toHaveBeenCalled();
+        resolve(true); await Promise.resolve();
+        expect(f.send).toHaveBeenCalledTimes(2);
+        f.session.receive(f.event("ready"));
+        expect(authorize).toHaveBeenCalledTimes(1);
+    });
+    it.each(["close", "expire"] as const)("never releases after %s while authorization is pending", async method => {
+        let resolve!: (allowed: boolean) => void;
+        const f = fixture(() => new Promise<boolean>(r => { resolve = r; }));
+        f.session.start(); f.session.receive(f.event("ready"));
+        f.session[method](); resolve(true); await Promise.resolve();
+        expect(f.send).toHaveBeenCalledTimes(1);
+        expect(f.onOutcome.mock.calls).toEqual(method === "expire" ? [["uncertain"]] : []);
+    });
+    it.each(["denied", "failed"])("ends uncertain without an offer if authorization is %s", async mode => {
+        const f = fixture(async () => { if (mode === "failed") throw new Error(); return false; });
+        f.session.start(); f.session.receive(f.event("ready"));
+        await Promise.resolve(); await Promise.resolve();
+        f.session.receive(f.event("ready"));
+        expect(f.send).toHaveBeenCalledTimes(1);
+        expect(f.onOutcome.mock.calls).toEqual([["uncertain"]]);
+    });
+    it("treats a send failure as uncertain without a retry", () => {
+        const f = fixture(); f.session.start();
+        f.send.mockImplementationOnce(() => { throw new Error(); });
+        f.session.receive(f.event("ready")); f.session.receive(f.event("ready"));
+        expect(f.send).toHaveBeenCalledTimes(2);
+        expect(f.onOutcome.mock.calls).toEqual([["uncertain"]]);
+    });
     it("sends no payload until started and the exact receiver is ready; offers at most once", () => {
         const f = fixture();
         f.session.receive(f.event("ready"));

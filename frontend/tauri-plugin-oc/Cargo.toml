@@ -37,6 +37,7 @@ tauri-plugin = { version = "2.4.0", features = ["build"] }
 store = []
 # Restricted local-test browser transport; ordinary official builds do not include a listener.
 local-browser-auth = ["dep:bytes", "dep:getrandom", "dep:http-body-util", "dep:hyper", "dep:hyper-util", "tokio/time", "tokio/macros", "tokio/rt"]
+local-app-handoff = ["dep:bytes", "dep:getrandom", "dep:http-body-util", "dep:hyper", "dep:hyper-util", "tokio/time", "tokio/macros", "tokio/rt"]
 # Enables the on-device inference runtime (llama.cpp via llama-cpp-2). Off by default so normal/dev builds
 # stay fast and don't require the C++/cmake/libclang toolchain; the shipping app build turns it on.
 # Build note: requires cmake + a C/C++ compiler + libclang. On Windows, if a Visual Studio version newer

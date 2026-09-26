@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { UNOFFICIAL_LOCAL_CANISTERS } from "../frontend/unofficialLocalProfile.mjs";
 import { createUnofficialLocalApkEnvironment, localApkBundleMarker } from "../frontend/unofficialLocalApkProfile.mjs";
 import { localApkBuildPlan, parseLocalApkArgs } from "./build-unofficial-local-apk.mjs";
+import { localNativeAppHandoffBuildPlugin } from "../frontend/app/localNativeAppHandoffBuild.mjs";
 
 const canisters = Object.fromEntries(Object.values(UNOFFICIAL_LOCAL_CANISTERS).map((name) => [name, { ic: "aaaaa-aa" }]));
 const read = (name) => readFileSync(new URL(`../${name}`, import.meta.url), "utf8");
@@ -64,12 +65,12 @@ test("CLI only accepts bounded build targets and no device/data operations", () 
     for (const args of [["--install"], ["--target", "arm"], ["--target"], ["--target", "aarch64", "--target", "x86_64"], ["--config", "arbitrary"]]) assert.throws(() => parseLocalApkArgs(args));
 });
 
-test("build plan contains both GPU and isolated auth features; never invokes shell/install", () => {
+test("build plan contains GPU and separate auth/private-handoff features; never invokes shell/install", () => {
     const repo = fileURLToPath(new URL("..", import.meta.url));
     const plan = localApkBuildPlan(repo, canisters, parseLocalApkArgs([]));
     assert.equal(plan.options.shell, false);
     assert.equal(plan.options.windowsHide, true);
-    assert.ok(plan.args.includes("transformers-webgpu-android,local-test-browser-auth"));
+    assert.ok(plan.args.includes("transformers-webgpu-android,local-test-browser-auth,local-test-app-handoff"));
     assert.ok(plan.args.includes("--apk"));
     assert.ok(!plan.args.some((arg) => ["install", "uninstall", "dev", "run"].includes(arg)));
 });
@@ -106,6 +107,12 @@ test("bridge capability is only granted by the explicit local overlay", () => {
     assert.deepEqual(capability.windows, ["main"]);
     assert.equal(capability.local, true);
     assert.deepEqual(capability.permissions, ["oc:allow-local-browser-auth"]);
+    const handoff = overlay.app.security.capabilities.find((entry) => entry.identifier === "local-app-handoff");
+    assert.deepEqual(handoff.windows, ["main"]);
+    assert.equal(handoff.local, true);
+    assert.deepEqual(handoff.permissions, ["oc:allow-local-app-handoff"]);
+    const permission = read("frontend/tauri-plugin-oc/permissions/local-app-handoff.toml");
+    assert.match(permission, /begin_local_app_handoff.*poll_local_app_handoff.*cancel_local_app_handoff/);
 });
 
 test("Rollup keeps local web mode independent and emits only bundled signer assets", () => {
@@ -118,6 +125,12 @@ test("Rollup keeps local web mode independent and emits only bundled signer asse
     assert.match(plugin, /src=\\"\/sign-in.js\\"|src="\/sign-in.js"/);
     assert.match(plugin, /bundle: true, write: false/);
     assert.match(plugin, /fileName: "local-browser-auth.js"/);
+    assert.match(rollup, /localNativeAppHandoffBuildPlugin\(\{ enabled: localTestApk \}\)/);
+    const handoff = read("frontend/app/localNativeAppHandoffBuild.mjs");
+    assert.match(handoff, /src="\/handoff.js"/);
+    assert.match(handoff, /fileName: "local-native-app-handoff.js"/);
+    assert.match(handoff, /fileName: "local-native-app-handoff-profile.json"/);
+    assert.match(handoff, /applicationId: "dev.openchatfork.localtest", transport: "private-app-code-v1"/);
 });
 
 test("local native code never silently falls back to official passkeys or Firebase", () => {
@@ -128,4 +141,22 @@ test("local native code never silently falls back to official passkeys or Fireba
     assert.match(plugin, /if \(!isUnofficialLocalTest\(activity\)\) OCPluginCompanion.initFcmTokenCache/);
     const opener = read("frontend/tauri-plugin-oc/android/src/main/java/commands/OpenUrl.kt");
     assert.match(opener, /isUnofficialLocalTest\(activity\) && uri.host == "localhost"/);
+});
+
+test("private handoff plugin bundles the real browser entry and is inert outside local APK", async () => {
+    const absent = [];
+    await localNativeAppHandoffBuildPlugin().generateBundle.call({ emitFile: (asset) => absent.push(asset) });
+    assert.deepEqual(absent, []);
+    const assets = [];
+    await localNativeAppHandoffBuildPlugin({ enabled: true }).generateBundle.call({ emitFile: (asset) => assets.push(asset) });
+    assert.deepEqual(assets.map((asset) => asset.fileName), [
+        "local-native-app-handoff.html", "local-native-app-handoff.js", "local-native-app-handoff-profile.json",
+    ]);
+    const script = new TextDecoder().decode(assets[1].source);
+    assert.ok(script.length > 0 && script.length < 1024 * 1024);
+    assert.doesNotThrow(() => new Function(script));
+    assert.match(assets[0].source, /src="\/handoff.js"/);
+    assert.deepEqual(JSON.parse(assets[2].source), {
+        version: 1, applicationId: "dev.openchatfork.localtest", transport: "private-app-code-v1",
+    });
 });

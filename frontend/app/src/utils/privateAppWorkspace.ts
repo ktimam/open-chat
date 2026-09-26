@@ -31,6 +31,7 @@ import {
   deliverLocalAppViaRelay,
   cancelLocalAppHandoffs,
 } from "./localAppRelayDelivery";
+import { nativeAppDelivery, nativeDeliveryAllowed } from "./nativeAppDelivery";
 
 export interface PrivateAppWorkspaceState {
   open: boolean;
@@ -52,6 +53,7 @@ type Dependencies = {
   runProcessor: typeof runIsolatedAppProcessor;
   verifyProcessor: typeof verifyImportedLocalProcessor;
   deliver: LocalDraftDelivery;
+  nativeDeliver?: LocalDraftDelivery;
   cancelDelivery: () => void;
 };
 export type PrivateAppProposalOptions = {
@@ -77,6 +79,8 @@ export class PrivateAppWorkspace {
   #epoch = 0;
   #processor?: ImportedLocalProcessor;
   #abort?: AbortController;
+  #deliveryClient?: OpenChat;
+  #nativeDelivery = false;
   readonly #drafts: LocalAppDraftStore;
 
   constructor(
@@ -85,7 +89,15 @@ export class PrivateAppWorkspace {
       state: PrivateAppWorkspaceState,
     ) => void = () => {},
   ) {
-    this.#drafts = new LocalAppDraftStore(deps.deliver);
+    this.#drafts = new LocalAppDraftStore((request, signal) => {
+      if (this.#nativeDelivery) {
+        // A native client must never fall back to a browser BroadcastChannel or app backend.
+        return nativeDeliveryAllowed(this.#deliveryClient) && deps.nativeDeliver
+          ? deps.nativeDeliver(request, signal)
+          : Promise.resolve({ kind: "uncertain" });
+      }
+      return deps.deliver(request, signal);
+    });
   }
 
   get state(): PrivateAppWorkspaceState {
@@ -110,6 +122,8 @@ export class PrivateAppWorkspace {
     this.#abort?.abort();
     this.#abort = undefined;
     this.#processor = undefined;
+    this.#deliveryClient = undefined;
+    this.#nativeDelivery = false;
     this.#drafts.clear();
     this.deps.cancelDelivery();
     this.#state = { ...initial(), account: this.#account };
@@ -360,6 +374,8 @@ export class PrivateAppWorkspace {
         schema: action.draftSchema,
         payload: projectLocalAppPayload(action, result.candidates),
       });
+      this.#deliveryClient = client;
+      this.#nativeDelivery = client.isNativeApp?.() === true;
       this.#set({
         draft,
         editorJson: JSON.stringify(draft.payload, null, 2),
@@ -426,17 +442,28 @@ export class PrivateAppWorkspace {
   }
 
   async confirm(approvalId: string): Promise<void> {
+    await this.#send(approvalId, false);
+  }
+
+  /** Separate user confirmation only: reuse the exact approved import ID and request. */
+  async retryUncertain(approvalId: string): Promise<void> {
+    await this.#send(approvalId, true);
+  }
+
+  async #send(approvalId: string, retry: boolean): Promise<void> {
     const draft = this.#state.draft;
     if (
       !draft ||
       this.#state.busy ||
-      draft.status !== "reviewed" ||
+      draft.status !== (retry ? "uncertain" : "reviewed") ||
       draft.approval?.approvalId !== approvalId
     )
       return;
     const epoch = this.#epoch;
     // confirm invokes the delivery adapter synchronously, keeping the user's popup gesture.
-    const pending = this.#drafts.confirm(draft.id, approvalId);
+    const pending = retry
+      ? this.#drafts.retryUncertain(draft.id, approvalId)
+      : this.#drafts.confirm(draft.id, approvalId);
     this.#set({
       busy: true,
       draft: this.#drafts.get(draft.id),
@@ -452,7 +479,7 @@ export class PrivateAppWorkspace {
       message:
         current?.status === "delivered"
           ? "The app received the handoff. Review and save it in the app; delivery is not proof that it was saved."
-          : "The handoff outcome is unknown. Check the receiving app before starting another draft. No automatic retry will occur.",
+          : "The handoff outcome is unknown. Check the receiving app first. An explicit retry keeps this exact reviewed request and import ID; no automatic retry will occur.",
     });
   }
 
@@ -464,6 +491,8 @@ export class PrivateAppWorkspace {
       ? this.#drafts.cancel(this.#state.draft.id).deliveryMayHaveOccurred
       : false;
     this.deps.cancelDelivery();
+    this.#deliveryClient = undefined;
+    this.#nativeDelivery = false;
     this.#set({
       draft: undefined,
       editorJson: "",
@@ -485,7 +514,11 @@ export const privateAppWorkspace = new PrivateAppWorkspace(
     runProcessor: runIsolatedAppProcessor,
     verifyProcessor: verifyImportedLocalProcessor,
     deliver: deliverLocalAppViaRelay,
-    cancelDelivery: cancelLocalAppHandoffs,
+    nativeDeliver: nativeAppDelivery.deliver,
+    cancelDelivery: () => {
+      cancelLocalAppHandoffs();
+      nativeAppDelivery.cancelAll();
+    },
   },
   (state) => privateAppWorkspaceState.set(state),
 );

@@ -37,3 +37,4 @@ inference = ["tauri-plugin-oc/inference"]
 # contract just because a transient process environment happened to be present.
 transformers-webgpu-android = []
 local-test-browser-auth = ["tauri-plugin-oc/local-browser-auth"]
+local-test-app-handoff = ["tauri-plugin-oc/local-app-handoff"]

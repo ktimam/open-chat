@@ -4,17 +4,21 @@
     import { ANON_USER_ID } from "@shared";
     import { privateAppWorkspace as workspace, privateAppWorkspaceState } from "../utils/privateAppWorkspace";
     import { localAppDeliveryStatus } from "../utils/localAppRelayDelivery";
+    import { nativeAppDelivery, nativeAppPairing } from "../utils/nativeAppDelivery";
 
     let { client }: { client: OpenChat } = $props();
     let confirmed = $state(false);
+    let retryConfirmed = $state(false);
     const workspaceView = $derived($privateAppWorkspaceState);
     const accountReady = $derived($identityStateStore.kind === "logged_in" && $currentUserIdStore !== ANON_USER_ID && workspaceView.account === $currentUserIdStore);
     const selected = $derived(workspaceView.catalog?.apps.find(app => app.id === workspaceView.appId));
     const locked = $derived(workspaceView.busy || workspaceView.draft !== undefined);
     const editable = $derived(workspaceView.draft?.status === "draft" || workspaceView.draft?.status === "reviewed");
     const delivery = $derived($localAppDeliveryStatus?.importId === workspaceView.draft?.approval?.request.idempotencyKey ? $localAppDeliveryStatus : undefined);
+    const pairing = $derived($nativeAppPairing?.importId === workspaceView.draft?.approval?.request.idempotencyKey ? $nativeAppPairing : undefined);
 
     $effect(() => { workspaceView.draft?.revision; confirmed = false; });
+    $effect(() => { workspaceView.draft?.status; retryConfirmed = false; });
     $effect(() => {
         const kind = $identityStateStore.kind;
         const account = $currentUserIdStore;
@@ -112,6 +116,24 @@
                             <button class="confirm" type="button" disabled={!confirmed || workspaceView.busy} onclick={() => { const id = workspaceView.draft?.approval?.approvalId; if (confirmed && id) void workspace.confirm(id); }}>Send reviewed request</button>
                         {/if}
                     {/if}
+                    {#if pairing && client.isNativeApp() && client.existingAccountOnly()}
+                        <section class="pairing" aria-label="Pair local browser handoff">
+                            <h3>Open the reviewed draft in your browser</h3>
+                            <p>This one-use code unlocks only the request you approved above. Enter it only on this exact local browser page, then review the destination there.</p>
+                            <p><strong>Local browser page:</strong> <span class="destination">{pairing.url}</span></p>
+                            <p><strong>One-use pairing code:</strong> <code class="pairing-code">{pairing.pairingCode}</code></p>
+                            <p class="small">Expires at {new Date(pairing.expiresAtMs).toLocaleTimeString()}. The code is not included in the browser URL. Copying puts it on your device clipboard.</p>
+                            <div class="pairing-actions">
+                                <button type="button" onclick={() => void nativeAppDelivery.copyCode(pairing.importId)}>Copy pairing code</button>
+                                <button type="button" onclick={() => void nativeAppDelivery.openBrowser(pairing.importId)}>Open local browser</button>
+                            </div>
+                            {#if pairing.message}<p role="status">{pairing.message}</p>{/if}
+                        </section>
+                    {/if}
+                    {#if workspaceView.draft.status === "uncertain" && workspaceView.draft.approval}
+                        <label class="confirmation"><input type="checkbox" bind:checked={retryConfirmed} disabled={workspaceView.busy} /><span>I checked the receiving app. Retry exactly this reviewed request with the same import ID; a prior delivery may already have occurred.</span></label>
+                        <button type="button" disabled={!retryConfirmed || workspaceView.busy} onclick={() => { const id = workspaceView.draft?.approval?.approvalId; if (retryConfirmed && id) { retryConfirmed = false; void workspace.retryUncertain(id); } }}>Retry the same reviewed request</button>
+                    {/if}
                     <p class="small">Receiving an app handoff does not save an entry. Finish review and save in the app. Uncertain deliveries are never retried automatically.</p>
                     {#if delivery}
                         <p role="status">{delivery.status === "saved" ? "The receiving app reports that this request was saved."
@@ -147,4 +169,7 @@
     .confirmation input { flex: 0 0 auto; margin-top: 0.4rem; }
     .confirm { background: #292345; color: white; }
     .small { font-size: 0.875rem; }
+    .pairing { display: flex; flex-direction: column; gap: 0.75rem; padding: 0.75rem; border: 1px solid #888; border-radius: 0.5rem; }
+    .pairing-actions { display: flex; gap: 0.75rem; flex-wrap: wrap; }
+    .pairing-code { user-select: text; letter-spacing: 0.1em; }
 </style>

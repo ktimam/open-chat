@@ -13,6 +13,12 @@
                 "local": true,
                 "windows": ["main"],
                 "permissions": ["oc:allow-local-browser-auth"]
+            }, {
+                "identifier": "local-app-handoff",
+                "description": "Explicitly approved private draft transport for the separate local test APK",
+                "local": true,
+                "windows": ["main"],
+                "permissions": ["oc:allow-local-app-handoff"]
             }]
         }
     },

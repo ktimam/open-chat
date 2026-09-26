@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-local-app-handoff"
+description = "Allows only the bundled local-test main window to initiate, inspect and cancel a short-lived explicitly approved private app handoff. The separate native feature and bundled profile are also required."
+commands.allow = ["begin_local_app_handoff", "poll_local_app_handoff", "cancel_local_app_handoff"]

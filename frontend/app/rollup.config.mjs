@@ -28,6 +28,7 @@ import { publicKeyBuildPlugin } from "./publicKeyBuild.mjs";
 import { queryOfficialUserIndexPublicKey } from "./officialPublicKeyQuery.mjs";
 import { localAppRelayPlugin } from "./localAppRelayBuild.mjs";
 import { localBrowserAuthBuildPlugin } from "./localBrowserAuthBuild.mjs";
+import { localNativeAppHandoffBuildPlugin } from "./localNativeAppHandoffBuild.mjs";
 import { localApkBundleMarker } from "../unofficialLocalApkProfile.mjs";
 import {
     copyUnofficialWebPublicFiles,
@@ -783,6 +784,7 @@ export default {
         }),
         localAppRelayPlugin({ enabled: localWebBuild }),
         localBrowserAuthBuildPlugin({ enabled: localTestApk, identityCanister: process.env.OC_IDENTITY_CANISTER }),
+        localNativeAppHandoffBuildPlugin({ enabled: localTestApk }),
         unofficialWebArtifacts(),
         ...(!localClientBuild ? [androidBundlePlugin({
             version,

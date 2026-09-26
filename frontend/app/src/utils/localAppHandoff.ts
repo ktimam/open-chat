@@ -17,6 +17,9 @@ export function createLocalAppHandoffSession(options: {
     receiver: object;
     send: (message: unknown, exactOrigin: string) => void;
     onOutcome: (outcome: LocalAppHandoffOutcome) => void;
+    // Native transport rechecks the still-live user approval immediately before releasing data.
+    // Optional so an already-bound browser relay keeps its synchronous ready/offer behavior.
+    authorizeOffer?: () => Promise<boolean>;
 }) {
     const { request, sessionNonce, receiver, send, onOutcome } = options;
     const destination = new URL(request.destination);
@@ -27,6 +30,7 @@ export function createLocalAppHandoffSession(options: {
     }
     const origin = destination.origin;
     let started = false;
+    let authorizing = false;
     let offered = false;
     let received = false;
     let ended = false;
@@ -34,11 +38,25 @@ export function createLocalAppHandoffSession(options: {
     function exact(value: Record<string, unknown>, keys: string[]): boolean {
         return Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
     }
+    function uncertain(): void {
+        if (ended) return;
+        ended = true;
+        onOutcome("uncertain");
+    }
+    function offer(): void {
+        if (ended || offered) return;
+        offered = true;
+        try {
+            send({ ...common, type: "oc:app-import:offer", importId: request.idempotencyKey,
+                actionId: request.actionId, payload: request.payload }, origin);
+        } catch { uncertain(); }
+    }
     return {
         start(): void {
             if (started || ended) return;
             started = true;
-            send({ ...common, type: "oc:app-import:hello" }, origin);
+            try { send({ ...common, type: "oc:app-import:hello" }, origin); }
+            catch { uncertain(); }
         },
         receive(event: { origin: string; source: unknown; data: unknown }): void {
             if (!started || ended || event.origin !== origin || event.source !== receiver ||
@@ -46,10 +64,18 @@ export function createLocalAppHandoffSession(options: {
             const value = event.data as Record<string, unknown>;
             if (value.version !== 1 || value.sessionNonce !== sessionNonce) return;
             if (value.type === "oc:app-import:ready" && exact(value, ["type", "version", "sessionNonce"])) {
-                if (offered) return;
-                offered = true;
-                send({ ...common, type: "oc:app-import:offer", importId: request.idempotencyKey,
-                    actionId: request.actionId, payload: request.payload }, origin);
+                if (offered || authorizing) return;
+                if (options.authorizeOffer === undefined) offer();
+                else {
+                    authorizing = true;
+                    // Await once, ignore duplicate ready messages, and never send after close/expiry.
+                    void (async () => {
+                        try {
+                            if (await options.authorizeOffer!()) offer();
+                            else uncertain();
+                        } catch { uncertain(); }
+                    })();
+                }
                 return;
             }
             if (!offered) return;
@@ -73,8 +99,7 @@ export function createLocalAppHandoffSession(options: {
         },
         expire(): void {
             if (ended || received) return;
-            ended = true;
-            onOutcome("uncertain");
+            uncertain();
         },
         close(): void { ended = true; },
     };

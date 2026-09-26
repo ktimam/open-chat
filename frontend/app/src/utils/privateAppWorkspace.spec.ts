@@ -78,6 +78,7 @@ function fixture(processor = false) {
     })),
     verifyProcessor: vi.fn(async () => true),
     deliver: vi.fn<LocalDraftDelivery>(async () => ({ kind: "delivered" })),
+    nativeDeliver: vi.fn<LocalDraftDelivery>(async () => ({ kind: "delivered" })),
     cancelDelivery: vi.fn(),
   };
   const workspace = new PrivateAppWorkspace(deps);
@@ -324,6 +325,55 @@ describe("private app workspace boundaries", () => {
       "private model content",
     );
     expect(deps.deliver).not.toHaveBeenCalled();
+  });
+
+  it("retries uncertainty only on an explicit choice with the exact same immutable approval and import ID", async () => {
+    const { workspace, deps } = fixture();
+    await propose(workspace); workspace.review();
+    const approval = workspace.state.draft!.approval!;
+    deps.deliver.mockResolvedValueOnce({ kind: "uncertain" });
+    await workspace.confirm(approval.approvalId);
+    workspace.setAccount("test-account");
+    expect(deps.deliver).toHaveBeenCalledOnce();
+    await workspace.retryUncertain("incorrect"); expect(deps.deliver).toHaveBeenCalledOnce();
+    await Promise.all([workspace.retryUncertain(approval.approvalId), workspace.retryUncertain(approval.approvalId)]);
+    expect(deps.deliver).toHaveBeenCalledTimes(2);
+    expect(deps.deliver.mock.calls[0][0]).toBe(deps.deliver.mock.calls[1][0]);
+    expect(workspace.state.draft!.approval).toBe(approval);
+    expect(workspace.state.draft!.status).toBe("delivered");
+  });
+
+  it("uses the native adapter only for a native local-test profile and never falls back after native failure", async () => {
+    const { workspace, deps } = fixture();
+    const nativeClient = { clientOnlyApps: () => true, isNativeApp: () => true, existingAccountOnly: () => true } as OpenChat;
+    await workspace.propose(nativeClient, text, { stillCurrent: () => true }); workspace.review();
+    deps.nativeDeliver.mockRejectedValueOnce(new Error("unavailable native bridge"));
+    await workspace.confirm(workspace.state.draft!.approval!.approvalId);
+    expect(deps.nativeDeliver).toHaveBeenCalledOnce(); expect(deps.deliver).not.toHaveBeenCalled();
+    expect(workspace.state.draft!.status).toBe("uncertain");
+  });
+
+  it("rechecks native authorization at confirmation and explicit retry", async () => {
+    const { workspace, deps } = fixture();
+    let allowed = false;
+    const nativeClient = { clientOnlyApps: () => true, isNativeApp: () => true, existingAccountOnly: () => allowed } as OpenChat;
+    await workspace.propose(nativeClient, text, { stillCurrent: () => true }); workspace.review();
+    const approval = workspace.state.draft!.approval!.approvalId;
+    await workspace.confirm(approval);
+    expect(deps.nativeDeliver).not.toHaveBeenCalled(); expect(deps.deliver).not.toHaveBeenCalled();
+    allowed = true; await workspace.retryUncertain(approval);
+    expect(deps.nativeDeliver).toHaveBeenCalledOnce(); expect(deps.deliver).not.toHaveBeenCalled();
+  });
+
+  it("never retargets a native draft to the browser if its runtime gate disappears", async () => {
+    const { workspace, deps } = fixture();
+    let native = true;
+    const nativeClient = { clientOnlyApps: () => true, isNativeApp: () => native, existingAccountOnly: () => true } as OpenChat;
+    await workspace.propose(nativeClient, text, { stillCurrent: () => true }); workspace.review();
+    native = false;
+    await workspace.confirm(workspace.state.draft!.approval!.approvalId);
+    expect(deps.nativeDeliver).not.toHaveBeenCalled(); expect(deps.deliver).not.toHaveBeenCalled();
+    expect(workspace.state.draft!.status).toBe("uncertain");
   });
 
   it("blocks unofficial-only processing in an ordinary client", async () => {

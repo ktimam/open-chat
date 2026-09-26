@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="referrer" content="no-referrer">
+    <title>Review private app handoff</title>
+    <style>
+        :root { color-scheme: light dark; font: 16px/1.5 system-ui,sans-serif; }
+        body { max-width: 48rem; margin: 2rem auto; padding: 0 1rem; overflow-wrap: anywhere; }
+        label { display: block; margin-top: 1rem; }
+        input, button { font: inherit; padding: .7rem; margin: .5rem 0; max-width: 100%; box-sizing: border-box; }
+        input { width: 100%; font-family: monospace; }
+        pre { white-space: pre-wrap; overflow-wrap: anywhere; border: 1px solid gray; padding: 1rem; }
+        button { cursor: pointer; }
+        button:disabled { cursor: default; }
+    </style>
+</head>
+<body data-native-app-handoff="true">
+    <h1>Review private app handoff</h1>
+    <p>This local page receives only the draft you explicitly approved in the APK. It does not read your chats or sign you in.</p>
+    <label for="pairing-code">One-time code shown in the APK</label>
+    <input id="pairing-code" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="24">
+    <button id="claim-draft" type="button">Load reviewed draft</button>
+    <p id="handoff-status" role="status" aria-live="polite">Paste the code, then choose Load reviewed draft. Nothing has been sent to an app.</p>
+    <pre id="handoff-summary" aria-label="Exact approved request" hidden></pre>
+    <button id="open-app" type="button" disabled>Open app for review</button>
+    <p>The app will ask you to allow this connection once. It then receives the displayed payload for its own review. Saving is a separate action in the app.</p>
+    <script src="/handoff.js" defer></script>
+</body>
+</html>

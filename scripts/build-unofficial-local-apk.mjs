@@ -34,7 +34,7 @@ export function localApkBuildPlan(repository, canisters, options, inherited = {}
     const args = options.frontendOnly
         ? [path.join(frontend, "node_modules/rollup/dist/bin/rollup"), "-c"]
         : [path.join(frontend, "node_modules/@tauri-apps/cli/tauri.js"), "android", "build", "--apk", "--ci", "--target", options.target,
-            "--config", path.join(frontend, "src-tauri/tauri.localtest.conf.json"), "--features", "transformers-webgpu-android,local-test-browser-auth"];
+            "--config", path.join(frontend, "src-tauri/tauri.localtest.conf.json"), "--features", "transformers-webgpu-android,local-test-browser-auth,local-test-app-handoff"];
     return Object.freeze({ command: process.execPath, args: Object.freeze(args), options: Object.freeze({
         cwd: options.frontendOnly ? path.join(frontend, "app") : frontend,
         env, shell: false, windowsHide: true, stdio: "inherit",
@@ -61,7 +61,9 @@ export function main(args = process.argv.slice(2)) {
         const marker = JSON.parse(readFileSync(path.join(output, "local-apk-profile.json"), "utf8"));
         const ota = JSON.parse(readFileSync(path.join(output, "ota-policy.json"), "utf8"));
         if (marker.applicationId !== UNOFFICIAL_LOCAL_APK_ID || marker.nativeAuthentication !== "browser-bridge-v1" || ota.strategy !== "none" ||
-            !existsSync(path.join(output, "local-browser-auth.html")) || !existsSync(path.join(output, "local-browser-auth.js"))) {
+            !existsSync(path.join(output, "local-browser-auth.html")) || !existsSync(path.join(output, "local-browser-auth.js")) ||
+            !existsSync(path.join(output, "local-native-app-handoff.html")) || !existsSync(path.join(output, "local-native-app-handoff.js")) ||
+            !existsSync(path.join(output, "local-native-app-handoff-profile.json"))) {
             throw new Error("Local APK policy or browser-sign-in assets are incomplete");
         }
     }
