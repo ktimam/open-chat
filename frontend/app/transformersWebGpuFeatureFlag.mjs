@@ -20,6 +20,12 @@ export function transformersWebGpuFeatureEnabled(environment) {
         (environment?.OC_BUILD_ENV === "development" &&
             environment?.OC_DFX_NETWORK === "local" &&
             environment?.OC_TRANSFORMERS_WEBGPU_IMAGE_SPIKE === "true") ||
+        (environment?.OC_BUILD_ENV === "development" &&
+            environment?.OC_DFX_NETWORK === "ic" &&
+            environment?.OC_UNOFFICIAL_CLIENT === "true" &&
+            environment?.OC_TRANSFORMERS_WEBGPU_IMAGE_SPIKE === "true" &&
+            environment?.OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY ===
+                TRANSFORMERS_WEBGPU_IMMUTABLE_DELIVERY) ||
         transformersWebGpuProductionAssetsEnabled(environment)
     );
 }

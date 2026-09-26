@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { privateAppWorkspace } from "@utils/privateAppWorkspace";
     import type { AiAppRegistration, OpenChat } from "@client";
     import {
         anonUserStore,
@@ -57,6 +58,7 @@
     let searchTerm = $state(communitySearchState.term);
 
     function setView(v: View) {
+        if (v === "aiApps" && client.clientOnlyApps()) { privateAppWorkspace.open(); return; }
         view = v;
         searchTerm = v === "aiApps" ? aiAppSearchState.term : communitySearchState.term;
         if (v === "aiApps") {
@@ -77,6 +79,7 @@
     }
 
     function searchAiApps(reset = false) {
+        if (client.clientOnlyApps()) { searching = false; privateAppWorkspace.open(); return; }
         searching = true;
         if (reset) {
             aiAppSearchState.reset();
@@ -104,6 +107,7 @@
     }
 
     function refreshConnected() {
+        if (client.clientOnlyApps()) return;
         client.myAiAppKeys().then((keys) => {
             connectedAppIds = new Set(
                 keys.filter((k) => k.publicKey.length > 0).map((k) => k.appId),

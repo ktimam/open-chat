@@ -30,4 +30,6 @@ export type AgentConfig = {
     groupInvite?: GroupInvite;
     logger: Logger;
     accountLinkingCodesEnabled: boolean;
+    existingAccountOnly?: boolean;
+    clientOnlyApps?: boolean;
 };

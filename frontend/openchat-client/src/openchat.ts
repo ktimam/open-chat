@@ -1,4 +1,16 @@
 /* eslint-disable no-case-declarations */
+import {
+    assertSignUpAllowed,
+    ExistingAccountRequiredError,
+    isExistingAccountRequiredError,
+} from "@shared/utils/existingAccountPolicy";
+import { PickerWebAuthnIdentity } from "./utils/browserPasskey";
+import {
+    BrowserAccountLinkFlow,
+    createBrowserLinkPasskey,
+    type BrowserAccountLinkState,
+    type BrowserSignInExpectation,
+} from "./utils/browserAccountLink";
 import { AuthClient, type AuthClientLoginOptions } from "@icp-sdk/auth/client";
 import { AnonymousIdentity, DER_COSE_OID, unwrapDER, type SignIdentity } from "@icp-sdk/core/agent";
 import {
@@ -811,6 +823,11 @@ export class OpenChat {
 
     #handleStartupFailure(error: unknown): void {
         if (startupErrorStore.value !== undefined) return;
+        if (isExistingAccountRequiredError(error)) {
+            startupErrorStore.set(new ExistingAccountRequiredError().message);
+            this.updateIdentityState({ kind: "anon" });
+            return;
+        }
         this.#logger.error("OpenChat background worker failed", error);
         startupErrorStore.set(
             "OpenChat could not finish loading its background worker. Reload and try again.",
@@ -865,6 +882,14 @@ export class OpenChat {
 
     accountLinkingCodeEnabled() {
         return this.config.accountLinkingCodesEnabled;
+    }
+
+    existingAccountOnly() {
+        return this.config.existingAccountOnly === true;
+    }
+
+    clientOnlyApps() {
+        return this.config.clientOnlyApps === true;
     }
 
     deleteCurrentUser(
@@ -941,6 +966,7 @@ export class OpenChat {
         identityKeyAndChain: IdentityKeyAndChain | undefined,
         authProvider: AuthProvider | undefined,
         registering: boolean = false,
+        expectedUsername?: string,
     ) {
         startupErrorStore.set(undefined);
         const anon = identityKeyAndChain === undefined;
@@ -983,6 +1009,11 @@ export class OpenChat {
             if (setAuthIdentityResponse.kind === "success") {
                 ocIdentity = setAuthIdentityResponse;
             } else if (setAuthIdentityResponse.kind === "oc_identity_not_found") {
+                if (this.existingAccountOnly()) {
+                    this.#authPrincipal = undefined;
+                    this.updateIdentityState({ kind: "anon" });
+                    throw new ExistingAccountRequiredError();
+                }
                 const createOpenChatIdentityResponse = await this.#worker.send({
                     kind: "createOpenChatIdentity",
                     webAuthnCredentialId: this.#webAuthnKey?.credentialId,
@@ -997,20 +1028,29 @@ export class OpenChat {
 
             if (ocIdentity !== undefined) {
                 this.#ocIdentityPrincipal = ocIdentity.ocIdentityPrincipal;
-                this.#startSession(ocIdentity.ocIdentityPrincipal, ocIdentity.ocIdentityExpiry);
+                if (!this.existingAccountOnly()) {
+                    this.#startSession(ocIdentity.ocIdentityPrincipal, ocIdentity.ocIdentityExpiry);
+                }
             }
 
-            createdUser = await this.getCurrentUser()
+            createdUser = await this.getCurrentUser(expectedUsername)
                 .then((user) => {
                     switch (user.kind) {
                         case "created_user":
                             return user;
                         case "unknown_user":
+                            if (this.existingAccountOnly()) {
+                                this.#authPrincipal = undefined;
+                                this.#ocIdentityPrincipal = undefined;
+                                this.updateIdentityState({ kind: "anon" });
+                                throw new ExistingAccountRequiredError();
+                            }
                             this.updateIdentityState({ kind: "registering" });
                             return undefined;
                     }
                 })
                 .catch((e) => {
+                    if (isExistingAccountRequiredError(e)) throw e;
                     if (e.code === 403) {
                         // This happens locally if you run a new instance of the IC and have an identity based on the
                         // previous version's root key in the cache
@@ -1018,6 +1058,9 @@ export class OpenChat {
                     }
                     return undefined;
                 });
+            if (this.existingAccountOnly() && ocIdentity !== undefined && createdUser !== undefined) {
+                this.#startSession(ocIdentity.ocIdentityPrincipal, ocIdentity.ocIdentityExpiry);
+            }
         }
 
         this.onCreatedUser(createdUser ?? anonymousUser());
@@ -5816,6 +5859,7 @@ export class OpenChat {
     }
 
     registerUser(username: string, email: string | undefined): Promise<RegisterUserResponse> {
+        if (this.existingAccountOnly()) return Promise.reject(new ExistingAccountRequiredError());
         return this.#worker
             .send({
                 kind: "registerUser",
@@ -5845,11 +5889,16 @@ export class OpenChat {
             .catch(() => ({ kind: "internal_error" }));
     }
 
-    getCurrentUser(): Promise<CurrentUserResponse> {
+    getCurrentUser(expectedUsername?: string): Promise<CurrentUserResponse> {
         return new Promise((resolve, reject) => {
             let resolved = false;
             this.#worker.stream({ kind: "getCurrentUser" }).subscribe({
                 onResult: (user) => {
+                    if (expectedUsername !== undefined && user.kind === "created_user" && user.username !== expectedUsername) {
+                        if (!resolved) reject(new ExistingAccountRequiredError());
+                        resolved = true;
+                        return;
+                    }
                     // If the id has changed, the session restarts under the new one
                     if (user.kind === "created_user" && !this.#currentUserIdChanged(user.userId)) {
                         userCreatedStore.set(true);
@@ -9389,6 +9438,7 @@ export class OpenChat {
         assumeIdentity: boolean,
         username?: string,
     ): Promise<[ECDSAKeyIdentity, DelegationChain, WebAuthnKey]> {
+        assertSignUpAllowed(this.config, assumeIdentity);
         const webAuthnOrigin = this.config.webAuthnOrigin;
         if (webAuthnOrigin === undefined) throw new Error("WebAuthn origin not set");
 
@@ -9409,6 +9459,7 @@ export class OpenChat {
         assumeIdentity: boolean,
         username: string,
     ): Promise<[ECDSAKeyIdentity, DelegationChain, WebAuthnKey]> {
+        assertSignUpAllowed(this.config, assumeIdentity);
         const webAuthnIdentity = await createAndroidWebAuthnPasskeyIdentity(username, (key) =>
             this.#storeWebAuthnKeyInCache(key),
         );
@@ -9480,17 +9531,60 @@ export class OpenChat {
         }
     }
 
-    async signInWithWebAuthn() {
+    createBrowserAccountLinkFlow(onChange: (state: BrowserAccountLinkState) => void): BrowserAccountLinkFlow {
+        if (!this.existingAccountOnly() || this.isNativeApp()) throw new Error("Browser account linking is not enabled for this client");
+        const rpId = this.config.webAuthnOrigin;
+        if (rpId === undefined) throw new Error("WebAuthn origin not set");
+        let tempKey: ECDSAKeyIdentity | undefined;
+        let expires = 0;
+        let cancelled = false;
+        const currentKey = () => {
+            if (cancelled || tempKey === undefined || Date.now() > expires) throw new Error("Linking attempt expired or cancelled");
+            return tempKey;
+        };
+        return new BrowserAccountLinkFlow({
+            verify: async (code) => {
+                const key = await ECDSAKeyIdentity.generate();
+                if (cancelled) throw new Error("Linking attempt cancelled");
+                tempKey = key;
+                const result = await this.verifyAccountLinkingCode(code, key);
+                if (cancelled || result.kind !== "success") throw new Error("Code verification failed");
+                expires = Date.now() + 270_000;
+                return result.username;
+            },
+            createPasskey: async (username) => {
+                currentKey();
+                const key = await createBrowserLinkPasskey(rpId, username);
+                currentKey();
+                await this.#storeWebAuthnKeyInCache(key);
+                return key;
+            },
+            finalize: async (key) => {
+                const session = currentKey();
+                if (key.origin !== rpId) throw new Error("Unexpected passkey origin");
+                const identity = new WebAuthnIdentity(key.credentialId, unwrapDER(key.publicKey, DER_COSE_OID), undefined);
+                await this.finaliseAccountLinkingWithCode(session, identity.getPrincipal().toString(), key.publicKey, key);
+            },
+            forget: () => { cancelled = true; tempKey = undefined; },
+        }, onChange);
+    }
+
+    async signInWithWebAuthn(expected?: BrowserSignInExpectation) {
         const webAuthnOrigin = this.config.webAuthnOrigin;
         if (webAuthnOrigin === undefined) throw new Error("WebAuthn origin not set");
 
-        const webAuthnIdentity = new MultiWebAuthnIdentity(webAuthnOrigin, (credentialId) =>
-            this.lookupWebAuthnPubKey(credentialId),
+        const webAuthnIdentity = new MultiWebAuthnIdentity(
+            webAuthnOrigin,
+            (credentialId) => this.lookupWebAuthnPubKey(credentialId),
+            this.existingAccountOnly(),
+            this.existingAccountOnly() ? expected?.credentialId : undefined,
         );
         await this.#finaliseWebAuthnSignin(
             webAuthnIdentity,
             () => webAuthnIdentity.innerIdentity(),
             true,
+            false,
+            this.existingAccountOnly() ? expected?.username : undefined,
         );
     }
 
@@ -9530,11 +9624,13 @@ export class OpenChat {
             );
         } else {
             const cose = unwrapDER(webAuthnKey.publicKey, DER_COSE_OID);
-            const webAuthnIdentity = new WebAuthnIdentity(
-                webAuthnKey.credentialId,
-                cose,
-                undefined,
-            );
+            const webAuthnIdentity = this.existingAccountOnly()
+                ? new PickerWebAuthnIdentity(
+                      this.config.webAuthnOrigin,
+                      webAuthnKey.credentialId,
+                      cose,
+                  )
+                : new WebAuthnIdentity(webAuthnKey.credentialId, cose, undefined);
             return await this.#finaliseWebAuthnSignin(
                 webAuthnIdentity,
                 () => webAuthnIdentity,
@@ -9548,6 +9644,7 @@ export class OpenChat {
         webAuthnIdentityFn: () => WebAuthnIdentity,
         assumeIdentity: boolean,
         registering: boolean = false,
+        expectedUsername?: string,
     ): Promise<[ECDSAKeyIdentity, DelegationChain, WebAuthnKey]> {
         const sessionKey = await ECDSAKeyIdentity.generate();
         const delegation = await DelegationChain.create(
@@ -9565,11 +9662,24 @@ export class OpenChat {
         if (assumeIdentity) {
             this.#webAuthnKey = webAuthnKey;
             await this.#authIdentityStorage.set(sessionKey, delegation);
-            await this.#loadedAuthenticationIdentity(
-                { key: sessionKey, delegation },
-                AuthProvider.PASSKEY,
-                registering,
-            );
+            try {
+                await this.#loadedAuthenticationIdentity(
+                    { key: sessionKey, delegation },
+                    AuthProvider.PASSKEY,
+                    registering,
+                    expectedUsername,
+                );
+            } catch (error) {
+                if (this.existingAccountOnly() && isExistingAccountRequiredError(error)) {
+                    await this.#authIdentityStorage.remove();
+                    await this.#worker.send({ kind: "setAuthIdentity", identity: undefined, isIIPrincipal: false });
+                    this.#authPrincipal = undefined;
+                    this.#ocIdentityPrincipal = undefined;
+                    this.#webAuthnKey = undefined;
+                    this.updateIdentityState({ kind: "anon" });
+                }
+                throw error;
+            }
         }
         return [sessionKey, delegation, webAuthnKey];
     }

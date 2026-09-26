@@ -55,6 +55,9 @@ export default defineConfig({
         include: [
             "app/src/**/*.{test,spec}.ts",
             "app/rollup-plugin-wasm-url*.{test,spec}.ts",
+            "app/localAppRelayBuild.spec.ts",
+            "openchat-service-worker/src/local_app_relay.spec.ts",
+            "openchat-worker/src/existingAccountPolicy.spec.ts",
             "component-lib/src/**/*.{test,spec}.ts",
             "openchat-shared/src/**/*.{test,spec}.ts",
             "openchat-client/src/**/*.{test,spec}.ts",

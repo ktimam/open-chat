@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { privateAppWorkspace } from "@utils/privateAppWorkspace";
     import { disableRestrictedContent } from "@src/utils/features";
     import { communityPreviewState } from "@src/utils/preview.svelte";
     import {
@@ -165,6 +166,7 @@
     // Query-driven like communities (the published AI-app directory lives on the user_index; there
     // is no locally-synced state to filter, unlike bots).
     function searchAiApps(reset = false) {
+        if (client.clientOnlyApps()) { searching = false; privateAppWorkspace.open(); return; }
         if (reset) {
             aiAppSearchState.reset();
         } else {
@@ -198,6 +200,7 @@
     let appSurface = $state<SurfaceOpening | undefined>(undefined);
 
     function refreshConnected() {
+        if (client.clientOnlyApps()) return;
         client.myAiAppKeys().then((keys) => {
             connectedAppIds = new Set(
                 keys.filter((k) => k.publicKey.length > 0).map((k) => k.appId),
@@ -260,6 +263,7 @@
     });
 
     function setView(v: View) {
+        if (v === "aiApps" && client.clientOnlyApps()) { privateAppWorkspace.open(); return; }
         transition(["fade"], () => {
             view = v;
         });

@@ -351,3 +351,17 @@ export function mergeCatalogs(
     }
     return merged;
 }
+
+/** Production OpenChat has no custom model-catalog endpoint; unofficial clients use bundled data. */
+export async function loadModelCatalogForClient(client: {
+    clientOnlyApps(): boolean;
+    modelCatalog(): Promise<ModelCatalog>;
+}): Promise<ModelCatalogEntry[]> {
+    if (client.clientOnlyApps()) return defaultModelCatalog.models;
+    try {
+        const remote = await client.modelCatalog();
+        return mergeCatalogs(remote.models, defaultModelCatalog.models);
+    } catch {
+        return defaultModelCatalog.models;
+    }
+}

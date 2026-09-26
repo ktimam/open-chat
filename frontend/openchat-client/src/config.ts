@@ -40,5 +40,9 @@ export type OpenChatConfig = {
     communityInvite?: CommunityInvite;
     vapidPublicKey: string;
     accountLinkingCodesEnabled: boolean;
+    /** Never create a new OpenChat identity/account implicitly in an unofficial client. */
+    existingAccountOnly?: boolean;
+    /** Use client-owned app integration without unsupported OpenChat backend app APIs. */
+    clientOnlyApps?: boolean;
     baseOrigin: string;
 };

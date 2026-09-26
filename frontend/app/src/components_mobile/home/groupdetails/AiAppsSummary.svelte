@@ -1,4 +1,5 @@
 <script lang="ts">
+    import LocalAppsChatSettings from "@src/components_shared/LocalAppsChatSettings.svelte";
     import { i18nKey } from "@src/i18n/i18n";
     import { toastStore } from "@src/stores/toast";
     import {
@@ -55,6 +56,7 @@
     let disconnecting = $state(new Set<number>());
 
     async function load() {
+        if (client.clientOnlyApps()) return;
         loading = true;
         const [enabledIds, myKeys, directory] = await Promise.all([
             client.enabledAiApps(chat.id),
@@ -213,7 +215,11 @@
     }
 </script>
 
-{#if isMultiUser}
+{#if client.clientOnlyApps()}
+    <LocalAppsChatSettings chatId={chat.id} />
+{/if}
+
+{#if !client.clientOnlyApps() && isMultiUser}
     <Separator />
 
     <Container padding={["zero", "md"]} gap={"lg"} direction={"vertical"}>

@@ -10,6 +10,7 @@ import type {
 } from "@shared";
 import { ONE_MINUTE_MILLIS, Stream, publish, requiresLogout } from "@shared";
 import type { OpenChatConfig } from "./config";
+import { assertUnofficialApiRequestAllowed } from "@shared/utils/unofficialApiPolicy";
 import { snapshot } from "./snapshot.svelte";
 import { messagesRead, storageStore } from "./state";
 import { userStore } from "./state/users/state";
@@ -28,6 +29,7 @@ export class WorkerAgent {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     readonly #inflightRequests: Map<number, PromiseResolver<any>> = new Map();
     readonly #logger: Logger;
+    readonly #clientOnlyApps: boolean;
     readonly #onFatalError: ((error: Error) => void) | undefined;
     #fatalError: Error | undefined;
     #sessionExpired = false;
@@ -43,6 +45,7 @@ export class WorkerAgent {
     ) {
         console.debug("WORKER_CLIENT: loading worker with version: ", config.websiteVersion);
         this.#logger = config.logger;
+        this.#clientOnlyApps = config.clientOnlyApps === true;
         this.#onFatalError = onFatalError;
 
         const workerUrl = `/worker.js?v=${config.websiteVersion}`;
@@ -144,6 +147,8 @@ export class WorkerAgent {
             bitcoinMainnetEnabled: config.bitcoinMainnetEnabled,
             groupInvite: config.groupInvite,
             accountLinkingCodesEnabled: config.accountLinkingCodesEnabled,
+            existingAccountOnly: config.existingAccountOnly === true,
+            clientOnlyApps: config.clientOnlyApps === true,
         };
 
         // The init request owns a startup watchdog. Its rejection is consumed here because the
@@ -193,6 +198,12 @@ export class WorkerAgent {
     ): (resolve: (val: T, final: boolean) => void, reject: (reason?: unknown) => void) => void {
         const correlationId = this.nextCorrelationId++;
         return (resolve, reject) => {
+            try {
+                assertUnofficialApiRequestAllowed(req, this.#clientOnlyApps);
+            } catch (error) {
+                reject(error);
+                return;
+            }
             if (this.#fatalError !== undefined) {
                 reject(this.#fatalError);
                 return;

@@ -16,6 +16,7 @@ import type {
 } from "@shared";
 import { buildDelegationIdentity, toDer, ErrorCode } from "@shared";
 import { createHttpAgent } from "../utils/httpAgent";
+import { createSingleSubmissionFetch } from "../utils/singleSubmissionFetch";
 import { getCachedWebAuthnKey } from "../utils/webAuthnKeyCache";
 import { consolidateBytes } from "../utils/mapping";
 
@@ -38,8 +39,17 @@ export class IdentityAgent {
         identityCanister: string,
         icUrl: string,
         isIIPrincipal: boolean | undefined,
+        singleSubmission = false,
     ): Promise<IdentityAgent> {
-        const agent = await createHttpAgent(identity, icUrl);
+        const agent = singleSubmission
+            ? await HttpAgent.create({
+                  identity,
+                  host: icUrl,
+                  verifyQuerySignatures: true,
+                  retryTimes: 0,
+                  fetch: createSingleSubmissionFetch(),
+              })
+            : await createHttpAgent(identity, icUrl);
         return new IdentityAgent(identity, agent, identityCanister, isIIPrincipal);
     }
 

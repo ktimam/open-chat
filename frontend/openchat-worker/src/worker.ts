@@ -1,4 +1,6 @@
 import { AnonymousIdentity } from "@icp-sdk/core/agent";
+import { assertAccountCreationAllowed } from "@shared/utils/existingAccountPolicy";
+import { assertUnofficialApiRequestAllowed } from "@shared/utils/unofficialApiPolicy";
 import {
     DelegationChain,
     DelegationIdentity,
@@ -108,6 +110,8 @@ async function initializeAuthIdentity(
 async function createOpenChatIdentity(
     webAuthnCredentialId: Uint8Array | undefined,
 ): Promise<DelegationIdentity | CreateOpenChatIdentityError> {
+    if (agentConfig === undefined) throw new Error("Worker not initialised");
+    assertAccountCreationAllowed(agentConfig);
     if (identityAgent === undefined) {
         throw new Error("IdentityAgent not initialized");
     }
@@ -276,6 +280,7 @@ self.addEventListener("message", (msg: MessageEvent<CorrelatedWorkerRequest>) =>
         if (config === undefined) {
             throw new Error("Worker not initialised");
         }
+        assertUnofficialApiRequestAllowed(payload, config.clientOnlyApps);
 
         // Needs no agent: the queries belong to whichever agents exist
         if (kind === "abortInFlightQueries") {
@@ -649,6 +654,7 @@ function getAction(
             );
 
         case "registerUser":
+            assertAccountCreationAllowed(config);
             return agent.registerUser(payload.username, payload.email, payload.referralCode);
 
         case "subscriptionExists":
@@ -1629,6 +1635,7 @@ function getAction(
                 payload.tempKey,
                 config.identityCanister,
                 config.icUrl,
+                config.existingAccountOnly === true,
             );
 
         case "finaliseAccountLinkingWithCode":
@@ -1639,6 +1646,7 @@ function getAction(
                 payload.webAuthnKey,
                 config.identityCanister,
                 config.icUrl,
+                config.existingAccountOnly === true,
             );
 
         case "payForPremiumItem":
@@ -1739,11 +1747,16 @@ async function verifyAccountLinkingCode(
     tempKey: CryptoKeyPair,
     identityCanister: string,
     icUrl: string,
+    singleSubmission = false,
 ): Promise<VerifyAccountLinkingCodeResponse> {
     const ecdsaIdentity = await ECDSAKeyIdentity.fromKeyPair(tempKey);
-    const identityAgent = await IdentityAgent.create(ecdsaIdentity, identityCanister, icUrl, false);
-
-    return await identityAgent.verifyAccountLinkingCode(code);
+    const identityAgent = await IdentityAgent.create(ecdsaIdentity, identityCanister, icUrl, false, singleSubmission);
+    try {
+        return await identityAgent.verifyAccountLinkingCode(code);
+    } catch (error) {
+        if (singleSubmission) throw new Error("Code verification failed or has an unknown outcome. Do not retry this code automatically.");
+        throw error;
+    }
 }
 
 async function finaliseAccountLinkingWithCode(
@@ -1753,16 +1766,20 @@ async function finaliseAccountLinkingWithCode(
     webAuthnKey: WebAuthnKeyFull | undefined,
     identityCanister: string,
     icUrl: string,
+    singleSubmission = false,
 ): Promise<FinaliseAccountLinkingResponse> {
     const ecdsaIdentity = await ECDSAKeyIdentity.fromKeyPair(tempKey);
-    const identityAgent = await IdentityAgent.create(ecdsaIdentity, identityCanister, icUrl, false);
+    const identityAgent = await IdentityAgent.create(ecdsaIdentity, identityCanister, icUrl, false, singleSubmission);
 
     const delegationIdentity = await identityAgent.finaliseAccountLinkingWithCode(
         principal,
         publicKey,
         ecdsaIdentity,
         webAuthnKey,
-    );
+    ).catch((error) => {
+        if (singleSubmission) throw new Error("Account linking may have succeeded. Use fresh passkey sign-in; do not repeat linking.");
+        throw error;
+    });
 
     const delegationChain = delegationIdentity.getDelegation();
 

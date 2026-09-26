@@ -10,6 +10,7 @@ export type PublicKeyBuildOptions = {
     dfxExecutable?: string;
     expectedDfxVersion?: string;
     runCommand?: RunCommand;
+    queryPublicKey?: (canister: string) => Promise<string>;
 };
 
 export declare function resolveDfxInvocation(

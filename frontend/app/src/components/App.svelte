@@ -60,6 +60,7 @@
     import Profiler from "./Profiler.svelte";
     import Router from "./Router.svelte";
     import StartupFailure from "@shared_components/StartupFailure.svelte";
+    import PrivateAppsWorkspace from "@shared_components/PrivateAppsWorkspace.svelte";
     import UpgradeBanner from "./UpgradeBanner.svelte";
     import Witch from "@shared_components/Witch.svelte";
     import InstallPrompt from "./home/InstallPrompt.svelte";
@@ -115,6 +116,8 @@
             vapidPublicKey: import.meta.env.OC_VAPID_PUBLIC_KEY!,
             accountLinkingCodesEnabled:
                 import.meta.env.OC_ACCOUNT_LINKING_CODES_ENABLED! === "true",
+            existingAccountOnly: import.meta.env.OC_UNOFFICIAL_CLIENT === "true",
+            clientOnlyApps: import.meta.env.OC_UNOFFICIAL_CLIENT === "true",
             baseOrigin: import.meta.env.OC_BASE_ORIGIN!,
         });
 
@@ -703,6 +706,9 @@
     {/if}
 
     <Head />
+    {#if client.clientOnlyApps()}
+        <PrivateAppsWorkspace {client} />
+    {/if}
 
     <ActiveCall
         {showLandingPage}

@@ -229,6 +229,8 @@ export class IdentityClient extends SingleCanisterMsgpackAgent {
             (resp) => mapResult(resp, (username) => ({ kind: "success", username })),
             IdentityVerifyAccountLinkingCodeArgs,
             IdentityVerifyAccountLinkingCodeResponse,
+            undefined,
+            { sensitive: true },
         );
     }
 
@@ -251,6 +253,8 @@ export class IdentityClient extends SingleCanisterMsgpackAgent {
             (resp) => resp,
             IdentityFinaliseAccountLinkingWithCodeArgs,
             IdentityFinaliseAccountLinkingWithCodeResponse,
+            undefined,
+            { sensitive: true },
         );
     }
 

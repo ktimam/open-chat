@@ -1,4 +1,5 @@
 <script lang="ts">
+    import LocalAppsChatSettings from "@src/components_shared/LocalAppsChatSettings.svelte";
     // Per-DIRECT-chat AI-app affordance. Same Connect / "Open setup" / Reconnect / Disconnect actions
     // as groupdetails/AiAppsSummary.svelte, but WITHOUT the owner/admin enable toggle: a direct chat
     // has no admin, so enablement is implicit (your connected per-user-key apps participate). Its
@@ -62,6 +63,7 @@
     );
 
     async function load() {
+        if (client.clientOnlyApps()) return;
         const direct = await loadDirectChatAiApps(client);
         apps = direct.apps;
         connected = new Set(direct.connectedKeys.keys());
@@ -174,7 +176,11 @@
     }
 </script>
 
-{#if relevant.length > 0}
+{#if client.clientOnlyApps()}
+    <LocalAppsChatSettings {chatId} />
+{/if}
+
+{#if !client.clientOnlyApps() && relevant.length > 0}
     <CollapsibleCard
         onToggle={groupAiAppsOpen.toggle}
         open={$groupAiAppsOpen}

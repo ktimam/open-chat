@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 import { describe, expect, test, vi } from "vitest";
 
 // vitest resolves with the "browser" condition, which maps the bare "url" import in
@@ -7,6 +8,7 @@ import { describe, expect, test, vi } from "vitest";
 vi.mock("url", () => import("node:url"));
 
 import { generateCspForScripts } from "../../rollup.extras.mjs";
+import { LOCAL_PROCESSOR_BOOTSTRAP } from "./isolatedAppProcessor";
 
 // The website's Permissions-Policy header lives in .ic-assets.json5 (served by the asset
 // canister); the rest of the CSP is built by rollup.extras.mjs. Issue #9338.
@@ -86,5 +88,27 @@ describe("CSP frame-src", () => {
     ])("is https-only in %s builds", (_, development) => {
         const csp = generateCspForScripts(["window.x = 1;"], development);
         expect(directive(csp, "frame-src")).toBe("https:");
+    });
+});
+
+describe("explicit unofficial local processor CSP", () => {
+    const hash = `'sha256-${createHash("sha256").update(LOCAL_PROCESSOR_BOOTSTRAP).digest("base64")}'`;
+
+    test("ordinary builds do not permit the imported-app bootstrap or self frames", () => {
+        const csp = generateCspForScripts([], false);
+        expect(directive(csp, "frame-src")).toBe("https:");
+        expect(directive(csp, "script-src")).not.toContain(hash);
+        expect(directive(csp, "script-src")).not.toContain("'unsafe-inline'");
+    });
+
+    test("the explicit unofficial argument adds only self framing and the exact bootstrap hash", () => {
+        const ordinary = generateCspForScripts([], false);
+        const unofficial = generateCspForScripts([], false, true);
+        expect(directive(unofficial, "frame-src")).toBe("'self' https:");
+        const tokens = (value: string) => directive(value, "script-src").split(/\s+/).filter(Boolean);
+        expect(tokens(unofficial).filter(token => !tokens(ordinary).includes(token))).toEqual([hash]);
+        expect(directive(unofficial, "script-src")).not.toContain("'unsafe-inline'");
+        expect(directive(unofficial, "script-src")).not.toContain("*");
+        expect(directive(unofficial, "connect-src")).toBe(directive(ordinary, "connect-src"));
     });
 });

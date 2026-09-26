@@ -10,6 +10,7 @@
     import ModeSelection from "./ModeSelection.svelte";
     import SignIn from "./SignIn.svelte";
     import SignUp from "./SignUp.svelte";
+    import ExistingAccountSignIn from "../../components_shared/ExistingAccountSignIn.svelte";
 
     const client = getContext<OpenChat>("client");
 
@@ -75,7 +76,9 @@
     {/snippet}
     {#snippet body()}
         <div class="body">
-            {#if step === "select_mode"}
+            {#if client.existingAccountOnly() && !client.isNativeApp()}
+                <ExistingAccountSignIn onSignedIn={onClose} />
+            {:else if step === "select_mode"}
                 <ModeSelection
                     onSignIn={() => (step = "sign_in")}
                     onSignUp={() => (step = "sign_up")} />

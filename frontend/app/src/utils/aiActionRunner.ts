@@ -599,6 +599,12 @@ export function manualExtractEnabled(): boolean {
 // When the caller supplies an extraction directly (no on-device runtime, or a native client with no
 // model), the card is built from it with no inference — the rest of the cycle is identical, INCLUDING
 // the deterministic post-pass + required-fields gate (buildManualCard).
+export type PrivateAppProcessor = (
+    actionId: string,
+    input: AppProcessorInput,
+    stillCurrent: () => boolean,
+) => Promise<AppProcessorResult>;
+
 async function runDefinition(
     def: AiActionDefinition,
     recipientKey: string,
@@ -615,9 +621,19 @@ async function runDefinition(
     sourceTimestamp?: number,
     appProcessorUrl?: string,
     stillCurrent?: () => boolean,
+    privateProcessor?: PrivateAppProcessor,
 ): Promise<ProposeResult> {
     const viewer = currentUserIdStore.value;
     const contextCurrent = () => currentUserIdStore.value === viewer && stillCurrent?.() !== false;
+    const processApp = (request: AppProcessorInput): Promise<AppProcessorResult> => {
+        if (!contextCurrent()) return Promise.resolve({ kind: "error", error: "proposal context changed" });
+        if (privateProcessor !== undefined) return privateProcessor(def.name, request, contextCurrent);
+        // The unofficial client never gives source text/model output to a remote card document.
+        if (client.clientOnlyApps?.() === true || appProcessorUrl === undefined) {
+            return Promise.resolve({ kind: "error", error: "Import this app's isolated local processor before preparing an action." });
+        }
+        return processWithApp(appProcessorUrl, def.name, request, contextCurrent);
+    };
     // `acceptsImage` is an explicit app capability, not a menu hint. Enforce it before the manual
     // seam, blob fetching, model-capability checks, or inference so an image can never reach an
     // action that omitted/disabled image support. Text proposals are unaffected.
@@ -695,24 +711,19 @@ async function runDefinition(
             additionalRecipientKeys,
             appId,
             appRevision,
-            appProcessorUrl === undefined
+            appProcessorUrl === undefined && privateProcessor === undefined
                 ? undefined
                 : {
                       normalize: async (candidates) => {
                           rawNormalizationAttempted = true;
                           if (!contextCurrent()) return { kind: "error" };
-                          const normalized = await processWithApp(
-                              appProcessorUrl,
-                              def.name,
-                              {
+                          const normalized = await processApp({
                                   operation: "normalize_raw",
                                   modality: "image",
                                   candidates,
                                   ...(input.text === undefined ? {} : { text: input.text }),
                                   ...(sourceTimestamp === undefined ? {} : { sourceTimestamp }),
-                              },
-                              contextCurrent,
-                          );
+                          });
                           onPhase?.("validating");
                           return contextCurrent() ? normalized : { kind: "error" };
                       },
@@ -795,13 +806,13 @@ async function runDefinition(
         }
     };
     const runAppProcessor = async (request: AppProcessorInput): Promise<ProposeResult> => {
-        if (appProcessorUrl === undefined)
+        if (appProcessorUrl === undefined && privateProcessor === undefined)
             return {
                 kind: "error",
                 error: "The app's registered local processor could not be resolved. Refresh and retry.",
             };
         if (!contextCurrent()) return { kind: "error", error: "proposal context changed" };
-        const result = await processWithApp(appProcessorUrl, def.name, request, contextCurrent);
+        const result = await processApp(request);
         onPhase?.("validating");
         return localResult(result)!;
     };
@@ -997,6 +1008,40 @@ async function runDefinition(
     }
 
     return runSelectedModel();
+}
+
+export type PrivateAppExtractionResult =
+    | { kind: "extracted"; candidates: Record<string, unknown>[] }
+    | Exclude<ProposeResult, { kind: "ready" | "ready_multi" }>;
+
+/** Reuse the tested image/audio/OCR pipeline without registry lookup, attestation, or chat posting.
+ * The legacy runner's pure card projection is discarded; only extracted values enter a fresh draft.
+ * Processor callbacks must come from the host's isolated, integrity-checked app sandbox.
+ */
+export async function extractPrivateAppAction(
+    definition: AiActionDefinition,
+    content: MessageContent,
+    client: OpenChat,
+    options: {
+        processor?: PrivateAppProcessor;
+        stillCurrent: () => boolean;
+        sourceTimestamp?: number;
+        onPhase?: ProposalPhaseListener;
+    },
+): Promise<PrivateAppExtractionResult> {
+    if (client.clientOnlyApps?.() !== true) {
+        return { kind: "error", error: "Private app drafts are not enabled in this client." };
+    }
+    if (!options.stillCurrent()) return { kind: "error", error: "proposal context changed" };
+    const result = await runDefinition(
+        definition, "", content, client, undefined, undefined, undefined, undefined, undefined,
+        options.onPhase, undefined, options.sourceTimestamp, undefined, options.stillCurrent,
+        options.processor,
+    );
+    if (!options.stillCurrent()) return { kind: "error", error: "proposal context changed" };
+    if (result.kind === "ready") return { kind: "extracted", candidates: [result.extracted] };
+    if (result.kind === "ready_multi") return { kind: "extracted", candidates: result.extracted };
+    return result;
 }
 
 /**

@@ -17,6 +17,8 @@ import {
 import { ocPackageAliases } from "./oc-package-aliases.mjs";
 import { handleDevelopmentServiceWorkerRequest } from "./devServiceWorkerCleanup";
 import { publicKeyBuildPlugin } from "./publicKeyBuild.mjs";
+import { queryOfficialUserIndexPublicKey } from "./officialPublicKeyQuery.mjs";
+import { localAppRelayPlugin } from "./localAppRelayBuild.mjs";
 import { resolveLocalDevAllowedHost } from "./devAllowedHost.mjs";
 import { resolveDevHmrConfig } from "./devHmr";
 import { resolveDevPort } from "./devPort";
@@ -56,7 +58,9 @@ const inlineScripts = [`window.OC_WEBSITE_VERSION = "${version}";`];
 process.env.OC_WEBSITE_VERSION = version;
 const devTransformersWebGpuRuntimeVersion = createTransformersWebGpuDevRuntimeVersion(version);
 
-initEnv();
+initEnv({ websiteVersion: version });
+
+const unofficialLocalClient = process.env.OC_UNOFFICIAL_CLIENT === "true";
 
 const isNativeIos = process.env.OC_APP_TYPE === "ios";
 const isNativeAndroid = process.env.OC_APP_TYPE === "android";
@@ -686,10 +690,12 @@ function ocWorkerPlugin(): Plugin {
 // TODO use vite for prod build!
 // https://vite.dev/config/
 export default defineConfig({
+    // Vite otherwise reads .env independently of initEnv, reintroducing stale local IDs or keys.
+    envDir: unofficialLocalClient ? false : undefined,
     envPrefix: "OC_",
     define: {
         "import.meta.env.OC_AIRDROP_BOT_CANISTER": JSON.stringify(
-            "this-is-not-the-value-youre-looking-for",
+            process.env.OC_AIRDROP_BOT_CANISTER,
         ),
         "import.meta.env.OC_DEV_ALLOWED_HOST":
             devAllowedHost === undefined ? "undefined" : JSON.stringify(devAllowedHost),
@@ -707,8 +713,8 @@ export default defineConfig({
         // Mobile QC terminates HTTPS at a local proxy and forwards one configured hostname. Keep
         // this explicit; accepting arbitrary hosts would weaken Vite's DNS-rebinding protection.
         allowedHosts: ["host.docker.internal", ...(devAllowedHost ? [devAllowedHost] : [])],
-        host: true,
-        cors: true,
+        host: unofficialLocalClient ? "127.0.0.1" : true,
+        cors: unofficialLocalClient ? false : true,
         port,
         strictPort: true,
         // An HTTPS page cannot connect to a ws:// HMR endpoint. When the validated mobile-QC host
@@ -772,6 +778,7 @@ export default defineConfig({
           }
         : undefined,
     plugins: [
+        localAppRelayPlugin({ enabled: unofficialLocalClient }),
         localAndroidAssetLinksPlugin(
             process.env.OC_BUILD_ENV === "development" &&
                 process.env.OC_DFX_NETWORK === "local" &&
@@ -798,12 +805,14 @@ export default defineConfig({
                     csp: `<meta http-equiv="Content-Security-Policy" content="${generateCspForScripts(
                         inlineScripts,
                         true,
+                        unofficialLocalClient,
                     )}" />\n`,
                 },
             },
         }),
         publicKeyBuildPlugin({
             network: process.env.OC_DFX_NETWORK ?? "local",
+            ...(unofficialLocalClient ? { queryPublicKey: queryOfficialUserIndexPublicKey } : {}),
             canister: process.env.OC_USER_INDEX_CANISTER,
         }),
     ],

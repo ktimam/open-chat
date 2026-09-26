@@ -53,6 +53,42 @@ describe("WorkerAgent startup failure handling", () => {
         vi.useRealTimers();
     });
 
+    it("forwards explicit unofficial policies while defaulting both off", () => {
+        new WorkerAgent({ ...config(), existingAccountOnly: true, clientOnlyApps: true });
+        expect(worker.postMessage.mock.calls[0][0]).toMatchObject({
+            kind: "init", existingAccountOnly: true, clientOnlyApps: true,
+        });
+        worker.respond("init", 0);
+        worker.postMessage.mockClear();
+        new WorkerAgent(config());
+        expect(worker.postMessage.mock.calls[0][0]).toMatchObject({
+            kind: "init", existingAccountOnly: false, clientOnlyApps: false,
+        });
+        worker.respond("init", 0);
+    });
+
+    it("rejects unsupported app calls before posting them without breaking the worker", async () => {
+        const onFatalError = vi.fn();
+        const agent = new WorkerAgent({ ...config(), clientOnlyApps: true }, onFatalError);
+        worker.respond("init", 0);
+        worker.postMessage.mockClear();
+        const message = { content: { kind: "action_card_content", payload: "private-marker" } };
+        for (const request of [
+            { kind: "modelCatalog" },
+            { kind: "sendMessage", event: { event: message } },
+            { kind: "editMessage", msg: message },
+        ]) {
+            await expect(agent.send(request as never)).rejects.toMatchObject({ code: "client_only_app_request" });
+        }
+        expect(worker.postMessage).not.toHaveBeenCalled();
+        expect(worker.terminate).not.toHaveBeenCalled();
+        expect(onFatalError).not.toHaveBeenCalled();
+        const later = agent.send({ kind: "setMinLogLevel", minLogLevel: "warn" });
+        const request = worker.postMessage.mock.calls.at(-1)?.[0] as { correlationId: number };
+        worker.respond("setMinLogLevel", request.correlationId);
+        await expect(later).resolves.toBeUndefined();
+    });
+
     it("rejects an in-flight worker_error without treating it as a fatal worker crash", async () => {
         const agent = new WorkerAgent(config());
         worker.respond("init", 0);

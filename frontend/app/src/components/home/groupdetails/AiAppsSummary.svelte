@@ -1,4 +1,5 @@
 <script lang="ts">
+    import LocalAppsChatSettings from "@src/components_shared/LocalAppsChatSettings.svelte";
     // Per-chat AI-app settings (v1 port of components_mobile/.../groupdetails/AiAppsSummary.svelte).
     // Lists every registered AI app with: an owner/admin enable toggle for THIS chat, a per-user
     // "Connect/Reconnect/Disconnect" affordance for apps that pair per-user delivery keys, and an
@@ -61,6 +62,7 @@
     let disconnecting = $state(new Set<number>());
 
     async function load() {
+        if (client.clientOnlyApps()) return;
         const [enabledIds, myKeys, directory] = await Promise.all([
             client.enabledAiApps(chat.id),
             client.myAiAppKeys(),
@@ -221,7 +223,11 @@
     }
 </script>
 
-{#if apps.length > 0}
+{#if client.clientOnlyApps()}
+    <LocalAppsChatSettings chatId={chat.id} />
+{/if}
+
+{#if !client.clientOnlyApps() && apps.length > 0}
     <CollapsibleCard
         onToggle={groupAiAppsOpen.toggle}
         open={$groupAiAppsOpen}

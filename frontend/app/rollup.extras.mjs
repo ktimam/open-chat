@@ -4,6 +4,7 @@ import fs from "fs-extra";
 import { sha256 } from "js-sha256";
 import path, { dirname } from "path";
 import { fileURLToPath } from "url";
+import { createUnofficialLocalEnvironment } from "../unofficialLocalProfile.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 export const __dirname = dirname(__filename);
@@ -33,10 +34,13 @@ function generateCspHashValue(text) {
 // www.youtube.com and docs.google.com (blog/whitepaper embeds), www.googletagmanager.com
 // (noscript GTM). `https:` still blocks javascript:, data:, blob: and http frames.
 // img-src, media-src and the native-only connect-src `asset: *` are out of scope of #9338.
-export function generateCspForScripts(inlineScripts, development) {
+export function generateCspForScripts(inlineScripts, development = false, unofficialClient = false) {
     const cspHashValues = inlineScripts.map(generateCspHashValue);
     const production = !development;
     const isNative = process.env.OC_APP_TYPE === "android" || process.env.OC_APP_TYPE === "ios";
+    const unofficialConnections = development && unofficialClient
+        ? " https://icp-api.io https://*.raw.icp0.io https://huggingface.co https://*.huggingface.co https://*.hf.co https://*.xethub.hf.co"
+        : "";
     const csp = `
         default-src 'self';
         img-src * 'self' data: blob:${isNative && development ? ` ${process.env.OC_IC_URL}` : ""}${isNative ? " asset: http://asset.localhost content: *" : ""};
@@ -44,20 +48,35 @@ export function generateCspForScripts(inlineScripts, development) {
         style-src 'self' 'unsafe-inline' https://fonts.googleapis.com/ https://cdnjs.cloudflare.com/;
         style-src-elem 'self' 'unsafe-inline' https://fonts.googleapis.com/ https://cdnjs.cloudflare.com/;
         font-src 'self' https://fonts.gstatic.com/ data:;
-        frame-src https:;
+        frame-src ${unofficialClient ? "'self' " : ""}https:;
         object-src 'none';
         base-uri 'self';
         form-action 'self';${production ? "\nupgrade-insecure-requests;" : ""}
         worker-src 'self' blob:;
-        script-src 'self' 'wasm-unsafe-eval' https://www.instagram.com https://scripts.wobbl3.com/ https://api.rollbar.com/api/ ${cspHashValues.join(" ")} ${development ? "http://localhost:* http://127.0.0.1:*" : ""};
-        connect-src 'self'${development ? " ws: http:" : ""}${production || isNative ? " wss: https:" : ""}${isNative ? " ipc: http://ipc.localhost http://asset.localhost asset: *" : ""};`;
+        script-src 'self' 'wasm-unsafe-eval' ${unofficialClient ? "'sha256-I/prlf8CUg20D4Y+eHWS9nTAgsMREJwX8s/3ln5NZms=' " : ""}https://www.instagram.com https://scripts.wobbl3.com/ https://api.rollbar.com/api/ ${cspHashValues.join(" ")} ${development ? "http://localhost:* http://127.0.0.1:*" : ""};
+        connect-src 'self'${development ? " ws: http:" : ""}${production || isNative ? " wss: https:" : ""}${unofficialConnections}${isNative ? " ipc: http://ipc.localhost http://asset.localhost asset: *" : ""};`;
 
     return csp;
 }
 
 // Set up environment
-export function initEnv() {
-    dotenv.config({ path: path.join(__dirname, "../.env") });
+export function initEnv({ websiteVersion } = {}) {
+    if (process.env.OC_UNOFFICIAL_CLIENT === "true") {
+        const canisters = JSON.parse(fs.readFileSync(path.join(__dirname, "../../canister_ids.json")));
+        const profile = createUnofficialLocalEnvironment(canisters, {
+            port: process.env.OC_DEV_PORT,
+            layout: process.env.OC_MOBILE_LAYOUT,
+            inherited: process.env,
+        });
+        // A stale env file or inherited local deployment setting must not retarget this client.
+        for (const key of Object.keys(process.env)) {
+            if (/^(OC_|NODE_OPTIONS$|NODE_ENV$|VITE_)/i.test(key)) delete process.env[key];
+        }
+        Object.assign(process.env, profile);
+        if (websiteVersion !== undefined) process.env.OC_WEBSITE_VERSION = websiteVersion;
+    } else {
+        dotenv.config({ path: path.join(__dirname, "../.env") });
+    }
 
     const dfxNetwork = process.env.OC_DFX_NETWORK;
 

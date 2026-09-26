@@ -135,6 +135,7 @@ import {
     type ProposeResult,
     type SuggestedAiActionResolution,
     unexpectedProposalFailureMessage,
+    extractPrivateAppAction,
 } from "./aiActionRunner";
 
 const RECIPIENT = "-----BEGIN PUBLIC KEY-----\nABC\n-----END PUBLIC KEY-----\n";
@@ -206,6 +207,52 @@ const DEF: AiActionDefinition = {
         cancelLabel: "Dismiss",
     },
 };
+
+describe("private draft extraction boundary", () => {
+    const privateClient = () => ({
+        clientOnlyApps: () => true,
+        enabledAiApps: vi.fn(),
+        aiApps: vi.fn(),
+        createAiAppCardProvenance: vi.fn(),
+        sendMessageWithContent: vi.fn(),
+    });
+
+    it("uses the app's isolated processor without lookup, remote frame, attestation or posting", async () => {
+        const client = privateClient();
+        const processor = vi.fn(async (): Promise<AppProcessorResult> => ({
+            kind: "candidates", candidates: [{ reading: 42, unit: "LUX" }],
+        }));
+        const definition = {
+            ...DEF,
+            responseSchema: { ...DEF.responseSchema, "x-openchat-local-processor": { version: 1 } },
+        };
+        const result = await extractPrivateAppAction(definition, { kind: "text_content", text: "private source marker" }, client as unknown as OpenChat, {
+            processor, stillCurrent: () => true,
+        });
+        expect(result).toEqual({ kind: "extracted", candidates: [{ reading: 42, unit: "LUX" }] });
+        expect(processor).toHaveBeenCalledWith(DEF.name, expect.objectContaining({ text: "private source marker", operation: "extract" }), expect.any(Function));
+        for (const fn of [client.enabledAiApps, client.aiApps, client.createAiAppCardProvenance, client.sendMessageWithContent, processWithAppMock, inferOnDeviceMock]) expect(fn).not.toHaveBeenCalled();
+        expect(result).not.toHaveProperty("card");
+    });
+
+    it("never falls back to a remote processor when the isolated app artifact is missing", async () => {
+        const definition = { ...DEF, responseSchema: { ...DEF.responseSchema, "x-openchat-local-processor": { version: 1 } } };
+        const result = await extractPrivateAppAction(definition, { kind: "text_content", text: "private source marker" }, privateClient() as unknown as OpenChat, { stillCurrent: () => true });
+        expect(result.kind).toBe("error");
+        expect(processWithAppMock).not.toHaveBeenCalled();
+    });
+
+    it("drops late results after the account or source context changes", async () => {
+        let current = true;
+        const processor = vi.fn(async (): Promise<AppProcessorResult> => {
+            current = false;
+            return { kind: "candidates", candidates: [{ reading: 42 }] };
+        });
+        const definition = { ...DEF, responseSchema: { ...DEF.responseSchema, "x-openchat-local-processor": { version: 1 } } };
+        const result = await extractPrivateAppAction(definition, { kind: "text_content", text: "private source marker" }, privateClient() as unknown as OpenChat, { processor, stillCurrent: () => current });
+        expect(result).toEqual({ kind: "error", error: "proposal context changed" });
+    });
+});
 
 describe("buildManualCard (manual-extraction gate)", () => {
     it("reports a degenerate manual extraction as incomplete — no card", () => {
@@ -3520,7 +3567,12 @@ describe("both ChatMessage trees run the SHARED propose flow", () => {
             expect(src).toContain("proposeCandidate: (candidate, extraction, source)");
             expect(src).toMatch(/onPhase,\s+source,\s+Number\(timestamp\),\s+\),/u);
             expect(src).toContain("const runAiActionSingleFlight = createSingleFlight(");
-            expect(src).toContain("function runAiActionHandler(suggested?: AutoProposeSuggestion)");
+            expect(src).toMatch(/function runAiActionHandler\(suggested\?: AutoProposeSuggestion(?:, privateSuggested\?: LocalAppSuggestion)?\)/u);
+            expect(src).toContain("if (client.clientOnlyApps()) {");
+            expect(src).toContain("return proposePrivateAppMessage(client, capturedContent, {");
+            expect(src.indexOf("return proposePrivateAppMessage(client, capturedContent, {")).toBeLessThan(src.indexOf("return runProposeFlow({"));
+            expect(src).toContain("localAppChatConfiguration.current(privateSuggested)");
+            expect(src).toContain("onPropose={() => proposeLocalSuggestedAction(suggestion)}");
             expect(src).toContain("parseManualExtractionPrompt(");
             expect(src).toContain("{#each autoProposeSuggestionList as suggestion");
             expect(src).toContain("autoProposeSuggestionActionKey(suggestion)");

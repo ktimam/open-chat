@@ -27,6 +27,16 @@ afterEach(async () => {
 });
 
 describe("public key build plugin", () => {
+    test("the unofficial mainnet profile writes a queried key without invoking dfx", async () => {
+        const outputPath = path.join(await temporaryDirectory(), "public-key");
+        const queryPublicKey = vi.fn(async () => queryResult);
+        const runCommand = vi.fn();
+        await writePublicKeyFile({ network: "ic", canister: "aaaaa-aa", outputPath, queryPublicKey, runCommand });
+        expect(queryPublicKey).toHaveBeenCalledExactlyOnceWith("aaaaa-aa");
+        expect(runCommand).not.toHaveBeenCalled();
+        expect(await readFile(outputPath, "utf8")).toBe(extractPublicKey(queryResult));
+    });
+
     test("the production Rollup config uses the query plugin and preserves worker generation", async () => {
         const config = await readFile(
             path.resolve(import.meta.dirname, "../rollup.config.mjs"),

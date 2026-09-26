@@ -8,6 +8,7 @@ import {
 import { WebAuthnIdentity } from "@icp-sdk/core/identity";
 import borc from "borc";
 import type { WebAuthnKeyFull } from "@shared";
+import { PickerWebAuthnIdentity, requestBrowserPasskeyAssertion } from "./browserPasskey";
 
 export async function createWebAuthnIdentity(
     origin: string,
@@ -59,6 +60,8 @@ export class MultiWebAuthnIdentity extends SignIdentity {
     public constructor(
         readonly rpId: string | undefined,
         readonly lookupPubKeyFn: (credentialId: Uint8Array) => Promise<Uint8Array>,
+        readonly validatedPicker = false,
+        readonly expectedCredentialId?: Uint8Array,
     ) {
         super();
         this._actualIdentity = undefined;
@@ -79,6 +82,17 @@ export class MultiWebAuthnIdentity extends SignIdentity {
     public async sign(blob: Uint8Array): Promise<Signature> {
         if (this._actualIdentity !== undefined) {
             return this._actualIdentity.sign(blob);
+        }
+
+        if (this.validatedPicker) {
+            const assertion = await requestBrowserPasskeyAssertion(this.rpId, blob, this.expectedCredentialId);
+            const pubkey = await this.lookupPubKeyFn(assertion.credentialId);
+            this._actualIdentity = new PickerWebAuthnIdentity(
+                this.rpId,
+                assertion.credentialId,
+                unwrapDER(pubkey, DER_COSE_OID),
+            );
+            return assertion.signature;
         }
 
         const options: CredentialRequestOptions = {

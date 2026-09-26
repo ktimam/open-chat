@@ -98,8 +98,12 @@ export async function writePublicKeyFile({
     dfxExecutable = process.env.OC_DFX_EXECUTABLE ?? "dfx",
     expectedDfxVersion,
     runCommand = runDfx,
+    queryPublicKey,
 } = {}) {
-    if (expectedDfxVersion !== undefined) {
+    if (queryPublicKey !== undefined && (typeof queryPublicKey !== "function" || network !== "ic")) {
+        throw new Error("An official public-key query provider requires the ic network");
+    }
+    if (queryPublicKey === undefined && expectedDfxVersion !== undefined) {
         if (typeof expectedDfxVersion !== "string" || expectedDfxVersion.trim() === "") {
             throw new Error("The expected dfx build version must be a non-empty string");
         }
@@ -124,7 +128,9 @@ export async function writePublicKeyFile({
         canister,
         dfxExecutable,
     );
-    const result = await runCommand(command, args);
+    const result = queryPublicKey === undefined
+        ? await runCommand(command, args)
+        : await queryPublicKey(canister);
     const publicKey = extractPublicKey(result);
     const destination = outputPath instanceof URL ? outputPath : path.resolve(outputPath);
     const directory =

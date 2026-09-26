@@ -41,6 +41,7 @@ import {
     autoProposeIdentityKey,
 } from "./autoProposeEvaluationTracker";
 import { abortPrivateMatchOperations, runPrivateMatchCandidates } from "./privateMatchSurface";
+import { localAppChatConfiguration, localAutoProposeSuggestions } from "./localAppChatState";
 
 // ---------------------------------------------------------------------------------------------
 // Suggestion store — keyed by messageId, read by ChatMessage to render the chip.
@@ -320,6 +321,7 @@ const vocabularyCache = new Map<
 >();
 
 function invalidateAutoProposeRuntime(): void {
+    localAutoProposeSuggestions.set(new Map());
     evaluationGeneration += 1;
     evaluationTracker.clear();
     eventWatermarks.clear();
@@ -334,6 +336,7 @@ function invalidateAutoProposeRuntime(): void {
  * boundaries is essential: reconnecting, enabling, or unmuting must not backfill earlier texts.
  */
 export function revokePrivateAutoProposeRuntime(): void {
+    localAutoProposeSuggestions.set(new Map());
     evaluationGeneration += 1;
     evaluationTracker.clear();
     vocabularyCache.clear();
@@ -577,6 +580,20 @@ export function evaluateForAutoPropose(
             evaluationTracker.claim(identityChatKey, threadRootMessageIndex, ev.event.messageId),
     );
     if (fresh.length === 0) return;
+    if (client.clientOnlyApps?.() === true) {
+        // The same authoritative fresh-event gates above apply; no directory, capability, iframe,
+        // model or backend call is used to offer a local draft. App metadata remains string-keyed.
+        localAutoProposeSuggestions.update((map) => {
+            const next = new Map(map);
+            for (const event of fresh) {
+                const suggestions = localAppChatConfiguration.suggestions(viewerId, chatKey, event.event.content);
+                if (suggestions.length) next.set(autoProposeSuggestionKey(viewerId, chatId, threadRootMessageIndex, event.event.messageId), suggestions);
+                evaluationTracker.finish(identityChatKey, threadRootMessageIndex, event.event.messageId, true);
+            }
+            return next;
+        });
+        return;
+    }
     const generation = evaluationGeneration;
     const stillEligible = () =>
         generation === evaluationGeneration &&

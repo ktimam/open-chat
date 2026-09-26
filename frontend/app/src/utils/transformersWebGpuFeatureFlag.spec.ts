@@ -45,6 +45,18 @@ describe("all-WebGPU build feature flag", () => {
         ).toBe(true);
     });
 
+    it("allows unofficial development against ic only with the immutable delivery contract", () => {
+        const localPrototype = { ...production, OC_BUILD_ENV: "development", OC_UNOFFICIAL_CLIENT: "true" };
+        expect(transformersWebGpuFeatureEnabled(localPrototype)).toBe(true);
+        expect(transformersWebGpuProductionAssetsEnabled(localPrototype)).toBe(false);
+        for (const change of [
+            { OC_UNOFFICIAL_CLIENT: undefined }, { OC_UNOFFICIAL_CLIENT: "false" },
+            { OC_UNOFFICIAL_CLIENT: "TRUE" }, { OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY: undefined },
+            { OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY: "hf-proxy" },
+            { OC_TRANSFORMERS_WEBGPU_IMAGE_SPIKE: "false" },
+        ]) expect(transformersWebGpuFeatureEnabled({ ...localPrototype, ...change })).toBe(false);
+    });
+
     it("keeps production disabled even when the development flag is exported", () => {
         expect(
             transformersWebGpuFeatureEnabled({

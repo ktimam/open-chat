@@ -607,7 +607,7 @@ export default {
                     `var parcelRequire;`,
                     analyticsBody,
                 ];
-                const csp = generateCspForScripts(inlineScripts);
+                const csp = generateCspForScripts(inlineScripts, development, process.env.OC_UNOFFICIAL_CLIENT === "true");
 
                 const analyticsNoscript =
                     production && gaEnabled

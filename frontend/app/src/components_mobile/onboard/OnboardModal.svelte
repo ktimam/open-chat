@@ -28,6 +28,7 @@
     import Progress from "../Progress.svelte";
     import Translatable from "../Translatable.svelte";
     import SignUp from "./SignUp.svelte";
+    import ExistingAccountSignIn from "../../components_shared/ExistingAccountSignIn.svelte";
 
     const ALC_LENGTH = 6;
 
@@ -310,6 +311,11 @@
     </Container>
 {/snippet}
 
+{#if client.existingAccountOnly() && !client.isNativeApp()}
+    <Container supplementalClass="login_screen" padding={["xxl", "lg"]} direction={"vertical"}>
+        <ExistingAccountSignIn onSignedIn={() => navigate("/communities")} />
+    </Container>
+{:else}
 <Container supplementalClass="login_screen" gap={"xl"} direction={"vertical"}>
     <Container
         supplementalClass={"login_mockup"}
@@ -333,6 +339,7 @@
         </Container>
     {/if}
 </Container>
+{/if}
 
 <style lang="scss">
     :global(.container.login_mockup) {

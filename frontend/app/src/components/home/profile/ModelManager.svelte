@@ -14,7 +14,7 @@
     } from "@src/stores/customModels";
     import {
         defaultModelCatalog,
-        mergeCatalogs,
+        loadModelCatalogForClient,
         nativeModelInstallStatus,
     } from "@utils/modelCatalog";
     import { isNativeClient, usesWebInferenceRuntime } from "@utils/onDeviceInference";
@@ -73,12 +73,7 @@
     let catalogSource = $state<ModelCatalogEntry[]>(defaultModelCatalog.models);
 
     async function loadCatalog() {
-        try {
-            const remote = await client.modelCatalog();
-            catalogSource = mergeCatalogs(remote.models, defaultModelCatalog.models);
-        } catch {
-            // keep the built-in default (offline / not yet configured)
-        }
+        catalogSource = await loadModelCatalogForClient(client);
     }
 
     // What the list renders: the registry/default catalog ⊕ the user's device-local custom models.

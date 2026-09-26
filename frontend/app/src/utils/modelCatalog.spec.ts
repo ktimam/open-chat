@@ -1,7 +1,8 @@
 import type { ModelCatalogEntry } from "@shared";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
     defaultModelCatalog,
+    loadModelCatalogForClient,
     isMmprojFile,
     mergeCatalogs,
     nativeModelInstallStatus,
@@ -17,6 +18,27 @@ import {
 // against exactly these values.
 
 const HEX_64 = /^[0-9a-f]{64}$/;
+
+describe("client-owned model catalog", () => {
+    it("makes no backend request in client-only mode", async () => {
+        const modelCatalog = vi.fn();
+        const models = await loadModelCatalogForClient({ clientOnlyApps: () => true, modelCatalog });
+        expect(models).toBe(defaultModelCatalog.models);
+        expect(modelCatalog).not.toHaveBeenCalled();
+    });
+
+    it("retains official remote catalog merging and trusted built-in artifacts", async () => {
+        const modelCatalog = vi.fn(async () => ({ version: 1, models: [defaultModelCatalog.models[1]] }));
+        const models = await loadModelCatalogForClient({ clientOnlyApps: () => false, modelCatalog });
+        expect(modelCatalog).toHaveBeenCalledOnce();
+        expect(models).toEqual(mergeCatalogs([defaultModelCatalog.models[1]], defaultModelCatalog.models));
+    });
+
+    it("retains offline built-in fallback for ordinary clients", async () => {
+        const modelCatalog = vi.fn(async () => { throw new Error("Unavailable"); });
+        await expect(loadModelCatalogForClient({ clientOnlyApps: () => false, modelCatalog })).resolves.toBe(defaultModelCatalog.models);
+    });
+});
 
 describe("defaultModelCatalog", () => {
     it("is a versioned, non-empty catalog", () => {

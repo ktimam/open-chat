@@ -30,6 +30,7 @@ import { ExpirationPlugin } from "workbox-expiration";
 import { staticResourceCache } from "workbox-recipes";
 import { registerRoute } from "workbox-routing";
 import { CustomCachePlugin } from "./cache_plugin";
+import { fetchLocalAppRelay, isLocalAppRelayRequest } from "./local_app_relay";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 //@ts-expect-error
@@ -38,6 +39,13 @@ self.__WB_DISABLE_DEV_LOGS = true;
 declare const self: ServiceWorkerGlobalScope;
 
 const pendingNotificationClicks = new Map<string, string[]>();
+
+// The relay is intentionally non-isolated and must never share the main document cache or
+// stale script cache. Fail closed offline; preserve its path-specific COOP/COEP/CSP headers.
+registerRoute(
+    ({ request }) => isLocalAppRelayRequest(request, self.location.origin),
+    ({ request }) => fetchLocalAppRelay(request),
+);
 
 const FILE_ICON =
     "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAAABmJLR0QA/wD/AP+gvaeTAAAA30lEQVRoge2ZMQ6CQBBFn8baA2jNPS09ig29dyIWcAEtxMRY6Cw7O6Pmv2QLEpj/X4YKQAhhoQN6YAKulecQ3J0OuDgUT5PoncuHS3i8NqkSr6Fecx7nWFuwNNhrTphEhEBTiSiBZhKRAk0kogXcJTIEXCWyBEwSK2Nw6TOWOVbe5q0XDv0aNoFZ1s0VbernNyCBbCSQjQSykUA2EshGAtlIIBsJZCOBbCSQjeWrxARsn65rPm6VMn66wbKBs0ORpbhk74GB+t9JpWcAdh4CzINO3Ffauvg4Z7mVF+KfuQEADATf0SgDdQAAAABJRU5ErkJggg==";

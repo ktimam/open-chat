@@ -1,9 +1,9 @@
 <script lang="ts">
     import { i18nKey } from "@src/i18n/i18n";
     import { Body, ColourVars, Container, transition } from "component-lib";
-    import { publish, routeStore } from "@client";
+    import { publish, routeStore, type OpenChat } from "@client";
     import { navigate } from "@utils/navigation";
-    import { type Snippet } from "svelte";
+    import { getContext, type Snippet } from "svelte";
     import ChevronLeft from "svelte-material-icons/ChevronLeft.svelte";
     import MulticolourText, { type TextPart } from "../MulticolourText.svelte";
 
@@ -12,6 +12,7 @@
     }
 
     let { children }: Props = $props();
+    const client = getContext<OpenChat>("client");
 
     const signInMsg = [
         {
@@ -45,6 +46,9 @@
     let msg = $derived.by<TextPart[]>(() => {
         switch ($routeStore.kind) {
             case "communities_route":
+                if (client.clientOnlyApps()) return [
+                    { text: i18nKey("Sign in to your existing account"), colour: "primary" },
+                ] as TextPart[];
                 return signInMsg as TextPart[];
             default:
                 return backToExploreMsg as TextPart[];
