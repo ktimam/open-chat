@@ -1099,13 +1099,14 @@ export async function deleteTransformersWebGpuAudio(
 }
 
 function transformersWebGpuBuildEnvironment() {
+    // Keep this access contiguous for the optimized build's exact env replacement.
+    const assetDelivery = import.meta.env.OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY;
     return {
         OC_BUILD_ENV: import.meta.env.OC_BUILD_ENV,
         OC_DFX_NETWORK: import.meta.env.OC_DFX_NETWORK,
         OC_UNOFFICIAL_CLIENT: import.meta.env.OC_UNOFFICIAL_CLIENT,
         OC_TRANSFORMERS_WEBGPU_IMAGE_SPIKE: import.meta.env.OC_TRANSFORMERS_WEBGPU_IMAGE_SPIKE,
-        OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY: import.meta.env
-            .OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY,
+        OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY: assetDelivery,
     };
 }
 
