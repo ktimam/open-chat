@@ -212,6 +212,7 @@ describe("OpenChat verified sign-in acceptance", () => {
             ? request.identity ? (seam.order.push("worker-proof"), workerSuccess(NOW + 60 * 60_000)) : { kind: "auth_identity_not_found" } : undefined);
         const pending = client.signInWithWebAuthn({ username: "synthetic-user", credentialId: Uint8Array.of(1, 2, 3) });
         await vi.waitFor(() => expect(seam.order).toContain("profile-proof"));
+        expect(identityStateStore.value.kind).toBe("logging_in");
         expect(seam.cacheSet).not.toHaveBeenCalled(); expect(authenticated()).toHaveLength(0);
         gate.resolve(profile); await pending;
         expect(seam.order).toEqual(["worker-proof", "profile-proof", "persist"]);
@@ -220,6 +221,7 @@ describe("OpenChat verified sign-in acceptance", () => {
     it.each(["worker", "profile", "wrong-profile", "persistence"] as const)(
         "cleans up unofficial WebAuthn after %s failure", async failure => {
             seam.native = false; build(); await boot();
+            const transitions = vi.spyOn(client, "updateIdentityState");
             seam.send.mockImplementation(async request => {
                 if (request.kind !== "setAuthIdentity") return;
                 if (!request.identity) return { kind: "auth_identity_not_found" };
@@ -233,17 +235,35 @@ describe("OpenChat verified sign-in acceptance", () => {
             await expect(client.signInWithWebAuthn({ username: "synthetic-user", credentialId: Uint8Array.of(1, 2, 3) })).rejects.toBeDefined();
             expect(authenticated()).toHaveLength(0); expect(seam.cacheRemove).toHaveBeenCalledOnce();
             expect(currentUserStore.value.username).not.toBe("synthetic-user"); expect(identityStateStore.value.kind).toBe("anon");
+            expect(transitions.mock.calls.some(([state]) => state.kind === "logging_in")).toBe(true);
+            expect(transitions.mock.calls.some(([state]) => state.kind === "loading_user")).toBe(false);
             expect(seam.send).toHaveBeenLastCalledWith({ kind: "setAuthIdentity", identity: undefined, isIIPrincipal: false });
             if (failure !== "persistence") expect(seam.cacheSet).not.toHaveBeenCalled();
         },
     );
     it("preserves official WebAuthn persistence before worker/profile startup", async () => {
         seam.native = false; build(false); await boot();
+        const transitions = vi.spyOn(client, "updateIdentityState");
         seam.send.mockImplementation(async request => request.kind === "setAuthIdentity"
             ? request.identity ? (seam.order.push("worker-proof"), workerSuccess(NOW + 60 * 60_000)) : { kind: "auth_identity_not_found" } : undefined);
         await client.signInWithWebAuthn();
         expect(seam.authCreate).toHaveBeenCalledOnce();
         expect(seam.order).toEqual(["persist", "worker-proof", "profile-proof"]);
         expect(authenticated()).toHaveLength(1);
+        expect(transitions.mock.calls.some(([state]) => state.kind === "loading_user")).toBe(true);
+        expect(transitions.mock.calls.some(([state]) => state.kind === "logging_in")).toBe(false);
+    });
+    it("preserves loading_user during automatic unofficial browser session restoration", async () => {
+        seam.native = false;
+        seam.cacheGet.mockResolvedValue({ key: authKey, delegation: authChain });
+        const gate = deferred<ReturnType<typeof workerSuccess>>();
+        seam.send.mockImplementation(async request => request.kind === "setAuthIdentity"
+            ? request.identity ? gate.promise : { kind: "auth_identity_not_found" } : undefined);
+        build();
+        await vi.waitFor(() => expect(seam.send).toHaveBeenCalledWith(expect.objectContaining({ kind: "setAuthIdentity", identity: expect.any(Object) })));
+        expect(identityStateStore.value.kind).toBe("loading_user");
+        gate.resolve(workerSuccess(NOW + 60 * 60_000));
+        await vi.waitFor(() => expect(authenticated()).toHaveLength(1));
+        expect(seam.cacheSet).not.toHaveBeenCalled();
     });
 });

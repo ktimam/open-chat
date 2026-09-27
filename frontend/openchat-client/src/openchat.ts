@@ -1007,10 +1007,13 @@ export class OpenChat {
         const authPrincipal = identity.getPrincipal().toString();
         this.#authPrincipal = anon ? undefined : authPrincipal;
         this.#ocIdentityPrincipal = undefined;
-        // Keep the native browser sign-in form mounted (and cancellable) while
-        // adopting the proven session. loading_user replaces that form, whose
-        // destruction deliberately aborts its pending native sign-in request.
-        this.updateIdentityState(anon ? { kind: "anon" } : nativeSession
+        // Keep interactive unofficial sign-in mounted until acceptance: replacing
+        // the form loses browser failure diagnostics/credential expectations and
+        // deliberately aborts a pending native sign-in. The commit callback is
+        // supplied only by explicit browser sign-in, never cached-session restore.
+        const keepSignInMounted = nativeSession !== undefined ||
+            (commitVerifiedIdentity !== undefined && this.existingAccountOnly() && !this.isNativeApp());
+        this.updateIdentityState(anon ? { kind: "anon" } : keepSignInMounted
             ? { kind: "logging_in" }
             : { kind: "loading_user", registering });
 

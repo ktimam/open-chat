@@ -102,8 +102,12 @@ a new draft only after checking that the earlier request was not already saved.
   profile. The bundled frontend catalog replaces custom-backend model discovery.
 - Imported processors run in a bounded, opaque-origin worker with network/storage
   blocked. This is not a hard CPU/memory quota or protection from browser compromise.
-- The model page stays cross-origin isolated. Only the exact fixed relay routes use
-  non-isolated headers; those routes bypass the service worker's document cache.
+- In the localhost browser profile, the model page stays cross-origin isolated.
+  Only the exact fixed relay routes use non-isolated headers; those routes bypass
+  the service worker's document cache. The local-test APK WebView is a separate
+  secure-context profile and does not require cross-origin isolation: its local
+  inference runtime uses single-threaded WASM support alongside WebGPU. Imported
+  app processors still run in the separately isolated, network-blocked sandbox.
 - The handoff binds exact origin, popup and fresh nonce. It does not authenticate a
   destination pathname, receiving account, or the honesty of an approved app.
 - The relay holds only approved data and severs its opener to the main client. The
