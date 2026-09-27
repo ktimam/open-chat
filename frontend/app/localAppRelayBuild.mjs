@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, URL } from "node:url";
 import { build } from "vite";
 
 import { LOCAL_APP_RELAY_HEADERS } from "./localAppRelayHeaders.mjs";

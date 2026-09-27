@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, URL } from "node:url";
 import { build } from "esbuild";
 
 /** Fixed first-party private-draft relay only. Disabled for all official/browser builds. */

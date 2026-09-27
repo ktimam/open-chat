@@ -39,6 +39,7 @@ export function deliverLocalAppViaRelay(
         let received = false;
         let settled = false;
         let closed = false;
+        // eslint-disable-next-line prefer-const -- Initialized after popup opens; early-failure cleanup can run before assignment.
         let timer: ReturnType<typeof setTimeout> | undefined;
         const finish = (kind: "delivered" | "uncertain") => {
             if (!settled) {

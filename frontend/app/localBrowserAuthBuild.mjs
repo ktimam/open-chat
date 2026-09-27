@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, URL } from "node:url";
 import { build } from "esbuild";
 
 /** Bundled first-party signer only; no runtime source URL or arbitrary entrypoint is accepted. */

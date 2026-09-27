@@ -189,6 +189,7 @@ export function createNativeBrowserAuthVerifier(
         challenge.delegationExpiresAtMs > start + 300_000 ||
         typeof challenge.expectedUsername !== "string" || challenge.expectedUsername.trim() !== challenge.expectedUsername ||
         challenge.expectedUsername.length < 1 || challenge.expectedUsername.length > 100 ||
+        // eslint-disable-next-line no-control-regex -- Authentication names must reject literal ASCII control characters.
         /[\u0000-\u001f\u007f]/.test(challenge.expectedUsername) ||
         challenge.clientLabel !== "OpenChat Fork · Local Test") invalid();
     let used = false;

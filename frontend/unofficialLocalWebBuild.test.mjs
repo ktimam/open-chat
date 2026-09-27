@@ -3,6 +3,7 @@ import test from "node:test";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { URL } from "node:url";
 import { UNOFFICIAL_LOCAL_CANISTERS } from "./unofficialLocalProfile.mjs";
 import {
     copyUnofficialWebPublicFiles,

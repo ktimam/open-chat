@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import process from "node:process";
 import { createUnofficialLocalEnvironment, parseUnofficialLocalPort, UNOFFICIAL_LOCAL_CANISTERS } from "./unofficialLocalProfile.mjs";
 import { parseUnofficialLocalArgs, unofficialLocalLaunchPlan } from "../scripts/start-unofficial-local.mjs";
 import { transformersWebGpuFeatureEnabled, transformersWebGpuProductionAssetsEnabled } from "./app/transformersWebGpuFeatureFlag.mjs";

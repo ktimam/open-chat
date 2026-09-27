@@ -18,14 +18,14 @@ const request: LocalDraftDeliveryRequest = Object.freeze({
 
 function fixture() {
     const listeners = new Map<string, () => void>();
-    let channel: FakeChannel;
+    const channels: FakeChannel[] = [];
     class FakeChannel {
         onmessage?: (event: { data: unknown }) => void;
         onmessageerror?: () => void;
         postMessage = vi.fn();
         close = vi.fn();
         constructor(readonly name: string) {
-            channel = this;
+            channels.push(this);
         }
     }
     const open = vi.fn().mockReturnValue({});
@@ -38,10 +38,11 @@ function fixture() {
     });
     const controller = new AbortController();
     const result = deliverLocalAppViaRelay(request, controller.signal);
-    const nonce = channel!.name.split(":")[1];
+    const channel = channels[0];
+    const nonce = channel.name.split(":")[1];
     const emit = (type: string, rest: object = {}) =>
-        channel!.onmessage?.({ data: { type, version: 1, sessionNonce: nonce, ...rest } });
-    return { channel: channel!, open, result, controller, listeners, emit };
+        channel.onmessage?.({ data: { type, version: 1, sessionNonce: nonce, ...rest } });
+    return { channel, open, result, controller, listeners, emit };
 }
 
 afterEach(() => {

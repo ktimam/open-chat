@@ -42,6 +42,7 @@ export interface LocalAppCatalog {
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}$/;
 const FIELD = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+// eslint-disable-next-line no-control-regex -- Reject hidden/control characters in imported declarations; keep explicit code-point coverage.
 const HIDDEN = /[\p{Cf}\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/u;
 const NORMALIZERS = ["k_m_suffix", "strip_symbols", "uppercase", "lowercase", "trim"];
 const MAX_CATALOG_BYTES = 1024 * 1024;
