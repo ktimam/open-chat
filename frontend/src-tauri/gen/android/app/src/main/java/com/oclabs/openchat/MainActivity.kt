@@ -43,8 +43,10 @@ class MainActivity : TauriActivity() {
             setIntent(neutralized(intent))
         }
 
-        super.onCreate(savedInstanceState)
+        // Cold WebView provider initialization can block the UI thread. Complete it before
+        // super starts Wry's timed version lookup; retain the existing debugging setting.
         WebView.setWebContentsDebuggingEnabled(true)
+        super.onCreate(savedInstanceState)
 
         Log.d(LOG_TAG, "onCreate: action=${intent.action} data=${intent.data}")
 
