@@ -5,6 +5,7 @@
     import { privateAppWorkspace as workspace, privateAppWorkspaceState } from "../utils/privateAppWorkspace";
     import { localAppDeliveryStatus } from "../utils/localAppRelayDelivery";
     import { nativeAppDelivery, nativeAppPairing } from "../utils/nativeAppDelivery";
+    import PrivateAppCardPreview from "./PrivateAppCardPreview.svelte";
 
     let { client }: { client: OpenChat } = $props();
     let confirmed = $state(false);
@@ -12,6 +13,7 @@
     const workspaceView = $derived($privateAppWorkspaceState);
     const accountReady = $derived($identityStateStore.kind === "logged_in" && $currentUserIdStore !== ANON_USER_ID && workspaceView.account === $currentUserIdStore);
     const selected = $derived(workspaceView.catalog?.apps.find(app => app.id === workspaceView.appId));
+    const selectedAction = $derived(selected?.actions.find(action => action.definition.name === workspaceView.actionId));
     const locked = $derived(workspaceView.busy || workspaceView.draft !== undefined);
     const editable = $derived(workspaceView.draft?.status === "draft" || workspaceView.draft?.status === "reviewed");
     const delivery = $derived($localAppDeliveryStatus?.importId === workspaceView.draft?.approval?.request.idempotencyKey ? $localAppDeliveryStatus : undefined);
@@ -96,6 +98,7 @@
             {#if workspaceView.phase}<p>Local processing: {workspaceView.phase.replaceAll("_", " ")}</p>{/if}
             {#if workspaceView.draft}
                 <div class="draft">
+                    {#if selectedAction}<PrivateAppCardPreview action={selectedAction} editorJson={workspaceView.editorJson} />{/if}
                     <h3>Edit the complete outgoing payload</h3>
                     <p><strong>Exact destination:</strong> <span class="destination">{workspaceView.draft.target.destination}</span></p>
                     <label>Recipient review label (confirm the actual account in the receiving app)

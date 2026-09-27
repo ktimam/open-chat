@@ -87,6 +87,14 @@ ID. There is no automatic retry or automatic browser/clipboard action.
 **Close** only hides the workspace; use **Cancel / discard local draft** to cancel
 pending work.
 
+Private drafts also show an app-declared preview: title, disclosure and labelled
+fields, repeated for each item. It is derived from the current valid JSON editor,
+not a second submission payload. Additional fields remain visible; hidden text
+controls are escaped. Invalid edits remove the preview until corrected. The full
+JSON editor and exact-request review remain authoritative. Imported app button
+labels never replace OpenChat's explicit external-send or discard controls.
+This renderer is shared by both UIs and contains no app-specific formatting rules.
+
 ### Process with AI and `/ai` are chat actions
 
 **Process with AI** runs local inference on the selected message, then automatically

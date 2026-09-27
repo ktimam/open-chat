@@ -325,8 +325,9 @@ function snapshotTarget(input: LocalDraftTarget): LocalDraftTarget {
     return Object.freeze({ ...value, destination: url.href }) as unknown as LocalDraftTarget;
 }
 
-function approvalSummary(request: LocalDraftDeliveryRequest): string {
-    const json = JSON.stringify(snapshotJson(request), null, 2);
+/** Host-owned JSON display: preserve exact values while exposing hidden text controls. */
+export function formatLocalDraftJson(value: unknown): string {
+    const json = JSON.stringify(snapshotJson(value), null, 2);
     return json.replace(DISPLAY_CONTROLS, (character) => {
         // JSON escapes preserve the exact value while exposing bidi/hidden control characters.
         return Array.from(
@@ -418,7 +419,7 @@ export class LocalAppDraftStore {
             draftId: id,
             revision: record.view.revision,
             request,
-            summary: approvalSummary(request),
+            summary: formatLocalDraftJson(request),
         });
         record.view = Object.freeze({ ...record.view, status: "reviewed", approval });
         return approval;
