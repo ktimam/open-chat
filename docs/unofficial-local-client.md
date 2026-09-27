@@ -152,8 +152,25 @@ and verify its exact hashes/build ID; do not reuse an older frontend after UI ch
 Export each ABI's APK before the next build, and verify its signature, package,
 embedded assets and source identity. Building does not qualify device behavior.
 
-At the September 27 desktop/navigation checkpoint, Edge existing-account sign-in
-and session restoration have been observed. Real Qwen/Gemma proposals, authorized
-IOU delivery, updated APK binary/runtime checks, and real native sign-in/physical-phone
-acceptance remain separate pending gates. APK003 has not yet been built; APK002's
-synthetic handoff evidence does not qualify these newer frontend changes.
+Record acceptance separately for browser authentication, model completion and
+accuracy, private proposals, receiving-app persistence, APK integrity, native
+startup and real native authentication. A passing screenshot of the sign-in form
+does not prove account sign-in or app delivery; a completed model response does
+not prove that its contents match the source.
+
+At the September 28 local checkpoint, existing-account Edge sign-in and session
+restoration, real Qwen/Gemma text inference and retained-cache model switching
+have been observed. Generic text summarization still has a known fidelity issue:
+it can infer a relationship absent from the source. App-owned image proposals and
+real receiving-app saves remain pending, not covered by those text checks.
+
+The normal x86 APK005 passed independent binary checks and three process-cold
+startup/stability checks after closing an unrelated hung emulator Chrome process.
+Earlier inconclusive inspections and APK004's native startup crash remain recorded.
+The app-owned startup-order mitigation initializes the existing WebView provider
+before Wry's timed runtime lookup; it does not fix every possible upstream lookup
+timeout. Its separate intentional-delay diagnostics are approval-blocked, and
+the corresponding ARM build is held. Real native sign-in and physical-phone tests
+are not passed; physical-phone testing is explicitly deferred for this checkpoint.
+Keep all source commits, reused-frontend hashes, limitations and later results in
+the artifact's own build and acceptance records. Do not relabel older evidence.
