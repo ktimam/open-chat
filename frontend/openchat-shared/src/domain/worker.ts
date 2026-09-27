@@ -2111,6 +2111,8 @@ export type WorkerError = {
  * Worker response types
  */
 export type WorkerResponseInner =
+    | ModerationConfig
+    | CreateMultiUserCanisterResponse
     | Success
     | OCError
     | ProposedProtectedAction

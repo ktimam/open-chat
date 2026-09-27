@@ -219,7 +219,11 @@ const sendError = (kind: string, correlationId: number) => {
     };
 };
 
-function streamReplies(kind: string, correlationId: number, chain: Stream<WorkerResponseInner>) {
+function streamReplies(
+    kind: string,
+    correlationId: number,
+    chain: Pick<Stream<WorkerResponseInner>, "subscribe">,
+) {
     const start = Date.now();
     chain.subscribe({
         onResult: (value, final) => {
@@ -421,7 +425,12 @@ self.addEventListener("message", (msg: MessageEvent<CorrelatedWorkerRequest>) =>
 function getAction(
     payload: Exclude<
         WorkerRequest,
-        Init | SetAuthIdentity | CreateOpenChatIdentity | Logout | SetMinLogLevel
+        | Init
+        | SetAuthIdentity
+        | CreateOpenChatIdentity
+        | Logout
+        | SetMinLogLevel
+        | { kind: "abortInFlightQueries" }
     >,
     agent: OpenChatAgent,
     config: AgentConfig,
