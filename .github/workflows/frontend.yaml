@@ -45,6 +45,8 @@ jobs:
           filters: |
             frontend:
               - "frontend/**"
+              - "scripts/android_startup_order.test.mjs"
+              - "scripts/build-unofficial-local-apk.test.mjs"
               - ".prettierignore"
               - ".github/workflows/**"
 
@@ -113,6 +115,11 @@ jobs:
         run: |
           command -v zip
           command -v unzip
+
+      # Offline fixtures and source contracts only; no APK build, device, or network requests.
+      - name: Check offline local APK startup and build contracts
+        working-directory: .
+        run: node --test scripts/android_startup_order.test.mjs scripts/build-unofficial-local-apk.test.mjs
 
       - name: Check PR and release policy regressions
         working-directory: .
