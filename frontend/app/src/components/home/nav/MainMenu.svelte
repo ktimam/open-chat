@@ -8,8 +8,10 @@
         publish,
     } from "@client";
     import { navigate } from "@utils/navigation";
+    import { privateAppWorkspace } from "@utils/privateAppWorkspace";
     import { getContext } from "svelte";
     import AccountSettings from "svelte-material-icons/AccountSettingsOutline.svelte";
+    import Apps from "svelte-material-icons/Apps.svelte";
     import ChartLine from "svelte-material-icons/ChartLine.svelte";
     import CogOutline from "svelte-material-icons/CogOutline.svelte";
     import Graph from "svelte-material-icons/GraphOutline.svelte";
@@ -50,6 +52,14 @@
                 <Translatable resourceKey={i18nKey("profile.title")} />
             {/snippet}
         </MenuItem>
+        {#if client.clientOnlyApps()}
+            <MenuItem onclick={() => privateAppWorkspace.open()}>
+                {#snippet icon()}
+                    <Apps size={$iconSize} color={"var(--icon-inverted-txt)"} />
+                {/snippet}
+                {#snippet text()}Private apps{/snippet}
+            </MenuItem>
+        {/if}
         <MenuItem onclick={() => publish("upgrade")}>
             {#snippet icon()}
                 <span class="diamond-icon"></span>

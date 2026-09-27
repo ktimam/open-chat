@@ -7,7 +7,8 @@
     // components_mobile/home/user_profile/MyApps.svelte.
     import { i18nKey } from "@src/i18n/i18n";
     import { toastStore } from "@src/stores/toast";
-    import { type AiAppRegistration, type OpenChat } from "@client";
+    import { anonUserStore, type AiAppRegistration, type OpenChat } from "@client";
+    import { privateAppWorkspace } from "@utils/privateAppWorkspace";
     import { getContext, onMount } from "svelte";
     import CheckDecagram from "svelte-material-icons/CheckDecagram.svelte";
     import Upload from "svelte-material-icons/Upload.svelte";
@@ -24,6 +25,7 @@
     let publishing = $state(new Set<number>());
 
     async function load(reset = true) {
+        if (client.clientOnlyApps()) return;
         const pageIndex = reset ? 0 : Math.floor(apps.length / 8);
         const page = await client.myAiAppsPage(pageIndex, 8);
         apps = reset ? page.apps : [...apps, ...page.apps];
@@ -40,6 +42,7 @@
     onMount(load);
 
     async function publishApp(app: AiAppRegistration) {
+        if (client.clientOnlyApps()) return;
         if (publishing.has(app.id)) return;
         publishing = new Set(publishing).add(app.id);
         const ok = await client.publishAiApp(app.id);
@@ -55,7 +58,11 @@
     }
 </script>
 
-{#if apps.length > 0}
+{#if client.clientOnlyApps()}
+    {#if !$anonUserStore}
+        <Button onClick={() => privateAppWorkspace.open()}>Private apps</Button>
+    {/if}
+{:else if apps.length > 0}
     <CollapsibleCard
         onToggle={myAppsSectionOpen.toggle}
         open={$myAppsSectionOpen}

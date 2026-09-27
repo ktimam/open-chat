@@ -31,6 +31,7 @@ import {
     transformersWebGpuRuntimeAvailableOffline,
     transformersWebGpuRuntimeAssetUrl,
     transformersWebGpuClientEnabled,
+    transformersWebGpuSelectionCanHandle,
     type TransformersWebGpuArtifactCache,
     type TransformersWebGpuWorker,
 } from "./transformersWebGpuInference";
@@ -1339,7 +1340,7 @@ describe("Transformers.js Qwen WebGPU spike", () => {
         }
     });
 
-    it("passes the unofficial local profile through the actual mobile runtime admission check", () => {
+    it("passes the unofficial local profile through mobile and desktop browser admission", () => {
         const originalUserAgent = navigator.userAgent;
         vi.stubEnv("OC_BUILD_ENV", "development");
         vi.stubEnv("OC_DFX_NETWORK", "ic");
@@ -1365,12 +1366,76 @@ describe("Transformers.js Qwen WebGPU spike", () => {
                 configurable: true,
                 value: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/150",
             });
-            expect(transformersWebGpuClientEnabled()).toBe(false);
+            expect(transformersWebGpuClientEnabled()).toBe(true);
+            expect(transformersWebGpuSelectionCanHandle(PHONE_QWEN3_VL_2B_MODEL_ID)).toBe(true);
+            expect(transformersWebGpuSelectionCanHandle(PHONE_GEMMA4_E2B_MODEL_ID)).toBe(true);
+            expect(transformersWebGpuSelectionCanHandle("some-other-model")).toBe(false);
         } finally {
             Object.defineProperty(navigator, "userAgent", {
                 configurable: true,
                 value: originalUserAgent,
             });
+            vi.unstubAllEnvs();
+        }
+    });
+
+    it.each([
+        { name: "unofficial desktop browser", unofficial: "true", native: false, userAgent: "Windows NT 10.0", expected: true },
+        { name: "official desktop browser", unofficial: undefined, native: false, userAgent: "Windows NT 10.0", expected: false },
+        { name: "non-exact unofficial flag", unofficial: "TRUE", native: false, userAgent: "Windows NT 10.0", expected: false },
+        { name: "unofficial desktop native", unofficial: "true", native: true, userAgent: "Windows NT 10.0", expected: false },
+        { name: "unofficial iOS native", unofficial: "true", native: true, userAgent: "iPhone Mobile", expected: false },
+        { name: "unofficial Android native", unofficial: "true", native: true, userAgent: "Android 15 Mobile", expected: true },
+        { name: "official Android browser", unofficial: undefined, native: false, userAgent: "Android 15 Mobile", expected: true },
+    ])("preserves platform policy for $name", ({ unofficial, native, userAgent, expected }) => {
+        vi.stubEnv("OC_BUILD_ENV", "production");
+        vi.stubEnv("OC_DFX_NETWORK", "ic");
+        vi.stubEnv("OC_UNOFFICIAL_CLIENT", unofficial);
+        vi.stubEnv("OC_TRANSFORMERS_WEBGPU_IMAGE_SPIKE", "true");
+        vi.stubEnv("OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY", "immutable-hub-v1");
+        vi.stubGlobal("navigator", { userAgent, userAgentData: { mobile: false } });
+        vi.stubGlobal("window", native ? { __TAURI_INTERNALS__: {} } : {});
+        try {
+            expect(transformersWebGpuClientEnabled()).toBe(expected);
+            vi.stubEnv("OC_TRANSFORMERS_WEBGPU_IMAGE_SPIKE", "false");
+            expect(transformersWebGpuClientEnabled()).toBe(false);
+            vi.stubEnv("OC_TRANSFORMERS_WEBGPU_IMAGE_SPIKE", "true");
+            vi.stubEnv("OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY", "local");
+            expect(transformersWebGpuClientEnabled()).toBe(false);
+        } finally {
+            vi.unstubAllGlobals();
+            vi.unstubAllEnvs();
+        }
+    });
+
+    it("does not bypass GPU or image API admission for an enabled unofficial desktop browser", async () => {
+        vi.stubEnv("OC_BUILD_ENV", "development");
+        vi.stubEnv("OC_DFX_NETWORK", "ic");
+        vi.stubEnv("OC_UNOFFICIAL_CLIENT", "true");
+        vi.stubEnv("OC_TRANSFORMERS_WEBGPU_IMAGE_SPIKE", "true");
+        vi.stubEnv("OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY", "immutable-hub-v1");
+        vi.stubGlobal("navigator", { userAgent: "Windows NT 10.0" });
+        vi.stubGlobal("window", {});
+        vi.stubGlobal("Worker", class {});
+        vi.stubGlobal("OffscreenCanvas", class {});
+        vi.stubGlobal("createImageBitmap", vi.fn());
+        try {
+            expect(transformersWebGpuClientEnabled()).toBe(true);
+            expect(transformersWebGpuRuntimeAvailability()).toEqual({
+                available: false,
+                reason: TRANSFORMERS_WEBGPU_ADAPTER_UNAVAILABLE_REASON,
+            });
+            const factory = vi.fn(() => new FakeWorker());
+            const engine = createTransformersWebGpuEngine(factory);
+            expect((await engine.infer(IMAGE_REQUEST)).kind).toBe("unavailable");
+            expect(factory).not.toHaveBeenCalled();
+            vi.stubGlobal("navigator", { userAgent: "Windows NT 10.0", gpu: {} });
+            vi.stubGlobal("OffscreenCanvas", undefined);
+            expect(transformersWebGpuRuntimeAvailability().available).toBe(false);
+            vi.stubGlobal("navigator", undefined);
+            expect(transformersWebGpuClientEnabled()).toBe(false);
+        } finally {
+            vi.unstubAllGlobals();
             vi.unstubAllEnvs();
         }
     });

@@ -1132,16 +1132,14 @@ export function shouldUseTransformersWebGpuSpike(
     );
 }
 
-/** True for a mobile browser or Android WebView in a deliberately enabled runtime build. */
+/** Browser policy admission only; runtime capabilities and verified model assets are checked separately. */
 export function transformersWebGpuClientEnabled(): boolean {
-    if (!transformersWebGpuSpikeEnabled() || !mobileBrowser()) return false;
+    if (!transformersWebGpuSpikeEnabled() || typeof navigator === "undefined") return false;
     const nativeWebView = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-    // Browser builds remain eligible on supported mobile browsers. Native packaging intentionally
-    // ships the all-WebGPU payload only for Android; a flagged iOS WebView must stay on its
-    // native route because its bundle does not contain the accelerated browser runtime.
-    return (
-        !nativeWebView || (typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent))
-    );
+    // Native packaging ships the browser runtime only for Android. The unofficial browser
+    // client also supports desktop WebGPU, without broadening official or native clients.
+    if (nativeWebView) return /Android/i.test(navigator.userAgent);
+    return mobileBrowser() || import.meta.env.OC_UNOFFICIAL_CLIENT === "true";
 }
 
 function cachedRuntimeAssetMetadataMatches(

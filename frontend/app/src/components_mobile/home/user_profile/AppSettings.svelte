@@ -3,6 +3,7 @@
     import { BodySmall, Container, MenuItem } from "component-lib";
     import { anonUserStore, OpenChat, publish } from "@client";
     import { navigate } from "@utils/navigation";
+    import { privateAppWorkspace } from "@utils/privateAppWorkspace";
     import AccountMultiple from "svelte-material-icons/AccountMultiple.svelte";
     import AutoFix from "svelte-material-icons/AutoFix.svelte";
     import CellphoneLink from "svelte-material-icons/CellphoneLink.svelte";
@@ -22,6 +23,11 @@
     function help() {
         publish("closeModalStack");
         navigate("/community/dgegb-daaaa-aaaar-arlhq-cai/channel/3798400021");
+    }
+
+    function openPrivateApps() {
+        publish("closeModalStack");
+        privateAppWorkspace.open();
     }
 </script>
 
@@ -96,6 +102,15 @@
                 info={i18nKey("Download and manage AI models that run privately on your device.")}
             />
 
+            {#if client.clientOnlyApps() && !$anonUserStore}
+                <LinkedCard
+                    onClick={openPrivateApps}
+                    Icon={AutoFix}
+                    title={i18nKey("Private apps")}
+                    info={i18nKey("Import app setup and review private drafts locally.")}
+                />
+            {/if}
+
             <Container padding={["zero", "xl"]}>
                 <BodySmall fontWeight={"bold"} colour={"textSecondary"}>
                     <Translatable resourceKey={i18nKey("Advanced options")}></Translatable>
@@ -111,14 +126,16 @@
                 )}
             />
 
-            <LinkedCard
-                onClick={() => publish("userProfileMyApps")}
-                Icon={AutoFix}
-                title={i18nKey("aiApps.myApps")}
-                info={i18nKey(
-                    "View the AI apps you have registered and publish them to the app directory.",
-                )}
-            />
+            {#if !client.clientOnlyApps()}
+                <LinkedCard
+                    onClick={() => publish("userProfileMyApps")}
+                    Icon={AutoFix}
+                    title={i18nKey("aiApps.myApps")}
+                    info={i18nKey(
+                        "View the AI apps you have registered and publish them to the app directory.",
+                    )}
+                />
+            {/if}
 
             <LinkedCard
                 onClick={() => publish("userProfileBotConfig")}

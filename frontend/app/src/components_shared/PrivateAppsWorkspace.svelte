@@ -58,10 +58,7 @@
     onDestroy(() => workspace.clear());
 </script>
 
-{#if client.clientOnlyApps() && accountReady}
-    {#if !workspaceView.open}
-        <button class="workspace-launcher" type="button" onclick={() => workspace.open()}>Private apps</button>
-    {:else}
+{#if client.clientOnlyApps() && accountReady && workspaceView.open}
         <section class="workspace" aria-label="Private app workspace" aria-busy={workspaceView.busy}>
             <header><h2>Private app draft</h2><button type="button" onclick={() => workspace.close()}>Close</button></header>
             <p>Local prototype: imports and drafts exist only in this page's memory. Reloading or changing account discards them. Nothing is posted to the chat.</p>
@@ -146,11 +143,9 @@
             {/if}
             {#if workspaceView.draft || workspaceView.busy}<button type="button" onclick={() => workspace.discard()}>{workspaceView.busy ? "Cancel / discard local draft" : "Discard local draft"}</button>{/if}
         </section>
-    {/if}
 {/if}
 
 <style>
-    .workspace-launcher { position: fixed; right: 1rem; bottom: 1rem; z-index: 1000; background: #292345; color: white; }
     .workspace { position: fixed; inset: 1rem 1rem 1rem auto; z-index: 1100; width: min(42rem, calc(100vw - 2rem)); box-sizing: border-box; overflow-y: auto; background: var(--bg, #fff); color: var(--txt, #1b1b1b); border: 1px solid #888; border-radius: 1rem; padding: 1.25rem; box-shadow: 0 0.5rem 2rem #0004; display: flex; flex-direction: column; gap: 1rem; }
     header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
     h2, h3, p { margin: 0; }

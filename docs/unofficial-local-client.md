@@ -33,6 +33,11 @@ sign in again explicitly. A linked credential is not deleted when this session e
 
 ## Private apps
 
+Open **Private apps** from the classic (v1) main menu or profile's apps section.
+In the responsive v2 interface, use your profile's **App settings → Private apps**.
+There is no floating launcher over the chat. These entries open the same private
+workspace; they do not run inference or send app data.
+
 1. In the receiving app, explicitly export its local setup catalog and processor.
    A private catalog can contain the app's private vocabulary/defaults; keep it private.
 2. In **Private apps**, import the catalog, select its app/action and import the
@@ -53,6 +58,12 @@ sign in again explicitly. A linked credential is not deleted when this session e
 Per-chat app opt-in enables suggestions from imported declarative rules for fresh
 messages only. It does not grant the app access to chat history. Models do not run
 merely to display a suggestion.
+
+The explicitly enabled unofficial browser profile offers all-WebGPU models on
+desktop as well as mobile. Select/download them in **On-device models** before
+processing a message. Model visibility does not bypass hardware, image-decoding
+or verified-download checks. Native WebGPU packaging remains Android-only; this
+does not enable desktop native/iOS or change the official client's platform policy.
 
 ### Local-test APK browser handoff
 
@@ -121,3 +132,28 @@ navigation Accept header, not only plain fetch/HEAD checks.
 
 Synthetic browser coverage is not proof of real model accuracy, existing-account
 sign-in, ledger delivery or native APK behavior. Keep these acceptance gates separate.
+
+## Rebuilding the separate local-test APK
+
+Use a clean source snapshot and retain its complete root `Cargo.toml` and
+`Cargo.lock`. With the reviewed frontend dependencies and Android/Rust toolchains
+already installed, the repository's build entry point is:
+
+```sh
+node scripts/build-unofficial-local-apk.mjs --target x86_64
+node scripts/build-unofficial-local-apk.mjs --target aarch64
+```
+
+Each command builds frontend assets for the separate `dev.openchatfork.localtest`
+package with official OTA disabled; neither installs an APK nor accesses an account.
+For a no-download run, require offline Cargo and Gradle dependency resolution and
+stop if a dependency is missing. A native-only reuse of frontend output must preserve
+and verify its exact hashes/build ID; do not reuse an older frontend after UI changes.
+Export each ABI's APK before the next build, and verify its signature, package,
+embedded assets and source identity. Building does not qualify device behavior.
+
+At the September 27 desktop/navigation checkpoint, Edge existing-account sign-in
+and session restoration have been observed. Real Qwen/Gemma proposals, authorized
+IOU delivery, updated APK binary/runtime checks, and real native sign-in/physical-phone
+acceptance remain separate pending gates. APK003 has not yet been built; APK002's
+synthetic handoff evidence does not qualify these newer frontend changes.

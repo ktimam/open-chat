@@ -25,6 +25,13 @@ web profile. A unique per-build version invalidates cached inference-worker code
 deleting downloaded model weights. Model downloads still use the configured immutable
 upstream model repositories; the build does not fetch or host model weights.
 
+The explicit unofficial web profile admits desktop and mobile browsers to the
+all-WebGPU model chooser. Use **On-device models** to select or download a model;
+actual inference still requires the supported GPU/image APIs and verified artifacts.
+The official desktop policy and non-Android native exclusions are unchanged.
+Open **Private apps** from the classic main menu/profile, or from
+**App settings → Private apps** in the responsive v2 interface, not a floating button.
+
 The output must already exist, be empty, and not traverse a symbolic link/junction. No
 output cleanup is performed. If a build fails, preserve that directory for diagnosis and
 choose a fresh one for the next attempt. The output includes the reviewed manifest, static
