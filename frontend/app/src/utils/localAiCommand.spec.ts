@@ -52,6 +52,7 @@ import {
     runLocalAiCommand,
     VOICE_MESSAGE_ADD_ON_REQUIRED,
 } from "./localAiCommand";
+import { runLocalAiMessageFlow } from "./localAiMessageFlow";
 
 describe("/ai composer UI parity", () => {
     const composers = [
@@ -77,6 +78,17 @@ describe("/ai composer UI parity", () => {
 });
 
 describe("Process with AI prompt", () => {
+    it("bounds the default text summary without changing freeform user prompts", () => {
+        expect(PROCESS_WITH_AI_TEXT_PROMPT).toContain("one sentence of at most 20 words");
+        expect(PROCESS_WITH_AI_TEXT_PROMPT).toContain("Use only stated facts");
+        expect(PROCESS_WITH_AI_TEXT_PROMPT).toContain("Copy any names and numbers you include exactly");
+        expect(PROCESS_WITH_AI_TEXT_PROMPT).toContain("Do not add analysis, explanations, or guesses");
+        expect(PROCESS_WITH_AI_TEXT_PROMPT).toContain("Return only the sentence, then stop");
+        const userPrompt = "Explain the selected topic in detail with examples.";
+        expect(buildLocalAiPrompt(userPrompt)).toBe(userPrompt);
+        expect(parseLocalAiCommand(`/ai ${userPrompt}`)).toBe(userPrompt);
+    });
+
     it("uses distinct generic prompts for selected text, image, and voice messages", () => {
         expect(PROCESS_WITH_AI_TEXT_PROMPT).toContain("selected message");
         expect(PROCESS_WITH_AI_IMAGE_PROMPT).toContain("selected image message");
@@ -212,6 +224,54 @@ describe("runLocalAiCommand (through the real inferOnDevice facade)", () => {
         expect(outcome).toEqual({ kind: "ok", reply: "the answer" });
         expect(web.webInfer).toHaveBeenCalledTimes(1);
         expect(web.webInfer.mock.calls[0][0]).toMatchObject({ prompt: "hi" });
+    });
+
+    // This executes the real message flow and inference facade, not a model-quality test.
+    // Runtime completion/EOS validation remains covered by transformersWebGpuCompletion.spec.ts.
+    it("posts a completed short Process with AI text reply exactly once", async () => {
+        web.isWebInferenceReady.mockReturnValue(true);
+        web.webInfer.mockResolvedValue({ kind: "ok", text: "  The meeting starts at 09:30.  " });
+        const sendReply = vi.fn(async () => ({ kind: "success" }));
+
+        const outcome = await runLocalAiMessageFlow({
+            readInput: async () => ({ text: "Meeting starts at 09:30." }),
+            unsupportedMessage: () => "unsupported",
+            promptFor: () => PROCESS_WITH_AI_TEXT_PROMPT,
+            contextFor: (input) => [{ author: "Alex", text: input.text }],
+            infer: runLocalAiCommand,
+            sendReply,
+            stillCurrent: () => true,
+        });
+
+        expect(outcome).toEqual({ kind: "success", message: "AI response added." });
+        expect(web.webInfer).toHaveBeenCalledOnce();
+        expect(web.webInfer.mock.calls[0][0].prompt).toContain(
+            `USER REQUEST\n${PROCESS_WITH_AI_TEXT_PROMPT}`,
+        );
+        expect(web.webInfer.mock.calls[0][0].prompt).toContain("Alex: Meeting starts at 09:30.");
+        expect(sendReply).toHaveBeenCalledExactlyOnceWith("🤖 The meeting starts at 09:30.");
+    });
+
+    it("does not post or retry a Process with AI result that exhausted its token budget", async () => {
+        web.isWebInferenceReady.mockReturnValue(true);
+        const error =
+            "The model reached its output token limit before completing the response. No partial result was returned.";
+        web.webInfer.mockResolvedValue({ kind: "error", error });
+        const sendReply = vi.fn(async () => ({ kind: "success" }));
+
+        const outcome = await runLocalAiMessageFlow({
+            readInput: async () => ({ text: "A selected message." }),
+            unsupportedMessage: () => "unsupported",
+            promptFor: () => PROCESS_WITH_AI_TEXT_PROMPT,
+            contextFor: (input) => [{ author: "Alex", text: input.text }],
+            infer: runLocalAiCommand,
+            sendReply,
+            stillCurrent: () => true,
+        });
+
+        expect(outcome).toEqual({ kind: "error", message: `On-device AI failed: ${error}` });
+        expect(web.webInfer).toHaveBeenCalledOnce();
+        expect(sendReply).not.toHaveBeenCalled();
     });
 
     it("forwards staged image bytes to the model (multimodal, e.g. a receipt photo)", async () => {

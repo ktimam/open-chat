@@ -2,7 +2,8 @@
 // typed prompt and hands the reply back for the composer to post. Fully generic — nothing here is
 // app-specific; it is just a thin, testable wrapper over the on-device inference facade so any
 // client build gains a direct "chat with the local model" affordance decoupled from the AI-action
-// (propose/confirm) flow. The model runs entirely on-device; the prompt never leaves the machine.
+// (propose/confirm) flow. Inference runs on-device; the composer posts the user's command and the
+// generated reply to the chat. Process with AI also posts its completed reply to the chat.
 
 import { inferOnDevice, onDeviceInferenceCapability } from "./onDeviceInference";
 
@@ -24,7 +25,7 @@ export const PROCESS_WITH_AI_IMAGE_PROMPT =
 export const PROCESS_WITH_AI_AUDIO_PROMPT =
     "Transcribe and analyze the selected voice message. Preserve the speaker's original language, names, amounts, currencies, dates, times, references, and stated uncertainty. Do not invent words for unclear audio; mark inaudible or uncertain spans, then give a concise, helpful response.";
 export const PROCESS_WITH_AI_TEXT_PROMPT =
-    "Summarize and analyze the selected message. Preserve its important facts, names, amounts, currencies, dates, references, and notes, and give a concise, helpful response.";
+    "Summarize the selected message in one sentence of at most 20 words. Use only stated facts. Copy any names and numbers you include exactly. Do not add analysis, explanations, or guesses. Return only the sentence, then stop.";
 export const VOICE_MESSAGE_ADD_ON_REQUIRED =
     "The selected on-device model cannot process voice messages. Select Gemma 4 E2B under profile → App settings → On-device models and install its optional audio add-on, then try again.";
 
