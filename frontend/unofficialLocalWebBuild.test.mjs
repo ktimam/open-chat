@@ -107,19 +107,50 @@ test("public copy preserves generated key and relay, ignores associations, and r
 test("Rollup local path has explicit safety replacements, isolated output, relay and no OTA/DAL clean", () => {
     const source = readFileSync(new URL("./app/rollup.config.mjs", import.meta.url), "utf8");
     const extra = readFileSync(new URL("./app/rollup.extras.mjs", import.meta.url), "utf8");
+    assert.match(source, /const localWebBuild = process\.env\.OC_UNOFFICIAL_WEB_BUILD === "true";/);
+    assert.match(source, /const localTestApk = process\.env\.OC_UNOFFICIAL_LOCAL_APK === "true";/);
+    assert.match(source, /const localClientBuild = localWebBuild \|\| localTestApk;/);
     assert.match(source, /"import\.meta\.env\.OC_UNOFFICIAL_CLIENT": JSON\.stringify/);
-    assert.match(source, /localWebBuild \? \{ "import\.meta\.env\.DEV": "false", "import\.meta\.env\.PROD": "true" \}/);
-    assert.match(source, /localWebBuild \? \{ "process\.env\.NODE_ENV": JSON\.stringify\("production"\)/);
-    assert.match(source, /localWebBuild \? "development" : \(process\.env\.NODE_ENV/);
+    assert.match(source, /localClientBuild \? \{ "import\.meta\.env\.DEV": "false", "import\.meta\.env\.PROD": "true" \}/);
+    assert.match(source, /localClientBuild \? \{ "process\.env\.NODE_ENV": JSON\.stringify\("production"\)/);
+    assert.match(source, /localClientBuild \? "development" : \(process\.env\.NODE_ENV/);
     assert.match(source, /localAppRelayPlugin\(\{ enabled: localWebBuild \}\)/);
     assert.match(source, /queryPublicKey: queryOfficialUserIndexPublicKey, outputPath: outputPath\("public-key"\)/);
-    assert.match(source, /\.\.\.\(!localWebBuild \? \[androidBundlePlugin/);
-    assert.match(source, /const androidRpId = localWebBuild \? ""/);
-    assert.match(source, /if \(localWebBuild\) \{[\s\S]*?return;\s*\}\s*console\.log\("cleaning up the build directory"\)/);
+    assert.match(source, /\.\.\.\(!localClientBuild \? \[androidBundlePlugin/);
+    assert.match(source, /const androidRpId = localClientBuild \? ""/);
+    assert.match(source, /if \(localClientBuild\) \{[\s\S]*?return;\s*\}\s*console\.log\("cleaning up the build directory"\)/);
+    assert.match(source, /buildStart\(\) \{\s*if \(!localTestApk\) return;[\s\S]*?rimrafSync\(path\.join\(__dirname, "build"\)\)/);
+    assert.match(source, /fs\.writeFileSync\(outputPath\("ota-policy\.json"\), JSON\.stringify\(\{ strategy: "none" \}\)\)/);
+    assert.match(source, /const outputDirectory = localWebBuild \? process\.env\.OC_UNOFFICIAL_WEB_OUTPUT : "build";/);
     assert.match(source, /dir: outputDirectory/);
     assert.equal(/dest: "build(?:\/|")/.test(source), false);
     assert.match(extra, /OC_UNOFFICIAL_WEB_BUILD === "true" && process\.env\.OC_UNOFFICIAL_CLIENT !== "true"/);
     assert.match(extra, /createUnofficialLocalWebBuildEnvironment\(canisters/);
     const workers = readFileSync(new URL("./app/build-workers.mjs", import.meta.url), "utf8");
     assert.match(workers, /envDir: process\.env\.OC_UNOFFICIAL_CLIENT === "true" \? false : undefined/);
+});
+
+const workflow = readFileSync(new URL("../.github/workflows/frontend.yaml", import.meta.url), "utf8");
+
+test("frontend CI runs all three offline local web profile suites before general policy checks", () => {
+    const build = workflow.match(/^ {2}build:\r?\n([\s\S]*?)(?=^ {2}install-and-test:)/mu)?.[1];
+    assert.ok(build, "frontend build job must remain present");
+    const command = "node --test scripts/unofficial-local-web.test.mjs frontend/unofficialLocalWebBuild.test.mjs frontend/unofficialLocalProfile.test.mjs";
+    assert.match(build, / {6}- name: Check offline local web build and profile contracts\r?\n {8}working-directory: \.\r?\n {8}run: node --test scripts\/unofficial-local-web\.test\.mjs frontend\/unofficialLocalWebBuild\.test\.mjs frontend\/unofficialLocalProfile\.test\.mjs\r?\n/u);
+    const policy = build.indexOf("- name: Check PR and release policy regressions");
+    assert.ok(policy >= 0, "existing release-policy checks must remain present");
+    assert.ok(build.indexOf(command) < policy);
+});
+
+test("changes to each local web entry script and test trigger frontend CI", () => {
+    const filter = workflow.match(/ {10}filters: \|\r?\n {12}frontend:\r?\n((?: {14}- "[^"\r\n]+"\r?\n)+)/u)?.[1];
+    assert.ok(filter, "frontend change filter must remain present");
+    const paths = [...filter.matchAll(/ {14}- "([^"\r\n]+)"/gu)].map((match) => match[1]);
+    assert.ok(paths.includes("frontend/**"), "frontend profile helpers and tests must trigger CI");
+    for (const file of [
+        "scripts/unofficial-local-web.test.mjs",
+        "scripts/build-unofficial-local-web.mjs",
+        "scripts/preview-unofficial-local-web.mjs",
+        "scripts/start-unofficial-local.mjs",
+    ]) assert.ok(paths.includes(file), `${file} must trigger frontend CI`);
 });

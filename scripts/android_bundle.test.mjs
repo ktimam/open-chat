@@ -197,7 +197,7 @@ test("writeBundle emits both configured OTA ZIPs with the existing asset exclusi
 
     for (const [kind, store, ota] of [
       ["store", "true", "patch"],
-      ["full", "false", "major"],
+      ["full", "false", "minor"],
     ]) {
       const archive = path.join(
         source,

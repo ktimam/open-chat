@@ -16,6 +16,9 @@ import {
   FEATURE_CI_NODE_VERSION,
   OFFLINE_FEATURE_HELPER_TESTS,
   readFeatureWorkflows,
+  checkCurrentClientCi,
+  readCurrentClientInputs,
+  CURRENT_CLIENT_LOCAL_WEB_COMMAND,
 } from "./check_feature_ci.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -37,7 +40,10 @@ test("workflow wiring is not completed Rust advisory or release acceptance", () 
   assert.equal(rust.pass, true);
   assert.equal(rust.advisoryAcceptance, false);
   assert.equal(rust.releaseAcceptance, false);
-  assert.equal(checkFeatureCi({ slice, workflows: actual }).pass, true);
+  assert.throws(
+    () => checkFeatureCi({ slice, workflows: actual }),
+    /Conditional\/ignored feature job checks/u,
+  );
 });
 
 test("npm CI checks the exact execution runtime and checkout line endings", () => {
@@ -312,9 +318,267 @@ for (const key of ["model", ...(slice === "pr2" ? ["security"] : [])]) {
     });
   }
 }
-// Check actual executable workflow wiring, not a sanitized replacement fixture.
-// Structural success is not the runtime gate's source/advisory acceptance.
-const safe = actual;
+// Explicit historical fixture: keep the legacy PR contract valid, without claiming
+// the actual split/main workflow satisfies that superseded topology. Model/security/
+// integration inputs still come from their actual, unchanged workflow files.
+const historicalFrontend = `on:
+  pull_request:
+    branches:
+      - master
+      - codex/pr1-local-models
+  push:
+    branches:
+      - codex/pr1-local-models
+      - codex/pr2-app-chat-interfaces
+      - codex/pr2-clean-integration
+  workflow_dispatch:
+jobs:
+  install-and-test:
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "${FEATURE_CI_NODE_VERSION}"
+      - run: npm ci --no-audit
+      - run: npm run build:ci
+      - name: Check offline feature inventory and CI contracts
+        working-directory: .
+        run: node --test ${OFFLINE_FEATURE_HELPER_TESTS.join(" ")}
+      - name: Model policy coverage
+        working-directory: .
+        run: node --test scripts/model_ci_coverage.test.mjs scripts/security_mode_scope.test.mjs
+`;
+const safe = { ...actual, frontend: historicalFrontend };
+const checkCurrentOfflineHelpers = (text) =>
+  checkOfflineFeatureHelpers(text, { topology: "current-client" });
+const currentClient = readCurrentClientInputs(root);
+
+test("actual current split frontend/main is accepted without qualifying historical security scopes", () => {
+  assert.deepEqual(checkCurrentClientCi(currentClient), {
+    pass: true,
+    mode: "current-client",
+    runtimeChecked: false,
+    nodeVersion: FEATURE_CI_NODE_VERSION,
+    securityScopeAcceptance: false,
+    unresolvedSecurityModes: ["pr1", "pr2"],
+    advisoryAcceptance: false,
+    buildExecuted: false,
+    releaseAcceptance: false,
+  });
+  assert.throws(() => checkFeatureCi({ slice, workflows: actual }));
+  assert.throws(() => checkOfflineFeatureHelpers(actual.frontend));
+  assert.deepEqual(checkOfflineFeatureHelpers(historicalFrontend), [
+    ...OFFLINE_FEATURE_HELPER_TESTS,
+  ]);
+});
+
+for (const [label, mutate] of [
+  [
+    "main push route",
+    (t) =>
+      t.replace(
+        "  push:\n    branches:\n      - main",
+        "  push:\n    branches:\n      - other",
+      ),
+  ],
+  ["merge queue route", (t) => t.replace("  merge_group:", "  unused_group:")],
+  [
+    "conditional checks",
+    (t) =>
+      t.replace("if: needs.changes.outputs.frontend == 'true'", "if: false"),
+  ],
+  [
+    "ignored checks",
+    (t) => t.replace("  checks:", "  checks:\n    continue-on-error: true"),
+  ],
+  [
+    "missing check command",
+    (t) => t.replace("run: npm run check:ci", "run: echo check:ci"),
+  ],
+  [
+    "wrong command directory",
+    (t) =>
+      t.replace(
+        "run: npm run check:ci",
+        "working-directory: .\n        run: npm run check:ci",
+      ),
+  ],
+  [
+    "missing production build",
+    (t) => t.replace("run: npm run build:prod", "run: true"),
+  ],
+  [
+    "missing candidate verification",
+    (t) =>
+      t.replace(
+        "node ../scripts/verify_webgpu_distribution.mjs app/build",
+        "true",
+      ),
+  ],
+  [
+    "unqualified candidate",
+    (t) =>
+      t.replace(
+        "OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY: immutable-hub-v1",
+        "OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY: unknown",
+      ),
+  ],
+  [
+    "wrong dfx pin",
+    (t) => t.replace('dfx-version: "0.31.0-beta.1"', 'dfx-version: "0.99.0"'),
+  ],
+  ["missing dfx check", (t) => t.replace("run: dfx --version", "run: true")],
+  [
+    "missing final dependency",
+    (t) =>
+      t.replace("needs: [changes, checks, build]", "needs: [changes, checks]"),
+  ],
+  ["skippable final gate", (t) => t.replace("if: always()", "if: success()")],
+  [
+    "failure converted to success",
+    (t) => t.replace("            exit 1", "            exit 0"),
+  ],
+  [
+    "missing topology gate",
+    (t) =>
+      t.replace(
+        "run: node scripts/check_feature_ci.mjs current-client",
+        "run: true",
+      ),
+  ],
+  ...["Cargo.lock", "rust-toolchain.toml", "dfx.json"].map((path) => [
+    "missing build-input route " + path,
+    (t) => t.replace(`              - "${path}"\n`, ""),
+  ]),
+  ...[
+    [
+      "missing local web build",
+      "node scripts/build-unofficial-local-web.mjs",
+      "true #",
+    ],
+    [
+      "reused output",
+      'mktemp -d "${RUNNER_TEMP:?}/openchat-unofficial-web.XXXXXX"',
+      "echo /tmp/reused",
+    ],
+    ["wrong local web port", "--port 5194", "--port 5190"],
+    ["wrong local web layout", "--layout v2", "--layout v1"],
+    ["extra local web flag", "--layout v2", "--layout v2 --skip-verification"],
+    [
+      "missing local web metadata check",
+      "loadLocalWebBuild(process.argv[1]);",
+      "void process.argv[1];",
+    ],
+    [
+      "missing local web runtime verification",
+      'node scripts/verify_webgpu_distribution.mjs "$unofficial_output"',
+      "true",
+    ],
+  ].map(([label, before, after]) => [label, (t) => t.replace(before, after)]),
+  ...[
+    ["skippable optimized local web build", "if: false"],
+    ["ignored optimized local web failure", "continue-on-error: true"],
+    [
+      "local web environment override",
+      'env:\n          OC_UNOFFICIAL_CLIENT: "false"',
+    ],
+    ["local web shell override", "shell: bash {0}"],
+  ].map(([label, field]) => [
+    label,
+    (t) =>
+      t.replace(
+        "      - name: Build and verify the optimized unofficial local web client\n",
+        `      - name: Build and verify the optimized unofficial local web client\n        ${field}\n`,
+      ),
+  ]),
+  [
+    "wrong optimized local web directory",
+    (t) =>
+      t.replace(
+        "name: Build and verify the optimized unofficial local web client\n        working-directory: .",
+        "name: Build and verify the optimized unofficial local web client\n        working-directory: frontend",
+      ),
+  ],
+  [
+    "local build before qualified candidate",
+    (t) => {
+      const local = CURRENT_CLIENT_LOCAL_WEB_COMMAND.replaceAll(
+        "\n",
+        "\n          ",
+      );
+      const candidate =
+        "npm run build:prod\n          node ../scripts/verify_webgpu_distribution.mjs app/build";
+      return t
+        .replace(local, "__LOCAL_WEB_SWAP__")
+        .replace(candidate, local)
+        .replace("__LOCAL_WEB_SWAP__", candidate);
+    },
+  ],
+]) {
+  test("current-client rejects " + label, () => {
+    const original = currentClient.frontendText.replaceAll("\r\n", "\n");
+    const changed = mutate(original);
+    assert.notEqual(
+      changed,
+      original,
+      "Negative mutation must hit current workflow",
+    );
+    assert.throws(() =>
+      checkCurrentClientCi({ ...currentClient, frontendText: changed }),
+    );
+  });
+}
+
+test("current-client checks script coverage, non-mutating lint, runner failures and public-key prerequisite", () => {
+  for (const [name, value] of [
+    ["check:ci", "npm run test"],
+    ["lint:check", "eslint . --fix"],
+    ["typecheck:agent", "true"],
+    ["test", "vitest"],
+    ["build:prod", "true"],
+  ]) {
+    assert.throws(() =>
+      checkCurrentClientCi({
+        ...currentClient,
+        frontendPackage: {
+          ...currentClient.frontendPackage,
+          scripts: { ...currentClient.frontendPackage.scripts, [name]: value },
+        },
+      }),
+    );
+  }
+  assert.throws(() =>
+    checkCurrentClientCi({
+      ...currentClient,
+      buildCiSource: currentClient.buildCiSource.replace(
+        "process.exitCode = 1",
+        "process.exitCode = 0",
+      ),
+    }),
+  );
+  assert.throws(() =>
+    checkCurrentClientCi({
+      ...currentClient,
+      rollupSource: currentClient.rollupSource.replace(
+        "expectedDfxVersion: dfxBuildVersion",
+        "expectedDfxVersion: undefined",
+      ),
+    }),
+  );
+  assert.throws(() =>
+    checkCurrentClientCi({ ...currentClient, ci: true, runtime: "24.0.0" }),
+  );
+  assert.equal(
+    checkCurrentClientCi({
+      ...currentClient,
+      ci: true,
+      runtime: FEATURE_CI_NODE_VERSION,
+    }).runtimeChecked,
+    true,
+  );
+});
 const rustWorkflowKey = slice === "pr1" ? "model" : "security";
 for (const [label, mutate] of [
   [
@@ -469,7 +733,7 @@ const check = (workflows = safe, extra = {}) =>
   checkFeatureCi({ slice, workflows, ...extra });
 
 test("the actual frontend workflow executes all offline feature helpers without advisory queries", () => {
-  assert.deepEqual(checkOfflineFeatureHelpers(actual.frontend), [
+  assert.deepEqual(checkCurrentOfflineHelpers(actual.frontend), [
     "scripts/npm_feature_scope.test.mjs",
     "scripts/npm_feature_seed_review.test.mjs",
     "scripts/npm_feature_advisories.test.mjs",
@@ -500,7 +764,7 @@ for (const file of OFFLINE_FEATURE_HELPER_TESTS) {
       expected.replace(file, ""),
     );
     assert.notEqual(changed, actual.frontend);
-    assert.throws(() => checkOfflineFeatureHelpers(changed));
+    assert.throws(() => checkCurrentOfflineHelpers(changed));
   });
 }
 
@@ -534,7 +798,7 @@ for (const [label, transform] of [
     assert(step);
     const changed = text.replace(step, transform(step));
     assert.notEqual(changed, text);
-    assert.throws(() => checkOfflineFeatureHelpers(changed));
+    assert.throws(() => checkCurrentOfflineHelpers(changed));
   });
 }
 
@@ -551,7 +815,7 @@ test("offline CI rejects inherited workflow and job shell overrides", () => {
   ]) {
     assert.notEqual(changed, actual.frontend);
     assert.throws(
-      () => checkOfflineFeatureHelpers(changed),
+      () => checkCurrentOfflineHelpers(changed),
       /inherited helper/,
     );
   }
@@ -576,12 +840,12 @@ for (const [style, comment] of [
         command;
       const changed = actual.frontend.replace("run: " + command, block);
       assert.notEqual(changed, actual.frontend);
-      assert.throws(() => checkOfflineFeatureHelpers(changed));
+      assert.throws(() => checkCurrentOfflineHelpers(changed));
     },
   );
 }
 
-test("current feature workflow structure passes after replacing legacy broad entrypoints", () => {
+test("explicit historical frontend fixture retains legacy feature structure acceptance", () => {
   assert.deepEqual(check(), {
     pass: true,
     slice,
@@ -786,9 +1050,15 @@ for (const [label, mutate] of [
       ),
   ],
 ]) {
-  test("rejects " + label, () =>
-    assert.throws(() => check({ ...safe, frontend: mutate(safe.frontend) })),
-  );
+  test("rejects " + label, () => {
+    const changed = mutate(safe.frontend);
+    assert.notEqual(
+      changed,
+      safe.frontend,
+      "Mutation must hit the historical fixture",
+    );
+    assert.throws(() => check({ ...safe, frontend: changed }));
+  });
 }
 
 test("missing/unknown workflow scope cannot silently shrink coverage", () => {

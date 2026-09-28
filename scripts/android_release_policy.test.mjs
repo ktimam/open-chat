@@ -760,6 +760,21 @@ test("Gradle requires configured release signing when CI requests it", () => {
   assert.doesNotMatch(gradle, /configuredRelease|debugRelease|"ANDROID_KEY/u);
 });
 
+function assertDistinctLocalTestApplicationId(gradle) {
+  assert.match(
+    gradle,
+    /val unofficialLocalTest = System\.getenv\("OC_UNOFFICIAL_LOCAL_APK"\) == "true"/u,
+  );
+  assert.match(
+    gradle,
+    /val localTestApplicationId = "dev\.openchatfork\.localtest"/u,
+  );
+  assert.match(
+    gradle,
+    /applicationId = if \(unofficialLocalTest\) localTestApplicationId else "com\.oclabs\.openchat"/u,
+  );
+}
+
 test("Gradle and policy share production identity, version formula and local RP-ID checks", () => {
   const gradle = readFileSync(
     new URL(
@@ -769,7 +784,26 @@ test("Gradle and policy share production identity, version formula and local RP-
     "utf8",
   );
   assert.match(gradle, /namespace = "com\.oclabs\.openchat"/u);
-  assert.match(gradle, /applicationId = "com\.oclabs\.openchat"/u);
+  assertDistinctLocalTestApplicationId(gradle);
+  for (const mutant of [
+    gradle.replace(
+      'System.getenv("OC_UNOFFICIAL_LOCAL_APK") == "true"',
+      "true",
+    ),
+    gradle.replace(
+      'val localTestApplicationId = "dev.openchatfork.localtest"',
+      'val localTestApplicationId = "com.oclabs.openchat"',
+    ),
+    gradle.replace(
+      'applicationId = if (unofficialLocalTest) localTestApplicationId else "com.oclabs.openchat"',
+      'applicationId = "com.oclabs.openchat"',
+    ),
+    gradle.replace(
+      'else "com.oclabs.openchat"',
+      'else "dev.openchatfork.localtest"',
+    ),
+  ])
+    assert.throws(() => assertDistinctLocalTestApplicationId(mutant));
   assert.doesNotMatch(gradle, /com\.oc\.app/u);
   const expression = gradle.match(
     /val code = (major \* [\d_]+ \+ minor \* [\d_]+ \+ patch)/u,

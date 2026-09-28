@@ -53,16 +53,17 @@ function block(text, key, indentation) {
   return end < 0 ? rest : rest.slice(0, end);
 }
 
-function jobs(text) {
+function jobs(text, allowConditionalJobs = false) {
   const value = block(text, "jobs", 0);
   return new Map(
     [...value.matchAll(/^ {2}([a-z0-9-]+):[ \t]*$/gmu)].map(([, name]) => {
       const body = block(value, name, 2);
-      assert.doesNotMatch(
-        body,
-        /^ {4}(?:if|continue-on-error):/mu,
-        `Conditional/ignored feature job ${name}`,
-      );
+      if (!allowConditionalJobs)
+        assert.doesNotMatch(
+          body,
+          /^ {4}(?:if|continue-on-error):/mu,
+          `Conditional/ignored feature job ${name}`,
+        );
       return [name, body];
     }),
   );
@@ -427,8 +428,13 @@ export function checkNpmFeatureCi({
   };
 }
 
-function checkNodeAndInstalls(text, expectedNodeJobs, expectedInstallJobs) {
-  const inventory = jobs(text);
+function checkNodeAndInstalls(
+  text,
+  expectedNodeJobs,
+  expectedInstallJobs,
+  allowConditionalJobs = false,
+) {
+  const inventory = jobs(text, allowConditionalJobs);
   const nodeJobs = [];
   const installJobs = [];
   for (const [name, job] of inventory) {
@@ -534,13 +540,36 @@ function requireRoutes(text, required, unfiltered = false) {
 }
 
 /** Validate the real offline test step independently of unresolved advisory workflow gates. */
-export function checkOfflineFeatureHelpers(frontendText) {
+export function checkOfflineFeatureHelpers(
+  frontendText,
+  { topology = "historical" } = {},
+) {
+  assert(
+    ["historical", "current-client"].includes(topology),
+    "Unknown frontend topology",
+  );
   frontendText = frontendText.replaceAll("\r\n", "\n");
-  const frontend = jobs(frontendText).get("install-and-test");
+  const current = topology === "current-client";
+  const inventory = jobs(frontendText, current);
+  const frontend = inventory.get(current ? "build" : "install-and-test");
   assert(frontend, "Missing frontend job");
+  if (current) {
+    assert.deepEqual(
+      [...frontend.matchAll(/^ {4}if: (.+)$/gmu)].map((m) => m[1]),
+      ["needs.changes.outputs.frontend == 'true'"],
+      "Exact current helper job condition",
+    );
+    assert.doesNotMatch(
+      frontend,
+      /^ {4}continue-on-error:/mu,
+      "Helper job failure cannot be ignored",
+    );
+  }
   for (const [text, indentation] of [
     [frontendText, 0],
-    [frontend, 4],
+    ...(current
+      ? [...inventory.values()].map((job) => [job, 4])
+      : [[frontend, 4]]),
   ]) {
     if (new RegExp("^ {" + indentation + "}defaults:", "mu").test(text)) {
       const defaults = block(text, "defaults", indentation);
@@ -578,6 +607,316 @@ export function checkOfflineFeatureHelpers(frontendText) {
     "Do not override helper test failure handling",
   );
   return [...OFFLINE_FEATURE_HELPER_TESTS];
+}
+
+export const CURRENT_CLIENT_RESULTS_COMMAND = [
+  'if [ "$CHANGES_RESULT" != "success" ]; then',
+  '  echo "The change detection job did not succeed ($CHANGES_RESULT)"',
+  "  exit 1",
+  "fi",
+  'if [ "$FRONTEND_CHANGED" != "true" ]; then',
+  '  echo "No frontend changes"',
+  "  exit 0",
+  "fi",
+  "for result in $ALL_RESULTS; do",
+  '  if [ "$result" != "success" ]; then',
+  '    echo "Not every job succeeded: $ALL_RESULTS"',
+  "    exit 1",
+  "  fi",
+  "done",
+  'echo "All jobs passed"',
+].join("\n");
+
+export const CURRENT_CLIENT_LOCAL_WEB_COMMAND = [
+  'unofficial_output="$(mktemp -d "${RUNNER_TEMP:?}/openchat-unofficial-web.XXXXXX")"',
+  'node scripts/build-unofficial-local-web.mjs --output "$unofficial_output" --port 5194 --layout v2',
+  'node --input-type=module -e \'import { loadLocalWebBuild } from "./scripts/preview-unofficial-local-web.mjs"; loadLocalWebBuild(process.argv[1]);\' "$unofficial_output"',
+  'node scripts/verify_webgpu_distribution.mjs "$unofficial_output"',
+].join("\n");
+
+/** Current fork topology only. Historical advisory/source scopes are not accepted here. */
+export function checkCurrentClientCi({
+  frontendText,
+  frontendPackage,
+  buildCiSource,
+  dfxVersion,
+  rollupSource,
+  runtime = process.versions.node,
+  ci = false,
+}) {
+  if (ci) assert.equal(runtime, FEATURE_CI_NODE_VERSION, "CI Node runtime pin");
+  const text = frontendText.replaceAll("\r\n", "\n");
+  const inventory = checkNodeAndInstalls(
+    text,
+    ["checks", "build"],
+    ["checks", "build"],
+    true,
+  );
+  assert.deepEqual(
+    [...inventory.keys()].sort(),
+    ["build", "changes", "checks", "install-and-test"],
+    "Current split frontend jobs",
+  );
+  requireRoutes(
+    text,
+    { pull_request: ["main"], push: ["main"], merge_group: ["main"] },
+    true,
+  );
+  assert.doesNotMatch(
+    text,
+    /^defaults:/mu,
+    "No workflow-wide execution override",
+  );
+  assert.doesNotMatch(
+    inventory.get("changes"),
+    /^ {4}(?:if|continue-on-error):/mu,
+    "Change detection must run",
+  );
+  for (const path of ["Cargo.lock", "rust-toolchain.toml", "dfx.json"]) {
+    assert(
+      inventory
+        .get("changes")
+        .split("\n")
+        .includes(`              - "${path}"`),
+      "Current build-input change route missing: " + path,
+    );
+  }
+  for (const name of ["checks", "build"]) {
+    const job = inventory.get(name);
+    assert.match(
+      job,
+      /^ {4}needs: changes$/mu,
+      "Split job needs change detection",
+    );
+    assert.deepEqual(
+      [...job.matchAll(/^ {4}if: (.+)$/gmu)].map((m) => m[1]),
+      ["needs.changes.outputs.frontend == 'true'"],
+      "Exact frontend change condition",
+    );
+    assert.doesNotMatch(
+      job,
+      /^ {4}continue-on-error:/mu,
+      "Split job failure cannot be ignored",
+    );
+    assert.match(
+      block(job, "defaults", 4),
+      /^ {8}working-directory: frontend$/mu,
+      "Frontend job directory",
+    );
+    assert.doesNotMatch(job, /\bshell:/u, "No current-client shell override");
+  }
+  const scripts = frontendPackage.scripts;
+  assert.equal(
+    scripts["check:ci"],
+    "npm run lint:check && node ./build-ci.mjs typecheck typecheck:agent test",
+    "All check:ci contracts must execute",
+  );
+  assert.equal(
+    scripts["lint:check"],
+    "eslint .",
+    "CI lint must be non-mutating",
+  );
+  assert.equal(
+    scripts.typecheck,
+    "svelte-check --tsconfig ./app/tsconfig.json --threshold error",
+  );
+  assert.equal(
+    scripts["typecheck:agent"],
+    "tsc --noEmit -p openchat-agent/tsconfig.json",
+  );
+  assert.equal(scripts.test, "vitest --run");
+  assert.equal(scripts["build:prod"], "cd app && sh ./build_prod.sh");
+  for (const fragment of [
+    'spawn("npm", ["run", script]',
+    "code: 1",
+    "code: code ?? 1",
+    "results.filter((r) => r.code !== 0)",
+    "if (failed.length > 0)",
+    "process.exitCode = 1",
+  ])
+    assert(
+      buildCiSource.includes(fragment),
+      "Missing concurrent failure propagation: " + fragment,
+    );
+  assert.doesNotMatch(
+    buildCiSource,
+    /process\.exitCode\s*=\s*0|process\.exit\(0\)/u,
+    "Runner cannot override failures",
+  );
+  const checks = inventory.get("checks"),
+    build = inventory.get("build");
+  const requireFrontendCommand = (job, expected, label) => {
+    requiredCommand(job, (value) => value === expected, label);
+    const step = commands(job).find((item) => item.command === expected).step;
+    assert.doesNotMatch(
+      step,
+      /^(?:working-directory:| {8}working-directory:)/mu,
+      "Frontend gate must inherit its verified job directory",
+    );
+  };
+  requireFrontendCommand(
+    checks,
+    "npm run check:ci",
+    "split lint/typecheck/test gate",
+  );
+  requireFrontendCommand(
+    build,
+    "npm run build:prod",
+    "default production build",
+  );
+  requiredCommand(
+    build,
+    (value) => value === "node scripts/check_feature_ci.mjs current-client",
+    "current-client topology gate",
+  );
+  checkOfflineFeatureHelpers(text, { topology: "current-client" });
+  const candidate =
+    "npm run build:prod\nnode ../scripts/verify_webgpu_distribution.mjs app/build";
+  requireFrontendCommand(
+    build,
+    candidate,
+    "qualified WebGPU candidate build and byte verification",
+  );
+  const candidateStep = commands(build).find(
+    (item) => item.command === candidate,
+  ).step;
+  assert.match(
+    candidateStep,
+    /^ {8}run: \|$/mu,
+    "Candidate must use literal command lines",
+  );
+  assert.match(
+    candidateStep,
+    /^ {10}OC_TRANSFORMERS_WEBGPU_IMAGE_SPIKE: "true"$/mu,
+  );
+  assert.match(
+    candidateStep,
+    /^ {10}OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY: immutable-hub-v1$/mu,
+  );
+  requiredCommand(
+    build,
+    (value) => value === CURRENT_CLIENT_LOCAL_WEB_COMMAND,
+    "optimized unofficial local web build and artifact verification",
+  );
+  const localWebStep = commands(build).find(
+    (item) => item.command === CURRENT_CLIENT_LOCAL_WEB_COMMAND,
+  ).step;
+  assert.match(localWebStep, /^ {8}run: \|$/mu);
+  assert.deepEqual(
+    [...localWebStep.matchAll(/^ {8}working-directory: (.+)$/gmu)].map(
+      (match) => match[1],
+    ),
+    ["."],
+    "Optimized local web build must run from the repository root",
+  );
+  assert.doesNotMatch(
+    localWebStep,
+    /^(?:env:|shell:| {8}(?:env|shell):)/mu,
+    "No local web profile or shell override",
+  );
+  const dfx = steps(build).filter((step) =>
+    /uses: dfinity\/setup-dfx@/u.test(step),
+  );
+  assert.equal(dfx.length, 1, "One pinned dfx prerequisite");
+  assert.match(
+    dfx[0],
+    /^ {8}uses: dfinity\/setup-dfx@e50c04f104ee4285ec010f10609483cf41e4d365$/mu,
+  );
+  assert.match(
+    dfx[0],
+    new RegExp(
+      `^ {10}dfx-version: "${dfxVersion.replaceAll(".", "\\.")}"$`,
+      "mu",
+    ),
+  );
+  assert.doesNotMatch(
+    dfx[0],
+    /\bif:|\bcontinue-on-error:/u,
+    "dfx setup must execute",
+  );
+  requireFrontendCommand(build, "dfx --version", "dfx availability check");
+  const sequence = steps(build);
+  const stepIndex = (command) =>
+    sequence.findIndex((step) => runs(step).includes(command));
+  assert(
+    stepIndex("npm ci --no-audit") < stepIndex("dfx --version") &&
+      sequence.indexOf(dfx[0]) < stepIndex("dfx --version") &&
+      stepIndex("dfx --version") < stepIndex("npm run build:prod") &&
+      stepIndex("npm run build:prod") < stepIndex(candidate) &&
+      stepIndex(candidate) < stepIndex(CURRENT_CLIENT_LOCAL_WEB_COMMAND),
+    "Install/dfx/default/candidate/optimized local web build order",
+  );
+  assert(
+    stepIndex("node scripts/check_feature_ci.mjs current-client") <
+      stepIndex("npm run build:prod"),
+    "Offline topology check must precede builds",
+  );
+  for (const fragment of [
+    "publicKeyBuildPlugin({",
+    "expectedDfxVersion: dfxBuildVersion",
+    "canister: process.env.OC_USER_INDEX_CANISTER",
+    "queryPublicKey: queryOfficialUserIndexPublicKey",
+  ]) {
+    assert(
+      rollupSource.includes(fragment),
+      "Production public-key build prerequisite missing: " + fragment,
+    );
+  }
+  const gate = inventory.get("install-and-test");
+  assert.match(
+    gate,
+    /^ {4}needs: \[changes, checks, build\]$/mu,
+    "Required gate must cover all current jobs",
+  );
+  assert.deepEqual(
+    [...gate.matchAll(/^ {4}if: (.+)$/gmu)].map((m) => m[1]),
+    ["always()"],
+  );
+  assert.doesNotMatch(gate, /^ {4}continue-on-error:/mu);
+  assert.match(
+    gate,
+    /^ {6}CHANGES_RESULT: \$\{\{ needs\.changes\.result \}\}$/mu,
+  );
+  assert.match(
+    gate,
+    /^ {6}FRONTEND_CHANGED: \$\{\{ needs\.changes\.outputs\.frontend \}\}$/mu,
+  );
+  assert.match(
+    gate,
+    /^ {6}ALL_RESULTS: \$\{\{ join\(needs\.\*\.result, ' '\) \}\}$/mu,
+  );
+  assert.equal(
+    commands(gate).length,
+    1,
+    "Only the required result gate may decide status",
+  );
+  requiredCommand(
+    gate,
+    (value) => value === CURRENT_CLIENT_RESULTS_COMMAND,
+    "failure-propagating final status gate",
+  );
+  return {
+    pass: true,
+    mode: "current-client",
+    runtimeChecked: ci,
+    nodeVersion: FEATURE_CI_NODE_VERSION,
+    securityScopeAcceptance: false,
+    unresolvedSecurityModes: ["pr1", "pr2"],
+    advisoryAcceptance: false,
+    buildExecuted: false,
+    releaseAcceptance: false,
+  };
+}
+
+export function readCurrentClientInputs(repositoryRoot) {
+  const read = (name) => readFileSync(resolve(repositoryRoot, name), "utf8");
+  return {
+    frontendText: read(".github/workflows/frontend.yaml"),
+    frontendPackage: JSON.parse(read("frontend/package.json")),
+    buildCiSource: read("frontend/build-ci.mjs"),
+    dfxVersion: JSON.parse(read("dfx.json")).dfx,
+    rollupSource: read("frontend/app/rollup.config.mjs"),
+  };
 }
 
 /** Offline CI structure/coverage contract only; no baseline, dependency graph, advisory or build execution. */
@@ -803,17 +1142,28 @@ if (
   assert.equal(
     process.argv.length,
     3,
-    "Usage: node scripts/check_feature_ci.mjs pr1|pr2|npm-pr1|npm-pr2",
+    "Usage: node scripts/check_feature_ci.mjs current-client|pr1|pr2|npm-pr1|npm-pr2",
   );
-  const npmOnly = process.argv[2].startsWith("npm-");
-  const slice = npmOnly ? process.argv[2].slice(4) : process.argv[2];
-  console.log(
-    JSON.stringify(
-      (npmOnly ? checkNpmFeatureCi : checkFeatureCi)({
-        slice,
-        workflows: readFeatureWorkflows(root, slice),
-        ci: process.env.CI === "true",
-      }),
-    ),
-  );
+  if (process.argv[2] === "current-client") {
+    console.log(
+      JSON.stringify(
+        checkCurrentClientCi({
+          ...readCurrentClientInputs(root),
+          ci: process.env.CI === "true",
+        }),
+      ),
+    );
+  } else {
+    const npmOnly = process.argv[2].startsWith("npm-");
+    const slice = npmOnly ? process.argv[2].slice(4) : process.argv[2];
+    console.log(
+      JSON.stringify(
+        (npmOnly ? checkNpmFeatureCi : checkFeatureCi)({
+          slice,
+          workflows: readFeatureWorkflows(root, slice),
+          ci: process.env.CI === "true",
+        }),
+      ),
+    );
+  }
 }

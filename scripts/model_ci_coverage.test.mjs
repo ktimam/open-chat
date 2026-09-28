@@ -122,7 +122,8 @@ function assertAndroidDevFrontendGate(text) {
   const events = mappingBlock(text, "on", 0);
   for (const [event, branch] of [
     ["pull_request", "master"],
-    ["push", "codex/pr1-local-models"],
+    ["pull_request", "main"],
+    ["push", "main"],
   ]) {
     const trigger = mappingBlock(events, event, 2);
     assert.deepEqual(
@@ -140,12 +141,10 @@ function assertAndroidDevFrontendGate(text) {
       });
     assert.ok(branches.includes(branch), event + " must cover " + branch);
   }
-  const job = mappingBlock(
-    mappingBlock(text, "jobs", 0),
-    "install-and-test",
-    2,
-  );
-  assert.doesNotMatch(job, /^ {4}(?:if|continue-on-error):/mu);
+  const job = mappingBlock(mappingBlock(text, "jobs", 0), "build", 2);
+  assert.match(job, /^ {4}needs: changes$/mu);
+  assert.match(job, /^ {4}if: needs\.changes\.outputs\.frontend == 'true'$/mu);
+  assert.doesNotMatch(job, /^ {4}continue-on-error:/mu);
   const defaults = mappingBlock(mappingBlock(job, "defaults", 4), "run", 6);
   assert.match(defaults, /^ {8}working-directory: frontend[ \t]*\r?$/mu);
   assert.doesNotMatch(defaults, /^ {8}shell:/mu);
@@ -193,7 +192,7 @@ function assertAndroidDevFrontendGate(text) {
   ]) {
     assert.equal(files.filter((file) => file === required).length, 1, required);
   }
-  return { install, policy };
+  return { install, policy, job };
 }
 
 test("frontend CI executes Android launcher regressions after installation on unfiltered PR and published-branch events", () => {
@@ -212,10 +211,13 @@ test("Android launcher CI coverage rejects missing, commented, misplaced and non
         "run: node --test ",
         "run: node --test scripts/android_dev.test.mjs ",
       );
-  const { install, policy } = assertAndroidDevFrontendGate(positive);
+  const { install, policy, job } = assertAndroidDevFrontendGate(positive);
   const mutants = [
     positive.replace(" scripts/android_dev.test.mjs", ""),
-    positive.replace("run: node --test ", "# run: node --test "),
+    positive.replace(
+      policy,
+      policy.replace("run: node --test ", "# run: node --test "),
+    ),
     positive.replace(
       policy,
       policy.replace("working-directory: .", "working-directory: frontend"),
@@ -236,8 +238,12 @@ test("Android launcher CI coverage rejects missing, commented, misplaced and non
     ),
     positive.replace(policy, policy + "        shell: bash {0}\n"),
     positive.replace(
-      "    runs-on:",
-      "    continue-on-error: true\n    runs-on:",
+      job,
+      job.replace("    runs-on:", "    continue-on-error: true\n    runs-on:"),
+    ),
+    positive.replace(
+      job,
+      job.replace("if: needs.changes.outputs.frontend == 'true'", "if: false"),
     ),
     positive.replace(
       "  pull_request:\n",
@@ -248,10 +254,13 @@ test("Android launcher CI coverage rejects missing, commented, misplaced and non
       '  push:\n    paths-ignore: ["scripts/**"]\n',
     ),
     positive.replace("      - master\n", "      - other-branch\n"),
-    positive.replaceAll("      - codex/pr1-local-models\n", ""),
+    positive.replaceAll("      - main\n", ""),
     positive.replace(
-      "        run: npm ci --no-audit",
-      "        # run: npm ci --no-audit",
+      install,
+      install.replace(
+        "        run: npm ci --no-audit",
+        "        # run: npm ci --no-audit",
+      ),
     ),
   ];
   for (const [index, mutant] of mutants.entries()) {
@@ -293,7 +302,8 @@ function assertAuditFreeInstalls(text, expectedJobs) {
 
 test("automatic frontend installs explicitly disable implicit npm audits", () => {
   assertAuditFreeInstalls(read(".github/workflows/frontend.yaml"), [
-    "install-and-test",
+    "checks",
+    "build",
   ]);
   assertAuditFreeInstalls(workflow, [
     "dependency-policy",
@@ -344,7 +354,8 @@ function assertOptionalNodeDownloadsSkipped(text, expectedJobs, indent = 2) {
 
 test("feature installs skip unused ONNX Node GPU downloads without disabling lifecycle scripts", () => {
   assertOptionalNodeDownloadsSkipped(read(".github/workflows/frontend.yaml"), [
-    "install-and-test",
+    "checks",
+    "build",
   ]);
   assertOptionalNodeDownloadsSkipped(workflow, [
     "dependency-policy",
@@ -753,6 +764,67 @@ test("normal frontend CI runs this coverage regression as a policy test", () => 
   );
 });
 
+function requireUnofficialLocalBuild(frontend) {
+  const build = mappingBlock(mappingBlock(frontend, "jobs", 0), "build", 2);
+  const step = build
+    .split(
+      "- name: Build and verify the optimized unofficial local web client",
+    )[1]
+    ?.split(/\n {6}- /u)[0];
+  assert.ok(step, "missing actual unofficial profile build");
+  assert.doesNotMatch(step, /\bif:|\bcontinue-on-error:|\bshell:|\benv:/u);
+  assert.match(step, /^ {8}working-directory: \.$/mu);
+  assert.match(step, /^ {8}run: \|$/mu);
+  const lines = step
+    .split("run: |\n")[1]
+    .trimEnd()
+    .split("\n")
+    .map((line) => line.trim());
+  assert.deepEqual(lines, [
+    'unofficial_output="$(mktemp -d "${RUNNER_TEMP:?}/openchat-unofficial-web.XXXXXX")"',
+    'node scripts/build-unofficial-local-web.mjs --output "$unofficial_output" --port 5194 --layout v2',
+    `node --input-type=module -e 'import { loadLocalWebBuild } from "./scripts/preview-unofficial-local-web.mjs"; loadLocalWebBuild(process.argv[1]);' "$unofficial_output"`,
+    'node scripts/verify_webgpu_distribution.mjs "$unofficial_output"',
+  ]);
+  assert.ok(
+    build.indexOf("Build and verify the opt-in production WebGPU candidate") <
+      build.indexOf(
+        "Build and verify the optimized unofficial local web client",
+      ),
+  );
+  const changes = mappingBlock(mappingBlock(frontend, "jobs", 0), "changes", 2);
+  for (const filename of ["Cargo.lock", "rust-toolchain.toml", "dfx.json"])
+    assert.ok(
+      changes.includes(`- "${filename}"`),
+      `missing ${filename} policy trigger`,
+    );
+}
+
+test("frontend CI builds the actual optimized unofficial profile and verifies its artifact without deploy", () => {
+  const frontend = read(".github/workflows/frontend.yaml");
+  requireUnofficialLocalBuild(frontend);
+  for (const [from, to] of [
+    ["--layout v2", "--layout v1"],
+    ["--port 5194", "--port 8080"],
+    [
+      'mktemp -d "${RUNNER_TEMP:?}/openchat-unofficial-web.XXXXXX"',
+      "mktemp -d",
+    ],
+    ["loadLocalWebBuild(process.argv[1]);", "void process.argv[1];"],
+    [
+      'node scripts/verify_webgpu_distribution.mjs "$unofficial_output"',
+      "true",
+    ],
+    ...["Cargo.lock", "rust-toolchain.toml", "dfx.json"].map((name) => [
+      `- "${name}"`,
+      "# missing trigger",
+    ]),
+  ])
+    assert.throws(() =>
+      requireUnofficialLocalBuild(frontend.replace(from, to)),
+    );
+});
+
 test("legacy workspace commands and fixed filenames cannot replace prefix discovery", () => {
   const legacy =
     "jobs:\n  frontend-contracts:\n    steps:\n      - name: Run model tests\n        run: >-\n          npm --workspace app test --\n          src/utils/modelCatalog.spec.ts\n";
@@ -826,18 +898,23 @@ test("the frontend build runs a read-only lint check", () => {
   const manifest = JSON.parse(read("frontend/package.json"));
   assert.equal(manifest.scripts["lint:check"], "eslint .");
   assert.match(
-    manifest.scripts["build:ci"],
+    manifest.scripts["check:ci"],
     /(?:^|&&)\s*npm run lint:check(?:\s*&&|$)/u,
   );
   assert.doesNotMatch(manifest.scripts["build:ci"], /\bnpm run lint(?:\s|$)/u);
+  assert.doesNotMatch(manifest.scripts["check:ci"], /\bnpm run lint(?:\s|$)/u);
+  assert.equal(
+    manifest.scripts["build:ci"],
+    "npm run check:ci && npm run build:prod",
+  );
   assert.doesNotMatch(manifest.scripts["lint:check"], /--fix/u);
   assert.match(
     read(".github/workflows/frontend.yaml"),
-    /run: npm run build:ci/u,
+    /run: npm run check:ci/u,
   );
 });
 
-test("frontend policy invokes the exact combined PR and release regressions present in this checkout", () => {
+test("frontend policy invokes the exact current-client and retained release regressions", () => {
   const step = read(".github/workflows/frontend.yaml")
     .split("- name: Check PR and release policy regressions")[1]
     ?.split(/\n {6}- /u)[0];
@@ -846,14 +923,11 @@ test("frontend policy invokes the exact combined PR and release regressions pres
   assert.ok(command);
   const files = command[1].trim().split(/\s+/u);
   assert.deepEqual(files, [
-    "scripts/pr-ci-policy.test.mjs",
-    "scripts/app_model_integration.test.mjs",
-    "scripts/message_content_candid_contract.test.mjs",
+    "scripts/unofficial-client-ci.test.mjs",
     "scripts/validate_action_inbox_wiring.test.mjs",
     "scripts/android_release_policy.test.mjs",
     "scripts/android_release_checks.test.mjs",
     "scripts/release_preflight.test.mjs",
-    "scripts/upgrade_canister.test.mjs",
     "scripts/android_bundle.test.mjs",
     "scripts/android_build_prerequisites.test.mjs",
     "scripts/frontend_format_check.test.mjs",
@@ -917,20 +991,18 @@ test("CI separately builds and verifies the opt-in WebGPU production candidate",
     .split("- name: Build frontend")[1]
     ?.split(/\n {6}- /u)[0];
   assert.ok(standard);
-  assert.match(standard, /npm run build:ci/u);
+  assert.match(standard, /npm run build:prod/u);
   assert.doesNotMatch(standard, /OC_TRANSFORMERS_WEBGPU_/u);
-  assert.ok(frontend.indexOf("run: npm run build:ci") < frontend.indexOf(name));
+  assert.ok(
+    frontend.indexOf("run: npm run build:prod") < frontend.indexOf(name),
+  );
 });
 
-test("frontend checks cover both model and app-interface branches with read-only repository permissions", () => {
+test("frontend checks cover fork main with read-only repository permissions", () => {
   const frontend = read(".github/workflows/frontend.yaml");
   const events = mappingBlock(frontend, "on", 0);
   const push = mappingBlock(events, "push", 2);
-  for (const branch of [
-    "codex/pr1-local-models",
-    "codex/pr2-app-chat-interfaces",
-    "codex/pr2-clean-integration",
-  ]) {
+  for (const branch of ["main"]) {
     assert.match(push, new RegExp(`^ +- ${branch}\\r?$`, "mu"));
   }
   assert.match(
@@ -943,7 +1015,7 @@ test("frontend checks cover both model and app-interface branches with read-only
 test("frontend CI runs every scoped dependency contract against the frozen install", () => {
   const frontend = read(".github/workflows/frontend.yaml");
   const jobs = mappingBlock(frontend, "jobs", 0);
-  const job = mappingBlock(jobs, "install-and-test", 2);
+  const job = mappingBlock(jobs, "build", 2);
   const stepName = "- name: Verify narrowly scoped dependency compatibility";
   const step = job.split(stepName)[1]?.split(/\n {6}- /u)[0];
   assert.ok(step, "missing installed-parent compatibility step");
@@ -954,7 +1026,7 @@ test("frontend CI runs every scoped dependency contract against the frozen insta
   assert.deepEqual(commands, compatibilityScripts);
   const install = job.indexOf("run: npm ci");
   const compatibility = job.indexOf(stepName);
-  const build = job.indexOf("run: npm run build:ci");
+  const build = job.indexOf("run: npm run build:prod");
   assert.ok(install > 0 && compatibility > install && build > compatibility);
   assert.doesNotMatch(step, /continue-on-error|\|\|\s*true|--ignore-scripts/u);
   assert.doesNotMatch(job, /run: npm (?:install|update|audit fix)\b/u);

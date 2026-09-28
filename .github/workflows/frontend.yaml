@@ -28,13 +28,16 @@ concurrency:
 # one 4-core runner, where they contend for CPU) roughly doubles the wall-clock time.
 # `install-and-test` at the bottom is the required status check; it gates on both.
 jobs:
-  # Backend-only PRs have nothing here to check. `install-and-test` is a required status check,
+  # Backend changes run the unchanged-official-backend identity guard too. `install-and-test` is a required status check,
   # so it must still run on every PR (a workflow-level `paths:` filter would leave the check
   # pending and the PR unmergeable); instead the jobs skip themselves when nothing they depend on
   # changed, and the gate passes. This mirrors the `changes` job in backend.yaml.
   changes:
     name: detect frontend changes
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       frontend: ${{ steps.filter.outputs.frontend }}
     steps:
@@ -47,6 +50,18 @@ jobs:
               - "frontend/**"
               - "scripts/android_startup_order.test.mjs"
               - "scripts/build-unofficial-local-apk.test.mjs"
+              - "scripts/unofficial-local-web.test.mjs"
+              - "scripts/build-unofficial-local-web.mjs"
+              - "scripts/preview-unofficial-local-web.mjs"
+              - "scripts/start-unofficial-local.mjs"
+              # Policy/helper changes must execute the actual hosted offline gates too.
+              - "scripts/**"
+              - ".github/unofficial-client-baseline.json"
+              - "backend/**"
+              - "Cargo.toml"
+              - "Cargo.lock"
+              - "rust-toolchain.toml"
+              - "dfx.json"
               - ".prettierignore"
               - ".github/workflows/**"
 
@@ -121,9 +136,19 @@ jobs:
         working-directory: .
         run: node --test scripts/android_startup_order.test.mjs scripts/build-unofficial-local-apk.test.mjs
 
+      # Offline local fixtures and static contracts; no frontend/APK build or external requests.
+      - name: Check offline local web build and profile contracts
+        working-directory: .
+        run: node --test scripts/unofficial-local-web.test.mjs frontend/unofficialLocalWebBuild.test.mjs frontend/unofficialLocalProfile.test.mjs
+
       - name: Check PR and release policy regressions
         working-directory: .
-        run: node --test scripts/pr-ci-policy.test.mjs scripts/app_model_integration.test.mjs scripts/message_content_candid_contract.test.mjs scripts/validate_action_inbox_wiring.test.mjs scripts/android_release_policy.test.mjs scripts/android_release_checks.test.mjs scripts/release_preflight.test.mjs scripts/upgrade_canister.test.mjs scripts/android_bundle.test.mjs scripts/android_build_prerequisites.test.mjs scripts/frontend_format_check.test.mjs scripts/frontend_format_inherited.test.mjs scripts/android_dev.test.mjs scripts/verify_webgpu_distribution.test.mjs scripts/model_asset_notices.test.mjs scripts/sbom_lock_identity.test.mjs scripts/model_ci_coverage.test.mjs scripts/security_mode_scope.test.mjs
+        run: node --test scripts/unofficial-client-ci.test.mjs scripts/validate_action_inbox_wiring.test.mjs scripts/android_release_policy.test.mjs scripts/android_release_checks.test.mjs scripts/release_preflight.test.mjs scripts/android_bundle.test.mjs scripts/android_build_prerequisites.test.mjs scripts/frontend_format_check.test.mjs scripts/frontend_format_inherited.test.mjs scripts/android_dev.test.mjs scripts/verify_webgpu_distribution.test.mjs scripts/model_asset_notices.test.mjs scripts/sbom_lock_identity.test.mjs scripts/model_ci_coverage.test.mjs scripts/security_mode_scope.test.mjs
+
+      # The obsolete custom-backend contracts are superseded, not skipped; see docs/unofficial-ci-migration.md.
+      - name: Check current unofficial client CI topology
+        working-directory: .
+        run: node scripts/check_feature_ci.mjs current-client
 
       # Pure local fixtures only: no advisory requests, installs, or live model runs.
       - name: Check offline feature inventory and CI contracts
@@ -171,6 +196,15 @@ jobs:
           OC_VAPID_PUBLIC_KEY: DUMMY_VAPID_PUBLIC_KEY
           OC_TRANSFORMERS_WEBGPU_IMAGE_SPIKE: "true"
           OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY: immutable-hub-v1
+
+      # Package the actual client-only profile too; artifact checks only.
+      - name: Build and verify the optimized unofficial local web client
+        working-directory: .
+        run: |
+          unofficial_output="$(mktemp -d "${RUNNER_TEMP:?}/openchat-unofficial-web.XXXXXX")"
+          node scripts/build-unofficial-local-web.mjs --output "$unofficial_output" --port 5194 --layout v2
+          node --input-type=module -e 'import { loadLocalWebBuild } from "./scripts/preview-unofficial-local-web.mjs"; loadLocalWebBuild(process.argv[1]);' "$unofficial_output"
+          node scripts/verify_webgpu_distribution.mjs "$unofficial_output"
 
       - name: Save dependencies to cache
         if: ${{ github.ref == 'refs/heads/main' }}

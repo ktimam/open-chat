@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "profile": "unofficial-client-official-backend",
+  "upstreamCommit": "ef1d8ee08e539b48e0d24557a8450788db5de17f",
+  "backendTree": "7b0a2e51b5cc83be126f93d9a99ea387862384c9",
+  "rootCargoManifest": "1bc4d91ce9a5505ebfd6fa4382bf24594d074e02",
+  "upstreamDeploymentScripts": {
+    "scripts/upgrade-canister.sh": "598f8a08be46d6aa14802db9a6ac57f3b8ef6b70"
+  },
+  "historicalDeploymentWrappers": {
+    "scripts/upgrade-canister-local.sh": "f333398de4802b9f9be072f0f7fdd98c42515bdc",
+    "scripts/upgrade-canister-prod.sh": "e9503b3fdaae74a7b03613250e8d158f30982174",
+    "scripts/upgrade-canister-prod-test.sh": "ea5f45d8f1c4c1f047b7ab825f39d3859c34b229"
+  },
+  "securityScopeAcceptance": "unresolved-current-composition",
+  "retiredHostedContracts": [
+    "scripts/pr-ci-policy.test.mjs",
+    "scripts/app_model_integration.test.mjs",
+    "scripts/message_content_candid_contract.test.mjs",
+    "scripts/upgrade_canister.test.mjs"
+  ]
+}
