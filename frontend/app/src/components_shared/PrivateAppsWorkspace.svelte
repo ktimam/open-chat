@@ -18,9 +18,13 @@
     const editable = $derived(workspaceView.draft?.status === "draft" || workspaceView.draft?.status === "reviewed");
     const delivery = $derived($localAppDeliveryStatus?.importId === workspaceView.draft?.approval?.request.idempotencyKey ? $localAppDeliveryStatus : undefined);
     const pairing = $derived($nativeAppPairing?.importId === workspaceView.draft?.approval?.request.idempotencyKey ? $nativeAppPairing : undefined);
+    // Polling may replace a status object without changing its meaning. Reset consent only
+    // when this primitive scope changes, not on every identical native receipt poll.
+    const retryConsentScope = $derived(JSON.stringify([accountReady, workspaceView.open, workspaceView.draft?.id,
+        workspaceView.draft?.approval?.approvalId, workspaceView.draft?.status, delivery?.status]));
 
     $effect(() => { workspaceView.draft?.revision; confirmed = false; });
-    $effect(() => { workspaceView.draft?.status; retryConfirmed = false; });
+    $effect(() => { retryConsentScope; retryConfirmed = false; });
     $effect(() => {
         const kind = $identityStateStore.kind;
         const account = $currentUserIdStore;
@@ -133,6 +137,10 @@
                     {#if workspaceView.draft.status === "uncertain" && workspaceView.draft.approval}
                         <label class="confirmation"><input type="checkbox" bind:checked={retryConfirmed} disabled={workspaceView.busy} /><span>I checked the receiving app. Retry exactly this reviewed request with the same import ID; a prior delivery may already have occurred.</span></label>
                         <button type="button" disabled={!retryConfirmed || workspaceView.busy} onclick={() => { const id = workspaceView.draft?.approval?.approvalId; if (retryConfirmed && id) { retryConfirmed = false; void workspace.retryUncertain(id); } }}>Retry the same reviewed request</button>
+                    {/if}
+                    {#if workspaceView.draft.status === "delivered" && workspaceView.draft.approval && delivery?.status !== "saved"}
+                        <label class="confirmation"><input type="checkbox" bind:checked={retryConfirmed} disabled={workspaceView.busy} /><span>I checked the receiving app; this request may already have been saved. Reopen the same reviewed request and import ID, using the same receiving account and destination. Choosing another account or destination may create a duplicate.</span></label>
+                        <button type="button" disabled={!retryConfirmed || workspaceView.busy} onclick={() => { const id = workspaceView.draft?.approval?.approvalId; if (retryConfirmed && id && delivery?.status !== "saved") { retryConfirmed = false; void workspace.reopenDelivered(id); } }}>Reopen the same reviewed request</button>
                     {/if}
                     <p class="small">Receiving an app handoff does not save an entry. Finish review and save in the app. Uncertain deliveries are never retried automatically.</p>
                     {#if delivery}

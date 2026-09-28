@@ -8,7 +8,8 @@ requests. Existing chat cards and their verification flags are not reused.
 ## Integration
 
 1. Create one store with a trusted delivery adapter and call `setAccount` on account
-   change/logout. The adapter is invoked only by explicit `confirm` or `retryUncertain`.
+   change/logout. The adapter is invoked only by explicit `confirm`, `retryUncertain`
+   or `reopenDelivered`.
 2. After local extraction, `create({ target, schema, payload })`. Target app ID, action
    ID, destination and recipient come from trusted user-approved app configuration,
    never model output. Supply a closed supported declarative schema; unsupported
@@ -44,6 +45,17 @@ automatically call delivery. The user can explicitly retry an uncertain outcome;
 the same frozen request and idempotency key are retained. The app must deduplicate
 that key (a new handshake nonce does not mean a new import). Repeated confirmation
 and retry clicks are locked synchronously.
+
+If the app acknowledged receipt but its review page was lost before saving,
+`reopenDelivered` is a separate explicit operation. Ordinary `confirm` and
+`retryUncertain` remain blocked for acknowledged drafts. The workspace checks the
+current app save report again before reopening; the UI requires fresh consent
+after the user checks for an existing save. The same frozen approval and import
+ID are reused, without extraction or inference. Delivery adapters cancel the old
+attempt and create a fresh transport binding; old status callbacks cannot affect
+the replacement. Users must choose the same receiving account and destination:
+an app's deduplication may be scoped to that destination, not global. Receipt is
+still not saving, and no reconnect or rendering callback initiates reopening.
 
 Calling `setAccount` with the same account during a connection refresh preserves
 drafts. A real account change/logout or `clear` discards them and aborts pending

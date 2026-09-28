@@ -426,13 +426,20 @@ export class LocalAppDraftStore {
     }
 
     confirm(id: string, approvalId: string): Promise<LocalDraftConfirmationResult> {
-        return this.#dispatch(id, approvalId, false);
+        return this.#dispatch(id, approvalId, "reviewed");
     }
 
     // Only a NEW explicit user choice after unknown outcome/reconnection may invoke this. Keep the
     // exact request and idempotency key; a generic reconnect callback must never call this itself.
     retryUncertain(id: string, approvalId: string): Promise<LocalDraftConfirmationResult> {
-        return this.#dispatch(id, approvalId, true);
+        return this.#dispatch(id, approvalId, "uncertain");
+    }
+
+    // Receipt is not saving. A NEW explicit choice may reopen an acknowledged handoff after
+    // the receiving page is lost. Keep the original review/key; never infer or prepare again.
+    // The host must first check the app's save report and warn about possible prior saving.
+    reopenDelivered(id: string, approvalId: string): Promise<LocalDraftConfirmationResult> {
+        return this.#dispatch(id, approvalId, "delivered");
     }
 
     cancel(id: string): { deliveryMayHaveOccurred: boolean } {
@@ -452,7 +459,7 @@ export class LocalAppDraftStore {
     async #dispatch(
         id: string,
         approvalId: string,
-        retry: boolean,
+        expectedStatus: "reviewed" | "uncertain" | "delivered",
     ): Promise<LocalDraftConfirmationResult> {
         const record = this.#drafts.get(id);
         const approval = record?.view.approval;
@@ -462,7 +469,7 @@ export class LocalAppDraftStore {
             approval === undefined ||
             approval.approvalId !== approvalId ||
             approval.revision !== record.view.revision ||
-            record.view.status !== (retry ? "uncertain" : "reviewed")
+            record.view.status !== expectedStatus
         )
             return { kind: "blocked" };
         // Lock synchronously before invoking the adapter: double clicks cannot dispatch twice.

@@ -1,4 +1,4 @@
-import { writable } from "svelte/store";
+import { get, writable } from "svelte/store";
 import {
   currentUserIdStore,
   type OpenChat,
@@ -30,6 +30,7 @@ import {
 import {
   deliverLocalAppViaRelay,
   cancelLocalAppHandoffs,
+  localAppDeliveryStatus,
 } from "./localAppRelayDelivery";
 import { nativeAppDelivery, nativeDeliveryAllowed } from "./nativeAppDelivery";
 
@@ -55,6 +56,7 @@ type Dependencies = {
   deliver: LocalDraftDelivery;
   nativeDeliver?: LocalDraftDelivery;
   cancelDelivery: () => void;
+  deliverySaved: (importId: string) => boolean;
 };
 export type PrivateAppProposalOptions = {
   stillCurrent: () => boolean;
@@ -442,28 +444,36 @@ export class PrivateAppWorkspace {
   }
 
   async confirm(approvalId: string): Promise<void> {
-    await this.#send(approvalId, false);
+    await this.#send(approvalId, "reviewed");
   }
 
   /** Separate user confirmation only: reuse the exact approved import ID and request. */
   async retryUncertain(approvalId: string): Promise<void> {
-    await this.#send(approvalId, true);
+    await this.#send(approvalId, "uncertain");
   }
 
-  async #send(approvalId: string, retry: boolean): Promise<void> {
+  /** Fresh explicit choice after checking the app; receipt alone does not establish saving. */
+  async reopenDelivered(approvalId: string): Promise<void> {
+    await this.#send(approvalId, "delivered");
+  }
+
+  async #send(approvalId: string, expectedStatus: "reviewed" | "uncertain" | "delivered"): Promise<void> {
     const draft = this.#state.draft;
     if (
       !draft ||
       this.#state.busy ||
-      draft.status !== (retry ? "uncertain" : "reviewed") ||
-      draft.approval?.approvalId !== approvalId
+      draft.status !== expectedStatus ||
+      draft.approval?.approvalId !== approvalId ||
+      (expectedStatus === "delivered" && this.deps.deliverySaved(draft.approval.request.idempotencyKey))
     )
       return;
     const epoch = this.#epoch;
     // confirm invokes the delivery adapter synchronously, keeping the user's popup gesture.
-    const pending = retry
-      ? this.#drafts.retryUncertain(draft.id, approvalId)
-      : this.#drafts.confirm(draft.id, approvalId);
+    const pending = expectedStatus === "delivered"
+      ? this.#drafts.reopenDelivered(draft.id, approvalId)
+      : expectedStatus === "uncertain"
+        ? this.#drafts.retryUncertain(draft.id, approvalId)
+        : this.#drafts.confirm(draft.id, approvalId);
     this.#set({
       busy: true,
       draft: this.#drafts.get(draft.id),
@@ -515,6 +525,10 @@ export const privateAppWorkspace = new PrivateAppWorkspace(
     verifyProcessor: verifyImportedLocalProcessor,
     deliver: deliverLocalAppViaRelay,
     nativeDeliver: nativeAppDelivery.deliver,
+    deliverySaved: (importId) => {
+      const delivery = get(localAppDeliveryStatus);
+      return delivery?.importId === importId && delivery.status === "saved";
+    },
     cancelDelivery: () => {
       cancelLocalAppHandoffs();
       nativeAppDelivery.cancelAll();

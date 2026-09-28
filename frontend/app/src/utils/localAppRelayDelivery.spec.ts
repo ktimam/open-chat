@@ -42,11 +42,12 @@ function fixture() {
     const nonce = channel.name.split(":")[1];
     const emit = (type: string, rest: object = {}) =>
         channel.onmessage?.({ data: { type, version: 1, sessionNonce: nonce, ...rest } });
-    return { channel, open, result, controller, listeners, emit };
+    return { channel, channels, nonce, open, result, controller, listeners, emit };
 }
 
 afterEach(() => {
     cancelLocalAppHandoffs();
+    vi.useRealTimers();
     vi.unstubAllGlobals();
 });
 
@@ -101,6 +102,145 @@ describe("confirmed local relay delivery lifecycle", () => {
         f.emit("relay-outcome", { outcome: "saved", importId: request.idempotencyKey });
         expect(get(localAppDeliveryStatus)?.status).toBe("received");
     });
+    it("starts a fresh relay only on an explicit second delivery of the same approved import", async () => {
+        vi.useFakeTimers();
+        const f = fixture();
+        f.emit("relay-ready");
+        f.emit("relay-outcome", { outcome: "received", importId: request.idempotencyKey });
+        expect(await f.result).toEqual({ kind: "delivered" });
+        expect(get(localAppDeliveryStatus)).toEqual({
+            importId: request.idempotencyKey,
+            status: "received",
+        });
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(f.open).toHaveBeenCalledTimes(1);
+        expect(f.channels).toHaveLength(1);
+        expect(f.channel.postMessage).toHaveBeenCalledTimes(1);
+        expect(f.channel.close).not.toHaveBeenCalled();
+
+        const retryController = new AbortController();
+        const retryResult = deliverLocalAppViaRelay(request, retryController.signal);
+        const retryChannel = f.channels[1];
+        const retryNonce = retryChannel.name.split(":")[1];
+        const emitRetry = (type: string, rest: object = {}) =>
+            retryChannel.onmessage?.({
+                data: { type, version: 1, sessionNonce: retryNonce, ...rest },
+            });
+        expect(f.channel.postMessage.mock.calls.map(([message]) => message)).toEqual([
+            { type: "relay-approved", version: 1, sessionNonce: f.nonce, request },
+            { type: "relay-cancel", version: 1, sessionNonce: f.nonce },
+        ]);
+        expect(f.channel.close).toHaveBeenCalledOnce();
+        expect(f.channels).toHaveLength(2);
+        expect(retryChannel).not.toBe(f.channel);
+        expect(retryChannel.name).not.toBe(f.channel.name);
+        expect(retryNonce).not.toBe(f.nonce);
+        expect(f.open).toHaveBeenCalledTimes(2);
+        expect(f.open.mock.calls[1][1]).toBe("_blank");
+        expect(new URLSearchParams(new URL(f.open.mock.calls[1][0]).hash.slice(1)).get("sessionNonce")).toBe(retryNonce);
+        expect(JSON.stringify(f.open.mock.calls)).not.toContain("SYNTHETIC_APPROVED_MARKER");
+        expect(retryChannel.postMessage).not.toHaveBeenCalled();
+        for (const outcome of ["saved", "rejected"]) {
+            f.emit("relay-outcome", { outcome, importId: request.idempotencyKey });
+            expect(get(localAppDeliveryStatus)).toEqual({
+                importId: request.idempotencyKey,
+                status: "opening",
+            });
+        }
+
+        emitRetry("relay-ready");
+        emitRetry("relay-ready");
+        expect(retryChannel.postMessage).toHaveBeenCalledTimes(1);
+        expect(retryChannel.postMessage.mock.calls[0][0]).toEqual({
+            type: "relay-approved",
+            version: 1,
+            sessionNonce: retryNonce,
+            request,
+        });
+        expect(retryChannel.postMessage.mock.calls[0][0].request).toBe(request);
+        emitRetry("relay-outcome", { outcome: "received", importId: request.idempotencyKey });
+        expect(await retryResult).toEqual({ kind: "delivered" });
+        for (const outcome of ["saved", "rejected"]) {
+            f.emit("relay-outcome", { outcome, importId: request.idempotencyKey });
+            expect(get(localAppDeliveryStatus)?.status).toBe("received");
+        }
+        emitRetry("relay-outcome", { outcome: "saved", importId: request.idempotencyKey });
+        expect(get(localAppDeliveryStatus)?.status).toBe("saved");
+        f.emit("relay-outcome", { outcome: "rejected", importId: request.idempotencyKey });
+        f.emit("relay-ready");
+        emitRetry("relay-ready");
+        await vi.advanceTimersByTimeAsync(10 * 60_000);
+        expect(get(localAppDeliveryStatus)?.status).toBe("saved");
+        expect(retryChannel.postMessage.mock.calls.map(([message]) => message.type)).toEqual([
+            "relay-approved",
+            "relay-cancel",
+        ]);
+        expect(retryChannel.close).toHaveBeenCalledOnce();
+        expect(f.channel.close).toHaveBeenCalledOnce();
+        expect(f.channel.postMessage).toHaveBeenCalledTimes(2);
+        expect(f.open).toHaveBeenCalledTimes(2);
+        expect(f.channels).toHaveLength(2);
+        expect(f.listeners.has("pagehide")).toBe(false);
+    });
+    it.each(["abort", "account teardown"] as const)(
+        "cannot revive either attempt after explicit same-import redelivery and %s",
+        async (teardown) => {
+            vi.useFakeTimers();
+            const f = fixture();
+            f.emit("relay-ready");
+            f.emit("relay-outcome", { outcome: "received", importId: request.idempotencyKey });
+            expect(await f.result).toEqual({ kind: "delivered" });
+            const retryController = new AbortController();
+            const retryResult = deliverLocalAppViaRelay(request, retryController.signal);
+            const retryChannel = f.channels[1];
+            const retryNonce = retryChannel.name.split(":")[1];
+            const emitRetry = (type: string, rest: object = {}) =>
+                retryChannel.onmessage?.({
+                    data: { type, version: 1, sessionNonce: retryNonce, ...rest },
+                });
+            expect(retryNonce).not.toBe(f.nonce);
+            expect(f.channel.close).toHaveBeenCalledOnce();
+            expect(f.channel.postMessage.mock.calls.at(-1)?.[0]).toEqual({
+                type: "relay-cancel", version: 1, sessionNonce: f.nonce,
+            });
+            emitRetry("relay-ready");
+            expect(retryChannel.postMessage.mock.calls[0][0].request).toBe(request);
+            if (teardown === "account teardown") {
+                emitRetry("relay-outcome", { outcome: "received", importId: request.idempotencyKey });
+                expect(await retryResult).toEqual({ kind: "delivered" });
+                cancelLocalAppHandoffs();
+            } else {
+                retryController.abort();
+                expect(await retryResult).toEqual({ kind: "uncertain" });
+            }
+            const expectedStatus = teardown === "account teardown"
+                ? undefined
+                : { importId: request.idempotencyKey, status: "uncertain" };
+            expect(get(localAppDeliveryStatus)).toEqual(expectedStatus);
+            expect(retryChannel.close).toHaveBeenCalledOnce();
+            for (const emit of [f.emit, emitRetry]) {
+                for (const outcome of ["saved", "rejected", "received"]) {
+                    emit("relay-outcome", { outcome, importId: request.idempotencyKey });
+                    expect(get(localAppDeliveryStatus)).toEqual(expectedStatus);
+                }
+                emit("relay-ready");
+            }
+            f.channel.onmessageerror?.();
+            retryChannel.onmessageerror?.();
+            f.controller.abort();
+            await vi.advanceTimersByTimeAsync(10 * 60_000);
+            expect(get(localAppDeliveryStatus)).toEqual(expectedStatus);
+            for (const channel of f.channels) {
+                expect(channel.postMessage.mock.calls.map(([message]) => message.type)).toEqual([
+                    "relay-approved", "relay-cancel",
+                ]);
+                expect(channel.close).toHaveBeenCalledOnce();
+            }
+            expect(f.open).toHaveBeenCalledTimes(2);
+            expect(f.channels).toHaveLength(2);
+            expect(f.listeners.has("pagehide")).toBe(false);
+        },
+    );
     it("clears account-scoped monitoring and ignores a late saved claim", async () => {
         const f = fixture();
         f.emit("relay-ready");

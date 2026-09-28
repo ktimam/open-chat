@@ -24,6 +24,26 @@ function fixture() {
     return { deps, adapter: createNativeAppDelivery(deps), abort: new AbortController() };
 }
 const flush = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
+async function receivedReplacementFixture() {
+    const { adapter, deps, abort: previousAbort } = fixture();
+    const replacementStart = { ...start(), handoffId: "b".repeat(32),
+        pairingCode: "B".repeat(20), url: "http://localhost:41001/handoff" };
+    deps.begin.mockResolvedValueOnce(start()).mockResolvedValueOnce(replacementStart);
+    let finishPreviousPoll!: (result: LocalAppHandoffStatus) => void;
+    deps.poll.mockResolvedValueOnce(status("received"))
+        .mockImplementationOnce(() => new Promise(resolve => { finishPreviousPoll = resolve; }));
+    const previous = adapter.deliver(request, previousAbort.signal);
+    await flush();
+    await expect(previous).resolves.toEqual({ kind: "delivered" });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(deps.begin).toHaveBeenCalledOnce();
+    expect(deps.cancel).not.toHaveBeenCalled();
+    expect(deps.poll.mock.calls).toEqual([[start().handoffId], [start().handoffId]]);
+    const abort = new AbortController();
+    const pending = adapter.deliver(request, abort.signal);
+    await flush();
+    return { adapter, deps, previousAbort, abort, pending, replacementStart, finishPreviousPoll };
+}
 beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(now); });
 afterEach(() => { window.dispatchEvent(new Event("pagehide")); vi.useRealTimers(); vi.restoreAllMocks(); });
 
@@ -63,6 +83,69 @@ describe("native private draft delivery", () => {
         await vi.advanceTimersByTimeAsync(1_000);
         expect(deps.status).toHaveBeenLastCalledWith({ importId: request.idempotencyKey, status: "saved" });
         expect(deps.cancel).toHaveBeenCalledOnce();
+    });
+
+    it.each(["saved", "rejected"] as const)("replaces a received attempt only explicitly and ignores its late %s poll", async (latePhase) => {
+        const { adapter, deps, previousAbort, pending, replacementStart, finishPreviousPoll } = await receivedReplacementFixture();
+        expect(deps.begin.mock.calls).toEqual([
+            [{ approvedRequestJson: JSON.stringify(request) }],
+            [{ approvedRequestJson: JSON.stringify(request) }],
+        ]);
+        expect(deps.cancel).toHaveBeenCalledExactlyOnceWith(start().handoffId);
+        expect(get(adapter.pairing)).toMatchObject({ importId: request.idempotencyKey,
+            handoffId: replacementStart.handoffId, pairingCode: replacementStart.pairingCode,
+            url: replacementStart.url });
+        expect(deps.poll).toHaveBeenLastCalledWith(replacementStart.handoffId);
+        expect(deps.status).toHaveBeenLastCalledWith({ importId: request.idempotencyKey, status: "opening" });
+        previousAbort.abort();
+        expect(deps.cancel).toHaveBeenCalledOnce();
+        deps.poll.mockResolvedValueOnce(status("received"));
+        await vi.advanceTimersByTimeAsync(1_000);
+        await expect(pending).resolves.toEqual({ kind: "delivered" });
+        const statusCalls = deps.status.mock.calls.length;
+        finishPreviousPoll(status(latePhase));
+        await flush();
+        expect(deps.status).toHaveBeenCalledTimes(statusCalls);
+        expect(deps.status).toHaveBeenLastCalledWith({ importId: request.idempotencyKey, status: "received" });
+        expect(get(adapter.pairing)).toBeUndefined();
+        expect(deps.cancel).toHaveBeenCalledOnce();
+        deps.poll.mockResolvedValueOnce(status("saved"));
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(deps.status).toHaveBeenLastCalledWith({ importId: request.idempotencyKey, status: "saved" });
+        expect(deps.cancel.mock.calls).toEqual([[start().handoffId], [replacementStart.handoffId]]);
+        await vi.advanceTimersByTimeAsync(1_000_000);
+        expect(deps.begin).toHaveBeenCalledTimes(2);
+        expect(deps.copy).not.toHaveBeenCalled();
+        expect(deps.open).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        ["abort", "saved"], ["abort", "rejected"],
+        ["account", "saved"], ["account", "rejected"],
+    ] as const)("does not revive a same-ID replacement after %s teardown and late %s polls", async (teardown, latePhase) => {
+        const { adapter, deps, previousAbort, abort, pending, replacementStart, finishPreviousPoll } = await receivedReplacementFixture();
+        let finishReplacementPoll!: (result: LocalAppHandoffStatus) => void;
+        deps.poll.mockImplementationOnce(() => new Promise(resolve => { finishReplacementPoll = resolve; }));
+        await vi.advanceTimersByTimeAsync(1_000);
+        if (teardown === "abort") abort.abort();
+        else adapter.cancelAll();
+        await expect(pending).resolves.toEqual({ kind: "uncertain" });
+        const statusCalls = deps.status.mock.calls.length;
+        const pollCalls = deps.poll.mock.calls.length;
+        finishPreviousPoll(status(latePhase));
+        finishReplacementPoll(status(latePhase));
+        previousAbort.abort();
+        await flush();
+        await vi.advanceTimersByTimeAsync(1_000_000);
+        expect(get(adapter.pairing)).toBeUndefined();
+        expect(deps.status).toHaveBeenCalledTimes(statusCalls);
+        expect(deps.status).toHaveBeenLastCalledWith(teardown === "account" ? undefined :
+            { importId: request.idempotencyKey, status: "uncertain" });
+        expect(deps.cancel.mock.calls).toEqual([[start().handoffId], [replacementStart.handoffId]]);
+        expect(deps.poll).toHaveBeenCalledTimes(pollCalls);
+        expect(deps.begin).toHaveBeenCalledTimes(2);
+        expect(deps.copy).not.toHaveBeenCalled();
+        expect(deps.open).not.toHaveBeenCalled();
     });
 
     it("never automatically retries a rejected begin or reports private errors", async () => {

@@ -17,7 +17,7 @@ vi.mock("./privateAppWorkspace", async () => {
     const { writable } = await import("svelte/store");
     return { privateAppWorkspaceState: writable({}), privateAppWorkspace: {
         setAccount: vi.fn(), clear: vi.fn(), open: vi.fn(), close: vi.fn(), discard: vi.fn(),
-        retryUncertain: vi.fn(), confirm: vi.fn(),
+        retryUncertain: vi.fn(), reopenDelivered: vi.fn(), confirm: vi.fn(),
     } };
 });
 vi.mock("./nativeAppDelivery", async () => {
@@ -95,6 +95,49 @@ describe("native pairing and retry UI", () => {
         state.set(view("sending")); await tick(); state.set(view("uncertain")); await tick();
         expect(button("Retry the same reviewed request").disabled).toBe(true);
         expect(privateAppWorkspace.retryUncertain).toHaveBeenCalledOnce();
+    });
+
+    it.each([false, true])("reopens received-but-unsaved requests only after a fresh choice (native=%s)", async (native) => {
+        state.set(view("delivered")); localAppDeliveryStatus.set({ importId, status: "received" }); await render(native);
+        const reopen = button("Reopen the same reviewed request");
+        expect(reopen).toBeDefined(); expect(reopen.disabled).toBe(true);
+        expect(privateAppWorkspace.reopenDelivered).not.toHaveBeenCalled();
+        expect(target.textContent).toContain("same receiving account and destination");
+        (target.querySelector('input[type="checkbox"]') as HTMLInputElement).click(); await tick();
+        expect(reopen.disabled).toBe(false); reopen.click(); await tick();
+        expect(privateAppWorkspace.reopenDelivered).toHaveBeenCalledExactlyOnceWith(approvalId);
+        expect(reopen.disabled).toBe(true);
+        state.set(view("sending")); await tick(); state.set(view("delivered")); await tick();
+        expect(button("Reopen the same reviewed request").disabled).toBe(true);
+        expect(privateAppWorkspace.confirm).not.toHaveBeenCalled();
+        expect(privateAppWorkspace.retryUncertain).not.toHaveBeenCalled();
+    });
+
+    it("keeps explicit reopen consent across unchanged receipt polling", async () => {
+        state.set(view("delivered")); localAppDeliveryStatus.set({ importId, status: "received" }); await render();
+        (target.querySelector('input[type="checkbox"]') as HTMLInputElement).click(); await tick();
+        expect(button("Reopen the same reviewed request").disabled).toBe(false);
+        // Native polling emits a fresh object every second, even when its status is unchanged.
+        localAppDeliveryStatus.set({ importId, status: "received" }); await tick();
+        expect(button("Reopen the same reviewed request").disabled).toBe(false);
+        state.set({ ...view("delivered"), message: "Unchanged handoff received" }); await tick();
+        expect(button("Reopen the same reviewed request").disabled).toBe(false);
+        expect(privateAppWorkspace.reopenDelivered).not.toHaveBeenCalled();
+    });
+
+    it("withdraws reopen consent when saving is reported or the workspace closes", async () => {
+        state.set(view("delivered")); localAppDeliveryStatus.set({ importId, status: "received" }); await render();
+        expect(button("Reopen the same reviewed request")).toBeDefined();
+        (target.querySelector('input[type="checkbox"]') as HTMLInputElement).click(); await tick();
+        localAppDeliveryStatus.set({ importId, status: "saved" }); await tick();
+        expect(button("Reopen the same reviewed request")).toBeUndefined();
+        expect(privateAppWorkspace.reopenDelivered).not.toHaveBeenCalled();
+        localAppDeliveryStatus.set({ importId, status: "received" }); await tick();
+        expect(button("Reopen the same reviewed request").disabled).toBe(true);
+        (target.querySelector('input[type="checkbox"]') as HTMLInputElement).click(); await tick();
+        state.set({ ...view("delivered"), open: false }); await tick();
+        state.set(view("delivered")); await tick();
+        expect(button("Reopen the same reviewed request").disabled).toBe(true);
     });
 
     it("distinguishes app receipt from its report of saving and clears on component teardown", async () => {

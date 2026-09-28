@@ -18,10 +18,14 @@ vi.mock("./isolatedAppProcessor", () => ({
   runIsolatedAppProcessor: vi.fn(),
   verifyImportedLocalProcessor: vi.fn(),
 }));
-vi.mock("./localAppRelayDelivery", () => ({
-  deliverLocalAppViaRelay: vi.fn(),
-  cancelLocalAppHandoffs: vi.fn(),
-}));
+vi.mock("./localAppRelayDelivery", async () => {
+  const { writable } = await import("svelte/store");
+  return {
+    deliverLocalAppViaRelay: vi.fn(),
+    cancelLocalAppHandoffs: vi.fn(),
+    localAppDeliveryStatus: writable(undefined),
+  };
+});
 
 const text = {
   kind: "text_content",
@@ -80,6 +84,7 @@ function fixture(processor = false) {
     deliver: vi.fn<LocalDraftDelivery>(async () => ({ kind: "delivered" })),
     nativeDeliver: vi.fn<LocalDraftDelivery>(async () => ({ kind: "delivered" })),
     cancelDelivery: vi.fn(),
+    deliverySaved: vi.fn(() => false),
   };
   const workspace = new PrivateAppWorkspace(deps);
   workspace.setAccount("test-account");
@@ -341,6 +346,65 @@ describe("private app workspace boundaries", () => {
     expect(deps.deliver.mock.calls[0][0]).toBe(deps.deliver.mock.calls[1][0]);
     expect(workspace.state.draft!.approval).toBe(approval);
     expect(workspace.state.draft!.status).toBe("delivered");
+  });
+
+  it.each([false, true])("reopens a received handoff without re-extraction or changing the request (native=%s)", async native => {
+    const { workspace, deps } = fixture();
+    const runtimeClient = { clientOnlyApps: () => true, isNativeApp: () => native, existingAccountOnly: () => true } as OpenChat;
+    await workspace.propose(runtimeClient, text, { stillCurrent: () => true }); workspace.review();
+    const approval = workspace.state.draft!.approval!;
+    const transport = native ? deps.nativeDeliver : deps.deliver;
+    await workspace.confirm(approval.approvalId);
+    workspace.close(); workspace.open(); workspace.setAccount("test-account");
+    expect(transport).toHaveBeenCalledOnce();
+    await workspace.confirm(approval.approvalId); await workspace.retryUncertain(approval.approvalId);
+    await workspace.reopenDelivered("wrong"); expect(transport).toHaveBeenCalledOnce();
+    await Promise.all([workspace.reopenDelivered(approval.approvalId), workspace.reopenDelivered(approval.approvalId)]);
+    expect(transport).toHaveBeenCalledTimes(2);
+    expect(transport.mock.calls[1][0]).toBe(approval.request);
+    expect(workspace.state.draft!.approval).toBe(approval);
+    expect(deps.deliverySaved).toHaveBeenCalledExactlyOnceWith(approval.request.idempotencyKey);
+    expect(deps.extract).toHaveBeenCalledOnce();
+    expect(native ? deps.deliver : deps.nativeDeliver).not.toHaveBeenCalled();
+  });
+
+  it("checks the app's save report again before reopening an acknowledged handoff", async () => {
+    const { workspace, deps } = fixture();
+    await propose(workspace); workspace.review();
+    const approval = workspace.state.draft!.approval!;
+    await workspace.confirm(approval.approvalId);
+    deps.deliverySaved.mockReturnValue(true);
+    await workspace.reopenDelivered(approval.approvalId);
+    expect(deps.deliverySaved).toHaveBeenCalledExactlyOnceWith(approval.request.idempotencyKey);
+    expect(deps.deliver).toHaveBeenCalledOnce();
+    expect(deps.extract).toHaveBeenCalledOnce();
+    expect(workspace.state.draft!.status).toBe("delivered");
+  });
+
+  it("rechecks native profile authority on reopen without falling back or re-inferring", async () => {
+    const { workspace, deps } = fixture();
+    let allowed = true;
+    const runtimeClient = { clientOnlyApps: () => true, isNativeApp: () => true, existingAccountOnly: () => allowed } as OpenChat;
+    await workspace.propose(runtimeClient, text, { stillCurrent: () => true }); workspace.review();
+    const approval = workspace.state.draft!.approval!.approvalId;
+    await workspace.confirm(approval);
+    allowed = false; await workspace.reopenDelivered(approval);
+    expect(deps.nativeDeliver).toHaveBeenCalledOnce(); expect(deps.deliver).not.toHaveBeenCalled();
+    expect(deps.extract).toHaveBeenCalledOnce(); expect(workspace.state.draft!.status).toBe("uncertain");
+  });
+
+  it("does not revive a reopened workspace after account change", async () => {
+    const { workspace, deps } = fixture();
+    await propose(workspace); workspace.review();
+    const approval = workspace.state.draft!.approval!.approvalId;
+    await workspace.confirm(approval);
+    let finish!: (result: { kind: "delivered" }) => void;
+    deps.deliver.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const reopened = workspace.reopenDelivered(approval);
+    workspace.setAccount("different-account");
+    finish({ kind: "delivered" }); await reopened;
+    expect(workspace.state.draft).toBeUndefined(); expect(workspace.state.busy).toBe(false);
+    expect(deps.extract).toHaveBeenCalledOnce(); expect(deps.deliver).toHaveBeenCalledTimes(2);
   });
 
   it("uses the native adapter only for a native local-test profile and never falls back after native failure", async () => {

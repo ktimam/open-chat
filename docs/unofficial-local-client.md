@@ -87,6 +87,16 @@ ID. There is no automatic retry or automatic browser/clipboard action.
 **Close** only hides the workspace; use **Cancel / discard local draft** to cancel
 pending work.
 
+If the receiving page closes or reloads after **Received** but before saving,
+return to the still-open client and choose **Reopen the same reviewed request**.
+First check the receiving app for an existing save, then explicitly acknowledge
+the warning. Reopening preserves the entire approved request and import ID; it
+does not rerun extraction or inference. The previous handoff is cancelled and a
+new browser relay or native pairing is created. Review the same receiving account
+and destination again: an app may deduplicate only within that destination, not
+across different accounts or sheets. Reopening is unavailable once the current
+handoff reports **Saved**, and never occurs automatically.
+
 Private drafts also show an app-declared preview: title, disclosure and labelled
 fields, repeated for each item. It is derived from the current valid JSON editor,
 not a second submission payload. Additional fields remain visible; hidden text
@@ -177,8 +187,10 @@ startup/stability checks after closing an unrelated hung emulator Chrome process
 Earlier inconclusive inspections and APK004's native startup crash remain recorded.
 The app-owned startup-order mitigation initializes the existing WebView provider
 before Wry's timed runtime lookup; it does not fix every possible upstream lookup
-timeout. Its separate intentional-delay diagnostics are approval-blocked, and
-the corresponding ARM build is held. Real native sign-in and physical-phone tests
-are not passed; physical-phone testing is explicitly deferred for this checkpoint.
+timeout. Its separate intentional-delay diagnostics remain approval-blocked.
+The later APK007 x86 and ARM builds from `e6091abff` both passed static package,
+signer, source and embedded-asset checks; they have no new device-runtime pass and
+predate the received-request reopen fix above. Real native sign-in and physical-phone
+tests are not passed; physical-phone testing is explicitly deferred for this checkpoint.
 Keep all source commits, reused-frontend hashes, limitations and later results in
 the artifact's own build and acceptance records. Do not relabel older evidence.
