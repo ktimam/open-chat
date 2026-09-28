@@ -424,14 +424,14 @@ fn users_in_the_same_multi_user_canister_each_hold_a_copy_of_their_direct_chat()
     assert_eq!(messages(&window), expected);
 
     // A message id can only be used once in a chat
-    let duplicate = client::multi_user::send_message(env, a_principal, canister_id, &send_message_args(b, "again", message_id));
+    let duplicate = client::user::send_message_v2(env, a_principal, canister_id, &send_message_args(b, "again", message_id));
     assert!(
         matches!(&duplicate, user_canister::send_message_v2::Response::Error(e) if e.matches_code(OCErrorCode::MessageIdAlreadyExists)),
         "{duplicate:?}"
     );
 
     // A message to a thread whose root does not exist is rejected rather than creating the thread
-    let missing_thread = client::multi_user::send_message(
+    let missing_thread = client::user::send_message_v2(
         env,
         a_principal,
         canister_id,
@@ -447,7 +447,7 @@ fn users_in_the_same_multi_user_canister_each_hold_a_copy_of_their_direct_chat()
 
     // A recipient in another canister who isn't an OpenChat user is not found
     let elsewhere: UserId = random_principal().into();
-    let unknown = client::multi_user::send_message(
+    let unknown = client::user::send_message_v2(
         env,
         a_principal,
         canister_id,
@@ -824,7 +824,7 @@ fn initial_state_and_updates_track_a_users_profile_blocked_users_favourites_and_
     assert_eq!(initial_state(env, a_principal, canister_id).blocked_users, vec![b]);
     assert!(updates(env, b_principal, canister_id, start).is_none());
     let response =
-        client::multi_user::send_message(env, a_principal, canister_id, &send_message_args(b, "hi", random_from_u128()));
+        client::user::send_message_v2(env, a_principal, canister_id, &send_message_args(b, "hi", random_from_u128()));
     assert!(
         matches!(&response, user_canister::send_message_v2::Response::Error(e) if e.matches_code(OCErrorCode::TargetUserBlocked)),
         "{response:?}"
@@ -1122,7 +1122,7 @@ fn send_text_message(
     text: &str,
     message_id: MessageId,
 ) -> user_canister::send_message_v2::SuccessResult {
-    let response = client::multi_user::send_message(env, sender, canister_id, &send_message_args(recipient, text, message_id));
+    let response = client::user::send_message_v2(env, sender, canister_id, &send_message_args(recipient, text, message_id));
     match response {
         user_canister::send_message_v2::Response::Success(result) => result,
         response => panic!("{response:?}"),
@@ -1215,7 +1215,7 @@ fn edits_deletions_and_reactions_reach_both_copies_of_a_direct_chat() {
     let b_root = Some(1.into());
 
     let reply_id = random_from_u128();
-    client::multi_user::send_message(
+    client::user::send_message_v2(
         env,
         a_principal,
         canister_id,
@@ -1922,6 +1922,17 @@ fn reactions_to_a_users_messages_appear_in_their_message_activity_feed() {
     assert_eq!(event.user_id, Some(b));
     assert_eq!(message_activity_feed(env, b_principal, canister_id, 0).total, 0);
 
+    // As when the users are in different canisters, having a message reacted to earns A an
+    // achievement
+    assert!(has_achievement(
+        &initial_state(env, a_principal, canister_id),
+        Achievement::HadMessageReactedTo
+    ));
+    assert!(!has_achievement(
+        &initial_state(env, b_principal, canister_id),
+        Achievement::HadMessageReactedTo
+    ));
+
     let summary = initial_state(env, a_principal, canister_id).message_activity_summary;
     assert_eq!(summary.unread_count, 1);
     assert_eq!(summary.latest_event_timestamp, event.timestamp);
@@ -2262,12 +2273,14 @@ fn chit_streaks_and_achievements_are_held_per_user_in_a_multi_user_canister() {
     let a_chit_events = chit_events(env, a_principal, canister_id);
     assert_eq!(a_chit_events.total, 4);
 
-    // The other user, in the same canister, has none of it
+    // The other user, in the same canister, has none of it, only the achievement for receiving a
+    // direct message, as when the users are in different canisters
     let b_state = initial_state(env, b_principal, canister_id);
-    assert_eq!(b_state.chit_balance, 0);
+    assert_eq!(b_state.chit_balance, Achievement::ReceivedDirectMessage.chit_reward() as i32);
     assert_eq!(b_state.streak, 0);
-    assert!(b_state.achievements.is_empty());
-    assert_eq!(chit_events(env, b_principal, canister_id).total, 0);
+    assert_eq!(b_state.achievements.len(), 1);
+    assert!(has_achievement(&b_state, Achievement::ReceivedDirectMessage));
+    assert_eq!(chit_events(env, b_principal, canister_id).total, 1);
 
     // Claiming on the next day extends the streak
     env.advance_time(Duration::from_millis(
@@ -4004,7 +4017,7 @@ fn reporting_a_message_deletes_it_from_the_reporters_copy_only() {
     let (bob, bob_id) = create_user(env, canister_ids, local_user_index, canister_id);
 
     let message_id = random_from_u128();
-    let response = client::multi_user::send_message(env, bob, canister_id, &send_message_args(alice_id, "rude", message_id));
+    let response = client::user::send_message_v2(env, bob, canister_id, &send_message_args(alice_id, "rude", message_id));
     assert!(
         matches!(response, user_canister::send_message_v2::Response::Success(_)),
         "{response:?}"
@@ -4774,7 +4787,7 @@ fn events_for_users_in_other_canisters_are_sent_to_their_canisters() {
 
     // A recipient in another canister is looked up in the LocalUserIndex
     let unknown: UserId = CanisterId::from_text("rrkah-fqaaa-aaaaa-aaaaq-cai").unwrap().into();
-    let response = client::multi_user::send_message(
+    let response = client::user::send_message_v2(
         env,
         bob,
         canister_id,
@@ -4811,7 +4824,7 @@ fn events_for_users_in_other_canisters_are_sent_to_their_canisters() {
             "{response:?}"
         );
     }
-    let response = client::multi_user::send_message(
+    let response = client::user::send_message_v2(
         env,
         bob,
         canister_id,
@@ -5084,7 +5097,7 @@ fn users_send_crypto_from_their_own_wallets() {
     );
 
     let send_crypto = |env: &mut PocketIc, recipient: UserId, transfer: PendingCryptoTransaction| {
-        client::multi_user::send_message(
+        client::user::send_message_v2(
             env,
             a_principal,
             canister_id,
@@ -5125,6 +5138,11 @@ fn users_send_crypto_from_their_own_wallets() {
     assert!(matches!(
         events(env, b_principal, canister_id, b, a).events.last().unwrap().event,
         ChatEvent::Message(ref m) if matches!(m.content, MessageContent::Crypto(_))
+    ));
+    // As when the users are in different canisters, receiving crypto earns B an achievement
+    assert!(has_achievement(
+        &initial_state(env, b_principal, canister_id),
+        Achievement::ReceivedCrypto
     ));
 
     // To Carol, in a User canister
@@ -5167,7 +5185,7 @@ fn users_send_crypto_from_their_own_wallets() {
 
     // In a thread which doesn't exist, which is refused before any funds are moved
     let transfer = icrc2_transfer(env, b_principal.into());
-    let response = client::multi_user::send_message(
+    let response = client::user::send_message_v2(
         env,
         a_principal,
         canister_id,
@@ -5692,7 +5710,7 @@ fn p2p_swaps_are_paid_from_and_into_users_own_wallets() {
     // Alice offers Bob a swap, both being in this canister. Alice's ICP is pulled from her wallet, as
     // is Bob's CHAT when he accepts, and each is paid into the other's wallet.
     let message_id = random_from_u128();
-    let response = client::multi_user::send_message(env, alice, canister_id, &offer(bob_id, message_id));
+    let response = client::user::send_message_v2(env, alice, canister_id, &offer(bob_id, message_id));
     assert!(
         matches!(response, user_canister::send_message_v2::Response::TransferSuccessV2(_)),
         "{response:?}"
@@ -5723,7 +5741,7 @@ fn p2p_swaps_are_paid_from_and_into_users_own_wallets() {
     // escrow canister, which names Alice by her principal, and tells this canister of the swap's
     // completion.
     let message_id = random_from_u128();
-    let response = client::multi_user::send_message(env, alice, canister_id, &offer(carol.user_id, message_id));
+    let response = client::user::send_message_v2(env, alice, canister_id, &offer(carol.user_id, message_id));
     assert!(
         matches!(response, user_canister::send_message_v2::Response::TransferSuccessV2(_)),
         "{response:?}"
@@ -5786,7 +5804,7 @@ fn p2p_swaps_are_paid_from_and_into_users_own_wallets() {
     // canister, which looks Alice up by her principal via the LocalUserIndex and sends her canister
     // the swap's completion.
     let message_id = random_from_u128();
-    let response = client::multi_user::send_message(env, alice, canister_id, &offer(dave_id, message_id));
+    let response = client::user::send_message_v2(env, alice, canister_id, &offer(dave_id, message_id));
     assert!(
         matches!(response, user_canister::send_message_v2::Response::TransferSuccessV2(_)),
         "{response:?}"
@@ -5815,7 +5833,7 @@ fn p2p_swaps_are_paid_from_and_into_users_own_wallets() {
     // Alice offers Bob a swap then cancels it. This canister created the swap, so may cancel it in
     // the escrow canister, which refunds Alice's deposit to her wallet and tells Bob's copy.
     let message_id = random_from_u128();
-    let response = client::multi_user::send_message(env, alice, canister_id, &offer(bob_id, message_id));
+    let response = client::user::send_message_v2(env, alice, canister_id, &offer(bob_id, message_id));
     assert!(
         matches!(response, user_canister::send_message_v2::Response::TransferSuccessV2(_)),
         "{response:?}"
@@ -5909,7 +5927,7 @@ fn p2p_swaps_are_paid_from_and_into_users_own_wallets() {
     // Alice offers Bob a swap which expires. Both copies of the chat are marked expired and the
     // escrow canister refunds Alice's deposit to her wallet.
     let message_id = random_from_u128();
-    let response = client::multi_user::send_message(env, alice, canister_id, &offer(bob_id, message_id));
+    let response = client::user::send_message_v2(env, alice, canister_id, &offer(bob_id, message_id));
     assert!(
         matches!(response, user_canister::send_message_v2::Response::TransferSuccessV2(_)),
         "{response:?}"
@@ -6116,4 +6134,109 @@ fn the_user_index_is_told_of_avatars_set_in_multi_user_canisters() {
     set_avatar(env, a_principal, canister_id, None);
     tick_many(env, 3);
     assert_eq!(avatar_id(env, a), None);
+}
+
+#[test]
+fn ingress_messages_are_only_accepted_from_the_canisters_own_users() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+    } = wrapper.env();
+
+    let local_user_index = client::user_index::happy_path::user_registration_canister(env, canister_ids.user_index);
+    let canister_id =
+        client::user_index::happy_path::create_multi_user_canister(env, *controller, canister_ids, local_user_index);
+    let (principal, user_id) = create_user(env, canister_ids, local_user_index, canister_id);
+    // An OpenChat user, but not one this canister holds
+    let outsider = client::register_user(env, canister_ids);
+
+    // Rejected by `inspect_message` as the call is submitted, before it can cost the canister
+    // anything, rather than by the endpoint's guard once it runs
+    let set_bio = msgpack::serialize_then_unwrap(user_canister::set_bio::Args { text: "bio".to_string() });
+    let error = env
+        .submit_call(canister_id, outsider.principal, "set_bio_msgpack", set_bio.clone())
+        .unwrap_err();
+    assert_eq!(error.error_code, pocket_ic::ErrorCode::CanisterRejectedMessage, "{error:?}");
+
+    // Nor may even one of its users call a c2c method, which only canisters call
+    let game_chit = msgpack::serialize_then_unwrap(user_canister::c2c_game_chit::Args {
+        user_id,
+        game_id: "game".to_string(),
+        key: "key".to_string(),
+        amount: 1,
+    });
+    let error = env
+        .submit_call(canister_id, principal, "c2c_game_chit_msgpack", game_chit)
+        .unwrap_err();
+    assert_eq!(error.error_code, pocket_ic::ErrorCode::CanisterRejectedMessage, "{error:?}");
+
+    let message_id = env.submit_call(canister_id, principal, "set_bio_msgpack", set_bio).unwrap();
+    assert!(env.await_call(message_id).is_ok());
+}
+
+#[test]
+fn token_swaps_return_errors_rather_than_trapping() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+    } = wrapper.env();
+
+    let local_user_index = client::user_index::happy_path::user_registration_canister(env, canister_ids.user_index);
+    let canister_id =
+        client::user_index::happy_path::create_multi_user_canister(env, *controller, canister_ids, local_user_index);
+    let (principal, user_id) = create_user(env, canister_ids, local_user_index, canister_id);
+
+    let swap_response = client::user::swap_tokens(
+        env,
+        principal,
+        canister_id,
+        &user_canister::swap_tokens::Args {
+            swap_id: random_from_u128(),
+            input_token: types::TokenInfo {
+                symbol: ICP_SYMBOL.to_string(),
+                ledger: canister_ids.icp_ledger,
+                decimals: 8,
+                fee: ICP_TRANSFER_FEE,
+            },
+            output_token: types::TokenInfo {
+                symbol: constants::CHAT_SYMBOL.to_string(),
+                ledger: canister_ids.chat_ledger,
+                decimals: 8,
+                fee: constants::CHAT_TRANSFER_FEE,
+            },
+            input_amount: 100_000_000,
+            exchange_args: user_canister::swap_tokens::ExchangeArgs::ICPSwap(user_canister::swap_tokens::ExchangeSwapArgs {
+                swap_canister_id: random_principal(),
+                zero_for_one: true,
+            }),
+            min_output_amount: 1,
+            from_account: None,
+            pin: None,
+        },
+    );
+    assert!(
+        matches!(&swap_response, user_canister::swap_tokens::Response::Error(e) if e.matches_code(OCErrorCode::InvalidRequest)),
+        "{swap_response:?}"
+    );
+
+    let withdraw_response = client::user::c2c_withdraw_from_icpswap(
+        env,
+        local_user_index,
+        canister_id,
+        &user_canister::c2c_withdraw_from_icpswap::Args {
+            user_id,
+            swap_id: random_from_u128(),
+            input_token: true,
+            amount: None,
+            fee: None,
+        },
+    );
+    assert!(
+        matches!(&withdraw_response, UnitResult::Error(e) if e.matches_code(OCErrorCode::InvalidRequest)),
+        "{withdraw_response:?}"
+    );
 }

@@ -125,7 +125,7 @@ export function initEnv({ websiteVersion } = {}) {
             setEnvironmentDefault("OC_ONLINE_CANISTER", canisters.online_users[dfxNetwork]);
             setEnvironmentDefault("OC_DAILY_PUZZLE_CANISTER", canisters.daily_puzzle?.[dfxNetwork] ?? "");
             setEnvironmentDefault("OC_PROPOSALS_BOT_CANISTER", canisters.proposals_bot[dfxNetwork]);
-            setEnvironmentDefault("OC_AIRDROP_BOT_CANISTER", canisters.airdrop_bot[dfxNetwork]);
+            setEnvironmentDefault("OC_AIRDROP_BOT_CANISTER", canisters.airdrop_bot?.[dfxNetwork] ?? "");
             setEnvironmentDefault("OC_STORAGE_INDEX_CANISTER", canisters.storage_index[dfxNetwork]);
             setEnvironmentDefault("OC_REGISTRY_CANISTER", canisters.registry[dfxNetwork]);
             setEnvironmentDefault("OC_MARKET_MAKER_CANISTER", canisters.market_maker[dfxNetwork]);

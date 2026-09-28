@@ -75,3 +75,30 @@ reviewed current-composition mapping. This is not permission for a core OpenChat
 audit, broader dependency collection, weakened checks, automatic deployment or
 publication. Historical security-mode requirements remain enforced by their
 explicit historical checker modes; current topology is not mislabeled as PR2.
+
+## Upstream synchronization checkpoint (2026-09-28)
+
+The client integrates upstream `d1e3712bb9ded3a1c8b652492591b7107333b23e`.
+Backend sources, the root Cargo manifest and `dfx.json` match that commit;
+the obsolete custom ActionInbox deployment entry is removed. This source merge
+does not deploy or upgrade any canister. The local profile permits the retired
+AirdropBot to be absent, but continues to require checked-in production IDs for
+every live service. Network-blocked tests exercise legacy and indexed MultiUser
+request routing through the actual agent, retaining the intended recipient.
+
+Local validation passed both typechecks, non-fixing ESLint (31 warnings), the
+45-test local profile/startup suite, and the complete 4,240-test frontend suite
+with `vitest run --maxWorkers=4`. No tests were filtered, skipped, or given longer
+timeouts. Two default-concurrency runs on a 32-thread host each timed out only
+the video-store import test at its existing five-second limit; both failures
+remain recorded. Upstream adds a transitive call-bridge/navigation/client import
+to this store. The same test passes alone and with the four-worker full suite,
+supporting concurrency sensitivity, not proving optimized startup performance.
+Neither the test timeout nor the checked-in Vitest configuration was changed.
+
+The release identity baseline above still pins the earlier upstream commit.
+Updating that reviewed baseline and the old feature dependency inventories is a
+separate pending step; this checkpoint does not claim that hosted release gates
+pass. Earlier web/APK artifacts also do not qualify this newly merged source.
+Matching builds, browser/native acceptance and IOU persisted delivery remain
+separate requirements.

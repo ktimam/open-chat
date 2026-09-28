@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import process from "node:process";
+import { URL } from "node:url";
 import { createUnofficialLocalEnvironment, parseUnofficialLocalPort, UNOFFICIAL_LOCAL_CANISTERS } from "./unofficialLocalProfile.mjs";
 import { parseUnofficialLocalArgs, unofficialLocalLaunchPlan } from "../scripts/start-unofficial-local.mjs";
 import { transformersWebGpuFeatureEnabled, transformersWebGpuProductionAssetsEnabled } from "./app/transformersWebGpuFeatureFlag.mjs";
@@ -24,9 +26,53 @@ test("pins all configured OpenChat canisters to checked-in .ic regardless of inh
 });
 
 test("fails closed for missing/malformed production canisters rather than reusing local values", () => {
-    for (const value of [undefined, {}, { ic: "" }, { ic: "http://attacker" }, { local: "other-cai" }]) {
-        assert.throws(() => createUnofficialLocalEnvironment({ ...canisters, identity: value }));
+    for (const name of Object.values(UNOFFICIAL_LOCAL_CANISTERS)) {
+        if (name === "airdrop_bot") continue;
+        for (const value of [undefined, {}, { ic: "" }, { ic: "http://attacker" }, { local: "other-cai" }]) {
+            assert.throws(() => createUnofficialLocalEnvironment({ ...canisters, [name]: value }));
+        }
     }
+});
+
+test("an absent or empty retired AirdropBot production ID explicitly disables it", () => {
+    const withoutAirdrop = { ...canisters };
+    delete withoutAirdrop.airdrop_bot;
+    assert.equal(createUnofficialLocalEnvironment(withoutAirdrop).OC_AIRDROP_BOT_CANISTER, "");
+    for (const value of [undefined, {}, { ic: "" }]) {
+        assert.equal(createUnofficialLocalEnvironment({ ...canisters, airdrop_bot: value }).OC_AIRDROP_BOT_CANISTER, "");
+    }
+});
+
+test("a valid legacy AirdropBot production ID is retained", () => {
+    const env = createUnofficialLocalEnvironment({ ...canisters, airdrop_bot: { ic: "legacy-airdrop-cai", local: "wrong-local-cai" } });
+    assert.equal(env.OC_AIRDROP_BOT_CANISTER, "legacy-airdrop-cai");
+});
+
+test("a local-only retired AirdropBot is never used as a fallback", () => {
+    for (const value of [{ local: "wrong-local-cai" }, { ic: "", local: "wrong-local-cai" }]) {
+        assert.equal(createUnofficialLocalEnvironment({ ...canisters, airdrop_bot: value }).OC_AIRDROP_BOT_CANISTER, "");
+    }
+});
+
+test("a present malformed retired AirdropBot production ID still fails closed", () => {
+    for (const id of [null, false, 0, {}, [], "http://attacker", " ", "not_a_canister"]) {
+        assert.throws(() => createUnofficialLocalEnvironment({ ...canisters, airdrop_bot: { ic: id, local: "wrong-local-cai" } }));
+    }
+});
+
+test("inherited overrides cannot re-enable or retarget retired AirdropBot", () => {
+    const inherited = { OC_AIRDROP_BOT_CANISTER: "wrong-inherited-cai", oc_airdrop_bot_canister: "wrong-case-cai" };
+    for (const [value, expected] of [[undefined, ""], [{ ic: "", local: "wrong-local-cai" }, ""], [{ ic: "legacy-airdrop-cai" }, "legacy-airdrop-cai"]]) {
+        const env = createUnofficialLocalEnvironment({ ...canisters, airdrop_bot: value }, { inherited });
+        assert.equal(env.OC_AIRDROP_BOT_CANISTER, expected);
+        assert.equal(env.oc_airdrop_bot_canister, undefined);
+    }
+    assert.equal(inherited.OC_AIRDROP_BOT_CANISTER, "wrong-inherited-cai");
+});
+
+test("client-only deployment configuration excludes the removed custom ActionInbox canister", () => {
+    const dfx = JSON.parse(readFileSync(new URL("../dfx.json", import.meta.url), "utf8"));
+    assert.equal(Object.hasOwn(dfx.canisters, "action_inbox"), false);
 });
 
 test("drops inherited secrets and disables telemetry/custom-backend flags", () => {

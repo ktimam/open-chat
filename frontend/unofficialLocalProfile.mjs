@@ -42,6 +42,12 @@ export function createUnofficialLocalEnvironment(canisters, options = {}) {
     }
     for (const [variable, name] of Object.entries(UNOFFICIAL_LOCAL_CANISTERS)) {
         const id = canisters?.[name]?.ic;
+        // Upstream retired AirdropBot. An absent production ID disables it explicitly;
+        // neither a local ID nor an inherited environment value may replace it.
+        if (name === "airdrop_bot" && (id === undefined || id === "")) {
+            env[variable] = "";
+            continue;
+        }
         if (typeof id !== "string" || !/^[a-z0-9]+(?:-[a-z0-9]+)+$/.test(id)) {
             throw new Error(`Missing checked-in production canister: ${name}.ic`);
         }

@@ -25,12 +25,12 @@ use user_core::updates::offer_p2p_swap;
 
 #[update(guard = "caller_is_hosted_user", msgpack = true)]
 #[trace]
-// The User canister's `send_message_v2`. A message holding crypto is sent with a transfer the user
-// makes from their own wallet, since this canister doesn't hold its users' funds: either pulled by
-// this canister via ICRC2, against an approval made under the user's own spender subaccount (see
-// `ledger_utils::spender_subaccount`), or already made by the user and certified (see
-// `ledger_utils::UserTransfer`).
-async fn send_message(args: Args) -> Response {
+// As the User canister's `send_message_v2`, except that a message holding crypto is sent with a
+// transfer the user makes from their own wallet, since this canister doesn't hold its users' funds:
+// either pulled by this canister via ICRC2, against an approval made under the user's own spender
+// subaccount (see `ledger_utils::spender_subaccount`), or already made by the user and certified
+// (see `ledger_utils::UserTransfer`).
+async fn send_message_v2(args: Args) -> Response {
     send_message_impl_async(args).await
 }
 
@@ -573,27 +573,18 @@ fn send_message_impl(
         None => return Error(OCErrorCode::InitiatorNotFound.into()),
     };
 
-    // A recipient in this canister gets the message straight away, while one in another canister is
-    // sent it via a call to their canister. A chat with yourself has a single copy, so there is
-    // nothing more to do.
-    match recipient_kind {
-        Recipient::Me => {}
-        Recipient::SameCanister(their_index) => {
-            receive_message(their_index, my_user_id, sender_details, message_for_recipient, now, state);
-        }
-        Recipient::OtherCanister => {
-            state.push_user_canister_event(
-                my_index,
-                recipient,
-                UserCanisterEvent::SendMessages(Box::new(SendMessagesArgs {
-                    messages: vec![message_for_recipient],
-                    sender_name: sender_details.name,
-                    sender_display_name: sender_details.display_name,
-                    sender_avatar_id: sender_details.avatar_id,
-                })),
-            );
-        }
-    }
+    // The recipient is sent the message, which one in this canister gets straight away. A chat with
+    // yourself has a single copy, so nothing is sent for it.
+    state.send_user_canister_event(
+        my_index,
+        recipient,
+        UserCanisterEvent::SendMessages(Box::new(SendMessagesArgs {
+            messages: vec![message_for_recipient],
+            sender_name: sender_details.name,
+            sender_display_name: sender_details.display_name,
+            sender_avatar_id: sender_details.avatar_id,
+        })),
+    );
 
     // As in the User canister, messages sent to yourself earn no achievements
     if !matches!(recipient_kind, Recipient::Me) {
@@ -654,11 +645,11 @@ enum Recipient {
     OtherCanister,
 }
 
-// Pushes a message from `sender`, another user in this canister, to the recipient's copy of the
-// chat between them, creating the chat if they have none. This is the User canister's handling of
-// the `SendMessages` event it receives from the sender's canister, applied directly. As there, a
-// message the recipient doesn't receive (because they have blocked the sender, or it is in a
-// thread their copy of the chat doesn't have) stays on the sender's side alone.
+// Pushes a message from `sender` to the recipient's copy of the chat between them, creating the chat
+// if they have none. This is the User canister's handling of the `SendMessages` event it receives
+// from the sender's canister, and is only reached once the recipient is known not to have blocked
+// the sender. As there, a message the recipient doesn't receive (because it is in a thread their
+// copy of the chat doesn't have) stays on the sender's side alone.
 pub(crate) fn receive_message(
     their_index: u16,
     sender: UserId,
@@ -674,10 +665,6 @@ pub(crate) fn receive_message(
     let message_id = message.message_id;
 
     let received = state.data.users.with_user_mut(their_index, |user| {
-        if user.blocked_users.contains(&sender) {
-            return None;
-        }
-
         let existing_chat = user.direct_chats.get(&chat_id);
 
         // Which thread the message is in and what it replies to are translated from ids to the

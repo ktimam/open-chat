@@ -5954,6 +5954,11 @@ export const ChannelReactionAddedNotification = /* @__PURE__ */ Type.Object({
     cha: Type.Optional(Type.BigInt()),
 });
 
+export type VideoCallParticipantArgs = Static<typeof VideoCallParticipantArgs>;
+export const VideoCallParticipantArgs = /* @__PURE__ */ Type.Object({
+    chat: Chat,
+});
+
 export type BotRegisteredEvent = Static<typeof BotRegisteredEvent>;
 export const BotRegisteredEvent = /* @__PURE__ */ Type.Object({
     bot_id: UserId,
@@ -9854,6 +9859,9 @@ export const LocalUserIndexAccessTokenV2Args = /* @__PURE__ */ Type.Union([
     }),
     Type.Object({
         MarkVideoCallAsEnded: MarkVideoCallAsEndedArgs,
+    }),
+    Type.Object({
+        VideoCallParticipant: VideoCallParticipantArgs,
     }),
     Type.Object({
         BotActionByCommand: BotActionByCommandArgs,
