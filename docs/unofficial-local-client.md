@@ -47,8 +47,10 @@ workspace; they do not run inference or send app data.
    **Propose** on one text or image message. Both UIs share this pipeline; app
    proposals do not currently accept voice messages.
    App prompts, labels, rules, extraction and normalization remain app-owned.
-4. Edit and review the complete local draft. Nothing is posted to the chat or sent
-   to the app for card verification. Editing invalidates the previous approval.
+4. Edit the local draft using its app-labelled fields. Setup controls are collapsed
+   once there is a draft; **Advanced: complete payload (JSON)** remains available
+   for structured fields and repairs. Nothing is posted to the chat or sent to the
+   app for card verification. Every edit invalidates the previous approval.
 5. Confirm the full request, including its destination and recipient review label.
    A separate browser relay displays it again and asks before opening the receiving
    app. In the local-test APK, first pair that relay as described below.
@@ -96,6 +98,17 @@ new browser relay or native pairing is created. Review the same receiving accoun
 and destination again: an app may deduplicate only within that destination, not
 across different accounts or sheets. Reopening is unavailable once the current
 handoff reports **Saved**, and never occurs automatically.
+
+Private drafts provide generic scalar-field controls from the app's declared schema
+for single items and lists. These edit the same canonical payload used for review;
+there is no second submission object. Optional absent values are different from an
+empty string, zero, false or null. Removing an optional field omits it. Incomplete
+numbers do not become zero, and invalid or oversized edits cannot approve or send
+the previously valid request. Non-scalar values remain available through the full
+JSON editor and complete preview. These controls do not run inference again or
+interpret an app's private processor context. App-specific dependent choices, such
+as selecting a saved template and applying its defaults, remain in the receiving
+app unless the app supplies a supported declarative contract for them.
 
 Private drafts also show an app-declared preview: title, disclosure and labelled
 fields, repeated for each item. It is derived from the current valid JSON editor,

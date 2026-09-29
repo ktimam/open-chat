@@ -102,7 +102,7 @@ describe("native pairing and retry UI", () => {
         const reopen = button("Reopen the same reviewed request");
         expect(reopen).toBeDefined(); expect(reopen.disabled).toBe(true);
         expect(privateAppWorkspace.reopenDelivered).not.toHaveBeenCalled();
-        expect(target.textContent).toContain("same receiving account and destination");
+        expect(target.textContent?.replace(/\s+/g, " ")).toContain("same receiving account and destination");
         (target.querySelector('input[type="checkbox"]') as HTMLInputElement).click(); await tick();
         expect(reopen.disabled).toBe(false); reopen.click(); await tick();
         expect(privateAppWorkspace.reopenDelivered).toHaveBeenCalledExactlyOnceWith(approvalId);
