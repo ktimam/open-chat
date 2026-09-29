@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "configSha256": "0047a42522def673373854e713d96e14d1203037c2a5076573854d63a9a61538",
+  "configSha256": "08dc4954f77f27197ae5181982445adaa242cf925c62c5e343a7c1c4b28da007",
   "boundary": "Current unofficial local client only: source-traced native model store/IPC, optional nonshipping host llama.cpp checks, local browser authentication and private-app loopback handoff, nested generic schemas/errors, native build hooks and bundled asset selection. Eight explicit profiles bind the two actual all-WebGPU APK ABIs and existing Linux/Windows default-library/inference/inference+store checks. Browser WebGPU/NPM and Android JVM dependencies have separate inventories; no OpenChat backend, removed custom card/action-inbox canisters, release-canister tooling, core dependency audit, advisory acceptance, model quality, device runtime or publication approval is claimed. Historical PR2 inventories remain verbatim historical evidence and are not current build acceptance.",
   "units": [
     {
@@ -20,21 +20,14 @@
       "sources": [
         {
           "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [
-            2
-          ]
+          "lines": [2]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/model_manager.rs",
-          "lines": [
-            1,
-            621
-          ]
+          "lines": [1, 621]
         }
       ],
-      "seeds": [
-        "plugin.model.stream"
-      ]
+      "seeds": ["plugin.model.stream"]
     },
     {
       "id": "plugin.model-and-handoff.url",
@@ -53,21 +46,14 @@
       "sources": [
         {
           "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [
-            2
-          ]
+          "lines": [2]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/model_manager.rs",
-          "lines": [
-            2,
-            339
-          ]
+          "lines": [2, 339]
         }
       ],
-      "seeds": [
-        "plugin.model-and-handoff.url"
-      ]
+      "seeds": ["plugin.model-and-handoff.url"]
     },
     {
       "id": "plugin.schemas",
@@ -86,22 +72,14 @@
       "sources": [
         {
           "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [
-            2
-          ]
+          "lines": [2]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/models.rs",
-          "lines": [
-            1,
-            121,
-            206
-          ]
+          "lines": [1, 121, 206]
         }
       ],
-      "seeds": [
-        "plugin.schemas"
-      ]
+      "seeds": ["plugin.schemas"]
     },
     {
       "id": "plugin.json",
@@ -120,21 +98,14 @@
       "sources": [
         {
           "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [
-            2
-          ]
+          "lines": [2]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff_protocol.rs",
-          "lines": [
-            4,
-            124
-          ]
+          "lines": [4, 124]
         }
       ],
-      "seeds": [
-        "plugin.json"
-      ]
+      "seeds": ["plugin.json"]
     },
     {
       "id": "plugin.hash",
@@ -153,21 +124,14 @@
       "sources": [
         {
           "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [
-            2
-          ]
+          "lines": [2]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff_protocol.rs",
-          "lines": [
-            5,
-            162
-          ]
+          "lines": [5, 162]
         }
       ],
-      "seeds": [
-        "plugin.hash"
-      ]
+      "seeds": ["plugin.hash"]
     },
     {
       "id": "plugin.hex",
@@ -186,20 +150,14 @@
       "sources": [
         {
           "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [
-            2
-          ]
+          "lines": [2]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff_protocol.rs",
-          "lines": [
-            166
-          ]
+          "lines": [166]
         }
       ],
-      "seeds": [
-        "plugin.hex"
-      ]
+      "seeds": ["plugin.hex"]
     },
     {
       "id": "plugin.ipc",
@@ -218,22 +176,14 @@
       "sources": [
         {
           "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [
-            2
-          ]
+          "lines": [2]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/commands.rs",
-          "lines": [
-            1,
-            20,
-            341
-          ]
+          "lines": [1, 20, 341]
         }
       ],
-      "seeds": [
-        "plugin.ipc"
-      ]
+      "seeds": ["plugin.ipc"]
     },
     {
       "id": "plugin.model.async",
@@ -252,21 +202,14 @@
       "sources": [
         {
           "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [
-            2
-          ]
+          "lines": [2]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/model_manager.rs",
-          "lines": [
-            13,
-            317
-          ]
+          "lines": [13, 317]
         }
       ],
-      "seeds": [
-        "plugin.model.async"
-      ]
+      "seeds": ["plugin.model.async"]
     },
     {
       "id": "plugin.model.resources",
@@ -285,21 +228,14 @@
       "sources": [
         {
           "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [
-            2
-          ]
+          "lines": [2]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/model_manager.rs",
-          "lines": [
-            761,
-            763
-          ]
+          "lines": [761, 763]
         }
       ],
-      "seeds": [
-        "plugin.model.resources"
-      ]
+      "seeds": ["plugin.model.resources"]
     },
     {
       "id": "plugin.native.inference",
@@ -314,21 +250,14 @@
       "sources": [
         {
           "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [
-            2
-          ]
+          "lines": [2]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/inference.rs",
-          "lines": [
-            17,
-            212
-          ]
+          "lines": [17, 212]
         }
       ],
-      "seeds": [
-        "plugin.native.inference"
-      ]
+      "seeds": ["plugin.native.inference"]
     },
     {
       "id": "plugin.native.template",
@@ -343,20 +272,14 @@
       "sources": [
         {
           "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [
-            2
-          ]
+          "lines": [2]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/inference.rs",
-          "lines": [
-            262
-          ]
+          "lines": [262]
         }
       ],
-      "seeds": [
-        "plugin.native.template"
-      ]
+      "seeds": ["plugin.native.template"]
     },
     {
       "id": "plugin.native.template-python",
@@ -371,150 +294,99 @@
       "sources": [
         {
           "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [
-            2
-          ]
+          "lines": [2]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/inference.rs",
-          "lines": [
-            264
-          ]
+          "lines": [264]
         }
       ],
-      "seeds": [
-        "plugin.native.template-python"
-      ]
+      "seeds": ["plugin.native.template-python"]
     },
     {
       "id": "plugin.loopback.bytes",
       "disposition": "external-owner-edges",
       "explanation": "Both local transports use bytes in their actual optional feature-gated listeners. Only the exact local-test APK profiles enable these features; default/inference host checks do not.",
-      "profiles": [
-        "android-arm64-local-webgpu",
-        "android-x86_64-local-webgpu"
-      ],
+      "profiles": ["android-arm64-local-webgpu", "android-x86_64-local-webgpu"],
       "sources": [
         {
           "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [
-            2
-          ]
+          "lines": [2]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff.rs",
-          "lines": [
-            4
-          ]
+          "lines": [4]
         }
       ],
-      "seeds": [
-        "plugin.loopback.bytes"
-      ]
+      "seeds": ["plugin.loopback.bytes"]
     },
     {
       "id": "plugin.loopback.getrandom",
       "disposition": "external-owner-edges",
       "explanation": "Both local transports use getrandom in their actual optional feature-gated listeners. Only the exact local-test APK profiles enable these features; default/inference host checks do not.",
-      "profiles": [
-        "android-arm64-local-webgpu",
-        "android-x86_64-local-webgpu"
-      ],
+      "profiles": ["android-arm64-local-webgpu", "android-x86_64-local-webgpu"],
       "sources": [
         {
           "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [
-            2
-          ]
+          "lines": [2]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff.rs",
-          "lines": [
-            46
-          ]
+          "lines": [46]
         }
       ],
-      "seeds": [
-        "plugin.loopback.getrandom"
-      ]
+      "seeds": ["plugin.loopback.getrandom"]
     },
     {
       "id": "plugin.loopback.http-body-util",
       "disposition": "external-owner-edges",
       "explanation": "Both local transports use http-body-util in their actual optional feature-gated listeners. Only the exact local-test APK profiles enable these features; default/inference host checks do not.",
-      "profiles": [
-        "android-arm64-local-webgpu",
-        "android-x86_64-local-webgpu"
-      ],
+      "profiles": ["android-arm64-local-webgpu", "android-x86_64-local-webgpu"],
       "sources": [
         {
           "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [
-            2
-          ]
+          "lines": [2]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff.rs",
-          "lines": [
-            5
-          ]
+          "lines": [5]
         }
       ],
-      "seeds": [
-        "plugin.loopback.http-body-util"
-      ]
+      "seeds": ["plugin.loopback.http-body-util"]
     },
     {
       "id": "plugin.loopback.hyper",
       "disposition": "external-owner-edges",
       "explanation": "Both local transports use hyper in their actual optional feature-gated listeners. Only the exact local-test APK profiles enable these features; default/inference host checks do not.",
-      "profiles": [
-        "android-arm64-local-webgpu",
-        "android-x86_64-local-webgpu"
-      ],
+      "profiles": ["android-arm64-local-webgpu", "android-x86_64-local-webgpu"],
       "sources": [
         {
           "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [
-            2
-          ]
+          "lines": [2]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff.rs",
-          "lines": [
-            6
-          ]
+          "lines": [6]
         }
       ],
-      "seeds": [
-        "plugin.loopback.hyper"
-      ]
+      "seeds": ["plugin.loopback.hyper"]
     },
     {
       "id": "plugin.loopback.hyper-util",
       "disposition": "external-owner-edges",
       "explanation": "Both local transports use hyper-util in their actual optional feature-gated listeners. Only the exact local-test APK profiles enable these features; default/inference host checks do not.",
-      "profiles": [
-        "android-arm64-local-webgpu",
-        "android-x86_64-local-webgpu"
-      ],
+      "profiles": ["android-arm64-local-webgpu", "android-x86_64-local-webgpu"],
       "sources": [
         {
           "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [
-            2
-          ]
+          "lines": [2]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff.rs",
-          "lines": [
-            7
-          ]
+          "lines": [7]
         }
       ],
-      "seeds": [
-        "plugin.loopback.hyper-util"
-      ]
+      "seeds": ["plugin.loopback.hyper-util"]
     },
     {
       "id": "plugin.host.open",
@@ -531,25 +403,19 @@
       "sources": [
         {
           "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [
-            2
-          ]
+          "lines": [2]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/desktop.rs",
-          "lines": [
-            29
-          ]
+          "lines": [29]
         }
       ],
-      "seeds": [
-        "plugin.host.open"
-      ]
+      "seeds": ["plugin.host.open"]
     },
     {
       "id": "plugin.error.derive",
       "disposition": "external-owner-edges",
-      "explanation": "The shared Result returned by the native URL/IPC bridge contains this derived error schema; all nested external error types are retained.",
+      "explanation": "The shared Result returned by the native URL/IPC bridge contains this derived error schema; all nested external error types are retained. The upstream merge deliberately resolves thiserror 2.0.18 rather than 2.0.19 because PocketIC 16.0.0 requires the exact 2.0.18 version. The unchanged native workspace dependency accepts version 2; the checksum-verified cached 2.0.18 archive retains MIT OR Apache-2.0 and pins thiserror-impl exactly to 2.0.18. This updates the existing production owner identity, not the feature boundary or a new backend audit root. Cargo metadata, native build and advisory qualification remain separate.",
       "profiles": [
         "android-arm64-local-webgpu",
         "android-x86_64-local-webgpu",
@@ -563,20 +429,14 @@
       "sources": [
         {
           "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [
-            2
-          ]
+          "lines": [2]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/error.rs",
-          "lines": [
-            5
-          ]
+          "lines": [5]
         }
       ],
-      "seeds": [
-        "plugin.error.derive"
-      ]
+      "seeds": ["plugin.error.derive"]
     },
     {
       "id": "plugin.error.android-fs",
@@ -595,20 +455,14 @@
       "sources": [
         {
           "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [
-            2
-          ]
+          "lines": [2]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/error.rs",
-          "lines": [
-            14
-          ]
+          "lines": [14]
         }
       ],
-      "seeds": [
-        "plugin.error.android-fs"
-      ]
+      "seeds": ["plugin.error.android-fs"]
     },
     {
       "id": "plugin.bundle.mime",
@@ -627,20 +481,14 @@
       "sources": [
         {
           "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [
-            2
-          ]
+          "lines": [2]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/bundle_manager.rs",
-          "lines": [
-            109
-          ]
+          "lines": [109]
         }
       ],
-      "seeds": [
-        "plugin.bundle.mime"
-      ]
+      "seeds": ["plugin.bundle.mime"]
     },
     {
       "id": "plugin.bundle.version",
@@ -659,21 +507,14 @@
       "sources": [
         {
           "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [
-            2
-          ]
+          "lines": [2]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/update_manager.rs",
-          "lines": [
-            3,
-            68
-          ]
+          "lines": [3, 68]
         }
       ],
-      "seeds": [
-        "plugin.bundle.version"
-      ]
+      "seeds": ["plugin.bundle.version"]
     },
     {
       "id": "plugin.build",
@@ -692,20 +533,14 @@
       "sources": [
         {
           "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [
-            2
-          ]
+          "lines": [2]
         },
         {
           "path": "frontend/tauri-plugin-oc/build.rs",
-          "lines": [
-            51
-          ]
+          "lines": [51]
         }
       ],
-      "seeds": [
-        "plugin.build"
-      ]
+      "seeds": ["plugin.build"]
     },
     {
       "id": "app.shell",
@@ -722,21 +557,14 @@
       "sources": [
         {
           "path": "frontend/src-tauri/Cargo.toml",
-          "lines": [
-            2
-          ]
+          "lines": [2]
         },
         {
           "path": "frontend/src-tauri/src/lib.rs",
-          "lines": [
-            9,
-            74
-          ]
+          "lines": [9, 74]
         }
       ],
-      "seeds": [
-        "app.shell"
-      ]
+      "seeds": ["app.shell"]
     },
     {
       "id": "app.build",
@@ -753,20 +581,14 @@
       "sources": [
         {
           "path": "frontend/src-tauri/Cargo.toml",
-          "lines": [
-            2
-          ]
+          "lines": [2]
         },
         {
           "path": "frontend/src-tauri/build.rs",
-          "lines": [
-            5
-          ]
+          "lines": [5]
         }
       ],
-      "seeds": [
-        "app.build"
-      ]
+      "seeds": ["app.build"]
     },
     {
       "id": "composition-manifests",
@@ -785,35 +607,19 @@
       "sources": [
         {
           "path": "Cargo.toml",
-          "lines": [
-            1,
-            287,
-            297
-          ]
+          "lines": [1, 287, 297]
         },
         {
           "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [
-            36,
-            39,
-            40,
-            50
-          ]
+          "lines": [36, 39, 40, 50]
         },
         {
           "path": "frontend/src-tauri/Cargo.toml",
-          "lines": [
-            27,
-            38,
-            39,
-            40
-          ]
+          "lines": [27, 38, 39, 40]
         },
         {
           "path": "scripts/build-unofficial-local-apk.mjs",
-          "lines": [
-            37
-          ]
+          "lines": [37]
         }
       ],
       "seeds": []
@@ -835,37 +641,23 @@
       "sources": [
         {
           "path": "frontend/tauri-plugin-oc/src/lib.rs",
-          "lines": [
-            18,
-            19,
-            27,
-            26
-          ]
+          "lines": [18, 19, 27, 26]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/local_browser_auth_protocol.rs",
-          "lines": [
-            3
-          ]
+          "lines": [3]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff_protocol.rs",
-          "lines": [
-            151
-          ]
+          "lines": [151]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/models.rs",
-          "lines": [
-            188,
-            206
-          ]
+          "lines": [188, 206]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/error.rs",
-          "lines": [
-            6
-          ]
+          "lines": [6]
         }
       ],
       "seeds": []
@@ -874,33 +666,19 @@
       "id": "local-listener-closure",
       "disposition": "no-additional-external-owner-edge",
       "explanation": "Both reviewed local listeners use only the listed bytes/getrandom/http-body-util/hyper/hyper-util plus serde/serde_json/hex/Tokio and standard library. They are feature-gated together only in the two APK profiles; pure protocol default-host tests do not imply listener tests or native APK runtime acceptance.",
-      "profiles": [
-        "android-arm64-local-webgpu",
-        "android-x86_64-local-webgpu"
-      ],
+      "profiles": ["android-arm64-local-webgpu", "android-x86_64-local-webgpu"],
       "sources": [
         {
           "path": "frontend/tauri-plugin-oc/src/local_browser_auth.rs",
-          "lines": [
-            7,
-            10,
-            13,
-            76,
-            34
-          ]
+          "lines": [7, 10, 13, 76, 34]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff.rs",
-          "lines": [
-            4,
-            52
-          ]
+          "lines": [4, 52]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/mobile.rs",
-          "lines": [
-            30
-          ]
+          "lines": [30]
         }
       ],
       "seeds": []
@@ -920,34 +698,23 @@
       "sources": [
         {
           "path": "frontend/src-tauri/src/main.rs",
-          "lines": [
-            5
-          ]
+          "lines": [5]
         },
         {
           "path": "frontend/src-tauri/src/navigation.rs",
-          "lines": [
-            11
-          ]
+          "lines": [11]
         },
         {
           "path": "frontend/src-tauri/tauri.localtest.conf.json",
-          "lines": [
-            13,
-            20
-          ]
+          "lines": [13, 20]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/bundle_manager.rs",
-          "lines": [
-            46
-          ]
+          "lines": [46]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/update_manager.rs",
-          "lines": [
-            84
-          ]
+          "lines": [84]
         }
       ],
       "seeds": []

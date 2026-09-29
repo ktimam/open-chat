@@ -92,7 +92,7 @@ test("current-client collectors remain explicit, scoped and ordered behind offli
   );
   assert.match(
     CURRENT_CLIENT_FORMAT_BASE_EXPRESSION,
-    /'d1e3712bb9ded3a1c8b652492591b7107333b23e' \}\}$/,
+    /'5f00758312735f2ddac9928e3aa60349964bf73a' \}\}$/,
   );
   for (const scope of [undefined, "", "main", "current", "pr3"])
     for (const factory of [npmFeatureQueryCommand, rustFeatureCiCommand])
@@ -307,7 +307,7 @@ const mutations = [
     "legacy formatting fallback",
     (s) =>
       s.replace(
-        "d1e3712bb9ded3a1c8b652492591b7107333b23e",
+        "5f00758312735f2ddac9928e3aa60349964bf73a",
         "df9d9ed52db00e87fbb7309280a325902c9bb2cc",
       ),
   ],

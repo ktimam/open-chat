@@ -42,7 +42,7 @@ jobs:
       - name: Check scoped candidate source and config formatting
         working-directory: .
         env:
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || (github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || 'd1e3712bb9ded3a1c8b652492591b7107333b23e' }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || (github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || '5f00758312735f2ddac9928e3aa60349964bf73a' }}
         run: node scripts/check_current_client_format.mjs --scope current-client
       - name: Test current-client security contracts offline
         working-directory: .

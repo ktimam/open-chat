@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "scope": "current-client",
-  "cargoLockSha256": "00a4aa346671f19728b2b4f30a6311b2022355fbcb8a65165d26ad0673956426",
-  "sourceScopeSha256": "0047a42522def673373854e713d96e14d1203037c2a5076573854d63a9a61538",
+  "cargoLockSha256": "0816a350d574b1a43bf7b5cbf4928862f1e5dd524878cec2c707e11a3e719cb9",
+  "sourceScopeSha256": "08dc4954f77f27197ae5181982445adaa242cf925c62c5e343a7c1c4b28da007",
   "modelIdentityResolutions": [
     {
       "name": "llama-cpp-sys-2",
@@ -215,7 +215,7 @@
     },
     {
       "name": "thiserror",
-      "version": "2.0.19",
+      "version": "2.0.18",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
       "license": "MIT OR Apache-2.0"
     },

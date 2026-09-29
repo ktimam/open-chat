@@ -137,3 +137,37 @@ node --test scripts/npm_feature_seed_review.test.mjs scripts/npm_feature_scope.t
 
 The existing collector/runtime commands also accept explicit
 `--scope current-client`; all other required options and approvals are unchanged.
+
+## Reviewed upstream-merge source checkpoint (2026-09-29)
+
+This separate record reviews the resolved frontend composition for upstream
+`5f00758312735f2ddac9928e3aa60349964bf73a` merged into fork checkpoint
+`8a164a52a33d09ce7b4390c96723194026ea8733`. The previous integrated upstream was
+`d1e3712bb9ded3a1c8b652492591b7107333b23e`; earlier records above retain their
+original meaning. This is not a formatting-only refresh or proof that the merge
+commit, Rust lock decision, hosted CI or runtime acceptance has completed.
+
+Exact comparison with the fork checkpoint finds only four changed files in the
+existing 118-source inventory:
+
+| Source                                          | Reviewed merged SHA256 (UTF-8/LF)                                  |
+| ----------------------------------------------- | ------------------------------------------------------------------ |
+| `frontend/app/src/components/App.svelte`        | `2ceed63767ca9c00f18abb89016be88c9e9ff58d7858ab36ae11d0886d9a71c1` |
+| `frontend/app/src/components_mobile/App.svelte` | `7ea0681d5d915320f704095654c0cf5c97ce8ba68a15374a3745f8c0966e56ed` |
+| `frontend/app/src/i18n/i18n.ts`                 | `652babbd5f519e9235b52a3bdae96f7990cce8299356e11455c556d0c1531d63` |
+| `frontend/openchat-client/src/openchat.ts`      | `b5da45a232b7c9fc1763edbe34c2e33805a7b14634d56237ffd6ea6e17d20405` |
+
+The two App entrypoints add upstream locale-load fallback/reload handling while
+retaining the private workspace imports and mounts. The i18n module uses the new
+local locale fallback helper and the same existing Svelte packages. The client
+adds a deleted-user filter to its direct-chat refresh loop; the exact private-app
+account/backend storage getter is unchanged. These are mixed-file changes, not
+new feature-owned dependency roots or approval to scan unrelated core imports.
+
+All 100 dedicated modules, 25 roots, 65 exact ownership anchors and 118 source
+paths remain unchanged. The frontend manifests and lockfile are unchanged from
+the fork checkpoint. The current aggregate is
+`14fb964489adca4863a72792cd229a5273594de925d2cfc80188a9f3f64fa806`.
+The original source reviews, the 94-file formatter-equivalence proof, setup-only
+persistence and named-choice evidence remain intact. No advisory query, package
+installation, root expansion, backend deployment or release acceptance is implied.

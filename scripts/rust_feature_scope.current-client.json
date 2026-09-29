@@ -3,10 +3,10 @@
   "reviewTextIdentity": "utf8-lf",
   "feature": "unofficial-current-client-models-and-private-app-native-interface",
   "sourceRevision": {
-    "base": "d1e3712bb9ded3a1c8b652492591b7107333b23e",
-    "head": "83edde00586c69bbb894f53e017aae8bc4b5c387"
+    "base": "5f00758312735f2ddac9928e3aa60349964bf73a",
+    "head": "9e8c88ece52860e6d0e3569969cc676072016227"
   },
-  "cargoLockSha256": "00a4aa346671f19728b2b4f30a6311b2022355fbcb8a65165d26ad0673956426",
+  "cargoLockSha256": "0816a350d574b1a43bf7b5cbf4928862f1e5dd524878cec2c707e11a3e719cb9",
   "completeness": {
     "status": "incomplete",
     "unresolved": [
@@ -49,19 +49,14 @@
     {
       "id": "linux-inference-check",
       "target": "x86_64-unknown-linux-gnu",
-      "features": [
-        "open-chat/inference"
-      ],
+      "features": ["open-chat/inference"],
       "metadataSha256": null,
       "purpose": "Nonshipping optional host compile check: cargo check --locked -p open-chat --features inference. Not the Android runtime or a published desktop build."
     },
     {
       "id": "linux-inference-store-check",
       "target": "x86_64-unknown-linux-gnu",
-      "features": [
-        "open-chat/inference",
-        "open-chat/store"
-      ],
+      "features": ["open-chat/inference", "open-chat/store"],
       "metadataSha256": null,
       "purpose": "Nonshipping optional host compile check: cargo check --locked -p open-chat --features inference,store. Store compiles the alternate legacy OTA URL; no deployment or update is authorized."
     },
@@ -75,25 +70,20 @@
     {
       "id": "windows-inference-check",
       "target": "x86_64-pc-windows-msvc",
-      "features": [
-        "open-chat/inference"
-      ],
+      "features": ["open-chat/inference"],
       "metadataSha256": null,
       "purpose": "Nonshipping optional host compile check: cargo check --locked -p open-chat --features inference. Not the Android runtime or a published desktop build."
     },
     {
       "id": "windows-inference-store-check",
       "target": "x86_64-pc-windows-msvc",
-      "features": [
-        "open-chat/inference",
-        "open-chat/store"
-      ],
+      "features": ["open-chat/inference", "open-chat/store"],
       "metadataSha256": null,
       "purpose": "Nonshipping optional host compile check: cargo check --locked -p open-chat --features inference,store. Store compiles the alternate legacy OTA URL; no deployment or update is authorized."
     }
   ],
   "sourceFiles": {
-    "Cargo.toml": "2fa5e17b29b6441f346e4ac62e55226c6028d9d6cdca180fd01e567b5f1500a8",
+    "Cargo.toml": "97b50c6823b10cee51b418bd3ac1249ea4433a1133a8f2850b5d9e53275f3b45",
     "frontend/tauri-plugin-oc/Cargo.toml": "8a4bd40892947657b9ee390acf03f8067fc2b6f9b917ab3b3c8cde25d28db122",
     "frontend/src-tauri/Cargo.toml": "506f7673e941e540ff842380dfebd90105a65bfb5e8a8838a7f65697dec12bb5",
     "frontend/tauri-plugin-oc/build.rs": "03927f8a41564985fa36548eed22078c8d286f085c3251d1fbebab4eca359215",
@@ -151,10 +141,7 @@
       "evidence": [
         {
           "path": "frontend/tauri-plugin-oc/src/model_manager.rs",
-          "lines": [
-            1,
-            621
-          ]
+          "lines": [1, 621]
         }
       ]
     },
@@ -190,10 +177,7 @@
       "evidence": [
         {
           "path": "frontend/tauri-plugin-oc/src/model_manager.rs",
-          "lines": [
-            2,
-            339
-          ]
+          "lines": [2, 339]
         }
       ]
     },
@@ -229,11 +213,7 @@
       "evidence": [
         {
           "path": "frontend/tauri-plugin-oc/src/models.rs",
-          "lines": [
-            1,
-            121,
-            206
-          ]
+          "lines": [1, 121, 206]
         }
       ]
     },
@@ -269,10 +249,7 @@
       "evidence": [
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff_protocol.rs",
-          "lines": [
-            4,
-            124
-          ]
+          "lines": [4, 124]
         }
       ]
     },
@@ -308,10 +285,7 @@
       "evidence": [
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff_protocol.rs",
-          "lines": [
-            5,
-            162
-          ]
+          "lines": [5, 162]
         }
       ]
     },
@@ -347,9 +321,7 @@
       "evidence": [
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff_protocol.rs",
-          "lines": [
-            166
-          ]
+          "lines": [166]
         }
       ]
     },
@@ -385,11 +357,7 @@
       "evidence": [
         {
           "path": "frontend/tauri-plugin-oc/src/commands.rs",
-          "lines": [
-            1,
-            20,
-            341
-          ]
+          "lines": [1, 20, 341]
         }
       ]
     },
@@ -425,10 +393,7 @@
       "evidence": [
         {
           "path": "frontend/tauri-plugin-oc/src/model_manager.rs",
-          "lines": [
-            13,
-            317
-          ]
+          "lines": [13, 317]
         }
       ]
     },
@@ -464,10 +429,7 @@
       "evidence": [
         {
           "path": "frontend/tauri-plugin-oc/src/model_manager.rs",
-          "lines": [
-            761,
-            763
-          ]
+          "lines": [761, 763]
         }
       ]
     },
@@ -499,10 +461,7 @@
       "evidence": [
         {
           "path": "frontend/tauri-plugin-oc/src/inference.rs",
-          "lines": [
-            17,
-            212
-          ]
+          "lines": [17, 212]
         }
       ]
     },
@@ -534,9 +493,7 @@
       "evidence": [
         {
           "path": "frontend/tauri-plugin-oc/src/inference.rs",
-          "lines": [
-            262
-          ]
+          "lines": [262]
         }
       ]
     },
@@ -568,9 +525,7 @@
       "evidence": [
         {
           "path": "frontend/tauri-plugin-oc/src/inference.rs",
-          "lines": [
-            264
-          ]
+          "lines": [264]
         }
       ]
     },
@@ -588,10 +543,7 @@
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "checksum": "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
       },
-      "profiles": [
-        "android-arm64-local-webgpu",
-        "android-x86_64-local-webgpu"
-      ],
+      "profiles": ["android-arm64-local-webgpu", "android-x86_64-local-webgpu"],
       "review": {
         "status": "source-traced",
         "basis": "source-call-or-schema",
@@ -600,9 +552,7 @@
       "evidence": [
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff.rs",
-          "lines": [
-            4
-          ]
+          "lines": [4]
         }
       ]
     },
@@ -620,10 +570,7 @@
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "checksum": "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd"
       },
-      "profiles": [
-        "android-arm64-local-webgpu",
-        "android-x86_64-local-webgpu"
-      ],
+      "profiles": ["android-arm64-local-webgpu", "android-x86_64-local-webgpu"],
       "review": {
         "status": "source-traced",
         "basis": "source-call-or-schema",
@@ -632,9 +579,7 @@
       "evidence": [
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff.rs",
-          "lines": [
-            46
-          ]
+          "lines": [46]
         }
       ]
     },
@@ -652,10 +597,7 @@
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "checksum": "e9f41fd6a08e4d4ec69df65976da761afd5ad5e58a9d4acb46bd1c953a9e3ff2"
       },
-      "profiles": [
-        "android-arm64-local-webgpu",
-        "android-x86_64-local-webgpu"
-      ],
+      "profiles": ["android-arm64-local-webgpu", "android-x86_64-local-webgpu"],
       "review": {
         "status": "source-traced",
         "basis": "source-call-or-schema",
@@ -664,9 +606,7 @@
       "evidence": [
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff.rs",
-          "lines": [
-            5
-          ]
+          "lines": [5]
         }
       ]
     },
@@ -684,10 +624,7 @@
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "checksum": "d22053281f852e11534f5198498373cbb59295120a20771d90f7ed1897490a72"
       },
-      "profiles": [
-        "android-arm64-local-webgpu",
-        "android-x86_64-local-webgpu"
-      ],
+      "profiles": ["android-arm64-local-webgpu", "android-x86_64-local-webgpu"],
       "review": {
         "status": "source-traced",
         "basis": "source-call-or-schema",
@@ -696,9 +633,7 @@
       "evidence": [
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff.rs",
-          "lines": [
-            6
-          ]
+          "lines": [6]
         }
       ]
     },
@@ -716,10 +651,7 @@
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "checksum": "96547c2556ec9d12fb1578c4eaf448b04993e7fb79cbaad930a656880a6bdfa0"
       },
-      "profiles": [
-        "android-arm64-local-webgpu",
-        "android-x86_64-local-webgpu"
-      ],
+      "profiles": ["android-arm64-local-webgpu", "android-x86_64-local-webgpu"],
       "review": {
         "status": "source-traced",
         "basis": "source-call-or-schema",
@@ -728,9 +660,7 @@
       "evidence": [
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff.rs",
-          "lines": [
-            7
-          ]
+          "lines": [7]
         }
       ]
     },
@@ -764,9 +694,7 @@
       "evidence": [
         {
           "path": "frontend/tauri-plugin-oc/src/desktop.rs",
-          "lines": [
-            29
-          ]
+          "lines": [29]
         }
       ]
     },
@@ -780,9 +708,9 @@
       "originContext": "production",
       "expected": {
         "name": "thiserror",
-        "version": "2.0.19",
+        "version": "2.0.18",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
-        "checksum": "09a43598840e33d5b0331f38c5e30d13bb11c11210a4b58f0d9b18a5a5eefcd9"
+        "checksum": "4288b5bcbc7920c07a1149a35cf9590a2aa808e0bc1eafaade0b80947865fbc4"
       },
       "profiles": [
         "android-arm64-local-webgpu",
@@ -802,9 +730,7 @@
       "evidence": [
         {
           "path": "frontend/tauri-plugin-oc/src/error.rs",
-          "lines": [
-            5
-          ]
+          "lines": [5]
         }
       ]
     },
@@ -840,9 +766,7 @@
       "evidence": [
         {
           "path": "frontend/tauri-plugin-oc/src/error.rs",
-          "lines": [
-            14
-          ]
+          "lines": [14]
         }
       ]
     },
@@ -878,9 +802,7 @@
       "evidence": [
         {
           "path": "frontend/tauri-plugin-oc/src/bundle_manager.rs",
-          "lines": [
-            109
-          ]
+          "lines": [109]
         }
       ]
     },
@@ -916,10 +838,7 @@
       "evidence": [
         {
           "path": "frontend/tauri-plugin-oc/src/update_manager.rs",
-          "lines": [
-            3,
-            68
-          ]
+          "lines": [3, 68]
         }
       ]
     },
@@ -955,9 +874,7 @@
       "evidence": [
         {
           "path": "frontend/tauri-plugin-oc/build.rs",
-          "lines": [
-            51
-          ]
+          "lines": [51]
         }
       ]
     },
@@ -991,10 +908,7 @@
       "evidence": [
         {
           "path": "frontend/src-tauri/src/lib.rs",
-          "lines": [
-            9,
-            74
-          ]
+          "lines": [9, 74]
         }
       ]
     },
@@ -1028,9 +942,7 @@
       "evidence": [
         {
           "path": "frontend/src-tauri/build.rs",
-          "lines": [
-            5
-          ]
+          "lines": [5]
         }
       ]
     }

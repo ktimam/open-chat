@@ -160,3 +160,78 @@ Historical PR inventories and advisory decisions are retained as historical
 material, not presented as current-source acceptance. No core dependency audit,
 advisory waiver or hosted release pass is implied. Matching builds, browser/native
 acceptance and IOU persisted delivery remain separate requirements.
+
+## Incoming upstream merge checkpoint (2026-09-29)
+
+The current-only CI baseline now records incoming upstream
+`5f00758312735f2ddac9928e3aa60349964bf73a`, following fork checkpoint
+`8a164a52a33d09ce7b4390c96723194026ea8733` and its previously integrated upstream
+`d1e3712bb9ded3a1c8b652492591b7107333b23e`. The reviewed immutable upstream backend
+tree is `cf00604a2ca33c96c00a403b813a83d9221fd56f` and root Cargo manifest blob is
+`dcdd0c5f0b123d6ab15622a46199b6eb4a94256a`. The base deployment script, all three
+explicitly frozen historical wrapper identities and `dfx.json` are unchanged.
+This baseline update does not modify or deploy backend code. The actual backend
+identity guard still requires the expected tree represented by the tested Git
+`HEAD` and refuses tracked or untracked guarded changes; an in-progress merge is
+not a successful identity check.
+
+All 12 current inherited-format record paths have byte-identical upstream blobs
+between the old and incoming upstream commits. Their existing candidate hashes,
+formatter/config identities, exact edit proofs and multiplicities are unchanged.
+Only the current upstream base pins and corresponding current workflow fallback
+and contract fixtures advance. Live proof recomputation remains mandatory; this
+does not add an exclusion, accept new inherited debt or exempt merge-resolution
+formatting. Historical formatting registries and workflows remain unchanged.
+
+The appended npm ownership checkpoint reviews only four changed mixed files:
+desktop/mobile App locale-load fallback, i18n locale fallback registration and
+the client deleted-user refresh filter. The private workspace mounts and exact
+account/backend storage getter remain intact. The existing 100 dedicated modules,
+118 fingerprinted sources, 25 roots, 65 ownership anchors and frontend package
+identities are retained. Its aggregate is
+`14fb964489adca4863a72792cd229a5273594de925d2cfc80188a9f3f64fa806`; prior runtime and
+formatting reviews are preserved as separate evidence.
+
+The root Cargo manifest and lockfile change upstream, including a `thiserror`
+identity shared with a current native owner. Their resolved dependency graph,
+license identities and Rust inventory bindings require a separate exact review;
+this non-Rust checkpoint neither accepts a candidate lock nor refreshes Rust
+policy. Unrelated upstream backend dependencies do not become model/app audit
+roots. Conflict resolution, focused local checks, complete runtime tests and
+hosted execution are separate evidence. Security/advisory acceptance remains
+unresolved, and no installation, advisory query, deployment or publication is
+authorized or claimed by this checkpoint.
+
+After the source merge was committed as `9e8c88ece`, the focused offline identity,
+current/historical wiring, source-ownership and live-format contract suites passed
+322/322 tests with zero skips. The unchanged actual backend identity guard passes
+against that merged `HEAD`. The npm source gate reports 25 roots / 118 sources and
+the exact aggregate above. The explicit current formatting command also passes
+445 candidates, retains the existing 12 policy exclusions, and recomputes all 12
+unchanged inherited proofs. Its `advisoryChecksPerformed` and `releaseAcceptance`
+results remain false. A final repeat of the exact source comparison found no
+fingerprint drift. These local results do not establish Rust/native qualification,
+hosted workflow execution, advisory acceptance or release readiness.
+
+The separate current Rust policy review is bound to merge commit
+`9e8c88ece52860e6d0e3569969cc676072016227`, lockfile digest
+`0816a350d574b1a43bf7b5cbf4928862f1e5dd524878cec2c707e11a3e719cb9`, and
+scope digest `08dc4954f77f27197ae5181982445adaa242cf925c62c5e343a7c1c4b28da007`.
+Upstream PocketIC requires exactly `thiserror 2.0.18`; keeping `2.0.19` failed
+actual offline Cargo resolution. The native workspace's compatible `"2"` range
+and unchanged derive use accept the upstream version. Its cached archive and
+implementation archive match their lockfile checksums, and its license remains
+`MIT OR Apache-2.0`. Only current source/lock/version bindings and the review
+explanation change; all eight profiles, 25 direct seeds, 39 license entries and
+19 model obligations are preserved. Thirty-eight focused pure source/policy
+tests pass. Source completeness remains explicitly incomplete, and offline Cargo
+metadata stops at the missing cached `candid 0.10.37` archive. These checks are
+not complete dependency-resolution, advisory, native-build or device acceptance.
+
+With both current policy updates present, the combined offline frontend build,
+Android packaging/startup, release-policy, identity, formatting and scoped security
+contract suites pass 1,167/1,167 tests with zero skips (four test processes). They
+use local fixtures only; no advisory query, package download or native compilation
+is included. Separately, the merged frontend passes 4,505 tests and both typechecks
+with zero errors; the existing 577 Svelte warnings remain. These results do not
+replace browser authentication, real image inference, app-save or APK runtime tests.
