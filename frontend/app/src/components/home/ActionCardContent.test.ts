@@ -1,7 +1,8 @@
 import type { ActionCardContent, ChatIdentifier, OpenChat } from "@client";
 import { mount, tick, unmount } from "svelte";
 import { writable } from "svelte/store";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import ActionCardContentHarness from "../../../test-stubs/ActionCardContentHarness.svelte";
 
 const mocks = vi.hoisted(() => ({
     resolveActionAppForCard: vi.fn(),
@@ -20,8 +21,26 @@ vi.mock("../../utils/aiActionAvailability", () => ({
     appCardRenderingAvailable: () => true,
 }));
 
-let ActionCardContentHarness: (typeof import("../../../test-stubs/ActionCardContentHarness.svelte"))["default"];
-const matchMediaDescriptor = Object.getOwnPropertyDescriptor(window, "matchMedia");
+// Install jsdom's missing browser API before static component imports. Loading the real
+// Svelte/theme/client dependency graph is module collection, not a timed beforeAll hook.
+const { matchMediaDescriptor } = vi.hoisted(() => {
+    const matchMediaDescriptor = Object.getOwnPropertyDescriptor(window, "matchMedia");
+    Object.defineProperty(window, "matchMedia", {
+        configurable: true,
+        writable: true,
+        value: vi.fn().mockImplementation((query: string) => ({
+            matches: false,
+            media: query,
+            onchange: null,
+            addListener: vi.fn(),
+            removeListener: vi.fn(),
+            addEventListener: vi.fn(),
+            removeEventListener: vi.fn(),
+            dispatchEvent: vi.fn(),
+        })),
+    });
+    return { matchMediaDescriptor };
+});
 
 const CARD_URL = "https://app.example/openchat/card";
 const GROUP: ChatIdentifier = { kind: "group_chat", groupId: "aaaaa-aa" };
@@ -109,25 +128,6 @@ type PostedCardMessage = {
 function postedCardMessages(postMessage: ReturnType<typeof vi.spyOn>): PostedCardMessage[] {
     return (postMessage.mock.calls as unknown[][]).map(([message]) => message as PostedCardMessage);
 }
-
-beforeAll(async () => {
-    Object.defineProperty(window, "matchMedia", {
-        configurable: true,
-        writable: true,
-        value: vi.fn().mockImplementation((query: string) => ({
-            matches: false,
-            media: query,
-            onchange: null,
-            addListener: vi.fn(),
-            removeListener: vi.fn(),
-            addEventListener: vi.fn(),
-            removeEventListener: vi.fn(),
-            dispatchEvent: vi.fn(),
-        })),
-    });
-    ({ default: ActionCardContentHarness } =
-        await import("../../../test-stubs/ActionCardContentHarness.svelte"));
-});
 
 afterAll(() => {
     if (matchMediaDescriptor === undefined) {
