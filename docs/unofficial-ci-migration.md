@@ -224,7 +224,11 @@ implementation archive match their lockfile checksums, and its license remains
 `MIT OR Apache-2.0`. Only current source/lock/version bindings and the review
 explanation change; all eight profiles, 25 direct seeds, 39 license entries and
 19 model obligations are preserved. Thirty-eight focused pure source/policy
-tests pass. Source completeness remains explicitly incomplete, and offline Cargo
+tests pass. The base inventory deliberately declares an incomplete review; its
+separately bound receipt resolves that source-owner gap across 24 sources, 29
+review units and 152 seed/profile pairs. That validated source-review result is
+not full collection acceptance: the collector publishes overall completeness
+only after every locked metadata profile and SBOM check succeeds. Offline Cargo
 metadata stops at the missing cached `candid 0.10.37` archive. These checks are
 not complete dependency-resolution, advisory, native-build or device acceptance.
 
@@ -235,3 +239,25 @@ use local fixtures only; no advisory query, package download or native compilati
 is included. Separately, the merged frontend passes 4,505 tests and both typechecks
 with zero errors; the existing 577 Svelte warnings remain. These results do not
 replace browser authentication, real image inference, app-save or APK runtime tests.
+
+## Current Android component compilation checkpoint (2026-09-29)
+
+Running the actual cached Kotlin/SDK job on the merged source caught stale host
+fixtures: they still supplied ProcessLifecycleOwner, while the app now uses
+Application.ActivityLifecycleCallbacks, Bundle and a generated local-test build
+flag. This was a test-harness compilation failure, not a passing native result;
+the original failure log is retained. Only the component-test folder is updated.
+The production MyApplication and IntentsManager implementations are unchanged.
+
+The runner still compiles those actual production files. Its recording doubles
+now match the framework API, and all existing four-path intent assertions remain.
+Five tests across package-identity, API-level and official/local-test combinations
+pass 40/40. They cover Firebase success/failure and local-test exclusion, cold
+startup before service calls, background intent creation, main-versus-other
+activity routing and the production foreground field's volatile modifier. A
+separate compilation excludes Android doubles and passes against SDK 36; all
+seven recorded Android constants match the SDK. The existing 32 CI coverage
+contracts pass, and the combined focused tool/startup/APK/CI contract run passes
+71/71 with no skips. No download, Gradle dependency resolution, production change,
+emulator action or APK installation is part of this evidence. It is not complete
+native compilation or device acceptance.

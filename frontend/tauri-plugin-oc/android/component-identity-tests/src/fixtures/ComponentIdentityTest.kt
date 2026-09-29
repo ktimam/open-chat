@@ -1,10 +1,12 @@
 package fixtures
 
+import android.app.Activity
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
-import androidx.lifecycle.ProcessLifecycleOwner
+import android.os.Bundle
+import com.oclabs.openchat.BuildConfig
 import com.oclabs.openchat.MainActivity
 import com.oclabs.openchat.MyApplication
 import com.oclabs.openchat.NotificationDismissReceiver
@@ -18,14 +20,19 @@ import org.junit.runner.RunWith
 import org.junit.runners.Parameterized
 
 @RunWith(Parameterized::class)
-class ComponentIdentityTest(private val differentId: Boolean, private val sdk: Int) {
+class ComponentIdentityTest(
+    private val differentId: Boolean,
+    private val sdk: Int,
+    private val localTest: Boolean,
+) {
     companion object {
         @JvmStatic
-        @Parameterized.Parameters(name = "differentId={0}, sdk={1}")
-        fun scenarios(): Collection<Array<Any>> = listOf(
-            arrayOf(false, 22), arrayOf(false, 36),
-            arrayOf(true, 22), arrayOf(true, 36),
-        )
+        @Parameterized.Parameters(name = "differentId={0}, sdk={1}, localTest={2}")
+        fun scenarios(): Collection<Array<Any>> = listOf(false, true).flatMap { differentId ->
+            listOf(22, 36).flatMap { sdk ->
+                listOf(false, true).map { localTest -> arrayOf<Any>(differentId, sdk, localTest) }
+            }
+        }
     }
 
     private val notification = Notification(
@@ -42,10 +49,16 @@ class ComponentIdentityTest(private val differentId: Boolean, private val sdk: I
         Probe.applicationId = if (differentId) "test.installed.application" else MainActivity::class.java.packageName
         Probe.activityConstructions = 0
         Probe.events.clear()
-        Probe.observer = null
+        Probe.lifecycleCallbacks.clear()
+        Probe.logs.clear()
+        Probe.firebaseAvailable = true
         Probe.onFirebase = null
         Probe.onDatabase = null
         Build.VERSION.SDK_INT = sdk
+        BuildConfig.UNOFFICIAL_LOCAL_TEST = localTest
+        MyApplication::class.java.getDeclaredField("isAppInForeground").apply {
+            isAccessible = true
+        }.setBoolean(null, false)
     }
 
     @Test
@@ -73,14 +86,72 @@ class ComponentIdentityTest(private val differentId: Boolean, private val sdk: I
         Probe.onDatabase = ::assertAllFourPaths
         val application = MyApplication()
         application.onCreate()
-        assertEquals(listOf("super.onCreate", "firebase", "database", "lifecycle"), Probe.events)
+        assertEquals(startupEvents(), Probe.events)
         assertEquals(0, Probe.activityConstructions)
         assertFalse(MyApplication.isAppInForeground)
-        val observer = requireNotNull(Probe.observer)
-        observer.onStart(ProcessLifecycleOwner)
+        assertEquals(1, Probe.lifecycleCallbacks.size)
+        if (localTest) assertTrue("local-test startup must not initialize Firebase or log its failure", Probe.logs.isEmpty())
+        else assertEquals(listOf("debug" to "Firebase initialized: test"), Probe.logs.map { it.first to it.third })
+        assertAllFourPaths(application)
+    }
+
+    @Test
+    fun onlyMainActivityStartStopControlsForegroundVisibility() {
+        assertTrue(
+            "the production foreground flag must retain volatile cross-thread publication",
+            java.lang.reflect.Modifier.isVolatile(
+                MyApplication::class.java.getDeclaredField("isAppInForeground").modifiers,
+            ),
+        )
+        MyApplication().onCreate()
+        val callbacks = Probe.lifecycleCallbacks.single()
+        val main = MainActivity()
+        val other = Activity() // For example, a native incoming-call screen.
+
+        callbacks.onActivityCreated(main, null)
+        callbacks.onActivityCreated(other, Bundle())
+        callbacks.onActivityResumed(main)
+        callbacks.onActivityStarted(other)
+        callbacks.onActivityResumed(other)
+        callbacks.onActivitySaveInstanceState(main, Bundle())
+        assertFalse("non-main activity startup must not mark the chat/web layer visible", MyApplication.isAppInForeground)
+
+        callbacks.onActivityStarted(main)
         assertTrue(MyApplication.isAppInForeground)
-        observer.onStop(ProcessLifecycleOwner)
+        callbacks.onActivityStarted(other)
+        callbacks.onActivityPaused(main)
+        callbacks.onActivityPaused(other)
+        callbacks.onActivityStopped(other)
+        callbacks.onActivityDestroyed(other)
+        assertTrue("another activity stopping must not hide the main activity", MyApplication.isAppInForeground)
+
+        val backgroundValue = AtomicReference<Boolean?>()
+        val background = Thread { backgroundValue.set(MyApplication.isAppInForeground) }
+        background.start()
+        background.join(1000)
+        assertFalse("background visibility read did not complete", background.isAlive)
+        assertEquals(true, backgroundValue.get())
+
+        callbacks.onActivityStopped(main)
         assertFalse(MyApplication.isAppInForeground)
+        callbacks.onActivityResumed(other)
+        callbacks.onActivityDestroyed(main)
+        assertFalse("non-start callbacks must not re-enable foreground routing", MyApplication.isAppInForeground)
+    }
+
+    @Test
+    fun firebaseUnavailableDoesNotSkipDatabaseOrComponentRegistration() {
+        Probe.firebaseAvailable = false
+        Probe.onFirebase = ::assertAllFourPaths
+        Probe.onDatabase = ::assertAllFourPaths
+        val application = MyApplication()
+        application.onCreate()
+        assertEquals(startupEvents(), Probe.events)
+        assertEquals(1, Probe.lifecycleCallbacks.size)
+        assertEquals(0, Probe.activityConstructions)
+        assertFalse(MyApplication.isAppInForeground)
+        if (localTest) assertTrue("local-test startup must never attempt Firebase", Probe.logs.isEmpty())
+        else assertEquals(listOf("error" to "Firebase failed to initialize!"), Probe.logs.map { it.first to it.third })
         assertAllFourPaths(application)
     }
 
@@ -98,6 +169,10 @@ class ComponentIdentityTest(private val differentId: Boolean, private val sdk: I
         failure.get()?.let { throw AssertionError("background intent creation failed", it) }
         assertEquals(0, Probe.activityConstructions)
     }
+
+    private fun startupEvents(): List<String> =
+        if (localTest) listOf("super.onCreate", "database", "activityLifecycle")
+        else listOf("super.onCreate", "firebase", "database", "activityLifecycle")
 
     private fun assertAllFourPaths(context: Context) {
         val immutableUpdate = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE

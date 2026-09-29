@@ -2,12 +2,28 @@ package android.app
 
 import android.content.Context
 import android.content.Intent
+import android.os.Bundle
 import fixtures.Probe
 
 open class Activity : Context()
 
 open class Application : Context() {
     open fun onCreate() { Probe.events.add("super.onCreate") }
+
+    interface ActivityLifecycleCallbacks {
+        fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?)
+        fun onActivityStarted(activity: Activity)
+        fun onActivityResumed(activity: Activity)
+        fun onActivityPaused(activity: Activity)
+        fun onActivityStopped(activity: Activity)
+        fun onActivitySaveInstanceState(activity: Activity, outState: Bundle)
+        fun onActivityDestroyed(activity: Activity)
+    }
+
+    fun registerActivityLifecycleCallbacks(callbacks: ActivityLifecycleCallbacks) {
+        Probe.events.add("activityLifecycle")
+        Probe.lifecycleCallbacks.add(callbacks)
+    }
 }
 
 // Records the exact Android factory arguments supplied by the real production code.

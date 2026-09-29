@@ -8,7 +8,7 @@ class FirebaseApp(val name: String) {
         fun initializeApp(context: Context): FirebaseApp? {
             Probe.events.add("firebase")
             Probe.onFirebase?.invoke(context)
-            return FirebaseApp("test")
+            return if (Probe.firebaseAvailable) FirebaseApp("test") else null
         }
     }
 }

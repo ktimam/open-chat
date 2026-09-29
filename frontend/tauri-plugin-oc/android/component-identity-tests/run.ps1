@@ -42,7 +42,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Host contract compilation failed.' }
 if ($LASTEXITCODE -ne 0) { throw 'Host component identity contracts failed.' }
 
 # The Android API doubles and host-only JUnit test are excluded here. External
-# Firebase/lifecycle/database collaborators remain explicit compilation fixtures.
+# Firebase/generated BuildConfig/database collaborators remain explicit compilation
+# fixtures; ActivityLifecycleCallbacks and Bundle come from the real Android SDK.
 & $java -Xmx512m -cp $KotlinCompilerClasspath org.jetbrains.kotlin.cli.jvm.K2JVMCompiler -no-stdlib -no-reflect -jvm-target 17 -classpath "$KotlinRuntimeClasspath$separator$AndroidJar" -d $sdkOutput $pluginSource $appSource @sdkSupport
 if ($LASTEXITCODE -ne 0) { throw 'Real Android SDK source compilation failed.' }
 & $java -Xmx256m -cp "$sdkOutput$separator$KotlinRuntimeClasspath" fixtures.AndroidConstantCheck
