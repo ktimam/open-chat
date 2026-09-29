@@ -68,7 +68,9 @@ describe("UserClient official direct-message routing", () => {
 
     function setup(userId: string) {
         // Capture the final IC call boundary, then stop. No success, certificate or save is faked.
-        const call = vi.fn<HttpAgent["call"]>().mockRejectedValue(new Error("SYNTHETIC_TRANSPORT_STOP"));
+        const call = vi
+            .fn<HttpAgent["call"]>()
+            .mockRejectedValue(new Error("SYNTHETIC_TRANSPORT_STOP"));
         const query = vi.fn<HttpAgent["query"]>().mockRejectedValue(new Error("Unexpected query"));
         const agent = { call, query } as unknown as HttpAgent;
         const cache = {
@@ -90,7 +92,11 @@ describe("UserClient official direct-message routing", () => {
     it.each([
         { name: "legacy User canister", userId: LEGACY_USER, canister: LEGACY_USER },
         { name: "indexed MultiUser", userId: MULTI_USER, canister: MULTI_USER_CANISTER },
-        { name: "last indexed MultiUser", userId: MULTI_USER_LAST_INDEX, canister: MULTI_USER_CANISTER },
+        {
+            name: "last indexed MultiUser",
+            userId: MULTI_USER_LAST_INDEX,
+            canister: MULTI_USER_CANISTER,
+        },
     ])("routes $name through its canister's send_message_v2", async ({ userId, canister }) => {
         const { client, call, query, cache } = setup(userId);
         const chat: DirectChatIdentifier = { kind: "direct_chat", userId: RECIPIENT };

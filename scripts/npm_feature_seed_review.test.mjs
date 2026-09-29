@@ -161,6 +161,7 @@ test("current private-app, field-review and browser/native relay families are fi
     "frontend/app/src/localNativeAppHandoff.ts",
     "frontend/app/src/utils/isolatedAppProcessor.ts",
     "frontend/app/src/utils/localAppCatalog.ts",
+    "frontend/app/src/utils/localAppSetupStore.ts",
     "frontend/app/src/utils/localAppChatConfiguration.ts",
     "frontend/app/src/utils/localAppChatState.ts",
     "frontend/app/src/utils/localAppDrafts.ts",
@@ -183,6 +184,7 @@ test("current private-app, field-review and browser/native relay families are fi
   }
   for (const file of [
     "frontend/app/src/components/home/ChatMessage.svelte",
+    "frontend/openchat-client/src/openchat.ts",
     "frontend/app/src/localBrowserAuth.ts",
     "frontend/app/localBrowserAuthBuild.mjs",
     "frontend/openchat-service-worker/src/service_worker.ts",
@@ -194,6 +196,140 @@ test("current private-app, field-review and browser/native relay families are fi
       !owned.includes(file),
       `mixed core, unrelated auth, tests or docs must not become dedicated source: ${file}`,
     );
+});
+
+test("current setup persistence is a dedicated builtin-API consumer with an exact mixed-client scope anchor", () => {
+  const config = JSON.parse(
+    readFileSync(
+      resolve(root, "scripts/npm_feature_scope.current-client.json"),
+      "utf8",
+    ),
+  );
+  const storePath = "frontend/app/src/utils/localAppSetupStore.ts";
+  const clientPath = "frontend/openchat-client/src/openchat.ts";
+  const owned = featureOwnedFiles(root, config.scopeId);
+  const fingerprint = seedSourceFingerprint(root, config);
+  assert.equal(owned.length, 99);
+  assert.equal(fingerprint.files.length, 117);
+  assert.equal(config.seeds.length, 25);
+  assert.equal(
+    config.seeds.reduce((count, seed) => count + seed.evidence.length, 0),
+    65,
+  );
+  assert(owned.includes(storePath));
+  assert(
+    !owned.includes(clientPath),
+    "Do not scan unrelated mixed core imports",
+  );
+  assert(fingerprint.files.includes(clientPath));
+  for (const historical of ["pr1-model-npm", "pr2-app-card-ocr-npm"])
+    assert(!featureOwnedFiles(root, historical).includes(storePath));
+  const anchors = config.seeds
+    .flatMap((seed) => seed.evidence)
+    .filter((item) => item.file === clientPath);
+  assert.equal(anchors.length, 1);
+  assert.equal(
+    anchors[0].contains,
+    "return JSON.stringify([this.config.icUrl, this.config.userIndexCanister]);",
+  );
+  const client = readFileSync(resolve(root, clientPath), "utf8").replaceAll(
+    "\r\n",
+    "\n",
+  );
+  assert(
+    client.includes(
+      "    privateAppStorageBackend(): string | undefined {\n" +
+        "        if (!this.clientOnlyApps() || !this.config.icUrl || !this.config.userIndexCanister)\n" +
+        "            return undefined;\n" +
+        "        return JSON.stringify([this.config.icUrl, this.config.userIndexCanister]);\n" +
+        "    }",
+    ),
+  );
+  const source = readFileSync(resolve(root, storePath), "utf8");
+  assert.deepEqual(featureDependencySpecifiers(source), [
+    "./localAppCatalog",
+    "./isolatedAppProcessor",
+  ]);
+  assert.match(source, /globalThis\.indexedDB/u);
+  assert.match(source, /crypto\.subtle\.digest\("SHA-256"/u);
+  assert.doesNotMatch(
+    source,
+    /\b(?:fetch|WebSocket|XMLHttpRequest|Worker|runIsolatedAppProcessor)\s*\(/u,
+  );
+});
+
+test("reviewed persistence writes setup-only fields at explicit mutations, never proposal or delivery state", () => {
+  const workspace = readFileSync(
+    resolve(root, "frontend/app/src/utils/privateAppWorkspace.ts"),
+    "utf8",
+  ).replaceAll("\r\n", "\n");
+  const store = readFileSync(
+    resolve(root, "frontend/app/src/utils/localAppSetupStore.ts"),
+    "utf8",
+  );
+  const method = (name) => {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+    const match = workspace.match(
+      new RegExp(`\\n    (?:async )?${escaped}\\([\\s\\S]*?\\n    \\}`, "u"),
+    );
+    assert(match, `Missing reviewed workspace method ${name}`);
+    return match[0];
+  };
+  const save = method("#saveSetup");
+  const snapshot = save.match(
+    /const snapshot: LocalAppSetupSnapshot = \{([\s\S]*?)\n        \};/u,
+  );
+  assert(snapshot, "Only an explicit setup snapshot can reach storage");
+  assert.deepEqual(
+    [...snapshot[1].matchAll(/^ {12}(\w+)(?::|,)/gmu)].map((match) => match[1]),
+    ["catalog", "appId", "actionId", "processor", "enabledChats"],
+  );
+  assert.doesNotMatch(
+    save,
+    /#state\.(?:draft|editorJson|recipient|message)|approval|idempotency|payload/u,
+  );
+  assert.match(save, /storage\.write\(scope, snapshot\)/u);
+  for (const name of [
+    "#set",
+    "propose",
+    "edit",
+    "review",
+    "#send",
+    "confirm",
+    "retryUncertain",
+    "reopenDelivered",
+    "discard",
+  ])
+    assert.doesNotMatch(
+      method(name),
+      /#saveSetup\(|setupStorage\.(?:write|remove)\(/u,
+      name,
+    );
+  for (const name of [
+    "importCatalog",
+    "chooseApp",
+    "select",
+    "importProcessor",
+    "replaceEnabledChats",
+  ])
+    assert.match(method(name), /#saveSetup\(/u, name);
+  assert.match(method("#setupScope"), /this\.#account && this\.#backend/u);
+  assert.match(method("setAccount"), /backend === this\.#backend/u);
+  assert.match(
+    method("#restoreSetup"),
+    /await validateLocalAppSetupSnapshot\(stored\)/u,
+  );
+  assert.match(method("#restoreSetup"), /epoch !== this\.#setupEpoch/u);
+  assert.doesNotMatch(
+    method("#restoreSetup"),
+    /deps\.(?:extract|runProcessor|deliver)|#saveSetup\(/u,
+  );
+  assert.match(
+    store,
+    /exact\(value, \["catalog", "enabledChats"\], \["appId", "actionId", "processor"\]\)/u,
+  );
+  assert.match(store, /storedOwner\.account !== owner\.account/u);
+  assert.match(store, /storedOwner\.backend !== owner\.backend/u);
 });
 
 test("native handoff bundler owns the reviewed locked esbuild location, not an invented manifest edge", () => {

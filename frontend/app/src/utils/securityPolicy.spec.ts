@@ -105,8 +105,11 @@ describe("explicit unofficial local processor CSP", () => {
         const ordinary = generateCspForScripts([], false);
         const unofficial = generateCspForScripts([], false, true);
         expect(directive(unofficial, "frame-src")).toBe("'self' https:");
-        const tokens = (value: string) => directive(value, "script-src").split(/\s+/).filter(Boolean);
-        expect(tokens(unofficial).filter(token => !tokens(ordinary).includes(token))).toEqual([hash]);
+        const tokens = (value: string) =>
+            directive(value, "script-src").split(/\s+/).filter(Boolean);
+        expect(tokens(unofficial).filter((token) => !tokens(ordinary).includes(token))).toEqual([
+            hash,
+        ]);
         expect(directive(unofficial, "script-src")).not.toContain("'unsafe-inline'");
         expect(directive(unofficial, "script-src")).not.toContain("*");
         expect(directive(unofficial, "connect-src")).toBe(directive(ordinary, "connect-src"));

@@ -81,8 +81,12 @@ describe("Process with AI prompt", () => {
     it("bounds the default text summary without changing freeform user prompts", () => {
         expect(PROCESS_WITH_AI_TEXT_PROMPT).toContain("one sentence of at most 20 words");
         expect(PROCESS_WITH_AI_TEXT_PROMPT).toContain("Use only stated facts");
-        expect(PROCESS_WITH_AI_TEXT_PROMPT).toContain("Copy any names and numbers you include exactly");
-        expect(PROCESS_WITH_AI_TEXT_PROMPT).toContain("Do not add analysis, explanations, or guesses");
+        expect(PROCESS_WITH_AI_TEXT_PROMPT).toContain(
+            "Copy any names and numbers you include exactly",
+        );
+        expect(PROCESS_WITH_AI_TEXT_PROMPT).toContain(
+            "Do not add analysis, explanations, or guesses",
+        );
         expect(PROCESS_WITH_AI_TEXT_PROMPT).toContain("Return only the sentence, then stop");
         const userPrompt = "Explain the selected topic in detail with examples.";
         expect(buildLocalAiPrompt(userPrompt)).toBe(userPrompt);

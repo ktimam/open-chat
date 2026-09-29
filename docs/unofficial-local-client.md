@@ -130,13 +130,34 @@ an unsent private app proposal; use **Propose** instead.
 Voice messages are supported by **Process with AI** when a compatible model's
 optional audio support is enabled. This does not add voice input to app proposals.
 
-This prototype keeps imports, per-chat opt-ins and private drafts in page memory.
-Reload/logout/account change discards them: re-import the app catalog and processor,
-reselect the app/action and restore any chat opt-ins. Downloaded model caches are
-separate and are not deleted when changing apps or models. An uncertain delivery is
-never retried automatically. Check the receiving app first, then use **Retry the same
-reviewed request** if the draft is still available, preserving its import ID. Create
-a new draft only after checking that the earlier request was not already saved.
+### Remembered setup; session-only drafts
+
+Imported app catalogs, the selected app/action, its verified processor file and
+enabled chats are remembered on the same device for the same signed-in account
+and configured backend. This includes private app-owned setup/context, such as
+user-defined labels. A separate IndexedDB store is used; nothing is synchronized
+to OpenChat or an app. This is not chat encryption or a promise of encryption at
+rest. Browser profiles/origins and the APK installation have separate storage.
+
+Restore revalidates catalog declarations and processor hashes without executing
+app code, running a model or contacting an app. Chat opt-ins bind to the exact
+catalog, not only its reusable app ID. Replacing a catalog clears those opt-ins.
+Setup controls wait for restoration; a failed read/write is shown rather than
+reported as saved. Invalid or future-version records are not silently accepted.
+
+**Forget this account's app setup on this device** removes catalog, processor,
+selection and chat opt-in content. A minimal account/backend invalidation marker
+remains to reject writes started by an older tab before Forget. Another tab may
+still hold its previous setup in memory, but cannot silently save that stale copy
+over the removal. Clearing browser/app storage also removes these markers.
+
+Drafts, source messages/images, extraction results, edited fields, recipients,
+approvals and handoff details stay in memory only. Reload/logout/account change
+discards them. An uncertain delivery is never retried automatically. Check the
+receiving app first, then use **Retry the same reviewed request** if the draft is
+still available, preserving its import ID. Create a new draft only after checking
+that the earlier request was not already saved. Downloaded model caches are
+separate and are not deleted when changing apps or models.
 
 ## Boundaries and developer checks
 

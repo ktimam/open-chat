@@ -46,9 +46,10 @@
     let msg = $derived.by<TextPart[]>(() => {
         switch ($routeStore.kind) {
             case "communities_route":
-                if (client.clientOnlyApps()) return [
-                    { text: i18nKey("Sign in to your existing account"), colour: "primary" },
-                ] as TextPart[];
+                if (client.clientOnlyApps())
+                    return [
+                        { text: i18nKey("Sign in to your existing account"), colour: "primary" },
+                    ] as TextPart[];
                 return signInMsg as TextPart[];
             default:
                 return backToExploreMsg as TextPart[];

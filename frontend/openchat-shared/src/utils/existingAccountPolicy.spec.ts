@@ -7,14 +7,21 @@ import {
 } from "./existingAccountPolicy";
 
 describe("existing-account-only policy", () => {
-    it.each([{}, { existingAccountOnly: false }])("preserves official account creation for %j", (policy) => {
-        expect(() => assertAccountCreationAllowed(policy)).not.toThrow();
-        expect(() => assertSignUpAllowed(policy, true)).not.toThrow();
-    });
+    it.each([{}, { existingAccountOnly: false }])(
+        "preserves official account creation for %j",
+        (policy) => {
+            expect(() => assertAccountCreationAllowed(policy)).not.toThrow();
+            expect(() => assertSignUpAllowed(policy, true)).not.toThrow();
+        },
+    );
 
     it("blocks account creation and ordinary signup when explicitly enabled", () => {
-        expect(() => assertAccountCreationAllowed({ existingAccountOnly: true })).toThrow(ExistingAccountRequiredError);
-        expect(() => assertSignUpAllowed({ existingAccountOnly: true }, true)).toThrow(ExistingAccountRequiredError);
+        expect(() => assertAccountCreationAllowed({ existingAccountOnly: true })).toThrow(
+            ExistingAccountRequiredError,
+        );
+        expect(() => assertSignUpAllowed({ existingAccountOnly: true }, true)).toThrow(
+            ExistingAccountRequiredError,
+        );
     });
 
     it("permits explicit creation of a credential for linking an existing account", () => {

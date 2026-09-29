@@ -58,7 +58,10 @@
     let searchTerm = $state(communitySearchState.term);
 
     function setView(v: View) {
-        if (v === "aiApps" && client.clientOnlyApps()) { privateAppWorkspace.open(); return; }
+        if (v === "aiApps" && client.clientOnlyApps()) {
+            privateAppWorkspace.open();
+            return;
+        }
         view = v;
         searchTerm = v === "aiApps" ? aiAppSearchState.term : communitySearchState.term;
         if (v === "aiApps") {
@@ -79,7 +82,11 @@
     }
 
     function searchAiApps(reset = false) {
-        if (client.clientOnlyApps()) { searching = false; privateAppWorkspace.open(); return; }
+        if (client.clientOnlyApps()) {
+            searching = false;
+            privateAppWorkspace.open();
+            return;
+        }
         searching = true;
         if (reset) {
             aiAppSearchState.reset();

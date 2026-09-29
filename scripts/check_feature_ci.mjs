@@ -1127,6 +1127,7 @@ export const CURRENT_CLIENT_SECURITY_TEST_COMMAND =
     ...OFFLINE_FEATURE_HELPER_TESTS,
     "scripts/check_feature_ci.current-client.test.mjs",
     "scripts/check_current_client_licenses.test.mjs",
+    "scripts/frontend_format_current.test.mjs",
   ].join(" ");
 
 export const CURRENT_CLIENT_LICENSE_COMMAND = [
@@ -1246,7 +1247,11 @@ export function checkCurrentClientSecurityCi({
   const required = [
     ["npm ci --no-audit", "frontend", false],
     ["node --test scripts/security_dependency_hash.test.mjs", undefined, false],
-    ["node scripts/check_openchat_pr1_security.mjs format", ".", false],
+    [
+      "node scripts/check_current_client_format.mjs --scope current-client",
+      ".",
+      false,
+    ],
     [CURRENT_CLIENT_SECURITY_TEST_COMMAND, ".", false],
     ["node scripts/check_feature_ci.mjs current-client-security", ".", false],
     [npmFeatureSmokeCommand("current-client"), ".", true],
@@ -1284,7 +1289,10 @@ export function checkCurrentClientSecurityCi({
         block(step, "env", 8).trim(),
         'ONNXRUNTIME_NODE_INSTALL: "skip"',
       );
-    else if (expected === "node scripts/check_openchat_pr1_security.mjs format")
+    else if (
+      expected ===
+      "node scripts/check_current_client_format.mjs --scope current-client"
+    )
       assert.equal(
         block(step, "env", 8).trim(),
         "PR_BASE_SHA: " + CURRENT_CLIENT_FORMAT_BASE_EXPRESSION,

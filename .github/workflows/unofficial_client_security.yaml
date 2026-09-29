@@ -43,10 +43,10 @@ jobs:
         working-directory: .
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || (github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || 'd1e3712bb9ded3a1c8b652492591b7107333b23e' }}
-        run: node scripts/check_openchat_pr1_security.mjs format
+        run: node scripts/check_current_client_format.mjs --scope current-client
       - name: Test current-client security contracts offline
         working-directory: .
-        run: node --test scripts/npm_feature_scope.test.mjs scripts/npm_feature_seed_review.test.mjs scripts/npm_feature_advisories.test.mjs scripts/npm_feature_advisories.review.test.mjs scripts/npm_feature_runtime.test.mjs scripts/rust_feature_scope.test.mjs scripts/rust_feature_seed_review.test.mjs scripts/rust_feature_advisories.test.mjs scripts/rust_feature_advisory_results.test.mjs scripts/rust_feature_advisory_runner.test.mjs scripts/rust_feature_sbom.test.mjs scripts/rust_feature_sbom_validate.test.mjs scripts/rust_feature_collection.test.mjs scripts/rust_feature_ci.test.mjs scripts/check_feature_ci.test.mjs scripts/security_mode_scope.test.mjs scripts/security_owned_rules.test.mjs scripts/check_feature_ci.current-client.test.mjs scripts/check_current_client_licenses.test.mjs
+        run: node --test scripts/npm_feature_scope.test.mjs scripts/npm_feature_seed_review.test.mjs scripts/npm_feature_advisories.test.mjs scripts/npm_feature_advisories.review.test.mjs scripts/npm_feature_runtime.test.mjs scripts/rust_feature_scope.test.mjs scripts/rust_feature_seed_review.test.mjs scripts/rust_feature_advisories.test.mjs scripts/rust_feature_advisory_results.test.mjs scripts/rust_feature_advisory_runner.test.mjs scripts/rust_feature_sbom.test.mjs scripts/rust_feature_sbom_validate.test.mjs scripts/rust_feature_collection.test.mjs scripts/rust_feature_ci.test.mjs scripts/check_feature_ci.test.mjs scripts/security_mode_scope.test.mjs scripts/security_owned_rules.test.mjs scripts/check_feature_ci.current-client.test.mjs scripts/check_current_client_licenses.test.mjs scripts/frontend_format_current.test.mjs
       - name: Check current-client security workflow wiring
         working-directory: .
         run: node scripts/check_feature_ci.mjs current-client-security

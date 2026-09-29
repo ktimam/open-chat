@@ -29,7 +29,9 @@
     const selectedAction = $derived(
         selected?.actions.find((action) => action.definition.name === workspaceView.actionId),
     );
-    const locked = $derived(workspaceView.busy || workspaceView.draft !== undefined);
+    const locked = $derived(
+        workspaceView.setupLoading || workspaceView.busy || workspaceView.draft !== undefined,
+    );
     const editable = $derived(
         workspaceView.draft?.status === "draft" || workspaceView.draft?.status === "reviewed",
     );
@@ -73,7 +75,8 @@
         const account = $currentUserIdStore;
         // Authentication briefly clears currentUser before loading the same account again.
         // Keep drafts hidden but intact during that transition; actual logout clears them.
-        if (kind === "logged_in" && account !== ANON_USER_ID) workspace.setAccount(account);
+        if (kind === "logged_in" && account !== ANON_USER_ID)
+            workspace.setAccount(account, client.privateAppStorageBackend?.());
         else if (kind === "anon" || kind === "registering") workspace.setAccount(undefined);
     });
     $effect(() => {
@@ -93,7 +96,7 @@
             if (processor) await workspace.importProcessor(text);
             else workspace.importCatalog(text);
         } catch {
-            workspace.reportImportFailure();
+            if (context === workspace.contextVersion) workspace.reportImportFailure();
         }
     }
     function selectAction(event: Event) {
@@ -131,19 +134,26 @@
         class="workspace"
         hidden={!workspaceView.open}
         aria-label="Private app workspace"
-        aria-busy={workspaceView.busy}
+        aria-busy={workspaceView.busy || workspaceView.setupLoading}
     >
         <header>
             <h2>{workspaceView.draft ? "Review app draft" : "Private apps"}</h2>
             <button type="button" onclick={() => workspace.close()}>Close</button>
         </header>
         <p>
-            Local prototype: imports and drafts exist only in this page's memory. Reloading or
-            changing account discards them. Nothing is posted to the chat.
+            App setup and enabled chats are remembered for this account on this device. Imported
+            setup may contain private app configuration. It is stored locally, not synced, and is
+            not protected by chat encryption. Drafts and handoff details stay in memory only:
+            reloading or changing account discards them. Nothing is posted to the chat.
         </p>
+        {#if workspaceView.setupLoading}<p role="status">Loading saved app setup…</p>{/if}
+        {#if workspaceView.setupStatus}<p role="status">{workspaceView.setupStatus}</p>{/if}
         <details class="setup-disclosure" open={!workspaceView.draft && !workspaceView.busy}>
             <summary>App setup</summary>
             <div class="setup">
+                <button type="button" disabled={locked} onclick={() => workspace.forgetSetup()}>
+                    Forget this account's app setup on this device
+                </button>
                 <label
                     >Import app catalog (JSON, up to 1 MB)
                     <input

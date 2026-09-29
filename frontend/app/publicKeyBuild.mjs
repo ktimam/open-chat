@@ -100,7 +100,10 @@ export async function writePublicKeyFile({
     runCommand = runDfx,
     queryPublicKey,
 } = {}) {
-    if (queryPublicKey !== undefined && (typeof queryPublicKey !== "function" || network !== "ic")) {
+    if (
+        queryPublicKey !== undefined &&
+        (typeof queryPublicKey !== "function" || network !== "ic")
+    ) {
         throw new Error("An official public-key query provider requires the ic network");
     }
     if (queryPublicKey === undefined && expectedDfxVersion !== undefined) {
@@ -128,9 +131,10 @@ export async function writePublicKeyFile({
         canister,
         dfxExecutable,
     );
-    const result = queryPublicKey === undefined
-        ? await runCommand(command, args)
-        : await queryPublicKey(canister);
+    const result =
+        queryPublicKey === undefined
+            ? await runCommand(command, args)
+            : await queryPublicKey(canister);
     const publicKey = extractPublicKey(result);
     const destination = outputPath instanceof URL ? outputPath : path.resolve(outputPath);
     const directory =

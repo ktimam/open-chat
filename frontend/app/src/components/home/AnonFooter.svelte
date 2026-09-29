@@ -11,8 +11,13 @@
     role="button"
     tabindex="0"
     on:click={() => client.updateIdentityState({ kind: "logging_in" })}
-    class="anon-footer">
-    <Markdown text={client.clientOnlyApps() ? "Sign in to your existing account · Unofficial local test" : $_("createAccountOrSignIn")} />
+    class="anon-footer"
+>
+    <Markdown
+        text={client.clientOnlyApps()
+            ? "Sign in to your existing account · Unofficial local test"
+            : $_("createAccountOrSignIn")}
+    />
 </div>
 
 <style lang="scss">

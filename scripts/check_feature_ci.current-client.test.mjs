@@ -81,6 +81,11 @@ test("current-client collectors remain explicit, scoped and ordered behind offli
       "scripts/check_current_client_licenses.test.mjs",
     ),
   );
+  assert(
+    CURRENT_CLIENT_SECURITY_TEST_COMMAND.includes(
+      "scripts/frontend_format_current.test.mjs",
+    ),
+  );
   assert.match(
     CURRENT_CLIENT_FORMAT_BASE_EXPRESSION,
     /github\.event\.before != '0{40}' && github\.event\.before/,
@@ -281,7 +286,22 @@ const mutations = [
   [
     "removed formatting check",
     (s) =>
-      s.replace("node scripts/check_openchat_pr1_security.mjs format", "true"),
+      s.replace(
+        "node scripts/check_current_client_format.mjs --scope current-client",
+        "true",
+      ),
+  ],
+  [
+    "historical formatting command in current workflow",
+    (s) =>
+      s.replace(
+        "node scripts/check_current_client_format.mjs --scope current-client",
+        "node scripts/check_openchat_pr1_security.mjs format",
+      ),
+  ],
+  [
+    "missing current live-format regression",
+    (s) => s.replace(" scripts/frontend_format_current.test.mjs", ""),
   ],
   [
     "legacy formatting fallback",

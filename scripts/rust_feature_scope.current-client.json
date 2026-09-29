@@ -115,7 +115,7 @@
     "frontend/src-tauri/src/lib.rs": "f2b3c4d29956531cfd2f55eb8397a9d0be7ee749a9c5df37fa11dbd8422bfa7d",
     "frontend/src-tauri/src/main.rs": "e5dfab54c7a9843285d54ff5a783c00813cd3f28d1bb2f6982aa348697cbb1c4",
     "frontend/src-tauri/src/navigation.rs": "0ddee2abb8f0eb2fbcf094fcb293d4b28423aab744a6b20319831f2fba9ee4b3",
-    "frontend/src-tauri/tauri.localtest.conf.json": "2fdafdc9b3d9afbd2671b7ac105879fe7ef894679f805a7717de7a7f2d535650",
+    "frontend/src-tauri/tauri.localtest.conf.json": "3d30592c63f9de144e1fe8ffd31a6e89654e7fac29c51ae650f0c5eb6e4eebc7",
     "scripts/build-unofficial-local-apk.mjs": "4955e5d820c9b27361513a9b0d29751516fe1f0b9ea05b632a01525f3566b771"
   },
   "seeds": [

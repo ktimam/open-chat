@@ -810,16 +810,21 @@ export class OpenChat {
         initialiseTracking(config);
 
         this.#authIdentityStorage = IdentityStorage.createForAuthIdentity();
-        this.#authClient = this.existingAccountOnly() && this.isNativeApp() ? Promise.resolve(undefined) : AuthClient.create({
-            idleOptions: {
-                disableIdle: true,
-                disableDefaultIdleCallback: true,
-            },
-            storage: this.#authIdentityStorage.storage,
-        });
+        this.#authClient =
+            this.existingAccountOnly() && this.isNativeApp()
+                ? Promise.resolve(undefined)
+                : AuthClient.create({
+                      idleOptions: {
+                          disableIdle: true,
+                          disableDefaultIdleCallback: true,
+                      },
+                      storage: this.#authIdentityStorage.storage,
+                  });
 
         this.#initialIdentityLoaded = this.#authClient
-            .then((client) => client === undefined ? undefined : this.#authIdentityStorage.getKeyAndChain())
+            .then((client) =>
+                client === undefined ? undefined : this.#authIdentityStorage.getKeyAndChain(),
+            )
             .then((authIdentity) => this.#loadedAuthenticationIdentity(authIdentity, undefined))
             .catch((error) => this.#handleStartupFailure(error));
 
@@ -895,6 +900,13 @@ export class OpenChat {
 
     clientOnlyApps() {
         return this.config.clientOnlyApps === true;
+    }
+
+    /** Local setup must never be restored against a different backend/account service. */
+    privateAppStorageBackend(): string | undefined {
+        if (!this.clientOnlyApps() || !this.config.icUrl || !this.config.userIndexCanister)
+            return undefined;
+        return JSON.stringify([this.config.icUrl, this.config.userIndexCanister]);
     }
 
     deleteCurrentUser(
@@ -982,10 +994,14 @@ export class OpenChat {
         },
         commitVerifiedIdentity?: () => Promise<void>,
     ) {
-        if (nativeSession && (!this.existingAccountOnly() || !this.isNativeApp() || nativeSession.signal?.aborted)) {
+        if (
+            nativeSession &&
+            (!this.existingAccountOnly() || !this.isNativeApp() || nativeSession.signal?.aborted)
+        ) {
             throw new Error("Native browser session is not available");
         }
-        if (this.#nativeSessionTimeout !== undefined) window.clearTimeout(this.#nativeSessionTimeout);
+        if (this.#nativeSessionTimeout !== undefined)
+            window.clearTimeout(this.#nativeSessionTimeout);
         this.#nativeSessionTimeout = undefined;
         startupErrorStore.set(undefined);
         const anon = identityKeyAndChain === undefined;
@@ -1011,33 +1027,49 @@ export class OpenChat {
         // the form loses browser failure diagnostics/credential expectations and
         // deliberately aborts a pending native sign-in. The commit callback is
         // supplied only by explicit browser sign-in, never cached-session restore.
-        const keepSignInMounted = nativeSession !== undefined ||
-            (commitVerifiedIdentity !== undefined && this.existingAccountOnly() && !this.isNativeApp());
-        this.updateIdentityState(anon ? { kind: "anon" } : keepSignInMounted
-            ? { kind: "logging_in" }
-            : { kind: "loading_user", registering });
+        const keepSignInMounted =
+            nativeSession !== undefined ||
+            (commitVerifiedIdentity !== undefined &&
+                this.existingAccountOnly() &&
+                !this.isNativeApp());
+        this.updateIdentityState(
+            anon
+                ? { kind: "anon" }
+                : keepSignInMounted
+                  ? { kind: "logging_in" }
+                  : { kind: "loading_user", registering },
+        );
 
-        const setAuthIdentity = () => this.#worker.send({
-            kind: "setAuthIdentity",
-            identity: identityKeyAndChain
-                ? {
-                      key: identityKeyAndChain.key.getKeyPair(),
-                      delegation: identityKeyAndChain.delegation.toJSON(),
-                  }
-                : undefined,
-            isIIPrincipal: authProvider == AuthProvider.II,
-            nativeBrowserSession: nativeSession ? {
-                ocIdentity: nativeSession.ocIdentity, expiresAtMs: nativeSession.expiresAtMs,
-            } : undefined,
-        });
+        const setAuthIdentity = () =>
+            this.#worker.send({
+                kind: "setAuthIdentity",
+                identity: identityKeyAndChain
+                    ? {
+                          key: identityKeyAndChain.key.getKeyPair(),
+                          delegation: identityKeyAndChain.delegation.toJSON(),
+                      }
+                    : undefined,
+                isIIPrincipal: authProvider == AuthProvider.II,
+                nativeBrowserSession: nativeSession
+                    ? {
+                          ocIdentity: nativeSession.ocIdentity,
+                          expiresAtMs: nativeSession.expiresAtMs,
+                      }
+                    : undefined,
+            });
         const setAuthIdentityResponse = await (this.existingAccountOnly() && !anon
             ? browserSignInStep("account-delegation", setAuthIdentity)
             : setAuthIdentity());
 
-        if (nativeSession && (nativeSession.signal?.aborted || setAuthIdentityResponse.kind !== "success" ||
-            setAuthIdentityResponse.ocIdentityPrincipal !== nativeSession.ocPrincipal ||
-            setAuthIdentityResponse.ocIdentityExpiry !== nativeSession.ocExpiresAtMs ||
-            nativeSession.ocExpiresAtMs <= Date.now() || nativeSession.ocExpiresAtMs > nativeSession.expiresAtMs)) {
+        if (
+            nativeSession &&
+            (nativeSession.signal?.aborted ||
+                setAuthIdentityResponse.kind !== "success" ||
+                setAuthIdentityResponse.ocIdentityPrincipal !== nativeSession.ocPrincipal ||
+                setAuthIdentityResponse.ocIdentityExpiry !== nativeSession.ocExpiresAtMs ||
+                nativeSession.ocExpiresAtMs <= Date.now() ||
+                nativeSession.ocExpiresAtMs > nativeSession.expiresAtMs)
+        ) {
             throw new Error("The verified native session could not be adopted");
         }
 
@@ -1073,7 +1105,11 @@ export class OpenChat {
                 }
             }
 
-            createdUser = await (nativeSession ? Promise.resolve(nativeSession.profile) : this.getCurrentUser(expectedUsername))
+            createdUser = await (
+                nativeSession
+                    ? Promise.resolve(nativeSession.profile)
+                    : this.getCurrentUser(expectedUsername)
+            )
                 .then((user) => {
                     switch (user.kind) {
                         case "created_user":
@@ -1101,17 +1137,30 @@ export class OpenChat {
                     }
                     return undefined;
                 });
-            if (this.existingAccountOnly() && ocIdentity !== undefined && createdUser !== undefined) {
-                if (commitVerifiedIdentity) await browserSignInStep("session-storage", commitVerifiedIdentity);
+            if (
+                this.existingAccountOnly() &&
+                ocIdentity !== undefined &&
+                createdUser !== undefined
+            ) {
+                if (commitVerifiedIdentity)
+                    await browserSignInStep("session-storage", commitVerifiedIdentity);
                 if (nativeSession) {
-                    if (nativeSession.signal?.aborted || nativeSession.profile.username !== expectedUsername ||
-                        nativeSession.expiresAtMs <= Date.now() || ocIdentity.ocIdentityExpiry > nativeSession.expiresAtMs) {
+                    if (
+                        nativeSession.signal?.aborted ||
+                        nativeSession.profile.username !== expectedUsername ||
+                        nativeSession.expiresAtMs <= Date.now() ||
+                        ocIdentity.ocIdentityExpiry > nativeSession.expiresAtMs
+                    ) {
                         throw new Error("Native browser session expired or changed");
                     }
                     // The normal session timer intentionally rejects <6-minute sessions. This
                     // separate local-only path is short-lived and never persists auth keys.
-                    this.#nativeSessionTimeout = window.setTimeout(() => { void this.logout(); },
-                        Math.max(0, ocIdentity.ocIdentityExpiry - Date.now() - 1_000));
+                    this.#nativeSessionTimeout = window.setTimeout(
+                        () => {
+                            void this.logout();
+                        },
+                        Math.max(0, ocIdentity.ocIdentityExpiry - Date.now() - 1_000),
+                    );
                 } else {
                     this.#startSession(ocIdentity.ocIdentityPrincipal, ocIdentity.ocIdentityExpiry);
                 }
@@ -1255,7 +1304,10 @@ export class OpenChat {
         this.updateIdentityState({ kind: "logging_in" });
         const authProvider = selectedAuthProviderStore.value!;
         this.#authClient.then((c) => {
-            if (c === undefined) { this.updateIdentityState({ kind: "anon" }); return; }
+            if (c === undefined) {
+                this.updateIdentityState({ kind: "anon" });
+                return;
+            }
             c.login({
                 ...this.getAuthClientOptions(authProvider),
                 onSuccess: () =>
@@ -5950,7 +6002,11 @@ export class OpenChat {
             let resolved = false;
             this.#worker.stream({ kind: "getCurrentUser" }).subscribe({
                 onResult: (user) => {
-                    if (expectedUsername !== undefined && user.kind === "created_user" && user.username !== expectedUsername) {
+                    if (
+                        expectedUsername !== undefined &&
+                        user.kind === "created_user" &&
+                        user.username !== expectedUsername
+                    ) {
                         if (!resolved) reject(new ExistingAccountRequiredError());
                         resolved = true;
                         return;
@@ -9619,42 +9675,62 @@ export class OpenChat {
         }
     }
 
-    createBrowserAccountLinkFlow(onChange: (state: BrowserAccountLinkState) => void): BrowserAccountLinkFlow {
-        if (!this.existingAccountOnly() || this.isNativeApp()) throw new Error("Browser account linking is not enabled for this client");
+    createBrowserAccountLinkFlow(
+        onChange: (state: BrowserAccountLinkState) => void,
+    ): BrowserAccountLinkFlow {
+        if (!this.existingAccountOnly() || this.isNativeApp())
+            throw new Error("Browser account linking is not enabled for this client");
         const rpId = this.config.webAuthnOrigin;
         if (rpId === undefined) throw new Error("WebAuthn origin not set");
         let tempKey: ECDSAKeyIdentity | undefined;
         let expires = 0;
         let cancelled = false;
         const currentKey = () => {
-            if (cancelled || tempKey === undefined || Date.now() > expires) throw new Error("Linking attempt expired or cancelled");
+            if (cancelled || tempKey === undefined || Date.now() > expires)
+                throw new Error("Linking attempt expired or cancelled");
             return tempKey;
         };
-        return new BrowserAccountLinkFlow({
-            verify: async (code) => {
-                const key = await ECDSAKeyIdentity.generate();
-                if (cancelled) throw new Error("Linking attempt cancelled");
-                tempKey = key;
-                const result = await this.verifyAccountLinkingCode(code, key);
-                if (cancelled || result.kind !== "success") throw new Error("Code verification failed");
-                expires = Date.now() + 270_000;
-                return result.username;
+        return new BrowserAccountLinkFlow(
+            {
+                verify: async (code) => {
+                    const key = await ECDSAKeyIdentity.generate();
+                    if (cancelled) throw new Error("Linking attempt cancelled");
+                    tempKey = key;
+                    const result = await this.verifyAccountLinkingCode(code, key);
+                    if (cancelled || result.kind !== "success")
+                        throw new Error("Code verification failed");
+                    expires = Date.now() + 270_000;
+                    return result.username;
+                },
+                createPasskey: async (username) => {
+                    currentKey();
+                    const key = await createBrowserLinkPasskey(rpId, username);
+                    currentKey();
+                    await this.#storeWebAuthnKeyInCache(key);
+                    return key;
+                },
+                finalize: async (key) => {
+                    const session = currentKey();
+                    if (key.origin !== rpId) throw new Error("Unexpected passkey origin");
+                    const identity = new WebAuthnIdentity(
+                        key.credentialId,
+                        unwrapDER(key.publicKey, DER_COSE_OID),
+                        undefined,
+                    );
+                    await this.finaliseAccountLinkingWithCode(
+                        session,
+                        identity.getPrincipal().toString(),
+                        key.publicKey,
+                        key,
+                    );
+                },
+                forget: () => {
+                    cancelled = true;
+                    tempKey = undefined;
+                },
             },
-            createPasskey: async (username) => {
-                currentKey();
-                const key = await createBrowserLinkPasskey(rpId, username);
-                currentKey();
-                await this.#storeWebAuthnKeyInCache(key);
-                return key;
-            },
-            finalize: async (key) => {
-                const session = currentKey();
-                if (key.origin !== rpId) throw new Error("Unexpected passkey origin");
-                const identity = new WebAuthnIdentity(key.credentialId, unwrapDER(key.publicKey, DER_COSE_OID), undefined);
-                await this.finaliseAccountLinkingWithCode(session, identity.getPrincipal().toString(), key.publicKey, key);
-            },
-            forget: () => { cancelled = true; tempKey = undefined; },
-        }, onChange);
+            onChange,
+        );
     }
 
     async signInWithWebAuthn(expected?: BrowserSignInExpectation) {
@@ -9663,9 +9739,10 @@ export class OpenChat {
 
         const webAuthnIdentity = new MultiWebAuthnIdentity(
             webAuthnOrigin,
-            (credentialId) => this.existingAccountOnly()
-                ? browserSignInStep("public-key", () => this.lookupWebAuthnPubKey(credentialId))
-                : this.lookupWebAuthnPubKey(credentialId),
+            (credentialId) =>
+                this.existingAccountOnly()
+                    ? browserSignInStep("public-key", () => this.lookupWebAuthnPubKey(credentialId))
+                    : this.lookupWebAuthnPubKey(credentialId),
             this.existingAccountOnly(),
             this.existingAccountOnly() ? expected?.credentialId : undefined,
         );
@@ -9693,36 +9770,73 @@ export class OpenChat {
             // An anonymous startup must not finish after adoption and replace the new session.
             await this.#initialIdentityLoaded;
             if (options.signal?.aborted) throw new DOMException("Sign-in cancelled", "AbortError");
-            if (startupErrorStore.value !== undefined) throw new Error("Local APK startup has not completed");
+            if (startupErrorStore.value !== undefined)
+                throw new Error("Local APK startup has not completed");
             const native = await import("tauri-plugin-oc-api/commands/localBrowserAuth");
             const { openUrl } = await import("tauri-plugin-oc-api/commands/openUrl");
-            const { lookupNativeBrowserCredential, establishNativeBrowserAccountSession } = await import("@agent/services/nativeBrowserAccountSession");
-            await runNativeBrowserSignIn(expectedUsername.trim(), this.config.identityCanister, {
-                begin: native.beginLocalBrowserAuth,
-                open: (url) => openUrl({ url }),
-                poll: native.pollLocalBrowserAuth,
-                cancel: native.cancelLocalBrowserAuth,
-                complete: native.completeLocalBrowserAuth,
-                lookup: (id) => lookupNativeBrowserCredential(this.config.identityCanister, icUrl, id, options.signal),
-                prove: (authKey, authChain, username, expiresAtMs) => establishNativeBrowserAccountSession({
-                    authKey, authChain, expectedUsername: username, expiresAtMs,
-                    identityCanister: this.config.identityCanister,
-                    userIndexCanister: this.config.userIndexCanister,
-                    icUrl, signal: options.signal,
-                }),
-                activate: async (session, authKey, authChain, webAuthnKey) => {
-                    activating = true;
-                    this.#webAuthnKey = webAuthnKey;
-                    await this.#loadedAuthenticationIdentity({ key: authKey, delegation: authChain },
-                        AuthProvider.PASSKEY, false, expectedUsername.trim(), {
-                            ocIdentity: { key: session.ocKey.getKeyPair(), delegation: session.ocChain.toJSON() },
-                            expiresAtMs: Number(authChain.delegations[0].delegation.expiration / 1_000_000n),
-                            ocPrincipal: DelegationIdentity.fromDelegation(session.ocKey, session.ocChain).getPrincipal().toString(),
-                            ocExpiresAtMs: Number(session.ocChain.delegations[0].delegation.expiration / 1_000_000n),
-                            profile: session.profile, signal: options.signal,
-                        });
+            const { lookupNativeBrowserCredential, establishNativeBrowserAccountSession } =
+                await import("@agent/services/nativeBrowserAccountSession");
+            await runNativeBrowserSignIn(
+                expectedUsername.trim(),
+                this.config.identityCanister,
+                {
+                    begin: native.beginLocalBrowserAuth,
+                    open: (url) => openUrl({ url }),
+                    poll: native.pollLocalBrowserAuth,
+                    cancel: native.cancelLocalBrowserAuth,
+                    complete: native.completeLocalBrowserAuth,
+                    lookup: (id) =>
+                        lookupNativeBrowserCredential(
+                            this.config.identityCanister,
+                            icUrl,
+                            id,
+                            options.signal,
+                        ),
+                    prove: (authKey, authChain, username, expiresAtMs) =>
+                        establishNativeBrowserAccountSession({
+                            authKey,
+                            authChain,
+                            expectedUsername: username,
+                            expiresAtMs,
+                            identityCanister: this.config.identityCanister,
+                            userIndexCanister: this.config.userIndexCanister,
+                            icUrl,
+                            signal: options.signal,
+                        }),
+                    activate: async (session, authKey, authChain, webAuthnKey) => {
+                        activating = true;
+                        this.#webAuthnKey = webAuthnKey;
+                        await this.#loadedAuthenticationIdentity(
+                            { key: authKey, delegation: authChain },
+                            AuthProvider.PASSKEY,
+                            false,
+                            expectedUsername.trim(),
+                            {
+                                ocIdentity: {
+                                    key: session.ocKey.getKeyPair(),
+                                    delegation: session.ocChain.toJSON(),
+                                },
+                                expiresAtMs: Number(
+                                    authChain.delegations[0].delegation.expiration / 1_000_000n,
+                                ),
+                                ocPrincipal: DelegationIdentity.fromDelegation(
+                                    session.ocKey,
+                                    session.ocChain,
+                                )
+                                    .getPrincipal()
+                                    .toString(),
+                                ocExpiresAtMs: Number(
+                                    session.ocChain.delegations[0].delegation.expiration /
+                                        1_000_000n,
+                                ),
+                                profile: session.profile,
+                                signal: options.signal,
+                            },
+                        );
+                    },
                 },
-            }, options);
+                options,
+            );
         } catch (error) {
             if (activating) {
                 this.#webAuthnKey = undefined;
@@ -9733,7 +9847,9 @@ export class OpenChat {
                 });
             }
             throw error;
-        } finally { this.#nativeBrowserSignInBusy = false; }
+        } finally {
+            this.#nativeBrowserSignInBusy = false;
+        }
     }
 
     async signInWithAndroidWebAuthn(): Promise<[ECDSAKeyIdentity, DelegationChain, WebAuthnKey]> {
@@ -9795,11 +9911,12 @@ export class OpenChat {
         expectedUsername?: string,
     ): Promise<[ECDSAKeyIdentity, DelegationChain, WebAuthnKey]> {
         const sessionKey = await ECDSAKeyIdentity.generate();
-        const createDelegation = () => DelegationChain.create(
-            initialKey,
-            sessionKey.getPublicKey(),
-            new Date(Date.now() + 30 * ONE_DAY),
-        );
+        const createDelegation = () =>
+            DelegationChain.create(
+                initialKey,
+                sessionKey.getPublicKey(),
+                new Date(Date.now() + 30 * ONE_DAY),
+            );
         const delegation = await (this.existingAccountOnly()
             ? browserSignInStep("passkey", createDelegation)
             : createDelegation());
@@ -9812,7 +9929,8 @@ export class OpenChat {
         };
         if (assumeIdentity) {
             this.#webAuthnKey = webAuthnKey;
-            if (!this.existingAccountOnly()) await this.#authIdentityStorage.set(sessionKey, delegation);
+            if (!this.existingAccountOnly())
+                await this.#authIdentityStorage.set(sessionKey, delegation);
             try {
                 await this.#loadedAuthenticationIdentity(
                     { key: sessionKey, delegation },
@@ -9820,12 +9938,20 @@ export class OpenChat {
                     registering,
                     expectedUsername,
                     undefined,
-                    this.existingAccountOnly() ? () => this.#authIdentityStorage.set(sessionKey, delegation) : undefined,
+                    this.existingAccountOnly()
+                        ? () => this.#authIdentityStorage.set(sessionKey, delegation)
+                        : undefined,
                 );
             } catch (error) {
                 if (this.existingAccountOnly()) {
                     await this.#authIdentityStorage.remove().catch(() => undefined);
-                    await this.#worker.send({ kind: "setAuthIdentity", identity: undefined, isIIPrincipal: false }).catch(() => undefined);
+                    await this.#worker
+                        .send({
+                            kind: "setAuthIdentity",
+                            identity: undefined,
+                            isIIPrincipal: false,
+                        })
+                        .catch(() => undefined);
                     this.#authPrincipal = undefined;
                     this.#ocIdentityPrincipal = undefined;
                     this.#webAuthnKey = undefined;

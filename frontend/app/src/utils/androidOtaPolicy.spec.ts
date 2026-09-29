@@ -84,17 +84,28 @@ describe("Android bundled frontend OTA policy", () => {
     });
 
     it("never inherits official OTA opt-in into the separate local APK profile", async () => {
-        const { createUnofficialLocalApkEnvironment } = await import("../../../unofficialLocalApkProfile.mjs");
-        const canisters = JSON.parse(fs.readFileSync(path.join(REPOSITORY_DIR, "canister_ids.json"), "utf8"));
-        const profile = createUnofficialLocalApkEnvironment(canisters, { inherited: {
-            OC_ANDROID_OTA_UPDATES: "minor", OC_OTA_UPDATES: "patch",
-            OC_ANDROID_APPLICATION_ID: "com.oclabs.openchat",
-        } });
+        const { createUnofficialLocalApkEnvironment } =
+            await import("../../../unofficialLocalApkProfile.mjs");
+        const canisters = JSON.parse(
+            fs.readFileSync(path.join(REPOSITORY_DIR, "canister_ids.json"), "utf8"),
+        );
+        const profile = createUnofficialLocalApkEnvironment(canisters, {
+            inherited: {
+                OC_ANDROID_OTA_UPDATES: "minor",
+                OC_OTA_UPDATES: "patch",
+                OC_ANDROID_APPLICATION_ID: "com.oclabs.openchat",
+            },
+        });
         expect(profile.OC_OTA_UPDATES).toBe("none");
         expect(profile.OC_ANDROID_OTA_UPDATES).toBe("none");
         expect(profile.OC_ANDROID_APPLICATION_ID).toBe("dev.openchatfork.localtest");
         const rollup = fs.readFileSync(path.join(APP_DIR, "rollup.config.mjs"), "utf8");
-        expect(rollup).toContain("...(!localClientBuild ? [androidBundlePlugin({");
+        const officialOnlyBundle =
+            /\.\.\.\(!localClientBuild\s*\?\s*\[\s*androidBundlePlugin\(\{\s*version,\s*includeLocalExtractor: transformersWebGpuSpikeEnabled,?\s*\}\),?\s*\]\s*:\s*\[\s*\]\)/u;
+        expect(rollup).toMatch(officialOnlyBundle);
+        expect(rollup.replace("...(!localClientBuild", "...(localClientBuild")).not.toMatch(
+            officialOnlyBundle,
+        );
         expect(rollup).toContain('JSON.stringify({ strategy: "none" })');
     });
 

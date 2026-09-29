@@ -316,29 +316,29 @@
         <ExistingAccountSignIn onSignedIn={() => navigate("/communities")} />
     </Container>
 {:else}
-<Container supplementalClass="login_screen" gap={"xl"} direction={"vertical"}>
-    <Container
-        supplementalClass={"login_mockup"}
-        height={{ size: step === "choose-auth" ? "23rem" : "11rem" }}
-        backgroundImage={"/assets/login_mockup.svg"}
-    >
-        <span></span>
-    </Container>
-    {#if step === "choose-auth"}
-        {@render choosePath()}
-    {:else if step === "new-user"}
-        {@render newUserView()}
-    {:else if step === "one-time-password"}
-        {@render existingUserView()}
-    {/if}
-    {#if error !== undefined}
-        <Container gap={"md"} padding={["zero", "xxl"]} direction={"vertical"}>
-            <ErrorMessage>
-                <Translatable resourceKey={i18nKey(nativeAuthErrorKey(error))} />
-            </ErrorMessage>
+    <Container supplementalClass="login_screen" gap={"xl"} direction={"vertical"}>
+        <Container
+            supplementalClass={"login_mockup"}
+            height={{ size: step === "choose-auth" ? "23rem" : "11rem" }}
+            backgroundImage={"/assets/login_mockup.svg"}
+        >
+            <span></span>
         </Container>
-    {/if}
-</Container>
+        {#if step === "choose-auth"}
+            {@render choosePath()}
+        {:else if step === "new-user"}
+            {@render newUserView()}
+        {:else if step === "one-time-password"}
+            {@render existingUserView()}
+        {/if}
+        {#if error !== undefined}
+            <Container gap={"md"} padding={["zero", "xxl"]} direction={"vertical"}>
+                <ErrorMessage>
+                    <Translatable resourceKey={i18nKey(nativeAuthErrorKey(error))} />
+                </ErrorMessage>
+            </Container>
+        {/if}
+    </Container>
 {/if}
 
 <style lang="scss">

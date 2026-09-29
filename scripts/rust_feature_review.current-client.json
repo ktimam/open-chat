@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "configSha256": "1d230b97b5719777cce7b4d78c8f7fc928e4bec0baf6f011df2d3c5b85a299ad",
+  "configSha256": "0047a42522def673373854e713d96e14d1203037c2a5076573854d63a9a61538",
   "boundary": "Current unofficial local client only: source-traced native model store/IPC, optional nonshipping host llama.cpp checks, local browser authentication and private-app loopback handoff, nested generic schemas/errors, native build hooks and bundled asset selection. Eight explicit profiles bind the two actual all-WebGPU APK ABIs and existing Linux/Windows default-library/inference/inference+store checks. Browser WebGPU/NPM and Android JVM dependencies have separate inventories; no OpenChat backend, removed custom card/action-inbox canisters, release-canister tooling, core dependency audit, advisory acceptance, model quality, device runtime or publication approval is claimed. Historical PR2 inventories remain verbatim historical evidence and are not current build acceptance.",
   "units": [
     {
@@ -933,8 +933,8 @@
         {
           "path": "frontend/src-tauri/tauri.localtest.conf.json",
           "lines": [
-            11,
-            17
+            13,
+            20
           ]
         },
         {

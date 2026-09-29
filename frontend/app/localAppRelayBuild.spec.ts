@@ -11,7 +11,15 @@ describe("local relay dev route priority", () => {
         const handle = use.mock.calls[0][0];
         const next = vi.fn();
         const response = { statusCode: 200, end: vi.fn() };
-        handle({ url: "/local-app-handoff.html", method: "GET", headers: { accept: "text/html,application/xhtml+xml" } }, response, next);
+        handle(
+            {
+                url: "/local-app-handoff.html",
+                method: "GET",
+                headers: { accept: "text/html,application/xhtml+xml" },
+            },
+            response,
+            next,
+        );
         // Fail closed while compiling rather than passing this navigation to index.html.
         expect(response.statusCode).toBe(503);
         expect(response.end).toHaveBeenCalledOnce();

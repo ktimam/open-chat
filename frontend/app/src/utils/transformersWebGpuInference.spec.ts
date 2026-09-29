@@ -1380,13 +1380,55 @@ describe("Transformers.js Qwen WebGPU spike", () => {
     });
 
     it.each([
-        { name: "unofficial desktop browser", unofficial: "true", native: false, userAgent: "Windows NT 10.0", expected: true },
-        { name: "official desktop browser", unofficial: undefined, native: false, userAgent: "Windows NT 10.0", expected: false },
-        { name: "non-exact unofficial flag", unofficial: "TRUE", native: false, userAgent: "Windows NT 10.0", expected: false },
-        { name: "unofficial desktop native", unofficial: "true", native: true, userAgent: "Windows NT 10.0", expected: false },
-        { name: "unofficial iOS native", unofficial: "true", native: true, userAgent: "iPhone Mobile", expected: false },
-        { name: "unofficial Android native", unofficial: "true", native: true, userAgent: "Android 15 Mobile", expected: true },
-        { name: "official Android browser", unofficial: undefined, native: false, userAgent: "Android 15 Mobile", expected: true },
+        {
+            name: "unofficial desktop browser",
+            unofficial: "true",
+            native: false,
+            userAgent: "Windows NT 10.0",
+            expected: true,
+        },
+        {
+            name: "official desktop browser",
+            unofficial: undefined,
+            native: false,
+            userAgent: "Windows NT 10.0",
+            expected: false,
+        },
+        {
+            name: "non-exact unofficial flag",
+            unofficial: "TRUE",
+            native: false,
+            userAgent: "Windows NT 10.0",
+            expected: false,
+        },
+        {
+            name: "unofficial desktop native",
+            unofficial: "true",
+            native: true,
+            userAgent: "Windows NT 10.0",
+            expected: false,
+        },
+        {
+            name: "unofficial iOS native",
+            unofficial: "true",
+            native: true,
+            userAgent: "iPhone Mobile",
+            expected: false,
+        },
+        {
+            name: "unofficial Android native",
+            unofficial: "true",
+            native: true,
+            userAgent: "Android 15 Mobile",
+            expected: true,
+        },
+        {
+            name: "official Android browser",
+            unofficial: undefined,
+            native: false,
+            userAgent: "Android 15 Mobile",
+            expected: true,
+        },
     ])("preserves platform policy for $name", ({ unofficial, native, userAgent, expected }) => {
         vi.stubEnv("OC_BUILD_ENV", "production");
         vi.stubEnv("OC_DFX_NETWORK", "ic");

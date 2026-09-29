@@ -29,7 +29,9 @@ export class ClientOnlyAppRequestError extends Error {
     readonly code = "client_only_app_request";
 
     constructor() {
-        super("This client uses private local app drafts, not custom OpenChat app services. No request was sent.");
+        super(
+            "This client uses private local app drafts, not custom OpenChat app services. No request was sent.",
+        );
         this.name = "ClientOnlyAppRequestError";
     }
 }
@@ -40,9 +42,12 @@ export function assertUnofficialApiRequestAllowed(
     clientOnlyApps?: boolean,
 ): void {
     if (clientOnlyApps !== true) return;
-    const message = request.kind === "sendMessage"
-        ? request.event.event
-        : request.kind === "editMessage" ? request.msg : undefined;
+    const message =
+        request.kind === "sendMessage"
+            ? request.event.event
+            : request.kind === "editMessage"
+              ? request.msg
+              : undefined;
     if (customRequests.has(request.kind) || message?.content.kind === "action_card_content") {
         throw new ClientOnlyAppRequestError();
     }

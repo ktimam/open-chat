@@ -239,13 +239,17 @@ describe("private local drafts", () => {
         store.setAccount("synthetic-account-a");
         expect(transport).toHaveBeenCalledOnce();
         expect(await store.confirm(draft.id, approval.approvalId)).toEqual({ kind: "blocked" });
-        expect(await store.retryUncertain(draft.id, approval.approvalId)).toEqual({ kind: "blocked" });
+        expect(await store.retryUncertain(draft.id, approval.approvalId)).toEqual({
+            kind: "blocked",
+        });
         expect(await store.reopenDelivered(draft.id, "wrong")).toEqual({ kind: "blocked" });
         const pending = pendingDelivery();
         transport.mockImplementationOnce(() => pending.deliver);
         const reopened = store.reopenDelivered(draft.id, approval.approvalId);
         expect(store.get(draft.id)?.status).toBe("sending");
-        expect(await store.reopenDelivered(draft.id, approval.approvalId)).toEqual({ kind: "blocked" });
+        expect(await store.reopenDelivered(draft.id, approval.approvalId)).toEqual({
+            kind: "blocked",
+        });
         expect(transport).toHaveBeenCalledTimes(2);
         expect(transport.mock.calls[1][0]).toBe(approval.request);
         expect(transport.mock.calls[1][0]).toBe(transport.mock.calls[0][0]);
@@ -260,32 +264,41 @@ describe("private local drafts", () => {
         const draft = store.create(input);
         expect(await store.reopenDelivered(draft.id, "invented")).toEqual({ kind: "blocked" });
         const approval = store.review(draft.id);
-        expect(await store.reopenDelivered(draft.id, approval.approvalId)).toEqual({ kind: "blocked" });
+        expect(await store.reopenDelivered(draft.id, approval.approvalId)).toEqual({
+            kind: "blocked",
+        });
         expect(transport).not.toHaveBeenCalled();
         await store.confirm(draft.id, approval.approvalId);
-        expect(await store.reopenDelivered(draft.id, approval.approvalId)).toEqual({ kind: "blocked" });
+        expect(await store.reopenDelivered(draft.id, approval.approvalId)).toEqual({
+            kind: "blocked",
+        });
         expect(transport).toHaveBeenCalledOnce();
     });
 
-    it.each(["cancel", "account", "logout", "clear"] as const)("does not revive a reopened request after %s", async operation => {
-        const { store, transport } = setup();
-        const draft = store.create(input);
-        const approval = store.review(draft.id);
-        await store.confirm(draft.id, approval.approvalId);
-        const pending = pendingDelivery();
-        transport.mockImplementationOnce(() => pending.deliver);
-        const reopened = store.reopenDelivered(draft.id, approval.approvalId);
-        if (operation === "cancel") store.cancel(draft.id);
-        else if (operation === "account") store.setAccount("different-account");
-        else if (operation === "logout") store.setAccount(undefined);
-        else store.clear();
-        expect(transport.mock.calls[1][1].aborted).toBe(true);
-        pending.resolve({ kind: "delivered" });
-        expect(await reopened).toEqual({ kind: "discarded", deliveryMayHaveOccurred: true });
-        expect(store.get(draft.id)).toBeUndefined();
-        expect(await store.reopenDelivered(draft.id, approval.approvalId)).toEqual({ kind: "blocked" });
-        expect(transport).toHaveBeenCalledTimes(2);
-    });
+    it.each(["cancel", "account", "logout", "clear"] as const)(
+        "does not revive a reopened request after %s",
+        async (operation) => {
+            const { store, transport } = setup();
+            const draft = store.create(input);
+            const approval = store.review(draft.id);
+            await store.confirm(draft.id, approval.approvalId);
+            const pending = pendingDelivery();
+            transport.mockImplementationOnce(() => pending.deliver);
+            const reopened = store.reopenDelivered(draft.id, approval.approvalId);
+            if (operation === "cancel") store.cancel(draft.id);
+            else if (operation === "account") store.setAccount("different-account");
+            else if (operation === "logout") store.setAccount(undefined);
+            else store.clear();
+            expect(transport.mock.calls[1][1].aborted).toBe(true);
+            pending.resolve({ kind: "delivered" });
+            expect(await reopened).toEqual({ kind: "discarded", deliveryMayHaveOccurred: true });
+            expect(store.get(draft.id)).toBeUndefined();
+            expect(await store.reopenDelivered(draft.id, approval.approvalId)).toEqual({
+                kind: "blocked",
+            });
+            expect(transport).toHaveBeenCalledTimes(2);
+        },
+    );
 
     it("cancel before confirmation discards data without sending", async () => {
         const { store, transport } = setup();

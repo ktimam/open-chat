@@ -100,6 +100,10 @@
         {
           "file": "frontend/app/src/components_mobile/App.svelte",
           "contains": "import PrivateAppsWorkspace from \"@shared_components/PrivateAppsWorkspace.svelte\";"
+        },
+        {
+          "file": "frontend/openchat-client/src/openchat.ts",
+          "contains": "return JSON.stringify([this.config.icUrl, this.config.userIndexCanister]);"
         }
       ]
     },
@@ -463,12 +467,14 @@
     "textIdentity": "utf8-lf",
     "boundary": "changed-feature-consumers-and-necessary-reached-edges",
     "reviewedOn": "2026-09-29",
-    "scope": "Current unofficial client model, private local-app draft/editor/processor, retained card compatibility, optional app-declared OCR, and browser/native handoff consumers. This scope does not enable or require new backend canisters.",
+    "scope": "Current unofficial client model, private local-app draft/editor/processor, account-and-backend-scoped device-local app setup persistence, retained card compatibility, optional app-declared OCR, and browser/native handoff consumers. This scope does not enable or require new backend canisters.",
     "exclusions": [
       "Historical PR1/PR2 inventories and advisory decisions are preserved separately, not accepted as current source snapshots.",
       "Core authentication, chat, wallet, media, generic compiler/minifier/style dependencies and unrelated plugins are not selected by mixed-file coexistence.",
       "Mixed entrypoints and build hooks have exact feature ownership anchors; only dedicated feature modules undergo direct-import scanning.",
+      "The mixed OpenChat client is anchored only for the private-app backend scope getter reached by the workspace. Its complete file fingerprint detects drift; unrelated core imports are not scanned or selected as feature roots.",
       "Private drafts are memory-only. The idb root covers retained action-card cache reconciliation, not new draft storage or remote pre-review verification.",
+      "Private app setup persistence uses the browser IndexedDB API and existing local catalog, processor-hash and Web Crypto helpers, not a new npm or Rust dependency. Only explicitly imported setup, selection and chat opt-ins are saved; messages, drafts, approvals and handoff payloads are excluded.",
       "Source ownership is not advisory, runtime, image-accuracy, phone, deployment or release acceptance."
     ],
     "snapshots": [
@@ -476,6 +482,14 @@
         "workingTreeReview": "2026-09-29: reviewed current model/private-app/native composition, all dedicated direct package imports and necessary reached edges. Retains 24 still-source-owned roots and adds only the explicitly reviewed node_modules/esbuild location for the native handoff asset build. No package, lock, installation, advisory decision, prompt or backend changes.",
         "reviewRecord": "npm_feature_scope.current-client.review.md",
         "sha256": "33b3ad8615b578d6d0f4d36aca795ddcaeb6baef4804f842b730bcecf57f3856"
+      },
+      {
+        "workingTreeReview": "2026-09-29: independently verified identical full Prettier output for all 94 approved formatting-only frontend changes against 75c7fddd1d91b650bf1d34ee5b0f9afe40045dbb, using the existing config/plugin and CRLF-to-LF normalization only. All 16 changed sources within this 115-file inventory have that equality proof; all 98 dedicated feature files retain identical direct imports. All 25 dependency roots and 64 exact ownership anchors remain unchanged. No historical inventory, advisory, dependency, prompt, backend or runtime behavior changes. Formatter proof SHA256: b37315e85ec265a960586e66e27fbbb035db687a7771059e2357a4e0a302e1d0.",
+        "sha256": "fb03b698a04652cffb5b3c3109ca99fe9d9b7882c64af4e25bad944ca2f837c5"
+      },
+      {
+        "workingTreeReview": "2026-09-29: separately reviewed runtime feature, not a formatting-only refresh: explicit private-app setup persistence scoped to account and configured backend. The new dedicated storage module uses browser IndexedDB, existing catalog/processor validators and Web Crypto, with strict setup-only keys, exact catalog-bound opt-ins, processor rehash, read/write transaction completion, and generation-checked Forget tombstones preventing stale-tab resurrection. Workspace persistence captures only catalog, app/action selection, processor and enabled chats at explicit setup mutations; draft/message/editor/approval/handoff state is never serialized. Restore is local-only and epoch guarded, scope changes clear ephemeral state, and chat restore does not trigger writes. Includes the exact private-app backend getter reached from the workspace as a mixed-client ownership anchor; unrelated core imports are not selected. Current composition is 99 dedicated modules, 117 fingerprinted sources, 65 anchors and the unchanged 25 dependency roots. Earlier composition and 94-file formatting-only snapshots remain intact. No dependency, lockfile, historical inventory, backend, prompt or advisory decision changes; source review is not runtime or release acceptance.",
+        "sha256": "128c7d9a57258fb3720ae19e825d7345bf9186f84294bd8aa6adcc31f5eb9409"
       }
     ]
   }

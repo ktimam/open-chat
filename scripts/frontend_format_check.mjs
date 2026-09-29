@@ -181,16 +181,22 @@ function assertReviewedFormatterConfig(frontendRoot, path, execute) {
   }
 }
 
-function inspectInheritedDebt(frontendRoot, path, inheritedBase, execute) {
+function inspectInheritedDebt(
+  frontendRoot,
+  path,
+  inheritedBase,
+  execute,
+  currentInheritedReview,
+) {
   assertReviewedFormatterConfig(frontendRoot, path, execute);
   const root = resolve(frontendRoot, "..");
   // The source checkout determines the slice. No environment variable or caller
   // supplied scope can opt this repository into another slice's review records.
-  const scope = existsSync(
-    resolve(root, "scripts/check_openchat_pr2_security.mjs"),
-  )
-    ? "pr2"
-    : "pr1";
+  const scope = currentInheritedReview
+    ? "current-client"
+    : existsSync(resolve(root, "scripts/check_openchat_pr2_security.mjs"))
+      ? "pr2"
+      : "pr1";
   const candidatePath = `frontend/${path}`;
   const base = execute(
     process.platform === "win32" ? "git.exe" : "git",
@@ -212,7 +218,8 @@ function inspectInheritedDebt(frontendRoot, path, inheritedBase, execute) {
         "utf8",
       ),
     ).version;
-  return classifyInheritedFormatting({
+  const classify = currentInheritedReview ?? classifyInheritedFormatting;
+  return classify({
     scope,
     path: candidatePath,
     baseCommit: inheritedBase,
@@ -230,8 +237,16 @@ export function checkFrontendFormatting(
   frontendRoot,
   paths,
   execute = spawnSync,
-  { inheritedBase, report = console.log } = {},
+  { inheritedBase, report = console.log, currentInheritedReview } = {},
 ) {
+  if (
+    currentInheritedReview !== undefined &&
+    typeof currentInheritedReview !== "function"
+  ) {
+    throw new Error(
+      "An explicit current inherited review function is required.",
+    );
+  }
   const failures = [];
   const endingArgs = frontendFormattingLineEndingArgs({
     platform: process.platform,
@@ -293,6 +308,7 @@ export function checkFrontendFormatting(
           path,
           inheritedBase,
           execute,
+          currentInheritedReview,
         );
         if (!review.accepted) {
           failures.push(

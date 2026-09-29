@@ -13,7 +13,11 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { AiActionDefinition, ChatIdentifier } from "@shared";
 import { chatIdentifierToString } from "@shared";
-import { localAppChatConfiguration, localAutoProposeSuggestions, dismissLocalAutoProposeSuggestion } from "./localAppChatState";
+import {
+    localAppChatConfiguration,
+    localAutoProposeSuggestions,
+    dismissLocalAutoProposeSuggestion,
+} from "./localAppChatState";
 import { currentUserStore, type EventWrapper, type Message, type OpenChat } from "@client";
 import { get } from "svelte/store";
 import { autoProposeSuggestions as autoProposeEnabled } from "../stores/settings";
@@ -109,7 +113,12 @@ vi.mock("./aiActionRunner", () => ({
 }));
 // Suggestions need imported declaration state only; do not initialise the inference/delivery UI.
 vi.mock("./privateAppWorkspace", () => ({
-    privateAppWorkspaceState: { subscribe: (run: (value: object) => void) => { run({}); return () => {}; } },
+    privateAppWorkspaceState: {
+        subscribe: (run: (value: object) => void) => {
+            run({});
+            return () => {};
+        },
+    },
 }));
 import {
     buildBoundedAutoProposeVocabulary,
@@ -167,37 +176,115 @@ describe("unofficial local app suggestions", () => {
         const viewer = "local-viewer";
         const chat: ChatIdentifier = { kind: "direct_chat", userId: "local-partner" };
         const chatKey = chatIdentifierToString(chat);
-        const client = { clientOnlyApps: () => true, enabledAiApps: vi.fn(), myAiAppKeys: vi.fn() } as unknown as OpenChat;
-        const event = (index: number, sender = viewer): EventWrapper<Message> => ({ index, timestamp: 1n,
-            event: { kind: "message", sender, messageId: BigInt(index), messageIndex: index, content: { kind: "text_content", text: "keyword-0" } },
-        }) as unknown as EventWrapper<Message>;
+        const client = {
+            clientOnlyApps: () => true,
+            enabledAiApps: vi.fn(),
+            myAiAppKeys: vi.fn(),
+        } as unknown as OpenChat;
+        const event = (index: number, sender = viewer): EventWrapper<Message> =>
+            ({
+                index,
+                timestamp: 1n,
+                event: {
+                    kind: "message",
+                    sender,
+                    messageId: BigInt(index),
+                    messageIndex: index,
+                    content: { kind: "text_content", text: "keyword-0" },
+                },
+            }) as unknown as EventWrapper<Message>;
         try {
-            currentUserStore.set({ ...originalUser, userId: viewer }); autoProposeEnabled.set(true);
-            moduleMocks.resolveCandidates.mockReset(); moduleMocks.runPrivateMatchCandidates.mockReset();
-            localAppChatConfiguration.setContext(viewer, { version: 1, apps: [{ id: "local-notebook", revision: "r1", name: "Notebook", description: "", destination: "https://example.test/review", actions: [{ definition: action("record", 1), draftSchema: { type: "object", properties: {}, additionalProperties: false }, handoff: { kind: "single" } }] }] });
+            currentUserStore.set({ ...originalUser, userId: viewer });
+            autoProposeEnabled.set(true);
+            moduleMocks.resolveCandidates.mockReset();
+            moduleMocks.runPrivateMatchCandidates.mockReset();
+            localAppChatConfiguration.setContext(viewer, {
+                version: 1,
+                apps: [
+                    {
+                        id: "local-notebook",
+                        revision: "r1",
+                        name: "Notebook",
+                        description: "",
+                        destination: "https://example.test/review",
+                        actions: [
+                            {
+                                definition: action("record", 1),
+                                draftSchema: {
+                                    type: "object",
+                                    properties: {},
+                                    additionalProperties: false,
+                                },
+                                handoff: { kind: "single" },
+                            },
+                        ],
+                    },
+                ],
+            });
             const registration = registerAutoProposeEventBoundary(chat, undefined, 100);
             // A fresh event observed while disabled is terminal, not a future backfill candidate.
-            evaluateForAutoPropose(client, chat, undefined, [event(101, "other")], "loaded_new", registration);
+            evaluateForAutoPropose(
+                client,
+                chat,
+                undefined,
+                [event(101, "other")],
+                "loaded_new",
+                registration,
+            );
             expect(get(localAutoProposeSuggestions).size).toBe(0);
             localAppChatConfiguration.setEnabled(viewer, chatKey, "local-notebook", true);
-            evaluateForAutoPropose(client, chat, undefined, [event(99, "other"), event(101, "other")], "loaded_new", registration);
+            evaluateForAutoPropose(
+                client,
+                chat,
+                undefined,
+                [event(99, "other"), event(101, "other")],
+                "loaded_new",
+                registration,
+            );
             expect(get(localAutoProposeSuggestions).size).toBe(0);
             evaluateForAutoPropose(client, chat, undefined, [event(102)], "sent", registration);
             expect(get(localAutoProposeSuggestions).size).toBe(0);
-            evaluateForAutoPropose(client, chat, undefined, [event(102)], "sent_confirmed", registration);
+            evaluateForAutoPropose(
+                client,
+                chat,
+                undefined,
+                [event(102)],
+                "sent_confirmed",
+                registration,
+            );
             const key = autoProposeSuggestionKey(viewer, chat, undefined, 102n);
             const suggestion = get(localAutoProposeSuggestions).get(key)![0];
-            expect(suggestion).toMatchObject({ appId: "local-notebook", appRevision: "r1", actionId: "record", viewerId: viewer });
+            expect(suggestion).toMatchObject({
+                appId: "local-notebook",
+                appRevision: "r1",
+                actionId: "record",
+                viewerId: viewer,
+            });
             expect(localAppChatConfiguration.current(suggestion)).toBe(true);
             expect(get(autoProposeSuggestions).size).toBe(0);
             dismissLocalAutoProposeSuggestion(key, suggestion);
-            evaluateForAutoPropose(client, chat, undefined, [event(102)], "sent_confirmed", registration);
+            evaluateForAutoPropose(
+                client,
+                chat,
+                undefined,
+                [event(102)],
+                "sent_confirmed",
+                registration,
+            );
             expect(get(localAutoProposeSuggestions).size).toBe(0);
-            for (const fn of [moduleMocks.resolveCandidates, moduleMocks.runPrivateMatchCandidates, client.enabledAiApps, client.myAiAppKeys]) expect(fn).not.toHaveBeenCalled();
+            for (const fn of [
+                moduleMocks.resolveCandidates,
+                moduleMocks.runPrivateMatchCandidates,
+                client.enabledAiApps,
+                client.myAiAppKeys,
+            ])
+                expect(fn).not.toHaveBeenCalled();
             registration.release();
         } finally {
-            localAppChatConfiguration.setContext(undefined, undefined); revokePrivateAutoProposeRuntime();
-            currentUserStore.set(originalUser); autoProposeEnabled.set(originalEnabled);
+            localAppChatConfiguration.setContext(undefined, undefined);
+            revokePrivateAutoProposeRuntime();
+            currentUserStore.set(originalUser);
+            autoProposeEnabled.set(originalEnabled);
         }
     });
 });

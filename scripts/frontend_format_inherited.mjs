@@ -57,6 +57,18 @@ function inheritedEdits(proof) {
 // The factory permits isolated fixture tests. Production callers use the fixed-registry
 // classifyInheritedFormatting export below, not a caller-supplied exemption registry.
 export function createInheritedFormattingChecker(registry) {
+  return createScopedInheritedFormattingChecker(registry, scopes);
+}
+
+// Separate explicit entry point. Historical callers still accept only pr1/pr2.
+export function createCurrentInheritedFormattingChecker(registry) {
+  return createScopedInheritedFormattingChecker(
+    registry,
+    new Set(["current-client"]),
+  );
+}
+
+function createScopedInheritedFormattingChecker(registry, scopes) {
   check(registry?.schemaVersion === 1, "unsupported schema");
   check(
     registry.normalization === "CRLF-to-LF-only",

@@ -36,13 +36,18 @@ function generateCspHashValue(text) {
 // www.youtube.com and docs.google.com (blog/whitepaper embeds), www.googletagmanager.com
 // (noscript GTM). `https:` still blocks javascript:, data:, blob: and http frames.
 // img-src, media-src and the native-only connect-src `asset: *` are out of scope of #9338.
-export function generateCspForScripts(inlineScripts, development = false, unofficialClient = false) {
+export function generateCspForScripts(
+    inlineScripts,
+    development = false,
+    unofficialClient = false,
+) {
     const cspHashValues = inlineScripts.map(generateCspHashValue);
     const production = !development;
     const isNative = process.env.OC_APP_TYPE === "android" || process.env.OC_APP_TYPE === "ios";
-    const unofficialConnections = development && unofficialClient
-        ? " https://icp-api.io https://*.raw.icp0.io https://huggingface.co https://*.huggingface.co https://*.hf.co https://*.xethub.hf.co"
-        : "";
+    const unofficialConnections =
+        development && unofficialClient
+            ? " https://icp-api.io https://*.raw.icp0.io https://huggingface.co https://*.huggingface.co https://*.hf.co https://*.xethub.hf.co"
+            : "";
     const csp = `
         default-src 'self';
         img-src * 'self' data: blob:${isNative && development ? ` ${process.env.OC_IC_URL}` : ""}${isNative ? " asset: http://asset.localhost content: *" : ""};
@@ -64,14 +69,27 @@ export function generateCspForScripts(inlineScripts, development = false, unoffi
 // Set up environment
 export function initEnv({ websiteVersion } = {}) {
     const localApk = process.env.OC_UNOFFICIAL_LOCAL_APK === "true";
-    if (localApk && (process.env.OC_UNOFFICIAL_CLIENT !== "true" || process.env.OC_UNOFFICIAL_WEB_BUILD === "true")) {
-        throw new Error("Local APK builds require the explicit unofficial profile, without web-build mode");
+    if (
+        localApk &&
+        (process.env.OC_UNOFFICIAL_CLIENT !== "true" ||
+            process.env.OC_UNOFFICIAL_WEB_BUILD === "true")
+    ) {
+        throw new Error(
+            "Local APK builds require the explicit unofficial profile, without web-build mode",
+        );
     }
-    if (process.env.OC_UNOFFICIAL_WEB_BUILD === "true" && process.env.OC_UNOFFICIAL_CLIENT !== "true") {
-        throw new Error("Optimized local web builds require the explicit unofficial client profile");
+    if (
+        process.env.OC_UNOFFICIAL_WEB_BUILD === "true" &&
+        process.env.OC_UNOFFICIAL_CLIENT !== "true"
+    ) {
+        throw new Error(
+            "Optimized local web builds require the explicit unofficial client profile",
+        );
     }
     if (process.env.OC_UNOFFICIAL_CLIENT === "true") {
-        const canisters = JSON.parse(fs.readFileSync(path.join(__dirname, "../../canister_ids.json")));
+        const canisters = JSON.parse(
+            fs.readFileSync(path.join(__dirname, "../../canister_ids.json")),
+        );
         const options = {
             port: process.env.OC_DEV_PORT,
             layout: process.env.OC_MOBILE_LAYOUT,
@@ -79,23 +97,27 @@ export function initEnv({ websiteVersion } = {}) {
         };
         const profile = localApk
             ? createUnofficialLocalApkEnvironment(canisters, {
-                inherited: process.env,
-                buildId: process.env.OC_UNOFFICIAL_APK_BUILD_ID,
-            })
+                  inherited: process.env,
+                  buildId: process.env.OC_UNOFFICIAL_APK_BUILD_ID,
+              })
             : process.env.OC_UNOFFICIAL_WEB_BUILD === "true"
-            ? createUnofficialLocalWebBuildEnvironment(canisters, {
-                ...options,
-                output: process.env.OC_UNOFFICIAL_WEB_OUTPUT,
-                buildId: process.env.OC_UNOFFICIAL_WEB_BUILD_ID,
-                repositoryRoot: path.join(__dirname, "../.."),
-            })
-            : createUnofficialLocalEnvironment(canisters, options);
+              ? createUnofficialLocalWebBuildEnvironment(canisters, {
+                    ...options,
+                    output: process.env.OC_UNOFFICIAL_WEB_OUTPUT,
+                    buildId: process.env.OC_UNOFFICIAL_WEB_BUILD_ID,
+                    repositoryRoot: path.join(__dirname, "../.."),
+                })
+              : createUnofficialLocalEnvironment(canisters, options);
         // A stale env file or inherited local deployment setting must not retarget this client.
         for (const key of Object.keys(process.env)) {
             if (/^(OC_|NODE_OPTIONS$|NODE_ENV$|VITE_)/i.test(key)) delete process.env[key];
         }
         Object.assign(process.env, profile);
-        if (websiteVersion !== undefined && process.env.OC_UNOFFICIAL_WEB_BUILD !== "true" && !localApk) {
+        if (
+            websiteVersion !== undefined &&
+            process.env.OC_UNOFFICIAL_WEB_BUILD !== "true" &&
+            !localApk
+        ) {
             process.env.OC_WEBSITE_VERSION = websiteVersion;
         }
     } else {
@@ -123,9 +145,15 @@ export function initEnv({ websiteVersion } = {}) {
             );
             setEnvironmentDefault("OC_IDENTITY_CANISTER", canisters.identity[dfxNetwork]);
             setEnvironmentDefault("OC_ONLINE_CANISTER", canisters.online_users[dfxNetwork]);
-            setEnvironmentDefault("OC_DAILY_PUZZLE_CANISTER", canisters.daily_puzzle?.[dfxNetwork] ?? "");
+            setEnvironmentDefault(
+                "OC_DAILY_PUZZLE_CANISTER",
+                canisters.daily_puzzle?.[dfxNetwork] ?? "",
+            );
             setEnvironmentDefault("OC_PROPOSALS_BOT_CANISTER", canisters.proposals_bot[dfxNetwork]);
-            setEnvironmentDefault("OC_AIRDROP_BOT_CANISTER", canisters.airdrop_bot?.[dfxNetwork] ?? "");
+            setEnvironmentDefault(
+                "OC_AIRDROP_BOT_CANISTER",
+                canisters.airdrop_bot?.[dfxNetwork] ?? "",
+            );
             setEnvironmentDefault("OC_STORAGE_INDEX_CANISTER", canisters.storage_index[dfxNetwork]);
             setEnvironmentDefault("OC_REGISTRY_CANISTER", canisters.registry[dfxNetwork]);
             setEnvironmentDefault("OC_MARKET_MAKER_CANISTER", canisters.market_maker[dfxNetwork]);

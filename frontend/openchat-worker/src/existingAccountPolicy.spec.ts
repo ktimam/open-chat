@@ -13,10 +13,12 @@ const backend = vi.hoisted(() => ({
 }));
 
 vi.mock("@agent", () => ({
-    IdentityAgent: { create: vi.fn(async () => ({
-        checkOpenChatIdentityExists: async () => false,
-        createOpenChatIdentity: backend.create,
-    })) },
+    IdentityAgent: {
+        create: vi.fn(async () => ({
+            checkOpenChatIdentityExists: async () => false,
+            createOpenChatIdentity: backend.create,
+        })),
+    },
     OpenChatAgent: class {
         registerUser = backend.register;
         modelCatalog = backend.catalog;
@@ -32,10 +34,16 @@ vi.mock("@agent", () => ({
 }));
 
 vi.mock("@shared", () => ({
-    IdentityStorage: { createForOcIdentity: () => ({
-        get: async () => undefined, set: vi.fn(), remove: vi.fn(),
-    }) },
-    buildIdentityFromJson: async () => ({ getPrincipal: () => ({ toString: () => "synthetic-test" }) }),
+    IdentityStorage: {
+        createForOcIdentity: () => ({
+            get: async () => undefined,
+            set: vi.fn(),
+            remove: vi.fn(),
+        }),
+    },
+    buildIdentityFromJson: async () => ({
+        getPrincipal: () => ({ toString: () => "synthetic-test" }),
+    }),
     inititaliseLogger: () => backend.log,
     shouldReportError: () => false,
     shouldReportWorkerError: () => false,
@@ -51,19 +59,26 @@ vi.mock("@shared", () => ({
 describe("existing-account-only worker boundary", () => {
     const handlers = new Map<string, (event: unknown) => void>();
     const posted = vi.fn();
-    const network = vi.fn(() => { throw new Error("No network allowed in worker policy tests"); });
+    const network = vi.fn(() => {
+        throw new Error("No network allowed in worker policy tests");
+    });
     let correlationId = 0;
 
     async function send(payload: Record<string, unknown>) {
         const id = ++correlationId;
         handlers.get("message")!({ data: { ...payload, correlationId: id } });
-        await vi.waitFor(() => expect(posted.mock.calls.some(([reply]) => reply.correlationId === id)).toBe(true));
+        await vi.waitFor(() =>
+            expect(posted.mock.calls.some(([reply]) => reply.correlationId === id)).toBe(true),
+        );
         return posted.mock.calls.find(([reply]) => reply.correlationId === id)![0];
     }
 
     beforeAll(async () => {
         vi.stubGlobal("crypto", webcrypto);
-        vi.stubGlobal("self", { addEventListener: (type: string, handler: (event: unknown) => void) => handlers.set(type, handler) });
+        vi.stubGlobal("self", {
+            addEventListener: (type: string, handler: (event: unknown) => void) =>
+                handlers.set(type, handler),
+        });
         vi.stubGlobal("postMessage", posted);
         vi.stubGlobal("fetch", network);
         await import("./worker");
@@ -95,14 +110,21 @@ describe("existing-account-only worker boundary", () => {
         expect(backend.register).not.toHaveBeenCalled();
     });
 
-    it.each([undefined, false])("preserves official backend operations when policy is %s", async existingAccountOnly => {
-        await send({ kind: "init", existingAccountOnly });
-        await send({ kind: "setAuthIdentity", identity: {} });
-        expect((await send({ kind: "createOpenChatIdentity" })).response).toBe("already_registered");
-        expect((await send({ kind: "registerUser", username: "synthetic" })).response).toEqual({ kind: "success" });
-        expect(backend.create).toHaveBeenCalledOnce();
-        expect(backend.register).toHaveBeenCalledOnce();
-    });
+    it.each([undefined, false])(
+        "preserves official backend operations when policy is %s",
+        async (existingAccountOnly) => {
+            await send({ kind: "init", existingAccountOnly });
+            await send({ kind: "setAuthIdentity", identity: {} });
+            expect((await send({ kind: "createOpenChatIdentity" })).response).toBe(
+                "already_registered",
+            );
+            expect((await send({ kind: "registerUser", username: "synthetic" })).response).toEqual({
+                kind: "success",
+            });
+            expect(backend.create).toHaveBeenCalledOnce();
+            expect(backend.register).toHaveBeenCalledOnce();
+        },
+    );
 
     it("blocks unsupported app methods and custom cards before backend dispatch without leaking payloads", async () => {
         await send({ kind: "init", clientOnlyApps: true });
@@ -127,7 +149,9 @@ describe("existing-account-only worker boundary", () => {
         await send({ kind: "init", clientOnlyApps: true });
         await send({ kind: "setAuthIdentity", identity: {} });
         const message = { content: { kind: "text_content", text: "synthetic" } };
-        expect((await send({ kind: "sendMessage", event: { event: message } })).response).toBe("success");
+        expect((await send({ kind: "sendMessage", event: { event: message } })).response).toBe(
+            "success",
+        );
         expect((await send({ kind: "editMessage", msg: message })).response).toBe("success");
         expect(backend.sendMessage).toHaveBeenCalledOnce();
         expect(backend.editMessage).toHaveBeenCalledOnce();

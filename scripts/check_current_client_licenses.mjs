@@ -8,8 +8,26 @@ import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ownedSecurityRules } from "./security_owned_rules.mjs";
 import { verifyRustFeatureScopeReview } from "./rust_feature_seed_review.mjs";
+import { lockIdentities } from "./rust_feature_scope.mjs";
 
 const REGISTRY = "registry+https://github.com/rust-lang/crates.io-index";
+// The historical PR1 rule remains unchanged. The current lock selects this
+// compatible transitive version for the optional native inference profiles.
+// This is a reviewed exact identity, not a same-name or latest-version fallback.
+const CURRENT_MODEL_IDENTITY_RESOLUTIONS = [
+  {
+    name: "llama-cpp-sys-2",
+    historicalVersion: "0.1.150",
+    version: "0.1.154",
+    source: REGISTRY,
+    checksum:
+      "13a9ea2ce0cdc20bcb1870534022e340b391663f8fe09133951e2fe37fbc29cf",
+    parent: { name: "llama-cpp-2", version: "0.1.150", source: REGISTRY },
+    dependencyName: "llama_cpp_sys_2",
+    dependencyKind: null,
+    dependencyTarget: null,
+  },
+];
 const key = ({ name, version, source }) =>
   JSON.stringify([name, version, source]);
 const normalizedHash = (bytes) =>
@@ -59,6 +77,7 @@ export function validateCurrentClientLicenses({
     "scope",
     "cargoLockSha256",
     "sourceScopeSha256",
+    "modelIdentityResolutions",
     "packages",
   ]);
   assert.equal(policy.schemaVersion, 1);
@@ -100,11 +119,24 @@ export function validateCurrentClientLicenses({
     required.set(key(value), value);
   }
   const inherited = ownedSecurityRules("pr1").introducedRustPackages;
-  for (const value of inherited)
-    required.set(key({ ...value, source: REGISTRY }), {
+  assert.deepEqual(
+    policy.modelIdentityResolutions,
+    CURRENT_MODEL_IDENTITY_RESOLUTIONS,
+    "Unreviewed current model identity resolution",
+  );
+  const inheritedCurrent = inherited.map((value) => {
+    const resolution = policy.modelIdentityResolutions.find(
+      (candidate) =>
+        candidate.name === value.name &&
+        candidate.historicalVersion === value.version,
+    );
+    return {
       ...value,
+      version: resolution?.version ?? value.version,
       source: REGISTRY,
-    });
+    };
+  });
+  for (const value of inheritedCurrent) required.set(key(value), value);
   assert.ok(Array.isArray(policy.packages) && policy.packages.length > 0);
   const reviewed = new Map();
   for (const value of policy.packages) {
@@ -123,9 +155,9 @@ export function validateCurrentClientLicenses({
     [...required.keys()].sort(),
     "License policy must cover exactly current owner roots plus retained model license requirements",
   );
-  for (const expected of inherited) {
+  for (const expected of inheritedCurrent) {
     assert.equal(
-      reviewed.get(key({ ...expected, source: REGISTRY })).license,
+      reviewed.get(key(expected)).license,
       expected.license,
       "Inherited model license requirement cannot be waived",
     );
@@ -147,6 +179,66 @@ export function validateCurrentClientLicenses({
       matches[0].license,
       expected.license,
       "License changed: " + key(expected),
+    );
+  }
+  const locked = lockIdentities(cargoLock);
+  for (const resolution of policy.modelIdentityResolutions) {
+    const historical = inherited.filter(
+      (value) =>
+        value.name === resolution.name &&
+        value.version === resolution.historicalVersion,
+    );
+    assert.equal(historical.length, 1, "Missing historical model obligation");
+    assert.equal(
+      locked.get(key(resolution))?.checksum,
+      resolution.checksum,
+      "Current model resolution must match the exact locked archive",
+    );
+    assert.ok(
+      config.seeds.some(
+        (seed) => key(seed.expected) === key(resolution.parent),
+      ),
+      "Current model resolution parent must remain a reviewed owner root",
+    );
+    const parent = metadata.packages.find(
+      (value) => key(value) === key(resolution.parent),
+    );
+    const child = metadata.packages.find(
+      (value) => key(value) === key(resolution),
+    );
+    assert.equal(typeof parent?.id, "string", "Missing actual parent identity");
+    assert.equal(typeof child?.id, "string", "Missing actual child identity");
+    assert.ok(
+      Array.isArray(metadata.resolve?.nodes),
+      "Missing actual Cargo graph",
+    );
+    const nodes = metadata.resolve.nodes.filter(
+      (value) => value.id === parent.id,
+    );
+    assert.equal(nodes.length, 1, "Missing or ambiguous model parent node");
+    const childNodes = metadata.resolve.nodes.filter(
+      (value) => value.id === child.id,
+    );
+    assert.equal(childNodes.length, 1, "Missing or ambiguous model child node");
+    assert.ok(Array.isArray(nodes[0].deps), "Missing model dependency edges");
+    const edges = nodes[0].deps.filter(
+      (value) => value.name === resolution.dependencyName,
+    );
+    assert.equal(edges.length, 1, "Missing or ambiguous reviewed model edge");
+    assert.equal(
+      edges[0].pkg,
+      child.id,
+      "Model edge resolves to another identity",
+    );
+    assert.ok(Array.isArray(edges[0].dep_kinds), "Missing model edge kinds");
+    assert.equal(
+      edges[0].dep_kinds.filter(
+        (value) =>
+          value.kind === resolution.dependencyKind &&
+          value.target === resolution.dependencyTarget,
+      ).length,
+      1,
+      "Missing or ambiguous reviewed model edge kind/target",
     );
   }
   assert.ok(
@@ -182,6 +274,7 @@ export function validateCurrentClientLicenses({
     scope: "current-client",
     reviewedPackageCount: reviewed.size,
     retainedModelLicenseRequirements: inherited.length,
+    reviewedModelIdentityResolutions: policy.modelIdentityResolutions.length,
     wholeRepositoryCoverage: false,
     advisoryChecksPerformed: false,
     releaseAcceptance: false,

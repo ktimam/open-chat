@@ -166,7 +166,11 @@
     // Query-driven like communities (the published AI-app directory lives on the user_index; there
     // is no locally-synced state to filter, unlike bots).
     function searchAiApps(reset = false) {
-        if (client.clientOnlyApps()) { searching = false; privateAppWorkspace.open(); return; }
+        if (client.clientOnlyApps()) {
+            searching = false;
+            privateAppWorkspace.open();
+            return;
+        }
         if (reset) {
             aiAppSearchState.reset();
         } else {
@@ -263,7 +267,10 @@
     });
 
     function setView(v: View) {
-        if (v === "aiApps" && client.clientOnlyApps()) { privateAppWorkspace.open(); return; }
+        if (v === "aiApps" && client.clientOnlyApps()) {
+            privateAppWorkspace.open();
+            return;
+        }
         transition(["fade"], () => {
             view = v;
         });

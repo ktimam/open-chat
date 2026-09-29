@@ -1,0 +1,297 @@
+{
+  "schemaVersion": 1,
+  "reviewedOn": "2026-09-29",
+  "normalization": "CRLF-to-LF-only",
+  "editAlgorithm": "unique-common-line-anchors-v1",
+  "proofMethod": "Actual installed CLI with root config, LF-normalized source and pinned current upstream Git blobs. Unique common lines anchor edit blocks; only byte-equal block prefix/suffix lines are removed. SHA-256(JSON.stringify([removedLines, addedLines])); every candidate edit and multiplicity must occur upstream. Recomputed live for each current-mode inherited mismatch.",
+  "records": [
+    {
+      "scope": "current-client",
+      "path": "frontend/app/src/components/home/groupdetails/DirectChatDetails.svelte",
+      "baseCommit": "d1e3712bb9ded3a1c8b652492591b7107333b23e",
+      "baseSha256": "2d532bf88e342f1e9e464be2be0a7933a727aa001467684a08d1d7152c0cffd2",
+      "candidateSha256": "e513ee0b9093d37dc7ba0ce3182dd2b1bc3b435980741dd09d9f7f12c16a6d2d",
+      "justification": "Every remaining formatter edit, including repeated edits, is byte-identical to an edit in the pinned current upstream file. Fork-owned formatting is not exempted; source, formatter, config and live edit proof must all still match.",
+      "formatter": {
+        "prettierVersion": "3.8.4",
+        "sveltePluginVersion": "3.5.2",
+        "configSha256": "6a608fe0bd06378aa252d9bc4bf291eea44b90d15657b5e95dc02cde509a44aa"
+      },
+      "proof": {
+        "baseEditSha256s": [
+          "402ba113b9d16736ab7e43d300cd3c97b87e10b9739046f9e747be53374d9692",
+          "d1f5a0f1788038c62f5ebc7381278f2e4c703b83def244421ae61bd6b13dd1ed",
+          "99f709c796b1462a2a228910a340489dba477a2b65f747d54133320dccf1f748",
+          "b79a87b3bdfa64e23c3ad9cb97aa56e9c6c119c04e77b1cbb5e7ff1cdaf8aaab"
+        ],
+        "candidateEditSha256s": [
+          "402ba113b9d16736ab7e43d300cd3c97b87e10b9739046f9e747be53374d9692"
+        ]
+      }
+    },
+    {
+      "scope": "current-client",
+      "path": "frontend/app/src/components/home/nav/MainMenu.svelte",
+      "baseCommit": "d1e3712bb9ded3a1c8b652492591b7107333b23e",
+      "baseSha256": "6ca5a83e2eefac23ba43613e845cf695fea537192102ea30555ebe5766886963",
+      "candidateSha256": "a3574d1be727ab4edfb48843061266f26c1e6f58f9a48bed2bc7d131b0417751",
+      "justification": "Every remaining formatter edit, including repeated edits, is byte-identical to an edit in the pinned current upstream file. Fork-owned formatting is not exempted; source, formatter, config and live edit proof must all still match.",
+      "formatter": {
+        "prettierVersion": "3.8.4",
+        "sveltePluginVersion": "3.5.2",
+        "configSha256": "6a608fe0bd06378aa252d9bc4bf291eea44b90d15657b5e95dc02cde509a44aa"
+      },
+      "proof": {
+        "baseEditSha256s": [
+          "a8e91b2a1da16190fd7744fe765fdab2f023f807e1b12ba29b269f37dcddd31b"
+        ],
+        "candidateEditSha256s": [
+          "a8e91b2a1da16190fd7744fe765fdab2f023f807e1b12ba29b269f37dcddd31b"
+        ]
+      }
+    },
+    {
+      "scope": "current-client",
+      "path": "frontend/app/src/components/onboard/OnboardModal.svelte",
+      "baseCommit": "d1e3712bb9ded3a1c8b652492591b7107333b23e",
+      "baseSha256": "b1875c95c338dcd6a6cee1abf1ad5894fcb0393555218b553ace28e5d265f3d2",
+      "candidateSha256": "1a7a64c9e6167080cbda0bdff9a2cf82f98ba21c4f2a0401b973379ab564923c",
+      "justification": "Every remaining formatter edit, including repeated edits, is byte-identical to an edit in the pinned current upstream file. Fork-owned formatting is not exempted; source, formatter, config and live edit proof must all still match.",
+      "formatter": {
+        "prettierVersion": "3.8.4",
+        "sveltePluginVersion": "3.5.2",
+        "configSha256": "6a608fe0bd06378aa252d9bc4bf291eea44b90d15657b5e95dc02cde509a44aa"
+      },
+      "proof": {
+        "baseEditSha256s": [
+          "5a9fe2c51b2a6df99093710fc2e1496fa7f5ec64377f0eb3e973ccfae71c5fc5",
+          "185b3127a3f26f1f6f457a5c7ee9f1ecc116d1657617dc44ae540ef3224c5123"
+        ],
+        "candidateEditSha256s": [
+          "5a9fe2c51b2a6df99093710fc2e1496fa7f5ec64377f0eb3e973ccfae71c5fc5",
+          "185b3127a3f26f1f6f457a5c7ee9f1ecc116d1657617dc44ae540ef3224c5123"
+        ]
+      }
+    },
+    {
+      "scope": "current-client",
+      "path": "frontend/app/src/components_mobile/home/AnonFooter.svelte",
+      "baseCommit": "d1e3712bb9ded3a1c8b652492591b7107333b23e",
+      "baseSha256": "cc49579c7170db7b1ca13cae81c326dd864cbe400ed0cb60a292212db4816f04",
+      "candidateSha256": "648dddf83859f0fef4451b0033fa7c8cd2c3e259d1a61c9c372db586e73b429e",
+      "justification": "Every remaining formatter edit, including repeated edits, is byte-identical to an edit in the pinned current upstream file. Fork-owned formatting is not exempted; source, formatter, config and live edit proof must all still match.",
+      "formatter": {
+        "prettierVersion": "3.8.4",
+        "sveltePluginVersion": "3.5.2",
+        "configSha256": "6a608fe0bd06378aa252d9bc4bf291eea44b90d15657b5e95dc02cde509a44aa"
+      },
+      "proof": {
+        "baseEditSha256s": [
+          "e1a64bfcad653a49808f9f71185e9485edfd6ae38f0618c8dd108dda48d0afa8",
+          "0bcca4be1a25b5d8220b89c5521ea3dd93e2851709f3947a43c531a40b68c58e"
+        ],
+        "candidateEditSha256s": [
+          "e1a64bfcad653a49808f9f71185e9485edfd6ae38f0618c8dd108dda48d0afa8",
+          "0bcca4be1a25b5d8220b89c5521ea3dd93e2851709f3947a43c531a40b68c58e"
+        ]
+      }
+    },
+    {
+      "scope": "current-client",
+      "path": "frontend/app/src/components_mobile/home/SlidingModals.svelte",
+      "baseCommit": "d1e3712bb9ded3a1c8b652492591b7107333b23e",
+      "baseSha256": "e45f65fd929d7b4120f19b5621e8a5d1574855a9749beb0611c5023b53ef6c23",
+      "candidateSha256": "30277109cf488e73247d95a521ff5a0d94f7f163f9b3e967d7475ffaadef77d1",
+      "justification": "Every remaining formatter edit, including repeated edits, is byte-identical to an edit in the pinned current upstream file. Fork-owned formatting is not exempted; source, formatter, config and live edit proof must all still match.",
+      "formatter": {
+        "prettierVersion": "3.8.4",
+        "sveltePluginVersion": "3.5.2",
+        "configSha256": "6a608fe0bd06378aa252d9bc4bf291eea44b90d15657b5e95dc02cde509a44aa"
+      },
+      "proof": {
+        "baseEditSha256s": [
+          "331e1cdeb6593a3fc010c992b95beca17d6f7ef71758cdd2a692c2867c0b1cdd",
+          "3a2c56c17b129b2bc5acea36477163d8bdce88f7adf14661ddf2e3ebce15c62d",
+          "1b46fb1f656a255c1e5ac9709092f6d7ae902b2f7ba319c4ca71d26ffc02ece9",
+          "4cec542c6fa3ab270c125660c23f85046781d84bc5429c6513dade5fd199952c",
+          "3994d63ce1c66b59cdec96aef3ffa19759f8b80b66b6dcc72e70f904ea25f61e",
+          "a6bb0f1dbcfb6619e623258c90afd30df914a63c37b2f1da287f935709daf91f",
+          "5bee40d5d123ceaa5552255cf88d1c4f7f8dc1bd10bb7df97188fa6c014f208e",
+          "5bee40d5d123ceaa5552255cf88d1c4f7f8dc1bd10bb7df97188fa6c014f208e"
+        ],
+        "candidateEditSha256s": [
+          "3994d63ce1c66b59cdec96aef3ffa19759f8b80b66b6dcc72e70f904ea25f61e"
+        ]
+      }
+    },
+    {
+      "scope": "current-client",
+      "path": "frontend/app/src/components_mobile/home/groupdetails/DirectChatDetails.svelte",
+      "baseCommit": "d1e3712bb9ded3a1c8b652492591b7107333b23e",
+      "baseSha256": "2fa406677f2c8f3c7270fe9ff8575b2a766d9b7627372df6957db8335ffc7298",
+      "candidateSha256": "9f40573499317b17d97007415facc3ba1eccdd86fb9557e4482ff26c3c6bd074",
+      "justification": "Every remaining formatter edit, including repeated edits, is byte-identical to an edit in the pinned current upstream file. Fork-owned formatting is not exempted; source, formatter, config and live edit proof must all still match.",
+      "formatter": {
+        "prettierVersion": "3.8.4",
+        "sveltePluginVersion": "3.5.2",
+        "configSha256": "6a608fe0bd06378aa252d9bc4bf291eea44b90d15657b5e95dc02cde509a44aa"
+      },
+      "proof": {
+        "baseEditSha256s": [
+          "ff73d0d400b87b87a167258eda6fed91e347505929d1ad21342843eb41d08ce9",
+          "de91977856cdd6854a60a99d5f726a3178d2a804ab3ecde6c29020e75afe92e6",
+          "2651407dd438a8cda3a36e484359f4d152a486f0dc10d0d02d328722ddaec226",
+          "991f284eb418de44573051671ca2c755259ed6115f24e10d7d623c0225f6a30f"
+        ],
+        "candidateEditSha256s": [
+          "2651407dd438a8cda3a36e484359f4d152a486f0dc10d0d02d328722ddaec226"
+        ]
+      }
+    },
+    {
+      "scope": "current-client",
+      "path": "frontend/app/src/components_mobile/home/groupdetails/GroupDetails.svelte",
+      "baseCommit": "d1e3712bb9ded3a1c8b652492591b7107333b23e",
+      "baseSha256": "18860a2f9227231b0ed4d62633695e391c4294502be9d4394c0a07119a6650ef",
+      "candidateSha256": "8b609a4936974f1548a2360b83529993215695430a9887cfde7fa3790084a3c8",
+      "justification": "Every remaining formatter edit, including repeated edits, is byte-identical to an edit in the pinned current upstream file. Fork-owned formatting is not exempted; source, formatter, config and live edit proof must all still match.",
+      "formatter": {
+        "prettierVersion": "3.8.4",
+        "sveltePluginVersion": "3.5.2",
+        "configSha256": "6a608fe0bd06378aa252d9bc4bf291eea44b90d15657b5e95dc02cde509a44aa"
+      },
+      "proof": {
+        "baseEditSha256s": [
+          "17baac9205783bcce74fa27961796967864994360c54cd3704f5b130c47bc1e3",
+          "2bc45365cc09eee015e04b54b9ce7e21a5568e489911351e4ced593bfa5efcfe",
+          "423081dbdd30e38a6e4a108d6647cbb41ed1e70bd900c82757fa488dd153ee54",
+          "02d866175a2dee77f465095a6772222a1ab9a4386abb69d3a89c05ff95b2ba32",
+          "530abddc75715218350ad5087a9f3fa064ad532da5ceba64c9e213bcbd1220de",
+          "c21772c78d549273c6e80c684c0950737441feb5f4619d9ea4e84446a4cfe7e9",
+          "5d37d7ce6d0ff89188169e7d419a44406ebc3fe7f2de9eed2a4abe045d1a79e3",
+          "5595295a2e96802e6b8a51739ba696372b4b2c08cf382ad46a4bd90f07df1afa",
+          "5d37d7ce6d0ff89188169e7d419a44406ebc3fe7f2de9eed2a4abe045d1a79e3",
+          "a70fa90e19a58e4cc51f47c3b78a10715bf2a465eca38b86f2a4e5e05cab4b42",
+          "c68aaf6b2c2c5715b9a5c7f3b49526204669093d1cf3396aec7ee700e5a07f2a",
+          "8388e8824da2ba27c359f214788a8c74a4ac079fdb96eb7e15a980ae1055afd2",
+          "8388e8824da2ba27c359f214788a8c74a4ac079fdb96eb7e15a980ae1055afd2",
+          "8388e8824da2ba27c359f214788a8c74a4ac079fdb96eb7e15a980ae1055afd2",
+          "8388e8824da2ba27c359f214788a8c74a4ac079fdb96eb7e15a980ae1055afd2"
+        ],
+        "candidateEditSha256s": [
+          "02d866175a2dee77f465095a6772222a1ab9a4386abb69d3a89c05ff95b2ba32"
+        ]
+      }
+    },
+    {
+      "scope": "current-client",
+      "path": "frontend/app/src/stores/settings.ts",
+      "baseCommit": "d1e3712bb9ded3a1c8b652492591b7107333b23e",
+      "baseSha256": "a8df69a7540e272044caef6d11ace0d66bd415c29dd8dce80b6929451dbdef7b",
+      "candidateSha256": "b2fa51210f3d3c7d5badaf745fb4837180a3292c6769284937c4b53a8f520e61",
+      "justification": "Every remaining formatter edit, including repeated edits, is byte-identical to an edit in the pinned current upstream file. Fork-owned formatting is not exempted; source, formatter, config and live edit proof must all still match.",
+      "formatter": {
+        "prettierVersion": "3.8.4",
+        "sveltePluginVersion": "3.5.2",
+        "configSha256": "6a608fe0bd06378aa252d9bc4bf291eea44b90d15657b5e95dc02cde509a44aa"
+      },
+      "proof": {
+        "baseEditSha256s": [
+          "b5294dd2ed0c932c9afe9e7fd299f31c21f8a0f69a2b8599e4918ecd3d5fd132",
+          "f338dd65cd245313ba8cec407b4b1b9a00cbbffdc9f5c86a5927f8a092bffebb"
+        ],
+        "candidateEditSha256s": [
+          "f338dd65cd245313ba8cec407b4b1b9a00cbbffdc9f5c86a5927f8a092bffebb"
+        ]
+      }
+    },
+    {
+      "scope": "current-client",
+      "path": "frontend/openchat-agent/src/services/identity/identity.client.ts",
+      "baseCommit": "d1e3712bb9ded3a1c8b652492591b7107333b23e",
+      "baseSha256": "213b10c2e1bdd8ad97dd2406cb535a58ce8e89cbc0b1cb5aacf8539267910a32",
+      "candidateSha256": "6343cc7868aac7d65ca6cdf4c9dc30248515f752bb269590a110dd4ff6697f0d",
+      "justification": "Every remaining formatter edit, including repeated edits, is byte-identical to an edit in the pinned current upstream file. Fork-owned formatting is not exempted; source, formatter, config and live edit proof must all still match.",
+      "formatter": {
+        "prettierVersion": "3.8.4",
+        "sveltePluginVersion": "3.5.2",
+        "configSha256": "6a608fe0bd06378aa252d9bc4bf291eea44b90d15657b5e95dc02cde509a44aa"
+      },
+      "proof": {
+        "baseEditSha256s": [
+          "d7bbed29a24e18783555ae0c9327ac5f4bc7f7df8f220a47fca92062cc21f50d"
+        ],
+        "candidateEditSha256s": [
+          "d7bbed29a24e18783555ae0c9327ac5f4bc7f7df8f220a47fca92062cc21f50d"
+        ]
+      }
+    },
+    {
+      "scope": "current-client",
+      "path": "frontend/openchat-agent/src/services/identityAgent.ts",
+      "baseCommit": "d1e3712bb9ded3a1c8b652492591b7107333b23e",
+      "baseSha256": "27e187a538bf1e4324affc76fb56e855fc48029d0dc4b72364a92bc79b344d9c",
+      "candidateSha256": "603121ecd5eee021a0334b6a5d85ac5fac3551ede2fff6b598fb179d73252691",
+      "justification": "Every remaining formatter edit, including repeated edits, is byte-identical to an edit in the pinned current upstream file. Fork-owned formatting is not exempted; source, formatter, config and live edit proof must all still match.",
+      "formatter": {
+        "prettierVersion": "3.8.4",
+        "sveltePluginVersion": "3.5.2",
+        "configSha256": "6a608fe0bd06378aa252d9bc4bf291eea44b90d15657b5e95dc02cde509a44aa"
+      },
+      "proof": {
+        "baseEditSha256s": [
+          "917e7c46737455bccc79ef0de7c7f4148f603d6bcb26672277662ae20c09b5d0",
+          "3db3ea16cc9e65130d9be4ccd5e5882497655eb90705b8ff6d41b5ac8073732a",
+          "d7bbed29a24e18783555ae0c9327ac5f4bc7f7df8f220a47fca92062cc21f50d"
+        ],
+        "candidateEditSha256s": [
+          "917e7c46737455bccc79ef0de7c7f4148f603d6bcb26672277662ae20c09b5d0",
+          "3db3ea16cc9e65130d9be4ccd5e5882497655eb90705b8ff6d41b5ac8073732a",
+          "d7bbed29a24e18783555ae0c9327ac5f4bc7f7df8f220a47fca92062cc21f50d"
+        ]
+      }
+    },
+    {
+      "scope": "current-client",
+      "path": "frontend/openchat-client/src/state/app/stores.ts",
+      "baseCommit": "d1e3712bb9ded3a1c8b652492591b7107333b23e",
+      "baseSha256": "575c7a1f8f627f03c9b322505f26e1724c130f2a5d4f61c9268b9b7b9b3e07bf",
+      "candidateSha256": "44cf5734c0ec317014f458b57ffc17e265a7d839513632a34d7f6ae525999c8d",
+      "justification": "Every remaining formatter edit, including repeated edits, is byte-identical to an edit in the pinned current upstream file. Fork-owned formatting is not exempted; source, formatter, config and live edit proof must all still match.",
+      "formatter": {
+        "prettierVersion": "3.8.4",
+        "sveltePluginVersion": "3.5.2",
+        "configSha256": "6a608fe0bd06378aa252d9bc4bf291eea44b90d15657b5e95dc02cde509a44aa"
+      },
+      "proof": {
+        "baseEditSha256s": [
+          "e42e58b182969bc74b96b708f4ff5bb44b686af4567475b36db68d1f47f89ec2"
+        ],
+        "candidateEditSha256s": [
+          "e42e58b182969bc74b96b708f4ff5bb44b686af4567475b36db68d1f47f89ec2"
+        ]
+      }
+    },
+    {
+      "scope": "current-client",
+      "path": "frontend/openchat-service-worker/src/service_worker.ts",
+      "baseCommit": "d1e3712bb9ded3a1c8b652492591b7107333b23e",
+      "baseSha256": "cd9351a43fd169a652888a98bb977e4b7b325e16200fe7341790995d6b52a9e8",
+      "candidateSha256": "6f91f1954e5a10118750b24d9c14a3d9149b1b90b930b5295601cde0f1fe5958",
+      "justification": "Every remaining formatter edit, including repeated edits, is byte-identical to an edit in the pinned current upstream file. Fork-owned formatting is not exempted; source, formatter, config and live edit proof must all still match.",
+      "formatter": {
+        "prettierVersion": "3.8.4",
+        "sveltePluginVersion": "3.5.2",
+        "configSha256": "6a608fe0bd06378aa252d9bc4bf291eea44b90d15657b5e95dc02cde509a44aa"
+      },
+      "proof": {
+        "baseEditSha256s": [
+          "254ecb9b9a801e812bd0f7922a7a86573aebcb24f715f61a1420ce97fdb404ee"
+        ],
+        "candidateEditSha256s": [
+          "254ecb9b9a801e812bd0f7922a7a86573aebcb24f715f61a1420ce97fdb404ee"
+        ]
+      }
+    }
+  ]
+}

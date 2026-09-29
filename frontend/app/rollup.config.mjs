@@ -84,13 +84,21 @@ function clean() {
             if (localClientBuild) {
                 // initEnv accepted an existing empty output. Never clean/delete a caller path.
                 fs.writeFileSync(outputPath("version"), JSON.stringify({ version }));
-                fs.writeFileSync(outputPath("ota-policy.json"), JSON.stringify({ strategy: "none" }));
+                fs.writeFileSync(
+                    outputPath("ota-policy.json"),
+                    JSON.stringify({ strategy: "none" }),
+                );
                 if (localTestApk) {
                     fs.writeFileSync(outputPath("android-rp-id"), "");
-                    fs.writeFileSync(outputPath("local-apk-profile.json"), JSON.stringify(localApkBundleMarker(
-                        process.env.OC_IDENTITY_CANISTER,
-                        Principal.fromText(process.env.OC_IDENTITY_CANISTER).toHex(),
-                    )));
+                    fs.writeFileSync(
+                        outputPath("local-apk-profile.json"),
+                        JSON.stringify(
+                            localApkBundleMarker(
+                                process.env.OC_IDENTITY_CANISTER,
+                                Principal.fromText(process.env.OC_IDENTITY_CANISTER).toHex(),
+                            ),
+                        ),
+                    );
                 }
                 return;
             }
@@ -148,11 +156,15 @@ function unofficialWebArtifacts() {
         name: "unofficial-local-web-artifacts",
         generateBundle() {
             if (!localWebBuild) return;
-            this.emitFile({ type: "asset", fileName: UNOFFICIAL_LOCAL_WEB_MANIFEST,
-                source: JSON.stringify(unofficialLocalWebManifest(process.env), null, 2) });
+            this.emitFile({
+                type: "asset",
+                fileName: UNOFFICIAL_LOCAL_WEB_MANIFEST,
+                source: JSON.stringify(unofficialLocalWebManifest(process.env), null, 2),
+            });
         },
         writeBundle() {
-            if (localClientBuild) copyUnofficialWebPublicFiles(path.join(__dirname, "public"), outputDirectory);
+            if (localClientBuild)
+                copyUnofficialWebPublicFiles(path.join(__dirname, "public"), outputDirectory);
         },
     };
 }
@@ -188,11 +200,14 @@ if (!otaUpdateStrategies.has(otaUpdateStrategy)) {
     );
 }
 
-const androidRpId = localClientBuild ? "" : (process.env.OC_ANDROID_RP_ID ?? "oc.app").trim().toLowerCase();
+const androidRpId = localClientBuild
+    ? ""
+    : (process.env.OC_ANDROID_RP_ID ?? "oc.app").trim().toLowerCase();
 if (
-    !localClientBuild && (!/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(androidRpId) ||
-    !androidRpId.includes(".") ||
-    androidRpId.includes(".."))
+    !localClientBuild &&
+    (!/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(androidRpId) ||
+        !androidRpId.includes(".") ||
+        androidRpId.includes(".."))
 ) {
     throw new Error("OC_ANDROID_RP_ID must be one valid HTTPS hostname");
 }
@@ -370,10 +385,14 @@ export default {
         clean(),
         // Must precede Svelte's package.json "svelte" resolver, which otherwise
         // follows an installed file-dependency copy outside this source tree.
-        alias({ entries: [{
-            find: /^component-lib$/,
-            replacement: path.resolve(__dirname, "../component-lib/src/index.ts"),
-        }] }),
+        alias({
+            entries: [
+                {
+                    find: /^component-lib$/,
+                    replacement: path.resolve(__dirname, "../component-lib/src/index.ts"),
+                },
+            ],
+        }),
         svelte({
             preprocess: sveltePreprocess({
                 sourceMap: true,
@@ -482,7 +501,9 @@ export default {
             "import.meta.env.MODE": JSON.stringify(env),
             "import.meta.env.DEV": JSON.stringify(development),
             "import.meta.env.PROD": JSON.stringify(!development),
-            ...(localClientBuild ? { "import.meta.env.DEV": "false", "import.meta.env.PROD": "true" } : {}),
+            ...(localClientBuild
+                ? { "import.meta.env.DEV": "false", "import.meta.env.PROD": "true" }
+                : {}),
             "import.meta.env.SSR": "false",
             "import.meta.env.BASE_URL": JSON.stringify("/"),
             "import.meta.env": "{}",
@@ -499,9 +520,15 @@ export default {
                 JSON.stringify(otaUpdateStrategy),
             ),
             "import.meta.env.OC_BUILD_ENV": JSON.stringify(process.env.OC_BUILD_ENV),
-            "import.meta.env.OC_UNOFFICIAL_CLIENT": JSON.stringify(process.env.OC_UNOFFICIAL_CLIENT === "true" ? "true" : "false"),
-            "import.meta.env.OC_UNOFFICIAL_LOCAL_APK": JSON.stringify(localTestApk ? "true" : "false"),
-            "import.meta.env.OC_ANDROID_NATIVE_AUTH": JSON.stringify(process.env.OC_ANDROID_NATIVE_AUTH ?? "passkey"),
+            "import.meta.env.OC_UNOFFICIAL_CLIENT": JSON.stringify(
+                process.env.OC_UNOFFICIAL_CLIENT === "true" ? "true" : "false",
+            ),
+            "import.meta.env.OC_UNOFFICIAL_LOCAL_APK": JSON.stringify(
+                localTestApk ? "true" : "false",
+            ),
+            "import.meta.env.OC_ANDROID_NATIVE_AUTH": JSON.stringify(
+                process.env.OC_ANDROID_NATIVE_AUTH ?? "passkey",
+            ),
             "import.meta.env.OC_WEBAUTHN_ORIGIN": JSON.stringify(process.env.OC_WEBAUTHN_ORIGIN),
             "import.meta.env.OC_ANDROID_RP_ID": JSON.stringify(androidRpId),
             "import.meta.env.OC_INTERNET_IDENTITY_URL": JSON.stringify(
@@ -530,7 +557,9 @@ export default {
             "import.meta.env.OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY": maybeStringify(
                 process.env.OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY,
             ),
-            "import.meta.env.OC_NODE_ENV": JSON.stringify(localClientBuild ? "development" : (process.env.NODE_ENV ?? "production")),
+            "import.meta.env.OC_NODE_ENV": JSON.stringify(
+                localClientBuild ? "development" : (process.env.NODE_ENV ?? "production"),
+            ),
             "import.meta.env.OC_WEBSITE_VERSION": JSON.stringify(process.env.OC_WEBSITE_VERSION),
             "import.meta.env.OC_ROLLBAR_ACCESS_TOKEN": JSON.stringify(
                 process.env.OC_ROLLBAR_ACCESS_TOKEN,
@@ -670,7 +699,11 @@ export default {
                     `var parcelRequire;`,
                     analyticsBody,
                 ];
-                const csp = generateCspForScripts(inlineScripts, development, process.env.OC_UNOFFICIAL_CLIENT === "true");
+                const csp = generateCspForScripts(
+                    inlineScripts,
+                    development,
+                    process.env.OC_UNOFFICIAL_CLIENT === "true",
+                );
 
                 const analyticsNoscript =
                     production && gaEnabled
@@ -769,7 +802,12 @@ export default {
         sourcemapNewline(),
         publicKeyBuildPlugin({
             network: process.env.OC_DFX_NETWORK ?? "local",
-            ...(localClientBuild ? { queryPublicKey: queryOfficialUserIndexPublicKey, outputPath: outputPath("public-key") } : {}),
+            ...(localClientBuild
+                ? {
+                      queryPublicKey: queryOfficialUserIndexPublicKey,
+                      outputPath: outputPath("public-key"),
+                  }
+                : {}),
             canister: process.env.OC_USER_INDEX_CANISTER,
             dfxExecutable: process.env.OC_DFX_EXECUTABLE,
             expectedDfxVersion: dfxBuildVersion,
@@ -783,13 +821,20 @@ export default {
             hook: "buildStart",
         }),
         localAppRelayPlugin({ enabled: localWebBuild }),
-        localBrowserAuthBuildPlugin({ enabled: localTestApk, identityCanister: process.env.OC_IDENTITY_CANISTER }),
+        localBrowserAuthBuildPlugin({
+            enabled: localTestApk,
+            identityCanister: process.env.OC_IDENTITY_CANISTER,
+        }),
         localNativeAppHandoffBuildPlugin({ enabled: localTestApk }),
         unofficialWebArtifacts(),
-        ...(!localClientBuild ? [androidBundlePlugin({
-            version,
-            includeLocalExtractor: transformersWebGpuSpikeEnabled,
-        })] : []),
+        ...(!localClientBuild
+            ? [
+                  androidBundlePlugin({
+                      version,
+                      includeLocalExtractor: transformersWebGpuSpikeEnabled,
+                  }),
+              ]
+            : []),
     ],
     watch: {
         clearScreen: false,

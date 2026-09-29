@@ -44,16 +44,24 @@ described in `MODEL_MODIFICATIONS.md`; cached publisher files remain unchanged.
 
 ## Native code and Rust packages included in the bundle
 
-| Component                                                           | Version                                                                           | License           | Disposition                                                                           |
-| ------------------------------------------------------------------- | --------------------------------------------------------------------------------- | ----------------- | ------------------------------------------------------------------------------------- |
-| llama.cpp / ggml                                                    | `9e3b928fd8c9d14dbf15a8768b9fdd7e5c721d66`, vendored by `llama-cpp-sys-2` 0.1.150 | MIT               | Compiled into the native inference runtime. Copyright 2023-2026 the ggml authors.     |
-| `llama-cpp-2`, `llama-cpp-sys-2`                                    | 0.1.150                                                                           | MIT OR Apache-2.0 | OpenChat elects Apache-2.0 for the Rust wrapper code; vendored llama.cpp remains MIT. |
-| `open`                                                              | 5.4.1                                                                             | MIT               | Opens validated external URLs. Copyright 2015 Sebastian Thiel.                        |
-| `minijinja`, `minijinja-contrib`                                    | 2.21.0                                                                            | Apache-2.0        | Renders model-provided chat templates. Copyright Armin Ronacher and contributors.     |
-| `memo-map`                                                          | 0.3.3                                                                             | Apache-2.0        | Transitive template cache. Copyright Armin Ronacher and contributors.                 |
-| `is-docker`, `is-wsl`                                               | 0.2.0, 0.4.0                                                                      | MIT               | Platform detection. Copyright 2023 Sean Larkin.                                       |
-| `sha2`, `hex`, `cc`, `find-msvc-tools`, `find_cuda_helper`, `shlex` | versions pinned in `Cargo.lock`                                                   | MIT OR Apache-2.0 | OpenChat elects Apache-2.0 for these integrity, build, and platform dependencies.     |
-| `bindgen`                                                           | 0.72.1                                                                            | BSD-3-Clause      | Build-time tool; it is not linked into or bundled with the application.               |
+| Component                                                           | Version                                                                        | License           | Disposition                                                                           |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------------------ | ----------------- | ------------------------------------------------------------------------------------- |
+| llama.cpp / ggml                                                    | Vendored source in the checksum-pinned `llama-cpp-sys-2` 0.1.154 archive below | MIT               | Compiled only when native inference is enabled. Copyright 2023-2026 the ggml authors. |
+| `llama-cpp-2`                                                       | 0.1.150                                                                        | MIT OR Apache-2.0 | OpenChat elects Apache-2.0 for the Rust wrapper code.                                 |
+| `llama-cpp-sys-2`                                                   | 0.1.154                                                                        | MIT OR Apache-2.0 | OpenChat elects Apache-2.0 for the Rust bindings; vendored llama.cpp remains MIT.     |
+| `open`                                                              | 5.4.1                                                                          | MIT               | Opens validated external URLs. Copyright 2015 Sebastian Thiel.                        |
+| `minijinja`, `minijinja-contrib`                                    | 2.21.0                                                                         | Apache-2.0        | Renders model-provided chat templates. Copyright Armin Ronacher and contributors.     |
+| `memo-map`                                                          | 0.3.3                                                                          | Apache-2.0        | Transitive template cache. Copyright Armin Ronacher and contributors.                 |
+| `is-docker`, `is-wsl`                                               | 0.2.0, 0.4.0                                                                   | MIT               | Platform detection. Copyright 2023 Sean Larkin.                                       |
+| `sha2`, `hex`, `cc`, `find-msvc-tools`, `find_cuda_helper`, `shlex` | versions pinned in `Cargo.lock`                                                | MIT OR Apache-2.0 | OpenChat elects Apache-2.0 for these integrity, build, and platform dependencies.     |
+| `bindgen`                                                           | 0.72.1                                                                         | BSD-3-Clause      | Build-time tool; it is not linked into or bundled with the application.               |
+
+The optional native inference dependency resolves `llama-cpp-2` 0.1.150 to
+`llama-cpp-sys-2` 0.1.154 from crates.io, whose source archive SHA-256 is
+`13a9ea2ce0cdc20bcb1870534022e340b391663f8fe09133951e2fe37fbc29cf` in `Cargo.lock`.
+This pins the published archive containing llama.cpp/ggml; the upstream llama.cpp
+Git revision has not been independently verified from the cached archive and is
+not asserted here. The local all-WebGPU Android builds do not enable native inference.
 
 The complete MIT and Apache-2.0 texts are bundled in `THIRD_PARTY_LICENSES`; the table preserves the
 copyright notices for MIT-only code compiled into the application. `bindgen` is a build-time tool,

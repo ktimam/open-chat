@@ -4,7 +4,9 @@ export type LocalAppHandoffOutcome = "received" | "saved" | "rejected" | "uncert
 
 export function localAppSessionNonce(): string {
     return btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))))
-        .replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+        .replaceAll("+", "-")
+        .replaceAll("/", "_")
+        .replace(/=+$/, "");
 }
 
 /** One explicitly confirmed handoff. start sends no payload; a bound ready permits one offer.
@@ -23,9 +25,18 @@ export function createLocalAppHandoffSession(options: {
 }) {
     const { request, sessionNonce, receiver, send, onOutcome } = options;
     const destination = new URL(request.destination);
-    if (!/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/.test(sessionNonce) || !receiver ||
-        destination.username || destination.password || destination.hash ||
-        (destination.protocol !== "https:" && !(destination.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(destination.hostname)))) {
+    if (
+        !/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/.test(sessionNonce) ||
+        !receiver ||
+        destination.username ||
+        destination.password ||
+        destination.hash ||
+        (destination.protocol !== "https:" &&
+            !(
+                destination.protocol === "http:" &&
+                ["localhost", "127.0.0.1", "[::1]"].includes(destination.hostname)
+            ))
+    ) {
         throw new Error("Invalid private app handoff binding");
     }
     const origin = destination.origin;
@@ -36,7 +47,10 @@ export function createLocalAppHandoffSession(options: {
     let ended = false;
     const common = { version: 1, sessionNonce };
     function exact(value: Record<string, unknown>, keys: string[]): boolean {
-        return Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+        return (
+            Object.keys(value).length === keys.length &&
+            keys.every((key) => Object.hasOwn(value, key))
+        );
     }
     function uncertain(): void {
         if (ended) return;
@@ -47,23 +61,47 @@ export function createLocalAppHandoffSession(options: {
         if (ended || offered) return;
         offered = true;
         try {
-            send({ ...common, type: "oc:app-import:offer", importId: request.idempotencyKey,
-                actionId: request.actionId, payload: request.payload }, origin);
-        } catch { uncertain(); }
+            send(
+                {
+                    ...common,
+                    type: "oc:app-import:offer",
+                    importId: request.idempotencyKey,
+                    actionId: request.actionId,
+                    payload: request.payload,
+                },
+                origin,
+            );
+        } catch {
+            uncertain();
+        }
     }
     return {
         start(): void {
             if (started || ended) return;
             started = true;
-            try { send({ ...common, type: "oc:app-import:hello" }, origin); }
-            catch { uncertain(); }
+            try {
+                send({ ...common, type: "oc:app-import:hello" }, origin);
+            } catch {
+                uncertain();
+            }
         },
         receive(event: { origin: string; source: unknown; data: unknown }): void {
-            if (!started || ended || event.origin !== origin || event.source !== receiver ||
-                event.data === null || typeof event.data !== "object" || Array.isArray(event.data)) return;
+            if (
+                !started ||
+                ended ||
+                event.origin !== origin ||
+                event.source !== receiver ||
+                event.data === null ||
+                typeof event.data !== "object" ||
+                Array.isArray(event.data)
+            )
+                return;
             const value = event.data as Record<string, unknown>;
             if (value.version !== 1 || value.sessionNonce !== sessionNonce) return;
-            if (value.type === "oc:app-import:ready" && exact(value, ["type", "version", "sessionNonce"])) {
+            if (
+                value.type === "oc:app-import:ready" &&
+                exact(value, ["type", "version", "sessionNonce"])
+            ) {
                 if (offered || authorizing) return;
                 if (options.authorizeOffer === undefined) offer();
                 else {
@@ -73,26 +111,52 @@ export function createLocalAppHandoffSession(options: {
                         try {
                             if (await options.authorizeOffer!()) offer();
                             else uncertain();
-                        } catch { uncertain(); }
+                        } catch {
+                            uncertain();
+                        }
                     })();
                 }
                 return;
             }
             if (!offered) return;
-            if (value.type === "oc:app-import:rejected" &&
+            if (
+                value.type === "oc:app-import:rejected" &&
                 ["invalid-offer", "id-conflict", "queue-full"].includes(value.reason as string) &&
-                exact(value, ["type", "version", "sessionNonce", "reason"])) {
+                exact(value, ["type", "version", "sessionNonce", "reason"])
+            ) {
                 ended = true;
                 onOutcome("rejected");
                 return;
             }
             if (value.importId !== request.idempotencyKey) return;
-            if (value.type === "oc:app-import:received" && value.status === "pending-review" &&
-                exact(value, ["type", "version", "sessionNonce", "importId", "status"])) {
-                if (!received) { received = true; onOutcome("received"); }
-            } else if (received && value.type === "oc:app-import:committed" && value.status === "saved" &&
-                typeof value.acceptedCount === "number" && Number.isSafeInteger(value.acceptedCount) && value.acceptedCount >= 1 && value.acceptedCount <= 32 &&
-                typeof value.replayed === "boolean" && exact(value, ["type", "version", "sessionNonce", "importId", "status", "acceptedCount", "replayed"])) {
+            if (
+                value.type === "oc:app-import:received" &&
+                value.status === "pending-review" &&
+                exact(value, ["type", "version", "sessionNonce", "importId", "status"])
+            ) {
+                if (!received) {
+                    received = true;
+                    onOutcome("received");
+                }
+            } else if (
+                received &&
+                value.type === "oc:app-import:committed" &&
+                value.status === "saved" &&
+                typeof value.acceptedCount === "number" &&
+                Number.isSafeInteger(value.acceptedCount) &&
+                value.acceptedCount >= 1 &&
+                value.acceptedCount <= 32 &&
+                typeof value.replayed === "boolean" &&
+                exact(value, [
+                    "type",
+                    "version",
+                    "sessionNonce",
+                    "importId",
+                    "status",
+                    "acceptedCount",
+                    "replayed",
+                ])
+            ) {
                 ended = true;
                 onOutcome("saved");
             }
@@ -101,6 +165,8 @@ export function createLocalAppHandoffSession(options: {
             if (ended || received) return;
             uncertain();
         },
-        close(): void { ended = true; },
+        close(): void {
+            ended = true;
+        },
     };
 }

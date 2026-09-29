@@ -1,7 +1,10 @@
 import { AnonymousIdentity } from "@icp-sdk/core/agent";
 import { assertAccountCreationAllowed } from "@shared/utils/existingAccountPolicy";
 import { assertUnofficialApiRequestAllowed } from "@shared/utils/unofficialApiPolicy";
-import { NativeBrowserSessionError, validateNativeBrowserSession } from "@shared/utils/nativeBrowserSession";
+import {
+    NativeBrowserSessionError,
+    validateNativeBrowserSession,
+} from "@shared/utils/nativeBrowserSession";
 import {
     DelegationChain,
     DelegationIdentity,
@@ -79,16 +82,30 @@ async function initializeAuthIdentity(
     policy: Pick<AgentConfig, "existingAccountOnly" | "clientOnlyApps">,
 ): Promise<GetOpenChatIdentityResponse> {
     if (nativeBrowserSession !== undefined) {
-        const adopted = await validateNativeBrowserSession(authIdentity, nativeBrowserSession, isIIPrincipal, {
-            ...policy, identityCanister,
-        });
+        const adopted = await validateNativeBrowserSession(
+            authIdentity,
+            nativeBrowserSession,
+            isIIPrincipal,
+            {
+                ...policy,
+                identityCanister,
+            },
+        );
         const assertCurrent = () => {
-            if (requestGeneration !== authRequestGeneration || Date.now() >= adopted.sessionExpiryMs) {
+            if (
+                requestGeneration !== authRequestGeneration ||
+                Date.now() >= adopted.sessionExpiryMs
+            ) {
                 throw new NativeBrowserSessionError();
             }
         };
         assertCurrent();
-        const adoptedIdentityAgent = await IdentityAgent.create(adopted.authIdentity, identityCanister, icUrl, false);
+        const adoptedIdentityAgent = await IdentityAgent.create(
+            adopted.authIdentity,
+            identityCanister,
+            icUrl,
+            false,
+        );
         assertCurrent();
         authPrincipalString = adopted.authIdentity.getPrincipal().toString();
         identityAgent = adoptedIdentityAgent;
@@ -1788,11 +1805,20 @@ async function verifyAccountLinkingCode(
     singleSubmission = false,
 ): Promise<VerifyAccountLinkingCodeResponse> {
     const ecdsaIdentity = await ECDSAKeyIdentity.fromKeyPair(tempKey);
-    const identityAgent = await IdentityAgent.create(ecdsaIdentity, identityCanister, icUrl, false, singleSubmission);
+    const identityAgent = await IdentityAgent.create(
+        ecdsaIdentity,
+        identityCanister,
+        icUrl,
+        false,
+        singleSubmission,
+    );
     try {
         return await identityAgent.verifyAccountLinkingCode(code);
     } catch (error) {
-        if (singleSubmission) throw new Error("Code verification failed or has an unknown outcome. Do not retry this code automatically.");
+        if (singleSubmission)
+            throw new Error(
+                "Code verification failed or has an unknown outcome. Do not retry this code automatically.",
+            );
         throw error;
     }
 }
@@ -1807,17 +1833,23 @@ async function finaliseAccountLinkingWithCode(
     singleSubmission = false,
 ): Promise<FinaliseAccountLinkingResponse> {
     const ecdsaIdentity = await ECDSAKeyIdentity.fromKeyPair(tempKey);
-    const identityAgent = await IdentityAgent.create(ecdsaIdentity, identityCanister, icUrl, false, singleSubmission);
-
-    const delegationIdentity = await identityAgent.finaliseAccountLinkingWithCode(
-        principal,
-        publicKey,
+    const identityAgent = await IdentityAgent.create(
         ecdsaIdentity,
-        webAuthnKey,
-    ).catch((error) => {
-        if (singleSubmission) throw new Error("Account linking may have succeeded. Use fresh passkey sign-in; do not repeat linking.");
-        throw error;
-    });
+        identityCanister,
+        icUrl,
+        false,
+        singleSubmission,
+    );
+
+    const delegationIdentity = await identityAgent
+        .finaliseAccountLinkingWithCode(principal, publicKey, ecdsaIdentity, webAuthnKey)
+        .catch((error) => {
+            if (singleSubmission)
+                throw new Error(
+                    "Account linking may have succeeded. Use fresh passkey sign-in; do not repeat linking.",
+                );
+            throw error;
+        });
 
     const delegationChain = delegationIdentity.getDelegation();
 

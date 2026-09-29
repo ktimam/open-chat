@@ -56,13 +56,17 @@ describe("WorkerAgent startup failure handling", () => {
     it("forwards explicit unofficial policies while defaulting both off", () => {
         new WorkerAgent({ ...config(), existingAccountOnly: true, clientOnlyApps: true });
         expect(worker.postMessage.mock.calls[0][0]).toMatchObject({
-            kind: "init", existingAccountOnly: true, clientOnlyApps: true,
+            kind: "init",
+            existingAccountOnly: true,
+            clientOnlyApps: true,
         });
         worker.respond("init", 0);
         worker.postMessage.mockClear();
         new WorkerAgent(config());
         expect(worker.postMessage.mock.calls[0][0]).toMatchObject({
-            kind: "init", existingAccountOnly: false, clientOnlyApps: false,
+            kind: "init",
+            existingAccountOnly: false,
+            clientOnlyApps: false,
         });
         worker.respond("init", 0);
     });
@@ -78,7 +82,9 @@ describe("WorkerAgent startup failure handling", () => {
             { kind: "sendMessage", event: { event: message } },
             { kind: "editMessage", msg: message },
         ]) {
-            await expect(agent.send(request as never)).rejects.toMatchObject({ code: "client_only_app_request" });
+            await expect(agent.send(request as never)).rejects.toMatchObject({
+                code: "client_only_app_request",
+            });
         }
         expect(worker.postMessage).not.toHaveBeenCalled();
         expect(worker.terminate).not.toHaveBeenCalled();

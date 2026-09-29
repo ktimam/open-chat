@@ -6,11 +6,12 @@ const equal = (a: Uint8Array, b: Uint8Array) =>
     a.length === b.length && a.every((value, index) => value === b[index]);
 
 function boundedBytes(value: unknown, maximum: number): Uint8Array<ArrayBuffer> {
-    const view = value instanceof ArrayBuffer
-        ? new Uint8Array(value)
-        : ArrayBuffer.isView(value)
-            ? new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
-            : undefined;
+    const view =
+        value instanceof ArrayBuffer
+            ? new Uint8Array(value)
+            : ArrayBuffer.isView(value)
+              ? new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
+              : undefined;
     if (view === undefined || view.length === 0 || view.length > maximum) {
         throw new Error("Invalid passkey response");
     }
@@ -19,14 +20,20 @@ function boundedBytes(value: unknown, maximum: number): Uint8Array<ArrayBuffer> 
 
 function base64url(value: Uint8Array): string {
     return btoa(String.fromCharCode(...value))
-        .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_")
+        .replace(/=+$/, "");
 }
 
-export function browserPasskeyContext(configuredRpId: string | undefined): { rpId: string; origin: string } {
+export function browserPasskeyContext(configuredRpId: string | undefined): {
+    rpId: string;
+    origin: string;
+} {
     const origin = new URL(globalThis.location.origin);
     const rpId = configuredRpId ?? origin.hostname;
     if (
-        (origin.protocol !== "https:" && !(origin.protocol === "http:" && origin.hostname === "localhost")) ||
+        (origin.protocol !== "https:" &&
+            !(origin.protocol === "http:" && origin.hostname === "localhost")) ||
         !/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(rpId) ||
         rpId.includes("..") ||
         (origin.hostname !== rpId && !origin.hostname.endsWith(`.${rpId}`))
@@ -54,15 +61,16 @@ export async function requestBrowserPasskeyAssertion(
 ): Promise<{ credentialId: Uint8Array; signature: Signature }> {
     const { rpId, origin } = browserPasskeyContext(configuredRpId);
     const challenge = boundedBytes(blob, 4096);
-    const expectedId = expectedCredentialId === undefined
-        ? undefined
-        : boundedBytes(expectedCredentialId, 4096);
+    const expectedId =
+        expectedCredentialId === undefined ? undefined : boundedBytes(expectedCredentialId, 4096);
     assertNotAborted(signal);
     // Invoke before the first await so the user gesture reaches the native picker.
-    const result = await browserSignInStep("passkey-request", () => navigator.credentials.get({
-        signal,
-        publicKey: { rpId, challenge: challenge.slice(), userVerification, timeout: 60_000 },
-    })) as PublicKeyCredential | null;
+    const result = (await browserSignInStep("passkey-request", () =>
+        navigator.credentials.get({
+            signal,
+            publicKey: { rpId, challenge: challenge.slice(), userVerification, timeout: 60_000 },
+        }),
+    )) as PublicKeyCredential | null;
     assertNotAborted(signal);
     if (result === null) throw new BrowserSignInFailure("passkey-request");
     if (result.type !== "public-key") throw new Error("Invalid passkey response");
@@ -77,12 +85,16 @@ export async function requestBrowserPasskeyAssertion(
     const clientData = JSON.parse(clientDataJson);
     const authenticatorData = boundedBytes(response.authenticatorData, 65536);
     const signature = boundedBytes(response.signature, 1024);
-    const rpHash = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(rpId)));
+    const rpHash = new Uint8Array(
+        await crypto.subtle.digest("SHA-256", new TextEncoder().encode(rpId)),
+    );
     if (
-        clientData.type !== "webauthn.get" || clientData.origin !== origin ||
+        clientData.type !== "webauthn.get" ||
+        clientData.origin !== origin ||
         clientData.challenge !== base64url(challenge) ||
         (clientData.crossOrigin !== undefined && clientData.crossOrigin !== false) ||
-        authenticatorData.length < 37 || !(authenticatorData[32] & 1) ||
+        authenticatorData.length < 37 ||
+        !(authenticatorData[32] & 1) ||
         (userVerification === "required" && !(authenticatorData[32] & 4)) ||
         !equal(authenticatorData.slice(0, 32), rpHash)
     ) {
@@ -114,6 +126,8 @@ export class PickerWebAuthnIdentity extends WebAuthnIdentity {
     }
 
     override async sign(blob: Uint8Array): Promise<Signature> {
-        return (await requestBrowserPasskeyAssertion(this.rpId, blob, this.#credentialId, this.signal)).signature;
+        return (
+            await requestBrowserPasskeyAssertion(this.rpId, blob, this.#credentialId, this.signal)
+        ).signature;
     }
 }

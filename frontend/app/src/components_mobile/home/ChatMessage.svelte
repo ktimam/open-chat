@@ -14,7 +14,11 @@
         type ProposalPhase,
     } from "@utils/aiActionRunner";
     import { privateAppWorkspace, proposePrivateAppMessage } from "@utils/privateAppWorkspace";
-    import { localAppChatConfiguration, localAutoProposeSuggestions, dismissLocalAutoProposeSuggestion } from "@utils/localAppChatState";
+    import {
+        localAppChatConfiguration,
+        localAutoProposeSuggestions,
+        dismissLocalAutoProposeSuggestion,
+    } from "@utils/localAppChatState";
     import type { LocalAppSuggestion } from "@utils/localAppChatConfiguration";
     import {
         PROCESS_WITH_AI_AUDIO_PROMPT,
@@ -493,7 +497,8 @@
                 $currentUserIdStore === capturedViewer &&
                 currentAutoProposeSessionEpoch() === capturedSessionEpoch &&
                 (suggested === undefined || autoProposeSuggestionStillCurrent(suggested)) &&
-                (privateSuggested === undefined || localAppChatConfiguration.current(privateSuggested)) &&
+                (privateSuggested === undefined ||
+                    localAppChatConfiguration.current(privateSuggested)) &&
                 chatIdentifierToString(chatId) === capturedChatKey &&
                 threadRootMessageIndex === capturedContext.threadRootMessageIndex &&
                 msg.messageId === capturedMessageId &&
@@ -505,9 +510,17 @@
                 if (privateSuggested !== undefined) {
                     if (!stillCurrent()) return Promise.resolve("retryable" as const);
                     const selected = privateAppWorkspace.selection();
-                    if (selected?.app.id !== privateSuggested.appId || selected?.action.definition.name !== privateSuggested.actionId) {
+                    if (
+                        selected?.app.id !== privateSuggested.appId ||
+                        selected?.action.definition.name !== privateSuggested.actionId
+                    ) {
                         privateAppWorkspace.open();
-                        if (!privateAppWorkspace.select(privateSuggested.appId, privateSuggested.actionId)) {
+                        if (
+                            !privateAppWorkspace.select(
+                                privateSuggested.appId,
+                                privateSuggested.actionId,
+                            )
+                        ) {
                             return Promise.resolve("retryable" as const);
                         }
                     }
@@ -565,14 +578,22 @@
         },
     );
 
-    function runAiActionHandler(suggested?: AutoProposeSuggestion, privateSuggested?: LocalAppSuggestion) {
+    function runAiActionHandler(
+        suggested?: AutoProposeSuggestion,
+        privateSuggested?: LocalAppSuggestion,
+    ) {
         const capturedContent = msg.content;
         const requiresModelReadiness = browserImageProposalRequiresModelReadiness(
             capturedContent.kind === "image_content",
             !usesWebInferenceRuntime(),
         );
         if (!proposing) proposalRequiresModelReadiness = requiresModelReadiness;
-        return runAiActionSingleFlight({ suggested, privateSuggested, capturedContent, requiresModelReadiness });
+        return runAiActionSingleFlight({
+            suggested,
+            privateSuggested,
+            capturedContent,
+            requiresModelReadiness,
+        });
     }
 
     async function processMessageWithAi() {
@@ -880,9 +901,16 @@
     );
     let privateSuggestionList = $derived(
         client.clientOnlyApps() && $autoProposeEnabled && !inert
-            ? ($localAutoProposeSuggestions.get(autoProposeSuggestionKey(
-                $currentUserIdStore, chatId, threadRootMessageIndex, msg.messageId,
-            )) ?? []).filter(suggestion => localAppChatConfiguration.current(suggestion))
+            ? (
+                  $localAutoProposeSuggestions.get(
+                      autoProposeSuggestionKey(
+                          $currentUserIdStore,
+                          chatId,
+                          threadRootMessageIndex,
+                          msg.messageId,
+                      ),
+                  ) ?? []
+              ).filter((suggestion) => localAppChatConfiguration.current(suggestion))
             : [],
     );
     let activeAutoProposeSuggestionVisible = $derived(
@@ -920,15 +948,25 @@
     }
 
     function privateSuggestionKey(suggestion: LocalAppSuggestion): string {
-        return JSON.stringify(["local", suggestion.appId, suggestion.appRevision, suggestion.actionId]);
+        return JSON.stringify([
+            "local",
+            suggestion.appId,
+            suggestion.appRevision,
+            suggestion.actionId,
+        ]);
     }
     async function proposeLocalSuggestedAction(suggestion: LocalAppSuggestion) {
         if (proposing || !localAppChatConfiguration.current(suggestion)) return;
         const key = privateSuggestionKey(suggestion);
-        const messageKey = autoProposeSuggestionKey($currentUserIdStore, chatId, threadRootMessageIndex, msg.messageId);
+        const messageKey = autoProposeSuggestionKey(
+            $currentUserIdStore,
+            chatId,
+            threadRootMessageIndex,
+            msg.messageId,
+        );
         activeAutoProposeSuggestionKey = key;
         try {
-            if (await runAiActionHandler(undefined, suggestion) === "drafted") {
+            if ((await runAiActionHandler(undefined, suggestion)) === "drafted") {
                 dismissLocalAutoProposeSuggestion(messageKey, suggestion);
             }
         } finally {
@@ -1379,13 +1417,21 @@
                             {me}
                             offset={index === 0 && !hasThread && !hasReactions && !hasTips}
                             title={`${suggestion.appName} — ${suggestion.title}`}
-                            busy={proposing && activeAutoProposeSuggestionKey === privateSuggestionKey(suggestion)}
+                            busy={proposing &&
+                                activeAutoProposeSuggestionKey === privateSuggestionKey(suggestion)}
                             disabled={proposing}
                             busyResourceKey={autoProposeBusyResourceKey}
                             onPropose={() => proposeLocalSuggestedAction(suggestion)}
-                            onDismiss={() => dismissLocalAutoProposeSuggestion(
-                                autoProposeSuggestionKey($currentUserIdStore, chatId, threadRootMessageIndex, msg.messageId), suggestion,
-                            )}
+                            onDismiss={() =>
+                                dismissLocalAutoProposeSuggestion(
+                                    autoProposeSuggestionKey(
+                                        $currentUserIdStore,
+                                        chatId,
+                                        threadRootMessageIndex,
+                                        msg.messageId,
+                                    ),
+                                    suggestion,
+                                )}
                             onMute={muteAutoProposeSuggestions}
                         />
                     {/each}

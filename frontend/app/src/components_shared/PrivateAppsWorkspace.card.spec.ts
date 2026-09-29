@@ -20,6 +20,16 @@ vi.mock("../utils/isolatedAppProcessor", () => ({
     runIsolatedAppProcessor: vi.fn(),
     verifyImportedLocalProcessor: vi.fn(),
 }));
+// These mounted card tests exercise real workspace/UI behavior; durable storage is
+// tested separately, and no browser account setup should be accessed by fixtures.
+vi.mock("../utils/localAppSetupStore", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../utils/localAppSetupStore")>()),
+    createBrowserLocalAppSetupStorage: () => ({
+        read: vi.fn(async () => undefined),
+        write: vi.fn(async () => {}),
+        remove: vi.fn(async () => {}),
+    }),
+}));
 vi.mock("../utils/localAppRelayDelivery", async () => ({
     deliverLocalAppViaRelay: calls.deliver,
     cancelLocalAppHandoffs: calls.cancel,
@@ -129,18 +139,20 @@ beforeEach(async () => {
     vi.clearAllMocks();
     (currentUserIdStore as unknown as Writable<string>).set("synthetic-account");
     workspace.clear();
-    workspace.setAccount("synthetic-account");
+    workspace.setAccount("synthetic-account", "synthetic-backend");
+    await vi.waitFor(() => expect(workspace.state.setupLoading).toBe(false));
     calls.extract.mockResolvedValue({
         kind: "extracted",
         candidates: [{ value: 42, extra: "Also sent" }],
     });
     calls.deliver.mockResolvedValue({ kind: "delivered" });
-    workspace.importCatalog(catalog);
-    workspace.select("synthetic", "capture");
+    expect(workspace.importCatalog(catalog)).toBe(true);
+    expect(workspace.select("synthetic", "capture")).toBe(true);
     target = document.createElement("div");
     document.body.append(target);
     client = {
         clientOnlyApps: () => true,
+        privateAppStorageBackend: () => "synthetic-backend",
         isNativeApp: () => false,
         existingAccountOnly: () => true,
         onLogout: vi.fn(),
@@ -501,6 +513,7 @@ describe("private workspace declarative card and authoritative review", () => {
                 expect(workspace.state.account).toBe("another-synthetic-account");
                 expect(workspace.state.draft).toBeUndefined();
                 expect(target.querySelector('[aria-label="Private app workspace"]')).toBeNull();
+                await vi.waitFor(() => expect(workspace.state.setupLoading).toBe(false));
                 expect(workspace.importCatalog(catalog)).toBe(true);
                 expect(workspace.select("synthetic", "capture")).toBe(true);
             } else {

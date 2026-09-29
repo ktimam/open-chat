@@ -1,7 +1,17 @@
 <script lang="ts">
     import type { Snippet } from "svelte";
-    let { children, body, header, onClose, value = $bindable("en") }: {
-        children?: Snippet; body?: Snippet; header?: Snippet; onClose?: () => void; value?: string;
+    let {
+        children,
+        body,
+        header,
+        onClose,
+        value = $bindable("en"),
+    }: {
+        children?: Snippet;
+        body?: Snippet;
+        header?: Snippet;
+        onClose?: () => void;
+        value?: string;
     } = $props();
 </script>
 

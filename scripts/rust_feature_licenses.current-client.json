@@ -2,7 +2,24 @@
   "schemaVersion": 1,
   "scope": "current-client",
   "cargoLockSha256": "00a4aa346671f19728b2b4f30a6311b2022355fbcb8a65165d26ad0673956426",
-  "sourceScopeSha256": "1d230b97b5719777cce7b4d78c8f7fc928e4bec0baf6f011df2d3c5b85a299ad",
+  "sourceScopeSha256": "0047a42522def673373854e713d96e14d1203037c2a5076573854d63a9a61538",
+  "modelIdentityResolutions": [
+    {
+      "name": "llama-cpp-sys-2",
+      "historicalVersion": "0.1.150",
+      "version": "0.1.154",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "13a9ea2ce0cdc20bcb1870534022e340b391663f8fe09133951e2fe37fbc29cf",
+      "parent": {
+        "name": "llama-cpp-2",
+        "version": "0.1.150",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      "dependencyName": "llama_cpp_sys_2",
+      "dependencyKind": null,
+      "dependencyTarget": null
+    }
+  ],
   "packages": [
     {
       "name": "bindgen",
@@ -84,7 +101,7 @@
     },
     {
       "name": "llama-cpp-sys-2",
-      "version": "0.1.150",
+      "version": "0.1.154",
       "license": "MIT OR Apache-2.0",
       "source": "registry+https://github.com/rust-lang/crates.io-index"
     },

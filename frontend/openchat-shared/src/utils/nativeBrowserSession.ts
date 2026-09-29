@@ -28,9 +28,15 @@ async function restoreSingle(source: JsonnableIdentityKeyAndChain) {
     }
     const pair = source.key;
     const isP256 = (key: CryptoKey, type: "public" | "private", usage: KeyUsage) =>
-        key?.type === type && key.algorithm.name === "ECDSA" &&
-        (key.algorithm as EcKeyAlgorithm).namedCurve === "P-256" && key.usages.includes(usage);
-    if (!pair || !isP256(pair.publicKey, "public", "verify") || !isP256(pair.privateKey, "private", "sign")) {
+        key?.type === type &&
+        key.algorithm.name === "ECDSA" &&
+        (key.algorithm as EcKeyAlgorithm).namedCurve === "P-256" &&
+        key.usages.includes(usage);
+    if (
+        !pair ||
+        !isP256(pair.publicKey, "public", "verify") ||
+        !isP256(pair.privateKey, "private", "sign")
+    ) {
         throw new NativeBrowserSessionError();
     }
     const chain = DelegationChain.fromJSON(source.delegation);
@@ -42,7 +48,8 @@ async function restoreSingle(source: JsonnableIdentityKeyAndChain) {
     const challenge = new TextEncoder().encode("OpenChat local session key-pair check v1");
     const algorithm = { name: "ECDSA", hash: "SHA-256" };
     const proof = await crypto.subtle.sign(algorithm, pair.privateKey, challenge);
-    if (!await crypto.subtle.verify(algorithm, pair.publicKey, proof, challenge)) throw new NativeBrowserSessionError();
+    if (!(await crypto.subtle.verify(algorithm, pair.publicKey, proof, challenge)))
+        throw new NativeBrowserSessionError();
     return { identity: DelegationIdentity.fromDelegation(key, chain), leaf };
 }
 
@@ -58,25 +65,46 @@ export async function validateNativeBrowserSession(
     isIIPrincipal: boolean,
     policy: Policy,
     nowMs = Date.now(),
-): Promise<{ authIdentity: DelegationIdentity; ocIdentity: DelegationIdentity; sessionExpiryMs: number }> {
+): Promise<{
+    authIdentity: DelegationIdentity;
+    ocIdentity: DelegationIdentity;
+    sessionExpiryMs: number;
+}> {
     try {
-        if (policy.existingAccountOnly !== true || policy.clientOnlyApps !== true || isIIPrincipal !== false ||
-            authIdentity === undefined || supplied === undefined ||
-            !Number.isSafeInteger(nowMs) || nowMs < 0 ||
-            !Number.isSafeInteger(supplied.expiresAtMs) || supplied.expiresAtMs <= nowMs ||
-            supplied.expiresAtMs > nowMs + MAX_LIFETIME_MS) throw new NativeBrowserSessionError();
+        if (
+            policy.existingAccountOnly !== true ||
+            policy.clientOnlyApps !== true ||
+            isIIPrincipal !== false ||
+            authIdentity === undefined ||
+            supplied === undefined ||
+            !Number.isSafeInteger(nowMs) ||
+            nowMs < 0 ||
+            !Number.isSafeInteger(supplied.expiresAtMs) ||
+            supplied.expiresAtMs <= nowMs ||
+            supplied.expiresAtMs > nowMs + MAX_LIFETIME_MS
+        )
+            throw new NativeBrowserSessionError();
 
         const expectedTarget = Principal.fromText(policy.identityCanister).toText();
         const auth = await restoreSingle(authIdentity);
         const oc = await restoreSingle(supplied.ocIdentity);
         const nowNs = BigInt(nowMs) * NS_PER_MS;
-        if (auth.leaf.expiration !== BigInt(supplied.expiresAtMs) * NS_PER_MS ||
-            auth.leaf.expiration <= nowNs || auth.leaf.expiration > BigInt(nowMs + MAX_LIFETIME_MS) * NS_PER_MS ||
-            auth.leaf.targets?.length !== 1 || auth.leaf.targets[0].toText() !== expectedTarget ||
-            oc.leaf.expiration <= nowNs || oc.leaf.expiration > auth.leaf.expiration ||
-            (oc.leaf.targets !== undefined && oc.leaf.targets.length !== 0)) throw new NativeBrowserSessionError();
-        return { authIdentity: auth.identity, ocIdentity: oc.identity,
-            sessionExpiryMs: Number(oc.leaf.expiration / NS_PER_MS) };
+        if (
+            auth.leaf.expiration !== BigInt(supplied.expiresAtMs) * NS_PER_MS ||
+            auth.leaf.expiration <= nowNs ||
+            auth.leaf.expiration > BigInt(nowMs + MAX_LIFETIME_MS) * NS_PER_MS ||
+            auth.leaf.targets?.length !== 1 ||
+            auth.leaf.targets[0].toText() !== expectedTarget ||
+            oc.leaf.expiration <= nowNs ||
+            oc.leaf.expiration > auth.leaf.expiration ||
+            (oc.leaf.targets !== undefined && oc.leaf.targets.length !== 0)
+        )
+            throw new NativeBrowserSessionError();
+        return {
+            authIdentity: auth.identity,
+            ocIdentity: oc.identity,
+            sessionExpiryMs: Number(oc.leaf.expiration / NS_PER_MS),
+        };
     } catch {
         // Do not forward malformed key material or underlying crypto/parser diagnostics.
         throw new NativeBrowserSessionError();

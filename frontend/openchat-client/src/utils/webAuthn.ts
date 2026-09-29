@@ -85,7 +85,11 @@ export class MultiWebAuthnIdentity extends SignIdentity {
         }
 
         if (this.validatedPicker) {
-            const assertion = await requestBrowserPasskeyAssertion(this.rpId, blob, this.expectedCredentialId);
+            const assertion = await requestBrowserPasskeyAssertion(
+                this.rpId,
+                blob,
+                this.expectedCredentialId,
+            );
             const pubkey = await this.lookupPubKeyFn(assertion.credentialId);
             this._actualIdentity = new PickerWebAuthnIdentity(
                 this.rpId,

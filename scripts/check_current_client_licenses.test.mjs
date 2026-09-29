@@ -12,21 +12,50 @@ import { resolve } from "node:path";
 
 const source = "registry+https://github.com/rust-lang/crates.io-index";
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
+const id = (value) => `${value.source}#${value.name}@${value.version}`;
+const modelResolution = () => ({
+  name: "llama-cpp-sys-2",
+  historicalVersion: "0.1.150",
+  version: "0.1.154",
+  source,
+  checksum: "13a9ea2ce0cdc20bcb1870534022e340b391663f8fe09133951e2fe37fbc29cf",
+  parent: { name: "llama-cpp-2", version: "0.1.150", source },
+  dependencyName: "llama_cpp_sys_2",
+  dependencyKind: null,
+  dependencyTarget: null,
+});
 function fixture() {
-  const cargoLock = Buffer.from("# synthetic license fixture\n");
+  const resolution = modelResolution();
   const app = { name: "synthetic-local-transport", version: "1.0.0", source };
-  const config = {
-    cargoLockSha256: hash(cargoLock),
-    seeds: [{ expected: app }],
-  };
-  const configBytes = Buffer.from(JSON.stringify(config));
   const packages = [
     ...ownedSecurityRules("pr1").introducedRustPackages.map((value) => ({
       ...value,
+      version:
+        value.name === resolution.name ? resolution.version : value.version,
       source,
     })),
     { ...app, license: "MIT" },
   ];
+  const cargoLock = Buffer.from(
+    "# synthetic license fixture\nversion = 4\n\n" +
+      packages
+        .map((value) =>
+          [
+            "[[package]]",
+            `name = "${value.name}"`,
+            `version = "${value.version}"`,
+            `source = "${value.source}"`,
+            `checksum = "${value.name === resolution.name ? resolution.checksum : "a".repeat(64)}"`,
+            "",
+          ].join("\n"),
+        )
+        .join("\n"),
+  );
+  const config = {
+    cargoLockSha256: hash(cargoLock),
+    seeds: [{ expected: app }, { expected: resolution.parent }],
+  };
+  const configBytes = Buffer.from(JSON.stringify(config));
   return {
     config,
     configBytes,
@@ -36,9 +65,27 @@ function fixture() {
       scope: "current-client",
       cargoLockSha256: hash(cargoLock),
       sourceScopeSha256: hash(configBytes),
+      modelIdentityResolutions: [resolution],
       packages,
     },
-    metadata: { packages: structuredClone(packages) },
+    metadata: {
+      packages: packages.map((value) => ({ ...value, id: id(value) })),
+      resolve: {
+        nodes: [
+          {
+            id: id(resolution.parent),
+            deps: [
+              {
+                name: resolution.dependencyName,
+                pkg: id(resolution),
+                dep_kinds: [{ kind: null, target: null }],
+              },
+            ],
+          },
+          { id: id(resolution), deps: [] },
+        ],
+      },
+    },
     tauriConfig: {
       bundle: { active: true, resources: [...CURRENT_CLIENT_LICENSE_NOTICES] },
     },
@@ -51,9 +98,183 @@ test("current licenses cover exact app owner roots plus all retained model licen
   assert.equal(result.pass, true);
   assert.equal(result.reviewedPackageCount, 20);
   assert.equal(result.retainedModelLicenseRequirements, 19);
+  assert.equal(result.reviewedModelIdentityResolutions, 1);
   assert.equal(result.wholeRepositoryCoverage, false);
   assert.equal(result.advisoryChecksPerformed, false);
   assert.equal(result.releaseAcceptance, false);
+});
+test("the current mapping preserves historical obligations rather than rewriting them", () => {
+  const historical = ownedSecurityRules("pr1").introducedRustPackages;
+  assert.equal(historical.length, 19);
+  assert.deepEqual(
+    historical.find((value) => value.name === "llama-cpp-sys-2"),
+    {
+      name: "llama-cpp-sys-2",
+      version: "0.1.150",
+      license: "MIT OR Apache-2.0",
+    },
+  );
+  const value = fixture();
+  for (const previous of historical) {
+    const current = value.policy.packages.find(
+      (entry) => entry.name === previous.name,
+    );
+    assert.equal(current.license, previous.license);
+    assert.equal(current.source, source);
+    assert.equal(
+      current.version,
+      previous.name === "llama-cpp-sys-2" ? "0.1.154" : previous.version,
+    );
+  }
+  assert.equal(validateCurrentClientLicenses(value).pass, true);
+});
+
+test("missing, duplicate, stale and unreviewed identity mappings fail closed", () => {
+  for (const mutate of [
+    (value) => delete value.policy.modelIdentityResolutions,
+    (value) => (value.policy.modelIdentityResolutions = []),
+    (value) => value.policy.modelIdentityResolutions.push(modelResolution()),
+    (value) => (value.policy.modelIdentityResolutions[0].name = "bindgen"),
+    (value) =>
+      (value.policy.modelIdentityResolutions[0].historicalVersion = "0.1.149"),
+    (value) => (value.policy.modelIdentityResolutions[0].version = "0.1.150"),
+    (value) => (value.policy.modelIdentityResolutions[0].version = "0.1.155"),
+    (value) =>
+      (value.policy.modelIdentityResolutions[0].source =
+        "git+https://example.invalid/model"),
+    (value) =>
+      (value.policy.modelIdentityResolutions[0].checksum = "b".repeat(64)),
+    (value) =>
+      (value.policy.modelIdentityResolutions[0].parent.version = "0.1.154"),
+    (value) =>
+      (value.policy.modelIdentityResolutions[0].dependencyName =
+        "unreviewed_alias"),
+    (value) =>
+      (value.policy.modelIdentityResolutions[0].dependencyKind = "build"),
+    (value) =>
+      (value.policy.modelIdentityResolutions[0].dependencyTarget =
+        "cfg(windows)"),
+    (value) => (value.policy.modelIdentityResolutions[0].allowMissing = true),
+  ]) {
+    const value = fixture();
+    mutate(value);
+    assert.throws(() => validateCurrentClientLicenses(value));
+  }
+});
+
+test("resolved package version, source, license and locked archive remain exact", () => {
+  for (const mutate of [
+    (value) =>
+      value.metadata.packages.splice(
+        value.metadata.packages.findIndex(
+          (item) => item.name === "llama-cpp-sys-2",
+        ),
+        1,
+      ),
+    (value) =>
+      (value.metadata.packages.find(
+        (item) => item.name === "llama-cpp-sys-2",
+      ).version = "0.1.150"),
+    (value) =>
+      (value.metadata.packages.find(
+        (item) => item.name === "llama-cpp-sys-2",
+      ).version = "0.1.155"),
+    (value) =>
+      (value.metadata.packages.find(
+        (item) => item.name === "llama-cpp-sys-2",
+      ).source = null),
+    (value) =>
+      (value.metadata.packages.find(
+        (item) => item.name === "llama-cpp-sys-2",
+      ).source = "git+https://example.invalid/model"),
+    (value) =>
+      (value.metadata.packages.find(
+        (item) => item.name === "llama-cpp-sys-2",
+      ).license = "MIT"),
+    (value) => {
+      value.policy.packages.find(
+        (item) => item.name === "llama-cpp-sys-2",
+      ).license = "MIT";
+      value.metadata.packages.find(
+        (item) => item.name === "llama-cpp-sys-2",
+      ).license = "MIT";
+    },
+  ]) {
+    const value = fixture();
+    mutate(value);
+    assert.throws(() => validateCurrentClientLicenses(value));
+  }
+  const changed = fixture();
+  changed.cargoLock = Buffer.from(
+    changed.cargoLock
+      .toString()
+      .replace(modelResolution().checksum, "b".repeat(64)),
+  );
+  changed.config.cargoLockSha256 = hash(changed.cargoLock);
+  changed.configBytes = Buffer.from(JSON.stringify(changed.config));
+  changed.policy.cargoLockSha256 = hash(changed.cargoLock);
+  changed.policy.sourceScopeSha256 = hash(changed.configBytes);
+  assert.throws(
+    () => validateCurrentClientLicenses(changed),
+    /exact locked archive/,
+  );
+});
+
+test("a metadata package list without the exact selected native dependency edge cannot pass", () => {
+  for (const mutate of [
+    (value) => delete value.metadata.resolve,
+    (value) => value.metadata.resolve.nodes.shift(),
+    (value) => value.metadata.resolve.nodes.pop(),
+    (value) =>
+      value.metadata.resolve.nodes.push(
+        structuredClone(value.metadata.resolve.nodes[0]),
+      ),
+    (value) =>
+      value.metadata.resolve.nodes.push(
+        structuredClone(value.metadata.resolve.nodes[1]),
+      ),
+    (value) => (value.metadata.resolve.nodes[0].deps = []),
+    (value) =>
+      value.metadata.resolve.nodes[0].deps.push(
+        structuredClone(value.metadata.resolve.nodes[0].deps[0]),
+      ),
+    (value) => (value.metadata.resolve.nodes[0].deps[0].name = "wrong_alias"),
+    (value) =>
+      (value.metadata.resolve.nodes[0].deps[0].pkg = "another-package-id"),
+    (value) => (value.metadata.resolve.nodes[0].deps[0].dep_kinds = []),
+    (value) =>
+      (value.metadata.resolve.nodes[0].deps[0].dep_kinds[0].kind = "build"),
+    (value) =>
+      (value.metadata.resolve.nodes[0].deps[0].dep_kinds[0].target =
+        "cfg(windows)"),
+    (value) =>
+      value.metadata.resolve.nodes[0].deps[0].dep_kinds.push({
+        kind: null,
+        target: null,
+      }),
+  ]) {
+    const value = fixture();
+    mutate(value);
+    assert.throws(() => validateCurrentClientLicenses(value));
+  }
+  const unowned = fixture();
+  unowned.config.seeds.pop();
+  unowned.configBytes = Buffer.from(JSON.stringify(unowned.config));
+  unowned.policy.sourceScopeSha256 = hash(unowned.configBytes);
+  assert.throws(
+    () => validateCurrentClientLicenses(unowned),
+    /reviewed owner root/,
+  );
+
+  // Cargo includes the same native dependency for an additional macOS target;
+  // retaining it must not replace the required unconditional normal edge.
+  const additionalTarget = fixture();
+  additionalTarget.metadata.resolve.nodes[0].deps[0].dep_kinds.push({
+    kind: null,
+    target:
+      'cfg(all(target_os = "macos", any(target_arch = "aarch64", target_arch = "arm64")))',
+  });
+  assert.equal(validateCurrentClientLicenses(additionalTarget).pass, true);
 });
 test("license checks reject missing, additional, duplicate, unknown, changed and wrong-source packages", () => {
   for (const mutate of [

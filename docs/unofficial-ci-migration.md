@@ -79,9 +79,12 @@ permission for a core OpenChat audit, advisory waiver, automatic deployment or
 publication. Historical security-mode requirements remain enforced by their
 explicit historical checker modes; current topology is not mislabeled as PR2.
 
-The npm inventory covers 25 source-owned roots and 115 fingerprinted files,
+The npm inventory covers 25 source-owned roots and 117 fingerprinted files,
 including private drafts, the generic editor, isolated processors and browser/native
-handoff. The Rust inventory covers 24 source files and 25 direct owner edges across
+handoff, including setup-only account/backend-scoped persistence. There are 99
+dedicated modules and 65 mixed/dedicated source anchors; the backend-scope getter
+does not make the whole client a dependency root. Browser IndexedDB adds no npm
+dependency. The Rust inventory covers 24 source files and 25 direct owner edges across
 eight explicit Android/host profiles. Removed custom backend roots are not current
 owners. Review receipts and current inventories are separate from historical PR
 files; source, lock, graph or profile drift still fails closed.
@@ -94,18 +97,30 @@ No missing package, changed license, configuration drift or unknown license is
 waived. It does not query advisories or assert whole-repository coverage.
 
 Local pure/offline contract passes do not prove hosted collection or advisory
-acceptance. The local license command currently stops because the Cargo cache
-lacks `leb128fmt 0.1.0`; offline mode prevented a download. The hosted workflow
-prepares locked metadata explicitly before running the same offline license gate.
-No hosted workflow, advisory query or public release has run for this update.
+acceptance. Five missing checksum-locked Cargo archives were subsequently prepared;
+the actual locked/offline license command now passes. A reviewed current-only
+mapping records the existing wrapper `llama-cpp-2` 0.1.150 dependency on
+`llama-cpp-sys-2` 0.1.154, validating its archive checksum, selected graph edge and
+unchanged license. All 19 model license obligations remain enforced; historical
+policies, dependencies and lockfiles are unchanged. No hosted workflow, advisory
+query or public release has run for this update.
 
-The actual existing formatter gate was also run against the reviewed upstream
-comparison commit. It fails on current fork frontend formatting, including new
-local-client files with no inherited-debt baseline and existing worker/bridge
-files with unaccepted mismatches. Those source files were not changed in this
-CI-policy update and the failure was not waived. The passing offline contract
-suite (725 tests, zero skips at this checkpoint) proves enforcement, not that all
-actual release gates pass.
+After explicit approval of the exact formatting command change, the current main
+workflow runs `check_current_client_format.mjs --scope current-client`. Historical
+commands and registries remain unchanged. The actual current gate passes 442
+frontend candidates (12 existing policy exclusions), including live proof for 12
+files whose remaining formatter edits are byte-identical to pinned upstream edits.
+Repeated identical lines are not used as ambiguous diff anchors. Exact source,
+formatter/config identity and duplicate-edit counts are checked, with live proof
+recomputation; refreshing only a fingerprint cannot exempt new fork formatting.
+
+Earlier cleanup proved equivalent full formatter output for 94 frontend files.
+Three separate source-wiring test fixes allow line wrapping with negative controls.
+The later setup-persistence feature is a separate reviewed runtime change, not a
+formatting-only claim. The complete frontend suite now passes 4,388 tests; both
+typechecks pass with zero errors. The offline scoped CI contract suite passes 749
+tests with zero skips. These results do not establish hosted execution, advisory
+acceptance, current APK runtime acceptance or whole-release readiness.
 
 Independent review also found that two sequential Windows native compile commands
 could mask failure of the first with success of the second. The current workflow

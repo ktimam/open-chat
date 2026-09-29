@@ -586,9 +586,27 @@ export function evaluateForAutoPropose(
         localAutoProposeSuggestions.update((map) => {
             const next = new Map(map);
             for (const event of fresh) {
-                const suggestions = localAppChatConfiguration.suggestions(viewerId, chatKey, event.event.content);
-                if (suggestions.length) next.set(autoProposeSuggestionKey(viewerId, chatId, threadRootMessageIndex, event.event.messageId), suggestions);
-                evaluationTracker.finish(identityChatKey, threadRootMessageIndex, event.event.messageId, true);
+                const suggestions = localAppChatConfiguration.suggestions(
+                    viewerId,
+                    chatKey,
+                    event.event.content,
+                );
+                if (suggestions.length)
+                    next.set(
+                        autoProposeSuggestionKey(
+                            viewerId,
+                            chatId,
+                            threadRootMessageIndex,
+                            event.event.messageId,
+                        ),
+                        suggestions,
+                    );
+                evaluationTracker.finish(
+                    identityChatKey,
+                    threadRootMessageIndex,
+                    event.event.messageId,
+                    true,
+                );
             }
             return next;
         });

@@ -19,8 +19,10 @@ export const UNOFFICIAL_LOCAL_CANISTERS = Object.freeze({
 });
 
 export function parseUnofficialLocalPort(value = UNOFFICIAL_LOCAL_DEFAULT_PORT) {
-    if ((typeof value !== "number" && typeof value !== "string") ||
-        (typeof value === "string" && !/^[1-9][0-9]{3,4}$/.test(value))) {
+    if (
+        (typeof value !== "number" && typeof value !== "string") ||
+        (typeof value === "string" && !/^[1-9][0-9]{3,4}$/.test(value))
+    ) {
         throw new Error("Local port must be an integer between 1024 and 65535");
     }
     const port = Number(value);
@@ -32,13 +34,18 @@ export function parseUnofficialLocalPort(value = UNOFFICIAL_LOCAL_DEFAULT_PORT) 
 
 /** No inherited OC_* value may retarget this profile, including differently cased Windows keys. */
 export function createUnofficialLocalEnvironment(canisters, options = {}) {
-    const { port: suppliedPort = UNOFFICIAL_LOCAL_DEFAULT_PORT, layout = "v2", inherited = {} } = options;
+    const {
+        port: suppliedPort = UNOFFICIAL_LOCAL_DEFAULT_PORT,
+        layout = "v2",
+        inherited = {},
+    } = options;
     const port = parseUnofficialLocalPort(suppliedPort);
     if (layout !== "v1" && layout !== "v2") throw new Error("Local layout must be v1 or v2");
     const origin = `http://localhost:${port}`;
     const env = {};
     for (const [key, value] of Object.entries(inherited)) {
-        if (!/^(OC_|NODE_OPTIONS$|NODE_ENV$|VITE_)/i.test(key) && typeof value === "string") env[key] = value;
+        if (!/^(OC_|NODE_OPTIONS$|NODE_ENV$|VITE_)/i.test(key) && typeof value === "string")
+            env[key] = value;
     }
     for (const [variable, name] of Object.entries(UNOFFICIAL_LOCAL_CANISTERS)) {
         const id = canisters?.[name]?.ic;

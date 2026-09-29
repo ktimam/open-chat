@@ -19,48 +19,142 @@ export class LocalAppChatConfiguration {
     #catalog?: LocalAppCatalog;
     #revision = 0;
     #enabled = new Map<string, Set<string>>();
-    constructor(private readonly changed: () => void = () => {}) {}
-    get revision(): number { return this.#revision; }
-    #notify() { ++this.#revision; this.changed(); }
+    constructor(
+        private readonly changed: (cause: "context" | "enabled" | "restore") => void = () => {},
+    ) {}
+    get revision(): number {
+        return this.#revision;
+    }
+    #notify(cause: "context" | "enabled" | "restore") {
+        ++this.#revision;
+        this.changed(cause);
+    }
     setContext(account: string | undefined, catalog: LocalAppCatalog | undefined): void {
         if (account === this.#account && catalog === this.#catalog) return;
-        this.#account = account; this.#catalog = catalog; this.#enabled.clear(); this.#notify();
+        this.#account = account;
+        this.#catalog = catalog;
+        this.#enabled.clear();
+        this.#notify("context");
     }
     setEnabled(account: string, chatKey: string, appId: string, enabled: boolean): boolean {
-        if (!account || account !== this.#account || !chatKey || chatKey.length > 512 ||
-            !this.#catalog?.apps.some(app => app.id === appId)) return false;
+        if (
+            !account ||
+            account !== this.#account ||
+            !chatKey ||
+            chatKey.length > 512 ||
+            !this.#catalog?.apps.some((app) => app.id === appId)
+        )
+            return false;
         if (!this.#enabled.has(chatKey) && this.#enabled.size >= 256) return false;
         const apps = new Set(this.#enabled.get(chatKey));
-        if (enabled) apps.add(appId); else apps.delete(appId);
-        if (apps.size) this.#enabled.set(chatKey, apps); else this.#enabled.delete(chatKey);
-        this.#notify(); return true;
+        if (enabled) apps.add(appId);
+        else apps.delete(appId);
+        if (apps.size) this.#enabled.set(chatKey, apps);
+        else this.#enabled.delete(chatKey);
+        this.#notify("enabled");
+        return true;
+    }
+    snapshotEnabled(account: string, catalog: LocalAppCatalog) {
+        if (account !== this.#account || catalog !== this.#catalog) return [];
+        return Object.freeze(
+            [...this.#enabled].map(([chatKey, apps]) =>
+                Object.freeze({ chatKey, appIds: Object.freeze([...apps]) }),
+            ),
+        );
+    }
+    /** Restore only an already validated, exact-catalog setup, never an app's suggestion data. */
+    restoreEnabled(
+        account: string,
+        catalog: LocalAppCatalog,
+        rows: readonly { chatKey: string; appIds: readonly string[] }[],
+    ): boolean {
+        if (
+            account !== this.#account ||
+            catalog !== this.#catalog ||
+            !Array.isArray(rows) ||
+            rows.length > 256
+        )
+            return false;
+        const restored = new Map<string, Set<string>>();
+        for (const row of rows) {
+            if (
+                !row ||
+                typeof row !== "object" ||
+                typeof row.chatKey !== "string" ||
+                !row.chatKey ||
+                row.chatKey.length > 512 ||
+                restored.has(row.chatKey) ||
+                !Array.isArray(row.appIds) ||
+                !row.appIds.length ||
+                row.appIds.length > catalog.apps.length ||
+                new Set(row.appIds).size !== row.appIds.length ||
+                row.appIds.some((id: unknown) => !catalog.apps.some((app) => app.id === id))
+            )
+                return false;
+            restored.set(row.chatKey, new Set(row.appIds));
+        }
+        this.#enabled = restored;
+        this.#notify("restore");
+        return true;
     }
     enabled(account: string, chatKey: string, appId: string): boolean {
         return account === this.#account && this.#enabled.get(chatKey)?.has(appId) === true;
     }
     enabledApps(account: string, chatKey: string): readonly LocalAppCatalogEntry[] {
-        return this.#catalog?.apps.filter(app => this.enabled(account, chatKey, app.id)) ?? [];
+        return this.#catalog?.apps.filter((app) => this.enabled(account, chatKey, app.id)) ?? [];
     }
     current(suggestion: LocalAppSuggestion): boolean {
-        return suggestion.configurationRevision === this.#revision &&
+        return (
+            suggestion.configurationRevision === this.#revision &&
             this.enabled(suggestion.viewerId, suggestion.chatKey, suggestion.appId) &&
-            this.#catalog?.apps.some(app => app.id === suggestion.appId && app.revision === suggestion.appRevision &&
-                app.actions.some(action => action.definition.name === suggestion.actionId)) === true;
+            this.#catalog?.apps.some(
+                (app) =>
+                    app.id === suggestion.appId &&
+                    app.revision === suggestion.appRevision &&
+                    app.actions.some((action) => action.definition.name === suggestion.actionId),
+            ) === true
+        );
     }
     /** Only declarative public/private-imported rules; never inspect opaque app processor context. */
-    suggestions(account: string, chatKey: string, content: { kind: string; text?: string }): LocalAppSuggestion[] {
-        const sources = this.enabledApps(account, chatKey).flatMap(app => app.actions.map(action => ({ app, action })));
-        const vocabulary = buildBoundedAutoProposeVocabulary(sources.map(source => source.action.definition));
+    suggestions(
+        account: string,
+        chatKey: string,
+        content: { kind: string; text?: string },
+    ): LocalAppSuggestion[] {
+        const sources = this.enabledApps(account, chatKey).flatMap((app) =>
+            app.actions.map((action) => ({ app, action })),
+        );
+        const vocabulary = buildBoundedAutoProposeVocabulary(
+            sources.map((source) => source.action.definition),
+        );
         const matches = new Set<number>();
-        if (content.kind === "image_content") for (const entry of vocabulary.imageEntries) matches.add(entry.actionIndex);
-        else if (content.kind === "text_content" && typeof content.text === "string" && content.text.length <= 32768) {
-            for (const entry of vocabulary.keywordEntries) if (entry.keywords.some(keyword => matchesKeyword(content.text!, keyword))) matches.add(entry.actionIndex);
+        if (content.kind === "image_content")
+            for (const entry of vocabulary.imageEntries) matches.add(entry.actionIndex);
+        else if (
+            content.kind === "text_content" &&
+            typeof content.text === "string" &&
+            content.text.length <= 32768
+        ) {
+            for (const entry of vocabulary.keywordEntries)
+                if (entry.keywords.some((keyword) => matchesKeyword(content.text!, keyword)))
+                    matches.add(entry.actionIndex);
         }
-        return [...matches].flatMap(index => {
+        return [...matches].flatMap((index) => {
             const source = sources[index];
-            return source ? [Object.freeze({ appId: source.app.id, appRevision: source.app.revision,
-                actionId: source.action.definition.name, title: source.action.definition.card.title,
-                appName: source.app.name, viewerId: account, chatKey, configurationRevision: this.#revision })] : [];
+            return source
+                ? [
+                      Object.freeze({
+                          appId: source.app.id,
+                          appRevision: source.app.revision,
+                          actionId: source.action.definition.name,
+                          title: source.action.definition.card.title,
+                          appName: source.app.name,
+                          viewerId: account,
+                          chatKey,
+                          configurationRevision: this.#revision,
+                      }),
+                  ]
+                : [];
         });
     }
 }

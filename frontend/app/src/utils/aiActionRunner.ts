@@ -626,11 +626,16 @@ async function runDefinition(
     const viewer = currentUserIdStore.value;
     const contextCurrent = () => currentUserIdStore.value === viewer && stillCurrent?.() !== false;
     const processApp = (request: AppProcessorInput): Promise<AppProcessorResult> => {
-        if (!contextCurrent()) return Promise.resolve({ kind: "error", error: "proposal context changed" });
-        if (privateProcessor !== undefined) return privateProcessor(def.name, request, contextCurrent);
+        if (!contextCurrent())
+            return Promise.resolve({ kind: "error", error: "proposal context changed" });
+        if (privateProcessor !== undefined)
+            return privateProcessor(def.name, request, contextCurrent);
         // The unofficial client never gives source text/model output to a remote card document.
         if (client.clientOnlyApps?.() === true || appProcessorUrl === undefined) {
-            return Promise.resolve({ kind: "error", error: "Import this app's isolated local processor before preparing an action." });
+            return Promise.resolve({
+                kind: "error",
+                error: "Import this app's isolated local processor before preparing an action.",
+            });
         }
         return processWithApp(appProcessorUrl, def.name, request, contextCurrent);
     };
@@ -718,11 +723,11 @@ async function runDefinition(
                           rawNormalizationAttempted = true;
                           if (!contextCurrent()) return { kind: "error" };
                           const normalized = await processApp({
-                                  operation: "normalize_raw",
-                                  modality: "image",
-                                  candidates,
-                                  ...(input.text === undefined ? {} : { text: input.text }),
-                                  ...(sourceTimestamp === undefined ? {} : { sourceTimestamp }),
+                              operation: "normalize_raw",
+                              modality: "image",
+                              candidates,
+                              ...(input.text === undefined ? {} : { text: input.text }),
+                              ...(sourceTimestamp === undefined ? {} : { sourceTimestamp }),
                           });
                           onPhase?.("validating");
                           return contextCurrent() ? normalized : { kind: "error" };
@@ -1034,8 +1039,20 @@ export async function extractPrivateAppAction(
     }
     if (!options.stillCurrent()) return { kind: "error", error: "proposal context changed" };
     const result = await runDefinition(
-        definition, "", content, client, undefined, undefined, undefined, undefined, undefined,
-        options.onPhase, undefined, options.sourceTimestamp, undefined, options.stillCurrent,
+        definition,
+        "",
+        content,
+        client,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        options.onPhase,
+        undefined,
+        options.sourceTimestamp,
+        undefined,
+        options.stillCurrent,
         options.processor,
     );
     if (!options.stillCurrent()) return { kind: "error", error: "proposal context changed" };

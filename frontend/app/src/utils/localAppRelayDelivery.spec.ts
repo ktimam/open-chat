@@ -137,7 +137,9 @@ describe("confirmed local relay delivery lifecycle", () => {
         expect(retryNonce).not.toBe(f.nonce);
         expect(f.open).toHaveBeenCalledTimes(2);
         expect(f.open.mock.calls[1][1]).toBe("_blank");
-        expect(new URLSearchParams(new URL(f.open.mock.calls[1][0]).hash.slice(1)).get("sessionNonce")).toBe(retryNonce);
+        expect(
+            new URLSearchParams(new URL(f.open.mock.calls[1][0]).hash.slice(1)).get("sessionNonce"),
+        ).toBe(retryNonce);
         expect(JSON.stringify(f.open.mock.calls)).not.toContain("SYNTHETIC_APPROVED_MARKER");
         expect(retryChannel.postMessage).not.toHaveBeenCalled();
         for (const outcome of ["saved", "rejected"]) {
@@ -201,21 +203,27 @@ describe("confirmed local relay delivery lifecycle", () => {
             expect(retryNonce).not.toBe(f.nonce);
             expect(f.channel.close).toHaveBeenCalledOnce();
             expect(f.channel.postMessage.mock.calls.at(-1)?.[0]).toEqual({
-                type: "relay-cancel", version: 1, sessionNonce: f.nonce,
+                type: "relay-cancel",
+                version: 1,
+                sessionNonce: f.nonce,
             });
             emitRetry("relay-ready");
             expect(retryChannel.postMessage.mock.calls[0][0].request).toBe(request);
             if (teardown === "account teardown") {
-                emitRetry("relay-outcome", { outcome: "received", importId: request.idempotencyKey });
+                emitRetry("relay-outcome", {
+                    outcome: "received",
+                    importId: request.idempotencyKey,
+                });
                 expect(await retryResult).toEqual({ kind: "delivered" });
                 cancelLocalAppHandoffs();
             } else {
                 retryController.abort();
                 expect(await retryResult).toEqual({ kind: "uncertain" });
             }
-            const expectedStatus = teardown === "account teardown"
-                ? undefined
-                : { importId: request.idempotencyKey, status: "uncertain" };
+            const expectedStatus =
+                teardown === "account teardown"
+                    ? undefined
+                    : { importId: request.idempotencyKey, status: "uncertain" };
             expect(get(localAppDeliveryStatus)).toEqual(expectedStatus);
             expect(retryChannel.close).toHaveBeenCalledOnce();
             for (const emit of [f.emit, emitRetry]) {
@@ -232,7 +240,8 @@ describe("confirmed local relay delivery lifecycle", () => {
             expect(get(localAppDeliveryStatus)).toEqual(expectedStatus);
             for (const channel of f.channels) {
                 expect(channel.postMessage.mock.calls.map(([message]) => message.type)).toEqual([
-                    "relay-approved", "relay-cancel",
+                    "relay-approved",
+                    "relay-cancel",
                 ]);
                 expect(channel.close).toHaveBeenCalledOnce();
             }
