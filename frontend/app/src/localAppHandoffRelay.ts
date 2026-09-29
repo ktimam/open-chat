@@ -156,6 +156,7 @@ export function startLocalAppHandoffRelay(): () => void {
         // A newly opened page may not have registered its listener yet. Only public hello is
         // repeated; the bound protocol sends its private offer at most once, after ready.
         session.start();
+        if (closed) return;
         const hello = { type: "oc:app-import:hello", version: 1, sessionNonce: nonce };
         let helloCount = 0;
         helloTimer = setInterval(() => {

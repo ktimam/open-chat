@@ -402,6 +402,7 @@ export function startLocalNativeAppHandoff(): () => void {
             status.textContent =
                 "In the app, allow this local connection once. No payload is sent before that consent and the APK's final approval check.";
             publicHello();
+            if (closed) return;
             helloTimer = setInterval(publicHello, 500);
             consentTimer = setTimeout(
                 () => {

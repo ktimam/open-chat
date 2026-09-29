@@ -333,6 +333,46 @@ describe("native private app browser relay", () => {
         expect(el("handoff-summary").textContent).toBe("");
         expect(el<HTMLButtonElement>("open-app").disabled).toBe(true);
     });
+    it.each(["throwing", "already closed"] as const)(
+        "keeps an initially %s popup terminal without starting new timers or sending again",
+        async (reason) => {
+            await load();
+            if (reason === "throwing") {
+                popup.postMessage.mockImplementationOnce(() => {
+                    throw new Error("Synthetic popup transport failure");
+                });
+            } else popup.closed = true;
+            el<HTMLButtonElement>("open-app").click();
+            expect(el("handoff-status").textContent).toContain("outcome is unknown");
+            expect(el("handoff-summary").textContent).toBe("");
+            expect(el<HTMLButtonElement>("open-app").disabled).toBe(true);
+            expect(fetchMock.mock.calls.map(([path]) => path)).toEqual(["/claim"]);
+            expect(vi.getTimerCount()).toBe(0);
+            const failureStatus = el("handoff-status").textContent;
+            const sends = reason === "throwing" ? 1 : 0;
+            expect(popup.postMessage).toHaveBeenCalledTimes(sends);
+            popup.closed = false;
+            if (reason === "throwing") {
+                // Match the actual attempted connection, not an unrelated ID
+                // that the live handler would reject even without cleanup.
+                const connectionId = popup.postMessage.mock.calls[0][0].connectionId;
+                postEvent({
+                    type: "oc:app-import:connected",
+                    version: 1,
+                    connectionId,
+                    sessionNonce: nonce,
+                });
+            }
+            appMessage("ready");
+            el<HTMLButtonElement>("open-app").dispatchEvent(new Event("click"));
+            await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+            expect(window.open).toHaveBeenCalledOnce();
+            expect(popup.postMessage).toHaveBeenCalledTimes(sends);
+            expect(fetchMock.mock.calls.map(([path]) => path)).toEqual(["/claim"]);
+            expect(el("handoff-status").textContent).toBe(failureStatus);
+            expect(vi.getTimerCount()).toBe(0);
+        },
+    );
     it("does not automatically retry a claim whose response was lost", async () => {
         fetchMock.mockRejectedValue(new Error("lost claim"));
         await load();
