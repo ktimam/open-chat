@@ -1137,7 +1137,7 @@ export const CURRENT_CLIENT_LICENSE_COMMAND = [
 ].join("\n");
 
 export const CURRENT_CLIENT_FORMAT_BASE_EXPRESSION =
-  "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || (github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || '5f00758312735f2ddac9928e3aa60349964bf73a' }}";
+  "5f00758312735f2ddac9928e3aa60349964bf73a";
 
 /** Offline wiring only: this does not collect dependencies, query advisories, or accept a release. */
 export function checkCurrentClientSecurityCi({

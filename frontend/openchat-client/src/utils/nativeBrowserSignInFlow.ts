@@ -75,11 +75,11 @@ export async function runNativeBrowserSignIn<T>(
         }
     };
     try {
-        // eslint-disable-next-line no-control-regex -- Reject control characters before creating any native authentication request.
         if (
             expectedUsername.trim() !== expectedUsername ||
             !expectedUsername ||
             expectedUsername.length > 100 ||
+            // eslint-disable-next-line no-control-regex -- Reject control characters before creating any native authentication request.
             /[\u0000-\u001f\u007f]/.test(expectedUsername)
         )
             throw new Error("Enter the expected existing username");

@@ -7,13 +7,14 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 // Run against the installed dependency tree. No resolver hooks, credentials from
 // the environment, external requests, or persistent test keys are used.
-// Verifies the version-scoped security override while this SDK pins Axios 1.16.0.
+// Verifies the exact integrated-upstream SDK and locked Axios compatibility tuple.
+// SDK 1.56.0 accepts Axios ^1.18.0; the lock resolves the reviewed Axios 1.18.1.
 // Advisory: https://github.com/axios/axios/security/advisories/GHSA-gcfj-64vw-6mp9
 // Usage: node scripts/cdp_axios_compatibility.mjs [frontend-directory]
 const frontend = path.resolve(process.argv[2] ?? fileURLToPath(new URL('../frontend', import.meta.url)));
 const sdkPackagePath = path.join(frontend, 'node_modules/@coinbase/cdp-sdk/package.json');
 const sdkPackage = JSON.parse(readFileSync(sdkPackagePath, 'utf8'));
-assert.equal(sdkPackage.version, '1.52.0', 'Review compatibility again when the parent SDK changes');
+assert.equal(sdkPackage.version, '1.56.0', 'Review compatibility again when the parent SDK changes');
 const sdkRequire = createRequire(sdkPackagePath);
 const axiosPackagePath = sdkRequire.resolve('axios/package.json');
 const axiosUrl = pathToFileURL(path.join(path.dirname(axiosPackagePath), 'index.js')).href;

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { CURRENT_FORMAT_BASE } from "./frontend_format_current.mjs";
 import {
   checkCurrentClientSecurityCi,
   readCurrentClientSecurityInputs,
@@ -86,13 +87,15 @@ test("current-client collectors remain explicit, scoped and ordered behind offli
       "scripts/frontend_format_current.test.mjs",
     ),
   );
-  assert.match(
+  assert.equal(CURRENT_CLIENT_FORMAT_BASE_EXPRESSION, CURRENT_FORMAT_BASE);
+  assert.equal(
     CURRENT_CLIENT_FORMAT_BASE_EXPRESSION,
-    /github\.event\.before != '0{40}' && github\.event\.before/,
-  );
-  assert.match(
-    CURRENT_CLIENT_FORMAT_BASE_EXPRESSION,
-    /'5f00758312735f2ddac9928e3aa60349964bf73a' \}\}$/,
+    JSON.parse(
+      readFileSync(
+        new URL("../.github/unofficial-client-baseline.json", import.meta.url),
+        "utf8",
+      ),
+    ).upstreamCommit,
   );
   for (const scope of [undefined, "", "main", "current", "pr3"])
     for (const factory of [npmFeatureQueryCommand, rustFeatureCiCommand])
@@ -304,7 +307,7 @@ const mutations = [
     (s) => s.replace(" scripts/frontend_format_current.test.mjs", ""),
   ],
   [
-    "legacy formatting fallback",
+    "legacy formatting comparison base",
     (s) =>
       s.replace(
         "5f00758312735f2ddac9928e3aa60349964bf73a",
@@ -312,11 +315,27 @@ const mutations = [
       ),
   ],
   [
-    "zero first-push comparison",
+    "push-before comparison includes upstream-only changes and omits prior fork changes",
     (s) =>
       s.replace(
-        "(github.event.before != '0000000000000000000000000000000000000000' && github.event.before)",
-        "github.event.before",
+        "PR_BASE_SHA: " + CURRENT_CLIENT_FORMAT_BASE_EXPRESSION,
+        "PR_BASE_SHA: ${{ github.event.before }}",
+      ),
+  ],
+  [
+    "PR base cannot narrow the complete fork formatting scope",
+    (s) =>
+      s.replace(
+        "PR_BASE_SHA: " + CURRENT_CLIENT_FORMAT_BASE_EXPRESSION,
+        "PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}",
+      ),
+  ],
+  [
+    "merge queue base cannot narrow the complete fork formatting scope",
+    (s) =>
+      s.replace(
+        "PR_BASE_SHA: " + CURRENT_CLIENT_FORMAT_BASE_EXPRESSION,
+        "PR_BASE_SHA: ${{ github.event.merge_group.base_sha }}",
       ),
   ],
   [
