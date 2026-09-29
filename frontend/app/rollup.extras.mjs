@@ -93,12 +93,16 @@ export function initEnv({ websiteVersion } = {}) {
         const options = {
             port: process.env.OC_DEV_PORT,
             layout: process.env.OC_MOBILE_LAYOUT,
+            // The launcher already validated this explicit operator option. Preserve it
+            // through this second profile normalization, just like the build ID.
+            appDirectoryUrl: process.env.OC_APP_DIRECTORY_URL,
             inherited: process.env,
         };
         const profile = localApk
             ? createUnofficialLocalApkEnvironment(canisters, {
                   inherited: process.env,
                   buildId: process.env.OC_UNOFFICIAL_APK_BUILD_ID,
+                  appDirectoryUrl: options.appDirectoryUrl,
               })
             : process.env.OC_UNOFFICIAL_WEB_BUILD === "true"
               ? createUnofficialLocalWebBuildEnvironment(canisters, {
