@@ -186,6 +186,17 @@ test("public copy preserves generated key and relay, ignores associations, and r
     assert.throws(() => copyUnofficialWebPublicFiles(publicDirectory, output));
 });
 
+const localWebWiring = {
+    mode: /localClientBuild\s*\?\s*\{\s*"import\.meta\.env\.DEV": "false",\s*"import\.meta\.env\.PROD": "true"\s*\}/,
+    key: /queryPublicKey: queryOfficialUserIndexPublicKey,\s*outputPath: outputPath\("public-key"\)/,
+    otaPlugin: /\.\.\.\(!localClientBuild\s*\?\s*\[\s*androidBundlePlugin/,
+    rpId: /const androidRpId = localClientBuild\s*\?\s*""/,
+    otaPolicy:
+        /fs\.writeFileSync\(\s*outputPath\("ota-policy\.json"\),\s*JSON\.stringify\(\{ strategy: "none" \}\),?\s*\)/,
+    profileGuard:
+        /OC_UNOFFICIAL_WEB_BUILD === "true" &&\s*process\.env\.OC_UNOFFICIAL_CLIENT !== "true"/,
+};
+
 test("Rollup local path has explicit safety replacements, isolated output, relay and no OTA/DAL clean", () => {
     const source = readFileSync(new URL("./app/rollup.config.mjs", import.meta.url), "utf8");
     const extra = readFileSync(new URL("./app/rollup.extras.mjs", import.meta.url), "utf8");
@@ -193,22 +204,16 @@ test("Rollup local path has explicit safety replacements, isolated output, relay
     assert.match(source, /const localTestApk = process\.env\.OC_UNOFFICIAL_LOCAL_APK === "true";/);
     assert.match(source, /const localClientBuild = localWebBuild \|\| localTestApk;/);
     assert.match(source, /"import\.meta\.env\.OC_UNOFFICIAL_CLIENT": JSON\.stringify/);
-    assert.match(
-        source,
-        /localClientBuild \? \{ "import\.meta\.env\.DEV": "false", "import\.meta\.env\.PROD": "true" \}/,
-    );
+    assert.match(source, localWebWiring.mode);
     assert.match(
         source,
         /localClientBuild \? \{ "process\.env\.NODE_ENV": JSON\.stringify\("production"\)/,
     );
     assert.match(source, /localClientBuild \? "development" : \(process\.env\.NODE_ENV/);
     assert.match(source, /localAppRelayPlugin\(\{ enabled: localWebBuild \}\)/);
-    assert.match(
-        source,
-        /queryPublicKey: queryOfficialUserIndexPublicKey, outputPath: outputPath\("public-key"\)/,
-    );
-    assert.match(source, /\.\.\.\(!localClientBuild \? \[androidBundlePlugin/);
-    assert.match(source, /const androidRpId = localClientBuild \? ""/);
+    assert.match(source, localWebWiring.key);
+    assert.match(source, localWebWiring.otaPlugin);
+    assert.match(source, localWebWiring.rpId);
     assert.match(
         source,
         /if \(localClientBuild\) \{[\s\S]*?return;\s*\}\s*console\.log\("cleaning up the build directory"\)/,
@@ -217,26 +222,65 @@ test("Rollup local path has explicit safety replacements, isolated output, relay
         source,
         /buildStart\(\) \{\s*if \(!localTestApk\) return;[\s\S]*?rimrafSync\(path\.join\(__dirname, "build"\)\)/,
     );
-    assert.match(
-        source,
-        /fs\.writeFileSync\(outputPath\("ota-policy\.json"\), JSON\.stringify\(\{ strategy: "none" \}\)\)/,
-    );
+    assert.match(source, localWebWiring.otaPolicy);
     assert.match(
         source,
         /const outputDirectory = localWebBuild \? process\.env\.OC_UNOFFICIAL_WEB_OUTPUT : "build";/,
     );
     assert.match(source, /dir: outputDirectory/);
     assert.equal(/dest: "build(?:\/|")/.test(source), false);
-    assert.match(
-        extra,
-        /OC_UNOFFICIAL_WEB_BUILD === "true" && process\.env\.OC_UNOFFICIAL_CLIENT !== "true"/,
-    );
+    assert.match(extra, localWebWiring.profileGuard);
     assert.match(extra, /createUnofficialLocalWebBuildEnvironment\(canisters/);
     const workers = readFileSync(new URL("./app/build-workers.mjs", import.meta.url), "utf8");
     assert.match(
         workers,
         /envDir: process\.env\.OC_UNOFFICIAL_CLIENT === "true" \? false : undefined/,
     );
+});
+
+test("wrapped local web wiring assertions retain their safety values and conditions", () => {
+    for (const [pattern, compact, wrapped, changed] of [
+        [
+            localWebWiring.mode,
+            'localClientBuild ? { "import.meta.env.DEV": "false", "import.meta.env.PROD": "true" }',
+            'localClientBuild\n ? { "import.meta.env.DEV": "false",\n "import.meta.env.PROD": "true" }',
+            'localClientBuild ? { "import.meta.env.DEV": "true", "import.meta.env.PROD": "true" }',
+        ],
+        [
+            localWebWiring.key,
+            'queryPublicKey: queryOfficialUserIndexPublicKey, outputPath: outputPath("public-key")',
+            'queryPublicKey: queryOfficialUserIndexPublicKey,\n outputPath: outputPath("public-key")',
+            'queryPublicKey: queryOtherKey, outputPath: outputPath("public-key")',
+        ],
+        [
+            localWebWiring.otaPlugin,
+            "...(!localClientBuild ? [androidBundlePlugin",
+            "...(!localClientBuild\n ? [\n androidBundlePlugin",
+            "...(localClientBuild ? [androidBundlePlugin",
+        ],
+        [
+            localWebWiring.rpId,
+            'const androidRpId = localClientBuild ? ""',
+            'const androidRpId = localClientBuild\n ? ""',
+            'const androidRpId = localClientBuild ? "oc.app"',
+        ],
+        [
+            localWebWiring.otaPolicy,
+            'fs.writeFileSync(outputPath("ota-policy.json"), JSON.stringify({ strategy: "none" }))',
+            'fs.writeFileSync(\n outputPath("ota-policy.json"),\n JSON.stringify({ strategy: "none" }),\n)',
+            'fs.writeFileSync(outputPath("ota-policy.json"), JSON.stringify({ strategy: "major" }))',
+        ],
+        [
+            localWebWiring.profileGuard,
+            'OC_UNOFFICIAL_WEB_BUILD === "true" && process.env.OC_UNOFFICIAL_CLIENT !== "true"',
+            'OC_UNOFFICIAL_WEB_BUILD === "true" &&\n process.env.OC_UNOFFICIAL_CLIENT !== "true"',
+            'OC_UNOFFICIAL_WEB_BUILD === "true" && process.env.OC_UNOFFICIAL_CLIENT === "true"',
+        ],
+    ]) {
+        assert.match(compact, pattern);
+        assert.match(wrapped, pattern);
+        assert.doesNotMatch(changed, pattern);
+    }
 });
 
 const workflow = readFileSync(
