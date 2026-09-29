@@ -1,5 +1,5 @@
 use crate::guards::caller_is_user_index;
-use crate::model::users_to_migrate::{UserToImport, UserToMigrate};
+use crate::model::users_to_migrate::{UserToCloseOut, UserToImport, UserToMigrate};
 use crate::{CanisterToRefund, CommunityEvent, GroupEvent, RuntimeState, UserEvent, UserToDelete, jobs, mutate_state};
 use canister_api_macros::update;
 use canister_time::now_millis;
@@ -13,8 +13,8 @@ use std::cmp::min;
 use std::collections::HashSet;
 use tracing::info;
 use types::{
-    BotEvent, BotInstallationLocation, BotLifecycleEvent, BotNotification, BotRegisteredEvent, CanisterId, PushIfNotContains,
-    TimestampMillis,
+    BotEvent, BotInstallationLocation, BotLifecycleEvent, BotNotification, BotRegisteredEvent, CanisterId, MAX_USER_INDEX,
+    PushIfNotContains, TimestampMillis,
 };
 use user_canister::{
     DiamondMembershipPaymentReceived, DisplayNameChanged, ExternalAchievementAwarded, OpenChatBotMessageV2,
@@ -249,8 +249,13 @@ fn handle_event<F: FnOnce() -> TimestampMillis>(
         UserIndexEvent::RefundDeletedUserCycles(canister_ids) => {
             let mut queued: HashSet<CanisterId> = state.data.cycles_refund_queue.iter().map(|c| c.canister_id).collect();
             for canister_id in canister_ids {
-                // Belt and braces, the job also refuses to touch any canister with code installed
-                if !state.data.local_users.contains(&canister_id.into()) && queued.insert(canister_id) {
+                // Belt and braces, the job also refuses to touch any canister with code installed.
+                // Deleted users' canisters used to be added to the canister pool, from which they
+                // may yet become live canisters, so any still in it are left alone.
+                if !state.data.local_users.contains(&canister_id.into())
+                    && !state.data.canister_pool.contains(&canister_id)
+                    && queued.insert(canister_id)
+                {
                     state.data.cycles_refund_queue.push_back(CanisterToRefund {
                         canister_id,
                         attempt: 0,
@@ -326,10 +331,15 @@ fn handle_event<F: FnOnce() -> TimestampMillis>(
                 state.push_event_to_user(user_id.into(), UserEvent::BotUpdated(Box::new(ev)), **now);
             }
         },
+        // The UserIndex names users by their latest ids, but a migration may not have reached here yet
         UserIndexEvent::UserBlocked(user_id, blocked) => {
+            let user_id = state.data.migrated_user_ids.latest(user_id);
+            let blocked = state.data.migrated_user_ids.latest(blocked);
             state.data.blocked_users.insert((blocked, user_id), ());
         }
         UserIndexEvent::UserUnblocked(user_id, unblocked) => {
+            let user_id = state.data.migrated_user_ids.latest(user_id);
+            let unblocked = state.data.migrated_user_ids.latest(unblocked);
             state.data.blocked_users.remove(&(unblocked, user_id));
         }
         UserIndexEvent::SetPremiumItemCost(ev) => state.data.premium_items.set(ev.item_id, ev.chit_cost),
@@ -369,7 +379,8 @@ fn handle_event<F: FnOnce() -> TimestampMillis>(
             jobs::start_user_migrations::start_job_if_required(state);
         }
         UserIndexEvent::ImportUser(ev) => {
-            state.data.users_to_import.push(UserToImport {
+            // A later migration of the user replaces any earlier one still waiting to be imported
+            state.data.users_to_import.replace(UserToImport {
                 user_id: ev.user_id,
                 multi_user_canister_id: ev.multi_user_canister_id,
                 user_hash: ev.user_hash,
@@ -380,6 +391,32 @@ fn handle_event<F: FnOnce() -> TimestampMillis>(
         }
         UserIndexEvent::UserIdMigrated(ev) => {
             if state.data.migrated_user_ids.insert(ev.old_user_id, ev.new_user_id) {
+                // The user's old canister, if this LocalUserIndex controls it, stays in `local_users`
+                // until it has been uninstalled
+                if ev.old_user_id.index() == 0 && state.data.local_users.contains(&ev.old_user_id) {
+                    state.data.users_to_close_out.push(UserToCloseOut {
+                        user_id: ev.old_user_id,
+                        attempt: 0,
+                        not_before: 0,
+                    });
+                    jobs::close_out_migrated_users::start_job_if_required(state);
+                }
+                if let Some(principal) = state.data.global_users.migrate_user_id(ev.old_user_id, ev.new_user_id) {
+                    let canister_id = ev.new_user_id.canister_id();
+                    if state.data.local_multi_user_canisters.contains(&canister_id)
+                        && !state.data.local_users.contains(&ev.new_user_id)
+                    {
+                        state.data.local_users.add(ev.new_user_id, principal, None, **now);
+                        state.data.local_multi_user_canisters.on_user_added(&canister_id);
+                        if ev.new_user_id.index() == MAX_USER_INDEX {
+                            state.data.local_multi_user_canisters.mark_full(&canister_id);
+                        }
+                    }
+                }
+                state
+                    .data
+                    .blocked_users
+                    .migrate_user_id(ev.old_user_id, ev.new_user_id, &ev.blocked_users);
                 for canister_id in ev.canisters_to_notify {
                     if state.data.local_groups.get(&canister_id.into()).is_some() {
                         state.push_event_to_group(

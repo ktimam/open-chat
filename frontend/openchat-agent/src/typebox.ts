@@ -3076,6 +3076,31 @@ export const LocalUserIndexAccessTokenV2Response = /* @__PURE__ */ Type.Union([
     }),
 ]);
 
+export type LocalUserIndexMoveFundsFromOldCanisterMoveFundsResult = Static<
+    typeof LocalUserIndexMoveFundsFromOldCanisterMoveFundsResult
+>;
+export const LocalUserIndexMoveFundsFromOldCanisterMoveFundsResult = /* @__PURE__ */ Type.Union([
+    Type.Object({
+        Moved: Type.Object({
+            amount: Type.BigInt(),
+            fee: Type.BigInt(),
+            block_index: Type.BigInt(),
+        }),
+    }),
+    Type.Literal("NothingToMove"),
+    Type.Object({
+        Failed: OCError,
+    }),
+]);
+
+export type LocalUserIndexMoveFundsFromOldCanisterArgs = Static<
+    typeof LocalUserIndexMoveFundsFromOldCanisterArgs
+>;
+export const LocalUserIndexMoveFundsFromOldCanisterArgs = /* @__PURE__ */ Type.Object({
+    old_user_id: UserId,
+    ledgers: Type.Array(TSPrincipal),
+});
+
 export type LocalUserIndexBotSendMessageSuccessResult = Static<
     typeof LocalUserIndexBotSendMessageSuccessResult
 >;
@@ -7661,6 +7686,14 @@ export const LocalUserIndexInviteUsersToChannelResponse = /* @__PURE__ */ Type.U
     }),
 ]);
 
+export type LocalUserIndexMoveFundsFromOldCanisterLedgerOutcome = Static<
+    typeof LocalUserIndexMoveFundsFromOldCanisterLedgerOutcome
+>;
+export const LocalUserIndexMoveFundsFromOldCanisterLedgerOutcome = /* @__PURE__ */ Type.Object({
+    ledger: TSPrincipal,
+    result: LocalUserIndexMoveFundsFromOldCanisterMoveFundsResult,
+});
+
 export type LocalUserIndexBotSendMessageResponse = Static<
     typeof LocalUserIndexBotSendMessageResponse
 >;
@@ -8951,6 +8984,7 @@ export const UserIndexCurrentUserSuccessResult = /* @__PURE__ */ Type.Object({
     hide_online_status: Type.Optional(Type.Boolean()),
     accepted_terms_version: Type.Optional(Type.Number()),
     current_terms_version: Type.Optional(Type.Number()),
+    previous_user_ids: Type.Optional(Type.Array(UserId)),
 });
 
 export type UserIndexCurrentUserResponse = Static<typeof UserIndexCurrentUserResponse>;
@@ -9049,6 +9083,18 @@ export const LocalUserIndexBotChatEventsArgs = /* @__PURE__ */ Type.Object({
     thread: Type.Optional(MessageIndex),
     events: LocalUserIndexChatEventsEventsSelectionCriteria,
 });
+
+export type LocalUserIndexMoveFundsFromOldCanisterResponse = Static<
+    typeof LocalUserIndexMoveFundsFromOldCanisterResponse
+>;
+export const LocalUserIndexMoveFundsFromOldCanisterResponse = /* @__PURE__ */ Type.Union([
+    Type.Object({
+        Success: Type.Array(LocalUserIndexMoveFundsFromOldCanisterLedgerOutcome),
+    }),
+    Type.Object({
+        Error: OCError,
+    }),
+]);
 
 export type CommunityRegisterPollVoteResponse = Static<typeof CommunityRegisterPollVoteResponse>;
 export const CommunityRegisterPollVoteResponse = /* @__PURE__ */ Type.Union([
@@ -9694,6 +9740,7 @@ export const CurrentUserSummary = /* @__PURE__ */ Type.Object({
     streak: Type.Number(),
     max_streak: Type.Number(),
     hide_online_status: Type.Optional(Type.Boolean()),
+    previous_user_ids: Type.Optional(Type.Array(UserId)),
 });
 
 export type SenderContext = Static<typeof SenderContext>;

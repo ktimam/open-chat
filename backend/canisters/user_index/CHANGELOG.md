@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- Pass the Registry's canister id to each LocalUserIndex when installing and upgrading it ([#9623](https://github.com/open-chat-labs/open-chat/pull/9623))
 - Store a map of the old to the new id of each user migrated to a MultiUser canister, sending each entry to every LocalUserIndex, including any added later ([#9536](https://github.com/open-chat-labs/open-chat/pull/9536))
 - Add the `migrated_user_ids` query, which takes a list of user ids and returns the latest id of each user in it who has been migrated to a MultiUser canister ([#9538](https://github.com/open-chat-labs/open-chat/pull/9538))
 - Include in `UserIdMigrated` the groups and communities the migrated user is in, for the LocalUserIndexes to notify ([#9543](https://github.com/open-chat-labs/open-chat/pull/9543))
@@ -15,9 +16,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Add `cancel_user_migration`, for governance principals in test mode only, which cancels a user's migration via their User canister's `c2c_cancel_migration` ([#9553](https://github.com/open-chat-labs/open-chat/pull/9553))
 - Add a one-off job which fetches the last online date of every user from the OnlineUsers canister in batches of 500, storing them in a temporary map separate from the `UserMap`, so that the users who haven't been online for the longest can be migrated first ([#9557](https://github.com/open-chat-labs/open-chat/pull/9557))
 - Accept a `user_id` in `c2c_set_avatar`, so a MultiUser canister can set the avatar id of one of its users ([#9560](https://github.com/open-chat-labs/open-chat/pull/9560))
-- One-off in `post_upgrade` which records the prod DailyPuzzle canister id and pushes it to every LocalUserIndex, in place of a governance proposal ([#9581](https://github.com/open-chat-labs/open-chat/pull/9581))
 - Add `migrate_users` which queues users to be migrated to MultiUser canisters ([#9582](https://github.com/open-chat-labs/open-chat/pull/9582))
 - Once a User canister is ready for migration, instruct the destination MultiUser canister that it should start the import ([#9587](https://github.com/open-chat-labs/open-chat/pull/9587))
+- Once a MultiUser canister has imported a migrating user, switch them over to their new id, re-keying them here and telling the Identity canister and every LocalUserIndex ([#9602](https://github.com/open-chat-labs/open-chat/pull/9602))
+- Add `previous_user_ids` to the current user in `current_user` and `users` responses ([#9608](https://github.com/open-chat-labs/open-chat/pull/9608))
+- Cancel user migrations which make no progress for an hour, and only unfreeze a user's canister once the MultiUser canister has abandoned importing them ([#9610](https://github.com/open-chat-labs/open-chat/pull/9610))
+- Notify the OnlineUsers canister when a user is migrated ([#9632](https://github.com/open-chat-labs/open-chat/pull/9632))
 
 ### Changed
 
@@ -36,6 +40,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Don't retry c2c calls to a method the callee doesn't have, which would otherwise be retried forever ([#9521](https://github.com/open-chat-labs/open-chat/pull/9521))
 - Move bot installations in a user's direct chat which were recorded under a `Group` or `Community` location back to the `User` location, since their events were being routed to a group or community that doesn't exist ([#9522](https://github.com/open-chat-labs/open-chat/pull/9522))
+- Tell the NotificationsIndex when a user is migrated, so it stops knowing them by their old id ([#9627](https://github.com/open-chat-labs/open-chat/pull/9627))
+- Move the blocked-user pairs naming a migrated user onto their new id, including those blocked or unblocked by their old id afterwards ([#9630](https://github.com/open-chat-labs/open-chat/pull/9630))
 
 ## [[2.0.2064](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2064-user_index)] - 2026-09-23
 
@@ -43,7 +49,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Add `refund_deleted_user_cycles` for platform operators, which sends each deleted user's canister to the LocalUserIndex on its subnet (using the NNS registry's routing table) to have the cycles it still holds refunded ([#9476](https://github.com/open-chat-labs/open-chat/pull/9476))
 - Add `set_call_push_enabled` and `call_push_enabled` for platform operators, fanning the value out to every LocalUserIndex and seeding new ones ([#9509](https://github.com/open-chat-labs/open-chat/pull/9509))
-- One-off `post_upgrade` job which queues the cycles held by previously deleted users' canisters to be refunded, running only once however many times the canister is upgraded. The LocalUserIndexes must be upgraded first ([#9511](https://github.com/open-chat-labs/open-chat/pull/9511))
+- One-off `post_upgrade` job which queues the cycles held by previously deleted users' canisters to be refunded, running only once however many times the canister is upgraded ([#9511](https://github.com/open-chat-labs/open-chat/pull/9511))
 
 ### Changed
 

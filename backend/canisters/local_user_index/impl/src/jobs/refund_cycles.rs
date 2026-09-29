@@ -1,5 +1,5 @@
-use crate::{CanisterToRefund, RuntimeState, mutate_state, read_state};
-use constants::{B, CYCLES_REQUIRED_FOR_UPGRADE};
+use crate::{CanisterToRefund, RuntimeState, call_relay, mutate_state, read_state};
+use constants::{B, CYCLES_REQUIRED_FOR_UPGRADE, MINUTE_IN_MS};
 use ic_cdk_management_canister::CanisterInstallMode;
 use ic_cdk_timers::TimerId;
 use std::cell::Cell;
@@ -24,10 +24,10 @@ const MAX_ATTEMPTS: usize = 10;
 // worth refunding. This also makes it cheap to queue a canister which has already been refunded.
 const MIN_CYCLES_TO_REFUND: Cycles = 100 * B;
 
-// `install_code` prepays for its execution, so the canister must hold this much above its
-// freezing threshold, else it is topped up first. The top-up comes back along with the rest, so
-// erring on the generous side costs nothing.
-const CYCLES_REQUIRED_FOR_INSTALL: Cycles = CYCLES_REQUIRED_FOR_UPGRADE + 100 * B;
+// `install_code` prepays for its execution, so the canister must hold this much (its freezing
+// threshold having been set to 0), else it is topped up first. The top-up comes back along with
+// the rest, so erring on the generous side costs nothing.
+pub(crate) const CYCLES_REQUIRED_FOR_INSTALL: Cycles = CYCLES_REQUIRED_FOR_UPGRADE + 100 * B;
 
 thread_local! {
     static TIMER_ID: Cell<Option<TimerId>> = Cell::default();
@@ -45,6 +45,17 @@ pub(crate) fn start_job_if_required(state: &RuntimeState, delay: Option<Millisec
     } else {
         false
     }
+}
+
+// Whether the canister's cycles are being refunded right now, which is when the canister being
+// processed is kept at the front of the queue
+pub(crate) fn is_in_progress(state: &RuntimeState, canister_id: CanisterId) -> bool {
+    IN_PROGRESS.get()
+        && state
+            .data
+            .cycles_refund_queue
+            .front()
+            .is_some_and(|c| c.canister_id == canister_id)
 }
 
 fn run() {
@@ -69,13 +80,14 @@ fn run() {
 
 // Returns the next canister whose retry delay (if any) has elapsed, having rotated it to the
 // front of the queue where it stays until it has been processed, else how long until the first
-// of them is due
+// of them is due. A canister reserved for the call relay is left until the relay is done with it.
 fn get_next(state: &mut RuntimeState) -> Result<CanisterToRefund, Option<Milliseconds>> {
     let now = state.env.now();
     let queue = &mut state.data.cycles_refund_queue;
     for _ in 0..queue.len() {
         if let Some(front) = queue.front()
             && front.retry_after <= now
+            && !call_relay::is_in_use(front.canister_id)
         {
             return Ok(front.clone());
         }
@@ -83,7 +95,13 @@ fn get_next(state: &mut RuntimeState) -> Result<CanisterToRefund, Option<Millise
             queue.push_back(front);
         }
     }
-    Err(queue.iter().map(|c| c.retry_after.saturating_sub(now)).min())
+    Err(queue
+        .iter()
+        .map(|c| {
+            let due_in = c.retry_after.saturating_sub(now);
+            if call_relay::is_in_use(c.canister_id) { due_in.max(MINUTE_IN_MS) } else { due_in }
+        })
+        .min())
 }
 
 async fn process_canister(canister: CanisterToRefund) {
@@ -111,6 +129,9 @@ async fn process_canister(canister: CanisterToRefund) {
             }
             Err(RefundError::CanisterHasCode) => {
                 error!(%canister_id, "Cycles not refunded, the canister has code installed");
+            }
+            Err(RefundError::InCanisterPool) => {
+                info!(%canister_id, "Cycles not refunded, the canister is in the canister pool");
             }
             Err(RefundError::TooFewCycles(cycles)) => {
                 info!(%canister_id, cycles, "Cycles not refunded, too few to be worth it");
@@ -149,6 +170,7 @@ fn retry_delay(error: &C2CError) -> Option<Milliseconds> {
 enum RefundError {
     NotController,
     CanisterHasCode,
+    InCanisterPool,
     TooFewCycles(Cycles),
     C2C(C2CError),
 }
@@ -160,7 +182,18 @@ impl From<C2CError> for RefundError {
 }
 
 async fn refund_cycles(canister_id: CanisterId) -> Result<Cycles, RefundError> {
-    let cycles_dispenser_canister_id = read_state(|state| state.data.cycles_dispenser_canister_id);
+    let (cycles_dispenser_canister_id, in_canister_pool) = read_state(|state| {
+        (
+            state.data.cycles_dispenser_canister_id,
+            state.data.canister_pool.contains(&canister_id),
+        )
+    });
+
+    // A pool canister may yet become a live canister, so it must be left as it is, in particular
+    // without its freezing threshold having been set to 0 (see below)
+    if in_canister_pool {
+        return Err(RefundError::InCanisterPool);
+    }
     let wasm = CanisterWasmBytes(CYCLES_REFUNDER_WASM.to_vec());
 
     let status = utils::canister::canister_status(canister_id).await?;
@@ -170,16 +203,28 @@ async fn refund_cycles(canister_id: CanisterId) -> Result<Cycles, RefundError> {
         return Err(RefundError::NotController);
     }
 
-    match status.module_hash {
+    // The call relay, left installed by a move of the canister's funds which failed to uninstall it
+    let mut module_hash = status.module_hash.clone();
+    if module_hash.as_ref().is_some_and(|hash| *hash == call_relay::wasm().hash()) {
+        utils::canister::uninstall(canister_id).await?;
+        module_hash = None;
+    }
+
+    match module_hash {
         None => {
             let balance = status.cycles();
             if balance < MIN_CYCLES_TO_REFUND {
                 return Err(RefundError::TooFewCycles(balance));
             }
 
-            let required = status.freezing_threshold_cycles() + CYCLES_REQUIRED_FOR_INSTALL;
-            if balance < required {
-                let top_up = required - balance;
+            // The refunder can only send the canister's liquid balance, which excludes the cycles
+            // held back by its freezing threshold, so set the threshold to 0 to refund those too
+            if status.settings.freezing_threshold != 0u32 {
+                utils::canister::set_freezing_threshold(canister_id, 0).await?;
+            }
+
+            if balance < CYCLES_REQUIRED_FOR_INSTALL {
+                let top_up = CYCLES_REQUIRED_FOR_INSTALL - balance;
                 utils::canister::deposit_cycles(canister_id, top_up).await?;
                 mutate_state(|state| state.data.cycles_topped_up_for_refunds += top_up);
             }

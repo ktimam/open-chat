@@ -11,10 +11,11 @@ use crate::model::media_scan_job_log::MediaScanJobLog;
 use crate::model::moderation_queue::ModerationQueue;
 use crate::model::premium_items::PremiumItems;
 use crate::model::referral_codes::{ReferralCodes, ReferralTypeMetrics};
+use crate::model::registry_tokens::RegistryTokens;
 use crate::model::top_up_leaderboards::TopUpLeaderboards;
 use crate::model::user_event_batch::UserEventBatch;
 use crate::model::user_index_event_batch::UserIndexEventBatch;
-use crate::model::users_to_migrate::{UserToImport, UsersToMigrate};
+use crate::model::users_to_migrate::{UserToCloseOut, UserToImport, UsersToMigrate};
 use crate::model::web_push_subscriptions::WebPushSubscriptions;
 use candid::Principal;
 use canister_state_macros::canister_state;
@@ -67,6 +68,7 @@ use utils::migrated_user_ids::MigratedUserIds;
 
 mod bots;
 mod call_push;
+mod call_relay;
 mod guards;
 mod jobs;
 mod lifecycle;
@@ -712,10 +714,13 @@ impl RuntimeState {
             users_to_migrate_in_progress: self.data.users_to_migrate.in_progress(),
             users_to_import_pending: self.data.users_to_import.pending(),
             users_to_import_in_progress: self.data.users_to_import.in_progress(),
+            users_to_close_out_pending: self.data.users_to_close_out.pending(),
+            users_to_close_out_in_progress: self.data.users_to_close_out.in_progress(),
             chunk_store: crate::jobs::refresh_chunk_store::metrics(),
             cycles_refund_queue_length: self.data.cycles_refund_queue.len(),
             cycles_refunded_from_deleted_users: self.data.cycles_refunded_from_deleted_users,
             cycles_topped_up_for_refunds: self.data.cycles_topped_up_for_refunds,
+            registry_tokens: self.data.registry_tokens.len(),
             referral_codes: self.data.referral_codes.metrics(now),
             event_store_client_info,
             notification_pushers: self.data.notification_pushers.iter().copied().collect(),
@@ -872,6 +877,17 @@ struct Data {
     // Users the UserIndex has asked this LocalUserIndex to have one of its MultiUser canisters import
     #[serde(default)]
     pub users_to_import: UsersToMigrate<UserToImport>,
+    // Users switched over to the MultiUser canister they were migrated to, whose old canisters, which
+    // this LocalUserIndex controls, are to be uninstalled
+    #[serde(default)]
+    pub users_to_close_out: UsersToMigrate<UserToCloseOut>,
+    // Passed in the init and upgrade args, so is set once this LocalUserIndex has been upgraded by a
+    // UserIndex which passes it
+    #[serde(default)]
+    pub registry_canister_id: Option<CanisterId>,
+    // The ledgers from which migrated users' funds can be moved, refreshed from the Registry daily
+    #[serde(default)]
+    pub registry_tokens: RegistryTokens,
     // Rebuilt every 5 minutes (and on start) from the child canisters' top ups, so not persisted
     #[serde(skip)]
     pub top_up_leaderboards: TopUpLeaderboards,
@@ -940,6 +956,7 @@ impl Data {
         escrow_canister_id: CanisterId,
         event_relay_canister_id: CanisterId,
         online_users_canister_id: CanisterId,
+        registry_canister_id: CanisterId,
         internet_identity_canister_id: CanisterId,
         website_canister_id: CanisterId,
         canister_pool_target_size: u16,
@@ -1026,6 +1043,9 @@ impl Data {
             migrated_user_ids: MigratedUserIds::default(),
             users_to_migrate: UsersToMigrate::default(),
             users_to_import: UsersToMigrate::default(),
+            users_to_close_out: UsersToMigrate::default(),
+            registry_canister_id: Some(registry_canister_id),
+            registry_tokens: RegistryTokens::default(),
             top_up_leaderboards: TopUpLeaderboards::default(),
         }
     }
@@ -1086,10 +1106,13 @@ pub struct Metrics {
     pub users_to_migrate_in_progress: usize,
     pub users_to_import_pending: usize,
     pub users_to_import_in_progress: usize,
+    pub users_to_close_out_pending: usize,
+    pub users_to_close_out_in_progress: usize,
     pub chunk_store: crate::jobs::refresh_chunk_store::ChunkStoreMetrics,
     pub cycles_refund_queue_length: usize,
     pub cycles_refunded_from_deleted_users: Cycles,
     pub cycles_topped_up_for_refunds: Cycles,
+    pub registry_tokens: usize,
     pub referral_codes: HashMap<ReferralType, ReferralTypeMetrics>,
     pub event_store_client_info: EventStoreClientInfo,
     pub user_versions: BTreeMap<String, u32>,

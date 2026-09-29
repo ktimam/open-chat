@@ -1,10 +1,10 @@
 use crate::crypto::user_wallet;
 use crate::guards::caller_is_hosted_user;
-use crate::{RuntimeState, mutate_state, read_state};
+use crate::{MultiUserEventPusher, RuntimeState, execute_update_async, mutate_state, read_state};
 use candid::Principal;
 use canister_api_macros::update;
 use canister_tracing_macros::trace;
-use chat_events::{NullEventPusher, TipMessageArgs};
+use chat_events::TipMessageArgs;
 use constants::{MEMO_TIP, NANOS_PER_MILLISECOND};
 use oc_error_codes::OCErrorCode;
 use types::{Achievement, CanisterId, Chat, OCResult, UserId, icrc1, icrc2};
@@ -17,7 +17,11 @@ use user_canister::tip_message::{Response::*, *};
 // groups and channels are given by calling the group or community directly.
 #[update(guard = "caller_is_hosted_user", msgpack = true)]
 #[trace]
-async fn tip_message(mut args: Args) -> Response {
+async fn tip_message(args: Args) -> Response {
+    execute_update_async(|| tip_message_impl(args)).await
+}
+
+async fn tip_message_impl(mut args: Args) -> Response {
     let PrepareOk {
         my_index,
         my_principal,
@@ -104,14 +108,19 @@ fn prepare(args: &mut Args, state: &mut RuntimeState) -> OCResult<PrepareOk> {
 // canister does
 fn tip_direct_chat_message(my_index: u16, args: TipMessageArgs, decimals: u8, state: &mut RuntimeState) -> Response {
     let recipient = args.recipient;
-    // TODO: Push the tip to the event store (`UserEventPusher` in the User canister)
+    let event_pusher = MultiUserEventPusher {
+        user_id: state.user_id(my_index),
+        now: args.now,
+        rng: state.env.rng(),
+        queue: &mut state.data.local_user_index_event_sync_queue,
+    };
     let c2c_args = match state.data.users.with_user_mut(my_index, |user| {
-        user_core::updates::tip_message::tip_direct_chat_message::<NullEventPusher>(
+        user_core::updates::tip_message::tip_direct_chat_message(
             user,
             args,
             decimals,
             &state.data.migrated_user_ids,
-            None,
+            Some(event_pusher),
         )
     }) {
         Some(Ok(c2c_args)) => c2c_args,

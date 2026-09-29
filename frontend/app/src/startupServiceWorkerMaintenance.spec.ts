@@ -98,12 +98,21 @@ describe("browser startup service-worker maintenance", () => {
             const recoveryGuard = app.indexOf("{#if $startupErrorStore !== undefined}");
             const recovery = app.indexOf("<StartupFailure", recoveryGuard);
             const identityGate = app.indexOf('$identityStateStore.kind === "anon"', recovery);
-            const i18nGate = app.indexOf("{#if !$isLoading", recovery);
+            const localeFailureGate = app.indexOf("{#if $localeLoadFailed}", identityGate);
+            const localeRecovery = app.indexOf("<Reload>", localeFailureGate);
+            const i18nGate = app.indexOf(
+                app === desktopApp
+                    ? "{:else if ($locale && !$isLoading) || $reviewingTranslations}"
+                    : "{:else if $locale && !$isLoading}",
+                localeRecovery,
+            );
 
             expect(recoveryGuard).toBeGreaterThan(appRoot);
             expect(recovery).toBeGreaterThan(recoveryGuard);
             expect(identityGate).toBeGreaterThan(recovery);
-            expect(i18nGate).toBeGreaterThan(recovery);
+            expect(localeFailureGate).toBeGreaterThan(identityGate);
+            expect(localeRecovery).toBeGreaterThan(localeFailureGate);
+            expect(i18nGate).toBeGreaterThan(localeRecovery);
         }
         expect(desktopHomeRoute).not.toContain("startupErrorStore");
         expect(mobileHomeRoute).not.toContain("startupErrorStore");

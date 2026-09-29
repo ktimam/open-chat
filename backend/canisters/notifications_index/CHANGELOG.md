@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [unreleased]
 
+### Fixed
+
+- Update the cached id of a user migrated to a MultiUser canister, when told by the UserIndex ([#9627](https://github.com/open-chat-labs/open-chat/pull/9627))
+
+## [[2.0.2068](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2068-notifications_index)] - 2026-09-29
+
 ### Added
 
 - Add `remove_fcm_tokens` endpoint so the notification pusher can drop FCM tokens that Firebase reports as `UNREGISTERED` ([#9044](https://github.com/open-chat-labs/open-chat/pull/9044))

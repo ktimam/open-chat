@@ -8,7 +8,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
-- Record P2P swaps the user creates directly in groups and communities ([#9563](https://github.com/open-chat-labs/open-chat/pull/9563))
 - Support leaving tips from external wallets using ICRC2 ([#9263](https://github.com/open-chat-labs/open-chat/pull/9263))
 - Support funding P2P swaps from external wallets using ICRC2 ([#9264](https://github.com/open-chat-labs/open-chat/pull/9264))
 - Return a distinct `InsufficientAllowance` error when an ICRC-2 transfer exceeds the approval ([#9264](https://github.com/open-chat-labs/open-chat/pull/9264))
@@ -25,9 +24,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Add `c2c_export_user` and `c2c_export_user_stable_memory`, through which the MultiUser canister a user is being migrated to pulls, in pages, the user as serialized when the migration started and the raw entries of the stable memory map ([#9547](https://github.com/open-chat-labs/open-chat/pull/9547))
 - Retry sending events for migrated users to their new canister ([#9551](https://github.com/open-chat-labs/open-chat/pull/9551))
 - Add `c2c_cancel_migration`, through which the UserIndex or the MultiUser canister the user is being migrated to cancels the migration to that canister, unfreezing the canister and scheduling again the timer jobs cancelled when it started ([#9553](https://github.com/open-chat-labs/open-chat/pull/9553))
-- Don't migrate users who have created or accepted P2P swaps ([#9561](https://github.com/open-chat-labs/open-chat/pull/9561))
+- Don't migrate users until their P2P swaps have expired ([#9561](https://github.com/open-chat-labs/open-chat/pull/9561), [#9603](https://github.com/open-chat-labs/open-chat/pull/9603))
+- Record P2P swaps the user creates directly in groups and communities ([#9563](https://github.com/open-chat-labs/open-chat/pull/9563))
 - Only allow the LocalUserIndex to call `c2c_try_start_migration`, rather than the UserIndex ([#9582](https://github.com/open-chat-labs/open-chat/pull/9582))
 - Return the size and hash of the serialized user with each page from `c2c_export_user`, for the MultiUser canister to check once it has pulled them all ([#9587](https://github.com/open-chat-labs/open-chat/pull/9587))
+- Include when a migration started in its hash, so that each migration of a user is told apart ([#9610](https://github.com/open-chat-labs/open-chat/pull/9610))
 
 ### Changed
 
@@ -74,7 +75,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Move the group and community models (`GroupChats`, `Communities` and `ThreadsRead`) into the `user_state` library, shared with the MultiUser canister ([#9447](https://github.com/open-chat-labs/open-chat/pull/9447))
 - Move `Membership` and `COMMUNITY_CREATION_LIMIT` into the `user_state` library, shared with the MultiUser canister ([#9450](https://github.com/open-chat-labs/open-chat/pull/9450))
 - Queue direct chat events per canister, paired with their recipient, and send those for users in a MultiUser canister via its `c2c_user_canister_v2` ([#9457](https://github.com/open-chat-labs/open-chat/pull/9457))
-- Verify the caller of `c2c_user_canister_v2` once per call rather than each sender, by asking the LocalUserIndex, which must be upgraded first, caching the MultiUser canisters it confirms, and skip events from blocked senders ([#9459](https://github.com/open-chat-labs/open-chat/pull/9459))
+- Verify the caller of `c2c_user_canister_v2` once per call rather than each sender, by asking the LocalUserIndex, caching the MultiUser canisters it confirms, and skip events from blocked senders ([#9459](https://github.com/open-chat-labs/open-chat/pull/9459))
 - Move the referrals model into the `user_state` library, shared with the MultiUser canister ([#9464](https://github.com/open-chat-labs/open-chat/pull/9464))
 - Hold the user's state, including their token and P2P swaps, BTC and 1sec addresses, bots and premium items, in the `User` struct shared with the MultiUser canister via the `user_state` library, nested within `Data` as `user`, migrating the previous layout on upgrade ([#9467](https://github.com/open-chat-labs/open-chat/pull/9467))
 - Build `initial_state` and `updates` from the shared `User`, so the MultiUser canister serves the same ([#9469](https://github.com/open-chat-labs/open-chat/pull/9469))
@@ -104,6 +105,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Track the spawned tasks in progress using `utils::async_work` ([#9546](https://github.com/open-chat-labs/open-chat/pull/9546))
 - Skip running the regular jobs while frozen ([#9548](https://github.com/open-chat-labs/open-chat/pull/9548))
 - Also retry sending events for migrated users to their new canister while the cycles refunder is installed in their old one ([#9558](https://github.com/open-chat-labs/open-chat/pull/9558))
+- Receive direct messages via `user_core`'s `receive_message`, shared with the MultiUser canister ([#9631](https://github.com/open-chat-labs/open-chat/pull/9631))
+- Refuse crypto and P2P swaps sent to bots ([#9648](https://github.com/open-chat-labs/open-chat/pull/9648))
 
 ### Removed
 
@@ -125,6 +128,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Ignore swap status notifications whose swap id doesn't match the swap on the message they name, since anyone can create a swap in the escrow canister naming any message and then cancel it ([#9530](https://github.com/open-chat-labs/open-chat/pull/9530))
 - Fix bug where disappearing message TTL could skip being set in new direct chats ([#9584](https://github.com/open-chat-labs/open-chat/pull/9584))
 - Fix bug where a disappearing message TTL changed twice before the other user received the changes could leave their copy of the direct chat with the earlier TTL ([#9585](https://github.com/open-chat-labs/open-chat/pull/9585))
+- Fix bug where a referrer could be rewarded again for a user migrated to a MultiUser canister ([#9628](https://github.com/open-chat-labs/open-chat/pull/9628))
 
 ## [[2.0.2015](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2015-user)] - 2026-08-12
 

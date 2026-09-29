@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 use stable_memory_map::BaseKeyPrefix;
 use std::collections::HashSet;
 use types::{
-    Achievement, BotDefinitionUpdate, BotInitiator, BotPermissions, BotUpdated, Chat, ChatId, ChitEvent, ChitEventType,
-    CommunityId, MultiUserChat, ReferralStatus, TimestampMillis, Timestamped, UniquePersonProof, UserId,
+    Achievement, BotDefinitionUpdate, BotInitiator, BotPermissions, BotUpdated, CanisterId, Chat, ChatId, ChitEvent,
+    ChitEventType, CommunityId, MultiUserChat, ReferralStatus, TimestampMillis, Timestamped, UniquePersonProof, UserId,
 };
 use user_canister::{MessageActivityEvent, WalletConfig};
 
@@ -99,6 +99,19 @@ impl User {
     pub fn migrate_own_user_id(&mut self, old_user_id: UserId, new_user_id: UserId) {
         self.direct_chats.migrate_own_user_id(old_user_id, new_user_id);
         self.favourite_chats.migrate_own_user_id(old_user_id, new_user_id);
+        // The deposit addresses were generated for the account of the user's old canister, so new
+        // ones are generated for the user's own account when next asked for
+        self.btc_address = None;
+        self.one_sec_address = None;
+    }
+
+    // The canisters of the groups and communities the user is in
+    pub fn group_and_community_canisters(&self) -> Vec<CanisterId> {
+        self.group_chats
+            .iter()
+            .map(|g| CanisterId::from(g.chat_id))
+            .chain(self.communities.iter().map(|c| CanisterId::from(c.community_id)))
+            .collect()
     }
 
     pub fn new(principal: Principal, username: String, referred_by: Option<UserId>, now: TimestampMillis) -> User {
@@ -321,9 +334,16 @@ impl User {
     }
 
     // Records the status a user this user referred has reached, as the User canister does on a
-    // `SetReferralStatus` event, returning whether CHIT was awarded for it
-    pub fn set_referral_status(&mut self, user_id: UserId, status: ReferralStatus, now: TimestampMillis) -> bool {
-        let chit_reward = self.referrals.set_status(user_id, status, now);
+    // `SetReferralStatus` event, returning whether CHIT was awarded for it. `previous_user_ids` are
+    // the ids the referred user had before being migrated to a MultiUser canister.
+    pub fn set_referral_status(
+        &mut self,
+        user_id: UserId,
+        previous_user_ids: &[UserId],
+        status: ReferralStatus,
+        now: TimestampMillis,
+    ) -> bool {
+        let chit_reward = self.referrals.set_status(user_id, previous_user_ids, status, now);
         let mut rewarded = false;
 
         if chit_reward > 0 {

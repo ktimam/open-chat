@@ -17,6 +17,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Handle `StartUserMigration` from the UserIndex by upgrading the user's canister to the latest wasm if it is behind, then calling its `c2c_try_start_migration`, and reporting back to the UserIndex whether the migration started ([#9582](https://github.com/open-chat-labs/open-chat/pull/9582))
 - Add the `VideoCallParticipant` access token, which proves only that the caller belongs to the chat, for declining or leaving its call through the video bridge ([#9578](https://github.com/open-chat-labs/open-chat/pull/9578))
 - Handle `ImportUser` from the UserIndex by having the MultiUser canister import the user, and pass on to the UserIndex whether the MultiUser canister imported them ([#9587](https://github.com/open-chat-labs/open-chat/pull/9587))
+- On `UserIdMigrated`, move the user onto their new id, and start tracking them as a local user if this LocalUserIndex controls their MultiUser canister ([#9602](https://github.com/open-chat-labs/open-chat/pull/9602))
+- Once a migrated user is switched over, uninstall their old canister and refund its cycles ([#9607](https://github.com/open-chat-labs/open-chat/pull/9607))
+- Pass on the migration's hash with a failed import, and let a later migration's import replace an earlier one still waiting ([#9610](https://github.com/open-chat-labs/open-chat/pull/9610))
+- Pass the OpenChat bot's welcome messages to the MultiUser canister when registering a user into one ([#9643](https://github.com/open-chat-labs/open-chat/pull/9643))
+- Add `move_funds_from_old_canister`, which moves the funds held by a migrated user's old canister to their wallet, by installing the call relay on the canister ([#9623](https://github.com/open-chat-labs/open-chat/pull/9623))
+- Refresh the tokens known to the Registry daily, which are the only ledgers `move_funds_from_old_canister` moves funds from ([#9623](https://github.com/open-chat-labs/open-chat/pull/9623))
 
 ### Changed
 
@@ -24,12 +30,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Once enabled, register new users in whichever MultiUser canister has the fewest users ([#9579](https://github.com/open-chat-labs/open-chat/pull/9579))
 - Once the last upgrade in a series completes, and on start up, clear the chunk store then upload the chunks of the current User, Group, Community and MultiUser wasms again, rather than leaving the store empty, and install new canisters from those chunks ([#9583](https://github.com/open-chat-labs/open-chat/pull/9583))
 - Hold the weekly cycles balance checks, as a one-off, until 09:00 UTC on 5 October 2026, rather than running them as soon as the LocalUserIndex is upgraded ([#9598](https://github.com/open-chat-labs/open-chat/pull/9598))
+- Set a canister's freezing threshold to 0 before refunding its cycles, so that those it held back are refunded too ([#9629](https://github.com/open-chat-labs/open-chat/pull/9629))
 
 ### Fixed
 
 - Reject `install_bot` and `uninstall_bot` calls whose location is the wrong type, eg. a user's own direct chat given as a `Group`, which led to the installation's events being queued for delivery to a group that doesn't exist ([#9520](https://github.com/open-chat-labs/open-chat/pull/9520))
 - Don't retry c2c calls to a method the callee doesn't have, which would otherwise be retried forever ([#9521](https://github.com/open-chat-labs/open-chat/pull/9521))
 - Send `c2c_bot_send_message` for a direct chat to the canister holding the user, rather than to their user id, which for a user in a MultiUser canister is not a canister id ([#9532](https://github.com/open-chat-labs/open-chat/pull/9532))
+- Serve a daily puzzle hint step at level 1 until it has been served, whatever level is asked for, so a client still climbing a finished step's ladder is not sold a new step's answer ([#9535](https://github.com/open-chat-labs/open-chat/pull/9535))
+- Serve a daily puzzle hint's premise first: an earlier negatives-only step that rules out a key the hint looks at, and is not yet marked on the board, rather than a hint whose reasoning doesn't hold on the player's board, but never in place of a hint already bought ([#9614](https://github.com/open-chat-labs/open-chat/pull/9614))
+- Move the blocked-user pairs naming a migrated user onto their new id, including those blocked or unblocked by their old id afterwards ([#9630](https://github.com/open-chat-labs/open-chat/pull/9630))
+- Fix reading direct chat events via `chat_events` and `bot_chat_events` for users in MultiUser canisters ([#9652](https://github.com/open-chat-labs/open-chat/pull/9652))
+- Fix issuing access tokens for direct chats with users in MultiUser canisters ([#9654](https://github.com/open-chat-labs/open-chat/pull/9654))
 
 ## [[2.0.2063](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2063-local_user_index)] - 2026-09-23
 
@@ -56,7 +68,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Fixed
 
 - Don't uninstall a MultiUser canister when deleting one of its users, which would delete every user it holds ([#9450](https://github.com/open-chat-labs/open-chat/pull/9450))
-- Serve a daily puzzle hint step at level 1 until it has been served, whatever level is asked for, so a client still climbing a finished step's ladder is not sold a new step's answer ([#9535](https://github.com/open-chat-labs/open-chat/pull/9535))
 
 ## [[2.0.2059](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2059-local_user_index)] - 2026-09-18
 
@@ -343,7 +354,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Removed
 
-- Removed unused fields from BotChatEvent (must go ahead of groups/communities) ([#8291](https://github.com/open-chat-labs/open-chat/pull/8291))
+- Removed unused fields from BotChatEvent ([#8291](https://github.com/open-chat-labs/open-chat/pull/8291))
 - Remove the now unused `group_and_community_summary_updates` ([#8311](https://github.com/open-chat-labs/open-chat/pull/8311))
 - Remove the now unused `notifications_v2` ([#8312](https://github.com/open-chat-labs/open-chat/pull/8312))
 

@@ -1,8 +1,10 @@
 use crate::env::ENV;
+use crate::setup::install_icrc_ledger;
 use crate::utils::{chat_token_info, icp_token_info, metrics, now_millis, tick_many};
 use crate::{CanisterIds, TestEnv, User, client, wasms};
-use candid::Principal;
-use constants::{DAY_IN_MS, HOUR_IN_MS};
+use candid::{CandidType, Nat, Principal};
+use constants::{DAY_IN_MS, HOUR_IN_MS, MINUTE_IN_MS};
+use local_user_index_canister::move_funds_from_old_canister::{MoveFundsResult, Response as MoveFundsResponse};
 use oc_error_codes::OCErrorCode;
 use pocket_ic::PocketIc;
 use std::collections::BTreeMap;
@@ -10,13 +12,15 @@ use std::ops::Deref;
 use std::time::Duration;
 use testing::rng::{random_from_u128, random_string};
 use types::{
-    BuildVersion, CanisterId, CanisterWasm, Chat, Document, MessageContent, MessageContentInitial, OptionUpdate,
-    P2PSwapContentInitial, UserId,
+    BuildVersion, CanisterId, CanisterWasm, Chat, ChatId, DiamondMembershipPlanDuration, Document, Empty, MessageContent,
+    MessageContentInitial, OptionUpdate, P2PSwapContentInitial, ReferralStatus, UserId,
 };
 use user_index_canister::user_migration::UserMigrationStatus;
 
+const CALL_RELAY_WASM: &[u8] = include_bytes!("../../canisters/call_relay/call_relay.wasm");
+
 #[test]
-fn users_with_a_p2p_swap_are_not_ready_for_migration() {
+fn users_with_a_p2p_swap_are_not_migrated_until_an_hour_after_it_expires() {
     let mut wrapper = ENV.deref().get();
     let TestEnv {
         env,
@@ -90,8 +94,6 @@ fn users_with_a_p2p_swap_are_not_ready_for_migration() {
 
     tick_many(env, 10);
 
-    // Neither the user who created the swap nor the one who accepted it can be migrated, even once it
-    // has been settled
     let operator = platform_operator(env, canister_ids, *controller);
     migrate_users(
         env,
@@ -102,8 +104,31 @@ fn users_with_a_p2p_swap_are_not_ready_for_migration() {
     );
     wait_for_migration_attempts_to_run_out(env);
 
+    // Neither the user who created the swap nor the one who accepted it is migrated while it may still
+    // pay out or refund to their canister, even though it has been settled
     for user in [&user1, &user2] {
-        assert_failed_with_p2p_swaps(env, operator.principal, canister_ids.user_index, user.user_id);
+        let status = user_migration_status(env, operator.principal, canister_ids.user_index, user.user_id);
+        assert!(
+            matches!(status, Some(UserMigrationStatus::Failed { ref error, .. })
+                if error.matches_code(OCErrorCode::NotReadyForMigration)
+                    && error.message() == Some("User has a P2P swap which hasn't yet expired")),
+            "{status:?}"
+        );
+    }
+
+    // An hour after the swap has expired, both are migrated
+    env.advance_time(Duration::from_millis(2 * HOUR_IN_MS));
+    migrate_users(
+        env,
+        operator.principal,
+        canister_ids.user_index,
+        vec![user1.user_id, user2.user_id],
+        Some(multi_user_canister(1)),
+    );
+    tick_many(env, 10);
+
+    for user in [&user1, &user2] {
+        started_migration(env, operator.principal, canister_ids.user_index, user.user_id);
     }
 }
 
@@ -278,6 +303,193 @@ fn cancelling_a_migration_unfreezes_the_user_canister() {
 }
 
 #[test]
+fn cancelled_migration_is_never_imported() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+        ..
+    } = wrapper.env();
+
+    let operator = platform_operator(env, canister_ids, *controller);
+    let local_user_index = client::user_index::happy_path::user_registration_canister(env, canister_ids.user_index);
+    let multi_user_canister =
+        client::user_index::happy_path::create_multi_user_canister(env, *controller, canister_ids, local_user_index);
+    let user = client::register_user(env, canister_ids);
+
+    // The MultiUser canister is stopped, so it can't start importing the user
+    env.stop_canister(multi_user_canister, Some(local_user_index)).unwrap();
+    migrate_users(
+        env,
+        operator.principal,
+        canister_ids.user_index,
+        vec![user.user_id],
+        Some(multi_user_canister),
+    );
+    tick_many(env, 10);
+    assert!(matches!(
+        user_migration_status(env, operator.principal, canister_ids.user_index, user.user_id),
+        Some(UserMigrationStatus::Started { .. })
+    ));
+
+    // Nor can it be made to abandon the import, so the migration isn't cancelled
+    let cancel = |env: &mut PocketIc| {
+        client::user_index::cancel_user_migration(
+            env,
+            operator.principal,
+            canister_ids.user_index,
+            &user_index_canister::cancel_user_migration::Args {
+                user_id: user.user_id,
+                multi_user_canister_id: multi_user_canister,
+            },
+        )
+    };
+    let response = cancel(env);
+    assert!(
+        matches!(response, user_index_canister::cancel_user_migration::Response::Error(_)),
+        "{response:?}"
+    );
+    assert!(
+        env.update_call(
+            user.canister(),
+            user.principal,
+            "set_bio_msgpack",
+            msgpack::serialize_then_unwrap(&user_canister::set_bio::Args { text: random_string() }),
+        )
+        .is_err()
+    );
+
+    env.start_canister(multi_user_canister, Some(local_user_index)).unwrap();
+    let response = cancel(env);
+    assert!(
+        matches!(response, user_index_canister::cancel_user_migration::Response::Success),
+        "{response:?}"
+    );
+    assert_eq!(
+        user_migration_status(env, operator.principal, canister_ids.user_index, user.user_id),
+        None
+    );
+
+    // The LocalUserIndex tries again to have the MultiUser canister import the user, which it refuses
+    for _ in 0..3 {
+        env.advance_time(Duration::from_secs(31));
+        tick_many(env, 5);
+    }
+    assert_eq!(metrics(env, multi_user_canister)["user_imports_in_progress"], 0);
+    assert_eq!(
+        user_migration_status(env, operator.principal, canister_ids.user_index, user.user_id),
+        None
+    );
+
+    // Migrating the user again to the same MultiUser canister imports them, even though they haven't
+    // changed, since the new migration is told apart from the cancelled one
+    migrate_users(
+        env,
+        operator.principal,
+        canister_ids.user_index,
+        vec![user.user_id],
+        Some(multi_user_canister),
+    );
+    tick_many(env, 30);
+    let status = user_migration_status(env, operator.principal, canister_ids.user_index, user.user_id);
+    assert!(matches!(status, Some(UserMigrationStatus::Imported { .. })), "{status:?}");
+}
+
+#[test]
+fn stalled_migration_is_cancelled() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+        ..
+    } = wrapper.env();
+
+    let operator = platform_operator(env, canister_ids, *controller);
+    let user = client::register_user(env, canister_ids);
+
+    // Migrated to a canister which doesn't import users, so the migration makes no more progress
+    start_migration(env, canister_ids, *controller, &user, multi_user_canister(1));
+    env.advance_time(Duration::from_millis(30 * MINUTE_IN_MS));
+    tick_many(env, 5);
+    assert!(matches!(
+        user_migration_status(env, operator.principal, canister_ids.user_index, user.user_id),
+        Some(UserMigrationStatus::Started { .. })
+    ));
+
+    env.advance_time(Duration::from_millis(40 * MINUTE_IN_MS));
+    tick_many(env, 10);
+
+    let status = user_migration_status(env, operator.principal, canister_ids.user_index, user.user_id);
+    assert!(
+        matches!(status, Some(UserMigrationStatus::Failed { ref error, .. }) if error.matches_code(OCErrorCode::UserMigrationStalled)),
+        "{status:?}"
+    );
+    // The canister is no longer frozen, so its owner can change it again
+    let response = client::user::set_bio(
+        env,
+        user.principal,
+        user.canister(),
+        &user_canister::set_bio::Args { text: random_string() },
+    );
+    assert!(matches!(response, types::UnitResult::Success), "{response:?}");
+}
+
+#[test]
+fn migration_which_fails_to_start_is_tracked_until_cancelled() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+        ..
+    } = wrapper.env();
+
+    let operator = platform_operator(env, canister_ids, *controller);
+    let user = client::register_user(env, canister_ids);
+
+    // The user's canister is stopped, so every call to start the migration fails, as would one whose
+    // reply was lost after it had frozen the canister
+    env.stop_canister(user.canister(), Some(user.local_user_index)).unwrap();
+    migrate_users(
+        env,
+        operator.principal,
+        canister_ids.user_index,
+        vec![user.user_id],
+        Some(multi_user_canister(1)),
+    );
+    for _ in 0..25 {
+        env.advance_time(Duration::from_secs(31));
+        tick_many(env, 3);
+    }
+
+    // The migration can't be cancelled while the canister can't be reached, so it isn't recorded as
+    // having failed, but is kept track of
+    assert!(matches!(
+        user_migration_status(env, operator.principal, canister_ids.user_index, user.user_id),
+        Some(UserMigrationStatus::Requested { .. })
+    ));
+
+    // Once the canister can be reached, the migration is cancelled when it stalls
+    env.start_canister(user.canister(), Some(user.local_user_index)).unwrap();
+    env.advance_time(Duration::from_millis(HOUR_IN_MS));
+    tick_many(env, 10);
+    let status = user_migration_status(env, operator.principal, canister_ids.user_index, user.user_id);
+    assert!(
+        matches!(status, Some(UserMigrationStatus::Failed { ref error, .. }) if error.matches_code(OCErrorCode::UserMigrationStalled)),
+        "{status:?}"
+    );
+    let response = client::user::set_bio(
+        env,
+        user.principal,
+        user.canister(),
+        &user_canister::set_bio::Args { text: random_string() },
+    );
+    assert!(matches!(response, types::UnitResult::Success), "{response:?}");
+}
+
+#[test]
 fn migrate_users_starts_migrating_each_user_to_a_multi_user_canister() {
     let mut wrapper = ENV.deref().get();
     let TestEnv {
@@ -330,9 +542,10 @@ fn migrated_user_is_imported_into_the_multi_user_canister() {
     let local_user_index = client::user_index::happy_path::user_registration_canister(env, canister_ids.user_index);
     let multi_user_canister =
         client::user_index::happy_path::create_multi_user_canister(env, *controller, canister_ids, local_user_index);
-    let user1 = client::register_user(env, canister_ids);
-    let user2 = client::register_user(env, canister_ids);
-
+    let (user1, user1_auth) = client::register_user_and_include_auth(env, canister_ids);
+    let user2 = client::register_diamond_user(env, canister_ids, *controller);
+    let group_id = client::user::happy_path::create_group(env, &user2, &random_string(), true, true);
+    client::group::happy_path::join_group(env, user1.principal, group_id);
     // Messages to another user and to themselves, and an avatar and profile background large enough
     // that the stable memory map entries are pulled in more than one page
     for _ in 0..40 {
@@ -370,7 +583,26 @@ fn migrated_user_is_imported_into_the_multi_user_canister() {
     assert_eq!(new_user_id.canister_id(), multi_user_canister);
     assert_eq!(metrics(env, multi_user_canister)["user_imports_in_progress"], 0);
 
-    // The user's canister stays frozen until the migration completes
+    // The user is switched over to their new id, which they are found by from then on
+    let current_user = client::user_index::happy_path::current_user(env, user1.principal, canister_ids.user_index);
+    assert_eq!(current_user.user_id, new_user_id);
+    assert_eq!(current_user.previous_user_ids, vec![user1.user_id]);
+    let summary = client::user_index::happy_path::user(env, canister_ids.user_index, user1.user_id);
+    assert_eq!(summary.user_id, new_user_id);
+    assert_eq!(summary.previous_user_ids, vec![user1.user_id]);
+    let identity_canister::check_auth_principal_v2::Response::Success(auth) =
+        client::identity::check_auth_principal_v2(env, user1_auth.auth_principal(), canister_ids.identity, &Empty {})
+    else {
+        panic!("Auth principal not found");
+    };
+    assert_eq!(auth.user_id, Some(new_user_id));
+    // As they are by their groups, once each has been told
+    tick_many(env, 10);
+    let members = client::group::happy_path::selected_initial(env, user2.principal, group_id).basic_members;
+    assert!(members.contains(&new_user_id));
+    assert!(!members.contains(&user1.user_id));
+
+    // The user's old canister no longer serves them
     assert!(
         env.update_call(
             user1.canister(),
@@ -419,6 +651,492 @@ fn migrated_user_is_imported_into_the_multi_user_canister() {
     assert_eq!(latest_message(user2.user_id), message_to_user2);
     assert_eq!(latest_message(new_user_id), message_to_self);
     assert!(!state.direct_chats.summaries.iter().any(|c| c.them == user1.user_id));
+
+    // The old canister is uninstalled and its cycles are refunded
+    crate::delete_user_tests::wait_for_cycles_to_be_refunded(env, &user1);
+    assert_eq!(metrics(env, user1.local_user_index)["users_to_close_out_pending"], 0);
+
+    // Messages sent to the user's old id are sent on to their new id
+    let message_to_old_id = random_string();
+    client::user::happy_path::send_text_message(env, &user2, user1.user_id, message_to_old_id.clone(), None);
+    tick_many(env, 10);
+    let user_canister::initial_state::Response::Success(state) = client::user::initial_state(
+        env,
+        user1.principal,
+        multi_user_canister,
+        &user_canister::initial_state::Args {},
+    );
+    let chat = state.direct_chats.summaries.iter().find(|c| c.them == user2.user_id).unwrap();
+    match &chat.latest_message.as_ref().unwrap().event.content {
+        MessageContent::Text(text) => assert_eq!(text.text, message_to_old_id),
+        content => panic!("Unexpected content: {content:?}"),
+    }
+}
+
+#[test]
+fn migrated_user_moves_the_funds_held_by_their_old_canister_to_their_wallet() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+        ..
+    } = wrapper.env();
+
+    let operator = platform_operator(env, canister_ids, *controller);
+    let local_user_index = client::user_index::happy_path::user_registration_canister(env, canister_ids.user_index);
+    let multi_user_canister =
+        client::user_index::happy_path::create_multi_user_canister(env, *controller, canister_ids, local_user_index);
+    let user = client::register_user(env, canister_ids);
+    let other_user = client::register_user(env, canister_ids);
+    // Ledgers of this test's own, known to the Registry, with fees of 10_000. The test env's ICP
+    // ledger isn't used, since the Registry marks it as uninstalled, having been set up before it.
+    let abc_ledger = install_registered_ledger(env, canister_ids, *controller, "ABC");
+    let def_ledger = install_registered_ledger(env, canister_ids, *controller, "DEF");
+    let ghi_ledger = install_registered_ledger(env, canister_ids, *controller, "GHI");
+    let xyz_ledger = install_registered_ledger(env, canister_ids, *controller, "XYZ");
+    let balance = 1_000_000_000;
+    client::ledger::happy_path::transfer(env, *controller, abc_ledger, user.user_id, balance);
+    client::ledger::happy_path::transfer(env, *controller, def_ledger, user.user_id, balance);
+    // Too little GHI to be worth moving, since it doesn't exceed the fee
+    client::ledger::happy_path::transfer(env, *controller, ghi_ledger, user.user_id, 10_000);
+    // Enough XYZ to be worth moving at the Registry's fee, but not once its fee is raised
+    client::ledger::happy_path::transfer(env, *controller, xyz_ledger, user.user_id, 15_000);
+
+    migrate_users(
+        env,
+        operator.principal,
+        canister_ids.user_index,
+        vec![user.user_id],
+        Some(multi_user_canister),
+    );
+    tick_many(env, 30);
+    assert!(matches!(
+        user_migration_status(env, operator.principal, canister_ids.user_index, user.user_id),
+        Some(UserMigrationStatus::Imported { .. })
+    ));
+
+    // Once the old canister is uninstalled its cycles are refunded, so it has to be topped up for
+    // the relay to be installed on it
+    crate::delete_user_tests::wait_for_cycles_to_be_refunded(env, &user);
+
+    // The LocalUserIndexes refresh the tokens from the Registry daily, after which the fees of ABC
+    // and XYZ are raised, leaving the LocalUserIndexes with the old ones
+    env.advance_time(Duration::from_secs(25 * 60 * 60));
+    tick_many(env, 10);
+    set_ledger_fee(env, *controller, abc_ledger, 20_000);
+    set_ledger_fee(env, *controller, xyz_ledger, 20_000);
+
+    // The UserIndex is not a ledger known to the Registry, so fails, but doesn't stop the funds on
+    // the others moving
+    let args = local_user_index_canister::move_funds_from_old_canister::Args {
+        old_user_id: user.user_id,
+        ledgers: vec![abc_ledger, def_ledger, ghi_ledger, xyz_ledger, canister_ids.user_index],
+    };
+    let move_funds = |env: &mut PocketIc, sender: Principal, local_user_index: CanisterId| {
+        client::local_user_index::move_funds_from_old_canister(env, sender, local_user_index, &args)
+    };
+    let is_error = |response: &MoveFundsResponse, code: OCErrorCode| matches!(response, MoveFundsResponse::Error(error) if error.matches_code(code));
+
+    // Only the user can move their funds
+    let response = move_funds(env, other_user.principal, user.local_user_index);
+    assert!(is_error(&response, OCErrorCode::InitiatorNotAuthorized), "{response:?}");
+
+    // And only through the LocalUserIndex which controls their old canister
+    let other_local_user_index = canister_ids
+        .subnets
+        .iter()
+        .map(|s| s.local_user_index)
+        .find(|c| *c != user.local_user_index)
+        .unwrap();
+    let response = move_funds(env, user.principal, other_local_user_index);
+    assert!(is_error(&response, OCErrorCode::CanisterNotFound), "{response:?}");
+
+    // As if an earlier move had failed to uninstall the relay, which the next move carries on with
+    install_call_relay(env, &user);
+
+    // Of two calls at once, whichever comes second is turned away while the other is in progress
+    let responses: Vec<MoveFundsResponse> = [0, 1]
+        .map(|_| {
+            env.submit_call(
+                user.local_user_index,
+                user.principal,
+                "move_funds_from_old_canister_msgpack",
+                msgpack::serialize_then_unwrap(&args),
+            )
+            .unwrap()
+        })
+        .into_iter()
+        .map(|id| msgpack::deserialize_then_unwrap(&env.await_call(id).unwrap()))
+        .collect();
+    let (moved, turned_away): (Vec<_>, Vec<_>) = responses
+        .into_iter()
+        .partition(|r| matches!(r, MoveFundsResponse::Success(_)));
+    assert!(
+        turned_away.iter().all(|r| is_error(r, OCErrorCode::AlreadyInProgress)),
+        "{turned_away:?}"
+    );
+
+    let [MoveFundsResponse::Success(outcomes)] = <[_; 1]>::try_from(moved).unwrap() else {
+        unreachable!();
+    };
+    assert_eq!(outcomes.len(), 5);
+    for outcome in outcomes {
+        match outcome.result {
+            // Moved having been retried with the ledger's new fee
+            MoveFundsResult::Moved { amount, fee, .. } if outcome.ledger == abc_ledger => {
+                assert_eq!(fee, 20_000);
+                assert_eq!(amount, balance - fee);
+            }
+            MoveFundsResult::Moved { amount, fee, .. } if outcome.ledger == def_ledger => {
+                assert_eq!(fee, 10_000);
+                assert_eq!(amount, balance - fee);
+            }
+            // XYZ having been tried at the Registry's fee, then found to have too little at the
+            // ledger's new one
+            MoveFundsResult::NothingToMove if outcome.ledger == ghi_ledger || outcome.ledger == xyz_ledger => {}
+            MoveFundsResult::Failed(error)
+                if outcome.ledger == canister_ids.user_index && error.matches_code(OCErrorCode::LedgerNotFound) => {}
+            result => panic!("Unexpected result for {}: {result:?}", outcome.ledger),
+        }
+    }
+    let balance_of = |env: &PocketIc, ledger: CanisterId, principal: Principal| {
+        client::ledger::happy_path::balance_of(env, ledger, principal)
+    };
+    assert_eq!(balance_of(env, abc_ledger, user.canister()), 0);
+    assert_eq!(balance_of(env, abc_ledger, user.principal), balance - 20_000);
+    assert_eq!(balance_of(env, def_ledger, user.canister()), 0);
+    assert_eq!(balance_of(env, def_ledger, user.principal), balance - 10_000);
+    assert_eq!(balance_of(env, xyz_ledger, user.canister()), 15_000);
+
+    // The relay is uninstalled and the old canister's cycles refunded again, during which moves
+    // are turned away
+    crate::delete_user_tests::wait_for_cycles_to_be_refunded(env, &user);
+
+    // Once moved there is nothing left to move. XYZ is left out from here on, since its balance
+    // still exceeds the fee the LocalUserIndex has for it, so a transfer would be tried each time.
+    let settled_args = local_user_index_canister::move_funds_from_old_canister::Args {
+        old_user_id: user.user_id,
+        ledgers: vec![abc_ledger, def_ledger, ghi_ledger],
+    };
+    let move_settled_funds = |env: &mut PocketIc| {
+        client::local_user_index::move_funds_from_old_canister(env, user.principal, user.local_user_index, &settled_args)
+    };
+    let MoveFundsResponse::Success(outcomes) = move_settled_funds(env) else {
+        panic!("Funds not checked");
+    };
+    assert!(outcomes.iter().all(|o| matches!(o.result, MoveFundsResult::NothingToMove)));
+
+    // A relay left installed by an earlier move is uninstalled by the cycles refund job, even if
+    // there is nothing to move
+    install_call_relay(env, &user);
+    let response = move_settled_funds(env);
+    assert!(matches!(response, MoveFundsResponse::Success(_)), "{response:?}");
+    crate::delete_user_tests::wait_for_cycles_to_be_refunded(env, &user);
+
+    // Having advanced the clock by a day
+    wrapper.discard();
+}
+
+// Installs an ICRC ledger with a fee of 10_000, and adds its token to the Registry
+fn install_registered_ledger(
+    env: &mut PocketIc,
+    canister_ids: &CanisterIds,
+    controller: Principal,
+    symbol: &str,
+) -> CanisterId {
+    let ledger = install_icrc_ledger(
+        env,
+        controller,
+        format!("{symbol} Token"),
+        symbol.to_string(),
+        10_000,
+        None,
+        Vec::new(),
+    );
+    let response = client::registry::add_token(
+        env,
+        controller,
+        canister_ids.registry,
+        &registry_canister::add_token::Args {
+            ledger_canister_id: ledger,
+            payer: None,
+            info_url: "info".to_string(),
+            transaction_url_format: "format".to_string(),
+            one_sec_enabled: None,
+        },
+    );
+    assert!(matches!(response, types::UnitResult::Success), "{response:?}");
+    ledger
+}
+
+// Changes the ledger's fee by upgrading it
+fn set_ledger_fee(env: &mut PocketIc, controller: Principal, ledger: CanisterId, fee: u64) {
+    #[derive(CandidType)]
+    enum LedgerArgument {
+        Upgrade(Option<UpgradeArgs>),
+    }
+
+    #[derive(CandidType)]
+    struct UpgradeArgs {
+        transfer_fee: Option<Nat>,
+    }
+
+    let args = candid::encode_one(LedgerArgument::Upgrade(Some(UpgradeArgs {
+        transfer_fee: Some(fee.into()),
+    })))
+    .unwrap();
+    env.upgrade_canister(ledger, wasms::ICRC_LEDGER.module.clone().into(), args, Some(controller))
+        .unwrap();
+}
+
+// Installs the call relay on the user's old canister, as the LocalUserIndex which controls it,
+// having first topped it up with enough cycles to do so
+fn install_call_relay(env: &mut PocketIc, user: &User) {
+    env.add_cycles(user.canister(), 1_000_000_000_000);
+    env.install_canister(
+        user.canister(),
+        CALL_RELAY_WASM.to_vec(),
+        Vec::new(),
+        Some(user.local_user_index),
+    );
+}
+
+#[test]
+fn notifications_index_knows_migrated_user_by_their_new_id() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+        ..
+    } = wrapper.env();
+
+    let operator = platform_operator(env, canister_ids, *controller);
+    let local_user_index = client::user_index::happy_path::user_registration_canister(env, canister_ids.user_index);
+    let multi_user_canister =
+        client::user_index::happy_path::create_multi_user_canister(env, *controller, canister_ids, local_user_index);
+    let user1 = client::register_user(env, canister_ids);
+    let user2 = client::register_user(env, canister_ids);
+
+    // Subscribing to notifications has the NotificationsIndex cache the user's id
+    let endpoint = random_string();
+    client::notifications_index::happy_path::push_subscription(
+        env,
+        user1.principal,
+        canister_ids.notifications_index,
+        "auth",
+        "p256dh",
+        &endpoint,
+    );
+    assert!(client::notifications_index::happy_path::subscription_exists(
+        env,
+        user1.principal,
+        canister_ids.notifications_index,
+        &endpoint
+    ));
+
+    migrate_users(
+        env,
+        operator.principal,
+        canister_ids.user_index,
+        vec![user1.user_id],
+        Some(multi_user_canister),
+    );
+    tick_many(env, 30);
+
+    let new_user_id = match user_migration_status(env, operator.principal, canister_ids.user_index, user1.user_id) {
+        Some(UserMigrationStatus::Imported { new_user_id, .. }) => new_user_id,
+        status => panic!("User not imported: {status:?}"),
+    };
+
+    // The NotificationsIndex now knows the user by their new id, so the subscription held under their
+    // old id is no longer theirs
+    assert!(!client::notifications_index::happy_path::subscription_exists(
+        env,
+        user1.principal,
+        canister_ids.notifications_index,
+        &endpoint
+    ));
+
+    // Upgrading the UserIndex once users have been migrated succeeds, and the user is still known by
+    // their new id
+    crate::delete_user_tests::upgrade_user_index(env, canister_ids);
+    tick_many(env, 3);
+    assert!(!client::notifications_index::happy_path::subscription_exists(
+        env,
+        user1.principal,
+        canister_ids.notifications_index,
+        &endpoint
+    ));
+
+    // Once pushed again, the subscription is held under their new id, so they are notified of messages
+    // sent to them
+    client::notifications_index::happy_path::push_subscription(
+        env,
+        user1.principal,
+        canister_ids.notifications_index,
+        "auth",
+        "p256dh",
+        &endpoint,
+    );
+    tick_many(env, 3);
+    let latest_notification_index =
+        client::local_user_index::happy_path::latest_notification_index(env, *controller, local_user_index);
+    client::user::happy_path::send_text_message(env, &user2, new_user_id, random_string(), None);
+    tick_many(env, 3);
+    let notifications =
+        client::local_user_index::happy_path::notifications(env, *controller, local_user_index, latest_notification_index + 1);
+    assert_eq!(notifications.notifications.len(), 1);
+    assert!(notifications.subscriptions.contains_key(&new_user_id));
+}
+
+#[test]
+fn blocked_user_pairs_are_moved_onto_a_migrated_users_new_id() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+        ..
+    } = wrapper.env();
+
+    let operator = platform_operator(env, canister_ids, *controller);
+    let local_user_index = client::user_index::happy_path::user_registration_canister(env, canister_ids.user_index);
+    let multi_user_canister =
+        client::user_index::happy_path::create_multi_user_canister(env, *controller, canister_ids, local_user_index);
+    let user1 = client::register_user(env, canister_ids);
+    let user2 = client::register_user(env, canister_ids);
+    let user3 = client::register_user(env, canister_ids);
+    // A private group, since members who join a public group have its notifications muted
+    let group_id = client::user::happy_path::create_group(env, &user1, &random_string(), false, false);
+    let group_local_user_index = canister_ids.local_user_index(env, group_id);
+    client::local_user_index::happy_path::add_users_to_group(
+        env,
+        &user1,
+        group_local_user_index,
+        group_id,
+        vec![(user2.user_id, user2.principal), (user3.user_id, user3.principal)],
+    );
+    // user2 blocks user1, who blocks user3
+    client::user::happy_path::block_user(env, &user2, user1.user_id);
+    client::user::happy_path::block_user(env, &user1, user3.user_id);
+    subscribe_to_notifications(env, canister_ids, &user2);
+    tick_many(env, 10);
+
+    migrate_users(
+        env,
+        operator.principal,
+        canister_ids.user_index,
+        vec![user1.user_id],
+        Some(multi_user_canister),
+    );
+    tick_many(env, 30);
+    let new_user_id = match user_migration_status(env, operator.principal, canister_ids.user_index, user1.user_id) {
+        Some(UserMigrationStatus::Imported { new_user_id, .. }) => new_user_id,
+        status => panic!("User not imported: {status:?}"),
+    };
+    // Having not subscribed until now, the user's subscription is held under their new id
+    subscribe_to_notifications(env, canister_ids, &user1);
+    tick_many(env, 10);
+
+    // user2 isn't notified of a message from user1, now under their new id
+    let recipients = group_message_notification_recipients(env, *controller, group_local_user_index, &user1, group_id);
+    assert!(recipients.is_empty(), "{recipients:?}");
+    // Nor is user1, under their new id, notified of a message from user3, while user2 is
+    let recipients = group_message_notification_recipients(env, *controller, group_local_user_index, &user3, group_id);
+    assert!(!recipients.contains(&new_user_id));
+    assert_eq!(recipients, vec![user2.user_id]);
+
+    // Once user2 unblocks user1, by the old id their canister still holds, they are notified again
+    client::user::happy_path::unblock_user(env, &user2, user1.user_id);
+    tick_many(env, 10);
+    let recipients = group_message_notification_recipients(env, *controller, group_local_user_index, &user1, group_id);
+    assert_eq!(recipients, vec![user2.user_id]);
+}
+
+#[test]
+fn migrated_user_is_not_rewarded_again_to_their_referrer() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+        ..
+    } = wrapper.env();
+
+    let operator = platform_operator(env, canister_ids, *controller);
+    let local_user_index = client::user_index::happy_path::user_registration_canister(env, canister_ids.user_index);
+    let multi_user_canister =
+        client::user_index::happy_path::create_multi_user_canister(env, *controller, canister_ids, local_user_index);
+    let referrer = client::register_user(env, canister_ids);
+    let user = client::register_user_with_referrer(env, canister_ids, Some(referrer.user_id.to_string()));
+    client::upgrade_user(
+        &user,
+        env,
+        canister_ids,
+        *controller,
+        DiamondMembershipPlanDuration::OneMonth,
+        false,
+    );
+    tick_many(env, 3);
+    let chit_balance = client::user::happy_path::initial_state(env, &referrer).chit_balance;
+
+    migrate_users(
+        env,
+        operator.principal,
+        canister_ids.user_index,
+        vec![user.user_id],
+        Some(multi_user_canister),
+    );
+    tick_many(env, 30);
+    assert!(matches!(
+        user_migration_status(env, operator.principal, canister_ids.user_index, user.user_id),
+        Some(UserMigrationStatus::Imported { .. })
+    ));
+
+    // The user now pays from their own wallet, having approved their MultiUser canister to charge it
+    let icp = canister_ids.icp_ledger;
+    client::ledger::happy_path::transfer(env, *controller, icp, user.principal, 1_000_000_000);
+    client::ledger::happy_path::approve(
+        env,
+        user.principal,
+        icp,
+        icrc_ledger_types::icrc1::account::Account {
+            owner: multi_user_canister,
+            subaccount: Some(ledger_utils::spender_subaccount(user.principal)),
+        },
+        900_000_000,
+    );
+    let pay = |env: &mut PocketIc, duration| {
+        client::user_index::happy_path::pay_for_diamond_membership(
+            env,
+            user.principal,
+            canister_ids.user_index,
+            duration,
+            false,
+            false,
+        );
+        tick_many(env, 10);
+        client::user::happy_path::initial_state(env, &referrer)
+    };
+
+    // Paying for Diamond again under their new id earns their referrer nothing more
+    let referrer_state = pay(env, DiamondMembershipPlanDuration::OneMonth);
+    assert_eq!(referrer_state.chit_balance, chit_balance);
+    assert_eq!(referrer_state.referrals.len(), 1);
+    assert_eq!(referrer_state.referrals[0].user_id, user.user_id);
+
+    // While upgrading to Lifetime Diamond earns them the difference, on the referral under the user's
+    // old id
+    let referrer_state = pay(env, DiamondMembershipPlanDuration::Lifetime);
+    assert_eq!(
+        referrer_state.chit_balance as u32,
+        chit_balance as u32 + ReferralStatus::LifetimeDiamond.chit_reward() - ReferralStatus::Diamond.chit_reward()
+    );
+    assert_eq!(referrer_state.referrals.len(), 1);
+    assert_eq!(referrer_state.referrals[0].user_id, user.user_id);
+    assert!(matches!(referrer_state.referrals[0].status, ReferralStatus::LifetimeDiamond));
 }
 
 #[test]
@@ -606,13 +1324,94 @@ fn user_canister_is_upgraded_to_the_latest_wasm_before_migrating() {
         vec![user.user_id],
         Some(multi_user_canister(1)),
     );
-    tick_many(env, 10);
+    // The canister may not be ready to migrate straight after being upgraded, in which case starting
+    // the migration is retried 30s later
+    for _ in 0..3 {
+        tick_many(env, 5);
+        env.advance_time(Duration::from_secs(31));
+    }
+    tick_many(env, 5);
 
     assert_eq!(wasm_version(env, user.canister()), version);
     let started = started_migration(env, operator.principal, canister_ids.user_index, user.user_id);
     assert_eq!(started.wasm_version, version);
 
     // Releasing a new User wasm would break later tests which draw this env
+    wrapper.discard();
+}
+
+#[test]
+fn online_users_knows_migrated_user_by_their_new_id() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+        ..
+    } = wrapper.env();
+
+    let operator = platform_operator(env, canister_ids, *controller);
+    let local_user_index = client::user_index::happy_path::user_registration_canister(env, canister_ids.user_index);
+    let multi_user_canister =
+        client::user_index::happy_path::create_multi_user_canister(env, *controller, canister_ids, local_user_index);
+    let user = client::register_user(env, canister_ids);
+
+    // Marking the user as online has the OnlineUsers canister cache their id
+    client::online_users::happy_path::mark_as_online(env, user.principal, canister_ids.online_users);
+
+    migrate_users(
+        env,
+        operator.principal,
+        canister_ids.user_index,
+        vec![user.user_id],
+        Some(multi_user_canister),
+    );
+    tick_many(env, 30);
+
+    let new_user_id = match user_migration_status(env, operator.principal, canister_ids.user_index, user.user_id) {
+        Some(UserMigrationStatus::Imported { new_user_id, .. }) => new_user_id,
+        status => panic!("User not imported: {status:?}"),
+    };
+
+    // The user's last online date has moved from their old id to their new one
+    let last_online = |env: &PocketIc, user_id: UserId| {
+        client::online_users::happy_path::last_online(env, vec![user_id], canister_ids.online_users)
+            .first()
+            .map(|u| u.duration_since_last_online)
+    };
+    assert!(last_online(env, new_user_id).is_some());
+    assert!(last_online(env, user.user_id).is_none());
+
+    // The user is marked as online under their new id, carrying on from the minutes online recorded
+    // under their old id. The month may have ended in the meantime, so both months are counted.
+    env.advance_time(Duration::from_secs(60));
+    let online_users_canister::mark_as_online::Response::SuccessV2(result) =
+        client::online_users::mark_as_online(env, user.principal, canister_ids.online_users, &Empty {})
+    else {
+        panic!("Failed to mark user as online");
+    };
+    assert_eq!(result.minutes_online + result.minutes_online_last_month, 2);
+    assert_eq!(last_online(env, new_user_id), Some(0));
+    assert!(last_online(env, user.user_id).is_none());
+
+    // Upgrading the UserIndex once users have been migrated sends the events again, which changes
+    // nothing
+    crate::delete_user_tests::upgrade_user_index(env, canister_ids);
+    tick_many(env, 3);
+    assert!(last_online(env, new_user_id).is_some());
+    assert!(last_online(env, user.user_id).is_none());
+    assert_eq!(
+        client::online_users::happy_path::minutes_online(
+            env,
+            user.principal,
+            canister_ids.online_users,
+            result.year,
+            result.month
+        ),
+        result.minutes_online
+    );
+
+    // Upgrading the UserIndex runs its one-offs, which would break later tests which draw this env
     wrapper.discard();
 }
 
@@ -691,12 +1490,12 @@ fn start_migration(env: &mut PocketIc, canister_ids: &CanisterIds, controller: P
     assert!(started.user_bytes > 0);
 }
 
-pub(crate) struct StartedMigration {
-    pub user_bytes: u64,
-    pub wasm_version: BuildVersion,
+struct StartedMigration {
+    user_bytes: u64,
+    wasm_version: BuildVersion,
 }
 
-pub(crate) fn user_migration_status(
+fn user_migration_status(
     env: &PocketIc,
     sender: Principal,
     user_index: CanisterId,
@@ -727,17 +1526,8 @@ fn started_migration(env: &PocketIc, sender: Principal, user_index: CanisterId, 
     }
 }
 
-pub(crate) fn assert_failed_with_p2p_swaps(env: &PocketIc, sender: Principal, user_index: CanisterId, user_id: UserId) {
-    let status = user_migration_status(env, sender, user_index, user_id);
-    assert!(
-        matches!(status, Some(UserMigrationStatus::Failed { ref error, .. })
-            if error.matches_code(OCErrorCode::NotReadyForMigration) && error.message() == Some("User has P2P swaps")),
-        "{status:?}"
-    );
-}
-
 // A canister which isn't ready is retried by the LocalUserIndex until its attempts run out
-pub(crate) fn wait_for_migration_attempts_to_run_out(env: &mut PocketIc) {
+fn wait_for_migration_attempts_to_run_out(env: &mut PocketIc) {
     for _ in 0..25 {
         env.advance_time(Duration::from_secs(31));
         tick_many(env, 3);
@@ -746,7 +1536,7 @@ pub(crate) fn wait_for_migration_attempts_to_run_out(env: &mut PocketIc) {
 
 // Registers a platform operator, and raises the migration concurrency so that migrations left
 // running by earlier tests in the env don't hold up those started here
-pub(crate) fn platform_operator(env: &mut PocketIc, canister_ids: &CanisterIds, controller: Principal) -> User {
+fn platform_operator(env: &mut PocketIc, canister_ids: &CanisterIds, controller: Principal) -> User {
     let operator = client::register_user(env, canister_ids);
     client::user_index::happy_path::add_platform_operator(env, controller, canister_ids.user_index, operator.user_id);
 
@@ -760,7 +1550,7 @@ pub(crate) fn platform_operator(env: &mut PocketIc, canister_ids: &CanisterIds, 
     operator
 }
 
-pub(crate) fn migrate_users(
+fn migrate_users(
     env: &mut PocketIc,
     sender: Principal,
     user_index: CanisterId,
@@ -780,6 +1570,34 @@ pub(crate) fn migrate_users(
         user_index_canister::migrate_users::Response::Success(result) => result.queued,
         response => panic!("'migrate_users' error: {response:?}"),
     }
+}
+
+fn subscribe_to_notifications(env: &mut PocketIc, canister_ids: &CanisterIds, user: &User) {
+    client::notifications_index::happy_path::push_subscription(
+        env,
+        user.principal,
+        canister_ids.notifications_index,
+        random_string(),
+        random_string(),
+        format!("https://{}.com/", random_string()),
+    );
+}
+
+// Sends a message to the group, returning the users its notification is pushed to
+fn group_message_notification_recipients(
+    env: &mut PocketIc,
+    controller: Principal,
+    local_user_index: CanisterId,
+    sender: &User,
+    group_id: ChatId,
+) -> Vec<UserId> {
+    let from_index = client::local_user_index::happy_path::latest_notification_index(env, controller, local_user_index) + 1;
+    client::group::happy_path::send_text_message(env, sender, group_id, None, random_string(), None);
+    tick_many(env, 3);
+    client::local_user_index::happy_path::notifications(env, controller, local_user_index, from_index)
+        .subscriptions
+        .into_keys()
+        .collect()
 }
 
 fn set_message_reminder(env: &mut PocketIc, user: &User, other_user: &User, remind_in: u64) {

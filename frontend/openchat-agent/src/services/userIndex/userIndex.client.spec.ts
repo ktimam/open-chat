@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, test, vi } from "vitest";
 import {
     MAX_AI_APP_LOOKUPS_PER_CLIENT_CALL,
     boundedAiAppLookupBatches,
@@ -172,6 +172,8 @@ describe("UserIndexClient.getUsers with migrated users", () => {
         chatStateForgotten = false;
     });
 
+    afterEach(() => vi.restoreAllMocks());
+
     test("a user requested by an earlier id is returned and cached under their latest id", async () => {
         setup({ users: { [OLD]: cachedUser(OLD, "stale") } });
         respond = () => ({ users: [fullUpdate(LATEST, "fresh", [OLD])] });
@@ -222,6 +224,28 @@ describe("UserIndexClient.getUsers with migrated users", () => {
         const resp = await client.getUsers(args(OLD), false);
 
         expect(resp.deletedUserIds).toEqual(new Set([LATEST, OLD]));
+    });
+
+    test("a deleted user isn't logged as missing", async () => {
+        setup();
+        respond = () => ({ deletedUserIds: new Set([OLD]) });
+        const debug = vi.spyOn(console, "debug").mockImplementation(() => {});
+
+        await client.getUsers(args(OLD), false);
+
+        expect(debug).not.toHaveBeenCalled();
+    });
+
+    test("a user neither returned nor deleted is logged as missing", async () => {
+        setup();
+        const debug = vi.spyOn(console, "debug").mockImplementation(() => {});
+
+        await client.getUsers(args(OLD), false);
+
+        expect(debug).toHaveBeenCalledWith(
+            "USERS: userId requested not in cache and not returned from server",
+            OLD,
+        );
     });
 
     test("the current user returned under a new id replaces the entry under their old one", async () => {

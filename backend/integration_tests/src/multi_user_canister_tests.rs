@@ -13,13 +13,15 @@ use std::ops::Deref;
 use std::time::Duration;
 use testing::rng::{random_from_u128, random_principal, random_string};
 use types::{
-    Achievement, AutonomousConfig, BotChatContext, BotDefinition, BotInitiator, BotInstallationLocation, BotMessageContent,
-    BotPermissions, BuildVersion, CanisterId, CanisterWasm, ChannelId, ChannelLatestMessageIndex, Chat, ChatEvent, ChatId,
-    ChatPermission, ChitEventType, CommunityId, CommunityImportedInto, CryptoContent, CryptoTransaction, DeletedCommunityInfo,
-    DeletedGroupInfoInternal, DiamondMembershipPlanDuration, DirectChatSummary, DirectChatSummaryUpdates, Document, Empty,
-    EventsResponse, IdempotentEnvelope, Message, MessageContent, MessageContentInitial, MessageId, MessageIndex, Milliseconds,
+    Achievement, AutonomousConfig, BlobReference, BotActionChatDetails, BotActionScope, BotChatContext, BotCommandDefinition,
+    BotDefinition, BotInitiator, BotInstallationLocation, BotMessageContent, BotPermissions, BuildVersion, CanisterId,
+    CanisterWasm, ChannelId, ChannelLatestMessageIndex, Chat, ChatEvent, ChatId, ChatPermission, ChitEventType, CommunityId,
+    CommunityImportedInto, CryptoContent, CryptoTransaction, DeletedCommunityInfo, DeletedGroupInfoInternal,
+    DiamondMembershipPlanDuration, DirectChatSummary, DirectChatSummaryUpdates, Document, Empty, EventIndex, EventsResponse,
+    FileContent, IdempotentEnvelope, Message, MessageContent, MessageContentInitial, MessageId, MessageIndex, Milliseconds,
     NotificationEnvelope, OptionUpdate, P2PSwapContentInitial, P2PSwapStatus, PendingCryptoTransaction, PinNumberSettings,
-    Reaction, ReferralStatus, TextContent, TimestampMillis, UnitResult, UpgradesFilter, UserId, VideoCallType, icrc1, icrc2,
+    Reaction, ReferralStatus, ReplyContext, TextContent, TimestampMillis, UnitResult, UpgradesFilter, UserId, VideoCallType,
+    icrc1, icrc2,
 };
 use user_canister::set_pin_number::PinNumberVerification;
 use user_canister::{
@@ -140,6 +142,39 @@ fn register_user_with_flag_places_user_in_multi_user_canister() {
     for (canister_id, expected) in expected_user_counts {
         assert_eq!(user_count(&multi_user_canisters_after, canister_id), expected);
     }
+}
+
+#[test]
+fn users_registered_in_a_multi_user_canister_are_sent_the_welcome_messages() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+    } = wrapper.env();
+
+    let local_user_index = client::user_index::happy_path::user_registration_canister(env, canister_ids.user_index);
+    let canister_id =
+        client::user_index::happy_path::create_multi_user_canister(env, *controller, canister_ids, local_user_index);
+    let (principal, user_id) = create_user(env, canister_ids, local_user_index, canister_id);
+    let user_in_own_canister = client::register_user(env, canister_ids);
+    assert_eq!(user_in_own_canister.user_id.index(), 0);
+
+    // The OpenChat bot sends the same welcome messages as it does to a user in a canister of their own
+    let expected = messages(&client::user::happy_path::events(
+        env,
+        &user_in_own_canister,
+        OPENCHAT_BOT_USER_ID,
+        0.into(),
+        true,
+        10,
+        10,
+    ));
+    assert!(!expected.is_empty());
+    assert_eq!(
+        messages(&events(env, principal, canister_id, user_id, OPENCHAT_BOT_USER_ID)),
+        expected
+    );
 }
 
 #[test]
@@ -284,6 +319,7 @@ fn users_created_in_multi_user_canister_are_addressed_by_indexed_user_id() {
                 principal,
                 username: random_string(),
                 referred_by: None,
+                openchat_bot_messages: Vec::new(),
             },
         )
     };
@@ -1038,12 +1074,16 @@ fn contacts(env: &PocketIc, sender: Principal, canister_id: CanisterId) -> Vec<(
     result.contacts.into_iter().map(|c| (c.user_id, c.nickname)).collect()
 }
 
+// Leaves out the user's chat with the OpenChat bot, which every user has from being sent the
+// welcome messages when they registered
 fn initial_state(env: &PocketIc, sender: Principal, canister_id: CanisterId) -> user_canister::initial_state::SuccessResult {
-    let user_canister::initial_state::Response::Success(result) =
+    let user_canister::initial_state::Response::Success(mut result) =
         client::user::initial_state(env, sender, canister_id, &user_canister::initial_state::Args {});
+    result.direct_chats.summaries.retain(|c| c.them != OPENCHAT_BOT_USER_ID);
     result
 }
 
+// Leaves out the user's chat with the OpenChat bot, as `initial_state` does
 fn updates(
     env: &PocketIc,
     sender: Principal,
@@ -1051,7 +1091,14 @@ fn updates(
     updates_since: TimestampMillis,
 ) -> Option<user_canister::updates::SuccessResult> {
     match client::user::updates(env, sender, canister_id, &user_canister::updates::Args { updates_since }) {
-        user_canister::updates::Response::Success(result) => Some(result),
+        user_canister::updates::Response::Success(mut result) => {
+            result.direct_chats.added.retain(|c| c.them != OPENCHAT_BOT_USER_ID);
+            result
+                .direct_chats
+                .updated
+                .retain(|c| c.chat_id != ChatId::from(OPENCHAT_BOT_USER_ID));
+            Some(result)
+        }
         user_canister::updates::Response::SuccessNoUpdates => None,
     }
 }
@@ -1428,6 +1475,91 @@ fn events_for_the_local_user_index_are_sent_from_a_multi_user_canister() {
 
     tick_many(env, 3);
     assert_eq!(queued_local_user_index_events(env, canister_id), 0);
+}
+
+#[test]
+fn message_events_are_pushed_to_the_event_store_as_by_user_canisters() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+    } = wrapper.env();
+
+    let local_user_index = client::user_index::happy_path::user_registration_canister(env, canister_ids.user_index);
+    let canister_id =
+        client::user_index::happy_path::create_multi_user_canister(env, *controller, canister_ids, local_user_index);
+    let (a_principal, a) = create_user(env, canister_ids, local_user_index, canister_id);
+    let (b_principal, b) = create_user(env, canister_ids, local_user_index, canister_id);
+
+    // Past when the welcome messages were sent, so that they aren't counted as the message sent below
+    env.advance_time(Duration::from_millis(1000));
+    let message_id = random_from_u128();
+    let sent = now_millis(env);
+    send_text_message(env, a_principal, canister_id, b, "hello", message_id);
+    env.advance_time(Duration::from_millis(1000));
+    let edited = now_millis(env);
+    edit_message(env, a_principal, canister_id, b, None, message_id, "hello edited");
+    env.advance_time(Duration::from_millis(1000));
+    let reacted = now_millis(env);
+    toggle_reaction(
+        env,
+        b_principal,
+        canister_id,
+        a,
+        None,
+        message_id,
+        &Reaction::new("👍".to_string()),
+        true,
+    );
+
+    // The events are batched by this canister and then by the LocalUserIndex before reaching the
+    // event store
+    for _ in 0..4 {
+        env.advance_time(Duration::from_millis(60_000));
+        tick_many(env, 3);
+    }
+
+    // Each is pushed once, by the user who acted, even though both users' copies of the chat are in
+    // this canister
+    for (name, timestamp) in [
+        ("message_sent", sent),
+        ("message_edited", edited),
+        ("reaction_added", reacted),
+    ] {
+        assert_eq!(
+            event_store_count(env, *controller, canister_ids, name, timestamp),
+            1,
+            "{name} at {timestamp}"
+        );
+    }
+}
+
+// The number of events with the name and timestamp among the most recent in the event store, which
+// is shared with every other test running against the env, so events from other tests may have
+// landed after them
+fn event_store_count(
+    env: &mut PocketIc,
+    controller: Principal,
+    canister_ids: &CanisterIds,
+    name: &str,
+    timestamp: TimestampMillis,
+) -> usize {
+    let latest_event_index = client::event_store::happy_path::events(env, controller, canister_ids.event_store, 0, 0)
+        .latest_event_index
+        .unwrap_or_default();
+    let window = 100;
+    client::event_store::happy_path::events(
+        env,
+        controller,
+        canister_ids.event_store,
+        latest_event_index.saturating_sub(window),
+        window + 1,
+    )
+    .events
+    .iter()
+    .filter(|e| e.name == name && e.timestamp == timestamp)
+    .count()
 }
 
 fn queued_local_user_index_events(env: &PocketIc, canister_id: CanisterId) -> u32 {
@@ -2358,6 +2490,8 @@ fn message_reminders_are_sent_by_the_openchat_bot_to_the_user_who_set_them() {
 
     let (a_principal, a) = create_user(env, canister_ids, local_user_index, canister_id);
     let (b_principal, b) = create_user(env, canister_ids, local_user_index, canister_id);
+    let welcome_messages = bot_messages(env, a_principal, canister_id, a).len();
+    let b_bot_messages = bot_message_texts(env, b_principal, canister_id, b);
 
     let now = now_millis(env);
     let notes = random_string();
@@ -2401,7 +2535,7 @@ fn message_reminders_are_sent_by_the_openchat_bot_to_the_user_who_set_them() {
 
     env.advance_time(Duration::from_millis(999));
     env.tick();
-    assert_eq!(bot_messages(env, a_principal, canister_id, a).len(), 2);
+    assert_eq!(bot_messages(env, a_principal, canister_id, a).len(), welcome_messages + 2);
 
     env.advance_time(Duration::from_millis(1));
     env.tick();
@@ -2409,7 +2543,10 @@ fn message_reminders_are_sent_by_the_openchat_bot_to_the_user_who_set_them() {
     // The OpenChat bot sent a message when each reminder was set, both of which are now hidden (the
     // first as its reminder has been sent and the second as its reminder was cancelled), followed by
     // the one reminder which wasn't cancelled
-    let [created1, created2, reminder]: [Message; 3] = bot_messages(env, a_principal, canister_id, a).try_into().unwrap();
+    let [created1, created2, reminder]: [Message; 3] = bot_messages(env, a_principal, canister_id, a)
+        .split_off(welcome_messages)
+        .try_into()
+        .unwrap();
     for (message, reminder_id) in [(created1, reminder1), (created2, reminder2)] {
         assert_eq!(message.sender, OPENCHAT_BOT_USER_ID);
         let MessageContent::MessageReminderCreated(created) = message.content else {
@@ -2436,8 +2573,8 @@ fn message_reminders_are_sent_by_the_openchat_bot_to_the_user_who_set_them() {
             .any(|event| matches!(event.reason, types::ChitEventType::Achievement(Achievement::SentReminder)))
     );
 
-    // The other user has no chat with the OpenChat bot
-    assert!(initial_state(env, b_principal, canister_id).direct_chats.summaries.is_empty());
+    // The other user's chat with the OpenChat bot still holds only their welcome messages
+    assert_eq!(bot_message_texts(env, b_principal, canister_id, b), b_bot_messages);
 }
 
 fn set_message_reminder(
@@ -3493,6 +3630,7 @@ fn local_user_index_events_update_the_state_each_user_holds() {
     let carol = client::register_user(env, canister_ids);
     let (alice, alice_id) = create_user_referred_by(env, canister_ids, local_user_index, canister_id, Some(carol.user_id));
     let (bob, bob_id) = create_user_referred_by(env, canister_ids, local_user_index, canister_id, Some(alice_id));
+    let bob_bot_messages = bot_message_texts(env, bob, canister_id, bob_id);
     let referred_elsewhere: UserId = random_principal().into();
 
     let events = vec![
@@ -3578,6 +3716,7 @@ fn local_user_index_events_update_the_state_each_user_holds() {
     assert!(bob_state.referrals.is_empty());
     assert!(bob_state.chit_balance == 0);
     assert!(bob_state.direct_chats.summaries.is_empty());
+    assert_eq!(bot_message_texts(env, bob, canister_id, bob_id), bob_bot_messages);
 
     // A referred user in another canister reaching a status is sent as a `SetReferralStatus`
     // event from their canister, as the User canister sends it
@@ -3612,6 +3751,51 @@ fn local_user_index_events_update_the_state_each_user_holds() {
     );
     assert!(has_achievement(&alice_state_after, Achievement::Referred1stUser));
     assert!(alice_state_after.chit_balance > alice_state.chit_balance);
+    let alice_state = alice_state_after;
+
+    // A referred user migrated to a MultiUser canister sends the ids they had before along with the
+    // status, and the referral held under one of them is updated, earning only the difference, rather
+    // than a new referral being added under their new id
+    let other_canister_id =
+        client::user_index::happy_path::create_multi_user_canister(env, *controller, canister_ids, local_user_index);
+    let migrated_user_id = UserId::new_indexed(other_canister_id, 1);
+    let response = client::user::c2c_user_canister_v2(
+        env,
+        other_canister_id,
+        canister_id,
+        &user_canister::c2c_user_canister_v2::Args {
+            events: vec![IdempotentEnvelope {
+                created_at: now_millis(env),
+                idempotency_id: 1,
+                value: user_canister::c2c_user_canister_v2::Event {
+                    sender: migrated_user_id,
+                    recipient: alice_id,
+                    event: UserCanisterEvent::SetReferralStatusV2(Box::new(user_canister::SetReferralStatusV2 {
+                        status: ReferralStatus::Diamond,
+                        previous_user_ids: vec![referred_elsewhere],
+                    })),
+                },
+            }],
+        },
+    );
+    assert!(
+        matches!(response, user_canister::c2c_user_canister_v2::Response::Success),
+        "{response:?}"
+    );
+    let alice_state_after = initial_state(env, alice, canister_id);
+    assert_eq!(alice_state_after.referrals.len(), alice_state.referrals.len());
+    assert!(
+        alice_state_after
+            .referrals
+            .iter()
+            .any(|r| r.user_id == referred_elsewhere && matches!(r.status, ReferralStatus::Diamond)),
+        "{:?}",
+        alice_state_after.referrals
+    );
+    assert_eq!(
+        alice_state_after.chit_balance,
+        alice_state.chit_balance + ReferralStatus::Diamond.chit_reward() as i32
+    );
     let alice_state = alice_state_after;
 
     // Bob buying Diamond tells Alice, his referrer in this canister, so she earns the CHIT
@@ -4330,13 +4514,17 @@ fn a_user_is_deleted_from_a_multi_user_canister_without_affecting_the_others() {
             principal: alice,
             username: random_string(),
             referred_by: None,
+            openchat_bot_messages: Vec::new(),
         },
     );
     let multi_user_canister::c2c_create_user::Response::Success(new_alice_id) = response else {
         panic!("{response:?}");
     };
     assert_eq!(new_alice_id.index(), 3);
-    assert!(initial_state(env, alice, canister_id).direct_chats.summaries.is_empty());
+    // Created without welcome messages, so she has no chat at all, not even with the OpenChat bot
+    let user_canister::initial_state::Response::Success(new_alice_state) =
+        client::user::initial_state(env, alice, canister_id, &user_canister::initial_state::Args {});
+    assert!(new_alice_state.direct_chats.summaries.is_empty());
 }
 
 fn delete_user(env: &mut PocketIc, local_user_index: CanisterId, canister_id: CanisterId, user_id: UserId) {
@@ -5061,6 +5249,111 @@ fn multi_user_canister_count(env: &PocketIc, local_user_index: CanisterId) -> u6
     serde_json::from_value(metrics(env, local_user_index)["multi_user_canister_count"].clone()).unwrap()
 }
 
+#[test]
+fn users_can_chat_with_bots_but_not_send_them_crypto() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+    } = wrapper.env();
+
+    let local_user_index = client::user_index::happy_path::user_registration_canister(env, canister_ids.user_index);
+    let canister_id =
+        client::user_index::happy_path::create_multi_user_canister(env, *controller, canister_ids, local_user_index);
+    let (alice, alice_id) = create_user(env, canister_ids, local_user_index, canister_id);
+    let (bot_id, _) = client::user_index::happy_path::register_bot(
+        env,
+        alice,
+        canister_ids.user_index,
+        random_string(),
+        "https://my.bot.xyz/".to_string(),
+        BotDefinition {
+            description: "Takes bets".to_string(),
+            commands: Vec::new(),
+            autonomous_config: None,
+            default_subscriptions: None,
+            data_encoding: None,
+            restricted_locations: None,
+        },
+    );
+    tick_many(env, 3);
+
+    // A bot with a canister of its own, such as the ProposalsBot, can't be chatted with
+    let response = client::user::send_message_v2(
+        env,
+        alice,
+        canister_id,
+        &send_message_args(canister_ids.proposals_bot.into(), "hello", random_from_u128()),
+    );
+    assert!(
+        matches!(&response, user_canister::send_message_v2::Response::Error(e) if e.matches_code(OCErrorCode::InvalidRequest)),
+        "{response:?}"
+    );
+
+    // A bot registered with the UserIndex can be. Installing it creates Alice's chat with it, in
+    // which she can send and edit messages, none of which is sent on to the bot, since no bot handles
+    // the events users send each other.
+    client::local_user_index::happy_path::install_bot(
+        env,
+        alice,
+        local_user_index,
+        BotInstallationLocation::User(alice_id.into()),
+        bot_id,
+        BotPermissions::text_only(),
+        None,
+    );
+    let message_id = random_from_u128();
+    send_text_message(env, alice, canister_id, bot_id, "hello bot", message_id);
+    edit_message(env, alice, canister_id, bot_id, None, message_id, "hello bot, edited");
+    assert_eq!(queued_user_canister_events(env, canister_id), 0);
+
+    // But she can't send it crypto, which it would have no way of spending
+    let amount = 1_000_000;
+    client::ledger::happy_path::transfer(env, *controller, canister_ids.icp_ledger, alice, 1_000_000_000);
+    client::ledger::happy_path::approve(
+        env,
+        alice,
+        canister_ids.icp_ledger,
+        icrc_ledger_types::icrc1::account::Account {
+            owner: canister_id,
+            subaccount: Some(ledger_utils::spender_subaccount(alice)),
+        },
+        amount + ICP_TRANSFER_FEE,
+    );
+    let balance = client::ledger::happy_path::balance_of(env, canister_ids.icp_ledger, alice);
+    let response = client::user::send_message_v2(
+        env,
+        alice,
+        canister_id,
+        &user_canister::send_message_v2::Args {
+            content: MessageContentInitial::Crypto(CryptoContent {
+                recipient: bot_id,
+                transfer: CryptoTransaction::Pending(PendingCryptoTransaction::ICRC2(icrc2::PendingCryptoTransaction {
+                    ledger: ICP_LEDGER_CANISTER_ID,
+                    token_symbol: ICP_SYMBOL.to_string(),
+                    amount,
+                    from: alice.into(),
+                    to: bot_id.as_principal().into(),
+                    fee: ICP_TRANSFER_FEE,
+                    memo: None,
+                    created: now_millis(env) * 1_000_000,
+                })),
+                caption: None,
+            }),
+            ..send_message_args(bot_id, "", random_from_u128())
+        },
+    );
+    assert!(
+        matches!(&response, user_canister::send_message_v2::Response::Error(e) if e.matches_code(OCErrorCode::InvalidRequest)),
+        "{response:?}"
+    );
+    assert_eq!(
+        client::ledger::happy_path::balance_of(env, canister_ids.icp_ledger, alice),
+        balance
+    );
+}
+
 // Users hold their own funds in their own wallets, so crypto is sent via ICRC2, pulled from the
 // sender's wallet against an approval made under their own spender subaccount, to either a user in
 // the same canister, whose wallet is under their principal, or one in a User canister, whose wallet
@@ -5144,6 +5437,15 @@ fn users_send_crypto_from_their_own_wallets() {
         &initial_state(env, b_principal, canister_id),
         Achievement::ReceivedCrypto
     ));
+    // And it appears once in B's message activity feed, as it would were B in a User canister
+    let feed = message_activity_feed(env, b_principal, canister_id, 0);
+    assert_eq!(
+        feed.events
+            .iter()
+            .filter(|e| e.activity == MessageActivity::Crypto && e.user_id == Some(a))
+            .count(),
+        1
+    );
 
     // To Carol, in a User canister
     let transfer = icrc2_transfer(env, icrc1::Account::legacy_for_user(carol.user_id));
@@ -5303,11 +5605,14 @@ fn tips_are_paid_from_the_tippers_own_wallet() {
     // directly, and the tip goes from Alice's wallet to Bob's.
     let message_id = random_from_u128();
     send_text_message(env, bob, canister_id, alice_id, "tip me", message_id);
+    let tipped = now_millis(env);
     let response = alice_tips(env, bob_id, message_id);
     assert!(
         matches!(response, user_canister::tip_message::Response::Success),
         "{response:?}"
     );
+    // So that no later tip, eg. one from a User canister, has the same timestamp as this one
+    env.advance_time(Duration::from_millis(1));
     assert_eq!(
         tips_on(message(&events(env, alice, canister_id, alice_id, bob_id), message_id)),
         tipped_by(alice_id)
@@ -5437,6 +5742,13 @@ fn tips_are_paid_from_the_tippers_own_wallet() {
         );
     }
     assert_eq!(client::ledger::happy_path::balance_of(env, ledger, alice), alices_balance);
+
+    // Alice's first tip was pushed to the event store, as a User canister's is
+    for _ in 0..4 {
+        env.advance_time(Duration::from_millis(60_000));
+        tick_many(env, 3);
+    }
+    assert_eq!(event_store_count(env, *controller, canister_ids, "message_tipped", tipped), 1);
 }
 
 #[test]
@@ -5510,7 +5822,7 @@ fn video_calls_are_recorded_in_both_copies_of_the_chat() {
     // told; Alice joining is sent back to it; the operator then ends the call in each copy
     let message_id = random_from_u128();
     start(env, alice_id, carol.user_id, carol.username(), message_id);
-    tick_many(env, 3);
+    tick_many(env, 10);
     assert!(call_in_progress(env, alice, carol.user_id));
     assert_eq!(participants(env, alice, alice_id, carol.user_id, message_id), 1);
     let carols_chat = client::user::happy_path::initial_state(env, &carol)
@@ -5522,7 +5834,7 @@ fn video_calls_are_recorded_in_both_copies_of_the_chat() {
     assert!(carols_chat.video_call_in_progress.is_some());
 
     join(env, alice, carol.user_id, message_id);
-    tick_many(env, 3);
+    tick_many(env, 10);
     assert_eq!(participants(env, alice, alice_id, carol.user_id, message_id), 2);
     let carols_events = client::user::happy_path::events(env, &carol, alice_id, 0.into(), true, 10, 10);
     assert!(matches!(
@@ -6238,5 +6550,502 @@ fn token_swaps_return_errors_rather_than_trapping() {
     assert!(
         matches!(&withdraw_response, UnitResult::Error(e) if e.matches_code(OCErrorCode::InvalidRequest)),
         "{withdraw_response:?}"
+    );
+}
+
+// The files in a direct message are deleted by the canister holding the sender once the message is
+// deleted for good, or by the canisters holding each user when it expires, as a User canister does.
+// The frontend names the canisters holding the two users as the files' accessors, which is what lets
+// them delete the files.
+#[test]
+fn files_in_direct_messages_are_deleted_along_with_the_messages() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+    } = wrapper.env();
+
+    let local_user_index = client::user_index::happy_path::user_registration_canister(env, canister_ids.user_index);
+    let canister_id =
+        client::user_index::happy_path::create_multi_user_canister(env, *controller, canister_ids, local_user_index);
+    let (a_principal, a) = create_user(env, canister_ids, local_user_index, canister_id);
+    let (b_principal, b) = create_user(env, canister_ids, local_user_index, canister_id);
+
+    let send_file = |env: &mut PocketIc| {
+        let blob_reference = client::storage_index::happy_path::upload_file(
+            env,
+            a_principal,
+            canister_ids.storage_index,
+            100,
+            vec![canister_id],
+        );
+        let message_id = random_from_u128();
+        let response = client::user::send_message_v2(
+            env,
+            a_principal,
+            canister_id,
+            &user_canister::send_message_v2::Args {
+                content: MessageContentInitial::File(FileContent {
+                    name: random_string(),
+                    caption: None,
+                    mime_type: random_string(),
+                    file_size: 100,
+                    blob_reference: Some(blob_reference.clone()),
+                }),
+                ..send_message_args(b, "", message_id)
+            },
+        );
+        assert!(
+            matches!(response, user_canister::send_message_v2::Response::Success(_)),
+            "{response:?}"
+        );
+        (blob_reference, message_id)
+    };
+    let file_exists = |env: &PocketIc, blob_reference: &BlobReference| {
+        client::storage_bucket::happy_path::file_exists(env, a_principal, blob_reference.canister_id, blob_reference.blob_id)
+    };
+
+    // B deleting A's message from their copy of the chat leaves the file, which A's copy references
+    let (blob_reference, message_id) = send_file(env);
+    delete_messages(env, b_principal, canister_id, a, None, vec![message_id]);
+    env.advance_time(Duration::from_secs(301));
+    tick_many(env, 3);
+    assert!(file_exists(env, &blob_reference));
+
+    // A deleting it deletes the file once the message can no longer be undeleted
+    delete_messages(env, a_principal, canister_id, b, None, vec![message_id]);
+    env.advance_time(Duration::from_secs(301));
+    tick_many(env, 3);
+    assert!(!file_exists(env, &blob_reference));
+
+    // A message which disappears has its file deleted when it does
+    update_chat_settings(env, a_principal, canister_id, b, OptionUpdate::SetToSome(1000));
+    let (blob_reference, _) = send_file(env);
+    env.advance_time(Duration::from_millis(999));
+    tick_many(env, 5);
+    assert!(file_exists(env, &blob_reference));
+    env.advance_time(Duration::from_millis(1));
+    tick_many(env, 5);
+    assert!(!file_exists(env, &blob_reference));
+}
+
+// A reply in a direct chat to a message in a group is recorded against the group, in both users'
+// copies of the chat, so that when the group is imported into a community the reply is pointed at
+// the channel it became, as in the User canister
+#[test]
+fn private_replies_to_a_group_follow_it_into_a_community() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+    } = wrapper.env();
+
+    let local_user_index = client::user_index::happy_path::user_registration_canister(env, canister_ids.user_index);
+    let canister_id =
+        client::user_index::happy_path::create_multi_user_canister(env, *controller, canister_ids, local_user_index);
+    let (a_principal, a) = create_user(env, canister_ids, local_user_index, canister_id);
+    let (b_principal, b) = create_user(env, canister_ids, local_user_index, canister_id);
+
+    let group: ChatId = random_principal().into();
+    let community: CommunityId = random_principal().into();
+    let channel_id: ChannelId = 7u32.into();
+    let replied_to_event_index: EventIndex = 5.into();
+
+    let response = client::user::send_message_v2(
+        env,
+        a_principal,
+        canister_id,
+        &user_canister::send_message_v2::Args {
+            replies_to: Some(ReplyContext {
+                chat_if_other: Some((Chat::Group(group), None)),
+                event_index: replied_to_event_index,
+            }),
+            ..send_message_args(b, "A private reply", random_from_u128())
+        },
+    );
+    assert!(
+        matches!(response, user_canister::send_message_v2::Response::Success(_)),
+        "{response:?}"
+    );
+
+    let now = now_millis(env);
+    for user_id in [a, b] {
+        client::user::c2c_notify_group_deleted(
+            env,
+            canister_ids.group_index,
+            canister_id,
+            &user_canister::c2c_notify_group_deleted::Args {
+                user_id,
+                deleted_group: DeletedGroupInfoInternal {
+                    id: group,
+                    timestamp: now,
+                    deleted_by: random_principal().into(),
+                    group_name: "Group".to_string(),
+                    name: "Group".to_string(),
+                    public: false,
+                    community_imported_into: Some(CommunityImportedInto {
+                        community_name: "Community".to_string(),
+                        community_id: community,
+                        local_user_index_canister_id: local_user_index,
+                        channel: ChannelLatestMessageIndex {
+                            channel_id,
+                            latest_message_index: None,
+                        },
+                        other_default_channels: Vec::new(),
+                    }),
+                },
+            },
+        );
+    }
+
+    for (principal, me, them) in [(a_principal, a, b), (b_principal, b, a)] {
+        let ChatEvent::Message(message) = events(env, principal, canister_id, me, them).events.pop().unwrap().event else {
+            panic!("Expected a message");
+        };
+        let replies_to = message.replies_to.unwrap();
+        assert_eq!(replies_to.chat_if_other, Some((Chat::Channel(community, channel_id), None)));
+        assert_eq!(replies_to.event_index, replied_to_event_index);
+    }
+}
+
+// A MultiUser canister checks its cycles balance as it handles updates, as a User canister does, and
+// asks the LocalUserIndex for a top up once it runs low
+#[test]
+fn a_multi_user_canister_is_topped_up_when_its_cycles_run_low() {
+    const TOP_UP_AMOUNT: u128 = 200_000_000_000;
+
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+    } = wrapper.env();
+
+    let local_user_index = client::user_index::happy_path::user_registration_canister(env, canister_ids.user_index);
+    let canister_id =
+        client::user_index::happy_path::create_multi_user_canister(env, *controller, canister_ids, local_user_index);
+    let (principal, _) = create_user(env, canister_ids, local_user_index, canister_id);
+
+    // Runs an update once the check is due again, then gives the top up time to arrive
+    let update_once_check_due = |env: &mut PocketIc| {
+        env.advance_time(Duration::from_secs(6 * 60));
+        let response = client::user::set_bio(
+            env,
+            principal,
+            canister_id,
+            &user_canister::set_bio::Args { text: random_string() },
+        );
+        assert!(matches!(response, user_canister::set_bio::Response::Success));
+        tick_many(env, 5);
+    };
+
+    // While the balance is healthy there's no top up
+    let balance = env.cycle_balance(canister_id);
+    update_once_check_due(env);
+    assert!(env.cycle_balance(canister_id) <= balance);
+
+    // Raise the freezing threshold until the cycles it reserves are three quarters of the balance.
+    // The canister still runs, but its balance is now less than twice the reserve, which is when
+    // `check_cycles_balance` counts it as low.
+    let balance = env.cycle_balance(canister_id);
+    let status = env.canister_status(canister_id, Some(local_user_index)).unwrap();
+    let original_freezing_threshold = status.settings.freezing_threshold.clone();
+    let burned_per_day: u128 = status.idle_cycles_burned_per_day.0.try_into().unwrap();
+    assert!(burned_per_day > 0);
+    let freezing_threshold_secs = balance * 3 / 4 * 24 * 60 * 60 / burned_per_day;
+    env.update_canister_settings(
+        canister_id,
+        Some(local_user_index),
+        pocket_ic::CanisterSettings {
+            freezing_threshold: Some(freezing_threshold_secs.into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    update_once_check_due(env);
+    // Less a margin for the cycles the update and the check themselves use
+    assert!(env.cycle_balance(canister_id) > balance + TOP_UP_AMOUNT - 10_000_000_000);
+
+    // Put the freezing threshold back, since the environment, and so this canister, is shared with
+    // later tests
+    env.update_canister_settings(
+        canister_id,
+        Some(local_user_index),
+        pocket_ic::CanisterSettings {
+            freezing_threshold: Some(original_freezing_threshold),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+}
+
+// A user in a MultiUser canister can read their direct chats via their LocalUserIndex's
+// `chat_events`, which asks the canister for that user's copy of the chat
+#[test]
+fn users_read_their_direct_chats_via_the_local_user_index() {
+    use local_user_index_canister::chat_events::{EventsArgs, EventsContext, EventsResponse, EventsSelectionCriteria};
+
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+    } = wrapper.env();
+
+    let local_user_index = client::user_index::happy_path::user_registration_canister(env, canister_ids.user_index);
+    let canister_id =
+        client::user_index::happy_path::create_multi_user_canister(env, *controller, canister_ids, local_user_index);
+    let (a_principal, a) = create_user(env, canister_ids, local_user_index, canister_id);
+    let (b_principal, b) = create_user(env, canister_ids, local_user_index, canister_id);
+
+    send_text_message(env, a_principal, canister_id, b, "Hello from A", random_from_u128());
+
+    for (principal, them) in [(a_principal, b), (b_principal, a)] {
+        let local_user_index_canister::chat_events::Response::Success(result) = client::local_user_index::chat_events(
+            env,
+            principal,
+            local_user_index,
+            &local_user_index_canister::chat_events::Args {
+                requests: vec![EventsArgs {
+                    context: EventsContext::Direct(them),
+                    args: EventsSelectionCriteria::Page(local_user_index_canister::chat_events::EventsPageArgs {
+                        start_index: 0.into(),
+                        ascending: true,
+                        max_messages: 10,
+                        max_events: 10,
+                    }),
+                    latest_known_update: None,
+                }],
+            },
+        );
+        let EventsResponse::Success(events) = &result.responses[0] else {
+            panic!("{:?}", result.responses[0]);
+        };
+        assert!(
+            events.events.iter().any(|e| matches!(
+                &e.event,
+                ChatEvent::Message(m) if m.sender == a && m.content.text() == Some("Hello from A")
+            )),
+            "{events:?}"
+        );
+    }
+}
+
+// A bot reads its direct chat with a user in a MultiUser canister via the LocalUserIndex's
+// `bot_chat_events`, which asks the canister for that user's copy of the chat
+#[test]
+fn bots_read_their_direct_chats_with_users_via_the_local_user_index() {
+    use local_user_index_canister::chat_events::{EventsPageArgs, EventsSelectionCriteria};
+
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+    } = wrapper.env();
+
+    let local_user_index = client::user_index::happy_path::user_registration_canister(env, canister_ids.user_index);
+    let canister_id =
+        client::user_index::happy_path::create_multi_user_canister(env, *controller, canister_ids, local_user_index);
+    let (a_principal, a) = create_user(env, canister_ids, local_user_index, canister_id);
+
+    let (bot_id, bot_principal) = client::user_index::happy_path::register_bot(
+        env,
+        // Registered by A, since a bot is private until published, so only its owner can install it
+        a_principal,
+        canister_ids.user_index,
+        random_string(),
+        "https://my.bot.xyz/".to_string(),
+        BotDefinition {
+            description: random_string(),
+            commands: Vec::new(),
+            autonomous_config: Some(AutonomousConfig {
+                permissions: BotPermissions::text_only(),
+            }),
+            default_subscriptions: None,
+            data_encoding: None,
+            restricted_locations: None,
+        },
+    );
+    client::local_user_index::happy_path::install_bot(
+        env,
+        a_principal,
+        local_user_index,
+        BotInstallationLocation::User(a.into()),
+        bot_id,
+        BotPermissions::text_only(),
+        Some(BotPermissions::text_only()),
+    );
+    tick_many(env, 3);
+
+    send_text_message(env, a_principal, canister_id, bot_id, "Hello bot", random_from_u128());
+
+    let response = client::local_user_index::bot_chat_events(
+        env,
+        bot_principal,
+        local_user_index,
+        &local_user_index_canister::bot_chat_events::Args {
+            chat_context: BotChatContext::Autonomous(Chat::Direct(a.into())),
+            thread: None,
+            events: EventsSelectionCriteria::Page(EventsPageArgs {
+                start_index: 0.into(),
+                ascending: true,
+                max_messages: 10,
+                max_events: 10,
+            }),
+        },
+    );
+    let local_user_index_canister::bot_chat_events::Response::Success(result) = &response else {
+        panic!("{response:?}");
+    };
+    assert!(
+        result
+            .events
+            .iter()
+            .any(|e| matches!(&e.event, ChatEvent::Message(m) if m.sender == a && m.content.text() == Some("Hello bot"))),
+        "{result:?}"
+    );
+}
+
+// The LocalUserIndex issues a token to start a video call with a user in a MultiUser canister once
+// that canister confirms the user hasn't blocked the caller, naming the user it is asking about
+#[test]
+fn video_call_tokens_are_issued_for_direct_chats_with_users_in_multi_user_canisters() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+    } = wrapper.env();
+
+    let local_user_index = client::user_index::happy_path::user_registration_canister(env, canister_ids.user_index);
+    let canister_id =
+        client::user_index::happy_path::create_multi_user_canister(env, *controller, canister_ids, local_user_index);
+    // A is in a User canister of their own, calling B in the MultiUser canister
+    let a = client::register_user(env, canister_ids);
+    let (b_principal, b) = create_user(env, canister_ids, local_user_index, canister_id);
+
+    let request_token = |env: &mut PocketIc| {
+        client::local_user_index::access_token_v2(
+            env,
+            a.principal,
+            local_user_index,
+            &local_user_index_canister::access_token_v2::Args::StartVideoCall(
+                local_user_index_canister::access_token_v2::StartVideoCallArgs {
+                    chat: Chat::Direct(b.into()),
+                    call_type: VideoCallType::Default,
+                    audio_only: false,
+                },
+            ),
+        )
+    };
+
+    let response = request_token(env);
+    assert!(
+        matches!(response, local_user_index_canister::access_token_v2::Response::Success(_)),
+        "{response:?}"
+    );
+
+    // Once B has blocked A, B's canister says no
+    block_user(env, b_principal, canister_id, a.user_id);
+    let response = request_token(env);
+    assert!(
+        matches!(response, local_user_index_canister::access_token_v2::Response::NotAuthorized),
+        "{response:?}"
+    );
+}
+
+// The LocalUserIndex issues a token for a bot command in a direct chat with a user in a MultiUser
+// canister once that canister confirms the user installed the bot, naming the user it is asking
+// about, so a user in the same canister who hasn't installed it is refused
+#[test]
+fn bot_command_tokens_are_issued_for_direct_chats_with_users_in_multi_user_canisters() {
+    use local_user_index_canister::access_token_v2::{BotActionByCommandArgs, BotCommandInitial};
+
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+    } = wrapper.env();
+
+    let local_user_index = client::user_index::happy_path::user_registration_canister(env, canister_ids.user_index);
+    let canister_id =
+        client::user_index::happy_path::create_multi_user_canister(env, *controller, canister_ids, local_user_index);
+    let (a_principal, a) = create_user(env, canister_ids, local_user_index, canister_id);
+    let (b_principal, b) = create_user(env, canister_ids, local_user_index, canister_id);
+
+    let command_name = random_string();
+    let (bot_id, _) = client::user_index::happy_path::register_bot(
+        env,
+        // Registered by A, since a bot is private until published, so only its owner can install it
+        a_principal,
+        canister_ids.user_index,
+        random_string(),
+        "https://my.bot.xyz/".to_string(),
+        BotDefinition {
+            description: random_string(),
+            commands: vec![BotCommandDefinition {
+                name: command_name.clone(),
+                description: None,
+                placeholder: None,
+                params: Vec::new(),
+                permissions: BotPermissions::from_chat_permission(ChatPermission::ReadMessages),
+                default_role: None,
+                direct_messages: None,
+            }],
+            autonomous_config: None,
+            default_subscriptions: None,
+            data_encoding: None,
+            restricted_locations: None,
+        },
+    );
+    client::local_user_index::happy_path::install_bot(
+        env,
+        a_principal,
+        local_user_index,
+        BotInstallationLocation::User(a.into()),
+        bot_id,
+        BotPermissions::from_chat_permission(ChatPermission::ReadMessages),
+        None,
+    );
+    tick_many(env, 3);
+
+    let request_token = |env: &mut PocketIc, principal: Principal, user_id: UserId| {
+        client::local_user_index::access_token_v2(
+            env,
+            principal,
+            local_user_index,
+            &local_user_index_canister::access_token_v2::Args::BotActionByCommand(BotActionByCommandArgs {
+                bot_id,
+                command: BotCommandInitial {
+                    name: command_name.clone(),
+                    args: Vec::new(),
+                    meta: None,
+                },
+                scope: BotActionScope::Chat(BotActionChatDetails {
+                    chat: Chat::Direct(user_id.into()),
+                    thread: None,
+                    message_id: random_from_u128(),
+                    user_message_id: None,
+                }),
+            }),
+        )
+    };
+
+    let response = request_token(env, a_principal, a);
+    assert!(
+        matches!(response, local_user_index_canister::access_token_v2::Response::Success(_)),
+        "{response:?}"
+    );
+
+    // B, in the same canister, hasn't installed the bot
+    let response = request_token(env, b_principal, b);
+    assert!(
+        matches!(response, local_user_index_canister::access_token_v2::Response::NotAuthorized),
+        "{response:?}"
     );
 }

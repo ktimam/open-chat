@@ -68,11 +68,15 @@ pub(crate) fn handle_event<F: FnOnce() -> TimestampMillis>(
                 **now,
             );
         }
+        // A migrated user may still be named by their old id, eg. by the canisters of those who had
+        // blocked them before, whereas the pairs are held under their latest id
         UserEvent::UserBlocked(blocked) => {
+            let blocked = state.data.migrated_user_ids.latest(blocked);
             state.data.blocked_users.insert((blocked, user_id), ());
             state.push_event_to_user_index(UserIndexEvent::UserBlocked(user_id, blocked), **now);
         }
         UserEvent::UserUnblocked(unblocked) => {
+            let unblocked = state.data.migrated_user_ids.latest(unblocked);
             state.data.blocked_users.remove(&(unblocked, user_id));
             state.push_event_to_user_index(UserIndexEvent::UserUnblocked(user_id, unblocked), **now);
         }
@@ -87,21 +91,23 @@ pub(crate) fn handle_event<F: FnOnce() -> TimestampMillis>(
         }
         UserEvent::EventStoreEvent(event) => state.data.event_store_client.push(event),
         // Only a MultiUser canister imports users, and it names the user by their new id
-        UserEvent::UserImported(old_user_id) if user_id.index() != 0 => {
+        UserEvent::UserImported(ev) if user_id.index() != 0 => {
             state.push_event_to_user_index(
                 UserIndexEvent::UserImported(Box::new(UserImported {
-                    old_user_id,
+                    old_user_id: ev.old_user_id,
                     new_user_id: user_id,
+                    canisters_to_notify: ev.canisters_to_notify,
                 })),
                 **now,
             );
         }
-        UserEvent::UserImportFailed(old_user_id, error) if user_id.index() != 0 => {
+        UserEvent::UserImportFailed(ev) if user_id.index() != 0 => {
             state.push_event_to_user_index(
                 UserIndexEvent::UserImportFailed(Box::new(UserImportFailed {
-                    user_id: old_user_id,
+                    user_id: ev.old_user_id,
                     multi_user_canister_id: user_id.canister_id(),
-                    error,
+                    user_hash: ev.user_hash,
+                    error: ev.error,
                 })),
                 **now,
             );
