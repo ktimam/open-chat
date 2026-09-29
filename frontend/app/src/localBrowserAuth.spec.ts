@@ -245,7 +245,11 @@ describe("bundled local browser authentication page (synthetic DOM + real linkin
         expect(operations()).toEqual(["verify"]);
         confirmCreation();
         await vi.waitFor(() => expect(text("link-status")).toContain("Passkey linked"));
-        expect(mocks.createPasskey).toHaveBeenCalledExactlyOnceWith("localhost", "synthetic-user");
+        expect(mocks.createPasskey).toHaveBeenCalledExactlyOnceWith(
+            "localhost",
+            "synthetic-user",
+            expect.any(AbortSignal),
+        );
         expect(operations()).toEqual(["verify", "finalise"]);
         expect(mocks.agent).toHaveBeenCalledTimes(2);
         expect(mocks.agents[1].transport).not.toBe(mocks.agents[0].transport);
@@ -276,6 +280,37 @@ describe("bundled local browser authentication page (synthetic DOM + real linkin
         ).rejects.toThrow("automatic resubmission");
         expect(operations()).toEqual(["verify", "finalise"]);
     });
+
+    it.each(["expiry", "pagehide"])(
+        "cancels pending creation on %s and never finalizes a late provider result",
+        async (reason) => {
+            const pending = deferred<typeof syntheticCredential>();
+            mocks.createPasskey.mockReturnValue(pending.promise);
+            await mount();
+            await verifyCode();
+            confirmCreation();
+            await vi.waitFor(() => expect(mocks.createPasskey).toHaveBeenCalledOnce());
+            const signal = mocks.createPasskey.mock.calls[0][2] as AbortSignal;
+            expect(signal.aborted).toBe(false);
+            if (reason === "expiry")
+                await vi.advanceTimersByTimeAsync(challenge.expiresAtMs - Date.now());
+            else window.dispatchEvent(new Event("pagehide"));
+            expect(signal.aborted).toBe(true);
+            // A provider can race cancellation; post-create finalization checks must remain.
+            pending.resolve(syntheticCredential);
+            await vi.advanceTimersByTimeAsync(0);
+            expect(operations()).toEqual(["verify"]);
+            expect(mocks.finalise).not.toHaveBeenCalled();
+            expect(mocks.signer).not.toHaveBeenCalled();
+            expect(mocks.createPasskey).toHaveBeenCalledOnce();
+            expect(localSubmissions()).toHaveLength(0);
+            expect(text("link-status")).not.toContain("Passkey linked");
+            if (reason === "expiry") {
+                expect(text("status")).toContain("No account-link finalization was requested");
+                expect(button("create-passkey").disabled).toBe(true);
+            }
+        },
+    );
 
     it("rejects a code for a different account without creating a passkey", async () => {
         mocks.network.mockResolvedValue(

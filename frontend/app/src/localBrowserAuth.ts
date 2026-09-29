@@ -134,7 +134,7 @@ startLink.addEventListener("click", () => {
             },
             createPasskey: async (username) => {
                 active();
-                return createBrowserLinkPasskey("localhost", username);
+                return createBrowserLinkPasskey("localhost", username, controller.signal);
             },
             finalize: async (credential) => {
                 active();

@@ -182,10 +182,16 @@ const base64url = (value: Uint8Array) =>
 export async function createBrowserLinkPasskey(
     rpId: string,
     username: string,
+    signal?: AbortSignal,
 ): Promise<WebAuthnKeyFull> {
+    const active = () => {
+        if (signal?.aborted) throw new DOMException("Passkey creation cancelled", "AbortError");
+    };
+    active();
     const context = browserPasskeyContext(rpId);
     const challenge = crypto.getRandomValues(new Uint8Array(32));
     const result = (await navigator.credentials.create({
+        signal,
         publicKey: {
             challenge,
             rp: { id: rpId, name: "Unofficial OpenChat client" },
@@ -200,6 +206,7 @@ export async function createBrowserLinkPasskey(
             timeout: 120_000,
         },
     })) as PublicKeyCredential | null;
+    active();
     if (!result || result.type !== "public-key") throw new Error("Passkey creation cancelled");
     const credentialId = new Uint8Array(result.rawId);
     const response = result.response as AuthenticatorAttestationResponse;
@@ -220,6 +227,7 @@ export async function createBrowserLinkPasskey(
     const rpHash = new Uint8Array(
         await crypto.subtle.digest("SHA-256", new TextEncoder().encode(rpId)),
     );
+    active();
     const idLength = new DataView(
         authData.buffer,
         authData.byteOffset,

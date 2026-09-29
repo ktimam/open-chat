@@ -45,21 +45,24 @@ function editClientData(result: Assertion, changes: Record<string, unknown>) {
 
 describe("validated browser passkey picker", () => {
     const get = vi.fn();
+    const create = vi.fn();
     const network = vi.fn(() => {
         throw new Error("Unexpected network request");
     });
 
     beforeEach(() => {
         get.mockReset();
+        create.mockReset();
         network.mockClear();
         vi.stubGlobal("location", new URL(origin));
-        vi.stubGlobal("navigator", { credentials: { get } });
+        vi.stubGlobal("navigator", { credentials: { get, create } });
         vi.stubGlobal("crypto", webcrypto);
         vi.stubGlobal("fetch", network);
     });
 
     afterEach(() => {
         expect(network).not.toHaveBeenCalled();
+        expect(create).not.toHaveBeenCalled();
         vi.unstubAllGlobals();
     });
 

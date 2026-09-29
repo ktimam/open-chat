@@ -171,7 +171,7 @@ describe("explicit browser-link credential creation", () => {
         response: { clientDataJSON: Uint8Array; getAuthenticatorData: () => Uint8Array };
     };
 
-    async function run(mutate?: (value: SyntheticCreation) => void) {
+    async function run(mutate?: (value: SyntheticCreation) => void, signal?: AbortSignal) {
         vi.stubGlobal("crypto", webcrypto);
         vi.stubGlobal("location", new URL("http://localhost:5187"));
         const create = vi.fn(async (options: CredentialCreationOptions) => {
@@ -207,13 +207,14 @@ describe("explicit browser-link credential creation", () => {
             return value;
         });
         vi.stubGlobal("navigator", { credentials: { create } });
-        const pending = createBrowserLinkPasskey("localhost", "test-user");
+        const pending = createBrowserLinkPasskey("localhost", "test-user", signal);
         expect(create).toHaveBeenCalledOnce();
         return { create, pending };
     }
 
     it("requests an explicit discoverable UV-required key and returns public metadata only", async () => {
-        const { create, pending } = await run();
+        const controller = new AbortController();
+        const { create, pending } = await run(undefined, controller.signal);
         await expect(pending).resolves.toMatchObject({
             origin: "localhost",
             credentialId: key.credentialId,
@@ -224,6 +225,48 @@ describe("explicit browser-link credential creation", () => {
             pubKeyCredParams: [{ type: "public-key", alg: -7 }],
             authenticatorSelection: { residentKey: "required", userVerification: "required" },
         });
+        expect(create.mock.calls[0][0].signal).toBe(controller.signal);
+    });
+
+    it("does not open a creation picker for an already-cancelled page", async () => {
+        const controller = new AbortController();
+        controller.abort();
+        const create = vi.fn();
+        vi.stubGlobal("navigator", { credentials: { create } });
+        await expect(
+            createBrowserLinkPasskey("localhost", "test-user", controller.signal),
+        ).rejects.toMatchObject({ name: "AbortError" });
+        expect(create).not.toHaveBeenCalled();
+    });
+
+    it("propagates page cancellation to the active creation request without retrying", async () => {
+        const controller = new AbortController();
+        vi.stubGlobal("crypto", webcrypto);
+        vi.stubGlobal("location", new URL("http://localhost:5187"));
+        const create = vi.fn(
+            (options: CredentialCreationOptions) =>
+                new Promise<never>((_resolve, reject) => {
+                    options.signal!.addEventListener(
+                        "abort",
+                        () => reject(new DOMException("Cancelled", "AbortError")),
+                        { once: true },
+                    );
+                }),
+        );
+        vi.stubGlobal("navigator", { credentials: { create } });
+        const pending = createBrowserLinkPasskey("localhost", "test-user", controller.signal);
+        expect(create.mock.calls[0][0].signal).toBe(controller.signal);
+        const rejected = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+        controller.abort();
+        await rejected;
+        expect(create).toHaveBeenCalledOnce();
+    });
+
+    it("rejects a late creation result even when a provider ignores cancellation", async () => {
+        const controller = new AbortController();
+        const { create, pending } = await run(() => controller.abort(), controller.signal);
+        await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+        expect(create).toHaveBeenCalledOnce();
     });
 
     it.each(["type", "rp", "uv", "id", "origin", "challenge"])(
