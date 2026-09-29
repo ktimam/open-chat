@@ -9,6 +9,10 @@ import { localNativeAppHandoffBuildPlugin } from "../frontend/app/localNativeApp
 
 const canisters = Object.fromEntries(Object.values(UNOFFICIAL_LOCAL_CANISTERS).map((name) => [name, { ic: "aaaaa-aa" }]));
 const read = (name) => readFileSync(new URL(`../${name}`, import.meta.url), "utf8");
+const authPluginWiring = /localBrowserAuthBuildPlugin\(\{\s*enabled:\s*localTestApk\s*,/;
+const officialKeyWiring = /localClientBuild\s*\?\s*\{\s*queryPublicKey:\s*queryOfficialUserIndexPublicKey\s*,/;
+const bundledOnlyWiring = /bundle:\s*true\s*,\s*write:\s*false\s*,/;
+const nativeProfileWiring = /applicationId:\s*"dev\.openchatfork\.localtest"\s*,\s*transport:\s*"private-app-code-v1"\s*,/;
 
 test("local APK pins official backend, distinct identity and no production updates/signing", () => {
     const env = createUnofficialLocalApkEnvironment(canisters, { inherited: {
@@ -118,19 +122,32 @@ test("bridge capability is only granted by the explicit local overlay", () => {
 test("Rollup keeps local web mode independent and emits only bundled signer assets", () => {
     const rollup = read("frontend/app/rollup.config.mjs");
     assert.match(rollup, /localAppRelayPlugin\(\{ enabled: localWebBuild \}\)/);
-    assert.match(rollup, /localBrowserAuthBuildPlugin\(\{ enabled: localTestApk/);
+    assert.match(rollup, authPluginWiring);
     assert.match(rollup, /import.meta.env.OC_UNOFFICIAL_LOCAL_APK/);
-    assert.match(rollup, /localClientBuild \? \{ queryPublicKey: queryOfficialUserIndexPublicKey/);
+    assert.match(rollup, officialKeyWiring);
     const plugin = read("frontend/app/localBrowserAuthBuild.mjs");
     assert.match(plugin, /src=\\"\/sign-in.js\\"|src="\/sign-in.js"/);
-    assert.match(plugin, /bundle: true, write: false/);
+    assert.match(plugin, bundledOnlyWiring);
     assert.match(plugin, /fileName: "local-browser-auth.js"/);
     assert.match(rollup, /localNativeAppHandoffBuildPlugin\(\{ enabled: localTestApk \}\)/);
     const handoff = read("frontend/app/localNativeAppHandoffBuild.mjs");
     assert.match(handoff, /src="\/handoff.js"/);
     assert.match(handoff, /fileName: "local-native-app-handoff.js"/);
     assert.match(handoff, /fileName: "local-native-app-handoff-profile.json"/);
-    assert.match(handoff, /applicationId: "dev.openchatfork.localtest", transport: "private-app-code-v1"/);
+    assert.match(handoff, nativeProfileWiring);
+});
+
+test("formatted APK wiring checks still reject different flags, sources and destinations", () => {
+    for (const [pattern, compact, changed] of [
+        [authPluginWiring, "localBrowserAuthBuildPlugin({ enabled: localTestApk,", "localBrowserAuthBuildPlugin({ enabled: true,"],
+        [officialKeyWiring, "localClientBuild ? { queryPublicKey: queryOfficialUserIndexPublicKey,", "localClientBuild ? { queryPublicKey: queryDifferentPublicKey,"],
+        [bundledOnlyWiring, "bundle: true, write: false,", "bundle: true, write: true,"],
+        [nativeProfileWiring, 'applicationId: "dev.openchatfork.localtest", transport: "private-app-code-v1",', 'applicationId: "com.oclabs.openchat", transport: "private-app-code-v1",'],
+    ]) {
+        assert.match(compact, pattern);
+        assert.match(compact.replaceAll(" ", "\n    "), pattern);
+        assert.doesNotMatch(changed, pattern);
+    }
 });
 
 test("local native code never silently falls back to official passkeys or Firebase", () => {
