@@ -331,6 +331,34 @@ test("PR2 uses its own exact source-reviewed scope rather than relabelling PR1",
   assert.equal(result.binding.configSha256, hash(readFileSync(f.configFile)));
 });
 
+test("current-client uses its own bound inventory and cannot relabel a historical collection", async (t) => {
+  const f = fixture(t, { scope: "current-client" });
+  const result = await runRustFeatureAdvisoryFixture(f.args, {
+    transport: empty,
+  });
+  assert.equal(result.status, "completed");
+  assert.equal(
+    result.validation.profiles[0].id,
+    "current-client/windows-default",
+  );
+  assert.equal(result.binding.configSha256, hash(readFileSync(f.configFile)));
+  assert.equal(result.advisoryAcceptance, false);
+  assert.equal(result.networkRequestsPerformed, false);
+  let requests = 0;
+  const mislabeled = await runRustFeatureAdvisoryFixture(
+    { ...f.args, scope: "pr2" },
+    {
+      transport: async () => {
+        requests++;
+        return empty();
+      },
+    },
+  );
+  assert.equal(mislabeled.status, "failed");
+  assert.equal(mislabeled.failure.code, "INPUT_BINDING_FAILED");
+  assert.equal(requests, 0);
+});
+
 for (const [name, mutate] of [
   [
     "config",
@@ -683,6 +711,12 @@ test("CLI requires an explicit selected-registry query and denies arbitrary endp
     "query-selected-identities",
   ];
   assert.equal(parseRustFeatureRunnerArgs(argv).scope, "pr1");
+  assert.equal(
+    parseRustFeatureRunnerArgs(
+      argv.map((value) => (value === "pr1" ? "current-client" : value)),
+    ).scope,
+    "current-client",
+  );
   for (const bad of [
     argv.slice(0, -2),
     [...argv, "--url", endpoint],

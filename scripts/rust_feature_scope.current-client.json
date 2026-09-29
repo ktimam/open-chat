@@ -1,0 +1,1038 @@
+{
+  "schemaVersion": 1,
+  "reviewTextIdentity": "utf8-lf",
+  "feature": "unofficial-current-client-models-and-private-app-native-interface",
+  "sourceRevision": {
+    "base": "d1e3712bb9ded3a1c8b652492591b7107333b23e",
+    "head": "83edde00586c69bbb894f53e017aae8bc4b5c387"
+  },
+  "cargoLockSha256": "00a4aa346671f19728b2b4f30a6311b2022355fbcb8a65165d26ad0673956426",
+  "completeness": {
+    "status": "incomplete",
+    "unresolved": [
+      {
+        "id": "current-native-owner-review",
+        "description": "Explicit review must cover the current model IPC/runtime, local browser authentication and private handoff transports, shared schemas/errors, exact profile features and native build/asset selection before any advisory collection can claim complete roots."
+      }
+    ]
+  },
+  "profiles": [
+    {
+      "id": "android-arm64-local-webgpu",
+      "target": "aarch64-linux-android",
+      "features": [
+        "open-chat/transformers-webgpu-android",
+        "open-chat/local-test-browser-auth",
+        "open-chat/local-test-app-handoff"
+      ],
+      "metadataSha256": null,
+      "purpose": "Local-test APK only: all-WebGPU frontend, bounded browser authentication and private-app loopback handoff; not a public release."
+    },
+    {
+      "id": "android-x86_64-local-webgpu",
+      "target": "x86_64-linux-android",
+      "features": [
+        "open-chat/transformers-webgpu-android",
+        "open-chat/local-test-browser-auth",
+        "open-chat/local-test-app-handoff"
+      ],
+      "metadataSha256": null,
+      "purpose": "Local-test APK only: all-WebGPU frontend, bounded browser authentication and private-app loopback handoff; not a public release."
+    },
+    {
+      "id": "linux-default-tests",
+      "target": "x86_64-unknown-linux-gnu",
+      "features": [],
+      "metadataSha256": null,
+      "purpose": "Nonshipping host default plugin-library unit tests: cargo test --locked -p tauri-plugin-oc --lib. Protocol tests compile, optional listener and inference features do not."
+    },
+    {
+      "id": "linux-inference-check",
+      "target": "x86_64-unknown-linux-gnu",
+      "features": [
+        "open-chat/inference"
+      ],
+      "metadataSha256": null,
+      "purpose": "Nonshipping optional host compile check: cargo check --locked -p open-chat --features inference. Not the Android runtime or a published desktop build."
+    },
+    {
+      "id": "linux-inference-store-check",
+      "target": "x86_64-unknown-linux-gnu",
+      "features": [
+        "open-chat/inference",
+        "open-chat/store"
+      ],
+      "metadataSha256": null,
+      "purpose": "Nonshipping optional host compile check: cargo check --locked -p open-chat --features inference,store. Store compiles the alternate legacy OTA URL; no deployment or update is authorized."
+    },
+    {
+      "id": "windows-default-tests",
+      "target": "x86_64-pc-windows-msvc",
+      "features": [],
+      "metadataSha256": null,
+      "purpose": "Nonshipping host default plugin-library unit tests: cargo test --locked -p tauri-plugin-oc --lib. Protocol tests compile, optional listener and inference features do not."
+    },
+    {
+      "id": "windows-inference-check",
+      "target": "x86_64-pc-windows-msvc",
+      "features": [
+        "open-chat/inference"
+      ],
+      "metadataSha256": null,
+      "purpose": "Nonshipping optional host compile check: cargo check --locked -p open-chat --features inference. Not the Android runtime or a published desktop build."
+    },
+    {
+      "id": "windows-inference-store-check",
+      "target": "x86_64-pc-windows-msvc",
+      "features": [
+        "open-chat/inference",
+        "open-chat/store"
+      ],
+      "metadataSha256": null,
+      "purpose": "Nonshipping optional host compile check: cargo check --locked -p open-chat --features inference,store. Store compiles the alternate legacy OTA URL; no deployment or update is authorized."
+    }
+  ],
+  "sourceFiles": {
+    "Cargo.toml": "2fa5e17b29b6441f346e4ac62e55226c6028d9d6cdca180fd01e567b5f1500a8",
+    "frontend/tauri-plugin-oc/Cargo.toml": "8a4bd40892947657b9ee390acf03f8067fc2b6f9b917ab3b3c8cde25d28db122",
+    "frontend/src-tauri/Cargo.toml": "506f7673e941e540ff842380dfebd90105a65bfb5e8a8838a7f65697dec12bb5",
+    "frontend/tauri-plugin-oc/build.rs": "03927f8a41564985fa36548eed22078c8d286f085c3251d1fbebab4eca359215",
+    "frontend/src-tauri/build.rs": "09e49062eca8a2fde5addd0f98f6b5f87c08e0b2daa989502914a716bf5a5d4b",
+    "frontend/tauri-plugin-oc/src/model_manager.rs": "f4cfb33a9460e778dd7325b3d78e84a2eb71f056ee583061f340b3fae0963236",
+    "frontend/tauri-plugin-oc/src/inference.rs": "f7e13738502cd2e35de0afd878f5467a624cb2195565cc612a09b48498aa095f",
+    "frontend/tauri-plugin-oc/src/models.rs": "ff0e90d4cc0f5629379967fe6e3fa085c1663432492ab84f08b9998d9bd74a07",
+    "frontend/tauri-plugin-oc/src/commands.rs": "a4acc658533c426993947ca788eca155e7e006b4e5e9ab9b8c6253d9ccc4e90f",
+    "frontend/tauri-plugin-oc/src/lib.rs": "a83db63ff1ff2c83fcd0b50d548da4fc5903a33e3eed9edb57dd1134beb4a5dd",
+    "frontend/tauri-plugin-oc/src/error.rs": "4c2471f227f3b47954dcfab294c5e7c1a0a6da4ac7714c02b648f340f44e6b4e",
+    "frontend/tauri-plugin-oc/src/desktop.rs": "994fc056e823f943f905b77efb9544cfce737e7bde6fdad06db1aa0d165163b1",
+    "frontend/tauri-plugin-oc/src/mobile.rs": "6490d63cd39c43918338e0dd010d59da27c3ec46f35ca64c97bf8514da2f2877",
+    "frontend/tauri-plugin-oc/src/bundle_manager.rs": "d6d534e5a2daec09af940d91a408666361f4ad45e5bfd7f8cc5d7e6d7503446f",
+    "frontend/tauri-plugin-oc/src/update_manager.rs": "44072afcb06efca06e4527140b9eba84868f17c9cfba54dc139967c2ef865cac",
+    "frontend/tauri-plugin-oc/src/local_browser_auth_protocol.rs": "2ea119b47da60304be7bf1d9403dcc7481d1cd1eb3555d3ce19a2764e06f1439",
+    "frontend/tauri-plugin-oc/src/local_app_handoff_protocol.rs": "0c881e347101cb1b26ddc254450a02d25c58e5cba45392e4617f02aecbc6a2ca",
+    "frontend/tauri-plugin-oc/src/local_browser_auth.rs": "6cb04c48d73d9a8a032368765ce70e7e5773ba3f3c7604abc7fb2eb18471f614",
+    "frontend/tauri-plugin-oc/src/local_app_handoff.rs": "9c0632334c939eaebf6853d123703942974c220cf573007a7ab09da70bd08614",
+    "frontend/src-tauri/src/lib.rs": "f2b3c4d29956531cfd2f55eb8397a9d0be7ee749a9c5df37fa11dbd8422bfa7d",
+    "frontend/src-tauri/src/main.rs": "e5dfab54c7a9843285d54ff5a783c00813cd3f28d1bb2f6982aa348697cbb1c4",
+    "frontend/src-tauri/src/navigation.rs": "0ddee2abb8f0eb2fbcf094fcb293d4b28423aab744a6b20319831f2fba9ee4b3",
+    "frontend/src-tauri/tauri.localtest.conf.json": "2fdafdc9b3d9afbd2671b7ac105879fe7ef894679f805a7717de7a7f2d535650",
+    "scripts/build-unofficial-local-apk.mjs": "4955e5d820c9b27361513a9b0d29751516fe1f0b9ea05b632a01525f3566b771"
+  },
+  "seeds": [
+    {
+      "id": "plugin.model.stream",
+      "ownerManifest": "frontend/tauri-plugin-oc/Cargo.toml",
+      "ownerPackage": "tauri-plugin-oc",
+      "dependencyName": "futures_util",
+      "kind": "normal",
+      "target": null,
+      "originContext": "production",
+      "expected": {
+        "name": "futures-util",
+        "version": "0.3.33",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "a77a90a256fce34da66415271e30f94ee91c57b04b8a2c042d9cf3220179deaa"
+      },
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu",
+        "linux-default-tests",
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-default-tests",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "review": {
+        "status": "source-traced",
+        "basis": "source-call-or-schema",
+        "notes": "The bounded native model download consumes the streamed response; not every workspace futures consumer."
+      },
+      "evidence": [
+        {
+          "path": "frontend/tauri-plugin-oc/src/model_manager.rs",
+          "lines": [
+            1,
+            621
+          ]
+        }
+      ]
+    },
+    {
+      "id": "plugin.model-and-handoff.url",
+      "ownerManifest": "frontend/tauri-plugin-oc/Cargo.toml",
+      "ownerPackage": "tauri-plugin-oc",
+      "dependencyName": "reqwest",
+      "kind": "normal",
+      "target": null,
+      "originContext": "production",
+      "expected": {
+        "name": "reqwest",
+        "version": "0.12.28",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
+      },
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu",
+        "linux-default-tests",
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-default-tests",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "review": {
+        "status": "source-traced",
+        "basis": "source-call-or-schema",
+        "notes": "Native model downloads/probes use this owner; the always-compiled private handoff protocol also uses reqwest::Url parsing (no outbound handoff request)."
+      },
+      "evidence": [
+        {
+          "path": "frontend/tauri-plugin-oc/src/model_manager.rs",
+          "lines": [
+            2,
+            339
+          ]
+        }
+      ]
+    },
+    {
+      "id": "plugin.schemas",
+      "ownerManifest": "frontend/tauri-plugin-oc/Cargo.toml",
+      "ownerPackage": "tauri-plugin-oc",
+      "dependencyName": "serde",
+      "kind": "normal",
+      "target": null,
+      "originContext": "production",
+      "expected": {
+        "name": "serde",
+        "version": "1.0.229",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "4148590afebada386688f18773da617792bf2ef03ffc1e4cbd2b1d45b023e0ba"
+      },
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu",
+        "linux-default-tests",
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-default-tests",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "review": {
+        "status": "source-traced",
+        "basis": "source-call-or-schema",
+        "notes": "Native model IPC and nested fields contain serde derives; generic app/auth protocols and bridge profiles share this owner."
+      },
+      "evidence": [
+        {
+          "path": "frontend/tauri-plugin-oc/src/models.rs",
+          "lines": [
+            1,
+            121,
+            206
+          ]
+        }
+      ]
+    },
+    {
+      "id": "plugin.json",
+      "ownerManifest": "frontend/tauri-plugin-oc/Cargo.toml",
+      "ownerPackage": "tauri-plugin-oc",
+      "dependencyName": "serde_json",
+      "kind": "normal",
+      "target": null,
+      "originContext": "production",
+      "expected": {
+        "name": "serde_json",
+        "version": "1.0.151",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
+      },
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu",
+        "linux-default-tests",
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-default-tests",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "review": {
+        "status": "source-traced",
+        "basis": "source-call-or-schema",
+        "notes": "Strict generic private-handoff JSON schema/state, model manifests and local auth candidate serialization share this owner."
+      },
+      "evidence": [
+        {
+          "path": "frontend/tauri-plugin-oc/src/local_app_handoff_protocol.rs",
+          "lines": [
+            4,
+            124
+          ]
+        }
+      ]
+    },
+    {
+      "id": "plugin.hash",
+      "ownerManifest": "frontend/tauri-plugin-oc/Cargo.toml",
+      "ownerPackage": "tauri-plugin-oc",
+      "dependencyName": "sha2",
+      "kind": "normal",
+      "target": null,
+      "originContext": "production",
+      "expected": {
+        "name": "sha2",
+        "version": "0.10.9",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283"
+      },
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu",
+        "linux-default-tests",
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-default-tests",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "review": {
+        "status": "source-traced",
+        "basis": "source-call-or-schema",
+        "notes": "Approved handoff proof hashes and verified model file hashes use SHA-256; production context is retained even though host tests exercise helpers."
+      },
+      "evidence": [
+        {
+          "path": "frontend/tauri-plugin-oc/src/local_app_handoff_protocol.rs",
+          "lines": [
+            5,
+            162
+          ]
+        }
+      ]
+    },
+    {
+      "id": "plugin.hex",
+      "ownerManifest": "frontend/tauri-plugin-oc/Cargo.toml",
+      "ownerPackage": "tauri-plugin-oc",
+      "dependencyName": "hex",
+      "kind": "normal",
+      "target": null,
+      "originContext": "production",
+      "expected": {
+        "name": "hex",
+        "version": "0.4.3",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
+      },
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu",
+        "linux-default-tests",
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-default-tests",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "review": {
+        "status": "source-traced",
+        "basis": "source-call-or-schema",
+        "notes": "Proof decoding, model checksum encoding, optional inference identity decoding, and random transport IDs use the same direct hex edge."
+      },
+      "evidence": [
+        {
+          "path": "frontend/tauri-plugin-oc/src/local_app_handoff_protocol.rs",
+          "lines": [
+            166
+          ]
+        }
+      ]
+    },
+    {
+      "id": "plugin.ipc",
+      "ownerManifest": "frontend/tauri-plugin-oc/Cargo.toml",
+      "ownerPackage": "tauri-plugin-oc",
+      "dependencyName": "tauri",
+      "kind": "normal",
+      "target": null,
+      "originContext": "production",
+      "expected": {
+        "name": "tauri",
+        "version": "2.11.5",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "667b20e2726d572dea2de7370da16e188eb06008faf9a92fab7cdc46791190b5"
+      },
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu",
+        "linux-default-tests",
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-default-tests",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "review": {
+        "status": "source-traced",
+        "basis": "source-call-or-schema",
+        "notes": "Feature-owned Tauri IPC commands, window checks, managed state, asset resolution, native runtime and nested errors. Unrelated core command behavior is not audited."
+      },
+      "evidence": [
+        {
+          "path": "frontend/tauri-plugin-oc/src/commands.rs",
+          "lines": [
+            1,
+            20,
+            341
+          ]
+        }
+      ]
+    },
+    {
+      "id": "plugin.model.async",
+      "ownerManifest": "frontend/tauri-plugin-oc/Cargo.toml",
+      "ownerPackage": "tauri-plugin-oc",
+      "dependencyName": "tokio",
+      "kind": "normal",
+      "target": null,
+      "originContext": "production",
+      "expected": {
+        "name": "tokio",
+        "version": "1.53.1",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "202caea871b69668250d242070849eb495be178ed697a3e98aebce5bc81a0bed"
+      },
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu",
+        "linux-default-tests",
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-default-tests",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "review": {
+        "status": "source-traced",
+        "basis": "source-call-or-schema",
+        "notes": "Native model download/DNS/synchronization; optional inference spawn_blocking and local listener async operations retain this runtime owner."
+      },
+      "evidence": [
+        {
+          "path": "frontend/tauri-plugin-oc/src/model_manager.rs",
+          "lines": [
+            13,
+            317
+          ]
+        }
+      ]
+    },
+    {
+      "id": "plugin.model.resources",
+      "ownerManifest": "frontend/tauri-plugin-oc/Cargo.toml",
+      "ownerPackage": "tauri-plugin-oc",
+      "dependencyName": "sysinfo",
+      "kind": "normal",
+      "target": null,
+      "originContext": "production",
+      "expected": {
+        "name": "sysinfo",
+        "version": "0.33.1",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "4fc858248ea01b66f19d8e8a6d55f41deaf91e9d495246fd01368d99935c6c01"
+      },
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu",
+        "linux-default-tests",
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-default-tests",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "review": {
+        "status": "source-traced",
+        "basis": "source-call-or-schema",
+        "notes": "The model selection resource probe reads available RAM and disk via this direct owner."
+      },
+      "evidence": [
+        {
+          "path": "frontend/tauri-plugin-oc/src/model_manager.rs",
+          "lines": [
+            761,
+            763
+          ]
+        }
+      ]
+    },
+    {
+      "id": "plugin.native.inference",
+      "ownerManifest": "frontend/tauri-plugin-oc/Cargo.toml",
+      "ownerPackage": "tauri-plugin-oc",
+      "dependencyName": "llama_cpp_2",
+      "kind": "normal",
+      "target": null,
+      "originContext": "production",
+      "expected": {
+        "name": "llama-cpp-2",
+        "version": "0.1.150",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "e82ec86fd73aaa7d8f4898cc4693410c217431506ba3237ea5c856127f49d84d"
+      },
+      "profiles": [
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "review": {
+        "status": "source-traced",
+        "basis": "source-call-or-schema",
+        "notes": "Optional host inference compile coverage only; not enabled by either all-WebGPU APK profile."
+      },
+      "evidence": [
+        {
+          "path": "frontend/tauri-plugin-oc/src/inference.rs",
+          "lines": [
+            17,
+            212
+          ]
+        }
+      ]
+    },
+    {
+      "id": "plugin.native.template",
+      "ownerManifest": "frontend/tauri-plugin-oc/Cargo.toml",
+      "ownerPackage": "tauri-plugin-oc",
+      "dependencyName": "minijinja",
+      "kind": "normal",
+      "target": null,
+      "originContext": "production",
+      "expected": {
+        "name": "minijinja",
+        "version": "2.21.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "cb3d648e68cea56d9858d535ee28f9538404e2dd8cb08ed0bd05dca379477f39"
+      },
+      "profiles": [
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "review": {
+        "status": "source-traced",
+        "basis": "source-call-or-schema",
+        "notes": "Optional native inference renders model-supplied Jinja templates; this runtime is not in the local Android all-WebGPU builds."
+      },
+      "evidence": [
+        {
+          "path": "frontend/tauri-plugin-oc/src/inference.rs",
+          "lines": [
+            262
+          ]
+        }
+      ]
+    },
+    {
+      "id": "plugin.native.template-python",
+      "ownerManifest": "frontend/tauri-plugin-oc/Cargo.toml",
+      "ownerPackage": "tauri-plugin-oc",
+      "dependencyName": "minijinja_contrib",
+      "kind": "normal",
+      "target": null,
+      "originContext": "production",
+      "expected": {
+        "name": "minijinja-contrib",
+        "version": "2.21.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "85342f6fac0be8ccd5bd00d9066be538f34f393f577b75d81b17c8398a6b43bb"
+      },
+      "profiles": [
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "review": {
+        "status": "source-traced",
+        "basis": "source-call-or-schema",
+        "notes": "Optional host model-template compatibility; preserve its exact direct owner, separate from Android WebGPU."
+      },
+      "evidence": [
+        {
+          "path": "frontend/tauri-plugin-oc/src/inference.rs",
+          "lines": [
+            264
+          ]
+        }
+      ]
+    },
+    {
+      "id": "plugin.loopback.bytes",
+      "ownerManifest": "frontend/tauri-plugin-oc/Cargo.toml",
+      "ownerPackage": "tauri-plugin-oc",
+      "dependencyName": "bytes",
+      "kind": "normal",
+      "target": null,
+      "originContext": "production",
+      "expected": {
+        "name": "bytes",
+        "version": "1.12.1",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
+      },
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu"
+      ],
+      "review": {
+        "status": "source-traced",
+        "basis": "source-call-or-schema",
+        "notes": "Both local transports use bytes in their actual optional feature-gated listeners. Only the exact local-test APK profiles enable these features; default/inference host checks do not."
+      },
+      "evidence": [
+        {
+          "path": "frontend/tauri-plugin-oc/src/local_app_handoff.rs",
+          "lines": [
+            4
+          ]
+        }
+      ]
+    },
+    {
+      "id": "plugin.loopback.getrandom",
+      "ownerManifest": "frontend/tauri-plugin-oc/Cargo.toml",
+      "ownerPackage": "tauri-plugin-oc",
+      "dependencyName": "getrandom",
+      "kind": "normal",
+      "target": null,
+      "originContext": "production",
+      "expected": {
+        "name": "getrandom",
+        "version": "0.3.4",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd"
+      },
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu"
+      ],
+      "review": {
+        "status": "source-traced",
+        "basis": "source-call-or-schema",
+        "notes": "Both local transports use getrandom in their actual optional feature-gated listeners. Only the exact local-test APK profiles enable these features; default/inference host checks do not."
+      },
+      "evidence": [
+        {
+          "path": "frontend/tauri-plugin-oc/src/local_app_handoff.rs",
+          "lines": [
+            46
+          ]
+        }
+      ]
+    },
+    {
+      "id": "plugin.loopback.http-body-util",
+      "ownerManifest": "frontend/tauri-plugin-oc/Cargo.toml",
+      "ownerPackage": "tauri-plugin-oc",
+      "dependencyName": "http_body_util",
+      "kind": "normal",
+      "target": null,
+      "originContext": "production",
+      "expected": {
+        "name": "http-body-util",
+        "version": "0.1.4",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "e9f41fd6a08e4d4ec69df65976da761afd5ad5e58a9d4acb46bd1c953a9e3ff2"
+      },
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu"
+      ],
+      "review": {
+        "status": "source-traced",
+        "basis": "source-call-or-schema",
+        "notes": "Both local transports use http-body-util in their actual optional feature-gated listeners. Only the exact local-test APK profiles enable these features; default/inference host checks do not."
+      },
+      "evidence": [
+        {
+          "path": "frontend/tauri-plugin-oc/src/local_app_handoff.rs",
+          "lines": [
+            5
+          ]
+        }
+      ]
+    },
+    {
+      "id": "plugin.loopback.hyper",
+      "ownerManifest": "frontend/tauri-plugin-oc/Cargo.toml",
+      "ownerPackage": "tauri-plugin-oc",
+      "dependencyName": "hyper",
+      "kind": "normal",
+      "target": null,
+      "originContext": "production",
+      "expected": {
+        "name": "hyper",
+        "version": "1.11.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "d22053281f852e11534f5198498373cbb59295120a20771d90f7ed1897490a72"
+      },
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu"
+      ],
+      "review": {
+        "status": "source-traced",
+        "basis": "source-call-or-schema",
+        "notes": "Both local transports use hyper in their actual optional feature-gated listeners. Only the exact local-test APK profiles enable these features; default/inference host checks do not."
+      },
+      "evidence": [
+        {
+          "path": "frontend/tauri-plugin-oc/src/local_app_handoff.rs",
+          "lines": [
+            6
+          ]
+        }
+      ]
+    },
+    {
+      "id": "plugin.loopback.hyper-util",
+      "ownerManifest": "frontend/tauri-plugin-oc/Cargo.toml",
+      "ownerPackage": "tauri-plugin-oc",
+      "dependencyName": "hyper_util",
+      "kind": "normal",
+      "target": null,
+      "originContext": "production",
+      "expected": {
+        "name": "hyper-util",
+        "version": "0.1.20",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "96547c2556ec9d12fb1578c4eaf448b04993e7fb79cbaad930a656880a6bdfa0"
+      },
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu"
+      ],
+      "review": {
+        "status": "source-traced",
+        "basis": "source-call-or-schema",
+        "notes": "Both local transports use hyper-util in their actual optional feature-gated listeners. Only the exact local-test APK profiles enable these features; default/inference host checks do not."
+      },
+      "evidence": [
+        {
+          "path": "frontend/tauri-plugin-oc/src/local_app_handoff.rs",
+          "lines": [
+            7
+          ]
+        }
+      ]
+    },
+    {
+      "id": "plugin.host.open",
+      "ownerManifest": "frontend/tauri-plugin-oc/Cargo.toml",
+      "ownerPackage": "tauri-plugin-oc",
+      "dependencyName": "open",
+      "kind": "normal",
+      "target": null,
+      "originContext": "production",
+      "expected": {
+        "name": "open",
+        "version": "5.4.1",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "f9cfef937e9c486488c7e3d949ae31c0f1d06bdacd75b99c086cb35356e30408"
+      },
+      "profiles": [
+        "linux-default-tests",
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-default-tests",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "review": {
+        "status": "source-traced",
+        "basis": "source-call-or-schema",
+        "notes": "Existing native URL opener is reached by the generic app/browser handoff bridge on hosts. Android uses Tauri mobile dispatch instead."
+      },
+      "evidence": [
+        {
+          "path": "frontend/tauri-plugin-oc/src/desktop.rs",
+          "lines": [
+            29
+          ]
+        }
+      ]
+    },
+    {
+      "id": "plugin.error.derive",
+      "ownerManifest": "frontend/tauri-plugin-oc/Cargo.toml",
+      "ownerPackage": "tauri-plugin-oc",
+      "dependencyName": "thiserror",
+      "kind": "normal",
+      "target": null,
+      "originContext": "production",
+      "expected": {
+        "name": "thiserror",
+        "version": "2.0.19",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "09a43598840e33d5b0331f38c5e30d13bb11c11210a4b58f0d9b18a5a5eefcd9"
+      },
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu",
+        "linux-default-tests",
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-default-tests",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "review": {
+        "status": "source-traced",
+        "basis": "source-call-or-schema",
+        "notes": "The shared Result returned by the native URL/IPC bridge contains this derived error schema; all nested external error types are retained."
+      },
+      "evidence": [
+        {
+          "path": "frontend/tauri-plugin-oc/src/error.rs",
+          "lines": [
+            5
+          ]
+        }
+      ]
+    },
+    {
+      "id": "plugin.error.android-fs",
+      "ownerManifest": "frontend/tauri-plugin-oc/Cargo.toml",
+      "ownerPackage": "tauri-plugin-oc",
+      "dependencyName": "tauri_plugin_android_fs",
+      "kind": "normal",
+      "target": null,
+      "originContext": "production",
+      "expected": {
+        "name": "tauri-plugin-android-fs",
+        "version": "28.4.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "999e39313646a1f48f65270e75df20664a692bf28fa21f44a16bf8706c154f31"
+      },
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu",
+        "linux-default-tests",
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-default-tests",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "review": {
+        "status": "source-traced",
+        "basis": "source-call-or-schema",
+        "notes": "Nested shared native error variant is part of the bridge Result even on hosts; it is not omitted because its media call sites are outside the feature boundary."
+      },
+      "evidence": [
+        {
+          "path": "frontend/tauri-plugin-oc/src/error.rs",
+          "lines": [
+            14
+          ]
+        }
+      ]
+    },
+    {
+      "id": "plugin.bundle.mime",
+      "ownerManifest": "frontend/tauri-plugin-oc/Cargo.toml",
+      "ownerPackage": "tauri-plugin-oc",
+      "dependencyName": "mime_guess",
+      "kind": "normal",
+      "target": null,
+      "originContext": "production",
+      "expected": {
+        "name": "mime_guess",
+        "version": "2.0.5",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "f7c44f8e672c00fe5308fa235f821cb4198414e1c77935c1ab6948d3fd78550e"
+      },
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu",
+        "linux-default-tests",
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-default-tests",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "review": {
+        "status": "source-traced",
+        "basis": "source-call-or-schema",
+        "notes": "Native bundle serving determines cache MIME; this helper is compiled with the plugin. The local APK rejects OTA caches via bundled policy."
+      },
+      "evidence": [
+        {
+          "path": "frontend/tauri-plugin-oc/src/bundle_manager.rs",
+          "lines": [
+            109
+          ]
+        }
+      ]
+    },
+    {
+      "id": "plugin.bundle.version",
+      "ownerManifest": "frontend/tauri-plugin-oc/Cargo.toml",
+      "ownerPackage": "tauri-plugin-oc",
+      "dependencyName": "semver",
+      "kind": "normal",
+      "target": null,
+      "originContext": "production",
+      "expected": {
+        "name": "semver",
+        "version": "1.0.28",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
+      },
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu",
+        "linux-default-tests",
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-default-tests",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "review": {
+        "status": "source-traced",
+        "basis": "source-call-or-schema",
+        "notes": "Source-owned native bundled/cache compatibility gate keeps the local client from selecting an old live-production bundle. No legacy OTA downloader or unrelated backend root is added."
+      },
+      "evidence": [
+        {
+          "path": "frontend/tauri-plugin-oc/src/update_manager.rs",
+          "lines": [
+            3,
+            68
+          ]
+        }
+      ]
+    },
+    {
+      "id": "plugin.build",
+      "ownerManifest": "frontend/tauri-plugin-oc/Cargo.toml",
+      "ownerPackage": "tauri-plugin-oc",
+      "dependencyName": "tauri_plugin",
+      "kind": "build",
+      "target": null,
+      "originContext": "build",
+      "expected": {
+        "name": "tauri-plugin",
+        "version": "2.6.3",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "74be5dd4bed9afbd145e5716b5fa2ec28cbc29c34ffa61c258c9273d896c8020"
+      },
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu",
+        "linux-default-tests",
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-default-tests",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "review": {
+        "status": "source-traced",
+        "basis": "source-call-or-schema",
+        "notes": "Native build script generates permissions for the model commands and local bridges for each selected plugin profile."
+      },
+      "evidence": [
+        {
+          "path": "frontend/tauri-plugin-oc/build.rs",
+          "lines": [
+            51
+          ]
+        }
+      ]
+    },
+    {
+      "id": "app.shell",
+      "ownerManifest": "frontend/src-tauri/Cargo.toml",
+      "ownerPackage": "open-chat",
+      "dependencyName": "tauri",
+      "kind": "normal",
+      "target": null,
+      "originContext": "production",
+      "expected": {
+        "name": "tauri",
+        "version": "2.11.5",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "667b20e2726d572dea2de7370da16e188eb06008faf9a92fab7cdc46791190b5"
+      },
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu",
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "review": {
+        "status": "source-traced",
+        "basis": "source-call-or-schema",
+        "notes": "The selected open-chat shell instantiates the native plugin and bundled-window navigation. Core notification/deep-link behavior is not a new feature-owned root."
+      },
+      "evidence": [
+        {
+          "path": "frontend/src-tauri/src/lib.rs",
+          "lines": [
+            9,
+            74
+          ]
+        }
+      ]
+    },
+    {
+      "id": "app.build",
+      "ownerManifest": "frontend/src-tauri/Cargo.toml",
+      "ownerPackage": "open-chat",
+      "dependencyName": "tauri_build",
+      "kind": "build",
+      "target": null,
+      "originContext": "build",
+      "expected": {
+        "name": "tauri-build",
+        "version": "2.6.3",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "bc9ce40b16101cb6ea63d3e221567affd1c3a9205f95d7bc574941a10636b632"
+      },
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu",
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "review": {
+        "status": "source-traced",
+        "basis": "source-call-or-schema",
+        "notes": "Builds the current shell assets and local-test capabilities; not executed by plugin-only default host library tests."
+      },
+      "evidence": [
+        {
+          "path": "frontend/src-tauri/build.rs",
+          "lines": [
+            5
+          ]
+        }
+      ]
+    }
+  ]
+}

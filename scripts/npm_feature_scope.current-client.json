@@ -1,0 +1,482 @@
+{
+  "schemaVersion": 1,
+  "status": "draft",
+  "scopeId": "current-client-npm",
+  "seeds": [
+    {
+      "kind": "edge",
+      "from": "",
+      "name": "@huggingface/transformers",
+      "purpose": "Runtime: model and optional audio inference",
+      "evidence": [
+        {
+          "file": "frontend/app/src/workers/transformersWebGpuInference.worker.ts",
+          "contains": "\"@huggingface/transformers\""
+        }
+      ]
+    },
+    {
+      "kind": "edge",
+      "from": "",
+      "name": "@wllama/wllama",
+      "purpose": "Runtime: browser text inference",
+      "evidence": [
+        {
+          "file": "frontend/app/src/utils/webInference.ts",
+          "contains": "\"@wllama/wllama/esm/index.js\""
+        }
+      ]
+    },
+    {
+      "kind": "edge",
+      "from": "",
+      "name": "onnxruntime-web",
+      "purpose": "Runtime and Build: accelerated model execution and pinned graph transforms",
+      "evidence": [
+        {
+          "file": "frontend/app/src/utils/gemma4WebGpuEmbedding.ts",
+          "contains": "\"onnxruntime-web/webgpu\""
+        },
+        {
+          "file": "frontend/app/transformersWebGpuDecoderGraph.mjs",
+          "contains": "../node_modules/onnxruntime-web/lib/onnxjs/ort-schema/protobuf/onnx.js"
+        },
+        {
+          "file": "frontend/app/transformersWebGpuMropeGraph.mjs",
+          "contains": "../node_modules/onnxruntime-web/lib/onnxjs/ort-schema/protobuf/onnx.js"
+        },
+        {
+          "file": "frontend/app/transformersWebGpuDeepStackGraph.mjs",
+          "contains": "../node_modules/onnxruntime-web/lib/onnxjs/ort-schema/protobuf/onnx.js"
+        }
+      ]
+    },
+    {
+      "kind": "edge",
+      "from": "",
+      "name": "@noble/hashes",
+      "purpose": "Runtime: model asset hashing",
+      "evidence": [
+        {
+          "file": "frontend/app/src/utils/transformersWebGpuInference.ts",
+          "contains": "\"@noble/hashes/sha2.js\""
+        },
+        {
+          "file": "frontend/app/src/utils/transformersWebGpuArtifactTransform.ts",
+          "contains": "\"@noble/hashes/sha2.js\""
+        },
+        {
+          "file": "frontend/app/src/utils/imageSemanticDuplicateGuard.ts",
+          "contains": "\"@noble/hashes/sha2.js\""
+        }
+      ]
+    },
+    {
+      "kind": "edge",
+      "from": "",
+      "name": "svelte",
+      "purpose": "Runtime: model stores, private local-draft editor and navigation, native handoff state, and retained card display",
+      "evidence": [
+        {
+          "file": "frontend/app/src/stores/customModels.ts",
+          "contains": "\"svelte/store\""
+        },
+        {
+          "file": "frontend/app/src/utils/privateAppWorkspace.ts",
+          "contains": "import { get, writable } from \"svelte/store\";"
+        },
+        {
+          "file": "frontend/app/src/utils/nativeAppDelivery.ts",
+          "contains": "import { writable } from \"svelte/store\";"
+        },
+        {
+          "file": "frontend/app/src/components_shared/PrivateAppsWorkspace.svelte",
+          "contains": "\"svelte\""
+        },
+        {
+          "file": "frontend/app/src/components/App.svelte",
+          "contains": "import PrivateAppsWorkspace from \"@shared_components/PrivateAppsWorkspace.svelte\";"
+        },
+        {
+          "file": "frontend/app/src/components_mobile/App.svelte",
+          "contains": "import PrivateAppsWorkspace from \"@shared_components/PrivateAppsWorkspace.svelte\";"
+        }
+      ]
+    },
+    {
+      "kind": "edge",
+      "from": "",
+      "name": "tauri-plugin-oc-api",
+      "purpose": "Runtime: generic native model commands and immutable reviewed private-app handoff",
+      "evidence": [
+        {
+          "file": "frontend/app/src/utils/onDeviceInference.ts",
+          "contains": "\"tauri-plugin-oc-api\""
+        },
+        {
+          "file": "frontend/tauri-plugin-oc/package.json",
+          "contains": "\"@tauri-apps/api\""
+        },
+        {
+          "file": "frontend/app/src/utils/nativeAppDelivery.ts",
+          "contains": "\"tauri-plugin-oc-api/commands/localAppHandoff\""
+        }
+      ]
+    },
+    {
+      "kind": "edge",
+      "from": "",
+      "name": "@sinclair/typebox",
+      "purpose": "Runtime: model catalog schemas",
+      "evidence": [
+        {
+          "file": "frontend/openchat-agent/src/services/registry/modelCatalog.ts",
+          "contains": "\"@sinclair/typebox\""
+        }
+      ]
+    },
+    {
+      "kind": "edge",
+      "from": "",
+      "name": "@icp-sdk/core",
+      "purpose": "Runtime: model catalog canister transport",
+      "evidence": [
+        {
+          "file": "frontend/openchat-agent/src/services/registry/registry.client.ts",
+          "contains": "modelCatalog(): Promise<ModelCatalog>"
+        },
+        {
+          "file": "frontend/openchat-agent/src/services/canisterAgent/msgpack.ts",
+          "contains": "\"@icp-sdk/core/agent\""
+        },
+        {
+          "file": "frontend/openchat-shared/src/domain/aiAction.ts",
+          "contains": "import { Principal } from \"@icp-sdk/core/principal\";"
+        }
+      ]
+    },
+    {
+      "kind": "edge",
+      "from": "",
+      "name": "msgpackr",
+      "purpose": "Runtime: model catalog transport encoding",
+      "evidence": [
+        {
+          "file": "frontend/openchat-agent/src/services/registry/registry.client.ts",
+          "contains": "modelCatalog(): Promise<ModelCatalog>"
+        },
+        {
+          "file": "frontend/openchat-agent/src/utils/msgpack.ts",
+          "contains": "\"msgpackr\""
+        }
+      ]
+    },
+    {
+      "kind": "edge",
+      "from": "",
+      "name": "vite",
+      "purpose": "Build: model workers and fixed first-party browser handoff relay",
+      "evidence": [
+        {
+          "file": "frontend/app/build-workers.mjs",
+          "contains": "import { build } from \"vite\";"
+        },
+        {
+          "file": "frontend/app/build-workers.mjs",
+          "contains": "transformersWebGpuInference.worker.ts"
+        },
+        {
+          "file": "frontend/app/localAppRelayBuild.mjs",
+          "contains": "import { build } from \"vite\";"
+        },
+        {
+          "file": "frontend/app/vite.config.ts",
+          "contains": "localAppRelayPlugin({ enabled: unofficialLocalClient })"
+        },
+        {
+          "file": "frontend/app/rollup.config.mjs",
+          "contains": "localAppRelayPlugin({ enabled: localWebBuild })"
+        }
+      ]
+    },
+    {
+      "kind": "edge",
+      "from": "",
+      "name": "@tauri-apps/cli",
+      "purpose": "Build: separate unofficial local APK, with model and private-app native features",
+      "evidence": [
+        {
+          "file": "scripts/build-unofficial-local-apk.mjs",
+          "contains": "\"node_modules/@tauri-apps/cli/tauri.js\""
+        }
+      ]
+    },
+    {
+      "kind": "edge",
+      "from": "",
+      "name": "chokidar",
+      "purpose": "Build: model worker watch lifecycle",
+      "evidence": [
+        {
+          "file": "frontend/app/vite.config.ts",
+          "contains": "import chokidar from \"chokidar\";"
+        },
+        {
+          "file": "frontend/app/vite.config.ts",
+          "contains": "chokidar.watch(watchDirs"
+        }
+      ]
+    },
+    {
+      "kind": "edge",
+      "from": "",
+      "name": "rollup-plugin-copy",
+      "purpose": "Build: packaged model and app-declared optional OCR assets",
+      "evidence": [
+        {
+          "file": "frontend/app/rollup.config.mjs",
+          "contains": "import copy from \"rollup-plugin-copy\";"
+        },
+        {
+          "file": "frontend/app/rollup.config.mjs",
+          "contains": "onnxruntime-web/dist/"
+        },
+        {
+          "file": "frontend/app/rollup.config.mjs",
+          "contains": "...localExtractorCopyTargets,"
+        }
+      ]
+    },
+    {
+      "kind": "location",
+      "location": "node_modules/fs-extra",
+      "purpose": "Build: packaged model graph file access",
+      "evidence": [
+        {
+          "file": "frontend/app/rollup.config.mjs",
+          "contains": "import fs from \"fs-extra\";"
+        },
+        {
+          "file": "frontend/app/rollup.config.mjs",
+          "contains": "model-overrides/qwen3vl2b/onnx"
+        }
+      ]
+    },
+    {
+      "kind": "edge",
+      "from": "",
+      "name": "svelte-i18n",
+      "purpose": "Runtime: model manager translation rendering",
+      "evidence": [
+        {
+          "file": "frontend/app/src/components_mobile/home/user_profile/ModelManager.svelte",
+          "contains": "i18nKey"
+        },
+        {
+          "file": "frontend/app/src/i18n/i18n.ts",
+          "contains": "\"svelte-i18n\""
+        }
+      ]
+    },
+    {
+      "kind": "edge",
+      "from": "",
+      "name": "svelte-material-icons",
+      "purpose": "Runtime: mobile model manager Chip control icon",
+      "evidence": [
+        {
+          "file": "frontend/app/src/components_mobile/home/user_profile/ModelManager.svelte",
+          "contains": "Caption, Chip, Container"
+        },
+        {
+          "file": "frontend/component-lib/src/components/Chip.svelte",
+          "contains": "\"svelte-material-icons/Close.svelte\""
+        }
+      ]
+    },
+    {
+      "kind": "edge",
+      "from": "component-lib",
+      "name": "@tsconfig/svelte",
+      "purpose": "Build: model manager component TypeScript configuration",
+      "evidence": [
+        {
+          "file": "frontend/app/src/components_mobile/home/user_profile/ModelManager.svelte",
+          "contains": "\"component-lib\""
+        },
+        {
+          "file": "frontend/component-lib/tsconfig.json",
+          "contains": "\"@tsconfig/svelte/tsconfig.json\""
+        }
+      ]
+    },
+    {
+      "kind": "edge",
+      "from": "component-lib",
+      "name": "typescript",
+      "purpose": "Build: model manager component type declarations",
+      "evidence": [
+        {
+          "file": "frontend/app/src/components_mobile/home/user_profile/ModelManager.svelte",
+          "contains": "\"component-lib\""
+        },
+        {
+          "file": "frontend/component-lib/package.json",
+          "contains": "\"tsc --emitDeclarationOnly\""
+        }
+      ]
+    },
+    {
+      "kind": "edge",
+      "from": "",
+      "name": "tesseract.js",
+      "purpose": "Introduced runtime: app-selected optional OCR",
+      "evidence": [
+        {
+          "file": "frontend/app/src/utils/browserOcr.ts",
+          "contains": "const loaded = (await import(\"tesseract.js\")) as unknown as {"
+        },
+        {
+          "file": "frontend/app/src/utils/browserOcr.ts",
+          "contains": "return createWorker(languages, 1, {"
+        }
+      ]
+    },
+    {
+      "kind": "edge",
+      "from": "",
+      "name": "tesseract.js-core",
+      "purpose": "Introduced runtime asset: packaged OCR WebAssembly core",
+      "evidence": [
+        {
+          "file": "frontend/app/vite.config.ts",
+          "contains": "path: path.resolve(__dirname, `../node_modules/tesseract.js-core/${fileName}`),"
+        },
+        {
+          "file": "frontend/app/rollup.config.mjs",
+          "contains": "src: \"../node_modules/tesseract.js-core/{tesseract-core-relaxedsimd-lstm.wasm.js,tesseract-core-simd-lstm.wasm.js,tesseract-core-lstm.wasm.js}\","
+        }
+      ]
+    },
+    {
+      "kind": "edge",
+      "from": "",
+      "name": "@tesseract.js-data/eng",
+      "purpose": "Introduced runtime data: English OCR language profile",
+      "evidence": [
+        {
+          "file": "frontend/app/src/utils/browserOcr.ts",
+          "contains": "export const BROWSER_OCR_LANGUAGES = \"eng\";"
+        },
+        {
+          "file": "frontend/app/vite.config.ts",
+          "contains": "\"../node_modules/@tesseract.js-data/eng/4.0.0_best_int/eng.traineddata.gz\","
+        },
+        {
+          "file": "frontend/app/rollup.config.mjs",
+          "contains": "src: \"../node_modules/@tesseract.js-data/eng/4.0.0_best_int/eng.traineddata.gz\","
+        }
+      ]
+    },
+    {
+      "kind": "edge",
+      "from": "",
+      "name": "@tesseract.js-data/ara",
+      "purpose": "Introduced runtime data: Arabic OCR language profile",
+      "evidence": [
+        {
+          "file": "frontend/app/src/utils/browserOcr.ts",
+          "contains": "export const BROWSER_OCR_SEMANTIC_LANGUAGES = \"ara+eng\";"
+        },
+        {
+          "file": "frontend/app/vite.config.ts",
+          "contains": "\"../node_modules/@tesseract.js-data/ara/4.0.0_best_int/ara.traineddata.gz\","
+        },
+        {
+          "file": "frontend/app/rollup.config.mjs",
+          "contains": "src: \"../node_modules/@tesseract.js-data/ara/4.0.0_best_int/ara.traineddata.gz\","
+        }
+      ]
+    },
+    {
+      "kind": "edge",
+      "from": "",
+      "name": "idb",
+      "purpose": "Compatibility runtime: retained action-card message-cache reconciliation; private drafts themselves remain memory-only",
+      "evidence": [
+        {
+          "file": "frontend/openchat-agent/src/utils/chatsDb.ts",
+          "contains": "const reconciled = reconcileSuccessfulActionCard(message);"
+        },
+        {
+          "file": "frontend/openchat-agent/src/utils/chatsDb.ts",
+          "contains": "import { IndexedDbConnectionManager } from \"./indexedDb\";"
+        },
+        {
+          "file": "frontend/openchat-agent/src/utils/indexedDb.ts",
+          "contains": "openDB,"
+        }
+      ]
+    },
+    {
+      "kind": "edge",
+      "from": "tauri-plugin-oc",
+      "name": "@tauri-apps/api",
+      "purpose": "Runtime: model IPC and events plus approved private-app native handoff commands",
+      "evidence": [
+        {
+          "file": "frontend/tauri-plugin-oc/guest-js/commands/localAppHandoff.ts",
+          "contains": "import { invoke } from \"@tauri-apps/api/core\";"
+        },
+        {
+          "file": "frontend/tauri-plugin-oc/guest-js/commands/onDeviceModels.ts",
+          "contains": "import { listen, type UnlistenFn } from \"@tauri-apps/api/event\";"
+        },
+        {
+          "file": "frontend/tauri-plugin-oc/guest-js/index.ts",
+          "contains": "} from \"./commands/localAppHandoff\";"
+        }
+      ]
+    },
+    {
+      "kind": "location",
+      "location": "node_modules/esbuild",
+      "purpose": "Build: fixed native private-app handoff asset bundler; existing locked hoisted location, not an owner-manifest edge",
+      "evidence": [
+        {
+          "file": "frontend/app/localNativeAppHandoffBuild.mjs",
+          "contains": "import { build } from \"esbuild\";"
+        },
+        {
+          "file": "frontend/app/localNativeAppHandoffBuild.mjs",
+          "contains": "new URL(\"./src/localNativeAppHandoff.ts\", import.meta.url)"
+        },
+        {
+          "file": "frontend/app/rollup.config.mjs",
+          "contains": "localNativeAppHandoffBuildPlugin("
+        }
+      ]
+    }
+  ],
+  "sourceReview": {
+    "status": "reviewed-direct-feature-roots",
+    "textIdentity": "utf8-lf",
+    "boundary": "changed-feature-consumers-and-necessary-reached-edges",
+    "reviewedOn": "2026-09-29",
+    "scope": "Current unofficial client model, private local-app draft/editor/processor, retained card compatibility, optional app-declared OCR, and browser/native handoff consumers. This scope does not enable or require new backend canisters.",
+    "exclusions": [
+      "Historical PR1/PR2 inventories and advisory decisions are preserved separately, not accepted as current source snapshots.",
+      "Core authentication, chat, wallet, media, generic compiler/minifier/style dependencies and unrelated plugins are not selected by mixed-file coexistence.",
+      "Mixed entrypoints and build hooks have exact feature ownership anchors; only dedicated feature modules undergo direct-import scanning.",
+      "Private drafts are memory-only. The idb root covers retained action-card cache reconciliation, not new draft storage or remote pre-review verification.",
+      "Source ownership is not advisory, runtime, image-accuracy, phone, deployment or release acceptance."
+    ],
+    "snapshots": [
+      {
+        "workingTreeReview": "2026-09-29: reviewed current model/private-app/native composition, all dedicated direct package imports and necessary reached edges. Retains 24 still-source-owned roots and adds only the explicitly reviewed node_modules/esbuild location for the native handoff asset build. No package, lock, installation, advisory decision, prompt or backend changes.",
+        "reviewRecord": "npm_feature_scope.current-client.review.md",
+        "sha256": "33b3ad8615b578d6d0f4d36aca795ddcaeb6baef4804f842b730bcecf57f3856"
+      }
+    ]
+  }
+}

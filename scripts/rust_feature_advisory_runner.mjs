@@ -472,7 +472,7 @@ async function run(args, transport, kind, limitOverrides) {
     "Explicit runner arguments required",
   );
   assert(
-    ["pr1", "pr2"].includes(args.scope),
+    ["pr1", "pr2", "current-client"].includes(args.scope),
     "Explicit feature scope required",
   );
   assert.equal(
@@ -770,7 +770,7 @@ export function parseRustFeatureRunnerArgs(argv) {
     );
     args[name] = argv[i + 1];
   }
-  assert(["pr1", "pr2"].includes(args.scope));
+  assert(["pr1", "pr2", "current-client"].includes(args.scope));
   assert.equal(args.mode, "query-selected-identities");
   validHash(args.collectionSha256);
   return args;

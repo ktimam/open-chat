@@ -566,6 +566,61 @@ test("missing, mismatched and extra graph edges cannot silently shrink or expand
   assert.throws(f.collect, /mismatched inventory/u);
 });
 
+test("direct build location roots retain their closure and reject missing, relocated or drifted locks", () => {
+  const configured = () => {
+    const f = fixture();
+    const bundler = f.node("node_modules/esbuild");
+    const platform = f.node(
+      "node_modules/@esbuild/win32-x64",
+      "@esbuild/win32-x64",
+    );
+    f.edge(bundler, "@esbuild/win32-x64", platform, "optional");
+    f.config.seeds = [
+      {
+        kind: "location",
+        location: "node_modules/esbuild",
+        purpose: "Native handoff asset build",
+      },
+    ];
+    return { f, bundler, platform };
+  };
+  const { f } = configured();
+  assert.deepEqual(
+    f
+      .collect()
+      .packages.map((item) => item.location)
+      .sort(),
+    ["node_modules/@esbuild/win32-x64", "node_modules/esbuild"],
+  );
+  assert.equal(
+    f.pkg.dependencies.esbuild,
+    undefined,
+    "location roots must not invent manifest edges",
+  );
+  for (const mutate of [
+    ({ f }) => f.root.inventory.delete("node_modules/esbuild"),
+    ({ f }) => {
+      delete f.lock.packages["node_modules/esbuild"];
+    },
+    ({ f }) => {
+      f.config.seeds[0].location = "app/node_modules/esbuild";
+    },
+    ({ f }) => {
+      f.lock.packages["node_modules/esbuild"].version = "9.9.9";
+    },
+    ({ f }) => {
+      f.lock.packages["node_modules/esbuild"].integrity = undefined;
+    },
+    ({ f }) => {
+      delete f.lock.packages["node_modules/@esbuild/win32-x64"];
+    },
+  ]) {
+    const changed = configured();
+    mutate(changed);
+    assert.throws(changed.f.collect);
+  }
+});
+
 test("whole-project, private and unsupported seeds or runtime identities are rejected", () => {
   for (const mutate of [
     (f) => {

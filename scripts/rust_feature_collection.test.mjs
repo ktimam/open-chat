@@ -379,7 +379,7 @@ function fixture(t, scope = "pr1") {
     spawn,
   };
 }
-for (const scope of ["pr1", "pr2"]) {
+for (const scope of ["pr1", "pr2", "current-client"]) {
   test(
     scope +
       ": collects every configured profile with fixed offline commands and exports selected SBOM only",
@@ -661,10 +661,8 @@ test("source or tool mutation during the process invalidates collection before t
   }
 });
 
-test("real current config preparation validates all existing sources/profiles without invoking Cargo", (t) => {
-  const scope = existsSync(join(root, "scripts/rust_feature_scope.pr2.json"))
-    ? "pr2"
-    : "pr1";
+test("current-client preparation validates all existing native profiles without invoking Cargo", (t) => {
+  const scope = "current-client";
   const f = fixture(t);
   const configPath = join(
     root,
@@ -679,14 +677,14 @@ test("real current config preparation validates all existing sources/profiles wi
   assert.deepEqual(
     prepared.commands.map((command) => command.id).sort(),
     [
-      "android-arm64-transformers-webgpu",
-      "android-inference-store",
-      "wasm-default",
-      "windows-default",
-      "windows-inference",
-      ...(scope === "pr2"
-        ? ["linux-release-tool", "windows-release-tool"]
-        : []),
+      "android-arm64-local-webgpu",
+      "android-x86_64-local-webgpu",
+      "linux-default-tests",
+      "linux-inference-check",
+      "linux-inference-store-check",
+      "windows-default-tests",
+      "windows-inference-check",
+      "windows-inference-store-check",
     ].sort(),
     "Every declared feature/host profile must have a real offline metadata command",
   );
@@ -717,12 +715,19 @@ test("CLI requires exact explicit paths, scope, pin and offline mode without exe
     "collect-offline",
   ];
   assert.deepEqual(parseRustCollectionArgs(argv), f.args);
+  assert.equal(
+    parseRustCollectionArgs(
+      argv.map((value) => (value === "pr1" ? "current-client" : value)),
+    ).scope,
+    "current-client",
+  );
   for (const bad of [
     [],
     argv.slice(2),
     [...argv, "--profile", "default"],
     argv.map((value) => (value === "collect-offline" ? "query" : value)),
     argv.map((value) => (value === "--scope" ? "--mode" : value)),
+    argv.map((value) => (value === "pr1" ? "whole-repository" : value)),
   ])
     assert.throws(() => parseRustCollectionArgs(bad));
   assert.throws(() => collectRustFeatureMetadataFixture(f.args));

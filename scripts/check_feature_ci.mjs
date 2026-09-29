@@ -7,7 +7,10 @@ export const FEATURE_CI_NODE_VERSION = "24.18.1";
 export const NPM_FEATURE_CI_TEST_COMMAND =
   "node --test scripts/npm_feature_scope.test.mjs scripts/npm_feature_seed_review.test.mjs scripts/npm_feature_advisories.test.mjs scripts/npm_feature_advisories.review.test.mjs scripts/npm_feature_runtime.test.mjs scripts/check_feature_ci.test.mjs scripts/security_mode_scope.test.mjs scripts/security_owned_rules.test.mjs";
 export const npmFeatureQueryCommand = (scope) => {
-  assert(["pr1", "pr2"].includes(scope), "Explicit npm feature scope required");
+  assert(
+    ["pr1", "pr2", "current-client"].includes(scope),
+    "Explicit npm feature scope required",
+  );
   return [
     "set -euo pipefail",
     'npm_root="$(npm root --global)"',
@@ -124,7 +127,7 @@ export const RUST_FEATURE_FETCH_COMMAND = [
 ].join("\n");
 export const rustFeatureCiCommand = (scope) => {
   assert(
-    ["pr1", "pr2"].includes(scope),
+    ["pr1", "pr2", "current-client"].includes(scope),
     "Explicit Rust feature scope required",
   );
   return [
@@ -901,7 +904,13 @@ export function checkCurrentClientCi({
     runtimeChecked: ci,
     nodeVersion: FEATURE_CI_NODE_VERSION,
     securityScopeAcceptance: false,
-    unresolvedSecurityModes: ["pr1", "pr2"],
+    securityScope: "current-client",
+    separateSecurityWiringMode: "current-client-security",
+    securityEvidenceNotChecked: [
+      "dependency-collection",
+      "scoped-advisory-gates",
+      "hosted-workflow",
+    ],
     advisoryAcceptance: false,
     buildExecuted: false,
     releaseAcceptance: false,
@@ -1112,6 +1121,263 @@ export function checkFeatureCi({
   };
 }
 
+export const CURRENT_CLIENT_SECURITY_TEST_COMMAND =
+  "node --test " +
+  [
+    ...OFFLINE_FEATURE_HELPER_TESTS,
+    "scripts/check_feature_ci.current-client.test.mjs",
+    "scripts/check_current_client_licenses.test.mjs",
+  ].join(" ");
+
+export const CURRENT_CLIENT_LICENSE_COMMAND = [
+  "set -euo pipefail",
+  'cargo_path="$(rustup which --toolchain 1.95.0 cargo)"',
+  'node scripts/check_current_client_licenses.mjs --scope current-client --cargo-executable "$cargo_path"',
+].join("\n");
+
+export const CURRENT_CLIENT_FORMAT_BASE_EXPRESSION =
+  "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || (github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || 'd1e3712bb9ded3a1c8b652492591b7107333b23e' }}";
+
+/** Offline wiring only: this does not collect dependencies, query advisories, or accept a release. */
+export function checkCurrentClientSecurityCi({
+  securityText,
+  historicalModelText,
+  runtime = process.versions.node,
+  ci = false,
+}) {
+  if (ci) assert.equal(runtime, FEATURE_CI_NODE_VERSION, "CI Node runtime pin");
+  assert.equal(typeof securityText, "string");
+  assert(securityText.length > 0 && securityText.length < 100_000);
+  const text = securityText.replaceAll("\r\n", "\n");
+  const legacy = historicalModelText.replaceAll("\r\n", "\n");
+  requireRoutes(
+    text,
+    { pull_request: ["main"], push: ["main"], merge_group: ["main"] },
+    true,
+  );
+  const events = block(text, "on", 0);
+  assert.deepEqual(
+    [...events.matchAll(/^ {2}([a-z_]+):/gmu)].map((match) => match[1]),
+    ["pull_request", "push", "merge_group", "workflow_dispatch"],
+    "Only explicit main and manual security routes are supported",
+  );
+  for (const event of ["pull_request", "push", "merge_group"])
+    assert.equal(block(events, event, 2).trim(), "branches: [main]");
+  assert.equal(block(text, "permissions", 0).trim(), "contents: read");
+  assert.doesNotMatch(
+    text,
+    /^(?:defaults|env):/mu,
+    "No workflow execution overrides",
+  );
+  const inventory = checkNodeAndInstalls(
+    text,
+    [
+      "dependency-security",
+      "android-component-contracts",
+      "frontend-contracts",
+    ],
+    ["dependency-security", "frontend-contracts"],
+  );
+  const preservedJobs = [
+    "android-component-contracts",
+    "native-hermetic",
+    "frontend-contracts",
+    "real-text-inference",
+  ];
+  assert.deepEqual(
+    [...inventory.keys()].sort(),
+    ["dependency-security", ...preservedJobs].sort(),
+    "Current security workflow must retain every reviewed model job",
+  );
+  const historicalJobs = jobs(legacy);
+  for (const name of preservedJobs) {
+    let expectedJob = historicalJobs.get(name);
+    if (name === "native-hermetic") {
+      // Preserve historical jobs on their branches. The current workflow alone
+      // must not let a later successful PowerShell command mask a failed one.
+      const windowsSteps = steps(expectedJob).filter((step) =>
+        /^ {8}if: runner\.os == 'Windows'$/mu.test(step),
+      );
+      assert.equal(windowsSteps.length, 1);
+      assert.deepEqual(runs(windowsSteps[0]), [
+        "cargo check --locked -p open-chat --features inference\n" +
+          "cargo check --locked -p open-chat --features inference,store",
+      ]);
+      const guardedStep = windowsSteps[0].replace(
+        /^ {10}cargo check --locked -p open-chat --features inference(?:,store)?$/gmu,
+        (command) =>
+          command +
+          "\n          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }",
+      );
+      expectedJob = expectedJob.replace(windowsSteps[0], guardedStep);
+    }
+    assert.equal(
+      inventory.get(name).trim(),
+      expectedJob?.trim(),
+      "Preserve reviewed model job with only explicit failure strengthening: " +
+        name,
+    );
+  }
+  const job = inventory.get("dependency-security");
+  assert.match(job, /^ {4}runs-on: ubuntu-24\.04$/mu);
+  assert.doesNotMatch(job, /^ {4}(?:defaults|env|permissions):/mu);
+  const checkout = steps(job).filter((step) =>
+    /uses: actions\/checkout@/u.test(step),
+  );
+  assert.equal(checkout.length, 1);
+  assert.match(
+    checkout[0],
+    /^ {8}uses: actions\/checkout@11d5960a326750d5838078e36cf38b85af677262(?: # v4)?$/mu,
+  );
+  assert.match(checkout[0], /^ {10}fetch-depth: 0$/mu);
+  assert.doesNotMatch(
+    checkout[0],
+    /\bif:|\bcontinue-on-error:|^ {10}(?:ref|repository|path):/mu,
+  );
+  const node = steps(job).filter((step) =>
+    /uses: actions\/setup-node@/u.test(step),
+  );
+  assert.equal(node.length, 1);
+  assert.match(
+    node[0],
+    /^ {8}uses: actions\/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020(?: # v4)?$/mu,
+  );
+  assert.doesNotMatch(node[0], /\bif:|\bcontinue-on-error:/u);
+  const required = [
+    ["npm ci --no-audit", "frontend", false],
+    ["node --test scripts/security_dependency_hash.test.mjs", undefined, false],
+    ["node scripts/check_openchat_pr1_security.mjs format", ".", false],
+    [CURRENT_CLIENT_SECURITY_TEST_COMMAND, ".", false],
+    ["node scripts/check_feature_ci.mjs current-client-security", ".", false],
+    [npmFeatureSmokeCommand("current-client"), ".", true],
+    [npmFeatureQueryCommand("current-client"), ".", true],
+    [RUST_FEATURE_FETCH_COMMAND, ".", true],
+    [CURRENT_CLIENT_LICENSE_COMMAND, ".", true],
+    [rustFeatureCiCommand("current-client"), ".", true],
+  ];
+  assert.deepEqual(
+    commands(job).map(({ command }) => command),
+    required.map(([command]) => command),
+    "Exact source/test/runtime/query/fetch/license/Rust order; no extra execution",
+  );
+  for (const [expected, directory, literalBlock] of required) {
+    requiredCommand(
+      job,
+      (command) => command === expected,
+      "current-client security command",
+    );
+    const step = commands(job).find(({ command }) => command === expected).step;
+    assert.deepEqual(
+      [...step.matchAll(/^ {8}working-directory: (.+)$/gmu)].map(
+        (match) => match[1],
+      ),
+      directory ? [directory] : [],
+      "Exact current-client command directory",
+    );
+    assert.doesNotMatch(
+      step,
+      /^(?:shell:| {8}shell:)/mu,
+      "No security shell override",
+    );
+    if (expected === "npm ci --no-audit")
+      assert.equal(
+        block(step, "env", 8).trim(),
+        'ONNXRUNTIME_NODE_INSTALL: "skip"',
+      );
+    else if (expected === "node scripts/check_openchat_pr1_security.mjs format")
+      assert.equal(
+        block(step, "env", 8).trim(),
+        "PR_BASE_SHA: " + CURRENT_CLIENT_FORMAT_BASE_EXPRESSION,
+      );
+    else
+      assert.doesNotMatch(
+        step,
+        /^(?:env:| {8}env:)/mu,
+        "No security command environment override",
+      );
+    assert.match(
+      step,
+      literalBlock ? /^ {8}run: \|$/mu : /^ {8}run: [^|>\n][^\n]*$/mu,
+      "No folded/commented command substitution",
+    );
+  }
+  for (const [kind, expectedPaths] of [
+    ["npm", ["npm-feature-advisories-*"]],
+    ["rust", [...RUST_FEATURE_REPORT_PATHS]],
+  ]) {
+    const uploads = steps(job).filter((step) =>
+      step.includes(`name: openchat-current-client-scoped-${kind}-report`),
+    );
+    assert.equal(
+      uploads.length,
+      1,
+      "Current scoped report upload required: " + kind,
+    );
+    const upload = uploads[0];
+    assert.match(
+      upload,
+      /^ {8}uses: actions\/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02(?: # v4)?$/mu,
+    );
+    assert.match(upload, /^ {8}if: always\(\)$/mu);
+    assert.match(upload, /^ {10}if-no-files-found: error$/mu);
+    assert.doesNotMatch(upload, /\bcontinue-on-error:|\benv:|\bshell:/u);
+    const paths =
+      kind === "npm"
+        ? [
+            ...upload.matchAll(
+              /^ {10}path: \$\{\{ runner\.temp \}\}\/([^\n]+)$/gmu,
+            ),
+          ].map((match) => match[1])
+        : [
+            ...upload.matchAll(/^ {12}\$\{\{ runner\.temp \}\}\/([^\n]+)$/gmu),
+          ].map((match) => match[1]);
+    if (kind === "rust") assert.match(upload, /^ {10}path: \|$/mu);
+    assert.deepEqual(
+      paths,
+      expectedPaths,
+      "Upload selected evidence, never raw workspace metadata",
+    );
+  }
+  assert.equal(
+    steps(job).length,
+    required.length + 4,
+    "Only reviewed checkout/setup/commands/uploads are permitted",
+  );
+  return {
+    pass: true,
+    mode: "current-client-security",
+    scope: "current-client",
+    runtimeChecked: ci,
+    nodeVersion: FEATURE_CI_NODE_VERSION,
+    preservedModelJobs: preservedJobs,
+    modelJobStrengthenings: ["native-hermetic-windows-per-command-exit-checks"],
+    advisoryQueriesExecuted: false,
+    advisoryAcceptance: false,
+    dependencyCollectionExecuted: false,
+    buildExecuted: false,
+    releaseAcceptance: false,
+  };
+}
+
+export function readCurrentClientSecurityInputs(repositoryRoot) {
+  return {
+    securityText: readFileSync(
+      resolve(
+        repositoryRoot,
+        ".github/workflows/unofficial_client_security.yaml",
+      ),
+      "utf8",
+    ),
+    historicalModelText: readFileSync(
+      resolve(
+        repositoryRoot,
+        ".github/workflows/on_device_model_security.yaml",
+      ),
+      "utf8",
+    ),
+  };
+}
+
 export function readFeatureWorkflows(repositoryRoot, slice) {
   assert(
     ["pr1", "pr2"].includes(slice),
@@ -1142,13 +1408,22 @@ if (
   assert.equal(
     process.argv.length,
     3,
-    "Usage: node scripts/check_feature_ci.mjs current-client|pr1|pr2|npm-pr1|npm-pr2",
+    "Usage: node scripts/check_feature_ci.mjs current-client|current-client-security|pr1|pr2|npm-pr1|npm-pr2",
   );
   if (process.argv[2] === "current-client") {
     console.log(
       JSON.stringify(
         checkCurrentClientCi({
           ...readCurrentClientInputs(root),
+          ci: process.env.CI === "true",
+        }),
+      ),
+    );
+  } else if (process.argv[2] === "current-client-security") {
+    console.log(
+      JSON.stringify(
+        checkCurrentClientSecurityCi({
+          ...readCurrentClientSecurityInputs(root),
           ci: process.env.CI === "true",
         }),
       ),

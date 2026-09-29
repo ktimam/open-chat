@@ -296,6 +296,12 @@ test("CLI requires exact explicit scope, producer, pin and executable mode", () 
     "check-scoped",
   ];
   assert.equal(parseRustFeatureCiArgs(argv).mode, "check-scoped");
+  assert.equal(
+    parseRustFeatureCiArgs(
+      argv.map((value) => (value === "pr1" ? "current-client" : value)),
+    ).scope,
+    "current-client",
+  );
   for (const changed of [
     argv.slice(0, -2),
     [...argv, "--allow-incomplete", "true"],

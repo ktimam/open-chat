@@ -12,6 +12,7 @@ import { Socket } from "node:net";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { loadNpmFeatureRuntime } from "./npm_feature_runtime.mjs";
+import { featureScopeVariants } from "./npm_feature_seed_review.mjs";
 import {
   runNpmFeatureScope,
   writeNewScopeReport,
@@ -240,10 +241,7 @@ export async function runNpmFeatureRuntimeSmoke(options) {
     false,
     "runtime smoke accepts offline plan mode only",
   );
-  assert(
-    ["pr1", "pr2"].includes(options.variant),
-    "explicit smoke scope required",
-  );
+  featureScopeVariants(options.variant);
   const repositoryRoot = realpathSync(options.repositoryRoot);
   const outputDirectory = realpathSync(options.outputDirectory);
   const rel = relative(repositoryRoot, outputDirectory);

@@ -135,6 +135,23 @@ test("composes inherited model and app scopes without dropping another selected 
   assert.deepEqual(plan.payload["model-runtime"], ["1.2.3", "2.0.0"]);
 });
 
+test("current-client plan stays a separate source-reviewed composition with unchanged advisory enforcement", () => {
+  const current = inventory("current-client-npm");
+  const plan = planFeatureAdvisories([current]);
+  assert(plan.selected.every((item) => item.scopeId === "current-client-npm"));
+  assert.equal(plan.wholeRepositoryCoverage, false);
+  assert.equal(
+    evaluateFeatureAdvisories(plan, { "model-runtime": [advisory()] }, semver)
+      .knownAdvisoriesPass,
+    false,
+  );
+  for (const old of [inventory(), inventory("pr2-app-card-ocr-npm")])
+    assert.throws(
+      () => planFeatureAdvisories([current, old]),
+      /cannot be mixed/u,
+    );
+});
+
 for (const [label, mutate] of [
   ["unreviewed source scope", (v) => (v.scopeId = "whole-core")],
   ["false inventory approval", (v) => (v.status = "approved")],
@@ -322,6 +339,17 @@ test("requires explicit scope, runtime, output and a separate query mode", () =>
     "plan",
   ];
   assert.equal(parseFeatureAdvisoryArgs(args).queryBulk, false);
+  const current = [...args];
+  current[3] = "current-client";
+  assert.equal(parseFeatureAdvisoryArgs(current).variant, "current-client");
+  assert.equal(parseFeatureAdvisoryArgs(current).queryBulk, false);
+  for (const variant of ["main", "whole-core", "current-client-npm"]) {
+    current[3] = variant;
+    assert.throws(
+      () => parseFeatureAdvisoryArgs(current),
+      /explicit reviewed feature scope/u,
+    );
+  }
   assert.equal(
     parseFeatureAdvisoryArgs([...args.slice(0, -1), "query-bulk"]).queryBulk,
     true,

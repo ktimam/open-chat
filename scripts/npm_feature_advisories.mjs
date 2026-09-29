@@ -10,7 +10,10 @@ import {
   runNpmFeatureScope,
   writeNewScopeReport,
 } from "./npm_feature_scope.mjs";
-import { reviewFeatureSeeds } from "./npm_feature_seed_review.mjs";
+import {
+  featureScopeVariants,
+  reviewFeatureSeeds,
+} from "./npm_feature_seed_review.mjs";
 import { loadNpmFeatureRuntime } from "./npm_feature_runtime.mjs";
 
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
@@ -19,7 +22,11 @@ const record = (value) =>
 export const BULK_URL =
   "https://registry.npmjs.org/-/npm/v1/security/advisories/bulk";
 const MAX_BYTES = 4 * 1024 * 1024;
-const knownScopes = new Set(["pr1-model-npm", "pr2-app-card-ocr-npm"]);
+const knownScopes = new Set([
+  "pr1-model-npm",
+  "pr2-app-card-ocr-npm",
+  "current-client-npm",
+]);
 // Only locally assigned categories and numeric status may enter a failure receipt.
 // Never copy exception text, response headers, paths or registry configuration.
 const bulkFailureDetails = new WeakMap();
@@ -47,6 +54,12 @@ export function planFeatureAdvisories(inventories, semver) {
     Array.isArray(inventories) &&
       inventories.length >= 1 &&
       inventories.length <= 2,
+  );
+  assert(
+    !inventories.some(
+      (inventory) => inventory.scopeId === "current-client-npm",
+    ) || inventories.length === 1,
+    "current-client inventory cannot be mixed with historical PR inventories",
   );
   const names = new Map();
   const selected = [];
@@ -402,7 +415,7 @@ export async function runFeatureAdvisories({
   outputDirectory,
   queryBulk = false,
 }) {
-  assert(["pr1", "pr2"].includes(variant), "explicit PR scope required");
+  const variants = featureScopeVariants(variant);
   const root = realpathSync(repositoryRoot);
   const directory = realpathSync(outputDirectory);
   const rel = relative(root, directory);
@@ -419,7 +432,6 @@ export async function runFeatureAdvisories({
   let advisoryRequestAttempted = false;
   let httpStatus;
   try {
-    const variants = variant === "pr2" ? ["pr1", "pr2"] : ["pr1"];
     const runtime = loadNpmFeatureRuntime(arboristPath);
     const semver = runtime.semver;
     const inventories = [];
@@ -612,6 +624,7 @@ export function parseFeatureAdvisoryArgs(args) {
     ["plan", "query-bulk"].includes(options.mode),
     "explicit mode required",
   );
+  featureScopeVariants(options.variant);
   return { ...options, queryBulk: options.mode === "query-bulk" };
 }
 

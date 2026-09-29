@@ -127,7 +127,7 @@ function validateArgs(args) {
     "repositoryRoot",
     "scope",
   ]);
-  assert(["pr1", "pr2"].includes(args.scope));
+  assert(["pr1", "pr2", "current-client"].includes(args.scope));
   assert.equal(
     args.mode,
     "check-scoped",

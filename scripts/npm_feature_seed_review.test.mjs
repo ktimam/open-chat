@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import {
+  assertReviewedFeatureImports,
   assertReviewedSourceFingerprint,
+  featureDependencySpecifiers,
   featureOwnedFiles,
+  featureScopeVariants,
   reviewFeatureSeeds,
   seedSourceFingerprint,
   sourceReviewFingerprintFromBytes,
@@ -91,6 +94,168 @@ test("source fingerprint rejects malformed UTF-8, duplicate paths and ambiguous 
 });
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+test("current-client is an explicit composition, never a historical-scope fallback", () => {
+  assert.deepEqual(featureScopeVariants("current-client"), ["current-client"]);
+  assert.deepEqual(featureScopeVariants("pr1"), ["pr1"]);
+  assert.deepEqual(featureScopeVariants("pr2"), ["pr1", "pr2"]);
+  for (const scope of [
+    undefined,
+    "",
+    "main",
+    "whole-core",
+    "current-client-npm",
+  ])
+    assert.throws(
+      () => featureScopeVariants(scope),
+      /explicit reviewed feature scope/u,
+    );
+});
+
+test("historical PR inventories retain their original identities and reviewed snapshots", () => {
+  for (const [variant, scopeId, roots, snapshot] of [
+    [
+      "pr1",
+      "pr1-model-npm",
+      18,
+      "b03408dc47dbc46d8eceb4789b695206c6abe4f372a3385ee36fa017558290cf",
+    ],
+    [
+      "pr2",
+      "pr2-app-card-ocr-npm",
+      17,
+      "d89aed77c20b53f54e5b6e3c0663027cd7a5bfdf004b91d4f92dc9b68a0a3522",
+    ],
+  ]) {
+    const config = JSON.parse(
+      readFileSync(
+        resolve(root, `scripts/npm_feature_scope.${variant}.json`),
+        "utf8",
+      ),
+    );
+    assert.equal(config.scopeId, scopeId);
+    assert.equal(config.seeds.length, roots);
+    assert(
+      config.sourceReview.snapshots.some((entry) => entry.sha256 === snapshot),
+    );
+  }
+});
+
+test("current private-app, field-review and browser/native relay families are fingerprinted", () => {
+  const config = JSON.parse(
+    readFileSync(
+      resolve(root, "scripts/npm_feature_scope.current-client.json"),
+      "utf8",
+    ),
+  );
+  const owned = featureOwnedFiles(root, config.scopeId);
+  const fingerprint = seedSourceFingerprint(root, config);
+  assert.equal(new Set(owned).size, owned.length);
+  assert.equal(config.sourceReview.inherits, undefined);
+  for (const file of [
+    "frontend/app/localAppRelayBuild.mjs",
+    "frontend/app/localAppRelayHeaders.mjs",
+    "frontend/app/localNativeAppHandoffBuild.mjs",
+    "frontend/app/local-native-app-handoff.html",
+    "frontend/app/public/local-app-handoff.html",
+    "frontend/app/src/localAppHandoffRelay.ts",
+    "frontend/app/src/localNativeAppHandoff.ts",
+    "frontend/app/src/utils/isolatedAppProcessor.ts",
+    "frontend/app/src/utils/localAppCatalog.ts",
+    "frontend/app/src/utils/localAppChatConfiguration.ts",
+    "frontend/app/src/utils/localAppChatState.ts",
+    "frontend/app/src/utils/localAppDrafts.ts",
+    "frontend/app/src/utils/localAppDraftFields.ts",
+    "frontend/app/src/utils/localAppHandoff.ts",
+    "frontend/app/src/utils/localAppRelayDelivery.ts",
+    "frontend/app/src/utils/localAppCardPreview.ts",
+    "frontend/app/src/utils/privateAppWorkspace.ts",
+    "frontend/app/src/utils/nativeAppDelivery.ts",
+    "frontend/app/src/components_shared/PrivateAppsWorkspace.svelte",
+    "frontend/app/src/components_shared/PrivateAppDraftFields.svelte",
+    "frontend/app/src/components_shared/PrivateAppCardPreview.svelte",
+    "frontend/app/src/components_shared/LocalAppsChatSettings.svelte",
+    "frontend/openchat-service-worker/src/local_app_relay.ts",
+    "frontend/tauri-plugin-oc/guest-js/commands/localAppHandoff.ts",
+    "frontend/tauri-plugin-oc/guest-js/commands/onDeviceModels.ts",
+  ]) {
+    assert(owned.includes(file), file);
+    assert(fingerprint.files.includes(file), file);
+  }
+  for (const file of [
+    "frontend/app/src/components/home/ChatMessage.svelte",
+    "frontend/app/src/localBrowserAuth.ts",
+    "frontend/app/localBrowserAuthBuild.mjs",
+    "frontend/openchat-service-worker/src/service_worker.ts",
+    "frontend/app/src/components_shared/PrivateAppsWorkspace.card.spec.ts",
+    "frontend/app/src/components_shared/PrivateAppsNavigation.spec.shell.svelte",
+    "frontend/app/src/utils/localAppDrafts.md",
+  ])
+    assert(
+      !owned.includes(file),
+      `mixed core, unrelated auth, tests or docs must not become dedicated source: ${file}`,
+    );
+});
+
+test("native handoff bundler owns the reviewed locked esbuild location, not an invented manifest edge", () => {
+  const config = JSON.parse(
+    readFileSync(
+      resolve(root, "scripts/npm_feature_scope.current-client.json"),
+      "utf8",
+    ),
+  );
+  const seed = config.seeds.find(
+    (entry) => entry.location === "node_modules/esbuild",
+  );
+  assert.equal(seed.kind, "location");
+  assert.equal(seed.from, undefined);
+  assert(
+    seed.evidence.some(
+      (entry) =>
+        entry.file === "frontend/app/localNativeAppHandoffBuild.mjs" &&
+        entry.contains.includes('from "esbuild"'),
+    ),
+  );
+  for (const location of [
+    "node_modules/other",
+    "app/node_modules/esbuild",
+    "",
+  ]) {
+    const changed = structuredClone(config);
+    changed.seeds.find(
+      (entry) => entry.location === "node_modules/esbuild",
+    ).location = location;
+    assert.throws(() => reviewFeatureSeeds(root, changed), /root set changed/u);
+  }
+});
+
+test("all literal direct import forms reject unreviewed dependency roots", () => {
+  const names = new Set(["svelte", "@tauri-apps/api"]);
+  for (const text of [
+    'import value from "unreviewed";',
+    'export { value } from "unreviewed/subpath";',
+    'import "unreviewed/polyfill";',
+    'const value = import("unreviewed/subpath");',
+    'const value = require("unreviewed/subpath");',
+  ]) {
+    assert.equal(featureDependencySpecifiers(text).length, 1);
+    assert.throws(
+      () => assertReviewedFeatureImports(text, names),
+      /no reviewed root: unreviewed/u,
+    );
+  }
+  assert.doesNotThrow(() =>
+    assertReviewedFeatureImports(
+      [
+        'import { writable } from "svelte/store";',
+        'import { invoke } from "@tauri-apps/api/core";',
+        'import "./local-module";',
+        'import fs from "node:fs";',
+        'import { local } from "@utils/localAppDrafts";',
+      ].join("\n"),
+      names,
+    ),
+  );
+});
 test("all dedicated model build and runtime helpers participate in ownership discovery", () => {
   const expected = readdirSync(resolve(root, "frontend/app"))
     .filter(
@@ -209,13 +374,9 @@ test("dedicated session transform participates in model ownership and source fin
   );
 });
 
-// PR2 scope cannot silently disappear by deleting only its seed configuration.
-const scopes = [
-  "pr1",
-  ...(existsSync(resolve(root, ".github/workflows/openchat_pr2_security.yaml"))
-    ? ["pr2"]
-    : []),
-];
+// The current composition has its own mandatory source gate. Historical PR
+// selectors remain exercised above; their snapshots are not current approvals.
+const scopes = ["current-client"];
 for (const scope of scopes) {
   const config = JSON.parse(
     readFileSync(
@@ -225,9 +386,13 @@ for (const scope of scopes) {
   );
   test(`${scope}: reviewed feature roots match source ownership and owning declarations`, () => {
     const result = reviewFeatureSeeds(root, config);
-    assert.equal(result.roots, scope === "pr1" ? 18 : 17);
+    assert.equal(result.roots, 25);
     assert.equal(result.advisoryAcceptance, false);
     assert.equal(result.sourceTextIdentity, "utf8-lf");
+    for (const seed of config.seeds) {
+      assert(seed.purpose.length <= 512);
+      assert.match(seed.purpose, /^[A-Za-z0-9][A-Za-z0-9 .,:;()+-]*$/u);
+    }
   });
   test(`${scope}: exact current source fingerprints match both Linux LF and Windows CRLF bytes`, () => {
     const actual = seedSourceFingerprint(root, config);

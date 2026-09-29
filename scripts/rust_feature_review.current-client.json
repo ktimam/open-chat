@@ -1,0 +1,993 @@
+{
+  "schemaVersion": 1,
+  "configSha256": "1d230b97b5719777cce7b4d78c8f7fc928e4bec0baf6f011df2d3c5b85a299ad",
+  "boundary": "Current unofficial local client only: source-traced native model store/IPC, optional nonshipping host llama.cpp checks, local browser authentication and private-app loopback handoff, nested generic schemas/errors, native build hooks and bundled asset selection. Eight explicit profiles bind the two actual all-WebGPU APK ABIs and existing Linux/Windows default-library/inference/inference+store checks. Browser WebGPU/NPM and Android JVM dependencies have separate inventories; no OpenChat backend, removed custom card/action-inbox canisters, release-canister tooling, core dependency audit, advisory acceptance, model quality, device runtime or publication approval is claimed. Historical PR2 inventories remain verbatim historical evidence and are not current build acceptance.",
+  "units": [
+    {
+      "id": "plugin.model.stream",
+      "disposition": "external-owner-edges",
+      "explanation": "The bounded native model download consumes the streamed response; not every workspace futures consumer.",
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu",
+        "linux-default-tests",
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-default-tests",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "sources": [
+        {
+          "path": "frontend/tauri-plugin-oc/Cargo.toml",
+          "lines": [
+            2
+          ]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/model_manager.rs",
+          "lines": [
+            1,
+            621
+          ]
+        }
+      ],
+      "seeds": [
+        "plugin.model.stream"
+      ]
+    },
+    {
+      "id": "plugin.model-and-handoff.url",
+      "disposition": "external-owner-edges",
+      "explanation": "Native model downloads/probes use this owner; the always-compiled private handoff protocol also uses reqwest::Url parsing (no outbound handoff request).",
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu",
+        "linux-default-tests",
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-default-tests",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "sources": [
+        {
+          "path": "frontend/tauri-plugin-oc/Cargo.toml",
+          "lines": [
+            2
+          ]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/model_manager.rs",
+          "lines": [
+            2,
+            339
+          ]
+        }
+      ],
+      "seeds": [
+        "plugin.model-and-handoff.url"
+      ]
+    },
+    {
+      "id": "plugin.schemas",
+      "disposition": "external-owner-edges",
+      "explanation": "Native model IPC and nested fields contain serde derives; generic app/auth protocols and bridge profiles share this owner.",
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu",
+        "linux-default-tests",
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-default-tests",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "sources": [
+        {
+          "path": "frontend/tauri-plugin-oc/Cargo.toml",
+          "lines": [
+            2
+          ]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/models.rs",
+          "lines": [
+            1,
+            121,
+            206
+          ]
+        }
+      ],
+      "seeds": [
+        "plugin.schemas"
+      ]
+    },
+    {
+      "id": "plugin.json",
+      "disposition": "external-owner-edges",
+      "explanation": "Strict generic private-handoff JSON schema/state, model manifests and local auth candidate serialization share this owner.",
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu",
+        "linux-default-tests",
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-default-tests",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "sources": [
+        {
+          "path": "frontend/tauri-plugin-oc/Cargo.toml",
+          "lines": [
+            2
+          ]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/local_app_handoff_protocol.rs",
+          "lines": [
+            4,
+            124
+          ]
+        }
+      ],
+      "seeds": [
+        "plugin.json"
+      ]
+    },
+    {
+      "id": "plugin.hash",
+      "disposition": "external-owner-edges",
+      "explanation": "Approved handoff proof hashes and verified model file hashes use SHA-256; production context is retained even though host tests exercise helpers.",
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu",
+        "linux-default-tests",
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-default-tests",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "sources": [
+        {
+          "path": "frontend/tauri-plugin-oc/Cargo.toml",
+          "lines": [
+            2
+          ]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/local_app_handoff_protocol.rs",
+          "lines": [
+            5,
+            162
+          ]
+        }
+      ],
+      "seeds": [
+        "plugin.hash"
+      ]
+    },
+    {
+      "id": "plugin.hex",
+      "disposition": "external-owner-edges",
+      "explanation": "Proof decoding, model checksum encoding, optional inference identity decoding, and random transport IDs use the same direct hex edge.",
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu",
+        "linux-default-tests",
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-default-tests",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "sources": [
+        {
+          "path": "frontend/tauri-plugin-oc/Cargo.toml",
+          "lines": [
+            2
+          ]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/local_app_handoff_protocol.rs",
+          "lines": [
+            166
+          ]
+        }
+      ],
+      "seeds": [
+        "plugin.hex"
+      ]
+    },
+    {
+      "id": "plugin.ipc",
+      "disposition": "external-owner-edges",
+      "explanation": "Feature-owned Tauri IPC commands, window checks, managed state, asset resolution, native runtime and nested errors. Unrelated core command behavior is not audited.",
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu",
+        "linux-default-tests",
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-default-tests",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "sources": [
+        {
+          "path": "frontend/tauri-plugin-oc/Cargo.toml",
+          "lines": [
+            2
+          ]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/commands.rs",
+          "lines": [
+            1,
+            20,
+            341
+          ]
+        }
+      ],
+      "seeds": [
+        "plugin.ipc"
+      ]
+    },
+    {
+      "id": "plugin.model.async",
+      "disposition": "external-owner-edges",
+      "explanation": "Native model download/DNS/synchronization; optional inference spawn_blocking and local listener async operations retain this runtime owner.",
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu",
+        "linux-default-tests",
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-default-tests",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "sources": [
+        {
+          "path": "frontend/tauri-plugin-oc/Cargo.toml",
+          "lines": [
+            2
+          ]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/model_manager.rs",
+          "lines": [
+            13,
+            317
+          ]
+        }
+      ],
+      "seeds": [
+        "plugin.model.async"
+      ]
+    },
+    {
+      "id": "plugin.model.resources",
+      "disposition": "external-owner-edges",
+      "explanation": "The model selection resource probe reads available RAM and disk via this direct owner.",
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu",
+        "linux-default-tests",
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-default-tests",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "sources": [
+        {
+          "path": "frontend/tauri-plugin-oc/Cargo.toml",
+          "lines": [
+            2
+          ]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/model_manager.rs",
+          "lines": [
+            761,
+            763
+          ]
+        }
+      ],
+      "seeds": [
+        "plugin.model.resources"
+      ]
+    },
+    {
+      "id": "plugin.native.inference",
+      "disposition": "external-owner-edges",
+      "explanation": "Optional host inference compile coverage only; not enabled by either all-WebGPU APK profile.",
+      "profiles": [
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "sources": [
+        {
+          "path": "frontend/tauri-plugin-oc/Cargo.toml",
+          "lines": [
+            2
+          ]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/inference.rs",
+          "lines": [
+            17,
+            212
+          ]
+        }
+      ],
+      "seeds": [
+        "plugin.native.inference"
+      ]
+    },
+    {
+      "id": "plugin.native.template",
+      "disposition": "external-owner-edges",
+      "explanation": "Optional native inference renders model-supplied Jinja templates; this runtime is not in the local Android all-WebGPU builds.",
+      "profiles": [
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "sources": [
+        {
+          "path": "frontend/tauri-plugin-oc/Cargo.toml",
+          "lines": [
+            2
+          ]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/inference.rs",
+          "lines": [
+            262
+          ]
+        }
+      ],
+      "seeds": [
+        "plugin.native.template"
+      ]
+    },
+    {
+      "id": "plugin.native.template-python",
+      "disposition": "external-owner-edges",
+      "explanation": "Optional host model-template compatibility; preserve its exact direct owner, separate from Android WebGPU.",
+      "profiles": [
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "sources": [
+        {
+          "path": "frontend/tauri-plugin-oc/Cargo.toml",
+          "lines": [
+            2
+          ]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/inference.rs",
+          "lines": [
+            264
+          ]
+        }
+      ],
+      "seeds": [
+        "plugin.native.template-python"
+      ]
+    },
+    {
+      "id": "plugin.loopback.bytes",
+      "disposition": "external-owner-edges",
+      "explanation": "Both local transports use bytes in their actual optional feature-gated listeners. Only the exact local-test APK profiles enable these features; default/inference host checks do not.",
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu"
+      ],
+      "sources": [
+        {
+          "path": "frontend/tauri-plugin-oc/Cargo.toml",
+          "lines": [
+            2
+          ]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/local_app_handoff.rs",
+          "lines": [
+            4
+          ]
+        }
+      ],
+      "seeds": [
+        "plugin.loopback.bytes"
+      ]
+    },
+    {
+      "id": "plugin.loopback.getrandom",
+      "disposition": "external-owner-edges",
+      "explanation": "Both local transports use getrandom in their actual optional feature-gated listeners. Only the exact local-test APK profiles enable these features; default/inference host checks do not.",
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu"
+      ],
+      "sources": [
+        {
+          "path": "frontend/tauri-plugin-oc/Cargo.toml",
+          "lines": [
+            2
+          ]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/local_app_handoff.rs",
+          "lines": [
+            46
+          ]
+        }
+      ],
+      "seeds": [
+        "plugin.loopback.getrandom"
+      ]
+    },
+    {
+      "id": "plugin.loopback.http-body-util",
+      "disposition": "external-owner-edges",
+      "explanation": "Both local transports use http-body-util in their actual optional feature-gated listeners. Only the exact local-test APK profiles enable these features; default/inference host checks do not.",
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu"
+      ],
+      "sources": [
+        {
+          "path": "frontend/tauri-plugin-oc/Cargo.toml",
+          "lines": [
+            2
+          ]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/local_app_handoff.rs",
+          "lines": [
+            5
+          ]
+        }
+      ],
+      "seeds": [
+        "plugin.loopback.http-body-util"
+      ]
+    },
+    {
+      "id": "plugin.loopback.hyper",
+      "disposition": "external-owner-edges",
+      "explanation": "Both local transports use hyper in their actual optional feature-gated listeners. Only the exact local-test APK profiles enable these features; default/inference host checks do not.",
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu"
+      ],
+      "sources": [
+        {
+          "path": "frontend/tauri-plugin-oc/Cargo.toml",
+          "lines": [
+            2
+          ]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/local_app_handoff.rs",
+          "lines": [
+            6
+          ]
+        }
+      ],
+      "seeds": [
+        "plugin.loopback.hyper"
+      ]
+    },
+    {
+      "id": "plugin.loopback.hyper-util",
+      "disposition": "external-owner-edges",
+      "explanation": "Both local transports use hyper-util in their actual optional feature-gated listeners. Only the exact local-test APK profiles enable these features; default/inference host checks do not.",
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu"
+      ],
+      "sources": [
+        {
+          "path": "frontend/tauri-plugin-oc/Cargo.toml",
+          "lines": [
+            2
+          ]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/local_app_handoff.rs",
+          "lines": [
+            7
+          ]
+        }
+      ],
+      "seeds": [
+        "plugin.loopback.hyper-util"
+      ]
+    },
+    {
+      "id": "plugin.host.open",
+      "disposition": "external-owner-edges",
+      "explanation": "Existing native URL opener is reached by the generic app/browser handoff bridge on hosts. Android uses Tauri mobile dispatch instead.",
+      "profiles": [
+        "linux-default-tests",
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-default-tests",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "sources": [
+        {
+          "path": "frontend/tauri-plugin-oc/Cargo.toml",
+          "lines": [
+            2
+          ]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/desktop.rs",
+          "lines": [
+            29
+          ]
+        }
+      ],
+      "seeds": [
+        "plugin.host.open"
+      ]
+    },
+    {
+      "id": "plugin.error.derive",
+      "disposition": "external-owner-edges",
+      "explanation": "The shared Result returned by the native URL/IPC bridge contains this derived error schema; all nested external error types are retained.",
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu",
+        "linux-default-tests",
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-default-tests",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "sources": [
+        {
+          "path": "frontend/tauri-plugin-oc/Cargo.toml",
+          "lines": [
+            2
+          ]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/error.rs",
+          "lines": [
+            5
+          ]
+        }
+      ],
+      "seeds": [
+        "plugin.error.derive"
+      ]
+    },
+    {
+      "id": "plugin.error.android-fs",
+      "disposition": "external-owner-edges",
+      "explanation": "Nested shared native error variant is part of the bridge Result even on hosts; it is not omitted because its media call sites are outside the feature boundary.",
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu",
+        "linux-default-tests",
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-default-tests",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "sources": [
+        {
+          "path": "frontend/tauri-plugin-oc/Cargo.toml",
+          "lines": [
+            2
+          ]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/error.rs",
+          "lines": [
+            14
+          ]
+        }
+      ],
+      "seeds": [
+        "plugin.error.android-fs"
+      ]
+    },
+    {
+      "id": "plugin.bundle.mime",
+      "disposition": "external-owner-edges",
+      "explanation": "Native bundle serving determines cache MIME; this helper is compiled with the plugin. The local APK rejects OTA caches via bundled policy.",
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu",
+        "linux-default-tests",
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-default-tests",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "sources": [
+        {
+          "path": "frontend/tauri-plugin-oc/Cargo.toml",
+          "lines": [
+            2
+          ]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/bundle_manager.rs",
+          "lines": [
+            109
+          ]
+        }
+      ],
+      "seeds": [
+        "plugin.bundle.mime"
+      ]
+    },
+    {
+      "id": "plugin.bundle.version",
+      "disposition": "external-owner-edges",
+      "explanation": "Source-owned native bundled/cache compatibility gate keeps the local client from selecting an old live-production bundle. No legacy OTA downloader or unrelated backend root is added.",
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu",
+        "linux-default-tests",
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-default-tests",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "sources": [
+        {
+          "path": "frontend/tauri-plugin-oc/Cargo.toml",
+          "lines": [
+            2
+          ]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/update_manager.rs",
+          "lines": [
+            3,
+            68
+          ]
+        }
+      ],
+      "seeds": [
+        "plugin.bundle.version"
+      ]
+    },
+    {
+      "id": "plugin.build",
+      "disposition": "external-owner-edges",
+      "explanation": "Native build script generates permissions for the model commands and local bridges for each selected plugin profile.",
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu",
+        "linux-default-tests",
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-default-tests",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "sources": [
+        {
+          "path": "frontend/tauri-plugin-oc/Cargo.toml",
+          "lines": [
+            2
+          ]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/build.rs",
+          "lines": [
+            51
+          ]
+        }
+      ],
+      "seeds": [
+        "plugin.build"
+      ]
+    },
+    {
+      "id": "app.shell",
+      "disposition": "external-owner-edges",
+      "explanation": "The selected open-chat shell instantiates the native plugin and bundled-window navigation. Core notification/deep-link behavior is not a new feature-owned root.",
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu",
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "sources": [
+        {
+          "path": "frontend/src-tauri/Cargo.toml",
+          "lines": [
+            2
+          ]
+        },
+        {
+          "path": "frontend/src-tauri/src/lib.rs",
+          "lines": [
+            9,
+            74
+          ]
+        }
+      ],
+      "seeds": [
+        "app.shell"
+      ]
+    },
+    {
+      "id": "app.build",
+      "disposition": "external-owner-edges",
+      "explanation": "Builds the current shell assets and local-test capabilities; not executed by plugin-only default host library tests.",
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu",
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "sources": [
+        {
+          "path": "frontend/src-tauri/Cargo.toml",
+          "lines": [
+            2
+          ]
+        },
+        {
+          "path": "frontend/src-tauri/build.rs",
+          "lines": [
+            5
+          ]
+        }
+      ],
+      "seeds": [
+        "app.build"
+      ]
+    },
+    {
+      "id": "composition-manifests",
+      "disposition": "no-additional-external-owner-edge",
+      "explanation": "Workspace dependency versions and exact native feature forwarding are bound, not whole-workspace audit roots. There are no new target-specific Cargo declarations. Features from the APK builder include all-WebGPU, browser auth and private-app handoff; host commands are separate nonshipping checks.",
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu",
+        "linux-default-tests",
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-default-tests",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "sources": [
+        {
+          "path": "Cargo.toml",
+          "lines": [
+            1,
+            287,
+            297
+          ]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/Cargo.toml",
+          "lines": [
+            36,
+            39,
+            40,
+            50
+          ]
+        },
+        {
+          "path": "frontend/src-tauri/Cargo.toml",
+          "lines": [
+            27,
+            38,
+            39,
+            40
+          ]
+        },
+        {
+          "path": "scripts/build-unofficial-local-apk.mjs",
+          "lines": [
+            37
+          ]
+        }
+      ],
+      "seeds": []
+    },
+    {
+      "id": "plugin-module-and-schema-closure",
+      "disposition": "no-additional-external-owner-edge",
+      "explanation": "Reviewed native module dispatch, commands, error schema and model nested structs. Dedicated protocols use only listed serde/JSON/reqwest/hex/SHA owner edges plus standard-library state. Model manager uses the listed stream, URL, JSON, hash, Tauri, Tokio and sysinfo roots; optional inference adds only llama-cpp-2/minijinja/minijinja-contrib. There are no separate dev dependencies for the embedded tests. Shared production edges are not downgraded to test context.",
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu",
+        "linux-default-tests",
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-default-tests",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "sources": [
+        {
+          "path": "frontend/tauri-plugin-oc/src/lib.rs",
+          "lines": [
+            18,
+            19,
+            27,
+            26
+          ]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/local_browser_auth_protocol.rs",
+          "lines": [
+            3
+          ]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/local_app_handoff_protocol.rs",
+          "lines": [
+            151
+          ]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/models.rs",
+          "lines": [
+            188,
+            206
+          ]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/error.rs",
+          "lines": [
+            6
+          ]
+        }
+      ],
+      "seeds": []
+    },
+    {
+      "id": "local-listener-closure",
+      "disposition": "no-additional-external-owner-edge",
+      "explanation": "Both reviewed local listeners use only the listed bytes/getrandom/http-body-util/hyper/hyper-util plus serde/serde_json/hex/Tokio and standard library. They are feature-gated together only in the two APK profiles; pure protocol default-host tests do not imply listener tests or native APK runtime acceptance.",
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu"
+      ],
+      "sources": [
+        {
+          "path": "frontend/tauri-plugin-oc/src/local_browser_auth.rs",
+          "lines": [
+            7,
+            10,
+            13,
+            76,
+            34
+          ]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/local_app_handoff.rs",
+          "lines": [
+            4,
+            52
+          ]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/mobile.rs",
+          "lines": [
+            30
+          ]
+        }
+      ],
+      "seeds": []
+    },
+    {
+      "id": "shell-asset-selection",
+      "disposition": "no-additional-external-owner-edge",
+      "explanation": "Current shell entry/navigation uses Tauri and the local oc plugin only at the changed feature boundary. Standard-library main calls app_lib; local-test capability JSON adds no Rust external owner. Existing unrelated notification/deep-link/media/update-download implementation and disabled devtools telemetry are outside the feature-owned roots, not claimed as audited. The changed bundled cache gate retains tauri, serde/JSON, semver and mime_guess owners; zip is only the unchanged legacy OTA downloader, not the selected local APK policy-none path.",
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu",
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "sources": [
+        {
+          "path": "frontend/src-tauri/src/main.rs",
+          "lines": [
+            5
+          ]
+        },
+        {
+          "path": "frontend/src-tauri/src/navigation.rs",
+          "lines": [
+            11
+          ]
+        },
+        {
+          "path": "frontend/src-tauri/tauri.localtest.conf.json",
+          "lines": [
+            11,
+            17
+          ]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/bundle_manager.rs",
+          "lines": [
+            46
+          ]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/update_manager.rs",
+          "lines": [
+            84
+          ]
+        }
+      ],
+      "seeds": []
+    }
+  ],
+  "resolutions": [
+    {
+      "id": "current-native-owner-review",
+      "explanation": "Source review traced each direct external owner and nested schema/build/dispatch closure at the current client boundary. Profile feature gating matches the local APK builder and separate host checks; removed backend roots are retired with the architecture, not waived. Live-source fingerprints now require renewed review on edits.",
+      "units": [
+        "plugin.model.stream",
+        "plugin.model-and-handoff.url",
+        "plugin.schemas",
+        "plugin.json",
+        "plugin.hash",
+        "plugin.hex",
+        "plugin.ipc",
+        "plugin.model.async",
+        "plugin.model.resources",
+        "plugin.native.inference",
+        "plugin.native.template",
+        "plugin.native.template-python",
+        "plugin.loopback.bytes",
+        "plugin.loopback.getrandom",
+        "plugin.loopback.http-body-util",
+        "plugin.loopback.hyper",
+        "plugin.loopback.hyper-util",
+        "plugin.host.open",
+        "plugin.error.derive",
+        "plugin.error.android-fs",
+        "plugin.bundle.mime",
+        "plugin.bundle.version",
+        "plugin.build",
+        "app.shell",
+        "app.build",
+        "composition-manifests",
+        "plugin-module-and-schema-closure",
+        "local-listener-closure",
+        "shell-asset-selection"
+      ]
+    }
+  ]
+}

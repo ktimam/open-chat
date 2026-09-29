@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "profile": "unofficial-client-official-backend",
-  "upstreamCommit": "ef1d8ee08e539b48e0d24557a8450788db5de17f",
-  "backendTree": "7b0a2e51b5cc83be126f93d9a99ea387862384c9",
-  "rootCargoManifest": "1bc4d91ce9a5505ebfd6fa4382bf24594d074e02",
+  "upstreamCommit": "d1e3712bb9ded3a1c8b652492591b7107333b23e",
+  "backendTree": "f75247990bf140604d67bff3001aeabbdb8eb3f9",
+  "rootCargoManifest": "205d356b932150dfb47b51f1da742a469a5c40a5",
   "upstreamDeploymentScripts": {
-    "scripts/upgrade-canister.sh": "598f8a08be46d6aa14802db9a6ac57f3b8ef6b70"
+    "scripts/upgrade-canister.sh": "7a7e86d72b15bd3554e5d5a2826b9edaf8d5e96a"
   },
   "historicalDeploymentWrappers": {
     "scripts/upgrade-canister-local.sh": "f333398de4802b9f9be072f0f7fdd98c42515bdc",

@@ -52,6 +52,15 @@ const reviewedRoots = {
     "|rollup-plugin-copy",
   ],
 };
+reviewedRoots["current-client-npm"] = [
+  ...new Set([
+    ...reviewedRoots["pr1-model-npm"],
+    ...reviewedRoots["pr2-app-card-ocr-npm"],
+    // Direct native handoff build consumer, resolved at this existing locked
+    // location; esbuild is not declared as an owner-manifest edge.
+    "location|node_modules/esbuild",
+  ]),
+];
 const selectors = {
   "pr1-model-npm": [
     ["frontend/app", /^transformersWebGpu.*\.mjs$/],
@@ -84,6 +93,39 @@ const selectors = {
   ],
 };
 
+// The unofficial client has a separately reviewed composition. Historical PR
+// selectors and configurations retain their original meaning and snapshots.
+selectors["current-client-npm"] = [
+  ...selectors["pr1-model-npm"],
+  ...selectors["pr2-app-card-ocr-npm"],
+  ["frontend/app", /^(?:localAppRelay.*|localNativeAppHandoffBuild)\.mjs$/],
+  ["frontend/app", /^local-native-app-handoff\.html$/],
+  ["frontend/app/public", /^local-app-handoff\.html$/],
+  ["frontend/app/src", /^local(?:AppHandoffRelay|NativeAppHandoff)\.ts$/],
+  [
+    "frontend/app/src/utils",
+    /^(?:localApp|privateApp|nativeApp|isolatedAppProcessor)/,
+  ],
+  [
+    "frontend/app/src/components_shared",
+    /^(?:PrivateApp.*|LocalAppsChatSettings)\.svelte$/,
+  ],
+  ["frontend/openchat-service-worker/src", /^local_app_relay\.ts$/],
+  [
+    "frontend/tauri-plugin-oc/guest-js/commands",
+    /^(?:localAppHandoff|onDeviceModels)\.ts$/,
+  ],
+];
+
+/** CLI variants are explicit; current-client never falls back to historical PR roots. */
+export function featureScopeVariants(variant) {
+  assert(
+    ["pr1", "pr2", "current-client"].includes(variant),
+    "explicit reviewed feature scope required",
+  );
+  return variant === "pr2" ? ["pr1", "pr2"] : [variant];
+}
+
 export function featureOwnedFiles(repositoryRoot, scopeId) {
   assert(selectors[scopeId], "unknown reviewed feature scope");
   const files = selectors[scopeId].flatMap(([directory, pattern]) =>
@@ -92,18 +134,55 @@ export function featureOwnedFiles(repositoryRoot, scopeId) {
         (entry) =>
           entry.isFile() &&
           pattern.test(entry.name) &&
-          /\.(?:ts|svelte|mjs)$/.test(entry.name) &&
+          /\.(?:ts|svelte|mjs|html)$/.test(entry.name) &&
           !/\.(?:test|spec)\./.test(entry.name),
       )
       .map((entry) => `${directory}/${entry.name}`),
   );
-  if (scopeId === "pr1-model-npm")
+  if (["pr1-model-npm", "current-client-npm"].includes(scopeId))
     files.push(
       "frontend/app/src/components/home/profile/ModelManager.svelte",
       "frontend/app/src/components_mobile/home/user_profile/ModelManager.svelte",
       "frontend/openchat-agent/src/services/registry/modelCatalog.ts",
     );
-  return files.sort();
+  return [...new Set(files)].sort();
+}
+
+export function featureDependencySpecifiers(text) {
+  return [
+    ...text.matchAll(
+      /^\s*(?:import|export)\s+(?:type\s+)?[^;]*?\bfrom\s*["']([^"']+)["']/gm,
+    ),
+    ...text.matchAll(/\b(?:import|require)\(\s*["']([^"']+)["']\s*\)/g),
+    ...text.matchAll(/^\s*import\s*["']([^"']+)["']/gm),
+  ].map((match) => match[1]);
+}
+
+export function assertReviewedFeatureImports(text, names) {
+  for (const specifier of featureDependencySpecifiers(text)) {
+    if (
+      specifier.startsWith(".") ||
+      specifier.startsWith("node:") ||
+      /^@(src|utils|client|shared|agent|app|i18n|stores|components|theme)(?:\/|$)/.test(
+        specifier,
+      )
+    )
+      continue;
+    const name = packageName(specifier);
+    if (name === "component-lib") {
+      assert(
+        names.has("@tsconfig/svelte") &&
+          names.has("typescript") &&
+          names.has("svelte") &&
+          names.has("svelte-material-icons"),
+        "selected component consumer dependencies are missing",
+      );
+    } else
+      assert(
+        names.has(name),
+        `dedicated feature import has no reviewed root: ${name}`,
+      );
+  }
 }
 
 function safePath(path) {
@@ -182,6 +261,7 @@ export function seedSourceFingerprint(repositoryRoot, config) {
 
 /** Read-only source ownership gate. No package execution, lock collection, advisory lookup or install. */
 export function reviewFeatureSeeds(repositoryRoot, config) {
+  assert(reviewedRoots[config.scopeId], "unknown reviewed feature scope");
   assert.equal(config.sourceReview?.status, "reviewed-direct-feature-roots");
   assert.equal(
     config.sourceReview?.textIdentity,
@@ -267,6 +347,7 @@ export function reviewFeatureSeeds(repositoryRoot, config) {
     }
   }
   if (config.sourceReview.inherits) {
+    assert.equal(config.scopeId, "pr2-app-card-ocr-npm");
     assert.equal(
       config.sourceReview.inherits,
       "scripts/npm_feature_scope.pr1.json",
@@ -281,36 +362,7 @@ export function reviewFeatureSeeds(repositoryRoot, config) {
   // have exact ownership anchors above. The fingerprint also forces review for new feature files.
   for (const file of featureOwnedFiles(repositoryRoot, config.scopeId)) {
     const text = readFileSync(resolve(repositoryRoot, file), "utf8");
-    const imports = [
-      ...text.matchAll(
-        /^\s*(?:import|export)\s+(?:type\s+)?[^;]*?\bfrom\s*["']([^"']+)["']/gm,
-      ),
-      ...text.matchAll(/\bimport\(\s*["']([^"']+)["']\s*\)/g),
-    ];
-    for (const [, specifier] of imports) {
-      if (
-        specifier.startsWith(".") ||
-        specifier.startsWith("node:") ||
-        /^@(src|utils|client|shared|agent|app|i18n|stores|components|theme)(?:\/|$)/.test(
-          specifier,
-        )
-      )
-        continue;
-      const name = packageName(specifier);
-      if (name === "component-lib") {
-        assert(
-          names.has("@tsconfig/svelte") &&
-            names.has("typescript") &&
-            names.has("svelte") &&
-            names.has("svelte-material-icons"),
-          "selected component consumer dependencies are missing",
-        );
-      } else
-        assert(
-          names.has(name),
-          `dedicated feature import has no reviewed root: ${name}`,
-        );
-    }
+    assertReviewedFeatureImports(text, names);
   }
   const fingerprint = seedSourceFingerprint(repositoryRoot, config);
   assertReviewedSourceFingerprint(fingerprint, config.sourceReview);
@@ -330,17 +382,31 @@ if (
   process.argv[1] &&
   resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 ) {
-  for (const file of [
-    "npm_feature_scope.pr1.json",
-    ...(existsSync(
-      resolve(ownRoot, ".github/workflows/openchat_pr2_security.yaml"),
-    )
-      ? ["npm_feature_scope.pr2.json"]
-      : []),
-  ]) {
+  const args = process.argv.slice(2);
+  const variants =
+    args.length === 0
+      ? [
+          "pr1",
+          ...(existsSync(
+            resolve(ownRoot, ".github/workflows/openchat_pr2_security.yaml"),
+          )
+            ? ["pr2"]
+            : []),
+        ]
+      : (assert(
+          args.length === 2 && args[0] === "--scope",
+          "use --scope <reviewed scope>",
+        ),
+        featureScopeVariants(args[1]));
+  for (const variant of variants) {
     console.log(
       JSON.stringify(
-        reviewFeatureSeeds(ownRoot, json(resolve(ownRoot, "scripts", file))),
+        reviewFeatureSeeds(
+          ownRoot,
+          json(
+            resolve(ownRoot, "scripts", `npm_feature_scope.${variant}.json`),
+          ),
+        ),
       ),
     );
   }

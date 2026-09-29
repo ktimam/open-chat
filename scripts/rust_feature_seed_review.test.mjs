@@ -52,85 +52,196 @@ function reviewedFixture() {
   return value;
 }
 
-test("actual PR2 source review binds app payloads and module glue without widening dependency profiles", () => {
+function currentClientFixture() {
   const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
   const configBytes = readFileSync(
-    resolve(repo, "scripts/rust_feature_scope.pr2.json"),
+    resolve(repo, "scripts/rust_feature_scope.current-client.json"),
   );
   const config = JSON.parse(configBytes);
-  const review = JSON.parse(
-    readFileSync(resolve(repo, "scripts/rust_feature_review.pr2.json")),
-  );
-  const sourceBytes = Object.fromEntries(
-    Object.keys(config.sourceFiles).map((path) => [
-      path,
-      readFileSync(resolve(repo, path)),
-    ]),
-  );
-  const value = {
+  return {
     config,
     configBytes,
-    review,
-    sourceBytes,
+    review: JSON.parse(
+      readFileSync(
+        resolve(repo, "scripts/rust_feature_review.current-client.json"),
+      ),
+    ),
+    sourceBytes: Object.fromEntries(
+      Object.keys(config.sourceFiles).map((path) => [
+        path,
+        readFileSync(resolve(repo, path)),
+      ]),
+    ),
     cargoLock: readFileSync(resolve(repo, "Cargo.lock")),
   };
+}
+
+test("current-client live source review binds native model/auth/handoff without claiming backend or release acceptance", () => {
+  const value = currentClientFixture();
+  const { config } = value;
   const result = verifyRustFeatureScopeReview(value);
-  assert.equal(config.seeds.length, 255);
-  assert.equal(config.profiles.length, 7);
-  assert.equal(result.reviewedSourceCount, 347);
-  assert.equal(result.reviewedSeedProfileCount, 436);
-  assert.equal(result.reviewedUnitCount, 67);
+  assert.equal(config.seeds.length, 25);
+  assert.equal(config.profiles.length, 8);
+  assert.equal(result.reviewedSourceCount, 24);
+  assert.equal(result.reviewedSeedProfileCount, 152);
+  assert.equal(result.reviewedUnitCount, 29);
   assert.equal(result.rootCompletenessVerified, true);
   assert.deepEqual(result.completeness, { status: "complete", unresolved: [] });
-  assert.equal(result.automaticSourceAnalysis, false);
-  assert.equal(result.wholeRepositoryCoverage, false);
-  assert.equal(result.advisoryChecksPerformed, false);
-  assert.equal(result.releaseAcceptance, false);
+  for (const field of [
+    "automaticSourceAnalysis",
+    "wholeRepositoryCoverage",
+    "advisoryChecksPerformed",
+    "releaseAcceptance",
+  ])
+    assert.equal(result[field], false);
   assert.equal(config.completeness.status, "incomplete");
+  assert.ok(
+    !Object.keys(config.sourceFiles).some((path) =>
+      path.startsWith("backend/"),
+    ),
+  );
   for (const profile of config.profiles)
     assert.equal(
       prepareRustFeatureInventory({ ...value, profileId: profile.id })
         .rootCompletenessVerified,
       false,
     );
-  const moduleUnit = review.units.find(
-    (unit) => unit.id === "changed-app-module-declarations",
-  );
-  assert.equal(moduleUnit.disposition, "no-additional-external-owner-edge");
-  for (const source of moduleUnit.sources) {
-    const lines = sourceBytes[source.path].toString("utf8").split(/\r?\n/u);
-    for (const line of source.lines)
-      assert.match(lines[line - 1], /^(?:pub )?mod [a-z0-9_]+;$/u);
-  }
   for (const id of [
-    "nested-card-identifiers",
-    "http-metrics-and-memory-leaves",
-    "inbox-configuration-and-guards",
-    "card-core-forwarding-and-wrappers",
+    "composition-manifests",
+    "plugin-module-and-schema-closure",
+    "local-listener-closure",
+    "shell-asset-selection",
+    "plugin.loopback.hyper",
+    "plugin.native.inference",
   ]) {
-    assert.ok(review.units.some((unit) => unit.id === id));
-    const missing = { ...value, review: structuredClone(review) };
+    const missing = { ...value, review: structuredClone(value.review) };
     missing.review.units = missing.review.units.filter(
       (unit) => unit.id !== id,
     );
     assert.throws(() => verifyRustFeatureScopeReview(missing));
   }
-  const cardSource = "backend/libraries/types/src/chat_id.rs";
-  assert.throws(() =>
-    verifyRustFeatureScopeReview({
-      ...value,
-      sourceBytes: {
-        ...sourceBytes,
-        [cardSource]: Buffer.concat([
-          sourceBytes[cardSource],
-          Buffer.from("\n// drift\n"),
-        ]),
-      },
-    }),
+  for (const path of [
+    "frontend/tauri-plugin-oc/src/model_manager.rs",
+    "frontend/tauri-plugin-oc/src/local_app_handoff.rs",
+    "frontend/tauri-plugin-oc/src/local_browser_auth.rs",
+    "scripts/build-unofficial-local-apk.mjs",
+  ]) {
+    assert.throws(
+      () =>
+        verifyRustFeatureScopeReview({
+          ...value,
+          sourceBytes: {
+            ...value.sourceBytes,
+            [path]: Buffer.concat([
+              value.sourceBytes[path],
+              Buffer.from("\n// drift\n"),
+            ]),
+          },
+        }),
+      /Source identity mismatch/u,
+    );
+  }
+});
+
+test("current-client profiles exactly bind both APK feature triples and nonshipping host commands", () => {
+  const { config, sourceBytes } = currentClientFixture();
+  for (const [id, target] of [
+    ["android-arm64-local-webgpu", "aarch64-linux-android"],
+    ["android-x86_64-local-webgpu", "x86_64-linux-android"],
+  ]) {
+    const profile = config.profiles.find((p) => p.id === id);
+    assert.equal(profile.target, target);
+    assert.deepEqual(profile.features, [
+      "open-chat/transformers-webgpu-android",
+      "open-chat/local-test-browser-auth",
+      "open-chat/local-test-app-handoff",
+    ]);
+    assert.ok(
+      sourceBytes["scripts/build-unofficial-local-apk.mjs"]
+        .toString()
+        .includes(profile.features.map((f) => f.split("/")[1]).join(",")),
+    );
+    const seeds = config.seeds.filter((s) => s.profiles.includes(id));
+    for (const dependency of [
+      "bytes",
+      "getrandom",
+      "http_body_util",
+      "hyper",
+      "hyper_util",
+      "tokio",
+      "serde",
+      "serde_json",
+      "hex",
+      "sha2",
+      "tauri",
+      "tauri_build",
+      "tauri_plugin",
+    ])
+      assert.ok(
+        seeds.some((s) => s.dependencyName === dependency),
+        id + ": missing " + dependency,
+      );
+    assert.ok(
+      !seeds.some((s) =>
+        ["llama_cpp_2", "minijinja", "minijinja_contrib", "open"].includes(
+          s.dependencyName,
+        ),
+      ),
+    );
+    assert.ok(
+      seeds.every(
+        (s) =>
+          s.ownerManifest.startsWith("frontend/") && s.originContext !== "test",
+      ),
+    );
+  }
+  for (const host of ["linux", "windows"]) {
+    const plain = config.profiles.find((p) => p.id === host + "-default-tests");
+    assert.deepEqual(plain.features, []);
+    const roots = config.seeds.filter((s) => s.profiles.includes(plain.id));
+    assert.ok(roots.every((s) => s.ownerPackage === "tauri-plugin-oc"));
+    assert.ok(
+      !roots.some(
+        (s) =>
+          s.id.startsWith("plugin.loopback.") ||
+          s.id.startsWith("plugin.native."),
+      ),
+    );
+    for (const store of [false, true]) {
+      const profile = config.profiles.find(
+        (p) =>
+          p.id ===
+          host + (store ? "-inference-store-check" : "-inference-check"),
+      );
+      assert.deepEqual(profile.features, [
+        "open-chat/inference",
+        ...(store ? ["open-chat/store"] : []),
+      ]);
+      assert.match(profile.purpose, /Nonshipping/u);
+      assert.ok(
+        config.seeds.some(
+          (s) =>
+            s.dependencyName === "llama_cpp_2" &&
+            s.profiles.includes(profile.id),
+        ),
+      );
+      assert.ok(
+        !config.seeds.some(
+          (s) =>
+            s.id.startsWith("plugin.loopback.") &&
+            s.profiles.includes(profile.id),
+        ),
+      );
+    }
+  }
+  assert.ok(
+    config.seeds.every(
+      (s) => s.originContext === (s.kind === "build" ? "build" : "production"),
+    ),
   );
   assert.ok(
-    !Object.keys(config.sourceFiles).some((path) =>
-      path.includes("dynamodb_index_store"),
+    config.profiles.every((p) =>
+      p.features.every((f) => !f.includes("devtools")),
     ),
   );
 });
@@ -334,7 +445,7 @@ function assertLocalWebGpuRoots(config, scope) {
     );
 }
 
-test("actual local all-WebGPU profile owns exact model/app roots without inference or devtools", () => {
+test("historical PR all-WebGPU inventory contract retains its original roots (not current-client acceptance)", () => {
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
   const scope = existsSync(resolve(root, "scripts/rust_feature_scope.pr2.json"))
     ? "pr2"
@@ -419,7 +530,7 @@ function assertReleaseToolRoots(config) {
     );
 }
 
-test("PR2 release-tool hash guard owns exact host profiles and no sibling core roots", () => {
+test("historical PR2 release-tool inventory contract remains unchanged (retired from current client)", () => {
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
   const config = JSON.parse(
     readFileSync(resolve(root, "scripts/rust_feature_scope.pr2.json"), "utf8"),
@@ -545,7 +656,7 @@ function assertSharedTestSchemaRoots(config, scope) {
   assert.equal(external.expected.checksum ?? null, null);
 }
 
-test("actual shared test-schema roots cannot silently disappear or become shipping roots", () => {
+test("historical PR test-schema inventory contract retains original context (not live backend coverage)", () => {
   const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
   const scope = existsSync(resolve(repo, "scripts/rust_feature_scope.pr2.json"))
     ? "pr2"
@@ -626,7 +737,7 @@ test("actual shared test-schema roots cannot silently disappear or become shippi
   }
 });
 
-test("PR2 app-state schema evidence cannot silently disappear", () => {
+test("historical PR2 app-state schema inventory contract remains preserved", () => {
   const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
   const config = JSON.parse(
     readFileSync(resolve(repo, "scripts/rust_feature_scope.pr2.json"), "utf8"),
@@ -743,41 +854,29 @@ function assertGeneratedTsOwners(config, sourceBytes) {
   return owners;
 }
 
-test("every pinned direct ts_export consumer retains its generated owner dependency", () => {
-  const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-  const scope = existsSync(resolve(repo, "scripts/rust_feature_scope.pr2.json"))
-    ? "pr2"
-    : "pr1";
-  const config = JSON.parse(
-    readFileSync(
-      resolve(repo, `scripts/rust_feature_scope.${scope}.json`),
-      "utf8",
-    ),
+test("historical generated-owner invariant is exercised by a fixture, not falsely claimed for retired backend live sources", () => {
+  const sources = {
+    "feature/Cargo.toml": '[package]\nname="schema_consumer"\n',
+    "feature/src/lib.rs": "#[ts_export]\npub struct Payload;\n",
+  };
+  const config = {
+    seeds: [
+      {
+        ownerManifest: "feature/Cargo.toml",
+        dependencyName: "ts_rs",
+        kind: "normal",
+      },
+    ],
+  };
+  assert.deepEqual(
+    [...assertGeneratedTsOwners(config, sources)],
+    ["feature/Cargo.toml"],
   );
-  const sources = Object.fromEntries(
-    Object.keys(config.sourceFiles).map((path) => [
-      path,
-      readFileSync(resolve(repo, path)),
-    ]),
+  assert.throws(
+    () => assertGeneratedTsOwners({ seeds: [] }, sources),
+    /lacks its own ts_rs edge/u,
   );
-  const owners = assertGeneratedTsOwners(config, sources);
-  assert.ok(
-    owners.size > 0,
-    "Regression must exercise actual generated consumers",
-  );
-  assert.ok(owners.has("backend/canisters/user_index/api/Cargo.toml"));
-  for (const owner of owners) {
-    const missing = structuredClone(config);
-    missing.seeds = missing.seeds.filter(
-      (seed) => seed.ownerManifest !== owner || seed.dependencyName !== "ts_rs",
-    );
-    assert.throws(
-      () => assertGeneratedTsOwners(missing, sources),
-      /lacks its own ts_rs edge/u,
-    );
-  }
-  // The macro produces a derive in the consuming crate. Its own crate must not
-  // be assigned that runtime edge merely because the generated token text names TS.
+  // The macro crate does not own its consumers' generated dependency edges.
   assert.deepEqual(
     [
       ...assertGeneratedTsOwners(
@@ -1042,84 +1141,32 @@ test("the inventory API has no incomplete-scope acceptance override", () => {
   );
 });
 
-// Validate the actual checked-in config belonging to this checkout, without Cargo,
-// network, dependency installation or selecting an unrelated workspace/core root.
-test("actual versioned config validates all source pins and every exact profile selection", () => {
-  const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-  const scope = existsSync(resolve(repo, "scripts/rust_feature_scope.pr2.json"))
-    ? "pr2"
-    : "pr1";
-  const config = JSON.parse(
-    readFileSync(
-      resolve(repo, `scripts/rust_feature_scope.${scope}.json`),
-      "utf8",
-    ),
-  );
-  const sourceBytes = Object.fromEntries(
-    Object.keys(config.sourceFiles).map((path) => [
-      path,
-      readFileSync(resolve(repo, path)),
-    ]),
-  );
-  const cargoLock = readFileSync(resolve(repo, "Cargo.lock"));
-  for (const profile of config.profiles) {
+// Live validation selects the explicit current scope; PR inventories below are historical contracts.
+test("current-client inventory validates every exact live source/profile and rejects stale lock identities", () => {
+  const value = currentClientFixture();
+  for (const profile of value.config.profiles) {
     const result = prepareRustFeatureInventory({
-      config,
+      ...value,
       profileId: profile.id,
-      sourceBytes,
-      cargoLock,
     });
     assert.deepEqual(
-      result.seeds.map((seed) => seed.id),
-      config.seeds
-        .filter((seed) => seed.profiles.includes(profile.id))
-        .map((seed) => seed.id),
+      result.seeds.map((s) => s.id),
+      value.config.seeds
+        .filter((s) => s.profiles.includes(profile.id))
+        .map((s) => s.id),
     );
     assert.ok(result.seeds.length > 0);
-    if (profile.id === "android-inference-store")
-      assert.ok(
-        result.seeds.every(
-          (seed) =>
-            seed.ownerManifest.startsWith("frontend/") &&
-            seed.originContext !== "test",
-        ),
-      );
-    if (profile.id === "windows-inference")
-      assert.ok(
-        result.seeds.every((seed) =>
-          seed.ownerManifest.startsWith("frontend/"),
-        ),
-      );
     assert.equal(result.rootCompletenessVerified, false);
   }
-  const mutated = structuredClone(config);
-  mutated.seeds[0].expected.checksum = "0".repeat(64);
-  assert.throws(() =>
-    prepareRustFeatureInventory({
-      config: mutated,
-      profileId: config.profiles[0].id,
-      sourceBytes,
-      cargoLock,
-    }),
+  const config = structuredClone(value.config);
+  config.seeds[0].expected.checksum = "0".repeat(64);
+  assert.throws(
+    () =>
+      prepareRustFeatureInventory({
+        ...value,
+        config,
+        profileId: config.profiles[0].id,
+      }),
+    /checksum/u,
   );
-  assert.ok(
-    config.seeds.some(
-      (seed) => seed.kind === "normal" && seed.originContext === "build",
-    ),
-  );
-  assert.ok(
-    config.seeds.some(
-      (seed) => seed.kind === "normal" && seed.originContext === "test",
-    ),
-  );
-  if (scope === "pr2") {
-    assert.ok(!config.seeds.some((seed) => seed.dependencyName === "futures"));
-    assert.ok(
-      !config.seeds.some(
-        (seed) =>
-          seed.ownerPackage === "chat_events" &&
-          seed.dependencyName === "tracing",
-      ),
-    );
-  }
 });

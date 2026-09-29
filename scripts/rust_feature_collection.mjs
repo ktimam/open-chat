@@ -84,7 +84,7 @@ function exactArgs(args) {
     "scope",
   ]);
   assert(
-    ["pr1", "pr2"].includes(args.scope),
+    ["pr1", "pr2", "current-client"].includes(args.scope),
     "Explicit feature scope required",
   );
   assert.equal(
