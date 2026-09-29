@@ -159,6 +159,27 @@ still available, preserving its import ID. Create a new draft only after checkin
 that the earlier request was not already saved. Downloaded model caches are
 separate and are not deleted when changing apps or models.
 
+### App-defined choices in the private draft
+
+An imported app can declare named choices and their scalar companion fields/defaults.
+The private editor shows the app's labels alongside the exact outgoing values. Choosing
+an option updates its declared companion fields atomically; those fields are read-only
+outside Advanced JSON. Clearing a choice removes its companions and restores the
+original defaulted values, unless the user has explicitly edited those values.
+
+Choice history remains in the current draft session through closing/reopening the
+panel and changing the recipient. It is not saved with app setup or sent to the app.
+Advanced JSON is authoritative: editing it clears that history, and later choices do
+not reapply automatic defaults. Unknown choices or inconsistent companion values block
+review. Every edit invalidates the previous approval; changing a choice does not run a
+model or processor again or contact the receiving app.
+
+Apps own the declarations and meanings. OpenChat implements only the bounded generic
+editor contract; it does not interpret app-specific Types, dates or business rules.
+The receiver sees only the final reviewed payload, not the sender's editing history.
+After updating a processor/catalog pair, explicitly import the new matching files;
+old imported setup is not silently replaced.
+
 ## Boundaries and developer checks
 
 - The client and worker both reject unsupported custom-registry/card APIs in this

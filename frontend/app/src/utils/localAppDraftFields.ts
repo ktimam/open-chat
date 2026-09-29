@@ -9,8 +9,10 @@ import {
 } from "./localAppDrafts";
 
 export type LocalAppDraftScalar = null | boolean | number | string;
-type ObjectSchema = Extract<LocalDraftSchema, { type: "object" }>;
-type DraftObject = { readonly [key: string]: LocalDraftJson };
+export type LocalAppDraftObjectSchema = Extract<LocalDraftSchema, { type: "object" }>;
+export type LocalAppDraftObject = { readonly [key: string]: LocalDraftJson };
+type ObjectSchema = LocalAppDraftObjectSchema;
+type DraftObject = LocalAppDraftObject;
 
 export interface LocalAppDraftField {
     key: string;
@@ -52,12 +54,10 @@ function valid(value: LocalDraftJson, schema: LocalDraftSchema): boolean {
 
 // Read only bounded structural JSON here. Schema-invalid scalar edits must stay recoverable in
 // controls, but never display an older valid draft. Review/delivery use the full schema validator.
-function source(action: LocalAppAction, editorJson: string) {
-    if (new TextEncoder().encode(editorJson).byteLength > 64 * 1024)
-        throw new Error("Invalid draft");
-    const payload = snapshotLocalDraftJson(JSON.parse(editorJson));
-    const schema = snapshotLocalDraftSchema(action.draftSchema);
-    const mapping = action.handoff;
+export function localAppDraftRowSchema(
+    schema: LocalDraftSchema,
+    mapping: LocalAppAction["handoff"],
+): ObjectSchema {
     const itemSchema =
         mapping.kind === "single"
             ? schema
@@ -74,6 +74,17 @@ function source(action: LocalAppAction, editorJson: string) {
                 ? itemSchema.items
                 : undefined
             : itemSchema;
+    if (recordSchema?.type !== "object") throw new Error("Invalid draft row schema");
+    return recordSchema;
+}
+
+export function localAppDraftSource(action: LocalAppAction, editorJson: string) {
+    if (new TextEncoder().encode(editorJson).byteLength > 64 * 1024)
+        throw new Error("Invalid draft");
+    const payload = snapshotLocalDraftJson(JSON.parse(editorJson));
+    const schema = snapshotLocalDraftSchema(action.draftSchema);
+    const mapping = action.handoff;
+    const recordSchema = localAppDraftRowSchema(schema, mapping);
     const records =
         mapping.kind === "single"
             ? [payload]
@@ -83,7 +94,6 @@ function source(action: LocalAppAction, editorJson: string) {
                 ? payload[mapping.field]
                 : undefined;
     if (
-        recordSchema?.type !== "object" ||
         !Array.isArray(records) ||
         records.length < 1 ||
         records.length > 32 ||
@@ -91,6 +101,33 @@ function source(action: LocalAppAction, editorJson: string) {
     )
         throw new Error("Invalid draft");
     return { payload, schema, records: records as readonly DraftObject[], recordSchema };
+}
+
+/** Preserve the complete envelope while replacing only the explicitly supplied row snapshots. */
+export function replaceLocalAppDraftRecords(
+    action: LocalAppAction,
+    payload: LocalDraftJson,
+    records: readonly DraftObject[],
+): string {
+    const mapping = action.handoff;
+    if (
+        records.length < 1 ||
+        records.length > 32 ||
+        !records.every(object) ||
+        (mapping.kind === "single" && records.length !== 1) ||
+        (mapping.kind === "wrapped-list" && !object(payload))
+    )
+        throw new Error("Invalid draft rows");
+    const updated =
+        mapping.kind === "single"
+            ? records[0]
+            : mapping.kind === "list"
+              ? records
+              : { ...(payload as DraftObject), [mapping.field]: records };
+    const serialized = formatLocalDraftJson(snapshotLocalDraftJson(updated));
+    if (new TextEncoder().encode(serialized).byteLength > 64 * 1024)
+        throw new Error("Invalid draft field edit");
+    return serialized;
 }
 
 function fields(record: DraftObject, schema: ObjectSchema, action: LocalAppAction) {
@@ -122,7 +159,7 @@ export function localAppDraftFields(
     editorJson: string,
 ): LocalAppDraftFields | undefined {
     try {
-        const { payload, schema, records, recordSchema } = source(action, editorJson);
+        const { payload, schema, records, recordSchema } = localAppDraftSource(action, editorJson);
         return {
             items: records.map((record) => fields(record, recordSchema, action)),
             valid: valid(payload, schema),
@@ -161,7 +198,7 @@ export function editLocalAppDraftField(
     key: string,
     value: LocalAppDraftScalar | undefined,
 ): string {
-    const { payload, records, recordSchema } = source(action, editorJson);
+    const { payload, records, recordSchema } = localAppDraftSource(action, editorJson);
     if (
         !Number.isSafeInteger(itemIndex) ||
         itemIndex < 0 ||
@@ -177,20 +214,7 @@ export function editLocalAppDraftField(
     if (value === undefined) delete record[key];
     else record[key] = value;
     const updatedRecords = records.map((item, index) => (index === itemIndex ? record : item));
-    const mapping = action.handoff;
-    const updated =
-        mapping.kind === "single"
-            ? record
-            : mapping.kind === "list"
-              ? updatedRecords
-              : { ...(payload as DraftObject), [mapping.field]: updatedRecords };
     // This intentionally checks structural safety, not schema validity: typing '-' into a number
     // must revoke review immediately and remain editable until the user finishes the value.
-    const serialized = formatLocalDraftJson(snapshotLocalDraftJson(updated));
-    // Escaping invisible controls and pretty-printing can expand a bounded JSON tree.
-    // Keep the emitted editor text within the same limit used by source(), otherwise
-    // an unrelated small edit could make every control disappear on the next render.
-    if (new TextEncoder().encode(serialized).byteLength > 64 * 1024)
-        throw new Error("Invalid draft field edit");
-    return serialized;
+    return replaceLocalAppDraftRecords(action, payload, updatedRecords);
 }

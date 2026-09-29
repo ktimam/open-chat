@@ -77,6 +77,40 @@ function fixture() {
 }
 
 describe("imported declarative local app catalog", () => {
+    it("validates and freezes named choices without copying editor setup into payload", () => {
+        const input = fixture();
+        Object.assign(input.apps[0].actions[0].draftSchema.properties.items.items.properties, {
+            preset: { type: "string" },
+            presetLabel: { type: "string" },
+        });
+        const draftEditor = {
+            version: 1,
+            choices: [
+                {
+                    field: "preset",
+                    label: "Preset",
+                    noneLabel: "None",
+                    options: [
+                        {
+                            value: "first",
+                            label: "First preset",
+                            assign: [{ field: "presetLabel", value: "First" }],
+                            defaults: [{ field: "label", value: "Default" }],
+                        },
+                    ],
+                },
+            ],
+        };
+        Object.assign(input.apps[0].actions[0], { draftEditor });
+        const action = parseLocalAppCatalog(JSON.stringify(input)).apps[0].actions[0];
+        expect(action.draftEditor).toEqual(draftEditor);
+        expect(Object.isFrozen(action.draftEditor?.choices[0].options)).toBe(true);
+        expect(projectLocalAppPayload(action, [{ label: "raw" }])).toEqual({
+            items: [{ label: "raw" }],
+        });
+        draftEditor.choices[0].options[0].defaults[0].field = "missing";
+        expect(() => parseLocalAppCatalog(JSON.stringify(input))).toThrow();
+    });
     it("preserves app prompts, opaque model IDs and user-defined vocabulary as immutable data", () => {
         const input = fixture();
         const catalog = parseLocalAppCatalog(JSON.stringify(input));

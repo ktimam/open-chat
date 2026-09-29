@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { MessageContent, OpenChat } from "@client";
 import type { extractPrivateAppAction, PrivateAppExtractionResult } from "./aiActionRunner";
 import { verifyImportedLocalProcessor, type runIsolatedAppProcessor } from "./isolatedAppProcessor";
-import type { LocalDraftDelivery } from "./localAppDrafts";
+import type { LocalDraftDelivery, LocalDraftSchema } from "./localAppDrafts";
 import { PrivateAppWorkspace } from "./privateAppWorkspace";
 import { parseLocalAppCatalog } from "./localAppCatalog";
 import type {
@@ -493,6 +493,237 @@ describe("private app workspace boundaries", () => {
             stillCurrent: () => true,
         });
         expect(deps.extract).not.toHaveBeenCalled();
+    });
+});
+
+function choiceFixture(
+    rows = [{ preset: "a", label: "untrusted", side: "original", category: "unchanged" }],
+) {
+    const { workspace, deps } = fixture();
+    const itemSchema: LocalDraftSchema = {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+            preset: { type: "string" },
+            label: { type: "string" },
+            side: { type: "string" },
+            category: { type: "string" },
+            note: { type: "string" },
+        },
+    };
+    const source = app("choices");
+    const action = {
+        ...source.actions[0],
+        handoff: { kind: "list" },
+        draftSchema: { type: "array", items: itemSchema },
+        draftEditor: {
+            version: 1,
+            choices: [
+                {
+                    field: "preset",
+                    label: "Saved preset",
+                    noneLabel: "No preset",
+                    options: ["a", "b"].map((value) => ({
+                        value,
+                        label: `Preset ${value}`,
+                        assign: [{ field: "label", value: `Label ${value}` }],
+                        defaults: [{ field: "side", value }],
+                    })),
+                },
+            ],
+        },
+    };
+    expect(
+        workspace.importCatalog(
+            JSON.stringify({ version: 1, apps: [{ ...source, actions: [action] }] }),
+        ),
+    ).toBe(true);
+    expect(workspace.select("choices", "add")).toBe(true);
+    deps.extract.mockResolvedValue({ kind: "extracted", candidates: rows });
+    return { workspace, deps };
+}
+const choiceRows = (workspace: PrivateAppWorkspace) => JSON.parse(workspace.state.editorJson);
+
+describe("workspace-owned named choice review", () => {
+    it("initializes once and retains the original baseline across close, reconnect, recipient edits and review", async () => {
+        const { workspace, deps } = choiceFixture();
+        await expect(propose(workspace)).resolves.toBe("drafted");
+        expect(choiceRows(workspace)).toEqual([
+            { preset: "a", label: "Label a", side: "a", category: "unchanged" },
+        ]);
+        expect(workspace.review()).toBe(true);
+        const old = workspace.state.draft!.approval!.approvalId;
+        workspace.close();
+        workspace.open();
+        workspace.setAccount("test-account");
+        workspace.editRecipient("new recipient");
+        expect(workspace.state.draft?.approval).toBeUndefined();
+        workspace.selectDraftChoice(0, "preset", "b");
+        expect(choiceRows(workspace)[0]).toMatchObject({ side: "b", category: "unchanged" });
+        workspace.selectDraftChoice(0, "preset", undefined);
+        expect(choiceRows(workspace)).toEqual([{ side: "original", category: "unchanged" }]);
+        expect(workspace.state.draftManualValues).toBe(false);
+        await workspace.confirm(old);
+        expect(deps.deliver).not.toHaveBeenCalled();
+        expect(workspace.review()).toBe(true);
+        await workspace.confirm(workspace.state.draft!.approval!.approvalId);
+        expect(deps.deliver.mock.calls[0][0].payload).toEqual([
+            { side: "original", category: "unchanged" },
+        ]);
+        expect(deps.extract).toHaveBeenCalledOnce();
+        expect(deps.runProcessor).not.toHaveBeenCalled();
+    });
+
+    it.each([false, true])(
+        "retains a same-value manual edit made before/after selection (before=%s)",
+        async (before) => {
+            const { workspace } = choiceFixture();
+            await propose(workspace);
+            if (before) workspace.selectDraftChoice(0, "preset", undefined);
+            const manual = choiceRows(workspace)[0].side;
+            workspace.editDraftField(0, "side", manual);
+            workspace.selectDraftChoice(0, "preset", "b");
+            workspace.selectDraftChoice(0, "preset", undefined);
+            expect(choiceRows(workspace)).toEqual([{ side: manual, category: "unchanged" }]);
+            expect(workspace.review()).toBe(true);
+        },
+    );
+
+    it("isolates per-row history without changing unrelated fields", async () => {
+        const { workspace } = choiceFixture([
+            { preset: "a", label: "Label a", side: "left", category: "first" },
+            { preset: "a", label: "Label a", side: "right", category: "second" },
+        ]);
+        await propose(workspace);
+        workspace.editDraftField(0, "side", "manual");
+        workspace.selectDraftChoice(0, "preset", "b");
+        workspace.selectDraftChoice(1, "preset", "b");
+        workspace.selectDraftChoice(0, "preset", undefined);
+        workspace.selectDraftChoice(1, "preset", undefined);
+        expect(choiceRows(workspace)).toEqual([
+            { side: "manual", category: "first" },
+            { side: "right", category: "second" },
+        ]);
+    });
+
+    it("treats advanced JSON recovery and reordered rows as authoritative, never reapplying defaults", async () => {
+        const { workspace } = choiceFixture();
+        await propose(workspace);
+        workspace.review();
+        workspace.edit("{invalid", "recipient");
+        expect(workspace.review()).toBe(false);
+        expect(workspace.state.draft?.approval).toBeUndefined();
+        workspace.edit(
+            JSON.stringify([
+                { category: "new", side: "explicit" },
+                { category: "original", side: "a", preset: "a", label: "Label a" },
+            ]),
+            "recipient",
+        );
+        workspace.selectDraftChoice(0, "preset", "b");
+        workspace.selectDraftChoice(1, "preset", "b");
+        expect(choiceRows(workspace).map((row: { side: string }) => row.side)).toEqual([
+            "explicit",
+            "a",
+        ]);
+        workspace.selectDraftChoice(0, "preset", undefined);
+        expect(choiceRows(workspace)[0]).toEqual({ category: "new", side: "explicit" });
+        expect(workspace.state.draftManualValues).toBe(true);
+        expect(workspace.review()).toBe(true);
+    });
+
+    it.each([
+        { preset: "missing", label: "Label a" },
+        { preset: "a", label: "wrong" },
+        { label: "orphan" },
+    ])("blocks inconsistent manually supplied app choices: %j", async (row) => {
+        const { workspace, deps } = choiceFixture();
+        await propose(workspace);
+        workspace.review();
+        const approval = workspace.state.draft!.approval!.approvalId;
+        workspace.edit(JSON.stringify([row]), "recipient");
+        expect(workspace.review()).toBe(false);
+        await workspace.confirm(approval);
+        expect(deps.deliver).not.toHaveBeenCalled();
+        workspace.selectDraftChoice(0, "preset", "b");
+        expect(workspace.review()).toBe(true);
+    });
+
+    it("revokes approval on a failed atomic field edit and does not unblock it through recipient changes", async () => {
+        const { workspace, deps } = choiceFixture();
+        await propose(workspace);
+        workspace.review();
+        const old = workspace.state.draft!.approval!.approvalId;
+        const json = workspace.state.editorJson;
+        expect(() => workspace.editDraftField(0, "note", "x".repeat(70_000))).toThrow();
+        expect(workspace.state.editorJson).toBe(json);
+        expect(workspace.state.draft?.approval).toBeUndefined();
+        workspace.editRecipient("new recipient");
+        workspace.invalidateReview();
+        expect(workspace.review()).toBe(false);
+        await workspace.confirm(old);
+        expect(deps.deliver).not.toHaveBeenCalled();
+        workspace.editDraftField(0, "note", "fixed");
+        expect(workspace.review()).toBe(true);
+    });
+
+    it("rejects direct selector and companion field edits without silently changing the draft", async () => {
+        const { workspace } = choiceFixture();
+        await propose(workspace);
+        const json = workspace.state.editorJson;
+        expect(() => workspace.editDraftField(0, "preset", "b")).toThrow();
+        expect(() => workspace.editDraftField(0, "label", "forged")).toThrow();
+        expect(workspace.state.editorJson).toBe(json);
+        expect(workspace.review()).toBe(false);
+        workspace.selectDraftChoice(0, "preset", "b");
+        expect(workspace.review()).toBe(true);
+    });
+
+    it.each(["delivered", "uncertain"] as const)(
+        "keeps sending and %s drafts immutable",
+        async (status) => {
+            const { workspace, deps } = choiceFixture();
+            await propose(workspace);
+            workspace.review();
+            const old = workspace.state.editorJson;
+            const pending = deferred<{ kind: "delivered" | "uncertain" }>();
+            deps.deliver.mockReturnValueOnce(pending.promise);
+            const sending = workspace.confirm(workspace.state.draft!.approval!.approvalId);
+            expect(workspace.state.draft?.status).toBe("sending");
+            expect(() => workspace.selectDraftChoice(0, "preset", "b")).toThrow();
+            workspace.edit("[]", "changed");
+            workspace.editRecipient("changed");
+            expect(workspace.state.editorJson).toBe(old);
+            pending.resolve({ kind: status });
+            await sending;
+            expect(workspace.state.draft?.status).toBe(status);
+            expect(() => workspace.editDraftField(0, "side", "changed")).toThrow();
+            workspace.edit("[]", "changed");
+            expect(workspace.state.editorJson).toBe(old);
+        },
+    );
+
+    it("discards manual history before another proposal and never exposes it in state or delivery", async () => {
+        const { workspace, deps } = choiceFixture();
+        await propose(workspace);
+        workspace.editDraftField(0, "side", "private previous value");
+        workspace.discard();
+        expect(workspace.state.draftManualValues).toBe(false);
+        await propose(workspace);
+        workspace.selectDraftChoice(0, "preset", undefined);
+        expect(choiceRows(workspace)[0].side).toBe("original");
+        workspace.review();
+        await workspace.confirm(workspace.state.draft!.approval!.approvalId);
+        expect(JSON.stringify([workspace.state, deps.deliver.mock.calls])).not.toContain(
+            "private previous value",
+        );
+        expect(deps.deliver.mock.calls[0][0].payload).toEqual([
+            { category: "unchanged", side: "original" },
+        ]);
+        workspace.clear();
+        expect(workspace.state.draft).toBeUndefined();
+        expect(workspace.state.draftManualValues).toBe(false);
+        expect(() => workspace.selectDraftChoice(0, "preset", "b")).toThrow();
     });
 });
 

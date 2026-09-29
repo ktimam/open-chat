@@ -5,6 +5,8 @@ import {
     editLocalAppDraftField,
     localAppDraftFields,
     localDraftNumericInput,
+    localAppDraftSource,
+    replaceLocalAppDraftRecords,
 } from "./localAppDraftFields";
 
 const itemSchema: LocalDraftSchema = {
@@ -70,6 +72,25 @@ const item = () => ({
 });
 
 describe("generic local draft field projection", () => {
+    it("shared traversal retains envelope values and enforces row cardinality", () => {
+        const definition = action({ kind: "wrapped-list", field: "records" });
+        const projected = localAppDraftSource(
+            definition,
+            JSON.stringify({ records: [item()], envelope: "keep" }),
+        );
+        expect(
+            JSON.parse(
+                replaceLocalAppDraftRecords(definition, projected.payload, [
+                    { ...projected.records[0], count: 2 },
+                ]),
+            ),
+        ).toMatchObject({ records: [{ count: 2 }], envelope: "keep" });
+        expect(() => replaceLocalAppDraftRecords(definition, projected.payload, [])).toThrow();
+        expect(() =>
+            replaceLocalAppDraftRecords(definition, projected.payload, Array(33).fill(item())),
+        ).toThrow();
+        expect(() => replaceLocalAppDraftRecords(action(), item(), [item(), item()])).toThrow();
+    });
     it.each(["single", "list", "wrapped-list"] as const)(
         "supports %s without inferring values",
         (kind) => {

@@ -134,6 +134,51 @@ const changeExtra = async (value: string) => {
     extraField().dispatchEvent(new Event("input", { bubbles: true }));
     await settle();
 };
+const categoryChoice = () =>
+    target.querySelector<HTMLSelectElement>('select[aria-label="Item 1 — Saved category"]')!;
+const selectCategory = async (value: string) => {
+    categoryChoice().value = value;
+    categoryChoice().dispatchEvent(new Event("change", { bubbles: true }));
+    await settle();
+};
+const proposeNamed = async (
+    payload: Record<string, unknown> = { value: 42, extra: "Also sent", categoryId: "category-a" },
+) => {
+    const declaration = JSON.parse(catalog);
+    const action = declaration.apps[0].actions[0];
+    action.draftSchema.properties.categoryId = { type: "string" };
+    action.draftSchema.properties.categoryLabel = { type: "string" };
+    action.draftEditor = {
+        version: 1,
+        choices: [
+            {
+                field: "categoryId",
+                label: "Saved category",
+                noneLabel: "None — keep extracted values",
+                options: [
+                    {
+                        value: "category-a",
+                        label: "Friendly Alpha",
+                        assign: [{ field: "categoryLabel", value: "Assigned Alpha" }],
+                        defaults: [{ field: "value", value: 10 }],
+                    },
+                    {
+                        value: "category-b",
+                        label: "Friendly Beta",
+                        assign: [{ field: "categoryLabel", value: "Assigned Beta" }],
+                        defaults: [{ field: "value", value: 20 }],
+                    },
+                ],
+            },
+        ],
+    };
+    workspace.discard();
+    expect(workspace.importCatalog(JSON.stringify(declaration))).toBe(true);
+    expect(workspace.select("synthetic", "capture")).toBe(true);
+    calls.extract.mockClear();
+    calls.extract.mockResolvedValue({ kind: "extracted", candidates: [payload] });
+    await propose();
+};
 
 beforeEach(async () => {
     vi.clearAllMocks();
@@ -169,6 +214,147 @@ afterEach(async () => {
 });
 
 describe("private workspace declarative card and authoritative review", () => {
+    it("wires named labels to exact values, preserves manual edits, and revokes consent synchronously", async () => {
+        await proposeNamed();
+        expect(categoryChoice().value).toBe("option-0");
+        expect(categoryChoice().selectedOptions[0].textContent).toBe("Friendly Alpha (category-a)");
+        expect(JSON.parse(editor().value)).toEqual({
+            value: 10,
+            extra: "Also sent",
+            categoryId: "category-a",
+            categoryLabel: "Assigned Alpha",
+        });
+        expect(
+            target.querySelector('output[aria-label="Item 1 — categoryLabel"]')?.textContent,
+        ).toContain('"Assigned Alpha"');
+        expect(
+            target.querySelector(
+                'input[aria-label="Item 1 — categoryLabel"], textarea[aria-label="Item 1 — categoryLabel"], select[aria-label="Item 1 — categoryLabel"]',
+            ),
+        ).toBeNull();
+        await changeNumber("55.5");
+        button("Review full request").click();
+        await settle();
+        const staleApproval = workspace.state.draft!.approval!.approvalId;
+        confirmation().click();
+        await settle();
+        categoryChoice().value = "option-1";
+        categoryChoice().dispatchEvent(new Event("change", { bubbles: true }));
+        expect(workspace.state.draft!.approval).toBeUndefined();
+        await settle();
+        const expected = {
+            value: 55.5,
+            extra: "Also sent",
+            categoryId: "category-b",
+            categoryLabel: "Assigned Beta",
+        };
+        expect(JSON.parse(editor().value)).toEqual(expected);
+        expect(button("Send reviewed request")).toBeUndefined();
+        await workspace.confirm(staleApproval);
+        expect(calls.deliver).not.toHaveBeenCalled();
+        await approveAndSend();
+        expect(calls.deliver).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({ payload: expected }),
+            expect.any(AbortSignal),
+        );
+        expect(categoryChoice().disabled).toBe(true);
+        const deliveredJson = editor().value;
+        await selectCategory("option-0");
+        expect(editor().value).toBe(deliveredJson);
+        expect(calls.extract).toHaveBeenCalledOnce();
+    });
+
+    it("sends None without choice or companion keys and restores the untouched extracted value", async () => {
+        await proposeNamed();
+        expect(JSON.parse(editor().value).value).toBe(10);
+        button("Review full request").click();
+        await settle();
+        const staleApproval = workspace.state.draft!.approval!.approvalId;
+        await selectCategory("absent");
+        const expected = { value: 42, extra: "Also sent" };
+        expect(categoryChoice().selectedOptions[0].textContent).toBe(
+            "None — keep extracted values",
+        );
+        expect(JSON.parse(editor().value)).toEqual(expected);
+        expect(
+            target.querySelector('output[aria-label="Item 1 — categoryLabel"]')?.textContent,
+        ).toContain("Not supplied");
+        expect(workspace.state.draft!.approval).toBeUndefined();
+        await workspace.confirm(staleApproval);
+        expect(calls.deliver).not.toHaveBeenCalled();
+        await approveAndSend();
+        expect(calls.deliver).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({ payload: expected }),
+            expect.any(AbortSignal),
+        );
+        expect(calls.extract).toHaveBeenCalledOnce();
+    });
+
+    it("does not approve or coerce unknown extracted choices and permits explicit None repair", async () => {
+        const payload = {
+            value: 42,
+            extra: "Also sent",
+            categoryId: "unknown-id",
+            categoryLabel: "Unknown companion",
+        };
+        await proposeNamed(payload);
+        expect(categoryChoice().value).toBe("invalid");
+        expect(categoryChoice().getAttribute("aria-invalid")).toBe("true");
+        expect(categoryChoice().selectedOptions[0].textContent).toBe("Unknown supplied choice");
+        expect(visibleText()).toContain("unknown-id");
+        expect(JSON.parse(editor().value)).toEqual(payload);
+        button("Review full request").click();
+        await settle();
+        expect(workspace.state.draft!.approval).toBeUndefined();
+        expect(button("Send reviewed request")).toBeUndefined();
+        expect(calls.deliver).not.toHaveBeenCalled();
+        await selectCategory("absent");
+        expect(JSON.parse(editor().value)).toEqual({ value: 42, extra: "Also sent" });
+        await approveAndSend();
+        expect(calls.deliver).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({ payload: { value: 42, extra: "Also sent" } }),
+            expect.any(AbortSignal),
+        );
+        expect(calls.extract).toHaveBeenCalledOnce();
+    });
+
+    it("keeps advanced JSON authoritative, blocks mismatched companions, and never reapplies defaults on repair", async () => {
+        await proposeNamed();
+        button("Review full request").click();
+        await settle();
+        const staleApproval = workspace.state.draft!.approval!.approvalId;
+        const manual = {
+            value: 99,
+            extra: "Manual payload",
+            categoryId: "category-a",
+            categoryLabel: "Mismatched companion",
+        };
+        await changeJson(JSON.stringify(manual));
+        expect(JSON.parse(editor().value)).toEqual(manual);
+        expect(visibleText()).toContain("Advanced JSON keeps your explicit field values");
+        expect(workspace.state.draft!.approval).toBeUndefined();
+        button("Review full request").click();
+        await settle();
+        expect(workspace.state.draft!.approval).toBeUndefined();
+        await workspace.confirm(staleApproval);
+        expect(calls.deliver).not.toHaveBeenCalled();
+        await selectCategory("option-1");
+        expect(JSON.parse(editor().value)).toEqual({
+            ...manual,
+            categoryId: "category-b",
+            categoryLabel: "Assigned Beta",
+        });
+        await selectCategory("absent");
+        const expected = { value: 99, extra: "Manual payload" };
+        expect(JSON.parse(editor().value)).toEqual(expected);
+        await approveAndSend();
+        expect(calls.deliver).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({ payload: expected }),
+            expect.any(AbortSignal),
+        );
+        expect(calls.extract).toHaveBeenCalledOnce();
+    });
+
     it("starts proposals with setup and advanced JSON collapsed without hiding the complete review", async () => {
         const setup = target.querySelector<HTMLDetailsElement>("details.setup-disclosure")!;
         const advanced = target.querySelector<HTMLDetailsElement>("details.advanced-editor")!;

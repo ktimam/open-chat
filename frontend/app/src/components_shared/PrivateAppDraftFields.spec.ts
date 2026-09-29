@@ -4,9 +4,15 @@ import { fromStore, writable } from "svelte/store";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LocalAppAction } from "../utils/localAppCatalog";
 import type { LocalDraftSchema } from "../utils/localAppDrafts";
+import {
+    editLocalAppDraftScalar,
+    initializeLocalAppDraftChoices,
+    selectLocalAppDraftChoice,
+} from "../utils/localAppDraftChoices";
+import type { LocalAppDraftScalar } from "../utils/localAppDraftFields";
 import PrivateAppDraftFields from "./PrivateAppDraftFields.svelte";
 
-const schema: LocalDraftSchema = {
+const schema = {
     type: "object",
     additionalProperties: false,
     required: ["text", "count"],
@@ -24,7 +30,7 @@ const schema: LocalDraftSchema = {
             properties: { value: { type: "string" } },
         },
     },
-};
+} satisfies LocalDraftSchema;
 function action(): LocalAppAction {
     return {
         definition: {
@@ -56,7 +62,19 @@ const initial = () => ({
 });
 let instances: ReturnType<typeof mount>[] = [];
 
-function render(definition = action(), payload: unknown = initial(), disabled = false) {
+function render(
+    definition = action(),
+    payload: unknown = initial(),
+    disabled = false,
+    operations: {
+        onfieldedit?: (
+            item: number,
+            field: string,
+            value: LocalAppDraftScalar | undefined,
+        ) => string;
+        onchoiceedit?: (item: number, field: string, value: string | undefined) => string;
+    } = {},
+) {
     const target = document.createElement("div");
     document.body.append(target);
     const json = writable(JSON.stringify(payload));
@@ -78,6 +96,7 @@ function render(definition = action(), payload: unknown = initial(), disabled = 
                 },
                 onchange,
                 onblocked,
+                ...operations,
             },
         }),
     );
@@ -96,6 +115,63 @@ function render(definition = action(), payload: unknown = initial(), disabled = 
             await tick();
         },
     };
+}
+function namedAction(): LocalAppAction {
+    return {
+        ...action(),
+        draftSchema: {
+            ...schema,
+            properties: {
+                ...schema.properties,
+                category: { type: "string" },
+                categoryLabel: { type: "string" },
+            },
+        },
+        draftEditor: {
+            version: 1,
+            choices: [
+                {
+                    field: "category",
+                    label: "Saved category",
+                    noneLabel: "None — restore extracted values",
+                    options: [
+                        {
+                            value: "raw-alpha",
+                            label: "Friendly Alpha",
+                            assign: [{ field: "categoryLabel", value: "Assigned Alpha" }],
+                            defaults: [{ field: "count", value: 7 }],
+                        },
+                        {
+                            value: "raw-beta",
+                            label: "Friendly Beta",
+                            assign: [{ field: "categoryLabel", value: "Assigned Beta" }],
+                            defaults: [{ field: "count", value: 11 }],
+                        },
+                    ],
+                },
+            ],
+        },
+    };
+}
+function renderNamed(payload: unknown = initial(), disabled = false, definition = namedAction()) {
+    let session = initializeLocalAppDraftChoices(definition, JSON.stringify(payload));
+    const onfieldedit = vi.fn(
+        (item: number, field: string, value: LocalAppDraftScalar | undefined) => {
+            session = editLocalAppDraftScalar(session, item, field, value);
+            void view.update(session.editorJson);
+            return session.editorJson;
+        },
+    );
+    const onchoiceedit = vi.fn((item: number, field: string, value: string | undefined) => {
+        session = selectLocalAppDraftChoice(session, item, field, value);
+        void view.update(session.editorJson);
+        return session.editorJson;
+    });
+    const view = render(definition, JSON.parse(session.editorJson), disabled, {
+        onfieldedit,
+        onchoiceedit,
+    });
+    return { ...view, onfieldedit, onchoiceedit };
 }
 function control(target: HTMLElement, label: string) {
     const found = [
@@ -127,6 +203,130 @@ afterEach(async () => {
 });
 
 describe("mounted generic private draft fields", () => {
+    it("shows named labels with exact raw values and keeps assigned companions read-only", async () => {
+        const view = renderNamed();
+        const choice = control(view.target, "Item 1 — Saved category") as HTMLSelectElement;
+        expect([...choice.options].map((option) => [option.value, option.textContent])).toEqual([
+            ["absent", "None — restore extracted values"],
+            ["option-0", "Friendly Alpha (raw-alpha)"],
+            ["option-1", "Friendly Beta (raw-beta)"],
+        ]);
+        expect(choice.value).toBe("absent");
+        expect(view.onchoiceedit).not.toHaveBeenCalled();
+        expect(view.onchange).not.toHaveBeenCalled();
+        await input(view.target, "Item 1 — Saved category", "option-1");
+        expect(view.onchoiceedit).toHaveBeenCalledExactlyOnceWith(0, "category", "raw-beta");
+        expect(view.payload()).toEqual({
+            ...initial(),
+            count: 11,
+            category: "raw-beta",
+            categoryLabel: "Assigned Beta",
+        });
+        const companion = view.target.querySelector('output[aria-label="Item 1 — categoryLabel"]');
+        expect(companion?.textContent).toContain('"Assigned Beta"');
+        expect(
+            view.target.querySelector(
+                'input[aria-label="Item 1 — categoryLabel"], textarea[aria-label="Item 1 — categoryLabel"], select[aria-label="Item 1 — categoryLabel"]',
+            ),
+        ).toBeNull();
+        expect(view.target.textContent).toContain("Controlled by Saved category");
+        expect(
+            [...view.target.querySelectorAll("button")].some(
+                (node) => node.textContent === "Remove categoryLabel",
+            ),
+        ).toBe(false);
+        // Workspace callbacks own history; no duplicate Advanced JSON edit may reset it.
+        expect(view.onchange).not.toHaveBeenCalled();
+    });
+
+    it("uses None to remove the choice and companions and restore untouched extracted values", async () => {
+        const view = renderNamed({ ...initial(), category: "raw-alpha" });
+        expect(view.payload().count).toBe(7);
+        await input(view.target, "Item 1 — Saved category", "absent");
+        expect(view.onchoiceedit).toHaveBeenCalledExactlyOnceWith(0, "category", undefined);
+        expect(view.payload()).toEqual(initial());
+        expect(
+            view.target.querySelector('output[aria-label="Item 1 — categoryLabel"]')?.textContent,
+        ).toContain("Not supplied");
+    });
+
+    it("routes manual field edits without losing their values on later named choices or None", async () => {
+        const view = renderNamed({ ...initial(), category: "raw-alpha" });
+        await input(view.target, "Item 1 — App count", "99");
+        expect(view.onfieldedit).toHaveBeenCalledExactlyOnceWith(0, "count", 99);
+        await input(view.target, "Item 1 — Saved category", "option-1");
+        expect(view.payload()).toMatchObject({ category: "raw-beta", count: 99 });
+        await input(view.target, "Item 1 — Saved category", "absent");
+        expect(view.payload()).toEqual({ ...initial(), count: 99 });
+        expect(view.onchange).not.toHaveBeenCalled();
+    });
+
+    it("keeps unknown raw choices visible without coercion or emission until explicitly corrected", async () => {
+        const payload = {
+            ...initial(),
+            category: "unrecognized-id",
+            categoryLabel: "Untrusted label",
+        };
+        const view = renderNamed(payload);
+        const choice = control(view.target, "Item 1 — Saved category") as HTMLSelectElement;
+        expect(choice.value).toBe("invalid");
+        expect(choice.getAttribute("aria-invalid")).toBe("true");
+        expect(choice.selectedOptions[0].textContent).toBe("Unknown supplied choice");
+        expect(choice.selectedOptions[0].disabled).toBe(true);
+        expect(view.target.textContent).toContain('"unrecognized-id"');
+        expect(view.payload()).toEqual(payload);
+        expect(view.onchoiceedit).not.toHaveBeenCalled();
+        await input(view.target, "Item 1 — Saved category", "option-0");
+        expect(view.payload()).toMatchObject({
+            category: "raw-alpha",
+            categoryLabel: "Assigned Alpha",
+            count: 7,
+        });
+        expect(control(view.target, "Item 1 — Saved category").getAttribute("aria-invalid")).toBe(
+            "false",
+        );
+    });
+
+    it("fails closed when named-choice wiring is absent and ignores disabled synthetic selection", async () => {
+        const unwired = render(namedAction());
+        await input(unwired.target, "Item 1 — Saved category", "option-0");
+        expect(unwired.onblocked).toHaveBeenLastCalledWith(true);
+        expect(unwired.onchange).not.toHaveBeenCalled();
+        expect(unwired.payload()).toEqual(initial());
+        const locked = renderNamed(initial(), true);
+        expect(control(locked.target, "Item 1 — Saved category").disabled).toBe(true);
+        await input(locked.target, "Item 1 — Saved category", "option-1");
+        expect(locked.onchoiceedit).not.toHaveBeenCalled();
+        expect(locked.onblocked).not.toHaveBeenCalled();
+        expect(locked.payload()).toEqual(initial());
+    });
+
+    it("renders imported named labels as inert text", () => {
+        const original = namedAction();
+        const markup = '<img src="https://example.invalid/leak" onerror="alert(1)">';
+        const definition: LocalAppAction = {
+            ...original,
+            draftEditor: {
+                ...original.draftEditor!,
+                choices: original.draftEditor!.choices.map((choice) => ({
+                    ...choice,
+                    label: markup,
+                    options: choice.options.map((option, index) => ({
+                        ...option,
+                        label: index ? option.label : markup,
+                    })),
+                })),
+            },
+        };
+        const fetchSpy = vi.fn();
+        vi.stubGlobal("fetch", fetchSpy);
+        const view = renderNamed(initial(), false, definition);
+        expect(view.target.textContent).toContain(markup);
+        expect(view.target.querySelector("img, script, iframe, a")).toBeNull();
+        expect(fetchSpy).not.toHaveBeenCalled();
+        expect(view.onchoiceedit).not.toHaveBeenCalled();
+    });
+
     it("uses app labels and does not infer values or emit on mount", () => {
         const { target, onchange } = render();
         expect(control(target, "Item 1 — App count").value).toBe("0");

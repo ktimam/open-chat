@@ -119,12 +119,12 @@
         if (blocked) {
             confirmed = false;
             // An unrepresentable edit must not leave the previous payload approved.
-            workspace.edit(workspaceView.editorJson, workspaceView.recipient);
+            workspace.invalidateReview();
         }
     }
     function updateRecipient(event: Event) {
         confirmed = false;
-        workspace.edit(workspaceView.editorJson, (event.currentTarget as HTMLInputElement).value);
+        workspace.editRecipient((event.currentTarget as HTMLInputElement).value);
     }
     onDestroy(() => workspace.clear());
 </script>
@@ -243,8 +243,18 @@
                             disabled={!editable || workspaceView.busy}
                             onchange={updateFields}
                             onblocked={blockFieldEdit}
+                            onfieldedit={(item, field, value) =>
+                                workspace.editDraftField(item, field, value)}
+                            onchoiceedit={(item, field, value) =>
+                                workspace.selectDraftChoice(item, field, value)}
                         />
                     {/key}
+                    {#if selectedAction.draftEditor && workspaceView.draftManualValues}
+                        <p class="small">
+                            Advanced JSON keeps your explicit field values. Selecting a named choice
+                            updates its controlled fields, but does not reapply automatic defaults.
+                        </p>
+                    {/if}
                     {#if fieldEditBlocked}
                         <p role="status">
                             A field edit could not be represented in the draft. Correct it before

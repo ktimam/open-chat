@@ -223,6 +223,44 @@ function expectTombstone(db: ReturnType<typeof fakeIndexedDb>) {
 }
 
 describe("strict device-local setup codec", () => {
+    it("remembers the app's named-choice declaration but not an initialized draft session", async () => {
+        const snapshot = await fixture();
+        const app = snapshot.catalog.apps[0];
+        const action = app.actions[0];
+        const draftEditor = {
+            version: 1,
+            choices: [
+                {
+                    field: "value",
+                    label: "Private saved choice",
+                    noneLabel: "None",
+                    options: [
+                        { value: "saved-a", label: "PRIVATE_LABEL", assign: [], defaults: [] },
+                    ],
+                },
+            ],
+        };
+        const catalog = parseLocalAppCatalog(
+            JSON.stringify({
+                version: 1,
+                apps: [{ ...app, actions: [{ ...action, draftEditor }] }],
+            }),
+        );
+        const serialized = await encodeLocalAppSetup(scope, { ...snapshot, catalog });
+        const restored = await decodeLocalAppSetup(scope, serialized);
+        expect(restored.catalog.apps[0].actions[0].draftEditor).toEqual(draftEditor);
+        expect(Object.isFrozen(restored.catalog.apps[0].actions[0].draftEditor)).toBe(true);
+        expect(serialized).not.toMatch(/editorJson|baseline|choiceSession|draftManualValues/);
+        const envelope = JSON.parse(serialized);
+        const corrupted = JSON.parse(envelope.catalogJson);
+        corrupted.apps[0].actions[0].draftEditor.choices[0].options[0].assign = [
+            { field: "missing", value: "forged" },
+        ];
+        envelope.catalogJson = JSON.stringify(corrupted);
+        envelope.catalogSha256 = await digest(envelope.catalogJson);
+        envelope.enabledChats.catalogSha256 = envelope.catalogSha256;
+        await expect(decodeLocalAppSetup(scope, JSON.stringify(envelope))).rejects.toThrow();
+    });
     it("round-trips only imported setup, selection, verified code and enabled chats as immutable data", async () => {
         const snapshot = await fixture(true);
         const serialized = await encodeLocalAppSetup(scope, snapshot);
@@ -241,6 +279,10 @@ describe("strict device-local setup codec", () => {
     });
     it.each([
         "draft",
+        "choiceSession",
+        "draftManualValues",
+        "rows",
+        "baseline",
         "message",
         "editorJson",
         "approval",

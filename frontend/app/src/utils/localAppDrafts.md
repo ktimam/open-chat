@@ -69,6 +69,34 @@ Unit tests use only synthetic values and a mocked delivery adapter. They cover
 the lifecycle boundary, not real browser handoff or app-side idempotency. Those
 remain separate integration tests when the adapter and private-draft UI are wired.
 
+## Optional declarative draft editor
+
+An action may include `draftEditor: { version: 1, choices: [...] }`. Each choice
+names an optional string field, a visible label, a distinct None label and bounded
+options. Each option supplies an exact string value/label, `assign` companion
+fields, and `defaults` fields. All targets must be scalar properties of the same
+object row, declared in the draft schema. Selector/companion fields are optional;
+targets cannot overlap between choices or form chains. Options have unique values
+and labels and identical target sets. Unknown keys, hidden labels, out-of-schema
+values and oversized declarations are rejected during catalog import/restoration.
+
+`localAppDraftChoices.ts` provides immutable, draft-session-only editing history.
+Initialization captures the pre-choice baseline once. Selection atomically updates
+companions and applies defaults only to fields the user has not edited, including
+same-value edits. None removes companions and restores the captured baseline or
+absence. Rows are independent. Raw JSON editing deliberately ends baseline inference:
+all subsequent defaults are protected, even after invalid JSON recovery or reordering.
+Payload/schema/declaration binding rejects accidental reuse of stale history.
+
+`PrivateAppWorkspace` owns this session, separate from persisted setup and delivery
+DTOs. Recipient-only changes and panel visibility do not reset it. Failed edits
+revoke approval and block review until corrected; successful edits also require a
+fresh review. Schema validation and choice/companion consistency checks both run
+before approval. No editing operation executes processor/model/app code or sends
+data. Existing catalogs without the optional declaration keep their previous
+schema/JSON behavior. Final handoffs contain no baseline/manual-edit metadata, so
+receivers cannot reconstruct the sender's earlier values from the delivered DTO.
+
 ## Relay trust boundary
 
 The cross-origin-isolated model client opens a fixed same-origin nonisolated relay

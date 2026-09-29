@@ -1,4 +1,5 @@
 import type { AiActionDefinition } from "@shared";
+import { validateLocalAppDraftEditor, type DraftEditorV1 } from "./localAppDraftChoices";
 import {
     snapshotLocalDraftJson,
     snapshotLocalDraftPayload,
@@ -15,6 +16,7 @@ export interface LocalProcessorArtifactDescriptor {
 export interface LocalAppAction {
     readonly definition: AiActionDefinition;
     readonly draftSchema: LocalDraftSchema;
+    readonly draftEditor?: DraftEditorV1;
     // Private app-owned setup data imported explicitly; never copied into the handoff by default.
     readonly processorContext?: LocalDraftJson;
     readonly handoff:
@@ -246,7 +248,11 @@ export function parseLocalAppCatalog(json: string): LocalAppCatalog {
         list(app.actions, 32, true);
         const actionIds = new Set<string>();
         for (const action of app.actions) {
-            exact(action, ["definition", "draftSchema", "handoff"], ["processorContext"]);
+            exact(
+                action,
+                ["definition", "draftSchema", "handoff"],
+                ["processorContext", "draftEditor"],
+            );
             validateDefinition(action.definition);
             const definition = action.definition as Record<string, unknown>;
             if (actionIds.has(definition.name as string)) invalid();
@@ -262,6 +268,12 @@ export function parseLocalAppCatalog(json: string): LocalAppCatalog {
                 exact(action.handoff, ["kind"]);
                 if (action.handoff.kind !== "single" && action.handoff.kind !== "list") invalid();
             }
+            if (action.draftEditor !== undefined)
+                action.draftEditor = validateLocalAppDraftEditor(
+                    action.draftEditor,
+                    action.draftSchema as LocalDraftSchema,
+                    action.handoff as LocalAppAction["handoff"],
+                );
             // Keep declarations that need a processor visible for setup, but never run one without
             // the pinned descriptor. Unknown extensions remain opaque; the existing runner owns them.
             const schema = definition.responseSchema as Record<string, unknown>;

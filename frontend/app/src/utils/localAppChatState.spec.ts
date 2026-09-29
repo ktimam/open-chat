@@ -35,6 +35,7 @@ const publish = (patch: Partial<PrivateAppWorkspaceState> = {}) =>
         busy: false,
         processorReady: false,
         editorJson: "",
+        draftManualValues: false,
         recipient: "",
         message: "",
         setupStatus: "",

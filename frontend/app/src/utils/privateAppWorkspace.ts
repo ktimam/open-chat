@@ -20,6 +20,15 @@ import {
 } from "./isolatedAppProcessor";
 import { LocalAppDraftStore, type LocalDraftDelivery, type LocalDraftView } from "./localAppDrafts";
 import {
+    initializeLocalAppDraftChoices,
+    selectLocalAppDraftChoice,
+    editLocalAppDraftScalar,
+    resetLocalAppDraftChoices,
+    assertLocalAppDraftChoiceConsistency,
+    type LocalAppDraftChoiceSession,
+} from "./localAppDraftChoices";
+import type { LocalAppDraftScalar } from "./localAppDraftFields";
+import {
     deliverLocalAppViaRelay,
     cancelLocalAppHandoffs,
     localAppDeliveryStatus,
@@ -52,6 +61,7 @@ export interface PrivateAppWorkspaceState {
     draft?: LocalDraftView;
     editorJson: string;
     recipient: string;
+    draftManualValues: boolean;
 }
 
 type Dependencies = {
@@ -80,6 +90,7 @@ const initial = (): PrivateAppWorkspaceState => ({
     enabledChats: Object.freeze([]),
     editorJson: "",
     recipient: "",
+    draftManualValues: false,
     message: "Import an app catalog and select an action. Drafts stay in memory only.",
 });
 
@@ -98,6 +109,8 @@ export class PrivateAppWorkspace {
     #abort?: AbortController;
     #deliveryClient?: OpenChat;
     #nativeDelivery = false;
+    #choiceSession?: LocalAppDraftChoiceSession;
+    #fieldEditBlocked = false;
     readonly #drafts: LocalAppDraftStore;
 
     constructor(
@@ -159,6 +172,8 @@ export class PrivateAppWorkspace {
         this.#processor = undefined;
         this.#deliveryClient = undefined;
         this.#nativeDelivery = false;
+        this.#choiceSession = undefined;
+        this.#fieldEditBlocked = false;
         this.#drafts.clear();
         this.deps.cancelDelivery();
         this.#state = {
@@ -551,6 +566,10 @@ export class PrivateAppWorkspace {
                 this.#set({ message });
                 return "retryable";
             }
+            const choiceSession = initializeLocalAppDraftChoices(
+                action,
+                JSON.stringify(projectLocalAppPayload(action, result.candidates), null, 2),
+            );
             const draft = this.#drafts.create({
                 target: {
                     appId: app.id,
@@ -559,13 +578,16 @@ export class PrivateAppWorkspace {
                     recipient: app.recipientLabel ?? "Choose the receiving account in the app",
                 },
                 schema: action.draftSchema,
-                payload: projectLocalAppPayload(action, result.candidates),
+                payload: JSON.parse(choiceSession.editorJson),
             });
+            this.#choiceSession = choiceSession;
+            this.#fieldEditBlocked = false;
             this.#deliveryClient = client;
             this.#nativeDelivery = client.isNativeApp?.() === true;
             this.#set({
                 draft,
-                editorJson: JSON.stringify(draft.payload, null, 2),
+                editorJson: choiceSession.editorJson,
+                draftManualValues: false,
                 recipient: draft.target.recipient,
                 message:
                     "Private draft ready. Edit and review every field before choosing to send it outside OpenChat.",
@@ -587,22 +609,100 @@ export class PrivateAppWorkspace {
     }
 
     edit(editorJson: string, recipient: string): void {
+        if (!this.#editable()) return;
+        if (this.#choiceSession)
+            this.#choiceSession = resetLocalAppDraftChoices(this.#choiceSession, editorJson);
+        this.#fieldEditBlocked = false;
+        this.#commitEdit(editorJson, recipient, true);
+    }
+
+    #editable(): boolean {
         const draft = this.#state.draft;
-        if (!draft || !["draft", "reviewed"].includes(draft.status)) return;
+        return !!draft && !this.#state.busy && ["draft", "reviewed"].includes(draft.status);
+    }
+
+    #commitEdit(
+        editorJson: string,
+        recipient: string,
+        manual = this.#state.draftManualValues,
+    ): void {
+        const draft = this.#state.draft;
+        if (!draft || !this.#editable()) return;
         // Revoke approval even while the editor temporarily contains invalid JSON.
         this.#set({
             draft: this.#drafts.edit(draft.id, {}),
             editorJson,
             recipient,
+            draftManualValues: manual,
             message: "Draft changed. Review the full request again before sending.",
         });
+    }
+
+    /** Recipient and approval changes do not erase session-only field history. */
+    editRecipient(recipient: string): void {
+        this.#commitEdit(this.#state.editorJson, recipient);
+    }
+
+    invalidateReview(): void {
+        this.#commitEdit(this.#state.editorJson, this.#state.recipient);
+    }
+
+    #changeFields(
+        operation: (session: LocalAppDraftChoiceSession) => LocalAppDraftChoiceSession,
+    ): string {
+        if (!this.#editable()) throw new Error("This draft cannot be edited.");
+        try {
+            const session = this.#choiceSession;
+            if (
+                !session ||
+                session.action !== this.selection()?.action ||
+                session.editorJson !== this.#state.editorJson
+            )
+                throw new Error("The draft editor context changed.");
+            const updated = operation(session);
+            this.#choiceSession = updated;
+            this.#fieldEditBlocked = false;
+            this.#commitEdit(updated.editorJson, this.#state.recipient, updated.manual);
+            return updated.editorJson;
+        } catch {
+            // Even a failed atomic edit must make a previously reviewed request unusable.
+            this.#fieldEditBlocked = true;
+            this.invalidateReview();
+            throw new Error("The field edit could not be represented in this draft.");
+        }
+    }
+
+    editDraftField(
+        itemIndex: number,
+        field: string,
+        value: LocalAppDraftScalar | undefined,
+    ): string {
+        return this.#changeFields((session) =>
+            editLocalAppDraftScalar(session, itemIndex, field, value),
+        );
+    }
+
+    selectDraftChoice(itemIndex: number, field: string, value: string | undefined): string {
+        return this.#changeFields((session) =>
+            selectLocalAppDraftChoice(session, itemIndex, field, value),
+        );
     }
 
     review(): boolean {
         const draft = this.#state.draft;
         if (!draft || this.#state.busy || !["draft", "reviewed"].includes(draft.status))
             return false;
+        if (this.#fieldEditBlocked) {
+            this.#set({
+                message:
+                    "Correct the pending field edit before review; no previous payload can be sent.",
+            });
+            return false;
+        }
         try {
+            const action = this.selection()?.action;
+            if (!action) throw new Error("The draft action is unavailable.");
+            assertLocalAppDraftChoiceConsistency(action, this.#state.editorJson);
             this.#drafts.edit(draft.id, {
                 payload: JSON.parse(this.#state.editorJson),
                 target: { ...draft.target, recipient: this.#state.recipient.trim() },
@@ -616,9 +716,9 @@ export class PrivateAppWorkspace {
             return true;
         } catch {
             this.#set({
-                draft: this.#drafts.get(draft.id),
+                draft: this.#drafts.edit(draft.id, {}),
                 message:
-                    "The edited JSON or recipient does not meet this app's schema. Correct it before review; nothing was sent.",
+                    "The edited JSON, app choices or recipient do not meet this app's schema. Correct them before review; nothing was sent.",
             });
             return false;
         }
@@ -688,10 +788,13 @@ export class PrivateAppWorkspace {
         this.deps.cancelDelivery();
         this.#deliveryClient = undefined;
         this.#nativeDelivery = false;
+        this.#choiceSession = undefined;
+        this.#fieldEditBlocked = false;
         this.#set({
             draft: undefined,
             editorJson: "",
             recipient: "",
+            draftManualValues: false,
             busy: false,
             phase: undefined,
             message: dispatched

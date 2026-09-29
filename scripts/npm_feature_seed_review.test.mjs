@@ -166,6 +166,7 @@ test("current private-app, field-review and browser/native relay families are fi
     "frontend/app/src/utils/localAppChatState.ts",
     "frontend/app/src/utils/localAppDrafts.ts",
     "frontend/app/src/utils/localAppDraftFields.ts",
+    "frontend/app/src/utils/localAppDraftChoices.ts",
     "frontend/app/src/utils/localAppHandoff.ts",
     "frontend/app/src/utils/localAppRelayDelivery.ts",
     "frontend/app/src/utils/localAppCardPreview.ts",
@@ -209,8 +210,8 @@ test("current setup persistence is a dedicated builtin-API consumer with an exac
   const clientPath = "frontend/openchat-client/src/openchat.ts";
   const owned = featureOwnedFiles(root, config.scopeId);
   const fingerprint = seedSourceFingerprint(root, config);
-  assert.equal(owned.length, 99);
-  assert.equal(fingerprint.files.length, 117);
+  assert.equal(owned.length, 100);
+  assert.equal(fingerprint.files.length, 118);
   assert.equal(config.seeds.length, 25);
   assert.equal(
     config.seeds.reduce((count, seed) => count + seed.evidence.length, 0),
@@ -256,6 +257,67 @@ test("current setup persistence is a dedicated builtin-API consumer with an exac
     source,
     /\b(?:fetch|WebSocket|XMLHttpRequest|Worker|runIsolatedAppProcessor)\s*\(/u,
   );
+});
+
+test("current named-choice module is app-owned and cannot disappear or add an unreviewed import", () => {
+  const config = JSON.parse(
+    readFileSync(
+      resolve(root, "scripts/npm_feature_scope.current-client.json"),
+      "utf8",
+    ),
+  );
+  const file = "frontend/app/src/utils/localAppDraftChoices.ts";
+  const source = readFileSync(resolve(root, file), "utf8");
+  const owned = featureOwnedFiles(root, config.scopeId);
+  const actual = seedSourceFingerprint(root, config);
+  assert(owned.includes(file));
+  assert(actual.files.includes(file));
+  for (const historical of ["pr1-model-npm", "pr2-app-card-ocr-npm"])
+    assert(!featureOwnedFiles(root, historical).includes(file));
+  assert.deepEqual(featureDependencySpecifiers(source), [
+    "./localAppCatalog",
+    "./localAppDrafts",
+    "./localAppDraftFields",
+  ]);
+  assert.doesNotMatch(
+    source,
+    /\b(?:fetch|WebSocket|XMLHttpRequest|Worker|indexedDB|localStorage|sessionStorage)\b/u,
+  );
+  const names = new Set(
+    config.seeds.map(
+      (seed) => seed.name ?? seed.location.replace(/^node_modules\//u, ""),
+    ),
+  );
+  assertReviewedFeatureImports(source, names);
+  assert.throws(
+    () =>
+      assertReviewedFeatureImports(
+        `${source}\nimport "unreviewed-choice-package";\n`,
+        names,
+      ),
+    /no reviewed root: unreviewed-choice-package/u,
+  );
+  const entries = actual.files.map((entry) => [
+    entry,
+    readFileSync(resolve(root, entry)),
+  ]);
+  for (const changed of [
+    entries.filter(([entry]) => entry !== file),
+    entries.map(([entry, bytes]) => [
+      entry,
+      entry === file
+        ? Buffer.concat([bytes, Buffer.from("\n// changed choice behavior\n")])
+        : bytes,
+    ]),
+  ])
+    assert.throws(
+      () =>
+        assertReviewedSourceFingerprint(
+          sourceReviewFingerprintFromBytes(changed),
+          config.sourceReview,
+        ),
+      /source set changed/u,
+    );
 });
 
 test("reviewed persistence writes setup-only fields at explicit mutations, never proposal or delivery state", () => {

@@ -15,12 +15,20 @@
         disabled = false,
         onchange,
         onblocked,
+        onfieldedit,
+        onchoiceedit,
     }: {
         action: LocalAppAction;
         editorJson: string;
         disabled?: boolean;
         onchange: (nextJson: string) => void;
         onblocked: (blocked: boolean) => void;
+        onfieldedit?: (
+            item: number,
+            field: string,
+            value: LocalAppDraftScalar | undefined,
+        ) => string;
+        onchoiceedit?: (item: number, field: string, value: string | undefined) => string;
     } = $props();
 
     const fields = $derived(localAppDraftFields(action, editorJson));
@@ -42,6 +50,27 @@
                   ? [null]
                   : undefined)
         );
+    }
+
+    function namedChoice(field: LocalAppDraftField) {
+        return action.draftEditor?.choices.find((choice) => choice.field === field.key);
+    }
+
+    function companionOwner(field: LocalAppDraftField) {
+        return action.draftEditor?.choices.find((choice) =>
+            choice.options[0]?.assign.some((assignment) => assignment.field === field.key),
+        );
+    }
+
+    function fieldLabel(field: LocalAppDraftField): string {
+        return namedChoice(field)?.label ?? field.label;
+    }
+
+    function namedSelection(field: LocalAppDraftField): string {
+        if (!field.present) return "absent";
+        const index =
+            namedChoice(field)?.options.findIndex((option) => option.value === field.value) ?? -1;
+        return index < 0 ? "invalid" : `option-${index}`;
     }
 
     function selection(field: LocalAppDraftField): string {
@@ -66,10 +95,15 @@
         value: LocalAppDraftScalar | undefined,
         text = "",
     ) {
-        if (fieldDisabled(field, item)) return;
+        if (fieldDisabled(field, item) || companionOwner(field)) return;
         let next: string;
         try {
-            next = editLocalAppDraftField(action, editorJson, item, field.key, value);
+            if (namedChoice(field)) {
+                if (!onchoiceedit || (value !== undefined && typeof value !== "string"))
+                    throw new Error("Named choice editing is unavailable.");
+                next = onchoiceedit(item, field.key, value);
+            } else if (onfieldedit) next = onfieldedit(item, field.key, value);
+            else next = editLocalAppDraftField(action, editorJson, item, field.key, value);
         } catch {
             // Keep a too-large edit visible, but revoke approval synchronously. The host must block
             // review/delivery while pending; it must never send the old canonical payload instead.
@@ -78,7 +112,9 @@
             return;
         }
         pending = undefined;
-        onchange(next);
+        // Workspace-owned operations retain baseline/manual-edit history. Do not turn them into
+        // a second Advanced JSON edit, which deliberately resets that history.
+        if (!namedChoice(field) && !onfieldedit) onchange(next);
         onblocked(false);
     }
 
@@ -89,6 +125,16 @@
             const options = choices(field);
             if (options && Number.isSafeInteger(index) && index >= 0 && index < options.length)
                 change(field, item, options[index]);
+        }
+    }
+
+    function selectNamed(field: LocalAppDraftField, item: number, value: string) {
+        if (value === "absent") change(field, item, undefined);
+        else if (value.startsWith("option-")) {
+            const index = Number(value.slice(7));
+            const options = namedChoice(field)?.options;
+            if (options && Number.isSafeInteger(index) && index >= 0 && index < options.length)
+                change(field, item, options[index].value, options[index].label);
         }
     }
 </script>
@@ -103,11 +149,44 @@
                     <div class="field">
                         <label>
                             <span
-                                >{field.label} <code>({field.displayKey})</code>{field.required
+                                >{fieldLabel(field)}
+                                <code>({field.displayKey})</code>{field.required
                                     ? " — required"
                                     : " — optional"}</span
                             >
-                            {#if choices(field)}
+                            {#if companionOwner(field)}
+                                <output aria-label={`Item ${index + 1} — ${field.label}`}>
+                                    {field.present
+                                        ? formatLocalDraftJson(field.value)
+                                        : "Not supplied"}
+                                </output>
+                                <small
+                                    >Controlled by {companionOwner(field)?.label}. Its exact value
+                                    remains part of the outgoing payload.</small
+                                >
+                            {:else if namedChoice(field)}
+                                <select
+                                    aria-label={`Item ${index + 1} — ${fieldLabel(field)}`}
+                                    aria-invalid={!field.valid ||
+                                        namedSelection(field) === "invalid" ||
+                                        (pending?.item === index && pending.key === field.key)}
+                                    disabled={fieldDisabled(field, index)}
+                                    value={namedSelection(field)}
+                                    onchange={(event) =>
+                                        selectNamed(field, index, event.currentTarget.value)}
+                                >
+                                    <option value="absent">{namedChoice(field)?.noneLabel}</option>
+                                    {#if namedSelection(field) === "invalid"}<option
+                                            value="invalid"
+                                            disabled>Unknown supplied choice</option
+                                        >{/if}
+                                    {#each namedChoice(field)?.options ?? [] as option, optionIndex}
+                                        <option value={`option-${optionIndex}`}
+                                            >{option.label} ({option.value})</option
+                                        >
+                                    {/each}
+                                </select>
+                            {:else if choices(field)}
                                 <select
                                     aria-label={`Item ${index + 1} — ${field.label}`}
                                     aria-invalid={!field.valid}
@@ -181,14 +260,14 @@
                                     ? "This value does not match the app's field schema."
                                     : "A value is required."}</small
                             >{/if}
-                        {#if !field.required && (field.present || (pending?.key === field.key && pending.item === index))}
+                        {#if !companionOwner(field) && !field.required && (field.present || (pending?.key === field.key && pending.item === index))}
                             <button
                                 type="button"
                                 disabled={fieldDisabled(field, index)}
                                 onclick={() => change(field, index, undefined)}
-                                >Remove {field.label}</button
+                                >Remove {fieldLabel(field)}</button
                             >
-                        {:else if !field.present && field.schema.type === "string" && !field.schema.enum}
+                        {:else if !companionOwner(field) && !namedChoice(field) && !field.present && field.schema.type === "string" && !field.schema.enum}
                             <button
                                 type="button"
                                 disabled={fieldDisabled(field, index)}

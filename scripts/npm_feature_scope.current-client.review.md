@@ -6,11 +6,11 @@ The separate current composition is `current-client-npm`; its CLI selector is
 `--scope current-client`. Historical PR1/PR2 configs, source snapshots and advisory
 decisions remain unchanged and are not reused as current-source acceptance.
 
-## Source boundary
+## Initial source boundary
 
-The current gate fingerprints 98 dedicated production modules plus exact ownership
-evidence in necessary shared consumers: 115 unique files. CRLF-to-LF normalization
-is the only source normalization. The recorded aggregate is
+The initial current-client review fingerprinted 98 dedicated production modules
+plus exact ownership evidence in necessary shared consumers: 115 unique files.
+CRLF-to-LF normalization is the only source normalization. Its recorded aggregate is
 `33b3ad8615b578d6d0f4d36aca795ddcaeb6baef4804f842b730bcecf57f3856`.
 
 The dedicated model and app/card/OCR families remain covered. The additional
@@ -32,6 +32,55 @@ minifier and style consumers are not added merely because they coexist in those
 files. The native browser-auth signer is outside this model/app scope. Rust source
 ownership is separately reviewed; this inventory does not select backend crates
 or require new OpenChat canisters.
+
+## Current named-choice source review
+
+The intervening setup-persistence review retained in the config covers 99 dedicated
+modules / 117 fingerprinted sources at
+`128c7d9a57258fb3720ae19e825d7345bf9186f84294bd8aa6adcc31f5eb9409`.
+This additive review compares the named-choice changes against the clean fork
+checkpoint `030fc60a81efe1369a887586b900ef20c46579b0`; it is not a formatting-only
+refresh. The integrated upstream baseline is still
+`d1e3712bb9ded3a1c8b652492591b7107333b23e`. No upstream merge is represented here.
+
+The new `localAppDraftChoices.ts` is already selected by the current-client
+`localApp*` family; no selector or dependency root was expanded. Its three literal
+imports are `./localAppCatalog` (type only), `./localAppDrafts` and
+`./localAppDraftFields`. The catalog and workspace add internal references to
+these helpers only. The field component, workspace component and existing row
+helper retain their prior direct-import sets. Every dedicated source was scanned
+with the unchanged reviewed-root checker; no new registry dependency is needed.
+
+The implementation was read before recording its fingerprint: the catalog accepts
+only the bounded, versioned app-authored editor declaration; choice IDs, labels,
+assignment targets and scalar defaults are validated against the app's row schema.
+The UI shows labels alongside exact raw IDs and exposes assigned companion fields
+as read-only outputs. The generic workspace retains baseline/manual-edit history
+in memory, revokes review on edits, blocks inconsistent/unknown choices, and still
+requires complete payload validation and explicit delivery review. Advanced JSON
+remains authoritative and does not silently reapply defaults. No app-specific
+field names, prompts, processor logic or model logic were introduced in this path.
+
+Only these six inventory sources differ from that checkpoint (SHA256 uses the
+existing UTF-8/LF identity):
+
+| Source                                                            | Current SHA256                                                     |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `frontend/app/src/utils/localAppDraftChoices.ts` (new)            | `4e72cf0063dd7917d0a106b876fe53f63beb026d4b4cbbd429f811b7fe782a5d` |
+| `frontend/app/src/utils/localAppCatalog.ts`                       | `809df079e4f417435c87f3c8637b3ed024711cbae3e15cdac538dbbebc2c9449` |
+| `frontend/app/src/utils/localAppDraftFields.ts`                   | `035dbfa7511383b8b1b9e72f3e889603d6bc44522c628719bb406a71d6bcfd6c` |
+| `frontend/app/src/utils/privateAppWorkspace.ts`                   | `7f87eaf0a02263b08cfe69557f3c184d776cf6dc9f5ec28111d4e3830147129d` |
+| `frontend/app/src/components_shared/PrivateAppDraftFields.svelte` | `d92d1c009e31feac6171e3c77be9d6f9a991da16324740f3ad8b1841e198607f` |
+| `frontend/app/src/components_shared/PrivateAppsWorkspace.svelte`  | `d7ad22c0df801de9d1de855b7e2f99eb8db3934608fc4c3cabd5b07dcfb37c00` |
+
+Current composition: **100 dedicated modules, 118 fingerprinted sources, 25 roots
+and 65 exact ownership anchors**. The aggregate is
+`6cbb333685c4468caf582ebcd14ced145a7d62b45554a2968be803e78547e023`.
+The root/anchor arrays are unchanged, as are manifests, lockfiles, historical
+inventories, earlier current snapshots and advisory decisions. Choice declarations
+are setup data in the existing catalog; draft history is not added to durable
+storage or outgoing requests. No collection, dependency query, advisory waiver,
+backend change, deployment or native runtime acceptance is implied by this review.
 
 ## Reviewed roots and disposition
 
