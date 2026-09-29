@@ -11,7 +11,7 @@ import {
 const toHex = (bytes: Uint8Array) =>
     Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 
-/** No storage or submission. A gesture signs only the fresh APK key and the displayed short lifetime. */
+/** No storage or submission. A gesture signs only the fresh APK key and the displayed fixed lifetime. */
 export async function signNativeBrowserChallenge(
     challenge: NativeBrowserAuthChallenge,
     officialIdentityCanister: string,

@@ -6,6 +6,7 @@ use crate::models::*;
 use crate::update_manager;
 use crate::local_browser_auth_protocol::{BeginRequest as LocalBrowserAuthBeginRequest, Challenge as LocalBrowserAuthChallenge, PollResult as LocalBrowserAuthPollResult};
 use crate::local_app_handoff_protocol::{BeginRequest as LocalAppHandoffBeginRequest, BeginResponse as LocalAppHandoffStart, Status as LocalAppHandoffStatus, CancelResponse as LocalAppHandoffCancel};
+use crate::local_app_setup_protocol::{BeginRequest as LocalAppSetupBeginRequest, BeginResponse as LocalAppSetupStart, PollResult as LocalAppSetupStatus};
 
 #[cfg(feature = "local-app-handoff")]
 fn require_local_app_handoff_window<R: Runtime>(window: &tauri::WebviewWindow<R>) -> std::result::Result<(), String> {
@@ -56,6 +57,48 @@ pub(crate) async fn cancel_local_app_handoff<R: Runtime>(app: AppHandle<R>, wind
     }
     #[cfg(not(feature = "local-app-handoff"))]
     { let _ = (app, window, handoff_id); Err("Private app handoff is not included in this build".into()) }
+}
+
+#[command]
+pub(crate) async fn begin_local_app_setup<R: Runtime>(app: AppHandle<R>, window: tauri::WebviewWindow<R>, payload: LocalAppSetupBeginRequest) -> std::result::Result<LocalAppSetupStart, String> {
+    #[cfg(feature = "local-app-handoff")]
+    {
+        use crate::local_app_setup::{LocalAppSetupBridge, BrowserAssets, BundledProfile, HTML_ASSET, JS_ASSET, PROFILE_ASSET};
+        use tauri::Manager;
+        require_local_app_handoff_window(&window)?;
+        let resolver = app.asset_resolver();
+        let profile = resolver.get(PROFILE_ASSET.into()).ok_or("Local app setup profile is missing")?;
+        let profile = BundledProfile::parse(&profile.bytes)?;
+        let html = resolver.get(HTML_ASSET.into()).ok_or("Local app setup page is missing")?;
+        let script = resolver.get(JS_ASSET.into()).ok_or("Local app setup script is missing")?;
+        app.state::<LocalAppSetupBridge>().begin(payload, profile, BrowserAssets { html: html.bytes, script: script.bytes }).await
+    }
+    #[cfg(not(feature = "local-app-handoff"))]
+    { let _ = (app, window, payload); Err("Local app setup is not included in this build".into()) }
+}
+
+#[command]
+pub(crate) async fn poll_local_app_setup<R: Runtime>(app: AppHandle<R>, window: tauri::WebviewWindow<R>, setup_id: String) -> std::result::Result<LocalAppSetupStatus, String> {
+    #[cfg(feature = "local-app-handoff")]
+    {
+        use tauri::Manager;
+        require_local_app_handoff_window(&window)?;
+        app.state::<crate::local_app_setup::LocalAppSetupBridge>().poll(&setup_id).await
+    }
+    #[cfg(not(feature = "local-app-handoff"))]
+    { let _ = (app, window, setup_id); Err("Local app setup is not included in this build".into()) }
+}
+
+#[command]
+pub(crate) async fn cancel_local_app_setup<R: Runtime>(app: AppHandle<R>, window: tauri::WebviewWindow<R>, setup_id: String) -> std::result::Result<(), String> {
+    #[cfg(feature = "local-app-handoff")]
+    {
+        use tauri::Manager;
+        require_local_app_handoff_window(&window)?;
+        app.state::<crate::local_app_setup::LocalAppSetupBridge>().cancel(&setup_id).await
+    }
+    #[cfg(not(feature = "local-app-handoff"))]
+    { let _ = (app, window, setup_id); Err("Local app setup is not included in this build".into()) }
 }
 
 #[cfg(feature = "local-browser-auth")]

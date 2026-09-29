@@ -8,7 +8,7 @@ import { parseUnofficialLocalPort } from "../frontend/unofficialLocalProfile.mjs
 import { LOCAL_APP_RELAY_HEADERS } from "../frontend/app/localAppRelayHeaders.mjs";
 
 const MANIFEST = "unofficial-local-web.json";
-const RELAY_ROUTES = new Set(["/local-app-handoff.html", "/local-app-handoff.js"]);
+const RELAY_ROUTES = new Set(["/local-app-handoff.html", "/local-app-handoff.js", "/local-app-setup.html", "/local-app-setup.js"]);
 // Mirrored from the build-owned runtime identities; the source-contract test prevents drift.
 const ORT_BASE = "/assets/transformers-webgpu/ort-1.29.0-dev.20260723-1b1e1db7bc";
 const PINNED_RUNTIME_ROUTES = new Set([

@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-poll-local-browser-auth"
+description = "Enables the poll_local_browser_auth command without any pre-configured scope."
+commands.allow = ["poll_local_browser_auth"]
+
+[[permission]]
+identifier = "deny-poll-local-browser-auth"
+description = "Denies the poll_local_browser_auth command without any pre-configured scope."
+commands.deny = ["poll_local_browser_auth"]

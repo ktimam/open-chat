@@ -44,5 +44,7 @@ export type OpenChatConfig = {
     existingAccountOnly?: boolean;
     /** Use client-owned app integration without unsupported OpenChat backend app APIs. */
     clientOnlyApps?: boolean;
+    /** Public publisher directory; contains no account or chat data. */
+    appDirectoryUrl?: string;
     baseOrigin: string;
 };

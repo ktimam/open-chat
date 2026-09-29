@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { flushSync, tick } from "svelte";
 import { createClassComponent } from "svelte/legacy";
+import { writable } from "svelte/store";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
     BrowserAccountLinkFlow,
@@ -24,6 +25,7 @@ const calls = vi.hoisted(() => ({
     verify: vi.fn(),
     createPasskey: vi.fn(),
     finalize: vi.fn(),
+    retry: vi.fn(),
 }));
 vi.mock("@client", async () => {
     const { writable } = await import("svelte/store");
@@ -136,6 +138,8 @@ function render(component: typeof HomeRouteV1 | typeof HomeRouteV2, native = tru
         existingAccountOnly: () => true,
         isNativeApp: () => native,
         signInWithLocalBrowser: calls.signIn,
+        nativeSessionRestoreState: writable<"idle" | "restoring" | "retry" | "invalid">("idle"),
+        retrySavedNativeSession: calls.retry,
         signInWithWebAuthn: calls.webSignIn,
         updateIdentityState: identityStateStore.set,
         createBrowserAccountLinkFlow: vi.fn(
@@ -189,6 +193,7 @@ async function begin() {
 beforeEach(() => {
     calls.signIn.mockReset();
     calls.webSignIn.mockReset();
+    calls.retry.mockReset().mockResolvedValue(undefined);
     calls.verify.mockReset().mockResolvedValue("synthetic-user");
     calls.createPasskey.mockReset().mockResolvedValue({
         credentialId: Uint8Array.of(1, 2, 3),
@@ -214,6 +219,23 @@ for (const [label, component] of [
     ["v2", HomeRouteV2],
 ] as const) {
     describe(`${label} actual native sign-in parent lifecycle`, () => {
+        it("offers saved-session retry without opening the browser or creating a passkey", async () => {
+            const view = render(component);
+            view.client.nativeSessionRestoreState.set("retry");
+            await settle();
+            expect(document.body.textContent).toContain("30 days");
+            expect(document.body.textContent?.replace(/\s+/g, " ")).toContain(
+                "do not need to create another passkey",
+            );
+            button("Retry saved sign-in").click();
+            await settle();
+            expect(calls.retry).toHaveBeenCalledOnce();
+            expect(calls.signIn).not.toHaveBeenCalled();
+            expect(calls.createPasskey).not.toHaveBeenCalled();
+            view.client.nativeSessionRestoreState.set("restoring");
+            await settle();
+            expect(button("Continue in browser").disabled).toBe(true);
+        });
         it("reaches native existing-account UI without exposing legacy registration or native passkey paths", async () => {
             const view = render(component);
             await settle();

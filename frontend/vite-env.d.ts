@@ -2,6 +2,7 @@
 
 interface ImportMetaEnv {
     readonly OC_UNOFFICIAL_CLIENT?: string;
+    readonly OC_APP_DIRECTORY_URL?: string;
     readonly OC_ACCOUNT_LINKING_CODES_ENABLED: string;
     readonly OC_ANDROID_LINK_PACKAGE?: string;
     readonly OC_ANDROID_LINK_CERT_SHA256?: string;

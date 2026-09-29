@@ -64,3 +64,10 @@ export {
     type LocalAppHandoffStatus,
     type LocalAppHandoffPhase,
 } from "./commands/localAppHandoff";
+export {
+    beginLocalAppSetup,
+    pollLocalAppSetup,
+    cancelLocalAppSetup,
+    type LocalAppSetupStart,
+    type LocalAppSetupStatus,
+} from "./commands/localAppSetup";

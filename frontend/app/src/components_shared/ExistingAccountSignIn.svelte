@@ -10,6 +10,7 @@
     let { onSignedIn = () => {} }: { onSignedIn?: () => void } = $props();
     const client = getContext<OpenChat>("client");
     const localApk = client.existingAccountOnly() && client.isNativeApp();
+    const restoreState = client.nativeSessionRestoreState;
     let nativeController: AbortController | undefined;
     let nativeStatus = $state("");
     let flow: BrowserAccountLinkFlow | undefined;
@@ -25,7 +26,10 @@
     let signingIn = $state(false);
     let error = $state("");
     let busy = $derived(
-        signingIn || linkState.stage === "verifying" || linkState.stage === "linking",
+        signingIn ||
+            $restoreState === "restoring" ||
+            linkState.stage === "verifying" ||
+            linkState.stage === "linking",
     );
 
     function startLink() {
@@ -72,6 +76,16 @@
         await flow.verify(submittedCode, username);
     }
 
+    async function retrySavedSignIn() {
+        if (busy) return;
+        error = "";
+        try {
+            await client.retrySavedNativeSession();
+        } catch (failure) {
+            error = browserSignInError(failure);
+        }
+    }
+
     async function complete() {
         if (!busy && confirmed) await flow?.complete();
     }
@@ -102,9 +116,25 @@
         </label>
         <p class="hint">
             This separate local-test APK uses your browser's localhost passkey. Sign-in and optional
-            account linking happen in that browser, then return here. This test session stays in
-            memory and lasts at most five minutes.
+            account linking happen in that browser, then return here. Sign-in is saved on this
+            device for up to 30 days, or until you sign out. The browser request itself expires in
+            two minutes.
         </p>
+        {#if $restoreState === "restoring"}<p role="status">Verifying your saved sign-in…</p>{/if}
+        {#if $restoreState === "retry"}
+            <p role="alert">
+                Your saved sign-in could not be verified. Check your connection and retry; you do
+                not need to create another passkey.
+            </p>
+            <button type="button" disabled={busy} onclick={retrySavedSignIn}
+                >Retry saved sign-in</button
+            >
+        {:else if $restoreState === "invalid"}
+            <p role="status">
+                Your saved sign-in is invalid or expired. Use your existing passkey to sign in
+                again.
+            </p>
+        {/if}
     {/if}
     <button
         class="primary"

@@ -10,12 +10,15 @@
     import { nativeAppDelivery, nativeAppPairing } from "../utils/nativeAppDelivery";
     import PrivateAppCardPreview from "./PrivateAppCardPreview.svelte";
     import PrivateAppDraftFields from "./PrivateAppDraftFields.svelte";
+    import { connectLocalAppSetup } from "../utils/localAppSetupConnection";
 
     let { client }: { client: OpenChat } = $props();
     let confirmed = $state(false);
     let retryConfirmed = $state(false);
     let fieldEditBlocked = $state(false);
     let fieldEditorGeneration = $state(0);
+    let discoveredScope = "";
+    let discoveryOpen = false;
     const workspaceView = $derived($privateAppWorkspaceState);
     const fieldDraftScope = $derived(workspaceView.draft?.id);
     const accountReady = $derived(
@@ -81,6 +84,26 @@
     });
     $effect(() => {
         client.onLogout(async () => workspace.setAccount(undefined));
+    });
+    $effect(() => {
+        workspace.setConnectAppSetup(connectLocalAppSetup);
+        workspace.configureDirectory(client.appDirectoryUrl?.());
+    });
+    $effect(() => {
+        if (!workspaceView.open || !accountReady) {
+            discoveryOpen = false;
+            return;
+        }
+        if (workspaceView.setupLoading) return;
+        const scope = JSON.stringify([
+            workspaceView.account,
+            workspaceView.backend,
+            client.appDirectoryUrl?.(),
+        ]);
+        if (discoveryOpen && scope === discoveredScope) return;
+        discoveryOpen = true;
+        discoveredScope = scope;
+        void workspace.refreshDirectory();
     });
 
     async function importFile(event: Event, processor: boolean) {
@@ -154,15 +177,75 @@
                 <button type="button" disabled={locked} onclick={() => workspace.forgetSetup()}>
                     Forget this account's app setup on this device
                 </button>
-                <label
-                    >Import app catalog (JSON, up to 1 MB)
-                    <input
-                        type="file"
-                        accept=".json,application/json"
-                        disabled={locked}
-                        onchange={(event) => importFile(event, false)}
-                    />
-                </label>
+                <h3>Available apps</h3>
+                <p class="small">
+                    Connecting approves this publisher's compatible future app updates. Changed
+                    destinations or private setup require connecting again. New apps are never
+                    enabled in your chats automatically.
+                </p>
+                {#if workspaceView.directorySource}<p class="small">
+                        Publisher directory: <span class="destination"
+                            >{workspaceView.directorySource}</span
+                        >
+                    </p>{/if}
+                <button
+                    type="button"
+                    disabled={locked ||
+                        workspaceView.directoryLoading ||
+                        !workspaceView.directorySource}
+                    onclick={() => workspace.refreshDirectory()}
+                >
+                    {workspaceView.directoryLoading ? "Checking apps…" : "Refresh available apps"}
+                </button>
+                {#if workspaceView.directoryStatus}<p role="status">
+                        {workspaceView.directoryStatus}
+                    </p>{/if}
+                {#each workspaceView.directory?.apps ?? [] as app (app.id)}
+                    <section aria-label={`Available app: ${app.name}`}>
+                        <h4>{app.name}</h4>
+                        <p>{app.description}</p>
+                        <p class="small">
+                            Connection page: <span class="destination">{app.setupUrl}</span>
+                        </p>
+                        {#if workspaceView.appUpdates[app.id]}<p role="status">
+                                {workspaceView.appUpdates[app.id]}
+                            </p>{/if}
+                        <button
+                            type="button"
+                            disabled={locked || workspaceView.directoryLoading}
+                            onclick={() => workspace.connectApp(app.id)}
+                        >
+                            {workspaceView.catalog?.apps.some(
+                                (installed) => installed.id === app.id,
+                            )
+                                ? "Reconnect / refresh setup"
+                                : "Connect"}
+                        </button>
+                    </section>
+                {/each}
+                <details>
+                    <summary>Advanced recovery: import app files</summary>
+                    <label
+                        >Import app catalog (JSON, up to 1 MB)
+                        <input
+                            type="file"
+                            accept=".json,application/json"
+                            disabled={locked}
+                            onchange={(event) => importFile(event, false)}
+                        />
+                    </label>
+                    {#if selected?.processor}
+                        <label
+                            >Import matching local processor (JavaScript, up to 1 MB)
+                            <input
+                                type="file"
+                                accept=".js,.mjs,text/javascript,application/javascript"
+                                disabled={locked || !workspaceView.actionId}
+                                onchange={(event) => importFile(event, true)}
+                            />
+                        </label>
+                    {/if}
+                </details>
                 {#if workspaceView.catalog}
                     <label
                         >App
@@ -179,6 +262,14 @@
                     </label>
                     {#if selected}
                         <p>{selected.description}</p>
+                        {#if workspaceView.disabledAppIds.includes(selected.id)}<p role="status">
+                                This app is disabled because it is no longer listed by its
+                                publisher. Reconnect if it becomes available again, or use Advanced
+                                recovery.
+                            </p>{/if}
+                        {#if workspaceView.appUpdates[selected.id]}<p role="status">
+                                {workspaceView.appUpdates[selected.id]}
+                            </p>{/if}
                         <p>
                             <strong>Destination declared by app:</strong>
                             <span class="destination">{selected.destination}</span>
@@ -207,17 +298,6 @@
                             </select>
                         </label>
                         {#if selected.processor}
-                            <label
-                                >Import matching local processor (JavaScript, up to 1 MB)
-                                <input
-                                    type="file"
-                                    accept=".js,.mjs,text/javascript,application/javascript"
-                                    disabled={locked ||
-                                        workspaceView.appId !== selected.id ||
-                                        !workspaceView.actionId}
-                                    onchange={(event) => importFile(event, true)}
-                                />
-                            </label>
                             <p class="small">
                                 SHA-256: <code>{selected.processor.sha256}</code>. {workspaceView.appId ===
                                     selected.id && workspaceView.processorReady

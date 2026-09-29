@@ -238,7 +238,7 @@ void (async () => {
         challenge = Object.freeze({ ...request });
         element("username").textContent = request.expectedUsername;
         element("expiry").textContent =
-            `This request expires at ${new Date(request.expiresAtMs).toLocaleTimeString()}. The test session expires by ${new Date(request.delegationExpiresAtMs).toLocaleTimeString()}.`;
+            `Complete this request by ${new Date(request.expiresAtMs).toLocaleTimeString()}. Sign-in will be saved on the APK until ${new Date(request.delegationExpiresAtMs).toLocaleString()}, or until you sign out.`;
         status.textContent =
             "Review the username and short lifetime, then choose an explicit sign-in or account-linking action.";
         controls();

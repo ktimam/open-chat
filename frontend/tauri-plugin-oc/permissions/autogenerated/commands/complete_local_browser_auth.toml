@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-complete-local-browser-auth"
+description = "Enables the complete_local_browser_auth command without any pre-configured scope."
+commands.allow = ["complete_local_browser_auth"]
+
+[[permission]]
+identifier = "deny-complete-local-browser-auth"
+description = "Denies the complete_local_browser_auth command without any pre-configured scope."
+commands.deny = ["complete_local_browser_auth"]

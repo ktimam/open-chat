@@ -119,6 +119,7 @@
                 import.meta.env.OC_ACCOUNT_LINKING_CODES_ENABLED! === "true",
             existingAccountOnly: import.meta.env.OC_UNOFFICIAL_CLIENT === "true",
             clientOnlyApps: import.meta.env.OC_UNOFFICIAL_CLIENT === "true",
+            appDirectoryUrl: import.meta.env.OC_APP_DIRECTORY_URL,
             baseOrigin: import.meta.env.OC_BASE_ORIGIN!,
         });
 

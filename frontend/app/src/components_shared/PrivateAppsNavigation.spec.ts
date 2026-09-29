@@ -20,6 +20,9 @@ const calls = vi.hoisted(() => ({
     close: vi.fn(),
     clear: vi.fn(),
     setAccount: vi.fn(),
+    setConnectAppSetup: vi.fn(),
+    configureDirectory: vi.fn(),
+    refreshDirectory: vi.fn(async () => false),
     forgetSetup: vi.fn(async () => true),
     publish: vi.fn(),
 }));
@@ -47,6 +50,10 @@ vi.mock("../utils/privateAppWorkspace", async () => {
         editorJson: "",
         recipient: "",
         message: "Synthetic setup",
+        directoryLoading: false,
+        directoryStatus: "",
+        appUpdates: {},
+        disabledAppIds: [],
     });
     calls.open.mockImplementation(() => state.update((value) => ({ ...value, open: true })));
     calls.close.mockImplementation(() => state.update((value) => ({ ...value, open: false })));
@@ -161,6 +168,10 @@ beforeEach(() => {
         editorJson: "",
         recipient: "",
         message: "Synthetic setup",
+        directoryLoading: false,
+        directoryStatus: "",
+        appUpdates: {},
+        disabledAppIds: [],
     } as never);
 });
 afterEach(async () => {

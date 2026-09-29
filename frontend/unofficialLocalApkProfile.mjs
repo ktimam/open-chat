@@ -4,12 +4,12 @@ import { createUnofficialLocalEnvironment } from "./unofficialLocalProfile.mjs";
 export const UNOFFICIAL_LOCAL_APK_ID = "dev.openchatfork.localtest";
 export const UNOFFICIAL_LOCAL_APK_LABEL = "OpenChat Fork · Local Test";
 
-export function createUnofficialLocalApkEnvironment(canisters, { inherited = {}, buildId } = {}) {
+export function createUnofficialLocalApkEnvironment(canisters, { inherited = {}, buildId, appDirectoryUrl } = {}) {
     const id = buildId ?? randomBytes(16).toString("hex");
     if (typeof id !== "string" || !/^[a-f0-9]{32}$/.test(id))
         throw new Error("Invalid local APK build identifier");
     return Object.freeze({
-        ...createUnofficialLocalEnvironment(canisters, { inherited, layout: "v2" }),
+        ...createUnofficialLocalEnvironment(canisters, { inherited, layout: "v2", appDirectoryUrl }),
         NODE_ENV: "production",
         OC_NODE_ENV: "development",
         OC_BUILD_ENV: "development",

@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-poll-local-app-setup"
+description = "Enables the poll_local_app_setup command without any pre-configured scope."
+commands.allow = ["poll_local_app_setup"]
+
+[[permission]]
+identifier = "deny-poll-local-app-setup"
+description = "Denies the poll_local_app_setup command without any pre-configured scope."
+commands.deny = ["poll_local_app_setup"]

@@ -121,7 +121,7 @@ describe("ephemeral native browser session structural validation", () => {
             await expect(validate(r)).rejects.toBeInstanceOf(NativeBrowserSessionError);
         }
     });
-    it.each([nowMs, nowMs - 1, nowMs + 300_001, NaN, Infinity, 1.5])(
+    it.each([nowMs, nowMs - 1, nowMs + 30 * 24 * 60 * 60_000 + 1, NaN, Infinity, 1.5])(
         "rejects invalid deadline %s",
         async (expiresAtMs) => {
             const r = request();

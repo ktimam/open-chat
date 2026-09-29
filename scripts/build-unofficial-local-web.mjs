@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { parseUnofficialLocalPort } from "../frontend/unofficialLocalProfile.mjs";
+import { parseUnofficialLocalPort, parseAppDirectoryUrl } from "../frontend/unofficialLocalProfile.mjs";
 import { createUnofficialLocalWebBuildEnvironment } from "../frontend/unofficialLocalWebBuild.mjs";
 
 export function parseBuildArgs(args) {
@@ -13,13 +13,14 @@ export function parseBuildArgs(args) {
     for (let index = 0; index < args.length; index++) {
         const option = args[index];
         if (option === "--help" || option === "-h") { options.help = true; continue; }
-        if (!["--output", "--port", "--layout"].includes(option) || seen.has(option)) {
-            throw new Error("Use only --output <empty absolute directory>, --port, and --layout");
+        if (!["--output", "--port", "--layout", "--app-directory"].includes(option) || seen.has(option)) {
+            throw new Error("Use --output <empty absolute directory>, --port, --layout, and --app-directory");
         }
         seen.add(option);
         const value = args[++index];
         if (!value || value.startsWith("--")) throw new Error(`${option} requires a value`);
         if (option === "--port") options.port = parseUnofficialLocalPort(value);
+        if (option === "--app-directory") options.appDirectoryUrl = parseAppDirectoryUrl(value);
         if (option === "--layout") {
             if (value !== "v1" && value !== "v2") throw new Error("--layout must be v1 or v2");
             options.layout = value;

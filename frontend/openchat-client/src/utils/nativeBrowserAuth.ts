@@ -7,6 +7,7 @@ import {
 } from "@icp-sdk/core/agent";
 import { DelegationChain, type JsonnableDelegationChain } from "@icp-sdk/core/identity";
 import { Principal } from "@icp-sdk/core/principal";
+import { NATIVE_SESSION_MAX_LIFETIME_MS } from "@shared/utils/nativeBrowserSession";
 
 export const NATIVE_BROWSER_AUTH_PROTOCOL = "openchat.local-browser-auth.v1";
 export type NativeBrowserAuthChallenge = {
@@ -231,7 +232,7 @@ export function createNativeBrowserAuthVerifier(
         challenge.expiresAtMs <= start ||
         challenge.expiresAtMs > start + 120_000 ||
         challenge.delegationExpiresAtMs <= challenge.expiresAtMs ||
-        challenge.delegationExpiresAtMs > start + 300_000 ||
+        challenge.delegationExpiresAtMs > start + NATIVE_SESSION_MAX_LIFETIME_MS ||
         typeof challenge.expectedUsername !== "string" ||
         challenge.expectedUsername.trim() !== challenge.expectedUsername ||
         challenge.expectedUsername.length < 1 ||

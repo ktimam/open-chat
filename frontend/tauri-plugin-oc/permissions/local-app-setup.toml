@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-local-app-setup"
+description = "Allows only the bundled local-test main window to initiate, consume once and cancel a ten-minute app setup return. No drafts, messages or credentials are transported. The local-app-handoff feature and bundled setup profile are required."
+commands.allow = ["begin_local_app_setup", "poll_local_app_setup", "cancel_local_app_setup"]

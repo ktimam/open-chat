@@ -22,6 +22,9 @@ vi.mock("./privateAppWorkspace", async () => {
         privateAppWorkspaceState: writable({}),
         privateAppWorkspace: {
             setAccount: vi.fn(),
+            setConnectAppSetup: vi.fn(),
+            configureDirectory: vi.fn(),
+            refreshDirectory: vi.fn(async () => false),
             clear: vi.fn(),
             open: vi.fn(),
             close: vi.fn(),
@@ -52,6 +55,10 @@ const view = (status = "sending") => ({
     processorReady: true,
     busy: status === "sending",
     message: "Synthetic status",
+    directoryLoading: false,
+    directoryStatus: "",
+    appUpdates: {},
+    disabledAppIds: [],
     editorJson: '{"value":42}',
     recipient: "Review app account",
     draft: {

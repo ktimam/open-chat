@@ -1,5 +1,6 @@
 import { parseLocalAppCatalog, type LocalAppCatalog } from "./localAppCatalog";
 import { verifyImportedLocalProcessor, type ImportedLocalProcessor } from "./isolatedAppProcessor";
+import { validateLocalAppInstallation, type LocalAppInstallation } from "./localAppDirectory";
 
 export type LocalAppSetupScope = Readonly<{ account: string; backend: string }>;
 export type LocalAppEnabledChats = readonly Readonly<{
@@ -11,6 +12,9 @@ export type LocalAppSetupSnapshot = Readonly<{
     appId?: string;
     actionId?: string;
     processor?: ImportedLocalProcessor;
+    processors?: readonly Readonly<{ appId: string; artifact: ImportedLocalProcessor }>[];
+    installations?: readonly LocalAppInstallation[];
+    disabledAppIds?: readonly string[];
     enabledChats: LocalAppEnabledChats;
 }>;
 export interface LocalAppSetupStorage {
@@ -151,7 +155,11 @@ export function validateLocalAppEnabledChats(
 }
 
 function captureSnapshot(value: unknown): LocalAppSetupSnapshot {
-    exact(value, ["catalog", "enabledChats"], ["appId", "actionId", "processor"]);
+    exact(
+        value,
+        ["catalog", "enabledChats"],
+        ["appId", "actionId", "processor", "processors", "installations", "disabledAppIds"],
+    );
     const catalog = parseLocalAppCatalog(JSON.stringify(cloneJson(value.catalog)));
     const appId = value.appId;
     const actionId = value.actionId;
@@ -180,12 +188,81 @@ function captureSnapshot(value: unknown): LocalAppSetupSnapshot {
             byteLength: app.processor.byteLength,
         });
     }
+    let processors: LocalAppSetupSnapshot["processors"];
+    if (value.processors !== undefined) {
+        if (!Array.isArray(value.processors) || value.processors.length > 16) invalid();
+        const seen = new Set<string>();
+        processors = Object.freeze(
+            value.processors.map((row: unknown) => {
+                exact(row, ["appId", "artifact"]);
+                identifier(row.appId, 128);
+                const owner = catalog.apps.find((entry) => entry.id === row.appId);
+                exact(row.artifact, ["source", "sha256", "byteLength"]);
+                const artifact = row.artifact;
+                if (
+                    seen.has(row.appId) ||
+                    !owner?.processor ||
+                    typeof artifact.source !== "string" ||
+                    artifact.sha256 !== owner.processor.sha256 ||
+                    artifact.byteLength !== owner.processor.byteLength ||
+                    new TextEncoder().encode(artifact.source).byteLength !== artifact.byteLength
+                )
+                    invalid();
+                seen.add(row.appId);
+                return Object.freeze({
+                    appId: row.appId,
+                    artifact: Object.freeze({ source: artifact.source, ...owner.processor }),
+                });
+            }),
+        );
+        if (
+            processor &&
+            processors.some(
+                (row) => row.appId === appId && row.artifact.source !== processor!.source,
+            )
+        )
+            invalid();
+    }
+    let installations: LocalAppSetupSnapshot["installations"];
+    if (value.installations !== undefined) {
+        if (!Array.isArray(value.installations) || value.installations.length > 16) invalid();
+        const seen = new Set<string>();
+        installations = Object.freeze(
+            value.installations.map((entry: unknown) => {
+                exact(entry, ["appId", "sourceUrl", "descriptor", "publicCatalogJson"]);
+                identifier(entry.appId, 128);
+                if (seen.has(entry.appId) || !catalog.apps.some((app) => app.id === entry.appId))
+                    invalid();
+                seen.add(entry.appId);
+                return cloneJson(entry) as LocalAppInstallation;
+            }),
+        );
+    }
+    let disabledAppIds: readonly string[] | undefined;
+    if (value.disabledAppIds !== undefined) {
+        if (
+            !Array.isArray(value.disabledAppIds) ||
+            value.disabledAppIds.length > 16 ||
+            new Set(value.disabledAppIds).size !== value.disabledAppIds.length ||
+            value.disabledAppIds.some(
+                (id) => typeof id !== "string" || !catalog.apps.some((app) => app.id === id),
+            )
+        )
+            invalid();
+        disabledAppIds = Object.freeze([...value.disabledAppIds]) as readonly string[];
+    }
+    const enabledChats = validateLocalAppEnabledChats(value.enabledChats, catalog);
+    if (enabledChats.some((row) => row.appIds.some((id) => disabledAppIds?.includes(id))))
+        invalid();
     return Object.freeze({
         catalog,
         ...(appId === undefined ? {} : { appId }),
         ...(actionId === undefined ? {} : { actionId }),
         ...(processor === undefined ? {} : { processor }),
-        enabledChats: validateLocalAppEnabledChats(value.enabledChats, catalog),
+        ...(processors === undefined ? {} : { processors }),
+        ...(installations === undefined ? {} : { installations }),
+        ...(disabledAppIds === undefined ? {} : { disabledAppIds }),
+        enabledChats,
     });
 }
 
@@ -195,6 +272,23 @@ export async function validateLocalAppSetupSnapshot(
 ): Promise<LocalAppSetupSnapshot> {
     const snapshot = captureSnapshot(value);
     if (snapshot.processor && !(await verifyImportedLocalProcessor(snapshot.processor))) invalid();
+    for (const row of snapshot.processors ?? []) {
+        // The legacy selected artifact may also appear in the per-app map. Capture checked
+        // equality above, so verify these exact bytes once rather than hashing them twice.
+        if (row.appId === snapshot.appId && snapshot.processor) continue;
+        if (!(await verifyImportedLocalProcessor(row.artifact))) invalid();
+    }
+    if (snapshot.installations) {
+        const installations = await Promise.all(
+            snapshot.installations.map((entry) =>
+                validateLocalAppInstallation(
+                    entry,
+                    snapshot.catalog.apps.find((app) => app.id === entry.appId)!,
+                ),
+            ),
+        );
+        return Object.freeze({ ...snapshot, installations: Object.freeze(installations) });
+    }
     return snapshot;
 }
 async function sha256(text: string): Promise<string> {
@@ -221,6 +315,11 @@ export async function encodeLocalAppSetup(
         ...(snapshot.appId === undefined ? {} : { appId: snapshot.appId }),
         ...(snapshot.actionId === undefined ? {} : { actionId: snapshot.actionId }),
         ...(snapshot.processor === undefined ? {} : { processor: snapshot.processor }),
+        ...(snapshot.processors === undefined ? {} : { processors: snapshot.processors }),
+        ...(snapshot.installations === undefined ? {} : { installations: snapshot.installations }),
+        ...(snapshot.disabledAppIds === undefined
+            ? {}
+            : { disabledAppIds: snapshot.disabledAppIds }),
         enabledChats: { catalogSha256, entries: snapshot.enabledChats },
     });
     if (new TextEncoder().encode(serialized).byteLength > MAX_RECORD_BYTES) invalid();
@@ -248,7 +347,7 @@ export async function decodeLocalAppSetup(
     exact(
         data,
         ["version", "scope", "catalogJson", "catalogSha256", "enabledChats"],
-        ["appId", "actionId", "processor"],
+        ["appId", "actionId", "processor", "processors", "installations", "disabledAppIds"],
     );
     const storedOwner = scopeSnapshot(data.scope);
     if (
@@ -273,6 +372,9 @@ export async function decodeLocalAppSetup(
         appId: data.appId,
         actionId: data.actionId,
         processor: data.processor,
+        processors: data.processors,
+        installations: data.installations,
+        disabledAppIds: data.disabledAppIds,
         enabledChats: data.enabledChats.entries,
     });
 }

@@ -51,7 +51,7 @@ type AssertionChanges = {
     duplicateWireKey?: boolean;
 };
 
-async function fixture(changes: AssertionChanges = {}) {
+async function fixture(changes: AssertionChanges = {}, lifetimeMs = 300_000) {
     const session = await ECDSAKeyIdentity.generate();
     const root = await webcrypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [
         "sign",
@@ -88,7 +88,7 @@ async function fixture(changes: AssertionChanges = {}) {
         identityCanister: identityCanister.toText(),
         identityTargetHex: identityCanister.toHex(),
         expiresAtMs: now + 120_000,
-        delegationExpiresAtMs: now + 300_000,
+        delegationExpiresAtMs: now + lifetimeMs,
         clientLabel: "OpenChat Fork · Local Test",
     };
     class SyntheticPasskey extends SignIdentity {
@@ -413,7 +413,7 @@ describe("local-only native browser AUTH delegation cryptographic verifier", () 
             { origin: "http://127.0.0.1:49123" },
             { origin: "http://localhost:49123/" },
             { url: `${f.challenge.url}?nonce=x` },
-            { delegationExpiresAtMs: now + 300_001 },
+            { delegationExpiresAtMs: now + 30 * 24 * 60 * 60_000 + 1 },
             { expiresAtMs: now + 120_001 },
             { expectedUsername: "" },
             { identityTargetHex: "0104" },
@@ -421,5 +421,25 @@ describe("local-only native browser AUTH delegation cryptographic verifier", () 
             expect(() =>
                 createNativeBrowserAuthVerifier({ ...f.challenge, ...changes }, { now: () => now }),
             ).toThrow();
+    });
+    it("verifies a freshly signed 30-day deadline but rejects locally extending an existing signature", async () => {
+        const lifetime = 30 * 24 * 60 * 60_000;
+        const f = await fixture({}, lifetime);
+        const verified = await createNativeBrowserAuthVerifier(f.challenge, {
+            now: () => now,
+        }).verify(f.candidate, f.rootDer);
+        expect(verified.authenticationExpiresAtMs).toBe(now + lifetime);
+        const old = await fixture();
+        const extended = { ...old.challenge, delegationExpiresAtMs: now + lifetime };
+        const modified = structuredClone(old.candidate);
+        modified.delegation.delegations[0].delegation.expiration = (
+            BigInt(now + lifetime) * 1_000_000n
+        ).toString(16);
+        await expect(
+            createNativeBrowserAuthVerifier(extended, { now: () => now }).verify(
+                modified,
+                old.rootDer,
+            ),
+        ).rejects.toThrow();
     });
 });

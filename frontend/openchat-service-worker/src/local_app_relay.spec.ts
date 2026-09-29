@@ -4,15 +4,23 @@ import { fetchLocalAppRelay, isLocalAppRelayRequest } from "./local_app_relay";
 afterEach(() => vi.unstubAllGlobals());
 
 describe("local app relay service worker bypass", () => {
-    it("matches only the two exact first-party assets, including version query strings", () => {
+    it("matches only exact handoff/setup assets, including version query strings", () => {
         const origin = "https://client.example";
-        for (const path of ["/local-app-handoff.html", "/local-app-handoff.js?v=2"])
+        for (const path of [
+            "/local-app-handoff.html",
+            "/local-app-handoff.js?v=2",
+            "/local-app-setup.html",
+            "/local-app-setup.js?v=2",
+        ])
             expect(isLocalAppRelayRequest({ url: origin + path }, origin)).toBe(true);
         for (const url of [
             origin + "/",
             origin + "/local-app-handoff.html/child",
             origin + "/other/local-app-handoff.js",
             "https://elsewhere.example/local-app-handoff.html",
+            origin + "/local-app-setup.html/child",
+            origin + "/other/local-app-setup.js",
+            "https://elsewhere.example/local-app-setup.html",
         ])
             expect(isLocalAppRelayRequest({ url }, origin)).toBe(false);
     });

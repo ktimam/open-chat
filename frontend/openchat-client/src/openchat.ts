@@ -8,6 +8,12 @@ import { PickerWebAuthnIdentity } from "./utils/browserPasskey";
 import { browserSignInStep } from "./utils/browserSignInDiagnostics";
 import { runNativeBrowserSignIn } from "./utils/nativeBrowserSignInFlow";
 import {
+    NativeBrowserSessionStorage,
+    validateSavedNativeSession,
+    type NativeSessionScope,
+    type SavedNativeSession,
+} from "./utils/nativeBrowserSessionStorage";
+import {
     BrowserAccountLinkFlow,
     createBrowserLinkPasskey,
     type BrowserAccountLinkState,
@@ -381,7 +387,7 @@ import {
 } from "@shared";
 import { tick } from "svelte";
 import { locale } from "svelte-i18n";
-import { get, type Unsubscriber } from "svelte/store";
+import { get, writable, type Unsubscriber } from "svelte/store";
 import { AndroidWebAuthnErrorCode } from "tauri-plugin-oc-api";
 import type { OpenChatConfig } from "./config";
 import { approveFromExternalWallet, type SignerWallet, type WalletAccount } from "./utils/signer";
@@ -724,6 +730,12 @@ export class OpenChat {
     #authIdentityStorage: IdentityStorage;
     #nativeBrowserSignInBusy = false;
     #nativeSessionTimeout: number | undefined;
+    #nativeSessionExpiry: number | undefined;
+    #nativeSessionOperation: AbortController | undefined;
+    #nativeSessionStorage = new NativeBrowserSessionStorage();
+    readonly nativeSessionRestoreState = writable<"idle" | "restoring" | "retry" | "invalid">(
+        "idle",
+    );
     #authPrincipal: string | undefined;
     #ocIdentityPrincipal: string | undefined;
     #authClient: Promise<AuthClient | undefined>;
@@ -822,12 +834,19 @@ export class OpenChat {
                       storage: this.#authIdentityStorage.storage,
                   });
 
-        this.#initialIdentityLoaded = this.#authClient
-            .then((client) =>
-                client === undefined ? undefined : this.#authIdentityStorage.getKeyAndChain(),
-            )
-            .then((authIdentity) => this.#loadedAuthenticationIdentity(authIdentity, undefined))
-            .catch((error) => this.#handleStartupFailure(error));
+        this.#initialIdentityLoaded =
+            this.existingAccountOnly() && this.isNativeApp()
+                ? this.#restoreNativeSession()
+                : this.#authClient
+                      .then((client) =>
+                          client === undefined
+                              ? undefined
+                              : this.#authIdentityStorage.getKeyAndChain(),
+                      )
+                      .then((authIdentity) =>
+                          this.#loadedAuthenticationIdentity(authIdentity, undefined),
+                      )
+                      .catch((error) => this.#handleStartupFailure(error));
 
         this.#setMinLogLevel((localStorage.getItem(configKeys.minLogLevel) ?? "warn") as LogLevel);
     }
@@ -901,6 +920,10 @@ export class OpenChat {
 
     clientOnlyApps() {
         return this.config.clientOnlyApps === true;
+    }
+
+    appDirectoryUrl(): string | undefined {
+        return this.clientOnlyApps() ? this.config.appDirectoryUrl : undefined;
     }
 
     /** Local setup must never be restored against a different backend/account service. */
@@ -1004,6 +1027,7 @@ export class OpenChat {
         if (this.#nativeSessionTimeout !== undefined)
             window.clearTimeout(this.#nativeSessionTimeout);
         this.#nativeSessionTimeout = undefined;
+        this.#nativeSessionExpiry = undefined;
         startupErrorStore.set(undefined);
         const anon = identityKeyAndChain === undefined;
         const identity = anon
@@ -1026,8 +1050,8 @@ export class OpenChat {
         this.#ocIdentityPrincipal = undefined;
         // Keep interactive unofficial sign-in mounted until acceptance: replacing
         // the form loses browser failure diagnostics/credential expectations and
-        // deliberately aborts a pending native sign-in. The commit callback is
-        // supplied only by explicit browser sign-in, never cached-session restore.
+        // deliberately aborts a pending native sign-in. The callback persists only after fresh
+        // sign-in proof, or rechecks the saved generation after worker adoption during restoration.
         const keepSignInMounted =
             nativeSession !== undefined ||
             (commitVerifiedIdentity !== undefined &&
@@ -1154,14 +1178,8 @@ export class OpenChat {
                     ) {
                         throw new Error("Native browser session expired or changed");
                     }
-                    // The normal session timer intentionally rejects <6-minute sessions. This
-                    // separate local-only path is short-lived and never persists auth keys.
-                    this.#nativeSessionTimeout = window.setTimeout(
-                        () => {
-                            void this.logout();
-                        },
-                        Math.max(0, ocIdentity.ocIdentityExpiry - Date.now() - 1_000),
-                    );
+                    this.#nativeSessionExpiry = ocIdentity.ocIdentityExpiry;
+                    this.#scheduleNativeSessionExpiry();
                 } else {
                     this.#startSession(ocIdentity.ocIdentityPrincipal, ocIdentity.ocIdentityExpiry);
                 }
@@ -1578,6 +1596,13 @@ export class OpenChat {
     // queries makes the agent resend them, and the triggered run fetches anything that changed
     // after the pass in flight had already read it.
     #onResume(reason: ResumeReason, suspendedMs: number) {
+        if (
+            this.#nativeSessionExpiry !== undefined &&
+            Date.now() >= this.#nativeSessionExpiry - 1_000
+        ) {
+            void this.logout();
+            return;
+        }
         console.debug(`Resumed (${reason}) after ${Math.round(suspendedMs / 1000)}s`);
         this.#worker
             .send({ kind: "abortInFlightQueries" })
@@ -1670,11 +1695,22 @@ export class OpenChat {
     // its pre-logout window removing the push token, which then failed with "Worker has no agent"
     // and left the Android token registered to a signed-out user.
     logout(): Promise<void> {
+        this.#nativeSessionOperation?.abort();
         this.#logoutPromise ??= this.#doLogout();
         return this.#logoutPromise;
     }
 
     async #doLogout(): Promise<void> {
+        if (this.existingAccountOnly() && this.isNativeApp()) {
+            // Do not navigate before the durable logout commits. A late restore/save is cancelled
+            // above and the storage generation invalidates pending writes in other instances.
+            try {
+                await this.#nativeSessionStorage.clear();
+            } catch {
+                this.#logoutPromise = undefined;
+                throw new Error("Sign-out could not clear saved sign-in. Please retry sign-out.");
+            }
+        }
         // Run any registered pre-logout tasks (e.g. push-token cleanup) while
         // the identity is still valid. Best-effort: Promise.resolve().then wraps
         // each task so a synchronous throw becomes a rejection that allSettled
@@ -9756,6 +9792,176 @@ export class OpenChat {
         );
     }
 
+    #nativeSessionScope(): NativeSessionScope | undefined {
+        if (
+            !this.existingAccountOnly() ||
+            !this.isNativeApp() ||
+            !this.config.clientOnlyApps ||
+            this.config.icUrl !== "https://icp-api.io" ||
+            !this.config.identityCanister ||
+            !this.config.userIndexCanister
+        )
+            return undefined;
+        return {
+            icUrl: this.config.icUrl,
+            identityCanister: this.config.identityCanister,
+            userIndexCanister: this.config.userIndexCanister,
+        };
+    }
+
+    #scheduleNativeSessionExpiry(): void {
+        if (this.#nativeSessionTimeout !== undefined)
+            window.clearTimeout(this.#nativeSessionTimeout);
+        const expiresAt = this.#nativeSessionExpiry;
+        if (expiresAt === undefined) return;
+        const remaining = expiresAt - Date.now() - 1_000;
+        if (remaining <= 0) {
+            void this.logout();
+            return;
+        }
+        // A 30-day delegation exceeds setTimeout's signed-32-bit range. Recheck the same fixed
+        // expiry on each chunk rather than logging out early or extending its signed authority.
+        this.#nativeSessionTimeout = window.setTimeout(
+            () => this.#scheduleNativeSessionExpiry(),
+            Math.min(MAX_TIMEOUT_MS, remaining),
+        );
+    }
+
+    async #activateNativeSession(
+        session: Awaited<
+            ReturnType<
+                typeof import("@agent/services/nativeBrowserAccountSession").establishNativeBrowserAccountSession
+            >
+        >,
+        authKey: ECDSAKeyIdentity,
+        authChain: DelegationChain,
+        webAuthnKey: WebAuthnKey,
+        signal: AbortSignal,
+        commit: () => Promise<void>,
+    ): Promise<void> {
+        if (signal.aborted || this.#logoutPromise)
+            throw new DOMException("Sign-in cancelled", "AbortError");
+        this.#webAuthnKey = webAuthnKey;
+        await this.#loadedAuthenticationIdentity(
+            { key: authKey, delegation: authChain },
+            AuthProvider.PASSKEY,
+            false,
+            session.profile.username,
+            {
+                ocIdentity: {
+                    key: session.ocKey.getKeyPair(),
+                    delegation: session.ocChain.toJSON(),
+                },
+                expiresAtMs: Number(authChain.delegations[0].delegation.expiration / 1_000_000n),
+                ocPrincipal: DelegationIdentity.fromDelegation(session.ocKey, session.ocChain)
+                    .getPrincipal()
+                    .toString(),
+                ocExpiresAtMs: Number(
+                    session.ocChain.delegations[0].delegation.expiration / 1_000_000n,
+                ),
+                profile: session.profile,
+                signal,
+            },
+            commit,
+        );
+        this.nativeSessionRestoreState.set("idle");
+    }
+
+    async #restoreNativeSession(): Promise<void> {
+        const controller = new AbortController();
+        this.#nativeSessionOperation?.abort();
+        this.#nativeSessionOperation = controller;
+        this.nativeSessionRestoreState.set("restoring");
+        const active = () => {
+            if (controller.signal.aborted || this.#logoutPromise)
+                throw new DOMException("Saved sign-in cancelled", "AbortError");
+        };
+        try {
+            await this.#loadedAuthenticationIdentity(undefined, undefined);
+            active();
+            const scope = this.#nativeSessionScope();
+            if (scope === undefined) {
+                this.nativeSessionRestoreState.set("idle");
+                return;
+            }
+            const saved = await this.#nativeSessionStorage.read();
+            active();
+            if (saved.session === undefined) {
+                this.nativeSessionRestoreState.set("idle");
+                return;
+            }
+            let restored: Awaited<ReturnType<typeof validateSavedNativeSession>>;
+            try {
+                restored = await validateSavedNativeSession(saved.session, scope);
+            } catch {
+                active();
+                await this.#nativeSessionStorage.clear(saved.generation);
+                active();
+                this.nativeSessionRestoreState.set("invalid");
+                return;
+            }
+            active();
+            const { establishNativeBrowserAccountSession } =
+                await import("@agent/services/nativeBrowserAccountSession");
+            active();
+            const session = await establishNativeBrowserAccountSession({
+                authKey: restored.key,
+                authChain: restored.chain,
+                expectedUsername: saved.session.username,
+                expiresAtMs: saved.session.expiresAtMs,
+                expectedAccount: {
+                    userId: saved.session.userId,
+                    ocPrincipal: saved.session.ocPrincipal,
+                },
+                ...scope,
+                signal: controller.signal,
+            });
+            const current = async () => {
+                active();
+                if (!(await this.#nativeSessionStorage.isCurrent(saved.generation)))
+                    throw new DOMException("Saved sign-in replaced", "AbortError");
+                active();
+            };
+            await current();
+            await this.#activateNativeSession(
+                session,
+                restored.key,
+                restored.chain,
+                saved.session.webAuthnKey,
+                controller.signal,
+                current,
+            );
+        } catch {
+            if (!controller.signal.aborted && !this.#logoutPromise) {
+                // A transport failure is not proof that a still-valid delegation is invalid.
+                // Preserve it, keep the UI anonymous, and offer a bounded explicit retry.
+                this.#webAuthnKey = undefined;
+                await this.#loadedAuthenticationIdentity(undefined, undefined).catch((error) =>
+                    this.#handleStartupFailure(error),
+                );
+                if (!controller.signal.aborted) this.nativeSessionRestoreState.set("retry");
+            }
+        } finally {
+            if (this.#nativeSessionOperation === controller)
+                this.#nativeSessionOperation = undefined;
+        }
+    }
+
+    async retrySavedNativeSession(): Promise<void> {
+        if (
+            this.#nativeSessionScope() === undefined ||
+            this.#nativeBrowserSignInBusy ||
+            get(this.nativeSessionRestoreState) === "restoring" ||
+            this.#logoutPromise
+        )
+            throw new Error("Saved sign-in is not available");
+        await this.#initialIdentityLoaded;
+        if (this.#nativeBrowserSignInBusy || this.#logoutPromise)
+            throw new DOMException("Saved sign-in cancelled", "AbortError");
+        this.#initialIdentityLoaded = this.#restoreNativeSession();
+        await this.#initialIdentityLoaded;
+    }
+
     async signInWithLocalBrowser(
         expectedUsername: string,
         options: { signal?: AbortSignal; onStatus?: (message: string) => void } = {},
@@ -9763,16 +9969,28 @@ export class OpenChat {
         if (!this.existingAccountOnly() || !this.isNativeApp() || this.#nativeBrowserSignInBusy) {
             throw new Error("Local APK browser sign-in is not available");
         }
-        const icUrl = this.config.icUrl;
-        if (icUrl === undefined) throw new Error("Local APK identity service is not configured");
+        const scope = this.#nativeSessionScope();
+        if (scope === undefined) throw new Error("Local APK identity service is not configured");
+        const icUrl = scope.icUrl;
         this.#nativeBrowserSignInBusy = true;
         let activating = false;
+        let savedGeneration: string | undefined;
+        let operation: AbortController | undefined;
         try {
             // An anonymous startup must not finish after adoption and replace the new session.
             await this.#initialIdentityLoaded;
             if (options.signal?.aborted) throw new DOMException("Sign-in cancelled", "AbortError");
             if (startupErrorStore.value !== undefined)
                 throw new Error("Local APK startup has not completed");
+            if (this.#logoutPromise) throw new DOMException("Sign-in cancelled", "AbortError");
+            operation = new AbortController();
+            this.#nativeSessionOperation?.abort();
+            this.#nativeSessionOperation = operation;
+            const signal = options.signal
+                ? AbortSignal.any([operation.signal, options.signal])
+                : operation.signal;
+            const generation = (await this.#nativeSessionStorage.read()).generation;
+            if (signal.aborted) throw new DOMException("Sign-in cancelled", "AbortError");
             const native = await import("tauri-plugin-oc-api/commands/localBrowserAuth");
             const { openUrl } = await import("tauri-plugin-oc-api/commands/openUrl");
             const { lookupNativeBrowserCredential, establishNativeBrowserAccountSession } =
@@ -9791,7 +10009,7 @@ export class OpenChat {
                             this.config.identityCanister,
                             icUrl,
                             id,
-                            options.signal,
+                            signal,
                         ),
                     prove: (authKey, authChain, username, expiresAtMs) =>
                         establishNativeBrowserAccountSession({
@@ -9802,43 +10020,48 @@ export class OpenChat {
                             identityCanister: this.config.identityCanister,
                             userIndexCanister: this.config.userIndexCanister,
                             icUrl,
-                            signal: options.signal,
+                            signal,
                         }),
                     activate: async (session, authKey, authChain, webAuthnKey) => {
                         activating = true;
-                        this.#webAuthnKey = webAuthnKey;
-                        await this.#loadedAuthenticationIdentity(
-                            { key: authKey, delegation: authChain },
-                            AuthProvider.PASSKEY,
-                            false,
-                            expectedUsername.trim(),
-                            {
-                                ocIdentity: {
-                                    key: session.ocKey.getKeyPair(),
-                                    delegation: session.ocChain.toJSON(),
-                                },
-                                expiresAtMs: Number(
-                                    authChain.delegations[0].delegation.expiration / 1_000_000n,
-                                ),
-                                ocPrincipal: DelegationIdentity.fromDelegation(
-                                    session.ocKey,
-                                    session.ocChain,
-                                )
-                                    .getPrincipal()
-                                    .toString(),
-                                ocExpiresAtMs: Number(
-                                    session.ocChain.delegations[0].delegation.expiration /
-                                        1_000_000n,
-                                ),
-                                profile: session.profile,
-                                signal: options.signal,
+                        const record: SavedNativeSession = {
+                            scope,
+                            key: authKey.getKeyPair(),
+                            delegation: authChain.toJSON(),
+                            expiresAtMs: Number(
+                                authChain.delegations[0].delegation.expiration / 1_000_000n,
+                            ),
+                            username: session.profile.username,
+                            userId: session.profile.userId,
+                            ocPrincipal: DelegationIdentity.fromDelegation(
+                                session.ocKey,
+                                session.ocChain,
+                            )
+                                .getPrincipal()
+                                .toString(),
+                            webAuthnKey,
+                        };
+                        await this.#activateNativeSession(
+                            session,
+                            authKey,
+                            authChain,
+                            webAuthnKey,
+                            signal,
+                            async () => {
+                                savedGeneration = await this.#nativeSessionStorage.save(
+                                    record,
+                                    generation,
+                                    signal,
+                                );
                             },
                         );
                     },
                 },
-                options,
+                { ...options, signal },
             );
         } catch (error) {
+            if (savedGeneration !== undefined)
+                await this.#nativeSessionStorage.clear(savedGeneration);
             if (activating) {
                 this.#webAuthnKey = undefined;
                 await this.#loadedAuthenticationIdentity(undefined, undefined).catch(() => {
@@ -9849,6 +10072,8 @@ export class OpenChat {
             }
             throw error;
         } finally {
+            if (this.#nativeSessionOperation === operation)
+                this.#nativeSessionOperation = undefined;
             this.#nativeBrowserSignInBusy = false;
         }
     }

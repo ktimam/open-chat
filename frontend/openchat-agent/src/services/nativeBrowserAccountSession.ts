@@ -1,6 +1,7 @@
 import { AnonymousIdentity, HttpAgent, type Identity, type Signature } from "@icp-sdk/core/agent";
 import { DelegationChain, DelegationIdentity, ECDSAKeyIdentity } from "@icp-sdk/core/identity";
 import { Principal } from "@icp-sdk/core/principal";
+import { NATIVE_SESSION_MAX_LIFETIME_MS } from "@shared/utils/nativeBrowserSession";
 import type { CreatedUser, CurrentUserResponse } from "@shared";
 import { Empty, UserIndexCurrentUserResponse } from "../typebox";
 import { IdentityClient } from "./identity/identity.client";
@@ -169,9 +170,12 @@ export type NativeBrowserAccountSessionRequest = {
     userIndexCanister: string;
     icUrl: string;
     signal?: AbortSignal;
+    // Restored sessions must still belong to the originally verified immutable account IDs.
+    expectedAccount?: { userId: string; ocPrincipal: string };
 };
 
-/** Only call after local signature validation. Returns an ephemeral proven candidate, never stores
+/** Call after local signature validation, or with a saved AUTH identity requiring fresh proof.
+ * Returns a proven candidate, never stores
  * identities, activates a worker, creates/registers a user, links accounts, or retries an update.
  * The native attempt must still be completed successfully before the caller activates this result.
  */
@@ -199,7 +203,7 @@ export async function establishNativeBrowserAccountSession(
         const auth = authChain.delegations[0]?.delegation;
         if (
             !Number.isSafeInteger(expiresAtMs) ||
-            expiresAtMs > Date.now() + 300_000 ||
+            expiresAtMs > Date.now() + NATIVE_SESSION_MAX_LIFETIME_MS ||
             typeof expectedUsername !== "string" ||
             expectedUsername.length === 0 ||
             expectedUsername.length > 100 ||
@@ -217,7 +221,12 @@ export async function establishNativeBrowserAccountSession(
         const client = new FreshIdentityClient(identity, agent, identityCanister);
         const mapping = await client.checkAuthPrincipal();
         active(expiresAtMs, signal);
-        if (mapping.kind !== "success" || mapping.userId === undefined || mapping.isIIPrincipal)
+        if (
+            mapping.kind !== "success" ||
+            mapping.userId === undefined ||
+            mapping.isIIPrincipal ||
+            (input.expectedAccount !== undefined && mapping.userId !== input.expectedAccount.userId)
+        )
             fail();
         const ocKey = await ECDSAKeyIdentity.generate();
         active(expiresAtMs, signal);
@@ -267,6 +276,11 @@ export async function establishNativeBrowserAccountSession(
                 prepared.userKey.slice(),
             );
             const ocIdentity = DelegationIdentity.fromDelegation(ocKey, ocChain);
+            if (
+                input.expectedAccount !== undefined &&
+                ocIdentity.getPrincipal().toString() !== input.expectedAccount.ocPrincipal
+            )
+                fail();
             const ocAgent = await freshAgent(
                 ocIdentity,
                 icUrl,
@@ -281,7 +295,7 @@ export async function establishNativeBrowserAccountSession(
             active(Number(prepared.expiration / 1_000_000n), signal);
             if (
                 profile.kind !== "created_user" ||
-                profile.username !== expectedUsername ||
+                (input.expectedAccount === undefined && profile.username !== expectedUsername) ||
                 profile.userId !== mapping.userId
             )
                 fail();

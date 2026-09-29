@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { createUnofficialLocalEnvironment, parseUnofficialLocalPort } from "../frontend/unofficialLocalProfile.mjs";
+import { createUnofficialLocalEnvironment, parseUnofficialLocalPort, parseAppDirectoryUrl } from "../frontend/unofficialLocalProfile.mjs";
 
 export function parseUnofficialLocalArgs(args) {
     const options = { port: 5190, layout: "v2", help: false };
@@ -12,14 +12,17 @@ export function parseUnofficialLocalArgs(args) {
     for (let index = 0; index < args.length; index++) {
         const option = args[index];
         if (option === "--help" || option === "-h") { options.help = true; continue; }
-        if ((option !== "--port" && option !== "--layout") || seen.has(option)) {
-            throw new Error("Use only --port <1024..65535> and --layout <v1|v2>");
+        if (!["--port", "--layout", "--app-directory"].includes(option) || seen.has(option)) {
+            throw new Error("Use --port, --layout, or --app-directory <public URL>");
         }
         seen.add(option);
         const value = args[++index];
         if (option === "--port") {
             if (value === undefined) throw new Error("--port requires a value");
             options.port = parseUnofficialLocalPort(value);
+        } else if (option === "--app-directory") {
+            if (!value) throw new Error("--app-directory requires a URL");
+            options.appDirectoryUrl = parseAppDirectoryUrl(value);
         } else {
             if (value !== "v1" && value !== "v2") throw new Error("--layout must be v1 or v2");
             options.layout = value;
@@ -43,7 +46,7 @@ export function unofficialLocalLaunchPlan(repositoryRoot, canisters, options, in
 export function main(args = process.argv.slice(2)) {
     const options = parseUnofficialLocalArgs(args);
     if (options.help) {
-        console.log("Usage: node scripts/start-unofficial-local.mjs [--port 5190] [--layout v1|v2]");
+        console.log("Usage: node scripts/start-unofficial-local.mjs [--port 5190] [--layout v1|v2] [--app-directory <public URL>]");
         console.log("Serves only loopback; uses official OpenChat services and your existing linked account.");
         return;
     }

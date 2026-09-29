@@ -52,7 +52,7 @@ function pause(signal?: AbortSignal): Promise<void> {
     });
 }
 
-/** One browser attempt, no disk persistence and no automatic retry or account creation. */
+/** One browser attempt; only verified activation may persist. No automatic retry or account creation. */
 export async function runNativeBrowserSignIn<T>(
     expectedUsername: string,
     identityCanister: string,
@@ -97,7 +97,7 @@ export async function runNativeBrowserSignIn<T>(
             throw new Error("APK request binding failed");
         const verifier = createNativeBrowserAuthVerifier(challenge, { signal });
         status(
-            "Complete the explicit sign-in in your browser, then return here. This local-test session lasts at most five minutes.",
+            "Complete sign-in in your browser within two minutes, then return here. This device can stay signed in for up to 30 days, or until you sign out.",
         );
         await adapter.open(challenge.url);
         active();

@@ -12,6 +12,11 @@ const seam = vi.hoisted(() => ({
     cacheGet: vi.fn(),
     cacheSet: vi.fn(),
     cacheRemove: vi.fn(),
+    nativeRead: vi.fn(),
+    nativeSave: vi.fn(),
+    nativeClear: vi.fn(),
+    nativeCurrent: vi.fn(),
+    nativeProve: vi.fn(),
     send: vi.fn(),
     stream: vi.fn(),
     flow: vi.fn(),
@@ -59,6 +64,15 @@ vi.mock("@client/utils/poller", () => ({
     },
 }));
 vi.mock("@client/utils/nativeBrowserSignInFlow", () => ({ runNativeBrowserSignIn: seam.flow }));
+vi.mock("@client/utils/nativeBrowserSessionStorage", async (original) => ({
+    ...(await original<object>()),
+    NativeBrowserSessionStorage: class {
+        read = seam.nativeRead;
+        save = seam.nativeSave;
+        clear = seam.nativeClear;
+        isCurrent = seam.nativeCurrent;
+    },
+}));
 vi.mock("@client/utils/webAuthn", () => ({
     createWebAuthnIdentity: vi.fn(),
     MultiWebAuthnIdentity: class {
@@ -86,13 +100,15 @@ vi.mock("tauri-plugin-oc-api/commands/localBrowserAuth", () => ({
 vi.mock("tauri-plugin-oc-api/commands/openUrl", () => ({ openUrl: vi.fn() }));
 vi.mock("@agent/services/nativeBrowserAccountSession", () => ({
     lookupNativeBrowserCredential: vi.fn(),
-    establishNativeBrowserAccountSession: vi.fn(),
+    establishNativeBrowserAccountSession: seam.nativeProve,
 }));
 
 import { anonymousUser, Stream, type CreatedUser } from "@shared";
 import { OpenChat } from "./openchat";
 import type { OpenChatConfig } from "./config";
 import { currentUserStore, identityStateStore } from "./state";
+import { Principal } from "@icp-sdk/core/principal";
+import { get } from "svelte/store";
 
 const NOW = 1_800_000_000_000;
 type NativeActivation = {
@@ -171,6 +187,7 @@ describe("OpenChat verified sign-in acceptance", () => {
                 key.getPublicKey().toDer(),
             );
         authChain = chain(authKey);
+        authChain.delegations[0].delegation.targets = [Principal.fromText("aaaaa-aa")];
         ocChain = chain(ocKey);
         profile = { ...anonymousUser(), username: "synthetic-user", userId: "aaaaa-aa" };
     });
@@ -187,6 +204,14 @@ describe("OpenChat verified sign-in acceptance", () => {
         seam.order = [];
         seam.authCreate.mockReset().mockResolvedValue({ logout: vi.fn() });
         seam.cacheGet.mockReset().mockResolvedValue(undefined);
+        seam.nativeRead.mockReset().mockResolvedValue({ generation: "initial" });
+        seam.nativeCurrent.mockReset().mockResolvedValue(true);
+        seam.nativeClear.mockReset().mockResolvedValue(undefined);
+        seam.nativeSave.mockReset().mockImplementation(async () => {
+            seam.order.push("native-persist");
+            return "saved-generation";
+        });
+        seam.nativeProve.mockReset().mockResolvedValue({ ocKey, ocChain, profile });
         seam.cacheRemove.mockReset().mockResolvedValue(undefined);
         seam.cacheSet.mockReset().mockImplementation(async () => {
             seam.order.push("persist");
@@ -228,12 +253,13 @@ describe("OpenChat verified sign-in acceptance", () => {
         vi.unstubAllGlobals();
     });
 
-    it("starts the unofficial APK anonymously without AuthClient or cached auth restoration", async () => {
+    it("starts with no session without AuthClient or legacy cached auth restoration", async () => {
         build();
         await boot();
         expect(seam.authCreate).not.toHaveBeenCalled();
         expect(seam.cacheGet).not.toHaveBeenCalled();
         expect(seam.cacheSet).not.toHaveBeenCalled();
+        expect(seam.nativeRead).toHaveBeenCalledOnce();
         expect(authenticated()).toHaveLength(0);
     });
     it.each([{ clientOnlyApps: false }, { icUrl: undefined }, { userIndexCanister: "" }])(
@@ -301,7 +327,7 @@ describe("OpenChat verified sign-in acceptance", () => {
         expect(authenticated()).toEqual([[profile]]);
         expect(transitions.mock.calls.some(([state]) => state.kind === "loading_user")).toBe(false);
     });
-    it("adopts the preflight profile without another lookup/cache and keeps the short session alive", async () => {
+    it("saves only after adoption of the proven profile and respects even a short signed expiry", async () => {
         build();
         await boot();
         const getUser = vi.spyOn(client, "getCurrentUser");
@@ -311,6 +337,8 @@ describe("OpenChat verified sign-in acceptance", () => {
         expect(seam.stream).not.toHaveBeenCalled();
         expect(seam.cacheGet).not.toHaveBeenCalled();
         expect(seam.cacheSet).not.toHaveBeenCalled();
+        expect(seam.nativeSave).toHaveBeenCalledOnce();
+        expect(seam.order).toEqual(["worker-proof", "native-persist"]);
         expect(seam.send).toHaveBeenCalledWith(
             expect.objectContaining({
                 kind: "setAuthIdentity",
@@ -321,6 +349,117 @@ describe("OpenChat verified sign-in acceptance", () => {
         await vi.advanceTimersByTimeAsync(NOW + 239_000 - Date.now() - 1);
         expect(logout).not.toHaveBeenCalled();
         await vi.advanceTimersByTimeAsync(1);
+        expect(logout).toHaveBeenCalledOnce();
+    });
+    function savedSession() {
+        return {
+            scope: {
+                icUrl: "https://icp-api.io",
+                identityCanister: "aaaaa-aa",
+                userIndexCanister: "aaaaa-aa",
+            },
+            key: authKey.getKeyPair(),
+            delegation: authChain.toJSON(),
+            expiresAtMs: NOW + 240_000,
+            username: profile.username,
+            userId: profile.userId,
+            ocPrincipal: ocKey.getPrincipal().toString(),
+            webAuthnKey: { publicKey: authChain.publicKey, credentialId: Uint8Array.of(1) },
+        };
+    }
+    it("restores only after fresh official proof and exact saved account/scope bindings", async () => {
+        const saved = savedSession();
+        seam.nativeRead.mockResolvedValue({ generation: "existing", session: saved });
+        build();
+        await vi.waitFor(() => expect(authenticated()).toHaveLength(1));
+        expect(seam.flow).not.toHaveBeenCalled();
+        expect(seam.nativeProve).toHaveBeenCalledWith(
+            expect.objectContaining({
+                expectedAccount: { userId: saved.userId, ocPrincipal: saved.ocPrincipal },
+                ...saved.scope,
+                expiresAtMs: saved.expiresAtMs,
+            }),
+        );
+        expect(seam.nativeCurrent).toHaveBeenCalledWith("existing");
+        expect(seam.nativeSave).not.toHaveBeenCalled();
+        expect(get(client.nativeSessionRestoreState)).toBe("idle");
+    });
+    it("keeps a valid saved identity after network failure and retries without opening the browser", async () => {
+        seam.nativeRead.mockResolvedValue({ generation: "existing", session: savedSession() });
+        seam.nativeProve.mockRejectedValueOnce(new Error("offline"));
+        build();
+        await vi.waitFor(() => expect(get(client.nativeSessionRestoreState)).toBe("retry"));
+        expect(authenticated()).toHaveLength(0);
+        expect(seam.nativeClear).not.toHaveBeenCalled();
+        await client.retrySavedNativeSession();
+        expect(authenticated()).toHaveLength(1);
+        expect(seam.nativeProve).toHaveBeenCalledTimes(2);
+        expect(seam.flow).not.toHaveBeenCalled();
+    });
+    it.each(["expired", "scope", "key"])(
+        "never uses %s saved identity as account authority",
+        async (failure) => {
+            const saved = savedSession();
+            if (failure === "expired") saved.expiresAtMs = NOW;
+            if (failure === "scope") saved.scope.identityCanister = "2vxsx-fae";
+            if (failure === "key") saved.key = ocKey.getKeyPair();
+            seam.nativeRead.mockResolvedValue({ generation: "existing", session: saved });
+            build();
+            await vi.waitFor(() => expect(get(client.nativeSessionRestoreState)).toBe("invalid"));
+            expect(seam.nativeProve).not.toHaveBeenCalled();
+            expect(seam.nativeClear).toHaveBeenCalledWith("existing");
+            expect(authenticated()).toHaveLength(0);
+        },
+    );
+    it("does not adopt a restore superseded by another instance's logout", async () => {
+        seam.nativeRead.mockResolvedValue({ generation: "existing", session: savedSession() });
+        seam.nativeCurrent.mockResolvedValue(false);
+        build();
+        await vi.waitFor(() => expect(get(client.nativeSessionRestoreState)).toBe("retry"));
+        expect(authenticated()).toHaveLength(0);
+        expect(seam.nativeSave).not.toHaveBeenCalled();
+    });
+    it("logout clears saved state and cancels a delayed official restore result", async () => {
+        const proof = deferred<{
+            ocKey: ECDSAKeyIdentity;
+            ocChain: DelegationChain;
+            profile: CreatedUser;
+        }>();
+        seam.nativeRead.mockResolvedValue({ generation: "existing", session: savedSession() });
+        seam.nativeProve.mockReturnValue(proof.promise);
+        build();
+        await vi.waitFor(() => expect(seam.nativeProve).toHaveBeenCalledOnce());
+        logout.mockRestore();
+        await client.logout();
+        expect(seam.nativeClear).toHaveBeenCalledWith();
+        proof.resolve({ ocKey, ocChain, profile });
+        await vi.waitFor(() =>
+            expect(seam.nativeProve.mock.results[0].value).resolves.toBeDefined(),
+        );
+        expect(authenticated()).toHaveLength(0);
+        expect(seam.nativeSave).not.toHaveBeenCalled();
+    });
+    it("does not expire a 30-day signed session at the setTimeout limit", async () => {
+        build();
+        await boot();
+        const expires = NOW + 30 * 24 * 60 * 60_000;
+        const longAuth = DelegationChain.fromJSON(authChain.toJSON());
+        const longOc = DelegationChain.fromJSON(ocChain.toJSON());
+        longAuth.delegations[0].delegation.expiration = BigInt(expires) * 1_000_000n;
+        longOc.delegations[0].delegation.expiration = BigInt(expires - 10_000) * 1_000_000n;
+        seam.send.mockImplementation(async (r) =>
+            r.kind === "setAuthIdentity" ? workerSuccess(expires - 10_000) : undefined,
+        );
+        seam.flow.mockImplementation(async (_u, _c, adapter: NativeActivation) =>
+            adapter.activate({ ocKey, ocChain: longOc, profile }, authKey, longAuth, {
+                publicKey: authChain.publicKey,
+                credentialId: Uint8Array.of(1),
+            }),
+        );
+        await nativeSignIn();
+        await vi.advanceTimersByTimeAsync(2 ** 31 - 1);
+        expect(logout).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(expires - 11_000 - Date.now());
         expect(logout).toHaveBeenCalledOnce();
     });
     it.each([

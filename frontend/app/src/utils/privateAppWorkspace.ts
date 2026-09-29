@@ -28,6 +28,7 @@ import {
     type LocalAppDraftChoiceSession,
 } from "./localAppDraftChoices";
 import type { LocalAppDraftScalar } from "./localAppDraftFields";
+import { APP_SETUP_TIMEOUT_MS } from "./localAppSetupPopup";
 import {
     deliverLocalAppViaRelay,
     cancelLocalAppHandoffs,
@@ -42,6 +43,22 @@ import {
     type LocalAppSetupSnapshot,
     type LocalAppSetupStorage,
 } from "./localAppSetupStore";
+import {
+    localAppDirectorySource,
+    loadLocalAppDirectory,
+    loadLocalAppPublicPackage,
+    bindConnectedLocalApp,
+    sameLocalAppPublisher,
+    localAppHasPrivateSetup,
+    type LocalAppDirectory,
+    type LocalAppDirectoryDescriptor,
+    type LocalAppInstallation,
+} from "./localAppDirectory";
+
+export type ConnectLocalAppSetup = (
+    descriptor: LocalAppDirectoryDescriptor,
+    signal: AbortSignal,
+) => Promise<string>;
 
 export interface PrivateAppWorkspaceState {
     open: boolean;
@@ -62,6 +79,12 @@ export interface PrivateAppWorkspaceState {
     editorJson: string;
     recipient: string;
     draftManualValues: boolean;
+    directory?: LocalAppDirectory;
+    directorySource?: string;
+    directoryLoading: boolean;
+    directoryStatus: string;
+    appUpdates: Readonly<Record<string, string>>;
+    disabledAppIds: readonly string[];
 }
 
 type Dependencies = {
@@ -73,6 +96,9 @@ type Dependencies = {
     cancelDelivery: () => void;
     deliverySaved: (importId: string) => boolean;
     setupStorage?: LocalAppSetupStorage;
+    connectAppSetup?: ConnectLocalAppSetup;
+    loadDirectory?: typeof loadLocalAppDirectory;
+    loadPublicPackage?: typeof loadLocalAppPublicPackage;
 };
 export type PrivateAppProposalOptions = {
     stillCurrent: () => boolean;
@@ -91,7 +117,11 @@ const initial = (): PrivateAppWorkspaceState => ({
     editorJson: "",
     recipient: "",
     draftManualValues: false,
-    message: "Import an app catalog and select an action. Drafts stay in memory only.",
+    directoryLoading: false,
+    directoryStatus: "",
+    appUpdates: Object.freeze({}),
+    disabledAppIds: Object.freeze([]),
+    message: "Connect an available app and select its action. Drafts stay in memory only.",
 });
 
 /** Drafts are ephemeral. Optional persistence contains only explicitly imported app setup. */
@@ -106,6 +136,12 @@ export class PrivateAppWorkspace {
     readonly #setupQueues = new Map<string, Promise<void>>();
     #epoch = 0;
     #processor?: ImportedLocalProcessor;
+    readonly #processors = new Map<string, ImportedLocalProcessor>();
+    readonly #installations = new Map<string, LocalAppInstallation>();
+    #directorySource?: string;
+    #directoryAbort?: AbortController;
+    #refreshDeferred = false;
+    #connectAppSetup?: ConnectLocalAppSetup;
     #abort?: AbortController;
     #deliveryClient?: OpenChat;
     #nativeDelivery = false;
@@ -117,6 +153,7 @@ export class PrivateAppWorkspace {
         private readonly deps: Dependencies,
         private readonly onChange: (state: PrivateAppWorkspaceState) => void = () => {},
     ) {
+        this.#connectAppSetup = deps.connectAppSetup;
         this.#drafts = new LocalAppDraftStore((request, signal) => {
             if (this.#nativeDelivery) {
                 // A native client must never fall back to a browser BroadcastChannel or app backend.
@@ -170,6 +207,11 @@ export class PrivateAppWorkspace {
         this.#abort?.abort();
         this.#abort = undefined;
         this.#processor = undefined;
+        this.#processors.clear();
+        this.#installations.clear();
+        this.#directoryAbort?.abort();
+        this.#directoryAbort = undefined;
+        this.#refreshDeferred = false;
         this.#deliveryClient = undefined;
         this.#nativeDelivery = false;
         this.#choiceSession = undefined;
@@ -180,6 +222,7 @@ export class PrivateAppWorkspace {
             ...initial(),
             account: this.#account,
             backend: this.#backend,
+            directorySource: this.#directorySource,
             setupGeneration: this.#setupGeneration,
             setupStatus: this.deps.setupStorage
                 ? "Workspace cleared. Any saved setup is unchanged; drafts were not saved."
@@ -217,6 +260,14 @@ export class PrivateAppWorkspace {
                 stored === undefined ? undefined : await validateLocalAppSetupSnapshot(stored);
             if (epoch !== this.#setupEpoch) return;
             this.#processor = setup?.processor;
+            this.#processors.clear();
+            for (const row of setup?.processors ?? [])
+                this.#processors.set(row.appId, row.artifact);
+            if (setup?.processor && setup.appId) this.#processors.set(setup.appId, setup.processor);
+            this.#installations.clear();
+            for (const entry of setup?.installations ?? [])
+                this.#installations.set(entry.appId, entry);
+            this.#processor = setup?.appId ? this.#processors.get(setup.appId) : undefined;
             ++this.#setupGeneration;
             const app = setup?.catalog.apps.find((app) => app.id === setup.appId);
             this.#set({
@@ -224,12 +275,16 @@ export class PrivateAppWorkspace {
                 appId: setup?.appId,
                 actionId: setup?.actionId,
                 enabledChats: setup?.enabledChats ?? Object.freeze([]),
-                processorReady: !!setup?.actionId && (!app?.processor || !!setup?.processor),
+                disabledAppIds: setup?.disabledAppIds ?? Object.freeze([]),
+                processorReady:
+                    !!setup?.actionId &&
+                    !setup?.disabledAppIds?.includes(setup.appId!) &&
+                    (!app?.processor || !!this.#processor),
                 setupGeneration: this.#setupGeneration,
                 setupLoading: false,
                 setupStatus: setup
                     ? "App setup restored on this device. No draft, message, or approval was restored."
-                    : "No saved app setup for this account and backend. Import a catalog to begin.",
+                    : "No saved app setup for this account and backend. Connect an available app to begin.",
             });
         } catch {
             if (epoch === this.#setupEpoch)
@@ -252,6 +307,13 @@ export class PrivateAppWorkspace {
             appId: this.#state.appId,
             actionId: this.#state.actionId,
             processor: this.#processor,
+            processors: Object.freeze(
+                [...this.#processors].map(([appId, artifact]) =>
+                    Object.freeze({ appId, artifact }),
+                ),
+            ),
+            installations: Object.freeze([...this.#installations.values()]),
+            disabledAppIds: this.#state.disabledAppIds,
             enabledChats: this.#state.enabledChats,
         };
         const epoch = this.#setupEpoch;
@@ -287,6 +349,12 @@ export class PrivateAppWorkspace {
             return false;
         try {
             const enabledChats = validateLocalAppEnabledChats(rows, catalog);
+            if (
+                enabledChats.some((row) =>
+                    row.appIds.some((id) => this.#state.disabledAppIds.includes(id)),
+                )
+            )
+                return false;
             if (JSON.stringify(enabledChats) === JSON.stringify(this.#state.enabledChats))
                 return true;
             this.#set({ enabledChats });
@@ -340,6 +408,313 @@ export class PrivateAppWorkspace {
         this.#set({ message: "Could not import this file. No app was contacted." });
     }
 
+    setConnectAppSetup(connect: ConnectLocalAppSetup): void {
+        this.#connectAppSetup = connect;
+    }
+
+    configureDirectory(source?: string): void {
+        let next: string | undefined;
+        try {
+            next = source ? localAppDirectorySource(source) : undefined;
+        } catch {
+            this.#directoryAbort?.abort();
+            this.#directorySource = undefined;
+            this.#set({
+                directorySource: undefined,
+                directory: undefined,
+                directoryLoading: false,
+                directoryStatus: "The configured app directory address is invalid.",
+            });
+            return;
+        }
+        if (next === this.#directorySource && this.#state.directorySource === next) return;
+        this.#directoryAbort?.abort();
+        this.#directorySource = next;
+        this.#set({
+            directorySource: next,
+            directory: undefined,
+            directoryLoading: false,
+            directoryStatus: next
+                ? "Refresh available apps to check the configured publisher."
+                : "No app directory is configured for this client.",
+        });
+    }
+
+    async refreshDirectory(): Promise<boolean> {
+        if (!this.#directorySource || !this.#account || this.#state.setupLoading) return false;
+        if (this.#state.busy || this.#state.draft) {
+            this.#refreshDeferred = true;
+            this.#set({
+                directoryStatus:
+                    "App updates are deferred until the current draft or processing is finished.",
+            });
+            return false;
+        }
+        if (this.#state.directoryLoading) return false;
+        const source = this.#directorySource;
+        const epoch = this.#setupEpoch;
+        const abort = new AbortController();
+        this.#directoryAbort = abort;
+        const timer = setTimeout(() => abort.abort(), 30_000);
+        this.#set({
+            directoryLoading: true,
+            directoryStatus: "Checking available apps. No chat content is sent.",
+        });
+        try {
+            const directory = await (this.deps.loadDirectory ?? loadLocalAppDirectory)(
+                source,
+                abort.signal,
+            );
+            if (
+                epoch !== this.#setupEpoch ||
+                source !== this.#directorySource ||
+                abort.signal.aborted
+            )
+                return false;
+            const updates: Record<string, string> = {};
+            this.#set({ directory });
+            if (this.#state.busy || this.#state.draft) {
+                this.#refreshDeferred = true;
+                this.#set({
+                    directoryStatus:
+                        "App list checked; installation changes are deferred until processing or the draft is discarded.",
+                });
+                return false;
+            }
+            const disabled = new Set(this.#state.disabledAppIds);
+            for (const installed of this.#installations.values()) {
+                if (
+                    installed.sourceUrl === source &&
+                    !directory.apps.some((app) => app.id === installed.appId)
+                )
+                    disabled.add(installed.appId);
+            }
+            if (disabled.size !== this.#state.disabledAppIds.length) {
+                const disabledAppIds = Object.freeze([...disabled]);
+                const enabledChats = Object.freeze(
+                    this.#state.enabledChats
+                        .map((row) =>
+                            Object.freeze({
+                                ...row,
+                                appIds: Object.freeze(row.appIds.filter((id) => !disabled.has(id))),
+                            }),
+                        )
+                        .filter((row) => row.appIds.length),
+                );
+                this.#set({
+                    disabledAppIds,
+                    enabledChats,
+                    processorReady:
+                        !disabled.has(this.#state.appId ?? "") && this.#state.processorReady,
+                });
+                this.#saveSetup();
+            }
+            for (const installed of this.#installations.values()) {
+                if (installed.sourceUrl !== source) {
+                    updates[installed.appId] = "Connect to approve this publisher.";
+                    continue;
+                }
+                const descriptor = directory.apps.find((app) => app.id === installed.appId);
+                if (!descriptor) {
+                    updates[installed.appId] =
+                        "No longer listed by this publisher. Disabled in chats and for proposals; setup is retained for recovery.";
+                    continue;
+                }
+                if (JSON.stringify(descriptor) === JSON.stringify(installed.descriptor)) continue;
+                if (!sameLocalAppPublisher(installed, descriptor, source)) {
+                    updates[installed.appId] = "Connect to approve changed publisher addresses.";
+                    continue;
+                }
+                const app = this.#state.catalog?.apps.find((app) => app.id === installed.appId);
+                if (!app) continue;
+                // Never reinterpret opaque private setup against a newly published recipe.
+                if (localAppHasPrivateSetup(app, installed.publicCatalogJson)) {
+                    updates[app.id] = "Connect again to refresh private app setup for this update.";
+                    continue;
+                }
+                const pkg = await (this.deps.loadPublicPackage ?? loadLocalAppPublicPackage)(
+                    descriptor,
+                    abort.signal,
+                );
+                if (
+                    epoch !== this.#setupEpoch ||
+                    source !== this.#directorySource ||
+                    abort.signal.aborted
+                )
+                    return false;
+                if (this.#state.busy || this.#state.draft) {
+                    this.#refreshDeferred = true;
+                    break;
+                }
+                if (pkg.catalog.apps[0].destination !== app.destination) {
+                    updates[app.id] = "Connect to approve the changed destination.";
+                    continue;
+                }
+                this.#installApp(
+                    pkg.catalog.apps[0],
+                    pkg.processor,
+                    {
+                        appId: app.id,
+                        sourceUrl: source,
+                        descriptor,
+                        publicCatalogJson: pkg.catalogJson,
+                    },
+                    false,
+                );
+            }
+            this.#set({
+                appUpdates: Object.freeze(updates),
+                directoryStatus:
+                    "App list updated. New apps are not enabled in any chat. Connect approves this publisher's compatible future recipe updates.",
+            });
+            return true;
+        } catch {
+            if (epoch === this.#setupEpoch && source === this.#directorySource)
+                this.#set({
+                    directoryStatus:
+                        "The app directory or update could not be verified. Previously verified apps remain available; an unverified update was not installed.",
+                });
+            return false;
+        } finally {
+            clearTimeout(timer);
+            if (this.#directoryAbort === abort) {
+                this.#directoryAbort = undefined;
+                this.#set({ directoryLoading: false });
+            }
+        }
+    }
+
+    async connectApp(appId: string): Promise<boolean> {
+        if (!this.#setupAllowed() || this.#state.directoryLoading || !this.#connectAppSetup)
+            return false;
+        const descriptor = this.#state.directory?.apps.find((app) => app.id === appId);
+        const source = this.#directorySource;
+        if (!descriptor || !source) return false;
+        const epoch = this.#epoch;
+        const abort = new AbortController();
+        this.#abort = abort;
+        let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+        this.#set({
+            busy: true,
+            message:
+                "Checking the app recipe and opening its account connection. No chat content is sent.",
+        });
+        try {
+            // The transport may finish before the public downloads. Bound the complete atomic
+            // operation even when a download stalls or ignores its cancellation signal.
+            const deadline = new Promise<never>((_resolve, reject) => {
+                deadlineTimer = setTimeout(() => {
+                    abort.abort();
+                    reject(new Error("App connection deadline exceeded"));
+                }, APP_SETUP_TIMEOUT_MS);
+            });
+            // The explicit Connect gesture opens the exact directory setup URL before awaiting
+            // downloads. Neither result is adopted until both are verified as one package.
+            const connection = this.#connectAppSetup(descriptor, abort.signal);
+            const [pkg, json] = await Promise.race([
+                Promise.all([
+                    (this.deps.loadPublicPackage ?? loadLocalAppPublicPackage)(
+                        descriptor,
+                        abort.signal,
+                    ),
+                    connection,
+                ]),
+                deadline,
+            ]);
+            const app = bindConnectedLocalApp(json, pkg.catalog);
+            if (epoch !== this.#epoch || source !== this.#directorySource || abort.signal.aborted)
+                return false;
+            this.#installApp(
+                app,
+                pkg.processor,
+                { appId, sourceUrl: source, descriptor, publicCatalogJson: pkg.catalogJson },
+                true,
+            );
+            this.#set({
+                message:
+                    "App connected. Enable it in a chat before proposing a message. No chat content was sent.",
+            });
+            return true;
+        } catch {
+            abort.abort();
+            if (epoch === this.#epoch)
+                this.#set({
+                    message:
+                        "The app connection could not be verified. Previously installed setup is unchanged; retry Connect explicitly.",
+                });
+            return false;
+        } finally {
+            clearTimeout(deadlineTimer);
+            if (this.#abort === abort) {
+                this.#abort = undefined;
+                this.#set({ busy: false });
+            }
+        }
+    }
+
+    #installApp(
+        app: LocalAppCatalogEntry,
+        processor: ImportedLocalProcessor,
+        installation: LocalAppInstallation,
+        select: boolean,
+    ): void {
+        const previous = this.#state.catalog?.apps.find((entry) => entry.id === app.id);
+        const oldInstallation = this.#installations.get(app.id);
+        const preservePermission =
+            previous?.destination === app.destination &&
+            oldInstallation !== undefined &&
+            sameLocalAppPublisher(oldInstallation, installation.descriptor, installation.sourceUrl);
+        const apps = [
+            ...(this.#state.catalog?.apps ?? []).filter((entry) => entry.id !== app.id),
+            app,
+        ];
+        const catalog = parseLocalAppCatalog(JSON.stringify({ version: 1, apps }));
+        ++this.#epoch;
+        const enabledChats = Object.freeze(
+            this.#state.enabledChats
+                .map((row) =>
+                    Object.freeze({
+                        ...row,
+                        appIds: Object.freeze(
+                            row.appIds.filter((id) => id !== app.id || preservePermission),
+                        ),
+                    }),
+                )
+                .filter((row) => row.appIds.length),
+        );
+        this.#processors.set(app.id, processor);
+        this.#installations.set(app.id, Object.freeze(installation));
+        const appId = select ? app.id : this.#state.appId;
+        const oldAction = this.#state.actionId;
+        const selected = catalog.apps.find((entry) => entry.id === appId);
+        const actionId = select
+            ? app.actions.length === 1
+                ? app.actions[0].definition.name
+                : undefined
+            : selected?.actions.find((action) => action.definition.name === oldAction)?.definition
+                  .name;
+        this.#processor = appId ? this.#processors.get(appId) : undefined;
+        const disabledAppIds = select
+            ? Object.freeze(this.#state.disabledAppIds.filter((id) => id !== app.id))
+            : this.#state.disabledAppIds;
+        const updates = { ...this.#state.appUpdates };
+        delete updates[app.id];
+        this.#set({
+            catalog,
+            enabledChats,
+            appId,
+            actionId,
+            processorReady:
+                !!actionId &&
+                !disabledAppIds.includes(appId ?? "") &&
+                (!selected?.processor || !!this.#processor),
+            disabledAppIds,
+            appUpdates: Object.freeze(updates),
+            setupGeneration: ++this.#setupGeneration,
+        });
+        this.#saveSetup();
+    }
+
     #setupAllowed(): boolean {
         if (this.#state.setupLoading || (this.deps.setupStorage && !this.#setupScope())) {
             this.#set({
@@ -372,10 +747,13 @@ export class PrivateAppWorkspace {
             ++this.#epoch;
             ++this.#setupGeneration;
             this.#processor = undefined;
+            this.#processors.clear();
+            this.#installations.clear();
             this.#set({
                 catalog,
                 setupGeneration: this.#setupGeneration,
                 enabledChats: Object.freeze([]),
+                disabledAppIds: Object.freeze([]),
                 appId: undefined,
                 actionId: undefined,
                 processorReady: false,
@@ -402,7 +780,7 @@ export class PrivateAppWorkspace {
         if (!this.#setupAllowed()) return false;
         if (appId && !this.#state.catalog?.apps.some((app) => app.id === appId)) return false;
         ++this.#epoch;
-        this.#processor = undefined;
+        this.#processor = this.#processors.get(appId);
         this.#set({
             appId: appId || undefined,
             actionId: undefined,
@@ -419,14 +797,17 @@ export class PrivateAppWorkspace {
         const action = app?.actions.find((action) => action.definition.name === actionId);
         if (!app || !action) return false;
         ++this.#epoch;
-        this.#processor = undefined;
+        this.#processor = this.#processors.get(appId);
         this.#set({
             appId,
             actionId,
-            processorReady: app.processor === undefined,
-            message: app.processor
-                ? "Import this app's matching local processor file before proposing a message."
-                : "Ready. Use Propose on one message to prepare a private draft.",
+            processorReady:
+                !this.#state.disabledAppIds.includes(appId) &&
+                (app.processor === undefined || !!this.#processor),
+            message:
+                app.processor && !this.#processor
+                    ? "Import this app's matching local processor file before proposing a message."
+                    : "Ready. Use Propose on one message to prepare a private draft.",
         });
         this.#saveSetup();
         return true;
@@ -451,6 +832,7 @@ export class PrivateAppWorkspace {
             if (epoch !== this.#epoch) return false;
             if (!valid) {
                 this.#processor = undefined;
+                this.#processors.delete(selection!.app.id);
                 this.#set({
                     processorReady: false,
                     message:
@@ -460,6 +842,7 @@ export class PrivateAppWorkspace {
                 return false;
             }
             this.#processor = artifact;
+            this.#processors.set(selection!.app.id, artifact);
             this.#set({
                 processorReady: true,
                 message:
@@ -497,6 +880,13 @@ export class PrivateAppWorkspace {
             return "retryable";
         }
         const { app, action } = selection;
+        if (this.#state.disabledAppIds.includes(app.id)) {
+            this.#set({
+                message:
+                    "This app is no longer available from its publisher. Reconnect it before proposing a message.",
+            });
+            return "retryable";
+        }
         const artifact = this.#processor;
         if (app.processor && (!artifact || !this.#state.processorReady)) {
             this.#set({
@@ -801,6 +1191,10 @@ export class PrivateAppWorkspace {
                 ? "Local draft discarded. A remote handoff may already have occurred; check the app before sending again."
                 : "Local draft or processing discarded. Nothing was sent to the app.",
         });
+        if (this.#refreshDeferred) {
+            this.#refreshDeferred = false;
+            void this.refreshDirectory();
+        }
     }
 }
 

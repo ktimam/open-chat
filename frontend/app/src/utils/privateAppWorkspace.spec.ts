@@ -841,8 +841,11 @@ describe("private app setup-only persistence", () => {
                 "actionId",
                 "appId",
                 "catalog",
+                "disabledAppIds",
                 "enabledChats",
+                "installations",
                 "processor",
+                "processors",
             ]);
             expect(JSON.stringify(snapshot)).not.toMatch(
                 /synthetic private source|private recipient|approvalId|idempotencyKey|editorJson/,

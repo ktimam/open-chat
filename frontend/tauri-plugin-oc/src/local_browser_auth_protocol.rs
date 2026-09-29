@@ -5,8 +5,15 @@ use serde::{Deserialize, Serialize};
 pub const PROTOCOL: &str = "openchat.local-browser-auth.v1";
 pub const CLIENT_LABEL: &str = "OpenChat Fork · Local Test";
 pub const ATTEMPT_LIFETIME_MS: u64 = 120_000;
-pub const SESSION_LIFETIME_MS: u64 = 300_000;
+// The ceremony stays short; the passkey signs this separate, fixed session deadline.
+pub const SESSION_LIFETIME_MS: u64 = 30 * 24 * 60 * 60 * 1_000;
 pub const MAX_CANDIDATE_BYTES: usize = 65_536;
+
+#[test]
+fn ceremony_and_signed_session_have_distinct_fixed_lifetimes() {
+    assert_eq!(ATTEMPT_LIFETIME_MS, 120_000);
+    assert_eq!(SESSION_LIFETIME_MS, 2_592_000_000);
+}
 
 pub fn bundled_window_allowed(label: &str, origin: &str, username: &str, has_password: bool) -> bool {
     label == "main" && origin == "http://tauri.localhost" && username.is_empty() && !has_password

@@ -295,6 +295,42 @@
       "type": "string",
       "oneOf": [
         {
+          "description": "Enables the begin_local_app_handoff command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-begin-local-app-handoff",
+          "markdownDescription": "Enables the begin_local_app_handoff command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the begin_local_app_handoff command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-begin-local-app-handoff",
+          "markdownDescription": "Denies the begin_local_app_handoff command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the begin_local_app_setup command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-begin-local-app-setup",
+          "markdownDescription": "Enables the begin_local_app_setup command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the begin_local_app_setup command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-begin-local-app-setup",
+          "markdownDescription": "Denies the begin_local_app_setup command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the begin_local_browser_auth command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-begin-local-browser-auth",
+          "markdownDescription": "Enables the begin_local_browser_auth command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the begin_local_browser_auth command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-begin-local-browser-auth",
+          "markdownDescription": "Denies the begin_local_browser_auth command without any pre-configured scope."
+        },
+        {
           "description": "Enables the call_active command without any pre-configured scope.",
           "type": "string",
           "const": "allow-call-active",
@@ -331,6 +367,42 @@
           "markdownDescription": "Denies the call_ring_handled command without any pre-configured scope."
         },
         {
+          "description": "Enables the cancel_local_app_handoff command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-cancel-local-app-handoff",
+          "markdownDescription": "Enables the cancel_local_app_handoff command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the cancel_local_app_handoff command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-cancel-local-app-handoff",
+          "markdownDescription": "Denies the cancel_local_app_handoff command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the cancel_local_app_setup command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-cancel-local-app-setup",
+          "markdownDescription": "Enables the cancel_local_app_setup command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the cancel_local_app_setup command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-cancel-local-app-setup",
+          "markdownDescription": "Denies the cancel_local_app_setup command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the cancel_local_browser_auth command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-cancel-local-browser-auth",
+          "markdownDescription": "Enables the cancel_local_browser_auth command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the cancel_local_browser_auth command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-cancel-local-browser-auth",
+          "markdownDescription": "Denies the cancel_local_browser_auth command without any pre-configured scope."
+        },
+        {
           "description": "Enables the clear_all_notifications command without any pre-configured scope.",
           "type": "string",
           "const": "allow-clear-all-notifications",
@@ -341,6 +413,18 @@
           "type": "string",
           "const": "deny-clear-all-notifications",
           "markdownDescription": "Denies the clear_all_notifications command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the complete_local_browser_auth command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-complete-local-browser-auth",
+          "markdownDescription": "Enables the complete_local_browser_auth command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the complete_local_browser_auth command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-complete-local-browser-auth",
+          "markdownDescription": "Denies the complete_local_browser_auth command without any pre-configured scope."
         },
         {
           "description": "Enables the delete_fcm_token command without any pre-configured scope.",
@@ -571,6 +655,42 @@
           "markdownDescription": "Denies the open_url command without any pre-configured scope."
         },
         {
+          "description": "Enables the poll_local_app_handoff command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-poll-local-app-handoff",
+          "markdownDescription": "Enables the poll_local_app_handoff command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the poll_local_app_handoff command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-poll-local-app-handoff",
+          "markdownDescription": "Denies the poll_local_app_handoff command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the poll_local_app_setup command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-poll-local-app-setup",
+          "markdownDescription": "Enables the poll_local_app_setup command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the poll_local_app_setup command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-poll-local-app-setup",
+          "markdownDescription": "Denies the poll_local_app_setup command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the poll_local_browser_auth command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-poll-local-browser-auth",
+          "markdownDescription": "Enables the poll_local_browser_auth command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the poll_local_browser_auth command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-poll-local-browser-auth",
+          "markdownDescription": "Denies the poll_local_browser_auth command without any pre-configured scope."
+        },
+        {
           "description": "Enables the probe_model_url command without any pre-configured scope.",
           "type": "string",
           "const": "allow-probe-model-url",
@@ -767,6 +887,24 @@
           "type": "string",
           "const": "default",
           "markdownDescription": "Default permissions for the plugin\n#### This default permission set includes:\n\n- `allow-open-url`\n- `allow-sign-in`\n- `allow-sign-up`\n- `allow-registerListener`\n- `allow-removeListener`\n- `allow-get-fcm-token`\n- `allow-show-notification`\n- `allow-svelte-ready`\n- `allow-release-notifications`\n- `allow-minimize-app`\n- `allow-get-server-version`\n- `allow-get-shell-version`\n- `allow-download-update`\n- `allow-restart-app`\n- `allow-load-recent-media`\n- `allow-enable-viewport-resize`\n- `allow-disable-viewport-resize`\n- `allow-save-media`\n- `allow-export-media`\n- `allow-update-chat-shortcuts`\n- `allow-get-pending-deep-link`\n- `allow-get-pending-notification-tap`\n- `allow-clear-all-notifications`\n- `allow-delete-fcm-token`\n- `allow-download-model`\n- `allow-probe-model-url`\n- `allow-system-resources`\n- `allow-list-local-models`\n- `allow-delete-model`\n- `allow-inference-runtime-available`\n- `allow-infer`\n- `allow-get-pending-call-action`\n- `allow-call-ring-handled`\n- `allow-set-call-config`\n- `allow-call-active`\n- `allow-call-ended`\n- `allow-set-call-speaker`\n- `allow-set-call-ringback`\n- `allow-set-call-end-token`"
+        },
+        {
+          "description": "Allows only the bundled local-test main window to initiate, inspect and cancel a short-lived explicitly approved private app handoff. The separate native feature and bundled profile are also required.",
+          "type": "string",
+          "const": "allow-local-app-handoff",
+          "markdownDescription": "Allows only the bundled local-test main window to initiate, inspect and cancel a short-lived explicitly approved private app handoff. The separate native feature and bundled profile are also required."
+        },
+        {
+          "description": "Allows only the bundled local-test main window to initiate, consume once and cancel a ten-minute app setup return. No drafts, messages or credentials are transported. The local-app-handoff feature and bundled setup profile are required.",
+          "type": "string",
+          "const": "allow-local-app-setup",
+          "markdownDescription": "Allows only the bundled local-test main window to initiate, consume once and cancel a ten-minute app setup return. No drafts, messages or credentials are transported. The local-app-handoff feature and bundled setup profile are required."
+        },
+        {
+          "description": "Allows the bundled local-test main window to start and consume its short-lived browser authentication attempt. The native feature and local profile are also required.",
+          "type": "string",
+          "const": "allow-local-browser-auth",
+          "markdownDescription": "Allows the bundled local-test main window to start and consume its short-lived browser authentication attempt. The native feature and local profile are also required."
         }
       ]
     }

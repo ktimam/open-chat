@@ -146,6 +146,53 @@ describe("native bridge official account preflight orchestration (mocked transpo
             expect(options.verifyQuerySignatures).toBe(true);
     });
 
+    it("requests a freshly signed 30-day session but never beyond the original AUTH expiry", async () => {
+        const input = await request();
+        input.expiresAtMs = now + 30 * 24 * 60 * 60_000;
+        input.authChain.delegations[0].delegation.expiration =
+            BigInt(input.expiresAtMs) * 1_000_000n;
+        calls.prepare.mockImplementation(async (_key, _ii, ttl: bigint) => ({
+            kind: "success",
+            userKey: new Uint8Array(91).fill(4),
+            expiration: BigInt(now) * 1_000_000n + ttl,
+        }));
+        const result = await establishNativeBrowserAccountSession(input);
+        expect(calls.prepare.mock.calls[0][2]).toBe(
+            BigInt(input.expiresAtMs - now - 10_000) * 1_000_000n,
+        );
+        expect(result.ocChain.delegations[0].delegation.expiration).toBeLessThan(
+            input.authChain.delegations[0].delegation.expiration,
+        );
+    });
+
+    it("restores only the pinned user ID and OC principal, allowing a legitimate username change", async () => {
+        const input = await request();
+        const { DelegationIdentity } = await import("@icp-sdk/core/identity");
+        const first = await establishNativeBrowserAccountSession(input);
+        const expectedAccount = {
+            userId,
+            ocPrincipal: DelegationIdentity.fromDelegation(first.ocKey, first.ocChain)
+                .getPrincipal()
+                .toString(),
+        };
+        calls.profile.mockResolvedValue({ ...profile, username: "renamed-user" });
+        await expect(
+            establishNativeBrowserAccountSession({ ...input, expectedAccount }),
+        ).resolves.toMatchObject({ profile: { username: "renamed-user" } });
+        await expect(
+            establishNativeBrowserAccountSession({
+                ...input,
+                expectedAccount: { ...expectedAccount, userId: userIndexCanister },
+            }),
+        ).rejects.toThrow();
+        await expect(
+            establishNativeBrowserAccountSession({
+                ...input,
+                expectedAccount: { ...expectedAccount, ocPrincipal: userIndexCanister },
+            }),
+        ).rejects.toThrow();
+    });
+
     it.each([
         "http://localhost:4943",
         "https://attacker.example",

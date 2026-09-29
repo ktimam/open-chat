@@ -779,6 +779,7 @@ export default defineConfig({
         : undefined,
     plugins: [
         localAppRelayPlugin({ enabled: unofficialLocalClient }),
+        localAppRelayPlugin({ enabled: unofficialLocalClient, setup: true }),
         localAndroidAssetLinksPlugin(
             process.env.OC_BUILD_ENV === "development" &&
                 process.env.OC_DFX_NETWORK === "local" &&

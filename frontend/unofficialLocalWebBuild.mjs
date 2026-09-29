@@ -118,6 +118,8 @@ export function copyUnofficialWebPublicFiles(publicDirectory, outputDirectory) {
                     "public-key",
                     "local-app-handoff.html",
                     "local-app-handoff.js",
+                    "local-app-setup.html",
+                    "local-app-setup.js",
                     "index.html",
                     "service_worker.js",
                     UNOFFICIAL_LOCAL_WEB_MANIFEST,

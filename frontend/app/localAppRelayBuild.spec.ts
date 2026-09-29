@@ -3,8 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import { localAppRelayPlugin } from "./localAppRelayBuild.mjs";
 
 describe("local relay dev route priority", () => {
-    it("runs before the HTML plugin history fallback and claims navigation-style relay requests", () => {
-        const plugin = localAppRelayPlugin({ enabled: true });
+    it.each([false, true])("runs before the HTML plugin history fallback (setup=%s)", (setup) => {
+        const plugin = localAppRelayPlugin({ enabled: true, setup });
         expect(plugin.enforce).toBe("pre");
         const use = vi.fn();
         plugin.configureServer({ middlewares: { use } });
@@ -13,7 +13,7 @@ describe("local relay dev route priority", () => {
         const response = { statusCode: 200, end: vi.fn() };
         handle(
             {
-                url: "/local-app-handoff.html",
+                url: setup ? "/local-app-setup.html" : "/local-app-handoff.html",
                 method: "GET",
                 headers: { accept: "text/html,application/xhtml+xml" },
             },

@@ -26,10 +26,15 @@ It never automatically creates a new OpenChat account or retries a consumed code
 
 In the separate local-test APK, enter your existing username and choose
 **Continue in browser to sign in or link**. Complete the passkey or explicit linking
-step yourself in the local browser page. Each request expires after two minutes;
-the adopted session is memory-only and expires no later than five minutes from
-starting that request, not five minutes after successful sign-in. After expiry,
-sign in again explicitly. A linked credential is not deleted when this session ends.
+step yourself in the local browser page. Each passkey request expires after two
+minutes. A newly approved sign-in can be remembered for up to 30 days, with a
+nonextractable session key in the APK's IndexedDB. Restoration verifies the saved
+scope, key and fixed expiry, then obtains fresh authenticated official account
+proof before adopting that same account. Network failure offers retry, not another
+passkey creation. Logout clears the saved session before navigation. This is not
+a hardware-keystore or at-rest-encryption guarantee. Existing five-minute signatures
+are never extended: the first sign-in after this update must obtain a fresh signature.
+A linked passkey itself is not deleted by session expiry or logout.
 
 ## Private apps
 
@@ -38,11 +43,12 @@ In the responsive v2 interface, use your profile's **App settings → Private ap
 There is no floating launcher over the chat. These entries open the same private
 workspace; they do not run inference or send app data.
 
-1. In the receiving app, explicitly export its local setup catalog and processor.
-   A private catalog can contain the app's private vocabulary/defaults; keep it private.
-2. In **Private apps**, import the catalog, select its app/action and import the
-   matching processor. The declared hash verifies an exact file, not publisher trust.
-   No app code or metadata is fetched automatically during message processing.
+1. Open **Private apps**. Apps from the operator-configured public directory appear
+   automatically; no catalog or processor files need to be uploaded.
+2. Choose **Connect** and continue to the app's page. Approve the exact requester
+   origin and choose the app account and destination there. Only app setup returns
+   to OpenChat; discovery and connection send no messages, drafts or credentials.
+   Enable the connected app in the intended chat. New apps are never auto-enabled.
 3. Select an available local model, or a supported local-reader mode, and use
    **Propose** on one text or image message. Both UIs share this pipeline; app
    proposals do not currently accept voice messages.
@@ -57,9 +63,32 @@ workspace; they do not run inference or send app data.
 6. Review the actual account/destination inside the app, then explicitly save there.
    **Received** is not **saved**; the latter means the app reports that it saved.
 
-Per-chat app opt-in enables suggestions from imported declarative rules for fresh
+Per-chat app opt-in enables suggestions from app-owned declarative rules for fresh
 messages only. It does not grant the app access to chat history. Models do not run
 merely to display a suggestion.
+
+The operator supplies `--app-directory <HTTPS-or-loopback-public-URL>` to the local
+web startup, optimized web build or APK build command. The directory lists bounded,
+same-publisher catalog/processor URLs, byte lengths, SHA-256 hashes and Connect URLs.
+It must contain no private account configuration. Hashes verify exact artifacts,
+not publisher honesty. The APK needs one update to add this directory capability;
+subsequent compatible app additions/updates at that URL do not require rebuilding it.
+Changing the publisher origin or client-supported protocol still requires review.
+
+Opening Apps refreshes the public directory with no cookies or referrer. Verified
+compatible updates are atomic; failures retain the last working setup. Changes to
+private recipes or trust/destination require Reconnect. Updates wait while a draft
+or processing operation is active. Publisher removal disables that app's proposals
+and chat opt-ins while retaining its local setup for recovery. File imports remain
+under advanced recovery controls, not the normal connection workflow.
+
+The local-test APK uses a separate ten-minute setup bridge. A one-use random launch
+fragment is immediately removed from the browser URL and authenticates the initial
+local request; it never goes to the app publisher. The app's response is accepted
+only from the expected popup/origin and nonce, then revalidated against the public
+package before installation. Neither HTTP GET nor the app receives an OpenChat
+session, chat history or draft. Closing/reloading an unfinished bridge requires a
+fresh Connect; it does not automatically retry.
 
 The explicitly enabled unofficial browser profile offers all-WebGPU models on
 desktop as well as mobile. Select/download them in **On-device models** before
@@ -132,7 +161,7 @@ optional audio support is enabled. This does not add voice input to app proposal
 
 ### Remembered setup; session-only drafts
 
-Imported app catalogs, the selected app/action, its verified processor file and
+Connected or explicitly imported app catalogs, the selected app/action, verified processors and
 enabled chats are remembered on the same device for the same signed-in account
 and configured backend. This includes private app-owned setup/context, such as
 user-defined labels. A separate IndexedDB store is used; nothing is synchronized
@@ -141,7 +170,8 @@ rest. Browser profiles/origins and the APK installation have separate storage.
 
 Restore revalidates catalog declarations and processor hashes without executing
 app code, running a model or contacting an app. Chat opt-ins bind to the exact
-catalog, not only its reusable app ID. Replacing a catalog clears those opt-ins.
+catalog, not only its reusable app ID. Explicit replacement clears the affected
+opt-ins; directory updates preserve unaffected apps and approved compatible setup.
 Setup controls wait for restoration; a failed read/write is shown rather than
 reported as saved. Invalid or future-version records are not silently accepted.
 
@@ -177,8 +207,9 @@ model or processor again or contact the receiving app.
 Apps own the declarations and meanings. OpenChat implements only the bounded generic
 editor contract; it does not interpret app-specific Types, dates or business rules.
 The receiver sees only the final reviewed payload, not the sender's editing history.
-After updating a processor/catalog pair, explicitly import the new matching files;
-old imported setup is not silently replaced.
+Directory-managed compatible processor/catalog updates are checked automatically
+when Apps opens; private setup that needs regeneration asks for Reconnect. Manually
+imported recovery setups remain explicit and are not silently reassigned a publisher.
 
 ## Boundaries and developer checks
 

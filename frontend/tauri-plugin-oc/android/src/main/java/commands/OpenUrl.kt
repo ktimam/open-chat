@@ -64,11 +64,25 @@ class OpenUrl(private val activity: Activity) {
 
             } catch (e: ActivityNotFoundException) {
                 // Open in custom tab browser as fallback
-                openWithCustomTabIntent(uri)
-                invoke.resolve(successResponse)
+                if (isUnofficialLocalTest(activity) && uri.host == "localhost") {
+                    try {
+                        openWithCustomTabIntent(uri)
+                        invoke.resolve(successResponse)
+                    } catch (_: Exception) {
+                        // A sibling catch below cannot catch a failure thrown by this fallback.
+                        Log.e(LOG_TAG, "Local browser connection could not be opened")
+                        invoke.reject("Local browser connection could not be opened")
+                    }
+                } else {
+                    openWithCustomTabIntent(uri)
+                    invoke.resolve(successResponse)
+                }
             } catch (e: Exception) {
-                Log.e(LOG_TAG, e.toString())
-                invoke.reject(e.toString())
+                // A local setup launch may contain a one-use fragment. Never echo its URI.
+                val error = if (isUnofficialLocalTest(activity) && uri.host == "localhost")
+                    "Local browser connection could not be opened" else e.toString()
+                Log.e(LOG_TAG, error)
+                invoke.reject(error)
             }
         }
     }

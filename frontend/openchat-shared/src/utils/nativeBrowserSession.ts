@@ -14,7 +14,7 @@ export class NativeBrowserSessionError extends Error {
 const equal = (a: Uint8Array, b: Uint8Array) =>
     a.length === b.length && a.every((value, index) => value === b[index]);
 const NS_PER_MS = 1_000_000n;
-const MAX_LIFETIME_MS = 5 * 60_000;
+export const NATIVE_SESSION_MAX_LIFETIME_MS = 30 * 24 * 60 * 60_000;
 
 type Policy = {
     existingAccountOnly?: boolean;
@@ -81,7 +81,7 @@ export async function validateNativeBrowserSession(
             nowMs < 0 ||
             !Number.isSafeInteger(supplied.expiresAtMs) ||
             supplied.expiresAtMs <= nowMs ||
-            supplied.expiresAtMs > nowMs + MAX_LIFETIME_MS
+            supplied.expiresAtMs > nowMs + NATIVE_SESSION_MAX_LIFETIME_MS
         )
             throw new NativeBrowserSessionError();
 
@@ -92,7 +92,7 @@ export async function validateNativeBrowserSession(
         if (
             auth.leaf.expiration !== BigInt(supplied.expiresAtMs) * NS_PER_MS ||
             auth.leaf.expiration <= nowNs ||
-            auth.leaf.expiration > BigInt(nowMs + MAX_LIFETIME_MS) * NS_PER_MS ||
+            auth.leaf.expiration > BigInt(nowMs + NATIVE_SESSION_MAX_LIFETIME_MS) * NS_PER_MS ||
             auth.leaf.targets?.length !== 1 ||
             auth.leaf.targets[0].toText() !== expectedTarget ||
             oc.leaf.expiration <= nowNs ||

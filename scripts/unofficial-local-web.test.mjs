@@ -28,6 +28,8 @@ function fixture(t, populated = true) {
         writeFileSync(path.join(root, "index.html"), "<html>main</html>");
         writeFileSync(path.join(root, "local-app-handoff.html"), "<html>relay</html>");
         writeFileSync(path.join(root, "local-app-handoff.js"), "/* relay */");
+        writeFileSync(path.join(root, "local-app-setup.html"), "<html>setup relay</html>");
+        writeFileSync(path.join(root, "local-app-setup.js"), "/* setup relay */");
         writeFileSync(path.join(root, "main.js"), "/* main */");
         writeFileSync(path.join(root, "runtime.wasm"), new Uint8Array([0, 97, 115, 109]));
         writeFileSync(path.join(root, "transformers_webgpu_worker.js"), "/* synthetic runtime worker */");
@@ -88,7 +90,7 @@ test("main and navigation fallback are isolated; only literal relay routes relax
         assert.equal(response.headers["cross-origin-embedder-policy"], "credentialless");
         assert.equal(response.headers["cache-control"], "no-store");
     }
-    for (const route of ["/local-app-handoff.html", "/local-app-handoff.js?version=1"]) {
+    for (const route of ["/local-app-handoff.html", "/local-app-handoff.js?version=1", "/local-app-setup.html", "/local-app-setup.js?version=1"]) {
         const response = await send(route, { headers: { accept: "text/html" } });
         assert.equal(response.status, 200);
         for (const [name, value] of Object.entries(LOCAL_APP_RELAY_HEADERS)) assert.equal(response.headers[name.toLowerCase()], value);
@@ -96,6 +98,8 @@ test("main and navigation fallback are isolated; only literal relay routes relax
     }
     assert.equal((await send("/%6cocal-app-handoff.html")).status, 404);
     assert.equal((await send("/local-app-handoff.js/")).status, 404);
+    assert.equal((await send("/%6cocal-app-setup.html")).status, 404);
+    assert.equal((await send("/local-app-setup.js/")).status, 404);
     assert.equal((await send("/missing.js", { headers: { accept: "text/html" } })).status, 404);
     const wasm = await send("/runtime.wasm"); assert.equal(wasm.headers["content-type"], "application/wasm");
     const head = await send("/main.js", { method: "HEAD" }); assert.equal(head.status, 200); assert.equal(head.body, ""); assert.equal(Number(head.headers["content-length"]), 10);

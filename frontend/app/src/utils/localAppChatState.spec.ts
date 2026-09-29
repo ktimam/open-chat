@@ -40,6 +40,10 @@ const publish = (patch: Partial<PrivateAppWorkspaceState> = {}) =>
         message: "",
         setupStatus: "",
         setupGeneration: 1,
+        directoryLoading: false,
+        directoryStatus: "",
+        appUpdates: {},
+        disabledAppIds: [],
         ...patch,
     });
 

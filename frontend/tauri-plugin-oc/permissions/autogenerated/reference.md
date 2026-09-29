@@ -56,6 +56,84 @@ Default permissions for the plugin
 <tr>
 <td>
 
+`oc:allow-begin-local-app-handoff`
+
+</td>
+<td>
+
+Enables the begin_local_app_handoff command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`oc:deny-begin-local-app-handoff`
+
+</td>
+<td>
+
+Denies the begin_local_app_handoff command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`oc:allow-begin-local-app-setup`
+
+</td>
+<td>
+
+Enables the begin_local_app_setup command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`oc:deny-begin-local-app-setup`
+
+</td>
+<td>
+
+Denies the begin_local_app_setup command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`oc:allow-begin-local-browser-auth`
+
+</td>
+<td>
+
+Enables the begin_local_browser_auth command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`oc:deny-begin-local-browser-auth`
+
+</td>
+<td>
+
+Denies the begin_local_browser_auth command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `oc:allow-call-active`
 
 </td>
@@ -134,6 +212,84 @@ Denies the call_ring_handled command without any pre-configured scope.
 <tr>
 <td>
 
+`oc:allow-cancel-local-app-handoff`
+
+</td>
+<td>
+
+Enables the cancel_local_app_handoff command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`oc:deny-cancel-local-app-handoff`
+
+</td>
+<td>
+
+Denies the cancel_local_app_handoff command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`oc:allow-cancel-local-app-setup`
+
+</td>
+<td>
+
+Enables the cancel_local_app_setup command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`oc:deny-cancel-local-app-setup`
+
+</td>
+<td>
+
+Denies the cancel_local_app_setup command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`oc:allow-cancel-local-browser-auth`
+
+</td>
+<td>
+
+Enables the cancel_local_browser_auth command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`oc:deny-cancel-local-browser-auth`
+
+</td>
+<td>
+
+Denies the cancel_local_browser_auth command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `oc:allow-clear-all-notifications`
 
 </td>
@@ -153,6 +309,32 @@ Enables the clear_all_notifications command without any pre-configured scope.
 <td>
 
 Denies the clear_all_notifications command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`oc:allow-complete-local-browser-auth`
+
+</td>
+<td>
+
+Enables the complete_local_browser_auth command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`oc:deny-complete-local-browser-auth`
+
+</td>
+<td>
+
+Denies the complete_local_browser_auth command without any pre-configured scope.
 
 </td>
 </tr>
@@ -654,6 +836,84 @@ Denies the open_url command without any pre-configured scope.
 <tr>
 <td>
 
+`oc:allow-poll-local-app-handoff`
+
+</td>
+<td>
+
+Enables the poll_local_app_handoff command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`oc:deny-poll-local-app-handoff`
+
+</td>
+<td>
+
+Denies the poll_local_app_handoff command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`oc:allow-poll-local-app-setup`
+
+</td>
+<td>
+
+Enables the poll_local_app_setup command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`oc:deny-poll-local-app-setup`
+
+</td>
+<td>
+
+Denies the poll_local_app_setup command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`oc:allow-poll-local-browser-auth`
+
+</td>
+<td>
+
+Enables the poll_local_browser_auth command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`oc:deny-poll-local-browser-auth`
+
+</td>
+<td>
+
+Denies the poll_local_browser_auth command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `oc:allow-probe-model-url`
 
 </td>
@@ -1063,6 +1323,45 @@ Enables the update_chat_shortcuts command without any pre-configured scope.
 <td>
 
 Denies the update_chat_shortcuts command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`oc:allow-local-app-handoff`
+
+</td>
+<td>
+
+Allows only the bundled local-test main window to initiate, inspect and cancel a short-lived explicitly approved private app handoff. The separate native feature and bundled profile are also required.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`oc:allow-local-app-setup`
+
+</td>
+<td>
+
+Allows only the bundled local-test main window to initiate, consume once and cancel a ten-minute app setup return. No drafts, messages or credentials are transported. The local-app-handoff feature and bundled setup profile are required.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`oc:allow-local-browser-auth`
+
+</td>
+<td>
+
+Allows the bundled local-test main window to start and consume its short-lived browser authentication attempt. The native feature and local profile are also required.
 
 </td>
 </tr>

@@ -295,7 +295,7 @@ mod tests {
         assert!(challenge.url.starts_with("http://localhost:"));
         assert!(challenge.url.ends_with("/sign-in"));
         assert!(!challenge.url.contains(&challenge.nonce));
-        assert_eq!(challenge.delegation_expires_at_ms - challenge.expires_at_ms, 180_000);
+        assert_eq!(challenge.delegation_expires_at_ms - challenge.expires_at_ms, SESSION_LIFETIME_MS - ATTEMPT_LIFETIME_MS);
         let host = challenge.origin.trim_start_matches("http://");
         let response = request(&challenge, format!("GET /challenge HTTP/1.1\r\nHost: {host}\r\nSec-Fetch-Site: same-origin\r\n\r\n")).await;
         assert!(response.starts_with("HTTP/1.1 200"));

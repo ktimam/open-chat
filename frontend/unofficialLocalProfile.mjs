@@ -32,12 +32,25 @@ export function parseUnofficialLocalPort(value = UNOFFICIAL_LOCAL_DEFAULT_PORT) 
     return port;
 }
 
+/** Operator-selected public directory, never an inherited environment override. */
+export function parseAppDirectoryUrl(value = "") {
+    if (value === "") return value;
+    if (typeof value !== "string" || value.length > 2048 || value.trim() !== value)
+        throw new Error("Invalid public app directory URL");
+    const url = new URL(value);
+    if (url.username || url.password || url.hash || url.search ||
+        (url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname))))
+        throw new Error("App directory requires HTTPS or explicit loopback HTTP");
+    return url.href;
+}
+
 /** No inherited OC_* value may retarget this profile, including differently cased Windows keys. */
 export function createUnofficialLocalEnvironment(canisters, options = {}) {
     const {
         port: suppliedPort = UNOFFICIAL_LOCAL_DEFAULT_PORT,
         layout = "v2",
         inherited = {},
+        appDirectoryUrl = "",
     } = options;
     const port = parseUnofficialLocalPort(suppliedPort);
     if (layout !== "v1" && layout !== "v2") throw new Error("Local layout must be v1 or v2");
@@ -68,6 +81,7 @@ export function createUnofficialLocalEnvironment(canisters, options = {}) {
         OC_DFX_NETWORK: "ic",
         OC_BUILD_ENV: "development",
         OC_UNOFFICIAL_CLIENT: "true",
+        OC_APP_DIRECTORY_URL: parseAppDirectoryUrl(appDirectoryUrl),
         OC_DEV_PORT: String(port),
         OC_DEV_ALLOWED_HOST: "",
         OC_MOBILE_LAYOUT: layout,

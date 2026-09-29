@@ -29,6 +29,7 @@ import { queryOfficialUserIndexPublicKey } from "./officialPublicKeyQuery.mjs";
 import { localAppRelayPlugin } from "./localAppRelayBuild.mjs";
 import { localBrowserAuthBuildPlugin } from "./localBrowserAuthBuild.mjs";
 import { localNativeAppHandoffBuildPlugin } from "./localNativeAppHandoffBuild.mjs";
+import { localNativeAppSetupBuildPlugin } from "./localNativeAppSetupBuild.mjs";
 import { localApkBundleMarker } from "../unofficialLocalApkProfile.mjs";
 import {
     copyUnofficialWebPublicFiles,
@@ -523,6 +524,9 @@ export default {
             "import.meta.env.OC_UNOFFICIAL_CLIENT": JSON.stringify(
                 process.env.OC_UNOFFICIAL_CLIENT === "true" ? "true" : "false",
             ),
+            "import.meta.env.OC_APP_DIRECTORY_URL": JSON.stringify(
+                process.env.OC_UNOFFICIAL_CLIENT === "true" ? process.env.OC_APP_DIRECTORY_URL ?? "" : "",
+            ),
             "import.meta.env.OC_UNOFFICIAL_LOCAL_APK": JSON.stringify(
                 localTestApk ? "true" : "false",
             ),
@@ -821,11 +825,13 @@ export default {
             hook: "buildStart",
         }),
         localAppRelayPlugin({ enabled: localWebBuild }),
+        localAppRelayPlugin({ enabled: localWebBuild, setup: true }),
         localBrowserAuthBuildPlugin({
             enabled: localTestApk,
             identityCanister: process.env.OC_IDENTITY_CANISTER,
         }),
         localNativeAppHandoffBuildPlugin({ enabled: localTestApk }),
+        localNativeAppSetupBuildPlugin({ enabled: localTestApk }),
         unofficialWebArtifacts(),
         ...(!localClientBuild
             ? [
