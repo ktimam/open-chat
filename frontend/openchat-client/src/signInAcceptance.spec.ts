@@ -109,6 +109,8 @@ import type { OpenChatConfig } from "./config";
 import { currentUserStore, identityStateStore } from "./state";
 import { Principal } from "@icp-sdk/core/principal";
 import { get } from "svelte/store";
+import { browserSignInError } from "./utils/browserAccountLink";
+import { BrowserSignInFailure } from "./utils/browserSignInDiagnostics";
 
 const NOW = 1_800_000_000_000;
 type NativeActivation = {
@@ -461,6 +463,34 @@ describe("OpenChat verified sign-in acceptance", () => {
         expect(logout).not.toHaveBeenCalled();
         await vi.advanceTimersByTimeAsync(expires - 11_000 - Date.now());
         expect(logout).toHaveBeenCalledOnce();
+    });
+    it("rolls back the worker when cancelled after saving even if saved-session deletion fails", async () => {
+        build();
+        await boot();
+        const controller = new AbortController();
+        seam.nativeSave.mockImplementation(async () => {
+            seam.order.push("native-persist");
+            controller.abort();
+            return "saved-generation";
+        });
+        seam.nativeClear.mockRejectedValue(new Error("private storage failure details"));
+        const failure = await nativeSignIn(controller.signal).catch((error: unknown) => error);
+        expect(seam.nativeSave).toHaveBeenCalledOnce();
+        expect(seam.nativeClear).toHaveBeenCalledExactlyOnceWith("saved-generation");
+        expect(seam.order).toEqual(["worker-proof", "native-persist", "worker-anon"]);
+        expect(seam.send).toHaveBeenLastCalledWith(
+            expect.objectContaining({ kind: "setAuthIdentity", identity: undefined }),
+        );
+        expect(identityStateStore.value.kind).toBe("anon");
+        expect(authenticated()).toHaveLength(0);
+        expect(failure).toEqual(new BrowserSignInFailure("session-cleanup"));
+        expect(browserSignInError(failure)).toBe(
+            "Saved sign-in could not be cleared after sign-in failed. Use Clear saved sign-in before trying again. No new account was created. [SIGNIN/session-cleanup]",
+        );
+        expect(browserSignInError(failure)).not.toMatch(
+            /private storage failure|signed out|sign-in cleared\./,
+        );
+        expect(logout).not.toHaveBeenCalled();
     });
     it.each([
         "worker-error",

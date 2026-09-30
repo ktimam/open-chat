@@ -149,8 +149,20 @@ describe("native bridge official account preflight orchestration (mocked transpo
     it("requests a freshly signed 30-day session but never beyond the original AUTH expiry", async () => {
         const input = await request();
         input.expiresAtMs = now + 30 * 24 * 60 * 60_000;
-        input.authChain.delegations[0].delegation.expiration =
-            BigInt(input.expiresAtMs) * 1_000_000n;
+        const signed = input.authChain.delegations[0];
+        input.authChain = DelegationChain.fromDelegations(
+            [
+                {
+                    delegation: new Delegation(
+                        signed.delegation.pubkey,
+                        BigInt(input.expiresAtMs) * 1_000_000n,
+                        signed.delegation.targets,
+                    ),
+                    signature: signed.signature,
+                },
+            ],
+            input.authChain.publicKey,
+        );
         calls.prepare.mockImplementation(async (_key, _ii, ttl: bigint) => ({
             kind: "success",
             userKey: new Uint8Array(91).fill(4),

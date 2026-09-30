@@ -5,7 +5,8 @@ export type BrowserSignInStage =
     | "public-key"
     | "account-delegation"
     | "account-profile"
-    | "session-storage";
+    | "session-storage"
+    | "session-cleanup";
 
 export class BrowserSignInFailure extends Error {
     readonly code = "browser_signin_failed";
@@ -53,6 +54,8 @@ export function browserSignInFailureMessage(error: unknown): string | undefined 
         "account-profile":
             "The session was established, but the existing OpenChat account could not be loaded.",
         "session-storage": "The verified session could not be stored on this device.",
+        "session-cleanup":
+            "Saved sign-in could not be cleared after sign-in failed. Use Clear saved sign-in before trying again.",
     };
     return `${messages[error.stage]} No new account was created. [SIGNIN/${error.stage}]`;
 }

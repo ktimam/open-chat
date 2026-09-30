@@ -26,6 +26,7 @@ const calls = vi.hoisted(() => ({
     createPasskey: vi.fn(),
     finalize: vi.fn(),
     retry: vi.fn(),
+    logout: vi.fn(),
 }));
 vi.mock("@client", async () => {
     const { writable } = await import("svelte/store");
@@ -140,6 +141,7 @@ function render(component: typeof HomeRouteV1 | typeof HomeRouteV2, native = tru
         signInWithLocalBrowser: calls.signIn,
         nativeSessionRestoreState: writable<"idle" | "restoring" | "retry" | "invalid">("idle"),
         retrySavedNativeSession: calls.retry,
+        logout: calls.logout,
         signInWithWebAuthn: calls.webSignIn,
         updateIdentityState: identityStateStore.set,
         createBrowserAccountLinkFlow: vi.fn(
@@ -194,6 +196,7 @@ beforeEach(() => {
     calls.signIn.mockReset();
     calls.webSignIn.mockReset();
     calls.retry.mockReset().mockResolvedValue(undefined);
+    calls.logout.mockReset().mockResolvedValue(undefined);
     calls.verify.mockReset().mockResolvedValue("synthetic-user");
     calls.createPasskey.mockReset().mockResolvedValue({
         credentialId: Uint8Array.of(1, 2, 3),
@@ -245,6 +248,48 @@ for (const [label, component] of [
             expect(document.body.textContent).not.toContain("Create account");
             expect(calls.signIn).not.toHaveBeenCalled();
             expect(view.client.createBrowserAccountLinkFlow).not.toHaveBeenCalled();
+        });
+        it("keeps cleanup failure visible and offers an explicit durable cleanup retry", async () => {
+            calls.signIn.mockRejectedValue(new BrowserSignInFailure("session-cleanup"));
+            render(component);
+            await settle();
+            expect(document.body.textContent).not.toContain("Clear saved sign-in");
+            await begin();
+            expect(document.body.textContent).toContain("[SIGNIN/session-cleanup]");
+            expect(document.body.textContent).toContain("Saved sign-in could not be cleared");
+            expect(button("Continue in browser").disabled).toBe(true);
+            expect(calls.logout).not.toHaveBeenCalled();
+            const failed = deferred();
+            calls.logout.mockReturnValueOnce(failed.promise);
+            button("Clear saved sign-in").click();
+            await settle();
+            expect(button("Clear saved sign-in").disabled).toBe(true);
+            expect(document.body.textContent).not.toMatch(/Saved sign-in cleared\.|signed out/);
+            failed.reject(new Error("private deletion failure details"));
+            await settle();
+            expect(button("Clear saved sign-in").disabled).toBe(false);
+            expect(document.body.textContent).toContain("Saved sign-in could not be cleared");
+            expect(document.body.textContent).not.toMatch(
+                /private deletion failure|Saved sign-in cleared\.|signed out/,
+            );
+            const succeeded = deferred();
+            calls.logout.mockReturnValueOnce(succeeded.promise);
+            button("Clear saved sign-in").click();
+            await settle();
+            expect(calls.logout).toHaveBeenCalledTimes(2);
+            expect(document.body.textContent).not.toContain("Saved sign-in cleared.");
+            succeeded.resolve();
+            await settle();
+            expect(document.body.textContent).toContain("Saved sign-in cleared.");
+            expect(document.body.textContent).not.toContain("[SIGNIN/session-cleanup]");
+            expect(
+                [...document.querySelectorAll("button")].some((element) =>
+                    element.textContent?.includes("Clear saved sign-in"),
+                ),
+            ).toBe(false);
+            expect(button("Continue in browser").disabled).toBe(false);
+            expect(calls.signIn).toHaveBeenCalledOnce();
+            expect(calls.createPasskey).not.toHaveBeenCalled();
         });
         it("retains the same component and uncancelled signal through logging_in; destroys it only after success", async () => {
             const completion = deferred();

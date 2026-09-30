@@ -6,6 +6,7 @@
         type BrowserAccountLinkFlow,
         type BrowserAccountLinkState,
     } from "@client/utils/browserAccountLink";
+    import { BrowserSignInFailure } from "@client/utils/browserSignInDiagnostics";
 
     let { onSignedIn = () => {} }: { onSignedIn?: () => void } = $props();
     const client = getContext<OpenChat>("client");
@@ -24,9 +25,12 @@
     let code = $state("");
     let confirmed = $state(false);
     let signingIn = $state(false);
+    let cleanupRequired = $state(false);
+    let clearingSavedSignIn = $state(false);
     let error = $state("");
     let busy = $derived(
         signingIn ||
+            clearingSavedSignIn ||
             $restoreState === "restoring" ||
             linkState.stage === "verifying" ||
             linkState.stage === "linking",
@@ -45,7 +49,7 @@
     }
 
     async function signIn() {
-        if (busy) return;
+        if (busy || cleanupRequired) return;
         signingIn = true;
         error = "";
         try {
@@ -62,9 +66,29 @@
             }
             onSignedIn();
         } catch (failure) {
+            cleanupRequired =
+                localApk &&
+                failure instanceof BrowserSignInFailure &&
+                failure.stage === "session-cleanup";
             error = browserSignInError(failure);
         } finally {
             signingIn = false;
+        }
+    }
+
+    async function clearSavedSignIn() {
+        if (busy || !cleanupRequired || !localApk) return;
+        clearingSavedSignIn = true;
+        try {
+            await client.logout();
+            cleanupRequired = false;
+            error = "";
+            nativeStatus = "Saved sign-in cleared.";
+        } catch {
+            // Do not claim removal or expose raw storage errors when durable logout fails.
+            error = browserSignInError(new BrowserSignInFailure("session-cleanup"));
+        } finally {
+            clearingSavedSignIn = false;
         }
     }
 
@@ -77,7 +101,7 @@
     }
 
     async function retrySavedSignIn() {
-        if (busy) return;
+        if (busy || cleanupRequired) return;
         error = "";
         try {
             await client.retrySavedNativeSession();
@@ -126,7 +150,7 @@
                 Your saved sign-in could not be verified. Check your connection and retry; you do
                 not need to create another passkey.
             </p>
-            <button type="button" disabled={busy} onclick={retrySavedSignIn}
+            <button type="button" disabled={busy || cleanupRequired} onclick={retrySavedSignIn}
                 >Retry saved sign-in</button
             >
         {:else if $restoreState === "invalid"}
@@ -139,7 +163,7 @@
     <button
         class="primary"
         type="button"
-        disabled={busy || (localApk && !username.trim())}
+        disabled={busy || cleanupRequired || (localApk && !username.trim())}
         onclick={signIn}
     >
         {signingIn
@@ -157,6 +181,10 @@
             linking code.
         </p>{/if}
     {#if error}<p class="error" role="alert">{error}</p>{/if}
+    {#if localApk && cleanupRequired}
+        <button type="button" disabled={busy} onclick={clearSavedSignIn}>Clear saved sign-in</button
+        >
+    {/if}
 
     {#if localApk}
         <p class="hint">

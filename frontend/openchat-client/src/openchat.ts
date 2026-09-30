@@ -5,7 +5,7 @@ import {
     isExistingAccountRequiredError,
 } from "@shared/utils/existingAccountPolicy";
 import { PickerWebAuthnIdentity } from "./utils/browserPasskey";
-import { browserSignInStep } from "./utils/browserSignInDiagnostics";
+import { BrowserSignInFailure, browserSignInStep } from "./utils/browserSignInDiagnostics";
 import { runNativeBrowserSignIn } from "./utils/nativeBrowserSignInFlow";
 import {
     NativeBrowserSessionStorage,
@@ -10060,8 +10060,15 @@ export class OpenChat {
                 { ...options, signal },
             );
         } catch (error) {
-            if (savedGeneration !== undefined)
-                await this.#nativeSessionStorage.clear(savedGeneration);
+            let cleanupError: Error | undefined;
+            if (savedGeneration !== undefined) {
+                try {
+                    await this.#nativeSessionStorage.clear(savedGeneration);
+                } catch {
+                    // Durable cleanup failure must not leave the worker authenticated.
+                    cleanupError = new BrowserSignInFailure("session-cleanup");
+                }
+            }
             if (activating) {
                 this.#webAuthnKey = undefined;
                 await this.#loadedAuthenticationIdentity(undefined, undefined).catch(() => {
@@ -10070,7 +10077,7 @@ export class OpenChat {
                     this.updateIdentityState({ kind: "anon" });
                 });
             }
-            throw error;
+            throw cleanupError ?? error;
         } finally {
             if (this.#nativeSessionOperation === operation)
                 this.#nativeSessionOperation = undefined;
