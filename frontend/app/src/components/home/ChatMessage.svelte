@@ -56,6 +56,7 @@
         type AiAppRegistration,
         AvatarSize,
         type ChatIdentifier,
+        chatIdentifiersEqual,
         chatListScopeStore,
         type ChatType,
         currentUserIdStore,
@@ -63,6 +64,7 @@
         type EnhancedReplyContext,
         iconSize,
         localUpdates,
+        type Member,
         type Message,
         type MessageContent,
         type MessageReminderCreatedContent,
@@ -74,9 +76,11 @@
         screenWidth,
         ScreenWidth,
         selectedChatBlockedUsersStore,
+        selectedChatMembersStore,
         selectedChatWebhooksStore,
         selectedCommunityMembersStore,
         type SelectedEmoji,
+        selectedServerChatStore,
         type SenderContext,
         translationsStore,
         unconfirmedReadByThem,
@@ -991,6 +995,13 @@
             $selectedChatWebhooksStore,
         ),
     );
+    // The details held can be for another chat, e.g. until the next chat's details load, or when
+    // a thread preview shows a message from a chat other than the one selected
+    let chatMembers = $derived(
+        chatIdentifiersEqual($selectedServerChatStore?.chatId, chatId)
+            ? $selectedChatMembersStore
+            : new Map<string, Member>(),
+    );
     let tips = $derived(msg.tips ? Object.entries(msg.tips) : []);
     let canBlockUser = $derived(canBlockUsers && !$selectedChatBlockedUsersStore.has(msg.sender));
     let edited = $derived(
@@ -1187,7 +1198,7 @@
                                         {#if sender !== undefined && multiUserChat}
                                             <WithRole
                                                 userId={sender.userId}
-                                                chatMembers={$selectedCommunityMembersStore}
+                                                {chatMembers}
                                                 communityMembers={$selectedCommunityMembersStore}
                                             >
                                                 {#snippet children(communityRole, chatRole)}

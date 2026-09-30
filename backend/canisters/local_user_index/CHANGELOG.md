@@ -9,10 +9,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 
 - Pass on when the details of each group, community and channel last changed in the summaries relayed to clients ([#9670](https://github.com/open-chat-labs/open-chat/pull/9670))
+- Report a community whose canister has been uninstalled to the GroupIndex, then stop tracking it ([#9672](https://github.com/open-chat-labs/open-chat/pull/9672))
 
 ### Changed
 
 - Keep the recorded wasm chunk hashes when upgraded, now that every LocalUserIndex clears them whenever it clears its chunk store ([#9676](https://github.com/open-chat-labs/open-chat/pull/9676))
+- Refund a deleted group's or community's cycles before deleting its canister ([#9680](https://github.com/open-chat-labs/open-chat/pull/9680))
 
 ### Removed
 
