@@ -80,6 +80,27 @@ describe("the startup script in index.html", () => {
         return document.documentElement.style.backgroundColor;
     }
 
+    test.each(["windows", "mixed"])(
+        "finds app and locale chunks with %s module path separators",
+        (style) => {
+            const platformChunks = chunks.map((chunk) => ({
+                ...chunk,
+                moduleIds: chunk.moduleIds.map((id) =>
+                    style === "windows" || id.endsWith(".json") ? id.replaceAll("/", "\\") : id,
+                ),
+            }));
+            expect(
+                run(
+                    generateStartupScript({
+                        chunks: platformChunks,
+                        version: "1.2.3",
+                        mobileLayout,
+                    }),
+                ),
+            ).toEqual(["/desktop.js", "/shared.js", "/deep.js", "/en.js"]);
+        },
+    );
+
     test("paints the page dark when the theme last used was a dark one", () => {
         localStorage.setItem("openchat_startup_theme_mode", "dark");
         expect(startupBackground()).not.toBe("");

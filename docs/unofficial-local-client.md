@@ -353,3 +353,16 @@ remain). Focused startup, worker, formatting and scoped source-review checks als
 pass. These are source-level results, not acceptance of a new web/APK artifact,
 Google Password Manager sign-in, automatic image accuracy or actual app delivery.
 Keep APK015's older evidence separate from the forthcoming rebuilt artifacts.
+
+The first actual Windows web build of that merge stopped before producing a
+usable bundle: upstream's new startup preload lookup assumed slash-separated
+module IDs, but JSON plugin IDs used Windows separators. The original unit
+fixtures were POSIX-only. Windows-only and mixed-separator fixtures reproduce
+the failure before the fix. Startup lookup now normalizes both app and locale
+module IDs; the ordinary layout selection, CSP and worker-ordering behavior are
+unchanged. A rebuilt artifact must pass separately; the failed build is retained
+and was never served to the user.
+
+The corrected source passes 4,794 frontend tests in 328 files. An in-memory build
+using the installed Rollup and JSON plugin confirms that the real English module
+ID has Windows separators, fails the former lookup, and matches after normalization.

@@ -711,10 +711,26 @@ test("current upstream merge preserves scoped startup, model and private-app bou
   assert.equal(featureOwnedFiles(root, config.scopeId).length, 119);
   assert.equal(config.seeds.length, 25);
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 86);
+  // Preserve the committed merge identity after the separately reviewed Windows
+  // path-only repair; every other file still uses its live content hash.
+  const mergeFingerprint = {
+    ...fingerprint,
+    sha256: hash(
+      JSON.stringify(
+        fingerprint.files.map((file) => [
+          file,
+          file === "frontend/app/rollup.extras.mjs"
+            ? "ed9641516ca65a821c6b4a5f4bcae1e51449be786d1ddbed04fdc2b2d7e32203"
+            : hash(read(file)),
+        ]),
+      ),
+    ),
+  };
   assert.equal(
-    fingerprint.sha256,
+    mergeFingerprint.sha256,
     "3e5e911fe406ba81cee7320c706bc1482ffdc02b977f684b5cc55185e0fcdb33",
   );
+  assertReviewedSourceFingerprint(mergeFingerprint, config.sourceReview);
   assertReviewedSourceFingerprint(fingerprint, config.sourceReview);
   const rollup = read("frontend/app/rollup.config.mjs");
   assert.match(rollup, /prestartWorker: !development \|\| isNativeApp/u);
@@ -758,6 +774,55 @@ test("current upstream merge preserves scoped startup, model and private-app bou
     worker,
     /console\.debug\("WORKER_CLIENT: response", data\.requestKind, data\.correlationId\)/u,
   );
+});
+
+test("Windows startup module-ID repair preserves the exact committed merge checkpoint", () => {
+  const config = JSON.parse(
+    readFileSync(
+      resolve(root, "scripts/npm_feature_scope.current-client.json"),
+      "utf8",
+    ),
+  );
+  const fingerprint = seedSourceFingerprint(root, config);
+  const file = "frontend/app/rollup.extras.mjs";
+  const source = readFileSync(resolve(root, file), "utf8").replaceAll(
+    "\r\n",
+    "\n",
+  );
+  const hash = (text) => createHash("sha256").update(text).digest("hex");
+  assert.equal(
+    hash(source),
+    "22bf93228b94a0cf4666eade3ca004278dc351fdfddc8937a69a86a11c3d5658",
+  );
+  const prior = source
+    .replace(
+      '        const app = chunks.find((c) =>\n            c.moduleIds.some((id) => id.replaceAll("\\\\", "/").endsWith(root)),\n        );',
+      "        const app = chunks.find((c) => c.moduleIds.some((id) => id.endsWith(root)));",
+    )
+    .replace(
+      '                // Rollup preserves native separators for JSON modules on Windows,\n                // while other plugins may already return slash-normalized IDs.\n                const locale = id.replaceAll("\\\\", "/").match',
+      "                const locale = id.match",
+    );
+  assert.equal(
+    hash(prior),
+    "ed9641516ca65a821c6b4a5f4bcae1e51449be786d1ddbed04fdc2b2d7e32203",
+  );
+  const restored = sourceReviewFingerprintFromBytes(
+    fingerprint.files.map((entry) => [
+      entry,
+      entry === file ? Buffer.from(prior) : readFileSync(resolve(root, entry)),
+    ]),
+  );
+  assert.equal(
+    restored.sha256,
+    "3e5e911fe406ba81cee7320c706bc1482ffdc02b977f684b5cc55185e0fcdb33",
+  );
+  assert.equal(
+    fingerprint.sha256,
+    "f987610e19dd0790765bbe2209b109c7a987d10d09f082a0400e702efca5c67d",
+  );
+  assertReviewedSourceFingerprint(restored, config.sourceReview);
+  assertReviewedSourceFingerprint(fingerprint, config.sourceReview);
 });
 
 test("current named-choice module is app-owned and cannot disappear or add an unreviewed import", () => {

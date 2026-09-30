@@ -190,7 +190,7 @@ const localWebWiring = {
     mode: /localClientBuild\s*\?\s*\{\s*"import\.meta\.env\.DEV": "false",\s*"import\.meta\.env\.PROD": "true"\s*\}/,
     key: /queryPublicKey: queryOfficialUserIndexPublicKey,\s*outputPath: outputPath\("public-key"\)/,
     otaPlugin: /\.\.\.\(!localClientBuild\s*\?\s*\[\s*androidBundlePlugin/,
-    rpId: /const androidRpId = localClientBuild\s*\?\s*""/,
+    rpId: /const androidRpId = localWebBuild\s*\?\s*""\s*:\s*\(process\.env\.OC_ANDROID_RP_ID \?\? "oc\.app"\)\.trim\(\)\.toLowerCase\(\);/,
     otaPolicy:
         /fs\.writeFileSync\(\s*outputPath\("ota-policy\.json"\),\s*JSON\.stringify\(\{ strategy: "none" \}\),?\s*\)/,
     profileGuard:
@@ -260,9 +260,9 @@ test("wrapped local web wiring assertions retain their safety values and conditi
         ],
         [
             localWebWiring.rpId,
-            'const androidRpId = localClientBuild ? ""',
-            'const androidRpId = localClientBuild\n ? ""',
-            'const androidRpId = localClientBuild ? "oc.app"',
+            'const androidRpId = localWebBuild ? "" : (process.env.OC_ANDROID_RP_ID ?? "oc.app").trim().toLowerCase();',
+            'const androidRpId = localWebBuild\n ? ""\n : (process.env.OC_ANDROID_RP_ID ?? "oc.app").trim().toLowerCase();',
+            'const androidRpId = localClientBuild ? "" : (process.env.OC_ANDROID_RP_ID ?? "oc.app").trim().toLowerCase();',
         ],
         [
             localWebWiring.otaPolicy,

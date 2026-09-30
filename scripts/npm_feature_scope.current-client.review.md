@@ -1,6 +1,6 @@
 # Current unofficial-client npm source ownership
 
-Latest disposition: see **Upstream c0ac3178 merge checkpoint (2026-09-30)**
+Latest disposition: see **Windows startup module-ID checkpoint (2026-09-30)**
 below. Earlier sections and their hashes remain historical evidence; they do not
 describe the now-removed active browser-auth transport.
 
@@ -439,3 +439,39 @@ Verification with pinned Node **24.18.1**: all **150/150** tests in the five off
 npm contract suites pass with zero failures/skips, and the current source gate
 reports the new aggregate and unchanged counts above with advisory acceptance
 explicitly false. Temporary files and logs remain under `F:/Temp/OpenChat-IOU`.
+
+## Windows startup module-ID checkpoint (2026-09-30)
+
+The reviewed current aggregate is
+`f987610e19dd0790765bbe2209b109c7a987d10d09f082a0400e702efca5c67d`.
+Against committed merge `28cda7221d920557664249cb71e2f4a6670a9996`, only
+`frontend/app/rollup.extras.mjs` changes among the fingerprinted production files.
+Its strict UTF-8/LF SHA256 changes from
+`ed9641516ca65a821c6b4a5f4bcae1e51449be786d1ddbed04fdc2b2d7e32203` to
+`22bf93228b94a0cf4666eade3ca004278dc351fdfddc8937a69a86a11c3d5658`.
+
+The real optimized web build failed because upstream startup preload discovery
+matched only slash-separated locale IDs. An independent in-memory Rollup 4.61.1
+build with the installed JSON plugin and actual English catalog returned a native
+Windows backslash-separated module ID: the previous expression found no locale,
+while separator normalization found `en`. No generated bundle was written or
+application code executed by that isolated check; it required no network access.
+
+The repair normalizes separators at exactly two comparisons: App component roots
+and locale IDs. It does not change manual chunks, generated startup behavior,
+CSP policy, development-browser worker ordering, authentication, models, prompts,
+private apps or business logic. Regression fixtures cover Windows and mixed IDs.
+The new source contract reverses only those comparisons and their explanatory
+comment to reproduce the committed file hash and full `3e5e911f` aggregate.
+Existing exact mobile translation proofs and earlier checkpoints remain intact.
+
+Counts remain **119 dedicated owners, 148 fingerprinted sources, 25 dependency
+roots and 86 ownership anchors**. Selectors, root lists, package/lock identities,
+historical PR policies and advisory decisions are unchanged. This is a bounded
+startup-build source review, not a core audit, advisory waiver, completed web
+artifact qualification, APK rebuild, provider/DAL test or deployment approval.
+
+Verification with pinned Node **24.18.1**: the current source gate reports the
+aggregate and unchanged counts above; the same five offline npm contract suites
+pass **151/151**, with no failed, skipped or cancelled tests. The exact-reversal
+test is additive; no preceding test expectation or enforcement rule is waived.

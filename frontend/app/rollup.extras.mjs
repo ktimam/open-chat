@@ -369,7 +369,9 @@ export function generateStartupScript({ chunks, version, mobileLayout, prestartW
     const alreadyPreloaded = staticImports(entry, chunksByFileName);
 
     const appChunks = (root) => {
-        const app = chunks.find((c) => c.moduleIds.some((id) => id.endsWith(root)));
+        const app = chunks.find((c) =>
+            c.moduleIds.some((id) => id.replaceAll("\\", "/").endsWith(root)),
+        );
         if (app === undefined) {
             throw new Error(`No chunk found for ${root}, so it cannot be preloaded`);
         }
@@ -381,7 +383,9 @@ export function generateStartupScript({ chunks, version, mobileLayout, prestartW
     const locales = Object.fromEntries(
         chunks.flatMap((c) =>
             c.moduleIds.flatMap((id) => {
-                const locale = id.match(/\/src\/i18n\/(\w+)\.json$/)?.[1];
+                // Rollup preserves native separators for JSON modules on Windows,
+                // while other plugins may already return slash-normalized IDs.
+                const locale = id.replaceAll("\\", "/").match(/\/src\/i18n\/(\w+)\.json$/)?.[1];
                 return locale !== undefined ? [[locale, c.fileName]] : [];
             }),
         ),
