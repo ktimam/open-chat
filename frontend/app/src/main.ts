@@ -13,7 +13,7 @@ import { prepareServiceWorkerBeforeApplicationStart } from "@client/utils/update
 import "svelte";
 import { mount } from "svelte";
 import StartupFailure from "./components_shared/StartupFailure.svelte";
-import { setNativeTheme, writeNativeCssVariables } from "./theme/themes";
+import { clearStartupBackground, setNativeTheme, writeNativeCssVariables } from "./theme/themes";
 import { selectLayout } from "./utils/layout";
 import { isNativeClient, usesWebInferenceRuntime } from "./utils/onDeviceInference";
 import { ensureWebModelRestored } from "./utils/webInference";
@@ -33,10 +33,12 @@ async function startApplication() {
                     : "A stale background worker still controls this page. Open OpenChat in a fresh tab, then close this tab.";
             // Recovery must already be in the bootstrap graph: a stale controller may also
             // prevent an additional component chunk from loading at exactly this point.
-            return mount(StartupFailure, {
+            const recovery = mount(StartupFailure, {
                 target: document.body,
                 props: { message, recovery: "new-tab" },
             });
+            clearStartupBackground();
+            return recovery;
         }
     }
 
@@ -65,7 +67,9 @@ async function startApplication() {
     const { default: App } = await (layout === "v2"
         ? import("./components_mobile/App.svelte")
         : import("./components/App.svelte"));
-    return mount(App, { target: document.body });
+    const mounted = mount(App, { target: document.body });
+    clearStartupBackground();
+    return mounted;
 }
 
 const app = startApplication();

@@ -34,14 +34,24 @@ function config(): OpenChatConfig {
     } as unknown as OpenChatConfig;
 }
 
-describe("WorkerAgent startup failure handling", () => {
+function prestartWorker(): FakeWorker {
+    const worker = new FakeWorker();
+    window.OC_PRESTARTED_WORKER = worker as unknown as Worker;
+    return worker;
+}
+
+describe.each(["constructed", "prestarted"] as const)("WorkerAgent (%s worker)", (startup) => {
     let worker: FakeWorker;
+    let constructions: number;
 
     beforeEach(() => {
         vi.useFakeTimers();
-        worker = new FakeWorker();
+        window.OC_PRESTARTED_WORKER = undefined;
+        worker = startup === "prestarted" ? prestartWorker() : new FakeWorker();
+        constructions = 0;
         class WorkerConstructor {
             constructor() {
+                constructions += 1;
                 return worker;
             }
         }
@@ -50,7 +60,10 @@ describe("WorkerAgent startup failure handling", () => {
 
     afterEach(() => {
         vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+        vi.clearAllTimers();
         vi.useRealTimers();
+        window.OC_PRESTARTED_WORKER = undefined;
     });
 
     it("forwards explicit unofficial policies while defaulting both off", () => {
@@ -133,6 +146,7 @@ describe("WorkerAgent startup failure handling", () => {
     });
 
     it("surfaces a synchronous worker-constructor failure without throwing from application mount", async () => {
+        window.OC_PRESTARTED_WORKER = undefined;
         const failure = new DOMException("worker blocked by policy", "SecurityError");
         class FailingWorkerConstructor {
             constructor() {
@@ -247,5 +261,54 @@ describe("WorkerAgent startup failure handling", () => {
         await expect(agent.send({ kind: "setMinLogLevel", minLogLevel: "warn" })).rejects.toThrow(
             "init",
         );
+    });
+
+    it("the worker index.html prestarted is used instead of starting another", () => {
+        const prestarted = prestartWorker();
+
+        new WorkerAgent(config());
+
+        expect(constructions).toBe(0);
+        expect(prestarted.postMessage.mock.calls).toEqual([
+            [expect.objectContaining({ kind: "init" })],
+        ]);
+        expect(prestarted.onmessage).toBeTypeOf("function");
+        expect(prestarted.onerror).toBeTypeOf("function");
+        expect(prestarted.onmessageerror).toBeTypeOf("function");
+        expect(window.OC_PRESTARTED_WORKER).toBeUndefined();
+        prestarted.respond("init", 0);
+    });
+
+    it("a prestarted worker is only used once", () => {
+        const prestarted = prestartWorker();
+
+        new WorkerAgent(config());
+        new WorkerAgent(config());
+
+        expect(constructions).toBe(1);
+        expect(prestarted.postMessage.mock.calls).toEqual([
+            [expect.objectContaining({ kind: "init" })],
+        ]);
+        expect(worker.postMessage.mock.calls).toEqual([
+            [expect.objectContaining({ kind: "init" })],
+        ]);
+        prestarted.respond("init", 0);
+        worker.respond("init", 0);
+    });
+
+    it("does not serialize private worker payloads to debug logs", async () => {
+        const debug = vi.spyOn(console, "debug").mockImplementation(() => {});
+        const agent = new WorkerAgent(config());
+        worker.respond("init", 0);
+        const request = agent.send({ kind: "setMinLogLevel", minLogLevel: "warn" });
+        const sent = worker.postMessage.mock.calls.at(-1)?.[0] as { correlationId: number };
+        worker.respond("setMinLogLevel", sent.correlationId, { grant: "private-response-marker" });
+        await request;
+        worker.onmessage?.({
+            data: { kind: "unknown", grant: "private-unknown-marker" },
+        } as MessageEvent);
+
+        expect(JSON.stringify(debug.mock.calls)).not.toContain("private-response-marker");
+        expect(JSON.stringify(debug.mock.calls)).not.toContain("private-unknown-marker");
     });
 });

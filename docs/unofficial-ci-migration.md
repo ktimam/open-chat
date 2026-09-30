@@ -271,3 +271,21 @@ records. Every remaining mismatch still requires the exact live upstream edit
 proof; the regression checks both the complete record set and that onboarding
 needs no exemption. The upstream comparison baseline, historical registries and
 candidate-selection rules are unchanged.
+
+## Current upstream baseline integration (2026-09-30)
+
+The current-client baseline and complete-fork formatting comparison advance to
+upstream `c0ac3178f70f5e9de2f6ee532ce1415ab32a47cd`, whose backend tree is
+`6f285e41b0b06ce273fc47ac551270479547263f`. The root Cargo manifest and
+upstream deployment-script blob identities are unchanged. All 11 current
+inherited-formatting records have identical upstream source blobs and candidate
+source hashes; only their base-commit pins advance. Exact live edit proofs and
+the normal formatting candidate rules remain required, including the formatted
+onboarding file without an exemption.
+
+Current workflow wiring rejects both the previous integrated upstream pin and
+the historical formatting base. Historical workflows, review records and
+exceptions stay frozen; no dependency root, advisory decision or release gate is
+waived. The backend identity guard still checks committed HEAD and requires the
+merge commit before it can pass. This baseline update is not device, account,
+provider, APK, advisory or release acceptance.

@@ -622,22 +622,142 @@ test("current mobile error translation is an exact presentation-only source chec
     hash(prior),
     "1c93d07d7b15826a5c0af8a593a86cffc092ff3dd1eb39911cb4a37114fb7785",
   );
-  const previousFingerprint = sourceReviewFingerprintFromBytes(
-    fingerprint.files.map((entry) => [
-      entry,
-      entry === file ? Buffer.from(prior) : readFileSync(resolve(root, entry)),
-    ]),
-  );
+  // The mobile file is unchanged by the later upstream merge. Preserve its exact
+  // two-line proof and both historical aggregates by using only these eight
+  // pre-merge UTF-8/LF identities, independently read from committed 77346e24c.
+  // All other identities still come from live source, so unrelated drift fails.
+  const beforeUpstreamMerge = new Map([
+    [
+      "frontend/app/rollup.config.mjs",
+      "4d9e53801963c6fd2b4c140541f69fd5533384666f3db2a22d427e6a5d049f70",
+    ],
+    [
+      "frontend/app/rollup.extras.mjs",
+      "af79b09b85c1bf33abc5f728ac12a7065373bd6004a8329b8d9a261a3c18838f",
+    ],
+    [
+      "frontend/app/src/i18n/i18n.ts",
+      "652babbd5f519e9235b52a3bdae96f7990cce8299356e11455c556d0c1531d63",
+    ],
+    [
+      "frontend/app/vite.config.ts",
+      "a6bfc68fcb43b1eccd1c90f773dc444a5518570214f97cb88f1576d268389903",
+    ],
+    [
+      "frontend/openchat-agent/src/utils/chatsDb.ts",
+      "e24ddc9bf370175d8fba07e1eea520edff6074addeb399d35e6e306560c184ff",
+    ],
+    [
+      "frontend/openchat-client/src/openchat.ts",
+      "84c874b06aa6c80707b9090e55e935c071796be443badbc05f074798281ff3d2",
+    ],
+    [
+      "frontend/openchat-shared/src/domain/worker.ts",
+      "df4bdec82f39446c92ff6f32616cc99337c7fe2c4499f40a1dc7763cc1652f94",
+    ],
+    [
+      "frontend/openchat-worker/src/worker.ts",
+      "5cb2c5b0b9e2100e6701dcaf7672ceca8c2c2ed87d82c04cfb6ae6eb5469f1ff",
+    ],
+  ]);
+  for (const entry of beforeUpstreamMerge.keys())
+    assert(fingerprint.files.includes(entry), entry);
+  const checkpointFingerprint = (mobileSource) => ({
+    ...fingerprint,
+    sha256: hash(
+      JSON.stringify(
+        fingerprint.files.map((entry) => [
+          entry,
+          entry === file
+            ? hash(mobileSource)
+            : (beforeUpstreamMerge.get(entry) ??
+              hash(
+                readFileSync(resolve(root, entry), "utf8").replaceAll(
+                  "\r\n",
+                  "\n",
+                ),
+              )),
+        ]),
+      ),
+    ),
+  });
+  const previousFingerprint = checkpointFingerprint(prior);
+  const translatedFingerprint = checkpointFingerprint(source);
   assert.equal(
     previousFingerprint.sha256,
     "425a64c8f66fb23956590bc0a698e865bbf1e606d3144b2e8411ad3dc2f1898c",
   );
   assert.equal(
-    fingerprint.sha256,
+    translatedFingerprint.sha256,
     "09b7e91e437cfbfb58c6029fbd51066967ffd27899a3406206dee87514e16341",
   );
   assertReviewedSourceFingerprint(previousFingerprint, config.sourceReview);
+  assertReviewedSourceFingerprint(translatedFingerprint, config.sourceReview);
   assertReviewedSourceFingerprint(fingerprint, config.sourceReview);
+});
+
+test("current upstream merge preserves scoped startup, model and private-app boundaries", () => {
+  const config = JSON.parse(
+    readFileSync(
+      resolve(root, "scripts/npm_feature_scope.current-client.json"),
+      "utf8",
+    ),
+  );
+  const read = (file) =>
+    readFileSync(resolve(root, file), "utf8").replaceAll("\r\n", "\n");
+  const hash = (text) => createHash("sha256").update(text).digest("hex");
+  const fingerprint = seedSourceFingerprint(root, config);
+  assert.equal(fingerprint.files.length, 148);
+  assert.equal(featureOwnedFiles(root, config.scopeId).length, 119);
+  assert.equal(config.seeds.length, 25);
+  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 86);
+  assert.equal(
+    fingerprint.sha256,
+    "3e5e911fe406ba81cee7320c706bc1482ffdc02b977f684b5cc55185e0fcdb33",
+  );
+  assertReviewedSourceFingerprint(fingerprint, config.sourceReview);
+  const rollup = read("frontend/app/rollup.config.mjs");
+  assert.match(rollup, /prestartWorker: !development \|\| isNativeApp/u);
+  assert.match(
+    rollup,
+    /generateCspForScripts\(\s*\[startupScript, \.\.\.inlineScripts\],\s*development,\s*process\.env\.OC_UNOFFICIAL_CLIENT === "true",\s*\)/u,
+  );
+  const extras = read("frontend/app/rollup.extras.mjs");
+  assert.match(extras, /prestartWorker = true/u);
+  assert.match(extras, /prestartWorker\s*\? `try/u);
+  assert.match(extras, /window\.OC_PRESTARTED_WORKER = new Worker/u);
+  // These two separately reviewed merge seams are not new dependency owners.
+  const main = read("frontend/app/src/main.ts");
+  assert.equal(
+    hash(main),
+    "ee353591455581bda225592981fbc9ec9f0f56641c50fe9b070d6f84f0327696",
+  );
+  assert(
+    main.indexOf("await prepareServiceWorkerBeforeApplicationStart()") <
+      main.indexOf(
+        "if (usesWebInferenceRuntime()) void ensureWebModelRestored();",
+      ),
+  );
+  assert.match(main, /const recovery = mount\(StartupFailure,/u);
+  assert.match(main, /clearStartupBackground\(\);\s*return recovery/u);
+  assert.match(main, /clearStartupBackground\(\);\s*return mounted/u);
+  const worker = read("frontend/openchat-client/src/workerAgent.ts");
+  assert.equal(
+    hash(worker),
+    "e6542c4c3900ac708aa7d3df2a9f2f038e41b40cda3e6682d6da71d50274e5a6",
+  );
+  assert.match(worker, /try \{\s*worker =\s*takePrestartedWorker\(\) \?\?/u);
+  assert.match(worker, /window\.OC_PRESTARTED_WORKER = undefined/u);
+  assert.match(
+    worker,
+    /assertUnofficialApiRequestAllowed\(req, this\.#clientOnlyApps\)/u,
+  );
+  assert.match(worker, /WORKER_STARTUP_REQUEST_TIMEOUT_MS = 30_000/u);
+  assert.match(worker, /this\.#onFatalError\?\.\(error\)/u);
+  assert.match(
+    worker,
+    /console\.debug\("WORKER_CLIENT: response", data\.requestKind, data\.correlationId\)/u,
+  );
 });
 
 test("current named-choice module is app-owned and cannot disappear or add an unreviewed import", () => {

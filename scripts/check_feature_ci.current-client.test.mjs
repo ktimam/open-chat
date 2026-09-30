@@ -310,8 +310,16 @@ const mutations = [
     "legacy formatting comparison base",
     (s) =>
       s.replace(
-        "5f00758312735f2ddac9928e3aa60349964bf73a",
+        CURRENT_CLIENT_FORMAT_BASE_EXPRESSION,
         "df9d9ed52db00e87fbb7309280a325902c9bb2cc",
+      ),
+  ],
+  [
+    "previous integrated upstream formatting base",
+    (s) =>
+      s.replace(
+        CURRENT_CLIENT_FORMAT_BASE_EXPRESSION,
+        "5f00758312735f2ddac9928e3aa60349964bf73a",
       ),
   ],
   [

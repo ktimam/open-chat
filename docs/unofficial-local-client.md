@@ -327,3 +327,29 @@ New upstream commits fetched after the reviewed `5f0075831` baseline have not ye
 been integrated at this checkpoint. Hosted scoped-security results, actual native
 account restore/reopen and current-artifact app delivery remain separate gates;
 none is waived by a passing build or unit suite.
+
+### September 30 upstream integration checkpoint
+
+The later integration advances the fork to official upstream
+`c0ac3178f70f5e9de2f6ee532ce1415ab32a47cd`. All backend source matches that
+upstream tree; this integration deploys no canisters or backend changes. The
+original native account-linking, passkey creation and sign-in operations remain
+unchanged from the restored-flow checkpoint. The user confirms that the older
+PR APK restored with a fresh linking code and saved a new Google Password Manager
+passkey. That was not merely a cached login; the new package's provider behavior
+still needs direct testing, and missing public association is not a diagnosed
+cause of its prior failures.
+
+Upstream's startup preloads and early worker are retained for production and
+native builds. Local browser builds defer worker creation until the existing
+bounded stale-service-worker preparation finishes. Both client and worker retain
+their private-app policy checks before dispatch. Model prompts, cached-model
+retention, optional audio and the all-WebGPU selection are unchanged.
+
+With the merged lockfile's `svelte-i18n` 3.7.4 installed, the complete frontend
+suite passes 4,792 tests in 328 files under Node 24.18.1. Both typechecks and
+non-mutating lint pass with zero errors (576 Svelte warnings and 31 lint warnings
+remain). Focused startup, worker, formatting and scoped source-review checks also
+pass. These are source-level results, not acceptance of a new web/APK artifact,
+Google Password Manager sign-in, automatic image accuracy or actual app delivery.
+Keep APK015's older evidence separate from the forthcoming rebuilt artifacts.

@@ -70,6 +70,7 @@ function startBootstrap(
     const chooseLayout = vi.fn(selectLayout);
     const setNativeTheme = vi.fn();
     const writeNativeCssVariables = vi.fn();
+    const clearStartupBackground = vi.fn();
     const usesWebInferenceRuntime = vi.fn(() => webRuntime);
     const isNativeClient = vi.fn(() => options.nativeClient ?? true);
     const prepareServiceWorkerBeforeApplicationStart = vi.fn(
@@ -84,7 +85,7 @@ function startBootstrap(
         "./web-components/spoiler": {},
         "@client": { mobileWidth: { value: narrow } },
         svelte: { mount },
-        "./theme/themes": { setNativeTheme, writeNativeCssVariables },
+        "./theme/themes": { setNativeTheme, writeNativeCssVariables, clearStartupBackground },
         "./utils/layout": { selectLayout: chooseLayout },
         "./utils/onDeviceInference": { usesWebInferenceRuntime, isNativeClient },
         "@client/utils/updateSw": { prepareServiceWorkerBeforeApplicationStart },
@@ -129,6 +130,7 @@ function startBootstrap(
         chooseLayout,
         setNativeTheme,
         writeNativeCssVariables,
+        clearStartupBackground,
         usesWebInferenceRuntime,
         ensureWebModelRestored,
         loadModule,
@@ -150,6 +152,14 @@ describe("application bootstrap security", () => {
         expect(indexHtml).not.toContain("127.0.0.1:38291");
         expect(indexHtml).not.toContain("__ocsend");
         expect(indexHtml).not.toContain("/src/main.ts");
+    });
+
+    test("Rollup preserves the startup-script CSP and defers browser development workers", () => {
+        const rollup = readAppFile("rollup.config.mjs");
+        expect(rollup).toMatch(/prestartWorker:\s*!development\s*\|\|\s*isNativeApp/);
+        expect(rollup).toMatch(
+            /generateCspForScripts\(\s*\[startupScript,\s*\.\.\.inlineScripts\],\s*development,\s*process\.env\.OC_UNOFFICIAL_CLIENT\s*===\s*"true",?\s*\)/,
+        );
     });
 
     test.each(
@@ -177,6 +187,10 @@ describe("application bootstrap security", () => {
             expect(result.chooseLayout).toHaveBeenCalledExactlyOnceWith(flag, narrow);
             expect(result.usesWebInferenceRuntime).toHaveBeenCalledExactlyOnceWith();
             expect(result.ensureWebModelRestored).toHaveBeenCalledTimes(webRuntime ? 1 : 0);
+            expect(result.clearStartupBackground).toHaveBeenCalledOnce();
+            expect(result.clearStartupBackground.mock.invocationCallOrder[0]).toBeGreaterThan(
+                result.mount.mock.invocationCallOrder[0],
+            );
             if (webRuntime) expect(result.ensureWebModelRestored).toHaveBeenCalledWith();
             expect(result.setNativeTheme).toHaveBeenCalledTimes(layout === "v2" ? 1 : 0);
             expect(result.writeNativeCssVariables).toHaveBeenCalledTimes(layout === "v1" ? 1 : 0);
@@ -225,6 +239,7 @@ describe("application bootstrap security", () => {
         expect(result.mount).not.toHaveBeenCalled();
         expect(result.chooseLayout).not.toHaveBeenCalled();
         expect(result.ensureWebModelRestored).not.toHaveBeenCalled();
+        expect(result.clearStartupBackground).not.toHaveBeenCalled();
     });
 
     test("worker preparation failure mounts recovery instead of either application", async () => {
@@ -237,6 +252,10 @@ describe("application bootstrap security", () => {
             target: result.body,
             props: { message: "worker preparation failed", recovery: "new-tab" },
         });
+        expect(result.clearStartupBackground).toHaveBeenCalledOnce();
+        expect(result.clearStartupBackground.mock.invocationCallOrder[0]).toBeGreaterThan(
+            result.mount.mock.invocationCallOrder[0],
+        );
         expect(result.chooseLayout).not.toHaveBeenCalled();
         expect(result.ensureWebModelRestored).not.toHaveBeenCalled();
         expect(result.loadModule.mock.calls.some(([name]) => name.endsWith("/App.svelte"))).toBe(

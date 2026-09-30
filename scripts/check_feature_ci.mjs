@@ -1137,7 +1137,7 @@ export const CURRENT_CLIENT_LICENSE_COMMAND = [
 ].join("\n");
 
 export const CURRENT_CLIENT_FORMAT_BASE_EXPRESSION =
-  "5f00758312735f2ddac9928e3aa60349964bf73a";
+  "c0ac3178f70f5e9de2f6ee532ce1415ab32a47cd";
 
 /** Offline wiring only: this does not collect dependencies, query advisories, or accept a release. */
 export function checkCurrentClientSecurityCi({

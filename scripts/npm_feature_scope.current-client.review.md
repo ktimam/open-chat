@@ -1,6 +1,6 @@
 # Current unofficial-client npm source ownership
 
-Latest disposition: see **Mobile error-translation checkpoint (2026-09-30)**
+Latest disposition: see **Upstream c0ac3178 merge checkpoint (2026-09-30)**
 below. Earlier sections and their hashes remain historical evidence; they do not
 describe the now-removed active browser-auth transport.
 
@@ -378,3 +378,64 @@ No selectors, roots, ownership anchors, package/lock identities, historical PR
 policies or advisory decisions change. This is not a core audit, provider/DAL
 qualification or binary acceptance: existing APK015 assets remain unchanged and
 do not contain this later source-only display correction.
+
+## Upstream c0ac3178 merge checkpoint (2026-09-30)
+
+The reviewed working-tree source aggregate is
+`3e5e911fe406ba81cee7320c706bc1482ffdc02b977f684b5cc55185e0fcdb33`.
+This compares the resolved merge of upstream
+`c0ac3178f70f5e9de2f6ee532ce1415ab32a47cd` against committed fork restoration
+`77346e24cb4711485b51e6beb2c1ce183b23228b`. It does not claim a completed merge
+commit, installed dependency tree or rebuilt APK. Counts remain **119 dedicated
+owners, 148 fingerprinted sources, 25 roots and 86 exact anchors**. No selector,
+ownership anchor or dependency root changes; all dedicated sources are unchanged.
+
+The eight changed fingerprint inputs were read before refreshing the checkpoint:
+
+- Rollup config/extras: upstream app/locale preloads, dark startup background and
+  prestarted worker; the resolved CSP still hashes the script and retains the
+  fork's development/local-client arguments. Browser development builds disable
+  worker prestarting so existing service-worker preparation happens first.
+  Model/OCR copying, private handoff/setup and absent browser-auth asset selection
+  remain intact.
+- Vite config: only the obsolete canonical-locales polyfill alias is removed.
+- App i18n: language/dialect helpers for supported correction targets; existing
+  translation loaders and fallback behavior remain in place.
+- chatsDb: per-instance cached chat/community detail timestamps. Retained
+  action-card reconciliation and principal-scoped database behavior are unchanged.
+- OpenChat client and worker protocol/implementation: details-last-updated and
+  details-synced-up-to requests avoid rebuilding unchanged details; translation
+  corrections use the current locale. Original identity bootstrap, passkey flows,
+  session persistence, account/backend scope and client-only app guards are intact.
+
+Separate review of the two startup conflict seams is recorded in the regression
+without making either file a new dependency owner. `main.ts` retains bounded
+browser cleanup before app mounting, model restoration and native layout/routing,
+then clears the temporary background after successful or recovery mounting. Its
+UTF-8/LF hash is
+`ee353591455581bda225592981fbc9ec9f0f56641c50fe9b070d6f84f0327696`.
+`workerAgent.ts` consumes and clears the prestarted worker inside the existing
+guarded constructor; reversing only that addition reproduces its previous source
+exactly. Watchdogs, fatal callbacks, policy enforcement and payload-safe logging
+are unchanged. Its hash is
+`e6542c4c3900ac708aa7d3df2a9f2f038e41b40cda3e6682d6da71d50274e5a6`.
+Focused worker/original-auth suites pass **75/75**, including both constructed and
+prestarted worker failure paths. This is not provider or device execution.
+
+The mobile error-translation file and its exact two-line reversal are unchanged.
+The regression retains both original file hashes and full `425a64c8` / `09b7e91e`
+aggregate identities: only the eight pre-merge file hashes, independently read
+from `77346e24c`, are substituted when reconstructing those historical snapshots.
+All other hashes still come from live source; a separate assertion binds the new
+live aggregate. No historical snapshot is rewritten or represented as new source.
+
+Upstream's package/lock changes include `svelte-i18n` 3.7.4 and its esbuild edge;
+esbuild already belongs to the reviewed root set. Fresh locked collection and any
+advisory/license decisions are separate from this source-only checkpoint. This
+review does not change advisory deferrals, historical PR policies, native/Rust
+records, model prompts, backend code, app-specific business logic or APK015 evidence.
+
+Verification with pinned Node **24.18.1**: all **150/150** tests in the five offline
+npm contract suites pass with zero failures/skips, and the current source gate
+reports the new aggregate and unchanged counts above with advisory acceptance
+explicitly false. Temporary files and logs remain under `F:/Temp/OpenChat-IOU`.

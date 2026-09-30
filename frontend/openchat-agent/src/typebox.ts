@@ -10768,6 +10768,7 @@ export type CommunityCanisterChannelSummaryUpdates = Static<
 export const CommunityCanisterChannelSummaryUpdates = /* @__PURE__ */ Type.Object({
     channel_id: ChannelId,
     last_updated: Type.BigInt(),
+    details_last_updated: Type.Optional(Type.BigInt()),
     name: Type.Optional(Type.String()),
     description: Type.Optional(Type.String()),
     subtype: Type.Optional(OptionUpdateGroupSubtype),
@@ -10975,6 +10976,7 @@ export const GroupCanisterGroupChatSummary = /* @__PURE__ */ Type.Object({
     chat_id: ChatId,
     local_user_index_canister_id: TSPrincipal,
     last_updated: Type.BigInt(),
+    details_last_updated: Type.Optional(Type.BigInt()),
     name: Type.String(),
     description: Type.String(),
     subtype: Type.Optional(GroupSubtype),
@@ -11023,6 +11025,7 @@ export type GroupCanisterGroupChatSummaryUpdates = Static<
 export const GroupCanisterGroupChatSummaryUpdates = /* @__PURE__ */ Type.Object({
     chat_id: ChatId,
     last_updated: Type.BigInt(),
+    details_last_updated: Type.Optional(Type.BigInt()),
     name: Type.Optional(Type.String()),
     description: Type.Optional(Type.String()),
     subtype: Type.Optional(OptionUpdateGroupSubtype),
@@ -11100,6 +11103,7 @@ export type CommunityCanisterChannelSummary = Static<typeof CommunityCanisterCha
 export const CommunityCanisterChannelSummary = /* @__PURE__ */ Type.Object({
     channel_id: ChannelId,
     last_updated: Type.BigInt(),
+    details_last_updated: Type.Optional(Type.BigInt()),
     name: Type.String(),
     description: Type.String(),
     subtype: Type.Optional(GroupSubtype),
@@ -11349,6 +11353,7 @@ export const CommunityCanisterCommunitySummary = /* @__PURE__ */ Type.Object({
     community_id: CommunityId,
     local_user_index_canister_id: TSPrincipal,
     last_updated: Type.BigInt(),
+    details_last_updated: Type.Optional(Type.BigInt()),
     name: Type.String(),
     description: Type.String(),
     avatar_id: Type.Optional(Type.BigInt()),
@@ -11375,6 +11380,7 @@ export type CommunityCanisterCommunitySummaryUpdates = Static<
 export const CommunityCanisterCommunitySummaryUpdates = /* @__PURE__ */ Type.Object({
     community_id: CommunityId,
     last_updated: Type.BigInt(),
+    details_last_updated: Type.Optional(Type.BigInt()),
     name: Type.Optional(Type.String()),
     description: Type.Optional(Type.String()),
     avatar_id: Type.Optional(OptionUpdateU128),

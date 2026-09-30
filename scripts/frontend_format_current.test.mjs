@@ -273,7 +273,10 @@ test("restored desktop onboarding is normally formatted and checked without an i
   const root = fileURLToPath(new URL("../", import.meta.url));
   const path = "frontend/app/src/components/onboard/OnboardModal.svelte";
   const registry = readCurrentFormattingRegistry();
-  assert.equal(registry.records.some((record) => record.path === path), false);
+  assert.equal(
+    registry.records.some((record) => record.path === path),
+    false,
+  );
   assert(
     currentFormattingCandidates(root, CURRENT_FORMAT_BASE).paths.includes(path),
   );

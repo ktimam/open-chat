@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "profile": "unofficial-client-official-backend",
-  "upstreamCommit": "5f00758312735f2ddac9928e3aa60349964bf73a",
-  "backendTree": "cf00604a2ca33c96c00a403b813a83d9221fd56f",
+  "upstreamCommit": "c0ac3178f70f5e9de2f6ee532ce1415ab32a47cd",
+  "backendTree": "6f285e41b0b06ce273fc47ac551270479547263f",
   "rootCargoManifest": "dcdd0c5f0b123d6ab15622a46199b6eb4a94256a",
   "upstreamDeploymentScripts": {
     "scripts/upgrade-canister.sh": "7a7e86d72b15bd3554e5d5a2826b9edaf8d5e96a"
