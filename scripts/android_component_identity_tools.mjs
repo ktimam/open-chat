@@ -17,6 +17,43 @@ export const manifestPath = fileURLToPath(
 const central = "https://repo.maven.apache.org/maven2/";
 const maxArtifactBytes = 60_000_000;
 
+class ToolDownloadError extends Error {
+  constructor(artifact, url, startedAt, error, deadlineExceeded) {
+    super("Pinned tool download failed", { cause: error });
+    const causes = [];
+    const pending = [error];
+    const seen = new Set();
+    while (pending.length && causes.length < 4) {
+      const current = pending.shift();
+      if (!current || typeof current !== "object" || seen.has(current))
+        continue;
+      seen.add(current);
+      const entry = {};
+      // Never include messages, stacks, headers, environment, or arbitrary values.
+      for (const field of ["name", "code"]) {
+        const value = current[field];
+        if (
+          typeof value === "string" &&
+          /^[A-Za-z][A-Za-z0-9_]{0,63}$/u.test(value)
+        )
+          entry[field] = value;
+      }
+      causes.push(entry);
+      if (current.cause) pending.push(current.cause);
+      if (current instanceof AggregateError)
+        pending.push(...current.errors.slice(0, 4));
+    }
+    this.diagnostic = {
+      error: "pinned-tool-download-failed",
+      artifact: `${artifact.group}:${artifact.artifact}:${artifact.version}`,
+      url,
+      elapsedMs: Math.max(0, Math.round(performance.now() - startedAt)),
+      deadlineExceeded,
+      causes,
+    };
+  }
+}
+
 export function artifactUrl(artifact) {
   assert.match(artifact.group, /^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)*$/u);
   assert.match(artifact.artifact, /^[a-z][a-z0-9-]*$/u);
@@ -99,14 +136,17 @@ async function freshDirectory(directory) {
 
 async function downloadArtifact(artifact, output, fetchImpl, timeoutMs) {
   const url = artifactUrl(artifact);
+  const startedAt = performance.now();
   const fileName = `${artifact.artifact}-${artifact.version}.jar`;
   const part = join(output, `${fileName}.part`);
   const controller = new AbortController();
   let reader;
   let file;
   let timer;
+  let deadlineExceeded = false;
   const deadline = new Promise((_, reject) => {
     timer = setTimeout(() => {
+      deadlineExceeded = true;
       controller.abort();
       reject(new Error(`tool download deadline exceeded: ${fileName}`));
     }, timeoutMs);
@@ -145,6 +185,14 @@ async function downloadArtifact(artifact, output, fetchImpl, timeoutMs) {
     file = undefined;
     await rename(part, join(output, fileName));
     return join(output, fileName);
+  } catch (error) {
+    throw new ToolDownloadError(
+      artifact,
+      url,
+      startedAt,
+      error,
+      deadlineExceeded,
+    );
   } finally {
     clearTimeout(timer);
     controller.abort();
@@ -197,7 +245,11 @@ if (
     const result = await resolveTools({ directory: process.argv[3], manifest });
     process.stdout.write(`${JSON.stringify(result)}\n`);
   } catch (error) {
-    console.error(error.message);
+    console.error(
+      error instanceof ToolDownloadError
+        ? JSON.stringify(error.diagnostic)
+        : error.message,
+    );
     process.exitCode = 1;
   }
 }

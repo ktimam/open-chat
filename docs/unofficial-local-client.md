@@ -366,3 +366,72 @@ and was never served to the user.
 The corrected source passes 4,794 frontend tests in 328 files. An in-memory build
 using the installed Rollup and JSON plugin confirms that the real English module
 ID has Windows separators, fails the former lookup, and matches after normalization.
+
+### September 30 current web and APK016 acceptance checkpoint
+
+The rebuilt artifacts use committed main
+`07aa47ba01fa896a607193d3ea36bf4487dc2222`, including the Windows startup repair.
+They do not inherit APK015 or earlier browser acceptance results. Evidence below
+is retained locally under `F:/Temp/OpenChat-IOU`; the receipts are not repository
+fixtures or a public release.
+
+The optimized web output is `merged-web-20260930-fixed`, version
+`2.0.0-localtest.edd1680a1ef59661cf0fb840b855ac92`. Independent verification passes
+for official backend/canister configuration, localhost RP, automatic local app
+directory, disabled OTA, exact inline-script CSP hashes and deferred browser worker
+startup. Both worker source maps match current source; pinned WebGPU assets and
+seven OCR assets verify, with no model weight download or new bundled weights.
+The 1,732-file inventory aggregate SHA256 is
+`da253f7140371fbe3388f6ac9e4db386b86b9f514ffe35ae533e60e20e425f28`.
+Receipt: `fork-main-closeout-20260930/merged-web-independent-verification.json`,
+SHA256 `fa9740013fd77e28f8c83dbcd1c00d98aaf8660ae60712b128e95b19576fbf42`.
+Its noted `existingAccountOnly: true` manifest field is stale metadata, not an
+enforced restriction; the original authentication UI/behavior is restored.
+
+Both APK016 ABIs passed independent source, package, signer, RP and embedded-asset
+verification from the same immutable source/frontend snapshot. Files and receipts
+are in `auth-native-restore-016/artifacts`:
+
+- `openchat-fork-local-test-x86_64.apk`: SHA256
+  `ba9c6bf9c746f2b5257118e8080f597dd492d56db860dd050191cf3d14999787`.
+  Receipt `independent-x86_64-verification.json`: SHA256
+  `3f92776037e6f04cc400e103e66891504486e8868e74d36b6c0a8a94c63baf10`.
+- `openchat-fork-local-test-aarch64.apk`: SHA256
+  `a21b9fd8d0d7b7a22d8b4ee5b2777e2a5b8778927e55adc3a4830057f07081b5`.
+  Receipt `independent-aarch64-verification.json`: SHA256
+  `bbfde3bac139aba5886e26cd5bd2b3fd54f0d6590ea2d01e151acc96a16cd145`.
+
+The current browser reloaded the existing account/chat, restored private-app setup,
+showed the automatic IOU directory and completed a synthetic local text request.
+A fresh-tab image proposal read the synthetic fixture's amount (`123.45 USD`) and
+date (`2026-09-27`) correctly, but supplied `credit` despite the printed "You owe"
+and used its heading rather than its description. The app's pinned four/five-field
+image profiles do not request those omitted values; IOU supplies the missing image
+direction default. That is an app-owned extraction-contract failure, not a passing
+image result. The incorrect draft was left unsaved. An IOU-only extended private
+profile is a separate candidate requiring real inference qualification; legacy
+phone-tested prompt bytes are not relabelled. The x86 APK installed over the separate test package,
+cold-launched and remained alive with an empty crash buffer on follow-up. That is
+startup evidence only: native account restore/reopen, Google Password Manager and
+native model/app delivery remain unverified. The ARM APK has not been installed or
+runtime-tested on a physical phone; phone testing remains deferred. The runtime
+record is `fork-main-closeout-20260930/current-runtime-checkpoint.json`.
+
+The [hosted frontend run](https://github.com/ktimam/open-chat/actions/runs/36769207255)
+passed. The separate
+[scoped-security run](https://github.com/ktimam/open-chat/actions/runs/36769207174)
+passed model contracts, Windows/Ubuntu native hermetic tests and real small-model
+inference, but did not pass overall. Its Android tool resolver failed fetching
+before compilation; an Android-only rerun failed at the same stage without
+re-executing the dependency audit. The underlying transport cause was not logged.
+Bounded artifact/elapsed/cause-code diagnostics now preserve JSON stdout and all
+existing download integrity checks so a later run can identify the failure. Scoped npm
+reported 11 findings across `adm-zip` 0.6.0, `brace-expansion` 1.1.18 and `devalue`
+5.8.1 (six high, five moderate). Hosted Rust metadata/license/advisory steps then
+did not run; the missing Rust artifact is a secondary failure, not a successful
+collection. No advisory waiver or dependency update is implied by these receipts.
+
+The remaining gates are current image extraction and reviewed app-save acceptance,
+native restore/reopen/provider and app-flow acceptance, and the unresolved scoped
+security/tool checks. This checkpoint is not release-ready. Public branding/domain
+and publication remain deferred; it requires no OpenChat backend deployment.

@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtemp, readFile, readdir, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   artifactUrl,
   manifestPath,
@@ -36,6 +38,22 @@ function response(url, options = {}) {
       },
     }),
     ...options,
+  };
+}
+
+function downloadFailure(expected, deadlineExceeded = false) {
+  return (error) => {
+    assert.match(error.cause.message, expected);
+    assert.equal(error.diagnostic.error, "pinned-tool-download-failed");
+    assert.equal(
+      error.diagnostic.artifact,
+      "org.jetbrains.kotlin:kotlin-compiler-embeddable:2.2.0",
+    );
+    assert.equal(error.diagnostic.url, artifactUrl(reviewed.artifacts[0]));
+    assert.ok(Number.isSafeInteger(error.diagnostic.elapsedMs));
+    assert.ok(error.diagnostic.elapsedMs >= 0);
+    assert.equal(error.diagnostic.deadlineExceeded, deadlineExceeded);
+    return true;
   };
 }
 
@@ -197,7 +215,7 @@ for (const [label, replacement, expected] of [
           return response(url, replacement);
         },
       }),
-      expected,
+      downloadFailure(expected),
     );
     assert.equal(calls, 1);
     assert.equal(signal.aborted, true);
@@ -229,7 +247,7 @@ for (const [label, body, expected] of [
           });
         },
       }),
-      expected,
+      downloadFailure(expected),
     );
     assert.equal(calls, 1);
     assert.ok((await readdir(output)).every((name) => name.endsWith(".part")));
@@ -240,12 +258,15 @@ for (const phase of ["headers", "body"]) {
   test(`deadline covers stalled ${phase}, including a fetch mock that ignores abort`, async () => {
     let signal;
     let cancelled = false;
+    let calls = 0;
+    const output = await directory();
     await assert.rejects(
       resolveTools({
-        directory: await directory(),
+        directory: output,
         manifest: fixtures(),
         timeoutMs: 20,
         fetchImpl: async (url, options) => {
+          calls += 1;
           signal = options.signal;
           if (phase === "headers") return new Promise(() => {});
           return response(url, {
@@ -257,12 +278,102 @@ for (const phase of ["headers", "body"]) {
           });
         },
       }),
-      /deadline/u,
+      downloadFailure(/deadline/u, true),
     );
+    assert.equal(calls, 1);
     assert.equal(signal.aborted, true);
+    assert.ok((await readdir(output)).every((name) => name.endsWith(".part")));
     if (phase === "body") assert.equal(cancelled, true);
   });
 }
+
+test("transport rejection reports bounded causes, aborts and never requests the next tool", async () => {
+  const output = await directory();
+  const transport = new TypeError("secret outer message");
+  const details = Array.from({ length: 8 }, (_, index) =>
+    Object.assign(new Error("secret cause message"), {
+      code: index === 0 ? "ENOTFOUND" : "ECONNRESET",
+      authorization: "secret header",
+    }),
+  );
+  transport.cause = new AggregateError(details, "secret aggregate message");
+  details[0].cause = transport; // Cycles cannot make diagnostics unbounded.
+  let calls = 0;
+  let signal;
+  await assert.rejects(
+    resolveTools({
+      directory: output,
+      manifest: fixtures(),
+      fetchImpl: async (_url, options) => {
+        calls += 1;
+        signal = options.signal;
+        throw transport;
+      },
+    }),
+    (error) => {
+      downloadFailure(/secret outer message/u)(error);
+      assert.equal(error.cause, transport);
+      assert.deepEqual(error.diagnostic.causes, [
+        { name: "TypeError" },
+        { name: "AggregateError" },
+        { name: "Error", code: "ENOTFOUND" },
+        { name: "Error", code: "ECONNRESET" },
+      ]);
+      assert.doesNotMatch(
+        JSON.stringify(error.diagnostic),
+        /secret|authorization/u,
+      );
+      return true;
+    },
+  );
+  assert.equal(calls, 1);
+  assert.equal(signal.aborted, true);
+  assert.deepEqual(await readdir(output), []);
+});
+
+test("actual CLI sends sanitized download context only to stderr and leaves JSON stdout empty on failure", async () => {
+  const output = await directory();
+  const script = fileURLToPath(
+    new URL("./android_component_identity_tools.mjs", import.meta.url),
+  );
+  const child = spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "--eval",
+      `globalThis.fetch = async () => {
+      const cause = Object.assign(new Error("secret proxy credentials"), {
+        code: "ENOTFOUND", name: "Error", headers: { authorization: "secret header" }
+      });
+      cause.cause = { name: "secret\\nname", code: "X".repeat(65), message: "secret nested message" };
+      throw new TypeError("secret outer message", { cause });
+    };
+    process.argv = [process.execPath, ${JSON.stringify(script)}, "--output-directory", ${JSON.stringify(output)}];
+    await import(${JSON.stringify(new URL("./android_component_identity_tools.mjs", import.meta.url).href)});`,
+    ],
+    { encoding: "utf8", timeout: 10_000 },
+  );
+  assert.equal(child.error, undefined);
+  assert.equal(child.status, 1);
+  assert.equal(child.stdout, "");
+  const diagnostic = JSON.parse(child.stderr);
+  assert.equal(
+    diagnostic.artifact,
+    "org.jetbrains.kotlin:kotlin-compiler-embeddable:2.2.0",
+  );
+  assert.equal(diagnostic.url, artifactUrl(reviewed.artifacts[0]));
+  assert.ok(
+    Number.isSafeInteger(diagnostic.elapsedMs) && diagnostic.elapsedMs >= 0,
+  );
+  assert.equal(diagnostic.deadlineExceeded, false);
+  assert.deepEqual(diagnostic.causes, [
+    { name: "TypeError" },
+    { name: "Error", code: "ENOTFOUND" },
+    {},
+  ]);
+  assert.doesNotMatch(child.stderr, /secret|authorization|headers|X{65}/u);
+  assert.deepEqual(await readdir(output), []);
+});
 
 test("redirected output ancestors and non-absolute outputs are rejected before fetch", async () => {
   const actual = await mkdtemp(join(tmpdir(), "android-tools-target-"));

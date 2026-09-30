@@ -1,5 +1,16 @@
 # Local app processing
 
+**Historical protocol:** this page describes the former backend-registered app
+surface, network iframe and card-verifier design. It is not the active unofficial
+client's private-local app path. For current discovery, connection and reviewed
+delivery, see [Unofficial local client](unofficial-local-client.md). For processor
+isolation and payload projection, see the
+[isolated local processor contract](../frontend/app/src/utils/isolatedAppProcessor.md)
+and [private draft lifecycle](../frontend/app/src/utils/localAppDrafts.md).
+The current path runs verified app code in a network-blocked local worker and
+does not send a draft to an app backend for card verification. The protocol below
+is retained for historical reference, not as implementation guidance for new apps.
+
 An app can own deterministic text extraction and interpretation of model results by declaring
 `"x-openchat-local-processor": { "version": 1 }` on its response schema. OpenChat runs the
 registered card surface with `oc-app-process=1` and communicates through a short-lived iframe.
