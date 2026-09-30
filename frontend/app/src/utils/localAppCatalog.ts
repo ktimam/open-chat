@@ -1,6 +1,10 @@
 import type { AiActionDefinition } from "@shared";
 import { validateLocalAppDraftEditor, type DraftEditorV1 } from "./localAppDraftChoices";
 import {
+    validateLocalAppDraftPresentation,
+    type DraftPresentationV1,
+} from "./localAppDraftPresentation";
+import {
     snapshotLocalDraftJson,
     snapshotLocalDraftPayload,
     snapshotLocalDraftSchema,
@@ -17,6 +21,7 @@ export interface LocalAppAction {
     readonly definition: AiActionDefinition;
     readonly draftSchema: LocalDraftSchema;
     readonly draftEditor?: DraftEditorV1;
+    readonly draftPresentation?: DraftPresentationV1;
     // Private app-owned setup data imported explicitly; never copied into the handoff by default.
     readonly processorContext?: LocalDraftJson;
     readonly handoff:
@@ -251,7 +256,7 @@ export function parseLocalAppCatalog(json: string): LocalAppCatalog {
             exact(
                 action,
                 ["definition", "draftSchema", "handoff"],
-                ["processorContext", "draftEditor"],
+                ["processorContext", "draftEditor", "draftPresentation"],
             );
             validateDefinition(action.definition);
             const definition = action.definition as Record<string, unknown>;
@@ -271,6 +276,12 @@ export function parseLocalAppCatalog(json: string): LocalAppCatalog {
             if (action.draftEditor !== undefined)
                 action.draftEditor = validateLocalAppDraftEditor(
                     action.draftEditor,
+                    action.draftSchema as LocalDraftSchema,
+                    action.handoff as LocalAppAction["handoff"],
+                );
+            if (action.draftPresentation !== undefined)
+                action.draftPresentation = validateLocalAppDraftPresentation(
+                    action.draftPresentation,
                     action.draftSchema as LocalDraftSchema,
                     action.handoff as LocalAppAction["handoff"],
                 );

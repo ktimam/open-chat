@@ -3,6 +3,7 @@ import { currentUserIdStore, type OpenChat, type MessageContent } from "@client"
 import { ANON_USER_ID } from "@shared";
 import {
     extractPrivateAppAction,
+    type PrivateAppExtractionResult,
     type ProposalPhase,
     type ProposalPhaseListener,
 } from "./aiActionRunner";
@@ -105,6 +106,54 @@ export type PrivateAppProposalOptions = {
     sourceTimestamp?: number;
     onPhase?: ProposalPhaseListener;
 };
+
+type PrivateProcessorOutcome = Awaited<ReturnType<typeof runIsolatedAppProcessor>>["kind"];
+
+/** Only fixed host diagnostics cross this boundary, never provider text or app/model data. */
+function privateExtractionFailureMessage(
+    result: PrivateAppExtractionResult,
+    processorOutcome?: PrivateProcessorOutcome,
+): string {
+    let message: string;
+    if (result.kind === "no_extraction") {
+        message =
+            processorOutcome === "none" || processorOutcome === "ambiguous"
+                ? "[PRIVATE-ACTION/APP_NO_MATCH] The app's local processor did not identify an action from the result."
+                : "[PRIVATE-ACTION/MODEL_NO_ACTION] The model result did not yield a complete action.";
+    } else if (result.kind === "local_no_extraction") {
+        message =
+            "[PRIVATE-ACTION/LOCAL_NO_MATCH] The local reader or processor did not identify an action.";
+    } else if (result.kind === "error") {
+        // Exact equality with host-authored messages only. Substrings, appended provider details,
+        // raw JSON and app-supplied error strings must never be copied into the UI.
+        switch (result.error) {
+            case "The model reached its output token limit before completing the response. No partial result was returned.":
+                message =
+                    "[PRIVATE-ACTION/MODEL_OUTPUT_LIMIT] The model reached its output token limit before completing the response. No partial result was accepted.";
+                break;
+            case "The model stopped without a completion EOS token. No partial result was returned.":
+                message =
+                    "[PRIVATE-ACTION/MODEL_OUTPUT_INCOMPLETE] The model stopped before completing the response. No partial result was accepted.";
+                break;
+            case "browser model returned no text":
+                message = "[PRIVATE-ACTION/MODEL_OUTPUT_EMPTY] The model returned no text.";
+                break;
+            case "The app could not normalize the complete model result. No action was prepared.":
+                message =
+                    "[PRIVATE-ACTION/APP_RESULT_INVALID] The app's local processor could not return a valid action from the complete model result.";
+                break;
+            default:
+                message =
+                    processorOutcome === "error"
+                        ? "[PRIVATE-ACTION/APP_PROCESSOR_FAILED] The app's isolated local processor could not complete."
+                        : "[PRIVATE-ACTION/PREPARATION_FAILED] The local processor or model could not prepare a complete action.";
+        }
+    } else {
+        message =
+            "[PRIVATE-ACTION/PREPARATION_FAILED] The local processor or model could not prepare a complete action.";
+    }
+    return `${message} No external handoff was requested.`;
+}
 
 const initial = (): PrivateAppWorkspaceState => ({
     open: false,
@@ -905,6 +954,8 @@ export class PrivateAppWorkspace {
             phase: "preparing",
             message: "Preparing a private draft locally. No app handoff has been requested.",
         });
+        // Invocation-local enum only; no processor output/error is stored in workspace state.
+        let processorOutcome: PrivateProcessorOutcome | undefined;
         try {
             const result = await this.deps.extract(action.definition, content, client, {
                 sourceTimestamp: options.sourceTimestamp,
@@ -924,7 +975,7 @@ export class PrivateAppWorkspace {
                                   !stillCurrent()
                               )
                                   return { kind: "error", error: "Proposal context changed" };
-                              return this.deps.runProcessor(
+                              const processed = await this.deps.runProcessor(
                                   artifact,
                                   actionId,
                                   JSON.stringify(input),
@@ -936,6 +987,8 @@ export class PrivateAppWorkspace {
                                               : JSON.stringify(action.processorContext),
                                   },
                               );
+                              processorOutcome = processed.kind;
+                              return processed;
                           },
             });
             if (!stillCurrent()) return "retryable";
@@ -951,8 +1004,8 @@ export class PrivateAppWorkspace {
                             : result.kind === "unsupported_content"
                               ? "This message type is not supported for this action."
                               : result.kind === "incomplete_extraction"
-                                ? "The local result is missing required fields. No draft or external handoff was created."
-                                : "The local processor or model could not prepare a complete action. No external handoff was requested.";
+                                ? "[PRIVATE-ACTION/SCHEMA_INCOMPLETE] The local result is missing required fields. No draft or external handoff was created."
+                                : privateExtractionFailureMessage(result, processorOutcome);
                 this.#set({ message });
                 return "retryable";
             }

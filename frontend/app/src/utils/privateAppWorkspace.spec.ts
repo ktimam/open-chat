@@ -319,6 +319,120 @@ describe("private app workspace boundaries", () => {
         expect(deps.deliver).not.toHaveBeenCalled();
     });
 
+    it.each([
+        [
+            "The model reached its output token limit before completing the response. No partial result was returned.",
+            "MODEL_OUTPUT_LIMIT",
+        ],
+        [
+            "The model stopped without a completion EOS token. No partial result was returned.",
+            "MODEL_OUTPUT_INCOMPLETE",
+        ],
+        ["browser model returned no text", "MODEL_OUTPUT_EMPTY"],
+        [
+            "The app could not normalize the complete model result. No action was prepared.",
+            "APP_RESULT_INVALID",
+        ],
+    ])("shows a fixed diagnostic for %s without starting delivery", async (error, code) => {
+        const { workspace, deps } = fixture();
+        deps.extract.mockResolvedValueOnce({ kind: "error", error });
+        await expect(propose(workspace)).resolves.toBe("retryable");
+        expect(workspace.state.message).toContain(`[PRIVATE-ACTION/${code}]`);
+        expect(workspace.state.draft).toBeUndefined();
+        expect(deps.deliver).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        "secret-provider-value",
+        "https://private.invalid/?token=secret-provider-value",
+        "The model reached its output token limit before completing the response. No partial result was returned. secret-provider-value",
+        "APP_RESULT_INVALID secret-provider-value",
+    ])("does not echo or partially classify an unrecognized provider error: %s", async (error) => {
+        const { workspace, deps } = fixture();
+        deps.extract.mockResolvedValueOnce({ kind: "error", error });
+        await expect(propose(workspace)).resolves.toBe("retryable");
+        expect(workspace.state.message).toContain("[PRIVATE-ACTION/PREPARATION_FAILED]");
+        expect(JSON.stringify(workspace.state)).not.toContain("secret-provider-value");
+        expect(deps.deliver).not.toHaveBeenCalled();
+    });
+
+    it("distinguishes an unusable model result from missing required fields without revealing either", async () => {
+        const { workspace, deps } = fixture();
+        deps.extract.mockResolvedValueOnce({ kind: "no_extraction", raw: "secret-model-output" });
+        await propose(workspace);
+        expect(workspace.state.message).toContain("[PRIVATE-ACTION/MODEL_NO_ACTION]");
+        expect(JSON.stringify(workspace.state)).not.toContain("secret-model-output");
+        deps.extract.mockResolvedValueOnce({
+            kind: "incomplete_extraction",
+            raw: "secret-model-output",
+            missingFields: ["secret-field-name"],
+            candidateCount: 1,
+            validCandidateCount: 0,
+        });
+        await propose(workspace);
+        expect(workspace.state.message).toContain("[PRIVATE-ACTION/SCHEMA_INCOMPLETE]");
+        expect(JSON.stringify(workspace.state)).not.toContain("secret-model-output");
+        expect(JSON.stringify(workspace.state)).not.toContain("secret-field-name");
+        expect(deps.deliver).not.toHaveBeenCalled();
+    });
+
+    it("does not expose or log an unexpected thrown failure", async () => {
+        const { workspace, deps } = fixture();
+        const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+        const warningLog = vi.spyOn(console, "warn").mockImplementation(() => {});
+        try {
+            deps.extract.mockRejectedValueOnce(new Error("secret-thrown-provider-value"));
+            await expect(propose(workspace)).resolves.toBe("retryable");
+            expect(workspace.state.message).toContain("The private draft could not be prepared.");
+            expect(JSON.stringify(workspace.state)).not.toContain("secret-thrown-provider-value");
+            expect(errorLog).not.toHaveBeenCalled();
+            expect(warningLog).not.toHaveBeenCalled();
+            expect(deps.deliver).not.toHaveBeenCalled();
+        } finally {
+            errorLog.mockRestore();
+            warningLog.mockRestore();
+        }
+    });
+
+    it.each(["none", "ambiguous", "error"] as const)(
+        "distinguishes processor %s from a parse failure without retaining processor details",
+        async (kind) => {
+            const { workspace, deps } = fixture(true);
+            await workspace.importProcessor("test");
+            deps.runProcessor.mockResolvedValueOnce(
+                kind === "error" ? { kind, error: "secret-processor-value" } : { kind },
+            );
+            deps.extract.mockImplementationOnce(async (_definition, _content, _client, options) => {
+                await options.processor!(
+                    "add",
+                    {
+                        operation: "normalize_raw",
+                        modality: "image",
+                        candidates: [{ value: "secret-model-output" }],
+                    },
+                    () => true,
+                );
+                return kind === "error"
+                    ? { kind: "error", error: "secret-processor-value" }
+                    : { kind: "no_extraction", raw: "" };
+            });
+            await expect(propose(workspace)).resolves.toBe("retryable");
+            expect(workspace.state.message).toContain(
+                `[PRIVATE-ACTION/${kind === "error" ? "APP_PROCESSOR_FAILED" : "APP_NO_MATCH"}]`,
+            );
+            expect(JSON.stringify(workspace.state)).not.toContain("secret-processor-value");
+            expect(JSON.stringify(workspace.state)).not.toContain("secret-model-output");
+            expect(deps.deliver).not.toHaveBeenCalled();
+            // Processor status belongs only to this invocation, not a later proposal.
+            deps.extract.mockResolvedValueOnce({
+                kind: "no_extraction",
+                raw: "secret-model-output",
+            });
+            await propose(workspace);
+            expect(workspace.state.message).toContain("[PRIVATE-ACTION/MODEL_NO_ACTION]");
+        },
+    );
+
     it("retries uncertainty only on an explicit choice with the exact same immutable approval and import ID", async () => {
         const { workspace, deps } = fixture();
         await propose(workspace);

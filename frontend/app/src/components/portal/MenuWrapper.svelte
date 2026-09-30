@@ -35,9 +35,14 @@
             move(container);
         }
 
-        setTimeout(() => {
+        const closeTimer = setTimeout(() => {
             document.addEventListener("click", onClose, { once: true });
         }, 100);
+
+        return () => {
+            clearTimeout(closeTimer);
+            document.removeEventListener("click", onClose);
+        };
     });
 
     function move(container: HTMLElement) {

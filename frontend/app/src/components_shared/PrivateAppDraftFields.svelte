@@ -1,6 +1,7 @@
 <script lang="ts">
     import type { LocalAppAction } from "../utils/localAppCatalog";
     import { formatLocalDraftJson } from "../utils/localAppDrafts";
+    import { validateLocalAppDraftPresentation } from "../utils/localAppDraftPresentation";
     import {
         editLocalAppDraftField,
         localAppDraftFields,
@@ -32,6 +33,19 @@
     } = $props();
 
     const fields = $derived(localAppDraftFields(action, editorJson));
+    const presentation = $derived.by(() => {
+        if (action.draftPresentation === undefined) return undefined;
+        try {
+            return validateLocalAppDraftPresentation(
+                action.draftPresentation,
+                action.draftSchema,
+                action.handoff,
+            );
+        } catch {
+            // Imported catalogs reject this metadata. Direct callers still get inert raw values.
+            return undefined;
+        }
+    });
     let pending = $state<{ item: number; key: string; text: string; source: string }>();
 
     $effect(() => {
@@ -54,6 +68,15 @@
 
     function namedChoice(field: LocalAppDraftField) {
         return action.draftEditor?.choices.find((choice) => choice.field === field.key);
+    }
+
+    function enumLabel(field: LocalAppDraftField, value: LocalAppDraftScalar): string {
+        return (
+            presentation?.enumLabels
+                .find((mapping) => mapping.field === field.key)
+                ?.options.find((option) => option.value === value)?.label ??
+            formatLocalDraftJson(value)
+        );
     }
 
     function companionOwner(field: LocalAppDraftField) {
@@ -204,7 +227,7 @@
                                         >{/if}
                                     {#each choices(field) ?? [] as option, optionIndex}
                                         <option value={`option-${optionIndex}`}
-                                            >{formatLocalDraftJson(option)}</option
+                                            >{enumLabel(field, option)}</option
                                         >
                                     {/each}
                                 </select>

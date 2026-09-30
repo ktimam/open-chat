@@ -49,7 +49,9 @@
     }
 
     function closeMenu() {
-        open = portalState.close();
+        if (!open) return;
+        open = false;
+        portalState.close();
     }
 </script>
 

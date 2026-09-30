@@ -4,6 +4,7 @@ import { fromStore, writable } from "svelte/store";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LocalAppAction } from "../utils/localAppCatalog";
 import type { LocalDraftSchema } from "../utils/localAppDrafts";
+import { snapshotLocalDraftPayload } from "../utils/localAppDrafts";
 import {
     editLocalAppDraftScalar,
     initializeLocalAppDraftChoices,
@@ -203,6 +204,173 @@ afterEach(async () => {
 });
 
 describe("mounted generic private draft fields", () => {
+    it("shows app-owned labels for required enums while preserving scalar identities and raw review", async () => {
+        const definition: LocalAppAction = {
+            ...action(),
+            draftSchema: {
+                ...schema,
+                required: [...schema.required, "option"],
+                properties: {
+                    ...schema.properties,
+                    enabled: { type: "boolean", enum: [false, true] },
+                    nil: { type: "null", enum: [null] },
+                },
+            },
+            draftPresentation: {
+                version: 1,
+                enumLabels: [
+                    {
+                        field: "option",
+                        // Declaration order cannot change schema enum identity/order.
+                        options: [
+                            { value: "second", label: "Second friendly option" },
+                            { value: "first", label: "First friendly option" },
+                        ],
+                    },
+                    {
+                        field: "enabled",
+                        options: [
+                            { value: false, label: "Disabled" },
+                            { value: true, label: "Enabled" },
+                        ],
+                    },
+                    {
+                        field: "numberChoice",
+                        options: [
+                            { value: 0, label: "Zero" },
+                            { value: 2, label: "Two" },
+                        ],
+                    },
+                    { field: "nil", options: [{ value: null, label: "Explicit null" }] },
+                ],
+            },
+        };
+        const payload = { ...initial(), option: "first", numberChoice: 0 };
+        const view = render(definition, payload);
+        const select = control(view.target, "Item 1 — option") as HTMLSelectElement;
+        expect([...select.options].map((option) => [option.value, option.textContent])).toEqual([
+            ["absent", "Not supplied (required)"],
+            ["option-0", "First friendly option"],
+            ["option-1", "Second friendly option"],
+        ]);
+        expect(view.onchange).not.toHaveBeenCalled();
+        expect(view.payload()).toEqual(payload);
+        expect(view.target.textContent).toContain('Supplied value: "first"');
+        await input(view.target, "Item 1 — option", "option-1");
+        await input(view.target, "Item 1 — enabled", "option-1");
+        await input(view.target, "Item 1 — numberChoice", "option-1");
+        await input(view.target, "Item 1 — nil", "option-0");
+        expect(view.payload()).toEqual({
+            ...payload,
+            option: "second",
+            enabled: true,
+            numberChoice: 2,
+        });
+        expect(snapshotLocalDraftPayload(view.payload(), definition.draftSchema)).toEqual(
+            view.payload(),
+        );
+        expect(JSON.stringify(view.payload())).not.toContain("friendly");
+        await input(view.target, "Item 1 — option", "absent");
+        expect(control(view.target, "Item 1 — option").getAttribute("aria-invalid")).toBe("true");
+        expect(() => snapshotLocalDraftPayload(view.payload(), definition.draftSchema)).toThrow();
+    });
+
+    it("keeps named-choice defaults, None restoration and manual precedence with presentation on the same required field", async () => {
+        const original = namedAction();
+        const definition: LocalAppAction = {
+            ...original,
+            draftSchema: {
+                ...schema,
+                properties: {
+                    ...schema.properties,
+                    category: { type: "string" },
+                    categoryLabel: { type: "string" },
+                    count: { type: "integer", minimum: 0, enum: [0, 7, 11, 99] },
+                },
+            },
+            draftPresentation: {
+                version: 1,
+                enumLabels: [
+                    {
+                        field: "count",
+                        options: [0, 7, 11, 99].map((value) => ({
+                            value,
+                            label: `Named ${value}`,
+                        })),
+                    },
+                ],
+            },
+        };
+        const view = renderNamed({ ...initial(), category: "raw-alpha" }, false, definition);
+        expect(view.payload().count).toBe(7);
+        expect(
+            (control(view.target, "Item 1 — App count") as HTMLSelectElement).selectedOptions[0]
+                .textContent,
+        ).toBe("Named 7");
+        await input(view.target, "Item 1 — Saved category", "absent");
+        expect(view.payload()).toEqual(initial());
+        await input(view.target, "Item 1 — Saved category", "option-1");
+        expect(view.payload().count).toBe(11);
+        await input(view.target, "Item 1 — App count", "option-3");
+        expect(view.onfieldedit).toHaveBeenCalledExactlyOnceWith(0, "count", 99);
+        await input(view.target, "Item 1 — Saved category", "option-0");
+        expect(view.payload()).toMatchObject({ category: "raw-alpha", count: 99 });
+        await input(view.target, "Item 1 — Saved category", "absent");
+        expect(view.payload()).toEqual({ ...initial(), count: 99 });
+        expect(view.onchange).not.toHaveBeenCalled();
+        expect(snapshotLocalDraftPayload(view.payload(), definition.draftSchema)).toEqual(
+            view.payload(),
+        );
+    });
+
+    it("renders enum labels only as inert text and preserves old raw display without metadata", () => {
+        const markup = '<img src="https://example.invalid/leak" onerror="alert(1)">';
+        const fetchSpy = vi.fn();
+        vi.stubGlobal("fetch", fetchSpy);
+        const definition: LocalAppAction = {
+            ...action(),
+            draftPresentation: {
+                version: 1,
+                enumLabels: [
+                    {
+                        field: "option",
+                        options: [
+                            { value: "first", label: markup },
+                            { value: "second", label: "Other" },
+                        ],
+                    },
+                ],
+            },
+        };
+        const view = render(definition, { ...initial(), option: "first" });
+        expect(view.target.textContent).toContain(markup);
+        expect(view.target.querySelector("img, script, iframe, a")).toBeNull();
+        expect(fetchSpy).not.toHaveBeenCalled();
+        expect(view.onchange).not.toHaveBeenCalled();
+        const legacy = render(action(), { ...initial(), option: "first" });
+        expect(
+            (control(legacy.target, "Item 1 — option") as HTMLSelectElement).selectedOptions[0]
+                .textContent,
+        ).toBe('"first"');
+        const invalid = render(
+            {
+                ...definition,
+                draftPresentation: {
+                    version: 1,
+                    enumLabels: [
+                        { field: "option", options: [{ value: "first", label: "Incomplete" }] },
+                    ],
+                },
+            },
+            { ...initial(), option: "first" },
+        );
+        expect(
+            (control(invalid.target, "Item 1 — option") as HTMLSelectElement).selectedOptions[0]
+                .textContent,
+        ).toBe('"first"');
+        expect(invalid.onchange).not.toHaveBeenCalled();
+    });
+
     it("shows named labels with exact raw values and keeps assigned companions read-only", async () => {
         const view = renderNamed();
         const choice = control(view.target, "Item 1 — Saved category") as HTMLSelectElement;
