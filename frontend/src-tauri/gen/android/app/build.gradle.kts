@@ -23,7 +23,8 @@ if (unofficialLocalTest) {
     require(markerFile.isFile) { "Local APK frontend profile marker is missing" }
     val marker = JsonSlurper().parse(markerFile) as Map<*, *>
     require(marker["applicationId"] == localTestApplicationId && marker["ota"] == "none" &&
-        marker["nativeAuthentication"] == "browser-bridge-v1") { "Local APK frontend profile mismatch" }
+        marker["nativeAuthentication"] == "android-credential-manager-v1" &&
+        marker["androidRpId"] == "oc.app") { "Local APK frontend profile mismatch" }
 }
 
 val tauriProperties = Properties().apply {
@@ -126,11 +127,16 @@ val environmentOpenChatRpId = System.getenv("OC_ANDROID_RP_ID")?.trim()?.lowerca
 require(environmentOpenChatRpId == null || bundledOpenChatRpId == null || environmentOpenChatRpId == bundledOpenChatRpId) {
     "OC_ANDROID_RP_ID differs between the outer Android build and the bundled frontend"
 }
-val openChatRpId = if (unofficialLocalTest) "" else (environmentOpenChatRpId ?: bundledOpenChatRpId ?: "oc.app").also {
+val openChatRpId = (environmentOpenChatRpId ?: bundledOpenChatRpId ?: "oc.app").also {
     require(Regex("^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$").matches(it) &&
         it.contains('.') && !it.contains("..")) {
         "OC_ANDROID_RP_ID must be one valid HTTPS hostname"
     }
+}
+// The fork keeps upstream's RP identifier, not its signing identity or a claim
+// of oc.app DAL approval. Provider-specific app trust is qualified separately.
+require(!unofficialLocalTest || openChatRpId == "oc.app") {
+    "Local APK must retain the original OpenChat native RP"
 }
 
 android {
@@ -156,7 +162,7 @@ android {
         resValue(
             "string",
             "asset_statements",
-            if (unofficialLocalTest) "[]" else "[{\\\"include\\\":\\\"https://$openChatRpId/.well-known/assetlinks.json\\\"}]",
+            "[{\\\"include\\\":\\\"https://$openChatRpId/.well-known/assetlinks.json\\\"}]",
         )
     }
     

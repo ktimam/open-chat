@@ -21,20 +21,35 @@ Choose **Sign in with an existing passkey**. A passkey already linked for localh
 can be selected in the browser even if it was created on another localhost port.
 It must be available in that browser/device; a desktop passkey is not automatically
 available on a phone. If no linked passkey exists, the separate explicit linking flow
-uses an official account-linking code and a confirmation before adding a credential.
-It never automatically creates a new OpenChat account or retries a consumed code.
+uses an official account-linking code before adding a credential. For an existing
+account, choose Restore/sign-in rather than Sign up. If linking has an uncertain
+outcome, check that account before submitting another code; this profile now uses
+the original shared authentication and linking transport.
 
-In the separate local-test APK, enter your existing username and choose
-**Continue in browser to sign in or link**. Complete the passkey or explicit linking
-step yourself in the local browser page. Each passkey request expires after two
-minutes. A newly approved sign-in can be remembered for up to 30 days, with a
-nonextractable session key in the APK's IndexedDB. Restoration verifies the saved
-scope, key and fixed expiry, then obtains fresh authenticated official account
-proof before adopting that same account. Network failure offers retry, not another
-passkey creation. Logout clears the saved session before navigation. This is not
-a hardware-keystore or at-rest-encryption guarantee. Existing five-minute signatures
-are never extended: the first sign-in after this update must obtain a fresh signature.
-A linked passkey itself is not deleted by session expiry or logout.
+The separate local-test APK now uses OpenChat's original onboarding UI and native
+Android Credential Manager path. Restore an existing account using an available
+passkey or the original account-linking-code flow. Linking verifies the code,
+creates a credential through the selected Android provider, and finalises linking
+with the official identity service. There is no special browser sign-in page,
+browser authentication listener or browser-provided identity adoption in this build.
+The browser relay described below is for private-app setup/delivery, not login.
+
+Session storage and restoration also use the original AuthClient/IdentityStorage
+lifecycle and its 30-day delegation policy, not the former custom browser-session
+record. Old test-build records are not silently converted or extended. A fresh
+sign-in may therefore be required after that test build; this does not delete the
+provider's passkey or the existing account. Device persistence and provider acceptance
+must be tested separately from the source-level restoration tests.
+
+The current local-test profile retains the original `oc.app` RP identifier, but uses
+the distinct `dev.openchatfork.localtest` package and local signing certificate.
+Restoring the original code does not itself establish that Google Password Manager
+accepts this package/certificate for that RP. Google's documented association
+requirements and a real provider test remain separate qualification checks; they
+are not evidence that missing association caused a previously successful PR APK's
+regression. The local-only association asset canister under
+`tools/android-passkey-association` tests hosting/response behavior, not public
+HTTPS reachability or Google provider authorization.
 
 ## Private apps
 
@@ -280,3 +295,35 @@ predate the received-request reopen fix above. Real native sign-in and physical-
 tests are not passed; physical-phone testing is explicitly deferred for this checkpoint.
 Keep all source commits, reused-frontend hashes, limitations and later results in
 the artifact's own build and acceptance records. Do not relabel older evidence.
+
+### September 30 native-restore checkpoint
+
+The original OpenChat onboarding and native Credential Manager flow are restored
+in both layouts. The separate browser-login screen and browser-auth assets are no
+longer selected by the local-test APK. App connection/delivery remains separate
+from authentication. See [the native authentication boundary](LOCAL_TEST_APK_AUTH.md).
+
+The restored source passes all 4,640 frontend tests in 319 files, both typechecks,
+and non-mutating frontend lint (zero errors; existing warnings remain). The complete
+suite caught a mobile authentication error-translation regression that the focused
+checks had missed. Its fix restores the existing error-key mapper without changing
+the original sign-in, account-linking or credential-provider flow.
+
+APK015's independently verified x86 and ARM artifacts contain the restored native
+flow but predate that final translation fix. The x86 artifact was installed over
+the existing separate test package and launched without a reported native fatal
+error. This is startup evidence, not proof of successful account restoration,
+remembered-session behavior or Google Password Manager compatibility. Physical
+phone testing remains deferred; no official app data was replaced.
+
+Earlier browser acceptance demonstrated retained-cache Qwen/Gemma switching and
+real private-app delivery with exact-once replay after a lost save acknowledgement.
+Those results belong to that earlier browser artifact, not APK015 or newer source.
+Automatic image direction and Type matching are still not fully qualified: IOU's
+pinned extraction contract omits some image fields and supplies a default direction.
+Manually corrected delivery does not establish automatic extraction accuracy.
+
+New upstream commits fetched after the reviewed `5f0075831` baseline have not yet
+been integrated at this checkpoint. Hosted scoped-security results, actual native
+account restore/reopen and current-artifact app delivery remain separate gates;
+none is waived by a passing build or unit suite.

@@ -1,6 +1,6 @@
 # Local-test native private-app handoff
 
-This is a separate feature from browser-mediated account sign-in. It neither changes
+This is a separate feature from account sign-in. It neither changes
 the OpenChat backend nor sends chat history, image bytes, processor context, or account
 credentials. Its only input is the immutable six-field private draft already reviewed
 and explicitly confirmed in the native host. It is generic; it contains no app schema.

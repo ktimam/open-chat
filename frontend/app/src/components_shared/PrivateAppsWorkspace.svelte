@@ -406,7 +406,7 @@
                         >
                     {/if}
                 {/if}
-                {#if pairing && client.isNativeApp() && client.existingAccountOnly()}
+                {#if pairing && client.isNativeApp() && client.clientOnlyApps()}
                     <section class="pairing" aria-label="Pair local browser handoff">
                         <h3>Open the reviewed draft in your browser</h3>
                         <p>

@@ -9,6 +9,7 @@ import { DER_COSE_OID, wrapDER } from "@icp-sdk/core/agent";
 import { Principal } from "@icp-sdk/core/principal";
 import type { ECDSAKeyIdentity } from "@icp-sdk/core/identity";
 import type { NativeBrowserAuthChallenge } from "@client/utils/nativeBrowserAuth";
+import { NATIVE_SESSION_MAX_LIFETIME_MS } from "@shared/utils/nativeBrowserSession";
 
 const mocks = vi.hoisted(() => ({
     agent: vi.fn(),
@@ -204,6 +205,39 @@ afterEach(() => {
 });
 
 describe("bundled local browser authentication page (synthetic DOM + real linking lifecycle/one-shot transport)", () => {
+    it("distinguishes the two-minute request from a remembered sign-in lasting up to 30 days", async () => {
+        const rememberedChallenge = {
+            ...challenge,
+            delegationExpiresAtMs: start + NATIVE_SESSION_MAX_LIFETIME_MS,
+        };
+        mocks.pageFetch.mockResolvedValueOnce(new Response(JSON.stringify(rememberedChallenge)));
+        await mount();
+        const consent = document.body.textContent!.replace(/\s+/g, " ");
+        expect(NATIVE_SESSION_MAX_LIFETIME_MS).toBe(30 * 24 * 60 * 60 * 1000);
+        expect(consent).toContain(
+            "Complete this one-time request by the deadline shown above, within two minutes of starting it in the APK.",
+        );
+        expect(consent).toContain("up to 30 days, or until you sign out");
+        expect(consent).toContain(
+            "initial sign-in and, only if needed, to link a localhost passkey",
+        );
+        expect(consent).toContain(
+            "automatically tries to restore a valid saved sign-in after rechecking your account online",
+        );
+        expect(consent).toContain("If that check cannot finish, you may need to retry.");
+        expect(consent).not.toMatch(/five minutes|short-lived delegation/i);
+        expect(text("expiry")).toContain(
+            new Date(rememberedChallenge.expiresAtMs).toLocaleTimeString(),
+        );
+        expect(text("expiry")).toContain(
+            new Date(rememberedChallenge.delegationExpiresAtMs).toLocaleString(),
+        );
+        expect(mocks.signer).not.toHaveBeenCalled();
+        expect(mocks.network).not.toHaveBeenCalled();
+        expect(mocks.createPasskey).not.toHaveBeenCalled();
+        expect(localSubmissions()).toHaveLength(0);
+    });
+
     it("loads only public request metadata; never opens a picker or calls official services before a user gesture", async () => {
         await mount();
         expect(text("username")).toBe("synthetic-user");

@@ -8,6 +8,292 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 const read = (path) => readFileSync(join(root, path), "utf8");
 const workflow = read(".github/workflows/on_device_model_security.yaml");
 
+// This contract checks the small, literal native manifest/lock shapes used here.
+// It does not run Cargo or claim that a native compile or inference has passed.
+function nativeAbiTable(text, name) {
+  text = text.replaceAll("\r\n", "\n");
+  const headers = [...text.matchAll(/^\[([^\]\n]+)\][ \t]*\r?$/gmu)];
+  const matches = headers.filter((entry) => entry[1] === name);
+  assert.equal(matches.length, 1, `expected one ${name} table`);
+  const start = matches[0].index + matches[0][0].length;
+  const next = headers.find((entry) => entry.index > start)?.index;
+  return text
+    .slice(start, next)
+    .replace(/^[ \t]*#[^\n]*$/gmu, "")
+    .trim();
+}
+
+function nativeAbiFeatures(manifest) {
+  const result = new Map();
+  for (const line of nativeAbiTable(manifest, "features").split(/\r?\n/u)) {
+    if (!line.trim()) continue;
+    const match = /^([a-z0-9-]+)\s*=\s*(\[[^\]\r\n]*\])$/u.exec(line);
+    assert.ok(match, `unsupported feature declaration: ${line}`);
+    assert.ok(!result.has(match[1]), `duplicate feature: ${match[1]}`);
+    const values = JSON.parse(match[2]);
+    assert.ok(values.every((value) => typeof value === "string"));
+    result.set(match[1], values);
+  }
+  return result;
+}
+
+function assertNativeAbiPair({ plugin, app, lock }) {
+  const declarations = {
+    "llama-cpp-2":
+      'llama-cpp-2 = { version = "=0.1.150", optional = true, features = ["mtmd"] }',
+    "llama-cpp-sys-2":
+      'llama-cpp-sys-2 = { version = "=0.1.150", optional = true, default-features = false }',
+  };
+  const dependency = (manifest, name, expected) => {
+    const pattern = new RegExp(`^${name}\\s*=.*$`, "gmu");
+    const declarations = [...manifest.matchAll(pattern)];
+    assert.equal(declarations.length, 1, `expected one ${name} dependency`);
+    assert.equal(
+      declarations[0][0].replace(/\s/gu, ""),
+      expected.replace(/\s/gu, ""),
+      `${name} exact optional dependency configuration`,
+    );
+    assert.match(nativeAbiTable(manifest, "dependencies"), pattern);
+  };
+  for (const [name, declaration] of Object.entries(declarations)) {
+    dependency(plugin, name, declaration);
+    assert.doesNotMatch(app, new RegExp(`^${name}\\s*=`, "mu"));
+  }
+  dependency(
+    app,
+    "tauri-plugin-oc",
+    'tauri-plugin-oc = { path = "../tauri-plugin-oc" }',
+  );
+
+  const pluginFeatures = nativeAbiFeatures(plugin);
+  assert.deepEqual(pluginFeatures.get("inference"), [
+    "dep:llama-cpp-2",
+    "dep:llama-cpp-sys-2",
+    "dep:minijinja",
+    "dep:minijinja-contrib",
+  ]);
+  for (const [name, values] of pluginFeatures) {
+    if (name === "inference") continue;
+    for (const value of values)
+      assert.doesNotMatch(
+        value,
+        /^(?:inference$|(?:dep:)?llama-cpp(?:-sys)?-2(?:$|[?/]))/u,
+        `native dependencies may only activate through inference, not ${name}`,
+      );
+  }
+  const appFeatures = nativeAbiFeatures(app);
+  assert.deepEqual(appFeatures.get("inference"), ["tauri-plugin-oc/inference"]);
+  assert.deepEqual(appFeatures.get("transformers-webgpu-android"), []);
+  for (const [name, values] of appFeatures) {
+    if (name === "inference") continue;
+    for (const value of values)
+      assert.doesNotMatch(
+        value,
+        /^(?:inference$|tauri-plugin-oc\??\/(?:inference|llama-cpp(?:-sys)?-2)$)/u,
+        `native inference must stay opt-in, not enabled by ${name}`,
+      );
+  }
+
+  const packageBlock = (name) => {
+    const matches = lock
+      .replaceAll("\r\n", "\n")
+      .split(/^\[\[package\]\]$/mu)
+      .slice(1)
+      .filter((block) => block.includes(`\nname = "${name}"\n`));
+    assert.equal(matches.length, 1, `expected one locked ${name} package`);
+    return matches[0];
+  };
+  const scalar = (block, name) => {
+    const matches = [...block.matchAll(new RegExp(`^${name} = (.*)$`, "gmu"))];
+    assert.equal(matches.length, 1, `expected one lock ${name}`);
+    return JSON.parse(matches[0][1]);
+  };
+  for (const [name, checksum] of [
+    [
+      "llama-cpp-2",
+      "e82ec86fd73aaa7d8f4898cc4693410c217431506ba3237ea5c856127f49d84d",
+    ],
+    [
+      "llama-cpp-sys-2",
+      "f67dab3ed2b68e4fc4a42471eac73e128ed2ee97bd10de66ddcc609dd5d838a0",
+    ],
+  ]) {
+    const block = packageBlock(name);
+    assert.equal(scalar(block, "version"), "0.1.150", name);
+    assert.equal(scalar(block, "checksum"), checksum, name);
+    assert.equal(
+      scalar(block, "source"),
+      "registry+https://github.com/rust-lang/crates.io-index",
+      name,
+    );
+  }
+  const nativeEdges = (name) => {
+    const matches = [
+      ...packageBlock(name).matchAll(/^dependencies = \[([^\]]*)\]$/gmu),
+    ];
+    assert.equal(matches.length, 1, `${name} locked dependencies`);
+    const dependencies = JSON.parse(`[${matches[0][1].replace(/,\s*$/u, "")}]`);
+    return dependencies.filter((value) =>
+      /^llama-cpp(?:-sys)?-2(?: |$)/u.test(value),
+    );
+  };
+  assert.deepEqual(nativeEdges("llama-cpp-2"), ["llama-cpp-sys-2"]);
+  assert.deepEqual(nativeEdges("tauri-plugin-oc"), [
+    "llama-cpp-2",
+    "llama-cpp-sys-2",
+  ]);
+}
+
+function nativeAbiFixture() {
+  return {
+    plugin: read("frontend/tauri-plugin-oc/Cargo.toml"),
+    app: read("frontend/src-tauri/Cargo.toml"),
+    lock: read("Cargo.lock"),
+  };
+}
+
+test("native inference retains the exact optional wrapper/sys ABI pair without activating default or WebGPU builds", () => {
+  assertNativeAbiPair(nativeAbiFixture());
+  const notices = read("frontend/src-tauri/THIRD_PARTY_NOTICES.md");
+  assert.match(
+    notices,
+    /`llama-cpp-2` 0\.1\.150 with\s+`llama-cpp-sys-2` 0\.1\.150/u,
+  );
+  assert.ok(
+    notices.includes(
+      "f67dab3ed2b68e4fc4a42471eac73e128ed2ee97bd10de66ddcc609dd5d838a0",
+    ),
+  );
+  assert.doesNotMatch(notices, /llama-cpp-sys-2[^\r\n]*0\.1\.154/u);
+});
+
+test("native ABI guard rejects loosened pins, changed lock tuples and missing direct owner edges", () => {
+  const fixture = nativeAbiFixture();
+  const cases = [
+    [
+      "plugin",
+      'llama-cpp-2 = { version = "=0.1.150"',
+      'llama-cpp-2 = { version = "0.1.150"',
+    ],
+    [
+      "plugin",
+      'llama-cpp-sys-2 = { version = "=0.1.150"',
+      'llama-cpp-sys-2 = { version = "0.1.150"',
+    ],
+    [
+      "plugin",
+      'llama-cpp-sys-2 = { version = "=0.1.150"',
+      'llama-cpp-sys-2 = { version = "=0.1.154"',
+    ],
+    [
+      "plugin",
+      'llama-cpp-2 = { version = "=0.1.150"',
+      'llama-cpp-2 = { version = "=0.1.154"',
+    ],
+    [
+      "plugin",
+      'llama-cpp-sys-2 = { version = "=0.1.150", optional = true',
+      'llama-cpp-sys-2 = { version = "=0.1.150", optional = false',
+    ],
+    [
+      "plugin",
+      'llama-cpp-2 = { version = "=0.1.150", optional = true',
+      'llama-cpp-2 = { version = "=0.1.150", optional = false',
+    ],
+    [
+      "plugin",
+      'llama-cpp-sys-2 = { version = "=0.1.150", optional = true, default-features = false }',
+      'llama-cpp-sys-2 = { version = "=0.1.150", optional = true }',
+    ],
+    [
+      "plugin",
+      'llama-cpp-sys-2 = { version = "=0.1.150", optional = true, default-features = false }',
+      'llama-cpp-sys-2 = { version = "=0.1.150", optional = true, default-features = true }',
+    ],
+    ...["llama-cpp-2", "llama-cpp-sys-2"].map((name) => [
+      "lock",
+      `name = "${name}"\nversion = "0.1.150"`,
+      `name = "${name}"\nversion = "0.1.154"`,
+    ]),
+    [
+      "lock",
+      'checksum = "f67dab3ed2b68e4fc4a42471eac73e128ed2ee97bd10de66ddcc609dd5d838a0"',
+      `checksum = "${"0".repeat(64)}"`,
+    ],
+    ["lock", ' "llama-cpp-sys-2",', ' "llama-cpp-sys-2 0.1.154",'],
+  ];
+  for (const [index, [key, before, after]] of cases.entries()) {
+    const original = fixture[key].replaceAll("\r\n", "\n");
+    const changed = original.replace(before, after);
+    assert.notEqual(changed, original, `mutation ${index} must execute`);
+    assert.throws(
+      () => assertNativeAbiPair({ ...fixture, [key]: changed }),
+      `mutation ${index}`,
+    );
+  }
+  for (const owner of ["llama-cpp-2", "tauri-plugin-oc"]) {
+    const lock = fixture.lock.replaceAll("\r\n", "\n");
+    const start = lock.indexOf(`\nname = "${owner}"\n`);
+    const edge = lock.indexOf(' "llama-cpp-sys-2",\n', start);
+    assert.ok(start >= 0 && edge > start);
+    const changed =
+      lock.slice(0, edge) + lock.slice(edge + ' "llama-cpp-sys-2",\n'.length);
+    assert.throws(
+      () => assertNativeAbiPair({ ...fixture, lock: changed }),
+      owner,
+    );
+  }
+  assert.throws(() =>
+    assertNativeAbiPair({
+      ...fixture,
+      lock:
+        fixture.lock +
+        '\n[[package]]\nname = "llama-cpp-sys-2"\nversion = "0.1.154"\n',
+    }),
+  );
+});
+
+test("native ABI guard rejects missing inference activation and default/WebGPU activation", () => {
+  const fixture = nativeAbiFixture();
+  const cases = [
+    ["plugin", '"dep:llama-cpp-sys-2", ', ""],
+    ["plugin", '"dep:llama-cpp-2", ', ""],
+    ["plugin", "[features]", '[features]\ndefault = ["inference"]'],
+    ["plugin", "[features]", '[features]\ndefault = ["dep:llama-cpp-sys-2"]'],
+    ["plugin", "store = []", 'store = ["llama-cpp-sys-2/mtmd"]'],
+    ["app", "[features]", '[features]\ndefault = ["inference"]'],
+    ["app", 'inference = ["tauri-plugin-oc/inference"]', "inference = []"],
+    [
+      "app",
+      "transformers-webgpu-android = []",
+      'transformers-webgpu-android = ["inference"]',
+    ],
+    [
+      "app",
+      "transformers-webgpu-android = []",
+      'transformers-webgpu-android = ["tauri-plugin-oc/inference"]',
+    ],
+    [
+      "app",
+      'store = ["tauri-plugin-oc/store"]',
+      'store = ["tauri-plugin-oc/inference"]',
+    ],
+    [
+      "app",
+      'tauri-plugin-oc = { path = "../tauri-plugin-oc" }',
+      'tauri-plugin-oc = { path = "../tauri-plugin-oc", features = ["inference"] }',
+    ],
+  ];
+  for (const [index, [key, before, after]] of cases.entries()) {
+    const changed = fixture[key].replace(before, after);
+    assert.notEqual(changed, fixture[key], `mutation ${index} must execute`);
+    assert.throws(
+      () => assertNativeAbiPair({ ...fixture, [key]: changed }),
+      `mutation ${index}`,
+    );
+  }
+});
+
 // These are the three reviewed jobs that actually execute Node. Do not derive
 // the expected count from the workflow: that would also accept dropped jobs.
 function assertModelNodeSetup(text, policy) {

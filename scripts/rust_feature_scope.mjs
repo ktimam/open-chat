@@ -398,7 +398,8 @@ export function collectRustFeatureScope({ identity, inputs, seeds }) {
       originContext,
       target: seed.target,
       package: record.key,
-      requestedFeatures: ordered(declaration.features),
+      // Inherited workspace/member declarations may repeat the same Cargo feature.
+      requestedFeatures: ordered(new Set(declaration.features)),
       usesDefaultFeatures: declaration.uses_default_features,
       optional: declaration.optional,
     });

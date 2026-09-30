@@ -27,7 +27,6 @@ import { modelAssetNoticesPlugin } from "./modelAssetNotices.mjs";
 import { publicKeyBuildPlugin } from "./publicKeyBuild.mjs";
 import { queryOfficialUserIndexPublicKey } from "./officialPublicKeyQuery.mjs";
 import { localAppRelayPlugin } from "./localAppRelayBuild.mjs";
-import { localBrowserAuthBuildPlugin } from "./localBrowserAuthBuild.mjs";
 import { localNativeAppHandoffBuildPlugin } from "./localNativeAppHandoffBuild.mjs";
 import { localNativeAppSetupBuildPlugin } from "./localNativeAppSetupBuild.mjs";
 import { localApkBundleMarker } from "../unofficialLocalApkProfile.mjs";
@@ -90,7 +89,7 @@ function clean() {
                     JSON.stringify({ strategy: "none" }),
                 );
                 if (localTestApk) {
-                    fs.writeFileSync(outputPath("android-rp-id"), "");
+                    fs.writeFileSync(outputPath("android-rp-id"), androidRpId);
                     fs.writeFileSync(
                         outputPath("local-apk-profile.json"),
                         JSON.stringify(
@@ -201,11 +200,11 @@ if (!otaUpdateStrategies.has(otaUpdateStrategy)) {
     );
 }
 
-const androidRpId = localClientBuild
+const androidRpId = localWebBuild
     ? ""
     : (process.env.OC_ANDROID_RP_ID ?? "oc.app").trim().toLowerCase();
 if (
-    !localClientBuild &&
+    !localWebBuild &&
     (!/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(androidRpId) ||
         !androidRpId.includes(".") ||
         androidRpId.includes(".."))
@@ -828,10 +827,6 @@ export default {
         }),
         localAppRelayPlugin({ enabled: localWebBuild }),
         localAppRelayPlugin({ enabled: localWebBuild, setup: true }),
-        localBrowserAuthBuildPlugin({
-            enabled: localTestApk,
-            identityCanister: process.env.OC_IDENTITY_CANISTER,
-        }),
         localNativeAppHandoffBuildPlugin({ enabled: localTestApk }),
         localNativeAppSetupBuildPlugin({ enabled: localTestApk }),
         unofficialWebArtifacts(),

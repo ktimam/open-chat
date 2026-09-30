@@ -10,7 +10,6 @@ import {
     transpileModule,
 } from "typescript";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { classifyAndroidWebAuthnSignInFailure } from "./androidWebAuthnError";
 
 const filename = resolve(process.cwd(), "app/src/components_mobile/onboard/OnboardModal.svelte");
 const source = readFileSync(filename, "utf8");
@@ -36,17 +35,16 @@ function harness(platform: Platform) {
         signInWithWebAuthn: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
     };
     // Execute the real component function, not a copied routing implementation. Only
-    // its two state bindings and platform authentication I/O are isolated; the Android
-    // failure classifier is the actual production implementation. These are behavioral
+    // its two state bindings and platform authentication I/O are isolated. These are behavioral
     // handler tests, not a claim to exercise the credential provider or mounted UI.
     const construct = compileFunction(
         `let step = "choose-auth";
          let error;
          ${signInDeclaration}
          return { signIn, state: () => ({ step, error }) };`,
-        ["client", "classifyAndroidWebAuthnSignInFailure", "console"],
+        ["client", "console"],
     );
-    const flow = construct(client, classifyAndroidWebAuthnSignInFailure, console) as {
+    const flow = construct(client, console) as {
         signIn: () => void;
         state: () => SignInState;
     };
@@ -88,10 +86,10 @@ describe("mobile onboarding sign-in behavior", () => {
         },
     );
 
-    it("leaves Android cancellation on sign-in without an error or account-linking offer", async () => {
+    it("preserves upstream Android cancellation fallback to the original linking screen", async () => {
         const flow = harness("android");
         await flow.reject({ code: AndroidWebAuthnErrorCode.CommonUserCancelled });
-        expect(flow.state()).toEqual({ step: "choose-auth", error: undefined });
+        expect(flow.state()).toEqual({ step: "one-time-password", error: undefined });
         expect(console.error).not.toHaveBeenCalled();
     });
 
@@ -100,7 +98,7 @@ describe("mobile onboarding sign-in behavior", () => {
         await flow.reject({ code: AndroidWebAuthnErrorCode.AuthNoPasskey });
         expect(flow.state()).toEqual({
             step: "one-time-password",
-            error: AndroidWebAuthnErrorCode.AuthNoPasskey,
+            error: undefined,
         });
         expect(console.error).not.toHaveBeenCalled();
     });
@@ -116,31 +114,34 @@ describe("mobile onboarding sign-in behavior", () => {
         AndroidWebAuthnErrorCode.CommonSecurityDenied,
         AndroidWebAuthnErrorCode.CommonDomPasskeyError,
         AndroidWebAuthnErrorCode.CommonInterrupted,
-    ])("keeps Android %s visible without offering account linking", async (code) => {
+    ])("preserves upstream Android %s fallback to account linking", async (code) => {
         const flow = harness("android");
         const failure = { code };
         await flow.reject(failure);
-        expect(flow.state()).toEqual({ step: "choose-auth", error: code });
-        expect(console.error).toHaveBeenCalledWith("Android passkey sign-in error: ", failure);
+        expect(flow.state()).toEqual({ step: "one-time-password", error: undefined });
+        expect(console.error).not.toHaveBeenCalled();
     });
 
     it.each([
         ["exception", new Error("unexpected provider failure")],
-        ["untyped failure", "AUTH_FAILED"],
         ["unknown identifier", { code: "new-unrecognized-error" }],
         ["malformed authentication data", { code: AndroidWebAuthnErrorCode.JsonAuthDataError }],
         ["untyped no-passkey string", AndroidWebAuthnErrorCode.AuthNoPasskey],
         ["null response", null],
-    ])("keeps Android %s visible as a generic error without relinking", async (_name, failure) => {
-        const flow = harness("android");
-        await flow.reject(failure);
-        expect(flow.state()).toEqual({ step: "choose-auth", error: "default" });
-        expect(console.error).toHaveBeenCalledWith("Android passkey sign-in error: ", failure);
-    });
+    ])(
+        "preserves upstream Android %s fallback rather than a fork-specific error classifier",
+        async (_name, failure) => {
+            const flow = harness("android");
+            await flow.reject(failure);
+            expect(flow.state()).toEqual({ step: "one-time-password", error: undefined });
+            expect(console.error).not.toHaveBeenCalled();
+        },
+    );
 
     it.each([
         ["ios", "native.auth.error"],
-        ["browser", "default"],
+        ["android", "native.auth.error"],
+        ["browser", "native.auth.error"],
     ] as const)("preserves the %s AUTH_FAILED error mapping", async (platform, error) => {
         const flow = harness(platform);
         await flow.reject("AUTH_FAILED");

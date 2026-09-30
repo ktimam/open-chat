@@ -10,13 +10,6 @@
             "capabilities": [
                 "default",
                 {
-                    "identifier": "local-browser-auth",
-                    "description": "Local-only browser sign-in transport for the separate test APK",
-                    "local": true,
-                    "windows": ["main"],
-                    "permissions": ["oc:allow-local-browser-auth"]
-                },
-                {
                     "identifier": "local-app-handoff",
                     "description": "Explicitly approved private draft transport for the separate local test APK",
                     "local": true,

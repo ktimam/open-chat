@@ -1,13 +1,7 @@
 // @vitest-environment jsdom
-import { flushSync, tick } from "svelte";
-import { createClassComponent } from "svelte/legacy";
-import { writable } from "svelte/store";
+import { flushSync, mount, tick, unmount } from "svelte";
+import { get } from "svelte/store";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-    BrowserAccountLinkFlow,
-    type BrowserAccountLinkState,
-} from "@client/utils/browserAccountLink";
-import { BrowserSignInFailure } from "@client/utils/browserSignInDiagnostics";
 import HomeRouteV1 from "../components/home/HomeRoute.svelte";
 import HomeRouteV2 from "../components_mobile/home/HomeRoute.svelte";
 import {
@@ -16,33 +10,48 @@ import {
     identityStateStore,
     querystringStore,
     routeStore,
+    selectedAuthProviderStore,
 } from "@client";
 
 const calls = vi.hoisted(() => ({
     signIn: vi.fn(),
+    linkAccount: vi.fn(),
+    signUp: vi.fn(),
+    browserSignIn: vi.fn(),
     webSignIn: vi.fn(),
     navigate: vi.fn(),
-    verify: vi.fn(),
-    createPasskey: vi.fn(),
-    finalize: vi.fn(),
-    retry: vi.fn(),
-    logout: vi.fn(),
+    stopVersionChecker: vi.fn(),
 }));
 vi.mock("@client", async () => {
     const { writable } = await import("svelte/store");
     return {
         OpenChat: class {},
+        AuthProvider: {
+            PASSKEY: "Passkey",
+            EMAIL: "Email",
+            II: "II",
+            ETH: "ETH",
+            SOL: "SOL",
+            NFID: "NFID",
+        },
         anonUserStore: writable(true),
+        userCreatedStore: writable(true),
         chatsInitialisedStore: writable(false),
         identityStateStore: writable({ kind: "anon" }),
         querystringStore: writable(new URLSearchParams()),
+        selectedAuthProviderStore: writable(undefined),
         routeStore: writable({ kind: "home_route", scope: { kind: "none" } }),
     };
 });
+vi.mock("@shared", () => ({
+    ErrorCode: { AlreadyRegistered: 1, LinkingCodeNotFound: 2, MaxLinkedIdentitiesLimitReached: 3 },
+}));
+vi.mock("@utils/navigation", () => ({ navigate: calls.navigate }));
 vi.mock("@src/i18n/i18n", () => ({
-    i18nKey: (key: string) => key,
+    i18nKey: (key: string, params?: { provider?: string }) =>
+        params?.provider ? `${key}:${params.provider}` : key,
     setLocale() {},
-    interpolate: (key: string) => key,
+    interpolate: (_: unknown, key: string) => key,
     supportedLanguages: [{ code: "en", name: "English" }],
 }));
 vi.mock("svelte-i18n", async () => {
@@ -52,20 +61,21 @@ vi.mock("svelte-i18n", async () => {
 vi.mock("@src/utils/version.svelte", () => ({
     VersionChecker: class {
         versionState = { kind: "up_to_date" };
-        stop() {}
+        stop = calls.stopVersionChecker;
     },
 }));
-vi.mock("@utils/navigation", () => ({ navigate: calls.navigate }));
-vi.mock("@src/utils/nativeAuthErrorKey", () => ({
-    nativeAuthErrorKey: (value: string) => value,
-}));
-vi.mock("@src/utils/androidWebAuthnError", () => ({
-    classifyAndroidWebAuthnSignInFailure: () => ({ kind: "cancelled" }),
-}));
-vi.mock("@shared", () => ({ ErrorCode: {} }));
+vi.mock("@src/utils/signin", async () => {
+    const { writable } = await import("svelte/store");
+    return {
+        EmailSigninHandler: class {
+            subscribe = writable(false).subscribe;
+        },
+    };
+});
 
-// Real HomeRoute, OnboardModal and ExistingAccountSignIn components remain mounted. Only layout
-// chrome, the post-login Home body and unused legacy-provider surfaces are inert fixtures.
+// Keep both HomeRoutes, OnboardModals, desktop ModeSelection, SignIn and
+// ChooseSignInOption real. Only visual leaves, services and the post-login Home
+// body are inert fixtures; the fixture does not provide an authentication UI.
 async function layout() {
     return {
         default: (await import("./fixtures/NativeSignInLayoutFixture.svelte")).default,
@@ -73,11 +83,16 @@ async function layout() {
 }
 vi.mock("../components/Overlay.svelte", layout);
 vi.mock("../components/ModalContent.svelte", layout);
+vi.mock("../components/Button.svelte", layout);
+vi.mock("../components/ButtonGroup.svelte", layout);
+vi.mock("../components/Input.svelte", layout);
 vi.mock("../components/Select.svelte", layout);
 vi.mock("../components/Translatable.svelte", layout);
+vi.mock("../components/ErrorMessage.svelte", layout);
 vi.mock("../components/icons/FancyLoader.svelte", layout);
-vi.mock("../components/onboard/ModeSelection.svelte", layout);
-vi.mock("../components/onboard/SignIn.svelte", layout);
+vi.mock("../components/home/EmailSigninFeedback.svelte", layout);
+vi.mock("../components/home/profile/OnBoardOptionLogo.svelte", layout);
+vi.mock("../components/home/profile/SignInOption.svelte", layout);
 vi.mock("../components/onboard/SignUp.svelte", layout);
 vi.mock("../components_mobile/onboard/SignUp.svelte", layout);
 vi.mock("../components_mobile/ErrorMessage.svelte", layout);
@@ -95,7 +110,7 @@ vi.mock("component-lib", async () => {
         Body: Fixture,
         BodySmall: Fixture,
         Button: Fixture,
-        ColourVars: {},
+        ColourVars: { primary: "primary" },
         Column: Fixture,
         CommonButton: Fixture,
         Container: Fixture,
@@ -107,344 +122,253 @@ vi.mock("component-lib", async () => {
     };
 });
 
-const cleanup: (() => void)[] = [];
+let mounted: ReturnType<typeof mount>[] = [];
 async function settle() {
     await tick();
-    await tick();
+    await Promise.resolve();
     flushSync();
 }
 function deferred() {
     let resolve!: () => void;
-    let reject!: (error: Error) => void;
+    let reject!: (error: unknown) => void;
     const promise = new Promise<void>((yes, no) => {
         resolve = yes;
         reject = no;
     });
     return { promise, resolve, reject };
 }
-function button(label: string) {
-    const result = [...document.querySelectorAll("button")].find((element) =>
-        element.textContent?.includes(label),
+function button(target: Element, label: string): HTMLButtonElement {
+    const result = [...target.querySelectorAll("button")].find(
+        (element) => element.textContent?.trim() === label,
     );
-    expect(result, `Missing button ${label}`).toBeDefined();
+    expect(result, `Missing original button ${label}`).toBeDefined();
     return result!;
 }
-function username() {
-    return document.querySelector('input[autocomplete="username"]') as HTMLInputElement | null;
-}
-function render(component: typeof HomeRouteV1 | typeof HomeRouteV2, native = true) {
+function render(component: typeof HomeRouteV1 | typeof HomeRouteV2) {
     const target = document.createElement("div");
     document.body.append(target);
     const client = {
+        isNativeApp: () => true,
+        // A stale profile flag must not restore the removed replacement screen.
         existingAccountOnly: () => true,
-        isNativeApp: () => native,
-        signInWithLocalBrowser: calls.signIn,
-        nativeSessionRestoreState: writable<"idle" | "restoring" | "retry" | "invalid">("idle"),
-        retrySavedNativeSession: calls.retry,
-        logout: calls.logout,
+        signInWithAndroidWebAuthn: calls.signIn,
+        linkAccountsWithAndroidWebAuthn: calls.linkAccount,
+        signUpWithAndroidWebAuthn: calls.signUp,
+        signInWithLocalBrowser: calls.browserSignIn,
         signInWithWebAuthn: calls.webSignIn,
         updateIdentityState: identityStateStore.set,
-        createBrowserAccountLinkFlow: vi.fn(
-            (onChange: (state: BrowserAccountLinkState) => void) => {
-                if (native) throw new Error("Native linking belongs in the browser");
-                return new BrowserAccountLinkFlow(
-                    {
-                        verify: calls.verify,
-                        createPasskey: calls.createPasskey,
-                        finalize: calls.finalize,
-                        forget() {},
-                    },
-                    onChange,
-                );
-            },
-        ),
+        gaTrack: vi.fn(),
+        logout: vi.fn(),
     };
-    const context = new Map<string, unknown>([["client", client]]);
-    const mounted =
+    const context = new Map([["client", client]]);
+    mounted.push(
         component === HomeRouteV1
-            ? createClassComponent({
-                  component: HomeRouteV1,
-                  target,
-                  context,
-                  props: { showLandingPage: false },
-              })
-            : createClassComponent({ component: HomeRouteV2, target, context });
-    let destroyed = false;
-    const destroy = () => {
-        if (!destroyed) {
-            mounted.$destroy();
-            target.remove();
-            destroyed = true;
-        }
-    };
-    cleanup.push(destroy);
-    return { destroy, client };
+            ? mount(HomeRouteV1, { target, context, props: { showLandingPage: false } })
+            : mount(HomeRouteV2, { target, context }),
+    );
+    flushSync();
+    return target;
 }
-async function begin() {
-    const field = username();
-    expect(field).not.toBeNull();
-    field!.value = "synthetic-user";
-    field!.dispatchEvent(new Event("input", { bubbles: true }));
+async function beginPasskey(target: Element, component: typeof HomeRouteV1 | typeof HomeRouteV2) {
+    if (component === HomeRouteV1) {
+        button(target, "loginDialog.signin").click();
+        await settle();
+        button(target, "loginDialog.signinWith:Passkey").click();
+    } else {
+        button(target, "I'm an existing user").click();
+    }
     await settle();
-    button("Continue in browser").click();
-    await settle();
-    expect(calls.signIn).toHaveBeenCalledOnce();
-    return calls.signIn.mock.calls[0][1].signal as AbortSignal;
+    expect(calls.signIn).toHaveBeenCalledExactlyOnceWith();
+}
+function markAuthenticated() {
+    (anonUserStore as unknown as { set(value: boolean): void }).set(false);
+    identityStateStore.set({ kind: "logged_in" });
+}
+function expectNoOtherAuth() {
+    expect(calls.signUp).not.toHaveBeenCalled();
+    expect(calls.browserSignIn).not.toHaveBeenCalled();
+    expect(calls.webSignIn).not.toHaveBeenCalled();
 }
 
 beforeEach(() => {
-    calls.signIn.mockReset();
-    calls.webSignIn.mockReset();
-    calls.retry.mockReset().mockResolvedValue(undefined);
-    calls.logout.mockReset().mockResolvedValue(undefined);
-    calls.verify.mockReset().mockResolvedValue("synthetic-user");
-    calls.createPasskey.mockReset().mockResolvedValue({
-        credentialId: Uint8Array.of(1, 2, 3),
-        publicKey: Uint8Array.of(4, 5, 6),
-        origin: "localhost",
-        crossPlatform: false,
-        aaguid: new Uint8Array(16),
-    });
-    calls.finalize.mockReset().mockResolvedValue(undefined);
-    calls.navigate.mockReset();
+    vi.resetAllMocks();
+    calls.signIn.mockResolvedValue(undefined);
+    calls.linkAccount.mockResolvedValue(undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    localStorage.clear();
     (anonUserStore as unknown as { set(value: boolean): void }).set(true);
     chatsInitialisedStore.set(false);
     identityStateStore.set({ kind: "anon" });
     routeStore.set({ kind: "home_route" } as never);
+    (selectedAuthProviderStore as unknown as { set(value: undefined): void }).set(undefined);
     (querystringStore as unknown as { set(value: URLSearchParams): void }).set(
         new URLSearchParams(),
     );
 });
-afterEach(() => cleanup.splice(0).forEach((destroy) => destroy()));
+afterEach(async () => {
+    for (const component of mounted) await unmount(component);
+    mounted = [];
+    document.body.innerHTML = "";
+    expectNoOtherAuth();
+    vi.restoreAllMocks();
+});
 
 for (const [label, component] of [
     ["v1", HomeRouteV1],
     ["v2", HomeRouteV2],
 ] as const) {
-    describe(`${label} actual native sign-in parent lifecycle`, () => {
-        it("offers saved-session retry without opening the browser or creating a passkey", async () => {
-            const view = render(component);
-            view.client.nativeSessionRestoreState.set("retry");
+    describe(`${label} original native onboarding parent lifecycle`, () => {
+        it("offers the original choices before chat discovery without starting any auth", async () => {
+            const target = render(component);
             await settle();
-            expect(document.body.textContent).toContain("30 days");
-            expect(document.body.textContent?.replace(/\s+/g, " ")).toContain(
-                "do not need to create another passkey",
+            expect(target.querySelector(".welcome")).not.toBeNull();
+            expect(target.querySelector(".loading")).toBeNull();
+            button(
+                target,
+                component === HomeRouteV1 ? "loginDialog.signin" : "I'm an existing user",
             );
-            button("Retry saved sign-in").click();
-            await settle();
-            expect(calls.retry).toHaveBeenCalledOnce();
-            expect(calls.signIn).not.toHaveBeenCalled();
-            expect(calls.createPasskey).not.toHaveBeenCalled();
-            view.client.nativeSessionRestoreState.set("restoring");
-            await settle();
-            expect(button("Continue in browser").disabled).toBe(true);
-        });
-        it("reaches native existing-account UI without exposing legacy registration or native passkey paths", async () => {
-            const view = render(component);
-            await settle();
-            expect(username()).not.toBeNull();
-            expect(button("Continue in browser")).toBeDefined();
-            expect(document.body.textContent).toContain("separate local-test APK");
-            expect(document.body.textContent).not.toContain("Create account");
-            expect(calls.signIn).not.toHaveBeenCalled();
-            expect(view.client.createBrowserAccountLinkFlow).not.toHaveBeenCalled();
-        });
-        it("keeps cleanup failure visible and offers an explicit durable cleanup retry", async () => {
-            calls.signIn.mockRejectedValue(new BrowserSignInFailure("session-cleanup"));
-            render(component);
-            await settle();
-            expect(document.body.textContent).not.toContain("Clear saved sign-in");
-            await begin();
-            expect(document.body.textContent).toContain("[SIGNIN/session-cleanup]");
-            expect(document.body.textContent).toContain("Saved sign-in could not be cleared");
-            expect(button("Continue in browser").disabled).toBe(true);
-            expect(calls.logout).not.toHaveBeenCalled();
-            const failed = deferred();
-            calls.logout.mockReturnValueOnce(failed.promise);
-            button("Clear saved sign-in").click();
-            await settle();
-            expect(button("Clear saved sign-in").disabled).toBe(true);
-            expect(document.body.textContent).not.toMatch(/Saved sign-in cleared\.|signed out/);
-            failed.reject(new Error("private deletion failure details"));
-            await settle();
-            expect(button("Clear saved sign-in").disabled).toBe(false);
-            expect(document.body.textContent).toContain("Saved sign-in could not be cleared");
-            expect(document.body.textContent).not.toMatch(
-                /private deletion failure|Saved sign-in cleared\.|signed out/,
+            button(
+                target,
+                component === HomeRouteV1 ? "register.createAccount" : "Create new account",
             );
-            const succeeded = deferred();
-            calls.logout.mockReturnValueOnce(succeeded.promise);
-            button("Clear saved sign-in").click();
-            await settle();
-            expect(calls.logout).toHaveBeenCalledTimes(2);
-            expect(document.body.textContent).not.toContain("Saved sign-in cleared.");
-            succeeded.resolve();
-            await settle();
-            expect(document.body.textContent).toContain("Saved sign-in cleared.");
-            expect(document.body.textContent).not.toContain("[SIGNIN/session-cleanup]");
-            expect(
-                [...document.querySelectorAll("button")].some((element) =>
-                    element.textContent?.includes("Clear saved sign-in"),
-                ),
-            ).toBe(false);
-            expect(button("Continue in browser").disabled).toBe(false);
-            expect(calls.signIn).toHaveBeenCalledOnce();
-            expect(calls.createPasskey).not.toHaveBeenCalled();
+            expect(target.textContent).not.toContain("Continue in browser");
+            expect(target.querySelector(".existing-account-sign-in")).toBeNull();
+            expect(calls.signIn).not.toHaveBeenCalled();
+            expect(calls.linkAccount).not.toHaveBeenCalled();
         });
-        it("retains the same component and uncancelled signal through logging_in; destroys it only after success", async () => {
+
+        it("allows the native passkey operation to finish after logging_in changes to loading_user", async () => {
             const completion = deferred();
-            calls.signIn.mockReturnValue(completion.promise);
-            render(component);
+            const accepted = vi.fn(markAuthenticated);
+            calls.signIn.mockImplementation(() => {
+                identityStateStore.set({ kind: "logging_in" });
+                return completion.promise.then(accepted);
+            });
+            const abort = vi.spyOn(AbortController.prototype, "abort");
+            const target = render(component);
+            const welcome = target.querySelector(".welcome");
+            await beginPasskey(target, component);
+            expect(target.querySelector(".welcome")).toBe(welcome);
+            chatsInitialisedStore.set(true);
             await settle();
-            const field = username();
-            const signal = await begin();
-            identityStateStore.set({ kind: "logging_in" });
+            expect(target.querySelector(".welcome")).toBe(welcome);
+            expect(accepted).not.toHaveBeenCalled();
+
+            identityStateStore.set({ kind: "loading_user", registering: false });
             await settle();
-            expect(username()).toBe(field);
-            expect(signal.aborted).toBe(false);
-            expect(button("Cancel this sign-in")).toBeDefined();
-            // Simulate the final accepted onCreatedUser transition, after all asynchronous adoption.
-            (anonUserStore as unknown as { set(value: boolean): void }).set(false);
-            identityStateStore.set({ kind: "logged_in" });
+            expect(target.querySelector(".welcome")).toBeNull();
+            expect(target.querySelector(".loading")).not.toBeNull();
+            expect(abort).not.toHaveBeenCalled();
+            expect(calls.linkAccount).not.toHaveBeenCalled();
+
             completion.resolve();
             await settle();
-            expect(username()).toBeNull();
-            expect(signal.aborted).toBe(true); // Teardown after commit is harmless.
+            expect(accepted).toHaveBeenCalledOnce();
+            expect(get(identityStateStore).kind).toBe("logged_in");
+            expect(target.querySelector(".welcome")).toBeNull();
+            expect(target.querySelector(".loading")).toBeNull();
+            expect(calls.signIn).toHaveBeenCalledExactlyOnceWith();
+            expect(abort).not.toHaveBeenCalled();
         });
-        it("returns a failed worker adoption to the same form, preserves username and permits a fresh explicit retry", async () => {
-            const completion = deferred();
-            calls.signIn.mockReturnValue(completion.promise);
-            render(component);
+
+        it("shows startup restoration progress without invoking a passkey or account creation", async () => {
+            identityStateStore.set({ kind: "loading_user", registering: false });
+            const target = render(component);
             await settle();
-            const field = username();
-            const signal = await begin();
-            identityStateStore.set({ kind: "logging_in" });
+            expect(target.querySelector(".welcome")).toBeNull();
+            expect(target.querySelector(".loading")).not.toBeNull();
+            markAuthenticated();
+            await settle();
+            expect(target.querySelector(".loading")).not.toBeNull();
+            chatsInitialisedStore.set(true);
+            await settle();
+            expect(target.querySelector(".welcome")).toBeNull();
+            expect(target.querySelector(".loading")).toBeNull();
+            expect(calls.signIn).not.toHaveBeenCalled();
+            expect(calls.linkAccount).not.toHaveBeenCalled();
+        });
+
+        it("returns failed startup restoration to original onboarding without automatic retry", async () => {
+            identityStateStore.set({ kind: "loading_user", registering: false });
+            const target = render(component);
             await settle();
             identityStateStore.set({ kind: "anon" });
-            completion.reject(new Error("Synthetic worker adoption failed"));
             await settle();
-            expect(username()).toBe(field);
-            expect(username()!.value).toBe("synthetic-user");
-            expect(signal.aborted).toBe(false);
-            expect(document.body.textContent).toContain("Passkey sign-in could not finish");
-            expect(button("Continue in browser").disabled).toBe(false);
-            expect(calls.signIn).toHaveBeenCalledOnce();
-        });
-        it("explicit cancellation and user navigation abort the pending native attempt", async () => {
-            const completion = deferred();
-            calls.signIn.mockReturnValue(completion.promise);
-            const view = render(component);
-            await settle();
-            const signal = await begin();
-            identityStateStore.set({ kind: "logging_in" });
-            await settle();
-            button("Cancel this sign-in").click();
-            expect(signal.aborted).toBe(true);
-            completion.reject(new DOMException("Cancelled", "AbortError"));
-            await settle();
-            const second = deferred();
-            calls.signIn.mockReturnValue(second.promise);
-            button("Continue in browser").click();
-            await settle();
-            const nextSignal = calls.signIn.mock.calls[1][1].signal as AbortSignal;
-            expect(nextSignal.aborted).toBe(false);
-            view.destroy();
-            await settle();
-            expect(nextSignal.aborted).toBe(true);
-            second.reject(new DOMException("Cancelled", "AbortError"));
-            await settle();
-        });
-    });
-
-    describe(`${label} actual browser sign-in parent lifecycle`, () => {
-        async function linkExplicitly() {
-            button("Link this client to my account").click();
-            await settle();
-            const user = username()!;
-            user.value = "synthetic-user";
-            user.dispatchEvent(new Event("input", { bubbles: true }));
-            const code = document.querySelector('input[autocomplete="off"]') as HTMLInputElement;
-            code.value = "ABC123";
-            code.dispatchEvent(new Event("input", { bubbles: true }));
-            await settle();
-            button("Verify code").click();
-            await settle();
-            const confirmation = document.querySelector(
-                'input[type="checkbox"]',
-            ) as HTMLInputElement;
-            confirmation.click();
-            await settle();
-            button("Create passkey and link this account").click();
-            await settle();
-            expect(calls.verify).toHaveBeenCalledOnce();
-            expect(calls.createPasskey).toHaveBeenCalledOnce();
-            expect(calls.finalize).toHaveBeenCalledOnce();
-        }
-
-        it.each(["account-delegation", "account-profile", "session-storage"] as const)(
-            "keeps a %s failure visible and retains the expected linked credential for explicit retry",
-            async (stage) => {
-                const first = deferred();
-                calls.webSignIn.mockReturnValue(first.promise);
-                render(component, false);
-                await settle();
-                expect(calls.webSignIn).not.toHaveBeenCalled();
-                await linkExplicitly();
-                const form = document.querySelector(".existing-account-sign-in");
-                button("Sign in with an existing passkey").click();
-                await settle();
-                const expected = {
-                    username: "synthetic-user",
-                    credentialId: Uint8Array.of(1, 2, 3),
-                };
-                expect(calls.webSignIn).toHaveBeenCalledExactlyOnceWith(expected);
-                // The OpenChat class acceptance test independently verifies this actual post-assertion transition.
-                identityStateStore.set({ kind: "logging_in" });
-                await settle();
-                expect(document.querySelector(".existing-account-sign-in")).toBe(form);
-                identityStateStore.set({ kind: "anon" });
-                first.reject(new BrowserSignInFailure(stage));
-                await settle();
-                expect(document.querySelector(".existing-account-sign-in")).toBe(form);
-                expect(document.querySelector('[role="alert"]')?.textContent).toContain(
-                    `[SIGNIN/${stage}]`,
-                );
-                expect(button("Sign in with an existing passkey").disabled).toBe(false);
-                expect(calls.webSignIn).toHaveBeenCalledOnce();
-                expect(calls.verify).toHaveBeenCalledOnce();
-                expect(calls.createPasskey).toHaveBeenCalledOnce();
-                expect(calls.finalize).toHaveBeenCalledOnce();
-                const second = deferred();
-                calls.webSignIn.mockReturnValue(second.promise);
-                button("Sign in with an existing passkey").click();
-                await settle();
-                expect(calls.webSignIn).toHaveBeenCalledTimes(2);
-                expect(calls.webSignIn).toHaveBeenLastCalledWith(expected);
-                second.reject(new BrowserSignInFailure(stage));
-                await settle();
-            },
-        );
-
-        it("keeps discovery mounted through loading and destroys it only after successful account activation", async () => {
-            const completion = deferred();
-            calls.webSignIn.mockReturnValue(completion.promise);
-            render(component, false);
-            await settle();
-            const form = document.querySelector(".existing-account-sign-in");
-            button("Sign in with an existing passkey").click();
-            await settle();
-            expect(calls.webSignIn).toHaveBeenCalledExactlyOnceWith(undefined);
-            identityStateStore.set({ kind: "logging_in" });
-            await settle();
-            expect(document.querySelector(".existing-account-sign-in")).toBe(form);
-            (anonUserStore as unknown as { set(value: boolean): void }).set(false);
-            identityStateStore.set({ kind: "logged_in" });
-            completion.resolve();
-            await settle();
-            expect(document.querySelector(".existing-account-sign-in")).toBeNull();
-            expect(calls.verify).not.toHaveBeenCalled();
-            expect(calls.createPasskey).not.toHaveBeenCalled();
-            expect(calls.finalize).not.toHaveBeenCalled();
+            expect(target.querySelector(".welcome")).not.toBeNull();
+            expect(target.querySelector(".loading")).toBeNull();
+            button(
+                target,
+                component === HomeRouteV1 ? "loginDialog.signin" : "I'm an existing user",
+            );
+            expect(calls.signIn).not.toHaveBeenCalled();
+            expect(calls.linkAccount).not.toHaveBeenCalled();
         });
     });
 }
+
+describe("v2 original native code-link parent lifecycle", () => {
+    async function openCodeForm() {
+        calls.signIn.mockRejectedValueOnce({ code: "NO_PASSKEY" });
+        const target = render(HomeRouteV2);
+        await beginPasskey(target, HomeRouteV2);
+        const input = target.querySelector<HTMLInputElement>('input[maxlength="6"]');
+        expect(input).not.toBeNull();
+        expect(button(target, "Link with existing account").disabled).toBe(true);
+        expect(calls.linkAccount).not.toHaveBeenCalled();
+        input!.value = "ABC123";
+        input!.dispatchEvent(new Event("input", { bubbles: true }));
+        await settle();
+        return { target, input };
+    }
+
+    it("keeps the explicit code-link operation alive through parent loading and finishes once", async () => {
+        const completion = deferred();
+        const accepted = vi.fn(markAuthenticated);
+        calls.linkAccount.mockImplementation(() => {
+            identityStateStore.set({ kind: "logging_in" });
+            return completion.promise.then(accepted);
+        });
+        const abort = vi.spyOn(AbortController.prototype, "abort");
+        const { target, input } = await openCodeForm();
+        const link = button(target, "Link with existing account");
+        expect(link.disabled).toBe(false);
+        link.click();
+        await settle();
+        expect(calls.linkAccount).toHaveBeenCalledExactlyOnceWith("ABC123");
+        expect(link.disabled).toBe(true);
+        chatsInitialisedStore.set(true);
+        await settle();
+        expect(target.querySelector('input[maxlength="6"]')).toBe(input);
+        expect(accepted).not.toHaveBeenCalled();
+
+        identityStateStore.set({ kind: "loading_user", registering: false });
+        await settle();
+        expect(target.querySelector('input[maxlength="6"]')).toBeNull();
+        expect(target.querySelector(".loading")).not.toBeNull();
+        expect(calls.stopVersionChecker).toHaveBeenCalledOnce();
+        expect(abort).not.toHaveBeenCalled();
+        completion.resolve();
+        await settle();
+        expect(accepted).toHaveBeenCalledOnce();
+        expect(target.querySelector(".welcome")).toBeNull();
+        expect(target.querySelector(".loading")).toBeNull();
+        expect(calls.linkAccount).toHaveBeenCalledExactlyOnceWith("ABC123");
+        expect(abort).not.toHaveBeenCalled();
+    });
+
+    it("keeps a linking failure in the original code form for explicit retry", async () => {
+        const completion = deferred();
+        calls.linkAccount.mockReturnValueOnce(completion.promise);
+        const { target, input } = await openCodeForm();
+        button(target, "Link with existing account").click();
+        await settle();
+        expect(button(target, "Link with existing account").disabled).toBe(true);
+        completion.reject({ code: 2 });
+        await settle();
+        expect(target.querySelector('input[maxlength="6"]')).toBe(input);
+        expect(input!.value).toBe("ABC123");
+        expect(target.textContent).toContain("linkingCodeNotFound");
+        expect(button(target, "Link with existing account").disabled).toBe(false);
+        expect(calls.linkAccount).toHaveBeenCalledOnce();
+    });
+});

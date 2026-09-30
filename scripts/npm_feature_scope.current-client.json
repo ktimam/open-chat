@@ -75,7 +75,7 @@
       "kind": "edge",
       "from": "",
       "name": "svelte",
-      "purpose": "Runtime: model stores, private local-draft editor and navigation, native handoff state, and retained card display",
+      "purpose": "Runtime: model stores, private local-draft editor and navigation, native handoff state, retained card display, and original upstream onboarding UI",
       "evidence": [
         {
           "file": "frontend/app/src/stores/customModels.ts",
@@ -104,6 +104,22 @@
         {
           "file": "frontend/openchat-client/src/openchat.ts",
           "contains": "return JSON.stringify([this.config.icUrl, this.config.userIndexCanister]);"
+        },
+        {
+          "file": "frontend/app/src/components/onboard/OnboardModal.svelte",
+          "contains": "<SignIn bind:spinning bind:error {onClose} />"
+        },
+        {
+          "file": "frontend/app/src/components_mobile/onboard/OnboardModal.svelte",
+          "contains": "? client.signInWithAndroidWebAuthn()"
+        },
+        {
+          "file": "frontend/openchat-client/src/utils/browserSignInDiagnostics.ts",
+          "contains": "Saved sign-in could not be cleared after sign-in failed. Use Clear saved sign-in before trying again."
+        },
+        {
+          "file": "frontend/openchat-client/src/config.ts",
+          "contains": "appDirectoryUrl?: string;"
         }
       ]
     },
@@ -111,7 +127,7 @@
       "kind": "edge",
       "from": "",
       "name": "tauri-plugin-oc-api",
-      "purpose": "Runtime: generic native model commands and immutable reviewed private-app handoff",
+      "purpose": "Runtime: generic native model commands, reviewed private-app handoff and setup, and original native passkey sign-in; retained browser-auth helpers are dormant",
       "evidence": [
         {
           "file": "frontend/app/src/utils/onDeviceInference.ts",
@@ -124,6 +140,14 @@
         {
           "file": "frontend/app/src/utils/nativeAppDelivery.ts",
           "contains": "\"tauri-plugin-oc-api/commands/localAppHandoff\""
+        },
+        {
+          "file": "frontend/app/src/utils/localAppSetupConnection.ts",
+          "contains": "await import(\"tauri-plugin-oc-api/commands/localAppSetup\")"
+        },
+        {
+          "file": "frontend/openchat-client/src/openchat.ts",
+          "contains": "const webAuthnIdentity = new AndroidWebAuthnPasskeyIdentity((credentialId) =>"
         }
       ]
     },
@@ -143,7 +167,7 @@
       "kind": "edge",
       "from": "",
       "name": "@icp-sdk/core",
-      "purpose": "Runtime: model catalog canister transport",
+      "purpose": "Runtime: model catalog transport and restored original identity bootstrap; retained legacy browser-auth proof helpers are covered as dormant source, not active authentication",
       "evidence": [
         {
           "file": "frontend/openchat-agent/src/services/registry/registry.client.ts",
@@ -156,6 +180,34 @@
         {
           "file": "frontend/openchat-shared/src/domain/aiAction.ts",
           "contains": "import { Principal } from \"@icp-sdk/core/principal\";"
+        },
+        {
+          "file": "frontend/openchat-agent/src/services/nativeBrowserAccountSession.ts",
+          "contains": "import { DelegationChain, DelegationIdentity, ECDSAKeyIdentity } from \"@icp-sdk/core/identity\";"
+        },
+        {
+          "file": "frontend/openchat-worker/src/worker.ts",
+          "contains": "identityAgent = await IdentityAgent.create(identity, identityCanister, icUrl, isIIPrincipal);"
+        },
+        {
+          "file": "frontend/openchat-shared/src/domain/worker.ts",
+          "contains": "identity: JsonnableIdentityKeyAndChain | undefined;"
+        },
+        {
+          "file": "frontend/openchat-client/src/utils/browserPasskey.ts",
+          "contains": "userVerification: \"preferred\" | \"required\" = \"preferred\","
+        },
+        {
+          "file": "frontend/openchat-client/src/utils/browserAccountLink.ts",
+          "contains": "export async function createBrowserLinkPasskey("
+        },
+        {
+          "file": "frontend/openchat-agent/src/services/identityAgent.ts",
+          "contains": "fetch: createSingleSubmissionFetch(),"
+        },
+        {
+          "file": "frontend/openchat-agent/src/utils/singleSubmissionFetch.ts",
+          "contains": "export function createSingleSubmissionFetch("
         }
       ]
     },
@@ -200,6 +252,14 @@
         {
           "file": "frontend/app/rollup.config.mjs",
           "contains": "localAppRelayPlugin({ enabled: localWebBuild })"
+        },
+        {
+          "file": "frontend/app/rollup.extras.mjs",
+          "contains": "appDirectoryUrl: process.env.OC_APP_DIRECTORY_URL,"
+        },
+        {
+          "file": "frontend/app/rollup.extras.mjs",
+          "contains": "appDirectoryUrl: options.appDirectoryUrl,"
         }
       ]
     },
@@ -406,7 +466,7 @@
       "kind": "edge",
       "from": "",
       "name": "idb",
-      "purpose": "Compatibility runtime: retained action-card message-cache reconciliation; private drafts themselves remain memory-only",
+      "purpose": "Runtime: retained action-card cache reconciliation; the separate legacy native-browser remembered-session helper remains covered but is not used by current sign-in; private drafts remain memory-only",
       "evidence": [
         {
           "file": "frontend/openchat-agent/src/utils/chatsDb.ts",
@@ -419,6 +479,10 @@
         {
           "file": "frontend/openchat-agent/src/utils/indexedDb.ts",
           "contains": "openDB,"
+        },
+        {
+          "file": "frontend/openchat-client/src/utils/nativeBrowserSessionStorage.ts",
+          "contains": "import { openDB, type IDBPDatabase } from \"idb\";"
         }
       ]
     },
@@ -426,7 +490,7 @@
       "kind": "edge",
       "from": "tauri-plugin-oc",
       "name": "@tauri-apps/api",
-      "purpose": "Runtime: model IPC and events plus approved private-app native handoff commands",
+      "purpose": "Runtime: model IPC and events and reviewed private-app handoff and setup; retained browser-auth command source is dormant",
       "evidence": [
         {
           "file": "frontend/tauri-plugin-oc/guest-js/commands/localAppHandoff.ts",
@@ -439,13 +503,21 @@
         {
           "file": "frontend/tauri-plugin-oc/guest-js/index.ts",
           "contains": "} from \"./commands/localAppHandoff\";"
+        },
+        {
+          "file": "frontend/tauri-plugin-oc/guest-js/commands/localAppSetup.ts",
+          "contains": "import { invoke } from \"@tauri-apps/api/core\";"
+        },
+        {
+          "file": "frontend/tauri-plugin-oc/guest-js/commands/localBrowserAuth.ts",
+          "contains": "import { invoke } from \"@tauri-apps/api/core\";"
         }
       ]
     },
     {
       "kind": "location",
       "location": "node_modules/esbuild",
-      "purpose": "Build: fixed native private-app handoff asset bundler; existing locked hoisted location, not an owner-manifest edge",
+      "purpose": "Build: fixed native private-app handoff and setup assets; legacy browser-signer build helper remains covered but is no longer invoked by the application build",
       "evidence": [
         {
           "file": "frontend/app/localNativeAppHandoffBuild.mjs",
@@ -458,6 +530,18 @@
         {
           "file": "frontend/app/rollup.config.mjs",
           "contains": "localNativeAppHandoffBuildPlugin("
+        },
+        {
+          "file": "frontend/app/localNativeAppSetupBuild.mjs",
+          "contains": "import { build } from \"esbuild\";"
+        },
+        {
+          "file": "frontend/app/localBrowserAuthBuild.mjs",
+          "contains": "import { build } from \"esbuild\";"
+        },
+        {
+          "file": "frontend/app/rollup.config.mjs",
+          "contains": "localNativeAppSetupBuildPlugin({ enabled: localTestApk })"
         }
       ]
     }
@@ -466,15 +550,15 @@
     "status": "reviewed-direct-feature-roots",
     "textIdentity": "utf8-lf",
     "boundary": "changed-feature-consumers-and-necessary-reached-edges",
-    "reviewedOn": "2026-09-29",
-    "scope": "Current unofficial client model, private local-app draft/editor/processor, account-and-backend-scoped device-local app setup persistence, retained card compatibility, optional app-declared OCR, and browser/native handoff consumers. This scope does not enable or require new backend canisters.",
+    "reviewedOn": "2026-09-30",
+    "scope": "Current unofficial client model, private local-app draft/editor/processor, public app discovery and consented connection, account/backend-scoped setup persistence, retained card compatibility, optional app-declared OCR and private-app handoff/setup. Original upstream onboarding, native sign-in, AuthClient/IdentityStorage and worker bootstrap are restored; retained legacy browser-auth/remembered-session modules remain source-reviewed but are not active sign-in or packaged browser-auth assets. This scope does not enable or require new OpenChat backend canisters.",
     "exclusions": [
       "Historical PR1/PR2 inventories and advisory decisions are preserved separately, not accepted as current source snapshots.",
-      "Core authentication, chat, wallet, media, generic compiler/minifier/style dependencies and unrelated plugins are not selected by mixed-file coexistence.",
+      "Original auth restoration is bounded by exact mixed-file anchors and pinned-upstream comparisons; unrelated core authentication, chat, wallet, media and build dependency imports are not selected merely by coexistence. Retained legacy browser-auth/remembered-session helpers stay in source coverage without claiming active transport.",
       "Mixed entrypoints and build hooks have exact feature ownership anchors; only dedicated feature modules undergo direct-import scanning.",
-      "The mixed OpenChat client is anchored only for the private-app backend scope getter reached by the workspace. Its complete file fingerprint detects drift; unrelated core imports are not scanned or selected as feature roots.",
-      "Private drafts are memory-only. The idb root covers retained action-card cache reconciliation, not new draft storage or remote pre-review verification.",
-      "Private app setup persistence uses the browser IndexedDB API and existing local catalog, processor-hash and Web Crypto helpers, not a new npm or Rust dependency. Only explicitly imported setup, selection and chat opt-ins are saved; messages, drafts, approvals and handoff payloads are excluded.",
+      "Mixed client/worker/config/sign-in UI and reached account-link/passkey helpers have exact feature anchors and whole-file drift fingerprints, not scans or approval of unrelated core imports.",
+      "Private drafts are memory-only. The existing idb root now also covers the separate nonextractable-key native remembered-sign-in store; it is not new draft storage, app setup storage, or remote pre-review verification.",
+      "Private app setup persistence uses browser IndexedDB and existing catalog, processor-hash and Web Crypto helpers. Only consented connected/imported setup, bounded public installation metadata, selected verified processors and chat opt-ins are saved; messages, drafts, approvals, credentials and handoff payloads are excluded from that setup store. Native remembered sign-in is a distinct approved account/backend-bound store.",
       "Source ownership is not advisory, runtime, image-accuracy, phone, deployment or release acceptance."
     ],
     "snapshots": [
@@ -500,6 +584,21 @@
         "workingTreeReview": "2026-09-29: reviewed the resolved frontend source composition merging upstream 5f00758312735f2ddac9928e3aa60349964bf73a into fork 8a164a52a33d09ce7b4390c96723194026ea8733, whose previous upstream was d1e3712bb9ded3a1c8b652492591b7107333b23e. Exactly four fingerprinted mixed files differ: desktop/mobile App locale-load fallback, i18n locale fallback registration and the OpenChat deleted-user refresh filter. Existing private workspace mounts, local-only setup boundaries and the exact account/backend scope getter are retained. All 100 dedicated feature modules are unchanged, as are all 25 roots, 65 ownership anchors, 118 source paths and frontend package/lock identities. Unrelated core locale/chat imports are not selected by coexistence. This is a distinct upstream-merge source review, not a formatting-only proof, completed merge commit, Rust lock decision, advisory waiver, deployment or runtime/release acceptance. All earlier snapshots and historical policies remain unchanged.",
         "reviewRecord": "npm_feature_scope.current-client.review.md",
         "sha256": "14fb964489adca4863a72792cd229a5273594de925d2cfc80188a9f3f64fa806"
+      },
+      {
+        "workingTreeReview": "2026-09-30: user-approved scoped current source verification of public app discovery, consented browser/native setup connection, and the local-test existing-account browser-auth/signature/proof/remembered-session seam, including 7fe6c8925 cleanup and the current local-browser-auth.html explanation. Independently reconstructed the prior 100-owner/118-source 14fb9644 snapshot from Git 9e8c88ece52860e6d0e3569969cc676072016227; current delta adds 31 source paths (19 dedicated, 12 anchored mixed/reached), changes 14 existing source files and removes none. All 119 dedicated modules pass the existing direct-import policy. Mixed client/worker/config/sign-in UI and reached passkey/account-link/single-submission helpers are exact anchored and fingerprinted, not broad core import scans. Separate setup-only IndexedDB and nonextractable-key remembered-session idb stores retain explicit account/backend isolation, signed/fresh account validation, bounded lifetimes, generation-checked clearing and fail-closed anonymous rollback/cleanup UI. Current composition is 149 fingerprinted sources, 90 exact ownership anchors and unchanged 25 dependency roots. Earlier reviews and historical PR policies remain intact. No dependency installation/upgrade, advisory query/waiver, core audit, prompt change, browser/device execution, native credential-provider qualification, deployment, APK rebuild or release acceptance is implied.",
+        "reviewRecord": "npm_feature_scope.current-client.review.md",
+        "sha256": "bf0884970516515d0cd38b6a405e858c2db331bcbf633b6371320e91275153c9"
+      },
+      {
+        "sha256": "425a64c8f66fb23956590bc0a698e865bbf1e606d3144b2e8411ad3dc2f1898c",
+        "reviewRecord": "npm_feature_scope.current-client.review.md",
+        "workingTreeReview": "2026-09-30: separately reviewed restoration of pinned-upstream 5f007583 original onboarding, native Android sign-in, AuthClient/IdentityStorage bootstrap and worker identity lookup/delegation refresh. Source inspection and exact upstream auth-function comparisons precede this fingerprint. The custom replacement screen is deleted; browser-supplied OC session adoption, active browser-session storage and Rollup browser-auth asset invocation are removed. The original account-creation UI and auth behavior are restored; no existing-account-only policy is claimed for active UI. Private apps remain protected independently by clientOnlyApps. All 119 dedicated sources, including ten retained but dormant browser-auth helper owners, still pass unchanged direct-import/root checks; those helpers do not authorize an active transport. Five obsolete ownership anchors are replaced with original source anchors; four removed-use anchors are retired (deleted screen, two custom-session save/clear calls and the inactive build-plugin invocation), while negative active-transport regression checks are added. Composition is 148 fingerprinted sources, 86 exact anchors and unchanged 25 dependency roots. All earlier snapshots and historical policies remain intact. This is source binding, not a core auth audit, provider/Digital Asset Links qualification, device persistence, account ceremony, dependency/advisory decision, APK build or release acceptance."
+      },
+      {
+        "sha256": "09b7e91e437cfbfb58c6029fbd51066967ffd27899a3406206dee87514e16341",
+        "reviewRecord": "npm_feature_scope.current-client.review.md",
+        "workingTreeReview": "2026-09-30: reviewed the single-site mobile native error-translation repair after original-auth restoration. Only frontend/app/src/components_mobile/onboard/OnboardModal.svelte changes within the prior 425a64c8 source set: its strict UTF-8/LF SHA256 changes from 1c93d07d7b15826a5c0af8a593a86cffc092ff3dd1eb39911cb4a37114fb7785 to 251df92cfea239711f19508c72e08c50c0a5424c9285c7762ba9bf262ffae6e8. The two-line presentation-only exception imports the existing local nativeAuthErrorKey helper and applies it at the sole error resourceKey lookup. Known raw codes select native.auth.errors catalog entries; legacy or unknown provider strings select the generic message. Original handlers, routing, layout, Credential Manager commands and session lifecycle are unchanged. All 44 existing real-catalog renderer tests and 87 focused native/onboarding tests pass without altered expectations. Exact reversal of these two lines reproduces the prior file and aggregate identities. Source selectors, 119 dedicated owners, 148 fingerprinted sources, 86 anchors and 25 roots remain unchanged; no package, lockfile, historical record, advisory decision or core audit change. Existing APK015 assets are not relabelled as containing this later source-only correction."
       }
     ]
   }

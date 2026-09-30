@@ -18,7 +18,8 @@
   <p>This browser page signs in the separate test APK. It does not sign in this browser or create an OpenChat account.</p>
   <p>Expected existing username: <strong id="username">Loading…</strong></p>
   <p id="expiry"></p>
-  <p>The APK keeps its own private session key. This page returns only a signed, short-lived delegation to that key. The APK checks your existing account before opening it. This local test session lasts at most five minutes.</p>
+  <p>The APK keeps its own private session key. This page returns a signed delegation to that key—not your passkey's private key. Complete this one-time request by the deadline shown above, within two minutes of starting it in the APK. After the APK verifies your existing account, it can remember your sign-in on this device for up to 30 days, or until you sign out.</p>
+  <p>Use this browser for the initial sign-in and, only if needed, to link a localhost passkey. When you reopen the APK, it automatically tries to restore a valid saved sign-in after rechecking your account online, without repeating browser sign-in. If that check cannot finish, you may need to retry.</p>
   <button id="sign-in" type="button" disabled>Use my existing localhost passkey</button>
   <p>Use the passkey previously linked on this phone for localhost. A passkey saved only on another device may not be available here.</p>
   <button id="start-link" type="button" disabled>Link a localhost passkey to my existing account</button>

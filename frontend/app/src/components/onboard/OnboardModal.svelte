@@ -10,7 +10,6 @@
     import ModeSelection from "./ModeSelection.svelte";
     import SignIn from "./SignIn.svelte";
     import SignUp from "./SignUp.svelte";
-    import ExistingAccountSignIn from "../../components_shared/ExistingAccountSignIn.svelte";
 
     const client = getContext<OpenChat>("client");
 
@@ -60,7 +59,14 @@
     }
 </script>
 
-<ModalContent fill hideFooter onClose={cancel} closeIcon={step === "select_mode"} onBack={() => (step = "select_mode")} backIcon={step !== "select_mode"}>
+<ModalContent
+    fill
+    hideFooter
+    onClose={cancel}
+    closeIcon={step === "select_mode"}
+    onBack={() => (step = "select_mode")}
+    backIcon={step !== "select_mode"}
+>
     {#snippet header()}
         <div class="header">
             <div class="logo-img">
@@ -76,12 +82,11 @@
     {/snippet}
     {#snippet body()}
         <div class="body">
-            {#if client.existingAccountOnly()}
-                <ExistingAccountSignIn onSignedIn={onClose} />
-            {:else if step === "select_mode"}
+            {#if step === "select_mode"}
                 <ModeSelection
                     onSignIn={() => (step = "sign_in")}
-                    onSignUp={() => (step = "sign_up")} />
+                    onSignUp={() => (step = "sign_up")}
+                />
             {:else if step === "sign_in"}
                 <SignIn bind:spinning bind:error {onClose} />
             {:else if step === "sign_up"}

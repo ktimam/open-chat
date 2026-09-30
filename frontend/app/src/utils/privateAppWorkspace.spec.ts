@@ -347,7 +347,6 @@ describe("private app workspace boundaries", () => {
             const runtimeClient = {
                 clientOnlyApps: () => true,
                 isNativeApp: () => native,
-                existingAccountOnly: () => true,
             } as OpenChat;
             await workspace.propose(runtimeClient, text, { stillCurrent: () => true });
             workspace.review();
@@ -395,9 +394,8 @@ describe("private app workspace boundaries", () => {
         const { workspace, deps } = fixture();
         let allowed = true;
         const runtimeClient = {
-            clientOnlyApps: () => true,
+            clientOnlyApps: () => allowed,
             isNativeApp: () => true,
-            existingAccountOnly: () => allowed,
         } as OpenChat;
         await workspace.propose(runtimeClient, text, { stillCurrent: () => true });
         workspace.review();
@@ -439,7 +437,6 @@ describe("private app workspace boundaries", () => {
         const nativeClient = {
             clientOnlyApps: () => true,
             isNativeApp: () => true,
-            existingAccountOnly: () => true,
         } as OpenChat;
         await workspace.propose(nativeClient, text, { stillCurrent: () => true });
         workspace.review();
@@ -452,15 +449,15 @@ describe("private app workspace boundaries", () => {
 
     it("rechecks native authorization at confirmation and explicit retry", async () => {
         const { workspace, deps } = fixture();
-        let allowed = false;
+        let allowed = true;
         const nativeClient = {
-            clientOnlyApps: () => true,
+            clientOnlyApps: () => allowed,
             isNativeApp: () => true,
-            existingAccountOnly: () => allowed,
         } as OpenChat;
         await workspace.propose(nativeClient, text, { stillCurrent: () => true });
         workspace.review();
         const approval = workspace.state.draft!.approval!.approvalId;
+        allowed = false;
         await workspace.confirm(approval);
         expect(deps.nativeDeliver).not.toHaveBeenCalled();
         expect(deps.deliver).not.toHaveBeenCalled();
@@ -476,7 +473,6 @@ describe("private app workspace boundaries", () => {
         const nativeClient = {
             clientOnlyApps: () => true,
             isNativeApp: () => native,
-            existingAccountOnly: () => true,
         } as OpenChat;
         await workspace.propose(nativeClient, text, { stillCurrent: () => true });
         workspace.review();

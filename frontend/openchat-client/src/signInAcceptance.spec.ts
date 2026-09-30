@@ -1,27 +1,39 @@
 // @vitest-environment jsdom
-// Exercises the actual OpenChat class and private acceptance paths. Crypto/preflight, native
-// commands, persistence and worker transport are inert seams; no real account or sign-in.
+// The real OpenChat auth methods and IdentityStorage execute here. Only provider/crypto,
+// IndexedDB I/O and worker transport are synthetic. onCreatedUser stops unrelated app polling;
+// these tests do not qualify a device, credential provider, RP or signing certificate.
 import { webcrypto } from "node:crypto";
-import { Delegation, DelegationChain, ECDSAKeyIdentity } from "@icp-sdk/core/identity";
-import type { Signature } from "@icp-sdk/core/agent";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { DelegationChain, ECDSAKeyIdentity } from "@icp-sdk/core/identity";
+import {
+    afterEach,
+    beforeAll,
+    beforeEach,
+    describe,
+    expect,
+    it,
+    vi,
+    type MockInstance,
+} from "vitest";
 
 const seam = vi.hoisted(() => ({
     native: true,
     authCreate: vi.fn(),
-    cacheGet: vi.fn(),
-    cacheSet: vi.fn(),
-    cacheRemove: vi.fn(),
-    nativeRead: vi.fn(),
-    nativeSave: vi.fn(),
-    nativeClear: vi.fn(),
-    nativeCurrent: vi.fn(),
-    nativeProve: vi.fn(),
+    authLogin: vi.fn(),
+    authLogout: vi.fn(),
+    storageGet: vi.fn(),
+    storageSet: vi.fn(),
+    storageRemove: vi.fn(),
+    data: new Map<string, unknown>(),
+    nativeConstruct: vi.fn(),
+    webConstruct: vi.fn(),
+    nativeCreate: vi.fn(),
+    webCreate: vi.fn(),
+    providerSign: vi.fn(),
     send: vi.fn(),
     stream: vi.fn(),
-    flow: vi.fn(),
+    workerFailure: undefined as ((error: unknown) => void) | undefined,
     signer: undefined as ECDSAKeyIdentity | undefined,
-    signFailure: false,
     order: [] as string[],
 }));
 vi.hoisted(() => {
@@ -39,20 +51,24 @@ vi.hoisted(() => {
 vi.mock("@icp-sdk/auth/client", async (importOriginal) => ({
     ...(await importOriginal<object>()),
     AuthClient: { create: seam.authCreate },
-}));
-vi.mock("@shared", async (importOriginal) => ({
-    ...(await importOriginal<typeof import("@shared")>()),
-    IdentityStorage: {
-        createForAuthIdentity: () => ({
-            storage: {},
-            getKeyAndChain: seam.cacheGet,
-            set: seam.cacheSet,
-            remove: seam.cacheRemove,
-        }),
+    IdbStorage: class {
+        constructor(private options: { dbName: string }) {}
+        get(key: string) {
+            return seam.storageGet(`${this.options.dbName}/${key}`);
+        }
+        set(key: string, value: unknown) {
+            return seam.storageSet(`${this.options.dbName}/${key}`, value);
+        }
+        remove(key: string) {
+            return seam.storageRemove(`${this.options.dbName}/${key}`);
+        }
     },
 }));
 vi.mock("@client/workerAgent", () => ({
     WorkerAgent: class {
+        constructor(_config: unknown, onFailure: (error: unknown) => void) {
+            seam.workerFailure = onFailure;
+        }
         send = seam.send;
         stream = seam.stream;
     },
@@ -63,25 +79,43 @@ vi.mock("@client/utils/poller", () => ({
         triggerNow() {}
     },
 }));
-vi.mock("@client/utils/nativeBrowserSignInFlow", () => ({ runNativeBrowserSignIn: seam.flow }));
-vi.mock("@client/utils/nativeBrowserSessionStorage", async (original) => ({
-    ...(await original<object>()),
-    NativeBrowserSessionStorage: class {
-        read = seam.nativeRead;
-        save = seam.nativeSave;
-        clear = seam.nativeClear;
-        isCurrent = seam.nativeCurrent;
-    },
-}));
-vi.mock("@client/utils/webAuthn", () => ({
-    createWebAuthnIdentity: vi.fn(),
-    MultiWebAuthnIdentity: class {
+vi.mock("@client/utils/androidWebAuthn", () => ({
+    createAndroidWebAuthnPasskeyIdentity: seam.nativeCreate,
+    AndroidWebAuthnPasskeyIdentity: class {
+        private lookup: (id: Uint8Array) => Promise<Uint8Array>;
+        constructor(...args: [(id: Uint8Array) => Promise<Uint8Array>]) {
+            [this.lookup] = args;
+            seam.nativeConstruct(...args);
+        }
         getPublicKey() {
             return seam.signer!.getPublicKey();
         }
-        sign(value: Uint8Array) {
-            if (seam.signFailure) throw new Error("synthetic signer failure");
-            return seam.signer!.sign(value);
+        async sign(value: Uint8Array) {
+            await this.lookup(Uint8Array.of(1, 2, 3));
+            return seam.providerSign(value);
+        }
+        identity() {
+            return {
+                getPublicKey: () => seam.signer!.getPublicKey(),
+                rawId: Uint8Array.of(1, 2, 3),
+            };
+        }
+    },
+}));
+vi.mock("@client/utils/webAuthn", () => ({
+    createWebAuthnIdentity: seam.webCreate,
+    MultiWebAuthnIdentity: class {
+        private lookup: (id: Uint8Array) => Promise<Uint8Array>;
+        constructor(...args: [string, (id: Uint8Array) => Promise<Uint8Array>]) {
+            [, this.lookup] = args;
+            seam.webConstruct(...args);
+        }
+        getPublicKey() {
+            return seam.signer!.getPublicKey();
+        }
+        async sign(value: Uint8Array) {
+            await this.lookup(Uint8Array.of(1, 2, 3));
+            return seam.providerSign(value);
         }
         innerIdentity() {
             return {
@@ -91,36 +125,27 @@ vi.mock("@client/utils/webAuthn", () => ({
         }
     },
 }));
-vi.mock("tauri-plugin-oc-api/commands/localBrowserAuth", () => ({
-    beginLocalBrowserAuth: vi.fn(),
-    pollLocalBrowserAuth: vi.fn(),
-    cancelLocalBrowserAuth: vi.fn(),
-    completeLocalBrowserAuth: vi.fn(),
-}));
-vi.mock("tauri-plugin-oc-api/commands/openUrl", () => ({ openUrl: vi.fn() }));
-vi.mock("@agent/services/nativeBrowserAccountSession", () => ({
-    lookupNativeBrowserCredential: vi.fn(),
-    establishNativeBrowserAccountSession: seam.nativeProve,
-}));
 
-import { anonymousUser, Stream, type CreatedUser } from "@shared";
+import {
+    anonymousUser,
+    AuthProvider,
+    IdentityStorage,
+    Stream,
+    type CreatedUser,
+    type WebAuthnKeyFull,
+} from "@shared";
 import { OpenChat } from "./openchat";
 import type { OpenChatConfig } from "./config";
-import { currentUserStore, identityStateStore } from "./state";
-import { Principal } from "@icp-sdk/core/principal";
-import { get } from "svelte/store";
-import { browserSignInError } from "./utils/browserAccountLink";
-import { BrowserSignInFailure } from "./utils/browserSignInDiagnostics";
+import {
+    currentUserStore,
+    identityStateStore,
+    selectedAuthProviderStore,
+    startupErrorStore,
+} from "./state";
 
 const NOW = 1_800_000_000_000;
-type NativeActivation = {
-    activate(
-        session: { ocKey: ECDSAKeyIdentity; ocChain: DelegationChain; profile: CreatedUser },
-        authKey: ECDSAKeyIdentity,
-        authChain: DelegationChain,
-        key: { publicKey: Uint8Array; credentialId: Uint8Array },
-    ): Promise<void>;
-};
+const THIRTY_DAYS = 30 * 24 * 60 * 60_000;
+const logger = { debug: vi.fn(), log: vi.fn(), warn: vi.fn(), error: vi.fn() };
 function deferred<T>() {
     let resolve!: (value: T) => void;
     let reject!: (error: unknown) => void;
@@ -131,66 +156,60 @@ function deferred<T>() {
     return { promise, resolve, reject };
 }
 
-describe("OpenChat verified sign-in acceptance", () => {
-    let authKey: ECDSAKeyIdentity, ocKey: ECDSAKeyIdentity;
-    let authChain: DelegationChain, ocChain: DelegationChain;
+describe("OpenChat original authentication pipeline", () => {
+    let authKey: ECDSAKeyIdentity;
+    let savedKey: ECDSAKeyIdentity;
+    let savedChain: DelegationChain;
     let profile: CreatedUser;
     let client: OpenChat;
-    let created: ReturnType<typeof vi.spyOn>, logout: ReturnType<typeof vi.spyOn>;
+    let created: MockInstance<OpenChat["onCreatedUser"]>;
     const network = vi.fn(() => {
-        throw new Error("Network forbidden in class acceptance tests");
+        throw new Error("Network forbidden in class authentication tests");
     });
     const authenticated = () =>
         created.mock.calls.filter(([user]) => (user as CreatedUser).username === "synthetic-user");
-    const workerSuccess = (expiry = NOW + 240_000) => ({
+    const workerSuccess = () => ({
         kind: "success",
-        ocIdentityPrincipal: ocKey.getPrincipal().toString(),
-        ocIdentityExpiry: expiry,
+        ocIdentityPrincipal: "aaaaa-aa",
+        ocIdentityExpiry: NOW + THIRTY_DAYS,
     });
-    function build(existingAccountOnly = true, overrides: Partial<OpenChatConfig> = {}) {
+    function build(overrides: Partial<OpenChatConfig> = {}) {
         client = new OpenChat({
             mobileLayout: "v1",
             websiteVersion: "synthetic",
             proposalBotCanister: "aaaaa-aa",
             identityCanister: "aaaaa-aa",
             userIndexCanister: "aaaaa-aa",
-            webAuthnOrigin: "localhost",
+            webAuthnOrigin: "oc.app",
+            internetIdentityUrl: "https://identity.example.invalid",
             icUrl: "https://icp-api.io",
-            existingAccountOnly,
-            clientOnlyApps: existingAccountOnly,
-            logger: { debug() {}, log() {}, warn() {}, error() {} },
+            clientOnlyApps: true,
+            logger,
             ...overrides,
         } as unknown as OpenChatConfig);
         return client;
     }
     async function boot() {
         await vi.waitFor(() => expect(created).toHaveBeenCalled());
+        vi.setSystemTime(NOW);
         created.mockClear();
         seam.order.length = 0;
         seam.send.mockClear();
     }
-    const nativeSignIn = (signal?: AbortSignal) =>
-        client.signInWithLocalBrowser("synthetic-user", { signal });
+    async function seedIdentity(chain = savedChain) {
+        await IdentityStorage.createForAuthIdentity().set(savedKey, chain);
+        seam.storageSet.mockClear();
+        seam.order.length = 0;
+    }
     beforeAll(async () => {
         vi.stubGlobal("crypto", webcrypto);
         authKey = await ECDSAKeyIdentity.generate();
-        ocKey = await ECDSAKeyIdentity.generate();
-        const chain = (key: ECDSAKeyIdentity) =>
-            DelegationChain.fromDelegations(
-                [
-                    {
-                        delegation: new Delegation(
-                            key.getPublicKey().toDer(),
-                            BigInt(NOW + 240_000) * 1_000_000n,
-                        ),
-                        signature: new Uint8Array(64).fill(7) as Signature,
-                    },
-                ],
-                key.getPublicKey().toDer(),
-            );
-        authChain = chain(authKey);
-        authChain.delegations[0].delegation.targets = [Principal.fromText("aaaaa-aa")];
-        ocChain = chain(ocKey);
+        savedKey = await ECDSAKeyIdentity.generate();
+        savedChain = await DelegationChain.create(
+            authKey,
+            savedKey.getPublicKey(),
+            new Date(NOW + THIRTY_DAYS),
+        );
         profile = { ...anonymousUser(), username: "synthetic-user", userId: "aaaaa-aa" };
     });
     beforeEach(() => {
@@ -198,53 +217,80 @@ describe("OpenChat verified sign-in acceptance", () => {
         vi.setSystemTime(NOW);
         vi.stubGlobal("crypto", webcrypto);
         vi.stubGlobal("fetch", network);
+        vi.stubGlobal("gtag", vi.fn());
         localStorage.clear();
         network.mockClear();
+        seam.data.clear();
         seam.native = true;
         seam.signer = authKey;
-        seam.signFailure = false;
         seam.order = [];
-        seam.authCreate.mockReset().mockResolvedValue({ logout: vi.fn() });
-        seam.cacheGet.mockReset().mockResolvedValue(undefined);
-        seam.nativeRead.mockReset().mockResolvedValue({ generation: "initial" });
-        seam.nativeCurrent.mockReset().mockResolvedValue(true);
-        seam.nativeClear.mockReset().mockResolvedValue(undefined);
-        seam.nativeSave.mockReset().mockImplementation(async () => {
-            seam.order.push("native-persist");
-            return "saved-generation";
+        seam.nativeConstruct.mockClear();
+        seam.webConstruct.mockClear();
+        seam.authLogin.mockReset();
+        seam.authLogout.mockReset().mockResolvedValue(undefined);
+        seam.authCreate.mockReset().mockResolvedValue({
+            login: seam.authLogin,
+            logout: seam.authLogout,
         });
-        seam.nativeProve.mockReset().mockResolvedValue({ ocKey, ocChain, profile });
-        seam.cacheRemove.mockReset().mockResolvedValue(undefined);
-        seam.cacheSet.mockReset().mockImplementation(async () => {
-            seam.order.push("persist");
+        seam.storageGet.mockReset().mockImplementation(async (key) => seam.data.get(key));
+        seam.storageSet.mockReset().mockImplementation(async (key, value) => {
+            seam.data.set(key, value);
+            if (key === "auth-client-db/delegation") seam.order.push("persist");
         });
+        seam.storageRemove.mockReset().mockImplementation(async (key) => seam.data.delete(key));
+        seam.providerSign.mockReset().mockImplementation((value) => authKey.sign(value));
+        const createIdentity = async (
+            _username: string,
+            cache: (key: WebAuthnKeyFull) => Promise<void>,
+        ) => {
+            await cache({
+                publicKey: new Uint8Array(authKey.getPublicKey().toDer()),
+                credentialId: Uint8Array.of(1, 2, 3),
+                origin: "oc.app",
+                crossPlatform: false,
+                aaguid: new Uint8Array(16),
+            });
+            return {
+                getPublicKey: () => authKey.getPublicKey(),
+                getPrincipal: () => authKey.getPrincipal(),
+                rawId: Uint8Array.of(1, 2, 3),
+            };
+        };
+        seam.nativeCreate.mockReset().mockImplementation(createIdentity);
+        seam.webCreate
+            .mockReset()
+            .mockImplementation((_origin, cache, username) => createIdentity(username, cache));
         seam.send.mockReset().mockImplementation(async (request) => {
-            if (request.kind === "setAuthIdentity") {
-                seam.order.push(request.identity ? "worker-proof" : "worker-anon");
-                return request.identity ? workerSuccess() : { kind: "auth_identity_not_found" };
+            switch (request.kind) {
+                case "setAuthIdentity":
+                    seam.order.push(request.identity ? "worker-identity" : "worker-anon");
+                    return request.identity ? workerSuccess() : { kind: "auth_identity_not_found" };
+                case "lookupWebAuthnPubKey":
+                    return new Uint8Array(authKey.getPublicKey().toDer());
+                case "registerUser":
+                    return { kind: "success" };
             }
         });
         seam.stream.mockReset().mockImplementation((request) => {
-            if (request.kind !== "getCurrentUser") throw new Error("Unexpected synthetic stream");
-            seam.order.push("profile-proof");
-            return new Stream((resolve) => queueMicrotask(() => resolve(profile, true)));
+            if (request.kind === "getCurrentUser") {
+                seam.order.push("profile");
+                return new Stream((resolve) => queueMicrotask(() => resolve(profile, true)));
+            }
+            if (request.kind === "getPublicProfile") {
+                return new Stream((resolve) => queueMicrotask(() => resolve(undefined, true)));
+            }
+            throw new Error(`Unexpected synthetic stream: ${request.kind}`);
         });
-        seam.flow
-            .mockReset()
-            .mockImplementation(async (_username, _canister, adapter: NativeActivation) =>
-                adapter.activate({ ocKey, ocChain, profile }, authKey, authChain, {
-                    publicKey: authKey.getPublicKey().toDer(),
-                    credentialId: Uint8Array.of(1, 2, 3),
-                }),
-            );
         vi.spyOn(OpenChat.prototype, "isNativeApp").mockImplementation(() => seam.native);
+        // End the acceptance pipeline at its real profile result, before unrelated chat polling.
         created = vi.spyOn(OpenChat.prototype, "onCreatedUser").mockImplementation(() => {});
-        logout = vi.spyOn(OpenChat.prototype, "logout").mockResolvedValue(undefined);
-        vi.spyOn(OpenChat.prototype, "getPublicProfile").mockImplementation(
-            () => new Stream((resolve) => queueMicrotask(() => resolve(undefined, true))) as never,
-        );
+        for (const fn of Object.values(logger)) fn.mockClear();
+        currentUserStore.set(anonymousUser());
+        identityStateStore.set({ kind: "anon" });
+        startupErrorStore.set(undefined);
         vi.spyOn(console, "debug").mockImplementation(() => {});
         vi.spyOn(console, "log").mockImplementation(() => {});
+        vi.spyOn(console, "warn").mockImplementation(() => {});
         vi.spyOn(console, "error").mockImplementation(() => {});
     });
     afterEach(() => {
@@ -255,19 +301,293 @@ describe("OpenChat verified sign-in acceptance", () => {
         vi.unstubAllGlobals();
     });
 
-    it("starts with no session without AuthClient or legacy cached auth restoration", async () => {
+    it.each([true, false])(
+        "starts native=%s through AuthClient and IdentityStorage",
+        async (native) => {
+            seam.native = native;
+            build();
+            await boot();
+            expect(seam.authCreate).toHaveBeenCalledWith({
+                idleOptions: { disableIdle: true, disableDefaultIdleCallback: true },
+                storage: expect.any(Object),
+            });
+            expect(seam.storageGet).toHaveBeenCalledWith("auth-client-db/identity");
+            expect(seam.providerSign).not.toHaveBeenCalled();
+            expect(seam.storageSet).not.toHaveBeenCalled();
+            expect(identityStateStore.value.kind).toBe("anon");
+        },
+    );
+    it.each(["android", "web"])(
+        "uses the real %s sign-in pipeline and 30-day persistence",
+        async (provider) => {
+            seam.native = provider === "android";
+            build();
+            await boot();
+            const transitions = vi.spyOn(client, "updateIdentityState");
+            const getUser = vi.spyOn(client, "getCurrentUser");
+            if (provider === "android") await client.signInWithAndroidWebAuthn();
+            else await client.signInWithWebAuthn();
+            expect(seam.order).toEqual(["persist", "worker-identity", "profile"]);
+            expect(seam.providerSign).toHaveBeenCalledOnce();
+            expect(getUser).toHaveBeenCalledOnce();
+            expect(authenticated()).toEqual([[profile]]);
+            expect(currentUserStore.value).toEqual(profile);
+            expect(transitions).toHaveBeenCalledWith({ kind: "loading_user", registering: false });
+            const saved = await IdentityStorage.createForAuthIdentity().getKeyAndChain();
+            expect(saved!.delegation.delegations[0].delegation.expiration).toBe(
+                BigInt(NOW + THIRTY_DAYS) * 1_000_000n,
+            );
+            expect(seam.send).toHaveBeenCalledWith({
+                kind: "setAuthIdentity",
+                identity: { key: saved!.key.getKeyPair(), delegation: saved!.delegation.toJSON() },
+                isIIPrincipal: false,
+            });
+            if (provider === "android") {
+                expect(seam.nativeConstruct).toHaveBeenCalledWith(expect.any(Function));
+                expect(seam.webConstruct).not.toHaveBeenCalled();
+            } else expect(seam.webConstruct).toHaveBeenCalledWith("oc.app", expect.any(Function));
+        },
+    );
+    it("restores the persisted native sign-in through the original worker/profile pipeline without a provider prompt", async () => {
         build();
         await boot();
-        expect(seam.authCreate).not.toHaveBeenCalled();
-        expect(seam.cacheGet).not.toHaveBeenCalled();
-        expect(seam.cacheSet).not.toHaveBeenCalled();
-        expect(seam.nativeRead).toHaveBeenCalledOnce();
+        await client.signInWithAndroidWebAuthn();
+        const saved = await IdentityStorage.createForAuthIdentity().getKeyAndChain();
+        created.mockClear();
+        seam.providerSign.mockClear();
+        seam.nativeConstruct.mockClear();
+        seam.storageSet.mockClear();
+        seam.order.length = 0;
+        build();
+        await vi.waitFor(() => expect(authenticated()).toHaveLength(1));
+        expect(seam.order).toEqual(["worker-identity", "profile"]);
+        expect(seam.nativeConstruct).not.toHaveBeenCalled();
+        expect(seam.providerSign).not.toHaveBeenCalled();
+        expect(seam.storageSet).not.toHaveBeenCalled();
+        expect(saved).toBeDefined();
+        expect(client.AuthPrincipal).toBe(authKey.getPrincipal().toString());
+    });
+    it("keeps loading_user while a saved identity waits for the worker", async () => {
+        await seedIdentity();
+        const gate = deferred<ReturnType<typeof workerSuccess>>();
+        seam.send.mockImplementation((request) =>
+            request.kind === "setAuthIdentity" ? gate.promise : Promise.resolve(),
+        );
+        build();
+        await vi.waitFor(() => expect(identityStateStore.value.kind).toBe("loading_user"));
+        expect(authenticated()).toHaveLength(0);
+        gate.resolve(workerSuccess());
+        await vi.waitFor(() => expect(authenticated()).toHaveLength(1));
+        expect(seam.providerSign).not.toHaveBeenCalled();
+    });
+    it("rejects an expired delegation through real IdentityStorage and starts anonymously", async () => {
+        const expired = await DelegationChain.create(
+            authKey,
+            savedKey.getPublicKey(),
+            new Date(NOW - 1),
+        );
+        await seedIdentity(expired);
+        build();
+        await boot();
+        expect(seam.storageRemove).toHaveBeenCalledWith("auth-client-db/delegation");
+        expect(authenticated()).toHaveLength(0);
+        expect(identityStateStore.value.kind).toBe("anon");
+        expect(seam.providerSign).not.toHaveBeenCalled();
+    });
+    it.each(["auth-client", "storage", "worker"])(
+        "reports generic %s startup failures",
+        async (failure) => {
+            const error = new Error(`synthetic ${failure} failure`);
+            if (failure === "auth-client") seam.authCreate.mockRejectedValue(error);
+            if (failure === "storage") seam.storageGet.mockRejectedValue(error);
+            if (failure === "worker") seam.send.mockRejectedValue(error);
+            build();
+            await vi.waitFor(() => expect(startupErrorStore.value).toContain("background worker"));
+            expect(logger.error).toHaveBeenCalledWith("OpenChat background worker failed", error);
+            expect(authenticated()).toHaveLength(0);
+        },
+    );
+    it("retains the generic worker startup-failure callback", async () => {
+        build();
+        await boot();
+        const error = new Error("synthetic worker startup failure");
+        seam.workerFailure!(error);
+        expect(logger.error).toHaveBeenCalledWith("OpenChat background worker failed", error);
+        expect(startupErrorStore.value).toContain("background worker");
+    });
+    it("uses AuthClient login options and loads its saved identity on success", async () => {
+        build();
+        await boot();
+        await seedIdentity();
+        selectedAuthProviderStore.set(AuthProvider.II);
+        client.login();
+        await vi.waitFor(() => expect(seam.authLogin).toHaveBeenCalledOnce());
+        const options = seam.authLogin.mock.calls[0][0];
+        expect(options.maxTimeToLive).toBe(BigInt(THIRTY_DAYS) * 1_000_000n);
+        expect(options.identityProvider).toBe("https://identity.example.invalid");
+        await options.onSuccess();
+        expect(authenticated()).toEqual([[profile]]);
+        expect(seam.send).toHaveBeenCalledWith(
+            expect.objectContaining({ kind: "setAuthIdentity", isIIPrincipal: true }),
+        );
+    });
+    it("routes AuthClient success-handler failures to the generic startup diagnostic", async () => {
+        build();
+        await boot();
+        selectedAuthProviderStore.set(AuthProvider.II);
+        client.login();
+        await vi.waitFor(() => expect(seam.authLogin).toHaveBeenCalledOnce());
+        seam.storageGet.mockRejectedValue(new Error("synthetic storage failure"));
+        await seam.authLogin.mock.calls[0][0].onSuccess();
+        expect(startupErrorStore.value).toContain("background worker");
+    });
+    it("allows original new-identity creation and registration instead of enforcing a special existing-account gate", async () => {
+        build();
+        await boot();
+        seam.send.mockImplementation(async (request) => {
+            if (request.kind === "lookupWebAuthnPubKey")
+                return new Uint8Array(authKey.getPublicKey().toDer());
+            if (request.kind === "setAuthIdentity") return { kind: "oc_identity_not_found" };
+            if (request.kind === "createOpenChatIdentity") return workerSuccess();
+            if (request.kind === "registerUser") return { kind: "success" };
+        });
+        seam.stream.mockImplementation(
+            () =>
+                new Stream((resolve) =>
+                    queueMicrotask(() => resolve({ kind: "unknown_user" }, true)),
+                ),
+        );
+        await client.signInWithAndroidWebAuthn();
+        expect(seam.send).toHaveBeenCalledWith({
+            kind: "createOpenChatIdentity",
+            webAuthnCredentialId: Uint8Array.of(1, 2, 3),
+        });
+        expect(identityStateStore.value.kind).toBe("registering");
+        await expect(client.registerUser("new-user", undefined)).resolves.toEqual({
+            kind: "success",
+        });
+    });
+    it.each(["android", "web"])(
+        "preserves original %s signup and assumeIdentity=false behavior",
+        async (provider) => {
+            build();
+            await boot();
+            const result =
+                provider === "android"
+                    ? await client.signUpWithAndroidWebAuthn(false, "new-user")
+                    : await client.signUpWithWebAuthn(false, "new-user");
+            expect(result[1].delegations[0].delegation.expiration).toBe(
+                BigInt(NOW + THIRTY_DAYS) * 1_000_000n,
+            );
+            expect(seam.storageSet).not.toHaveBeenCalled();
+            expect(seam.send).not.toHaveBeenCalledWith(
+                expect.objectContaining({ kind: "setAuthIdentity" }),
+            );
+            expect(authenticated()).toHaveLength(0);
+        },
+    );
+    it("re-authenticates natively without persisting or replacing the active session", async () => {
+        build();
+        await boot();
+        await client.signInWithAndroidWebAuthn();
+        seam.order.length = 0;
+        seam.storageSet.mockClear();
+        seam.nativeConstruct.mockClear();
+        seam.send.mockClear();
+        const result = await client.reSignInWithCurrentWebAuthnIdentity();
+        expect(result[1].delegations[0].delegation.expiration).toBe(
+            BigInt(NOW + THIRTY_DAYS) * 1_000_000n,
+        );
+        expect(seam.nativeConstruct).toHaveBeenCalledWith(expect.any(Function));
+        expect(seam.storageSet).not.toHaveBeenCalled();
+        expect(seam.send).not.toHaveBeenCalledWith(
+            expect.objectContaining({ kind: "setAuthIdentity" }),
+        );
+        expect(seam.order).toEqual([]);
+    });
+    it("links an existing account with the original native code/passkey pipeline", async () => {
+        build();
+        await boot();
+        const defaultSend = seam.send.getMockImplementation()!;
+        seam.send.mockImplementation(async (request) => {
+            if (request.kind === "verifyAccountLinkingCode") {
+                seam.order.push("verify-code");
+                return { kind: "success", username: "synthetic-user" };
+            }
+            if (request.kind === "setCachedWebAuthnKey") seam.order.push("cache-passkey");
+            if (request.kind === "finaliseAccountLinkingWithCode") seam.order.push("link-account");
+            return defaultSend(request);
+        });
+        await client.linkAccountsWithAndroidWebAuthn("123456");
+        expect(seam.nativeCreate).toHaveBeenCalledWith("synthetic-user", expect.any(Function));
+        expect(seam.order).toEqual([
+            "verify-code",
+            "cache-passkey",
+            "link-account",
+            "persist",
+            "worker-identity",
+            "profile",
+        ]);
+        const verify = seam.send.mock.calls.find(
+            ([request]) => request.kind === "verifyAccountLinkingCode",
+        )![0];
+        const finalize = seam.send.mock.calls.find(
+            ([request]) => request.kind === "finaliseAccountLinkingWithCode",
+        )![0];
+        expect(verify.code).toBe("123456");
+        expect(finalize.tempKey).toBe(verify.tempKey);
+        expect(finalize.webAuthnKey).toEqual(
+            expect.objectContaining({ origin: "oc.app", credentialId: Uint8Array.of(1, 2, 3) }),
+        );
+        expect(authenticated()).toEqual([[profile]]);
+        expect(seam.webCreate).not.toHaveBeenCalled();
+    });
+    it("does not create a native passkey when the original linking code is rejected", async () => {
+        build();
+        await boot();
+        const rejection = { kind: "error", code: 100, msg: "synthetic rejected linking code" };
+        seam.send.mockResolvedValue(rejection);
+        await expect(client.linkAccountsWithAndroidWebAuthn("123456")).rejects.toEqual(rejection);
+        expect(seam.nativeCreate).not.toHaveBeenCalled();
+        expect(seam.storageSet).not.toHaveBeenCalled();
         expect(authenticated()).toHaveLength(0);
     });
+    it("does not persist or adopt an identity when the provider rejects sign-in", async () => {
+        build();
+        await boot();
+        seam.providerSign.mockRejectedValue(new Error("synthetic provider cancellation"));
+        await expect(client.signInWithAndroidWebAuthn()).rejects.toThrow("provider cancellation");
+        expect(seam.storageSet).not.toHaveBeenCalled();
+        expect(seam.send).not.toHaveBeenCalledWith(
+            expect.objectContaining({ kind: "setAuthIdentity" }),
+        );
+        expect(authenticated()).toHaveLength(0);
+    });
+    it("does not adopt an identity when original persistence fails", async () => {
+        build();
+        await boot();
+        seam.storageSet.mockRejectedValue(new Error("synthetic persistence failure"));
+        await expect(client.signInWithAndroidWebAuthn()).rejects.toThrow("persistence failure");
+        expect(seam.send).not.toHaveBeenCalledWith(
+            expect.objectContaining({ kind: "setAuthIdentity" }),
+        );
+        expect(authenticated()).toHaveLength(0);
+    });
+    it("preserves original idempotent logout and both teardown paths", async () => {
+        build();
+        await boot();
+        const first = client.logout();
+        expect(client.logout()).toBe(first);
+        await first;
+        expect(seam.authLogout).toHaveBeenCalledOnce();
+        expect(seam.send.mock.calls.filter(([request]) => request.kind === "logout")).toHaveLength(
+            1,
+        );
+    });
     it.each([{ clientOnlyApps: false }, { icUrl: undefined }, { userIndexCanister: "" }])(
-        "does not offer a shared private setup scope for incomplete/official profiles (%j)",
+        "preserves private setup isolation for incomplete/official profiles (%j)",
         async (overrides) => {
-            build(true, overrides);
+            build(overrides);
             await boot();
             expect(client.privateAppStorageBackend()).toBeUndefined();
         },
@@ -277,398 +597,22 @@ describe("OpenChat verified sign-in acceptance", () => {
         ["http://127.0.0.1:8080", "aaaaa-aa"],
         ["https://icp-api.io", "2vxsx-fae"],
     ])(
-        "binds private setup to the configured gateway and account service (%s/%s)",
+        "binds private setup to gateway/account service (%s/%s)",
         async (icUrl, userIndexCanister) => {
-            build(true, { icUrl, userIndexCanister });
+            build({ icUrl, userIndexCanister });
             await boot();
             expect(client.privateAppStorageBackend()).toBe(
                 JSON.stringify([icUrl, userIndexCanister]),
             );
-            expect(seam.flow).not.toHaveBeenCalled();
         },
     );
-    it("rejects missing gateway configuration before starting native sign-in", async () => {
-        build(true, { icUrl: undefined });
-        await boot();
-        await expect(nativeSignIn()).rejects.toThrow(
-            "Local APK identity service is not configured",
+    it("has no active browser bridge or custom native-session API in the client", () => {
+        const source = readFileSync("openchat-client/src/openchat.ts", "utf8");
+        expect(source).not.toMatch(
+            /nativeBrowser|NativeBrowser|signInWithLocalBrowser|createBrowserAccountLinkFlow|retrySavedNativeSession|nativeSessionRestoreState|existingAccountOnly/,
         );
-        expect(seam.flow).not.toHaveBeenCalled();
-        expect(seam.send).not.toHaveBeenCalled();
-        expect(seam.cacheGet).not.toHaveBeenCalled();
-        expect(seam.cacheSet).not.toHaveBeenCalled();
-        expect(authenticated()).toHaveLength(0);
-        expect(identityStateStore.value.kind).toBe("anon");
-    });
-    it("keeps the native sign-in form mounted while worker adoption is pending", async () => {
-        build();
-        await boot();
-        const gate = deferred<ReturnType<typeof workerSuccess>>();
-        const transitions = vi.spyOn(client, "updateIdentityState");
-        seam.send.mockImplementation(async (request) =>
-            request.kind === "setAuthIdentity"
-                ? request.identity
-                    ? gate.promise
-                    : { kind: "auth_identity_not_found" }
-                : undefined,
-        );
-        const pending = nativeSignIn();
-        await vi.waitFor(() =>
-            expect(seam.send).toHaveBeenCalledWith(
-                expect.objectContaining({
-                    kind: "setAuthIdentity",
-                    nativeBrowserSession: expect.any(Object),
-                }),
-            ),
-        );
-        expect(identityStateStore.value.kind).toBe("logging_in");
-        expect(transitions.mock.calls.some(([state]) => state.kind === "loading_user")).toBe(false);
-        expect(authenticated()).toHaveLength(0);
-        gate.resolve(workerSuccess());
-        await pending;
-        expect(authenticated()).toEqual([[profile]]);
-        expect(transitions.mock.calls.some(([state]) => state.kind === "loading_user")).toBe(false);
-    });
-    it("saves only after adoption of the proven profile and respects even a short signed expiry", async () => {
-        build();
-        await boot();
-        const getUser = vi.spyOn(client, "getCurrentUser");
-        await nativeSignIn();
-        expect(authenticated()).toEqual([[profile]]);
-        expect(getUser).not.toHaveBeenCalled();
-        expect(seam.stream).not.toHaveBeenCalled();
-        expect(seam.cacheGet).not.toHaveBeenCalled();
-        expect(seam.cacheSet).not.toHaveBeenCalled();
-        expect(seam.nativeSave).toHaveBeenCalledOnce();
-        expect(seam.order).toEqual(["worker-proof", "native-persist"]);
-        expect(seam.send).toHaveBeenCalledWith(
-            expect.objectContaining({
-                kind: "setAuthIdentity",
-                nativeBrowserSession: expect.objectContaining({ expiresAtMs: NOW + 240_000 }),
-            }),
-        );
-        expect(logout).not.toHaveBeenCalled();
-        await vi.advanceTimersByTimeAsync(NOW + 239_000 - Date.now() - 1);
-        expect(logout).not.toHaveBeenCalled();
-        await vi.advanceTimersByTimeAsync(1);
-        expect(logout).toHaveBeenCalledOnce();
-    });
-    function savedSession() {
-        return {
-            scope: {
-                icUrl: "https://icp-api.io",
-                identityCanister: "aaaaa-aa",
-                userIndexCanister: "aaaaa-aa",
-            },
-            key: authKey.getKeyPair(),
-            delegation: authChain.toJSON(),
-            expiresAtMs: NOW + 240_000,
-            username: profile.username,
-            userId: profile.userId,
-            ocPrincipal: ocKey.getPrincipal().toString(),
-            webAuthnKey: { publicKey: authChain.publicKey, credentialId: Uint8Array.of(1) },
-        };
-    }
-    it("restores only after fresh official proof and exact saved account/scope bindings", async () => {
-        const saved = savedSession();
-        seam.nativeRead.mockResolvedValue({ generation: "existing", session: saved });
-        build();
-        await vi.waitFor(() => expect(authenticated()).toHaveLength(1));
-        expect(seam.flow).not.toHaveBeenCalled();
-        expect(seam.nativeProve).toHaveBeenCalledWith(
-            expect.objectContaining({
-                expectedAccount: { userId: saved.userId, ocPrincipal: saved.ocPrincipal },
-                ...saved.scope,
-                expiresAtMs: saved.expiresAtMs,
-            }),
-        );
-        expect(seam.nativeCurrent).toHaveBeenCalledWith("existing");
-        expect(seam.nativeSave).not.toHaveBeenCalled();
-        expect(get(client.nativeSessionRestoreState)).toBe("idle");
-    });
-    it("keeps a valid saved identity after network failure and retries without opening the browser", async () => {
-        seam.nativeRead.mockResolvedValue({ generation: "existing", session: savedSession() });
-        seam.nativeProve.mockRejectedValueOnce(new Error("offline"));
-        build();
-        await vi.waitFor(() => expect(get(client.nativeSessionRestoreState)).toBe("retry"));
-        expect(authenticated()).toHaveLength(0);
-        expect(seam.nativeClear).not.toHaveBeenCalled();
-        await client.retrySavedNativeSession();
-        expect(authenticated()).toHaveLength(1);
-        expect(seam.nativeProve).toHaveBeenCalledTimes(2);
-        expect(seam.flow).not.toHaveBeenCalled();
-    });
-    it.each(["expired", "scope", "key"])(
-        "never uses %s saved identity as account authority",
-        async (failure) => {
-            const saved = savedSession();
-            if (failure === "expired") saved.expiresAtMs = NOW;
-            if (failure === "scope") saved.scope.identityCanister = "2vxsx-fae";
-            if (failure === "key") saved.key = ocKey.getKeyPair();
-            seam.nativeRead.mockResolvedValue({ generation: "existing", session: saved });
-            build();
-            await vi.waitFor(() => expect(get(client.nativeSessionRestoreState)).toBe("invalid"));
-            expect(seam.nativeProve).not.toHaveBeenCalled();
-            expect(seam.nativeClear).toHaveBeenCalledWith("existing");
-            expect(authenticated()).toHaveLength(0);
-        },
-    );
-    it("does not adopt a restore superseded by another instance's logout", async () => {
-        seam.nativeRead.mockResolvedValue({ generation: "existing", session: savedSession() });
-        seam.nativeCurrent.mockResolvedValue(false);
-        build();
-        await vi.waitFor(() => expect(get(client.nativeSessionRestoreState)).toBe("retry"));
-        expect(authenticated()).toHaveLength(0);
-        expect(seam.nativeSave).not.toHaveBeenCalled();
-    });
-    it("logout clears saved state and cancels a delayed official restore result", async () => {
-        const proof = deferred<{
-            ocKey: ECDSAKeyIdentity;
-            ocChain: DelegationChain;
-            profile: CreatedUser;
-        }>();
-        seam.nativeRead.mockResolvedValue({ generation: "existing", session: savedSession() });
-        seam.nativeProve.mockReturnValue(proof.promise);
-        build();
-        await vi.waitFor(() => expect(seam.nativeProve).toHaveBeenCalledOnce());
-        logout.mockRestore();
-        await client.logout();
-        expect(seam.nativeClear).toHaveBeenCalledWith();
-        proof.resolve({ ocKey, ocChain, profile });
-        await vi.waitFor(() =>
-            expect(seam.nativeProve.mock.results[0].value).resolves.toBeDefined(),
-        );
-        expect(authenticated()).toHaveLength(0);
-        expect(seam.nativeSave).not.toHaveBeenCalled();
-    });
-    it("does not expire a 30-day signed session at the setTimeout limit", async () => {
-        build();
-        await boot();
-        const expires = NOW + 30 * 24 * 60 * 60_000;
-        const longAuth = DelegationChain.fromJSON(authChain.toJSON());
-        const longOc = DelegationChain.fromJSON(ocChain.toJSON());
-        longAuth.delegations[0].delegation.expiration = BigInt(expires) * 1_000_000n;
-        longOc.delegations[0].delegation.expiration = BigInt(expires - 10_000) * 1_000_000n;
-        seam.send.mockImplementation(async (r) =>
-            r.kind === "setAuthIdentity" ? workerSuccess(expires - 10_000) : undefined,
-        );
-        seam.flow.mockImplementation(async (_u, _c, adapter: NativeActivation) =>
-            adapter.activate({ ocKey, ocChain: longOc, profile }, authKey, longAuth, {
-                publicKey: authChain.publicKey,
-                credentialId: Uint8Array.of(1),
-            }),
-        );
-        await nativeSignIn();
-        await vi.advanceTimersByTimeAsync(2 ** 31 - 1);
-        expect(logout).not.toHaveBeenCalled();
-        await vi.advanceTimersByTimeAsync(expires - 11_000 - Date.now());
-        expect(logout).toHaveBeenCalledOnce();
-    });
-    it("rolls back the worker when cancelled after saving even if saved-session deletion fails", async () => {
-        build();
-        await boot();
-        const controller = new AbortController();
-        seam.nativeSave.mockImplementation(async () => {
-            seam.order.push("native-persist");
-            controller.abort();
-            return "saved-generation";
-        });
-        seam.nativeClear.mockRejectedValue(new Error("private storage failure details"));
-        const failure = await nativeSignIn(controller.signal).catch((error: unknown) => error);
-        expect(seam.nativeSave).toHaveBeenCalledOnce();
-        expect(seam.nativeClear).toHaveBeenCalledExactlyOnceWith("saved-generation");
-        expect(seam.order).toEqual(["worker-proof", "native-persist", "worker-anon"]);
-        expect(seam.send).toHaveBeenLastCalledWith(
-            expect.objectContaining({ kind: "setAuthIdentity", identity: undefined }),
-        );
-        expect(identityStateStore.value.kind).toBe("anon");
-        expect(authenticated()).toHaveLength(0);
-        expect(failure).toEqual(new BrowserSignInFailure("session-cleanup"));
-        expect(browserSignInError(failure)).toBe(
-            "Saved sign-in could not be cleared after sign-in failed. Use Clear saved sign-in before trying again. No new account was created. [SIGNIN/session-cleanup]",
-        );
-        expect(browserSignInError(failure)).not.toMatch(
-            /private storage failure|signed out|sign-in cleared\./,
-        );
-        expect(logout).not.toHaveBeenCalled();
-    });
-    it.each([
-        "worker-error",
-        "worker-nonsuccess",
-        "principal",
-        "expiry",
-        "expired",
-        "cancelled",
-    ] as const)("does not activate a native profile after %s rejection", async (failure) => {
-        build();
-        await boot();
-        const controller = new AbortController();
-        seam.send.mockImplementation(async (request) => {
-            if (request.kind !== "setAuthIdentity") return;
-            if (!request.identity) return { kind: "auth_identity_not_found" };
-            if (failure === "worker-error") throw new Error("synthetic worker failure");
-            if (failure === "cancelled") controller.abort();
-            if (failure === "expired") vi.setSystemTime(NOW + 240_000);
-            return failure === "worker-nonsuccess"
-                ? { kind: "oc_identity_not_found" }
-                : failure === "principal"
-                  ? { ...workerSuccess(), ocIdentityPrincipal: "2vxsx-fae" }
-                  : failure === "expiry"
-                    ? workerSuccess(NOW + 240_001)
-                    : workerSuccess();
-        });
-        await expect(nativeSignIn(controller.signal)).rejects.toBeDefined();
-        expect(authenticated()).toHaveLength(0);
-        expect(seam.cacheSet).not.toHaveBeenCalled();
-        expect(identityStateStore.value.kind).toBe("anon");
-        expect(seam.send).toHaveBeenLastCalledWith(
-            expect.objectContaining({ kind: "setAuthIdentity", identity: undefined }),
-        );
-    });
-    it("waits for anonymous startup before activating a native session", async () => {
-        const initial = deferred<unknown>();
-        let started = false;
-        seam.send.mockImplementation(async (request) => {
-            if (request.kind !== "setAuthIdentity") return;
-            if (!request.identity && !started) {
-                started = true;
-                return initial.promise;
-            }
-            return request.identity ? workerSuccess() : { kind: "auth_identity_not_found" };
-        });
-        build();
-        const pending = nativeSignIn();
-        await vi.waitFor(() => expect(started).toBe(true));
-        expect(seam.flow).not.toHaveBeenCalled();
-        initial.resolve({ kind: "auth_identity_not_found" });
-        await pending;
-        expect(authenticated()).toHaveLength(1);
-        expect(created.mock.calls.at(-1)).toEqual([profile]);
-    });
-    it("persists unofficial WebAuthn only after worker and matching-profile proof", async () => {
-        seam.native = false;
-        build();
-        await boot();
-        const gate = deferred<CreatedUser>();
-        seam.stream.mockImplementation(() => {
-            seam.order.push("profile-proof");
-            return new Stream((resolve, reject) => {
-                gate.promise.then((user) => resolve(user, true), reject);
-            });
-        });
-        seam.send.mockImplementation(async (request) =>
-            request.kind === "setAuthIdentity"
-                ? request.identity
-                    ? (seam.order.push("worker-proof"), workerSuccess(NOW + 60 * 60_000))
-                    : { kind: "auth_identity_not_found" }
-                : undefined,
-        );
-        const pending = client.signInWithWebAuthn({
-            username: "synthetic-user",
-            credentialId: Uint8Array.of(1, 2, 3),
-        });
-        await vi.waitFor(() => expect(seam.order).toContain("profile-proof"));
-        expect(identityStateStore.value.kind).toBe("logging_in");
-        expect(seam.cacheSet).not.toHaveBeenCalled();
-        expect(authenticated()).toHaveLength(0);
-        gate.resolve(profile);
-        await pending;
-        expect(seam.order).toEqual(["worker-proof", "profile-proof", "persist"]);
-        expect(authenticated()).toHaveLength(1);
-    });
-    it.each(["worker", "profile", "wrong-profile", "persistence"] as const)(
-        "cleans up unofficial WebAuthn after %s failure",
-        async (failure) => {
-            seam.native = false;
-            build();
-            await boot();
-            const transitions = vi.spyOn(client, "updateIdentityState");
-            seam.send.mockImplementation(async (request) => {
-                if (request.kind !== "setAuthIdentity") return;
-                if (!request.identity) return { kind: "auth_identity_not_found" };
-                if (failure === "worker") throw new Error("synthetic worker failure");
-                return workerSuccess(NOW + 60 * 60_000);
-            });
-            seam.stream.mockImplementation(
-                () =>
-                    new Stream((resolve, reject) =>
-                        queueMicrotask(() =>
-                            failure === "profile"
-                                ? reject(new Error("synthetic profile failure"))
-                                : resolve(
-                                      failure === "wrong-profile"
-                                          ? { ...profile, username: "someone-else" }
-                                          : profile,
-                                      true,
-                                  ),
-                        ),
-                    ),
-            );
-            if (failure === "persistence")
-                seam.cacheSet.mockRejectedValue(new Error("synthetic storage failure"));
-            await expect(
-                client.signInWithWebAuthn({
-                    username: "synthetic-user",
-                    credentialId: Uint8Array.of(1, 2, 3),
-                }),
-            ).rejects.toBeDefined();
-            expect(authenticated()).toHaveLength(0);
-            expect(seam.cacheRemove).toHaveBeenCalledOnce();
-            expect(currentUserStore.value.username).not.toBe("synthetic-user");
-            expect(identityStateStore.value.kind).toBe("anon");
-            expect(transitions.mock.calls.some(([state]) => state.kind === "logging_in")).toBe(
-                true,
-            );
-            expect(transitions.mock.calls.some(([state]) => state.kind === "loading_user")).toBe(
-                false,
-            );
-            expect(seam.send).toHaveBeenLastCalledWith({
-                kind: "setAuthIdentity",
-                identity: undefined,
-                isIIPrincipal: false,
-            });
-            if (failure !== "persistence") expect(seam.cacheSet).not.toHaveBeenCalled();
-        },
-    );
-    it("preserves official WebAuthn persistence before worker/profile startup", async () => {
-        seam.native = false;
-        build(false);
-        await boot();
-        const transitions = vi.spyOn(client, "updateIdentityState");
-        seam.send.mockImplementation(async (request) =>
-            request.kind === "setAuthIdentity"
-                ? request.identity
-                    ? (seam.order.push("worker-proof"), workerSuccess(NOW + 60 * 60_000))
-                    : { kind: "auth_identity_not_found" }
-                : undefined,
-        );
-        await client.signInWithWebAuthn();
-        expect(seam.authCreate).toHaveBeenCalledOnce();
-        expect(seam.order).toEqual(["persist", "worker-proof", "profile-proof"]);
-        expect(authenticated()).toHaveLength(1);
-        expect(transitions.mock.calls.some(([state]) => state.kind === "loading_user")).toBe(true);
-        expect(transitions.mock.calls.some(([state]) => state.kind === "logging_in")).toBe(false);
-    });
-    it("preserves loading_user during automatic unofficial browser session restoration", async () => {
-        seam.native = false;
-        seam.cacheGet.mockResolvedValue({ key: authKey, delegation: authChain });
-        const gate = deferred<ReturnType<typeof workerSuccess>>();
-        seam.send.mockImplementation(async (request) =>
-            request.kind === "setAuthIdentity"
-                ? request.identity
-                    ? gate.promise
-                    : { kind: "auth_identity_not_found" }
-                : undefined,
-        );
-        build();
-        await vi.waitFor(() =>
-            expect(seam.send).toHaveBeenCalledWith(
-                expect.objectContaining({ kind: "setAuthIdentity", identity: expect.any(Object) }),
-            ),
-        );
-        expect(identityStateStore.value.kind).toBe("loading_user");
-        gate.resolve(workerSuccess(NOW + 60 * 60_000));
-        await vi.waitFor(() => expect(authenticated()).toHaveLength(1));
-        expect(seam.cacheSet).not.toHaveBeenCalled();
+        expect(OpenChat.prototype).not.toHaveProperty("signInWithLocalBrowser");
+        expect(OpenChat.prototype).not.toHaveProperty("createBrowserAccountLinkFlow");
+        expect(OpenChat.prototype).not.toHaveProperty("retrySavedNativeSession");
     });
 });

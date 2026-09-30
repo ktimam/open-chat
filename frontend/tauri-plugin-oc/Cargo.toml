@@ -15,6 +15,9 @@ hex = "0.4"
 open = "5"
 sysinfo = { version = "0.33", default-features = false, features = ["system", "disk"] }
 llama-cpp-2 = { version = "=0.1.150", optional = true, features = ["mtmd"] }
+# Keep the wrapper and its exposed native ABI paired; the wrapper's sys range is not exact.
+# This constraint is activated only by inference and adds no sys default features.
+llama-cpp-sys-2 = { version = "=0.1.150", optional = true, default-features = false }
 minijinja = { version = "=2.21.0", optional = true, features = ["macros"] }
 minijinja-contrib = { version = "=2.21.0", optional = true, features = ["pycompat"] }
 serde = { workspace = true }
@@ -47,4 +50,4 @@ local-app-handoff = ["dep:bytes", "dep:getrandom", "dep:http-body-util", "dep:hy
 # Build the image (mtmd/CLIP) path with an optimised profile (`--release`): unoptimised debug builds of
 # llama.cpp's vision C++ are not only very slow but can abort with a stack-check failure on Windows. The
 # text path runs fine in debug; the shipping app build is release, so this is naturally satisfied.
-inference = ["dep:llama-cpp-2", "dep:minijinja", "dep:minijinja-contrib"]
+inference = ["dep:llama-cpp-2", "dep:llama-cpp-sys-2", "dep:minijinja", "dep:minijinja-contrib"]

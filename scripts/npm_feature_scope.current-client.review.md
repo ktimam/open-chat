@@ -1,5 +1,9 @@
 # Current unofficial-client npm source ownership
 
+Latest disposition: see **Mobile error-translation checkpoint (2026-09-30)**
+below. Earlier sections and their hashes remain historical evidence; they do not
+describe the now-removed active browser-auth transport.
+
 Reviewed 2026-09-29. This is a **direct-feature ownership review**, not an
 advisory waiver, whole-core audit, runtime/phone qualification, or release approval.
 The separate current composition is `current-client-npm`; its CLI selector is
@@ -171,3 +175,206 @@ the fork checkpoint. The current aggregate is
 The original source reviews, the 94-file formatter-equivalence proof, setup-only
 persistence and named-choice evidence remain intact. No advisory query, package
 installation, root expansion, backend deployment or release acceptance is implied.
+
+## Approved connection and remembered-sign-in source checkpoint (2026-09-30)
+
+The user explicitly approved scoped CI verification for the current app-owned
+connection and local-test remembered-auth seam. This checkpoint reviews the actual
+working-tree sources on `7fe6c8925530962a222ba6b816b3c7998cb8d91f`, including the
+new browser-auth explanation copy. Earlier exclusions of this seam describe their
+historical checkpoints; they do not silently grant or restrict this separate
+approval. No earlier snapshot, historical PR policy or advisory decision changes.
+
+The previous accepted snapshot was independently reconstructed from Git commit
+`9e8c88ece52860e6d0e3569969cc676072016227`, using its selectors, evidence paths and
+source bytes, and both the previous and current UTF-8/LF fingerprint functions.
+It exactly reproduces `14fb964489adca4863a72792cd229a5273594de925d2cfc80188a9f3f64fa806`
+over 100 dedicated owners and 118 fingerprinted sources. The current comparison
+adds 31 paths, changes 14 existing source files and removes none. No prior temporary
+candidate hash was accepted as current evidence.
+
+The current aggregate is
+`bf0884970516515d0cd38b6a405e858c2db331bcbf633b6371320e91275153c9`:
+**119 dedicated modules, 149 fingerprinted sources, 25 unchanged roots and 90
+exact ownership anchors**. The same fail-closed import, root, anchor and source-set
+checks apply. The current-only test-fixture exclusion keeps test data out of the
+production inventory and does not change either historical selector.
+
+### Added owners and narrowly reached sources
+
+Nine dedicated app-connection owners cover `localAppDirectory.ts`,
+`localAppSetupConnection.ts`, `localAppSetupPopup.ts`, the browser setup relay and
+public HTML, the native setup entrypoint/HTML/build plugin, and the native setup
+guest command. The directory fetch path accepts bounded same-publisher public
+metadata and verifies processor hashes. Setup requires an explicit app-owned
+consent exchange, exact popup origin/window/nonce validation and package
+revalidation. The native bootstrap uses a short-lived one-use fragment secret,
+scrubs it from the visible URL and does not transfer account credentials. Restored
+setup remains bounded, strict-key, account/backend-scoped data: selected catalog
+actions, verified processors, connected installations and chat opt-ins. Drafts,
+messages, approvals, credentials and delivery payloads remain excluded.
+
+Ten dedicated auth owners are added: `local-browser-auth.html`,
+`localBrowserAuthBuild.mjs`, `src/localBrowserAuth.ts`, the client
+`nativeBrowserAuth.ts`, `nativeBrowserSigner.ts`, `nativeBrowserSignInFlow.ts` and
+`nativeBrowserSessionStorage.ts`, agent `nativeBrowserAccountSession.ts`, shared
+`nativeBrowserSession.ts`, and the `localBrowserAuth.ts` guest command. Their direct
+imports use already reviewed SDK, idb, Tauri and esbuild roots; relative/internal
+aliases do not invent package roots. All 119 dedicated sources were scanned, not
+only the additions.
+
+Twelve newly fingerprinted mixed/reached paths are `rollup.extras.mjs`, desktop
+and mobile `OnboardModal.svelte`, `ExistingAccountSignIn.svelte`, agent
+`identityAgent.ts` and `singleSubmissionFetch.ts`, client `config.ts`,
+`browserAccountLink.ts`, `browserPasskey.ts` and `browserSignInDiagnostics.ts`,
+shared `domain/worker.ts`, and `openchat-worker/src/worker.ts`. Each has an exact
+feature anchor. Existing mixed `openchat.ts`, Rollup and guest index sources also
+gain scoped anchors. Whole-file fingerprints detect drift, but mixed/reached
+files do not enter the dedicated direct-import scan or approve unrelated core
+dependencies by coexistence.
+
+### Auth, persistence and cleanup findings
+
+The browser signer validates the fixed challenge/delegation target, challenge
+origin/RP, P-256 signature and required user presence/verification. A new sign-in
+attempt has a 120-second gesture window; the APK-only key/delegation is distinct
+from that attempt. Existing-account proof uses the pinned ICP API configuration,
+verified queries, bounded credential-omitting requests and a single-submission
+identity update transport. Restore rechecks the fresh existing account against the
+saved user/principal and configured backend before client/worker activation.
+
+The separate `oc-native-browser-session` IndexedDB store uses the existing `idb`
+root and saves a nonextractable P-256 key, bounded delegation and exact account/
+backend scope. Record validation, generation checks and metadata-only logout
+tombstones prevent stale restoration/clearing races. There is no localStorage
+fallback. This is not private-app setup storage or durable draft history, nor a
+claim of hardware-backed storage or protection against a compromised device.
+
+The shared worker helper is structural/delegation-scope validation, not a second
+independent cryptographic account proof. The client performs the fresh account
+proof before adopting the worker session. Transient restoration errors retain the
+saved record for an explicit retry while leaving the client anonymous; invalid or
+expired sessions are cleared. Logout clears saved sign-in. The `7fe6c8925` cleanup
+path preserves anonymous rollback even if deleting a just-saved record fails;
+the fixed diagnostic and sign-in UI require explicit saved-sign-in clearing before
+another attempt. The current HTML distinguishes the 120-second attempt from the
+up-to-30-day remembered session and its online verification requirement.
+
+Optional account-link/passkey helpers retain explicit credential interaction,
+required user verification and cancellation propagation. Source checks do not
+qualify any browser/Android credential provider, prove real-device remembered
+restore, or establish runtime acceptance. No additional dependency root or new
+scoped source-ownership finding was found; this is not a general security audit.
+
+### Existing-source delta and verification boundary
+
+The 14 changed previously fingerprinted sources are `localAppRelayBuild.mjs`,
+`rollup.config.mjs`, desktop/mobile `App.svelte`, `PrivateAppsWorkspace.svelte`,
+`localAppHandoffRelay.ts`, `localNativeAppHandoff.ts`, `localAppSetupStore.ts`,
+`privateAppWorkspace.ts`, `vite.config.ts`, client `openchat.ts`, service-worker
+`local_app_relay.ts`, guest `index.ts` and `scripts/build-unofficial-local-apk.mjs`.
+They integrate setup launch/discovery, consented connection/persistence and
+the narrowly reached auth flow with existing workspace, relay and local-test
+build entrypoints. Existing handoff validation and delivery review remain in
+place. The runtime sources themselves were not edited by this inventory update.
+
+Added regression coverage pins all nineteen added production owners, their exact
+direct imports, historical-scope separation and the setup fixture exclusion.
+The ten auth owners additionally reject per-file removal and content mutation;
+unreviewed setup/auth package imports fail closed. Exact counts and all four
+mixed-client ownership anchors remain asserted. No test, root allowlist or
+advisory disposition is relaxed to accept this snapshot.
+
+Use the two offline commands in **Enforcement and verification** above to verify
+the current inventory and the five scoped npm contract suites. Both passed for
+this checkpoint: the source gate reports 149 sources and the aggregate above;
+all 147 contract tests pass with zero skipped or cancelled tests. The initial stale
+inventory failed its two expected source-snapshot assertions; the new receipt
+records the reviewed current bytes rather than bypassing those checks. No network
+query, package installation/upgrade, core audit, advisory waiver, APK rebuild,
+browser/device test or deployment was performed by this source-review change.
+
+## Original-auth restoration source review (2026-09-30)
+
+This additional, user-approved current-source review binds the restored original
+auth flow after the client/worker/UI owners declared their production changes
+stable. The earlier browser-auth snapshot is preserved unchanged, not silently
+relabelled as acceptance of the restored path.
+
+The current aggregate is
+`425a64c8f66fb23956590bc0a698e865bbf1e606d3144b2e8411ad3dc2f1898c`:
+**119 dedicated modules, 148 fingerprinted sources, 25 unchanged dependency roots
+and 86 exact ownership anchors**. Dedicated selectors, dependency allowlists,
+strict UTF-8/LF identity and all historical PR records are unchanged.
+
+Reviewed source changes restore the original desktop/mobile onboarding UI,
+Android passkey entrypoint, AuthClient with original IdentityStorage, worker
+auth-principal cache lookup and delegation refresh, and ordinary account-linking
+transport. Worker initialization/linking functions and the SetAuthIdentity type
+match pinned upstream `5f00758312735f2ddac9928e3aa60349964bf73a`; worker reply
+logging remains redacted. Client auth methods were independently compared with
+the same baseline. This is a bounded restoration review, not a broad core audit.
+
+The custom ExistingAccountSignIn screen is deleted. Active browser-session
+adoption, custom remembered-session saves/clears and the browser-auth Rollup plugin
+are absent. The builder rejects browser-auth assets and no longer enables the
+browser-auth Cargo feature. Original account-creation UI and behavior are again
+available: this review does not claim an existing-account-only guard, and no real
+account was created by verification. The App entrypoints, native delivery and
+private workspace use clientOnlyApps independently of authentication policy.
+
+Exactly five stale anchors now identify original onboarding/native identity/
+worker/protocol source. Four removed-use anchors are retired: the deleted screen,
+the two removed custom-session save/clear calls and the removed Rollup plugin
+invocation. The source count falls by exactly the deleted screen. All ten legacy
+browser-auth helper owners remain scanned and fingerprinted as dormant source,
+including their idb/esbuild/SDK/Tauri edges; none is represented as active sign-in.
+The standalone structural validator's type no longer imports the worker protocol.
+Tests continue to reject helper removal, source drift and unreviewed imports, and
+now additionally require original bootstrap/worker fields and independent app
+guards while rejecting active custom browser-auth/session references. Exact
+counts are updated for reviewed removal, not waived or made conditional.
+
+No dependency installation/upgrade, advisory request/waiver, new dependency root,
+APK build, device persistence test or authentication ceremony is part of this
+review. Google Password Manager/RP association, real provider behavior and binary
+acceptance remain separate gates. Native Cargo/profile/license binding is a
+separate current-client review and is not inferred from this npm receipt.
+
+Verification: the current source gate reports the aggregate and counts above;
+all **148** tests in the same five offline npm contract suites pass, with zero
+failed, skipped or cancelled tests. Existing root-removal, import-drift, malformed
+source, ownership-anchor and historical-scope checks remain enabled.
+
+## Mobile error-translation checkpoint (2026-09-30)
+
+The reviewed current aggregate is
+`09b7e91e437cfbfb58c6029fbd51066967ffd27899a3406206dee87514e16341`.
+All **119 dedicated owners, 148 fingerprinted sources, 25 dependency roots and
+86 exact anchors** are unchanged. The preceding `425a64c8` snapshot remains intact.
+
+Exactly one fingerprinted file changes:
+`frontend/app/src/components_mobile/onboard/OnboardModal.svelte`. Its strict
+UTF-8/LF SHA256 changes from
+`1c93d07d7b15826a5c0af8a593a86cffc092ff3dd1eb39911cb4a37114fb7785` to
+`251df92cfea239711f19508c72e08c50c0a5424c9285c7762ba9bf262ffae6e8`.
+Restoring the original component had also restored its bare `i18nKey(error)`
+lookup, although handlers produce short codes and the real catalogs require
+`native.auth.errors.*`. The existing 44 renderer tests correctly caught this
+display regression; their expectations were not weakened or replaced.
+
+The two-line exception to exact upstream UI equivalence imports the existing
+local `nativeAuthErrorKey` helper and applies it only to the error resource key.
+Known codes select translated messages; legacy or unknown provider strings select
+the existing generic message. Original handlers, layout, sign-in/account-link
+routing, native commands, session persistence and private-app boundaries remain
+unchanged. Reversing only these two lines reproduces both the prior file hash and
+the prior full aggregate; the added offline contract asserts that exact delta.
+
+Focused renderer/onboarding/lifecycle verification passes **87/87**, including all
+44 former failures with real English/Arabic catalogs. The same five offline npm
+contract suites pass **149/149** and the source gate reports the aggregate above.
+No selectors, roots, ownership anchors, package/lock identities, historical PR
+policies or advisory decisions change. This is not a core audit, provider/DAL
+qualification or binary acceptance: existing APK015 assets remain unchanged and
+do not contain this later source-only display correction.

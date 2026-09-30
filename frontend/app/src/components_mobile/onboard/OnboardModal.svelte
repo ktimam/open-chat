@@ -1,7 +1,7 @@
 <script lang="ts">
     import { i18nKey, interpolate } from "@src/i18n/i18n";
-    import { VersionChecker } from "@src/utils/version.svelte";
     import { nativeAuthErrorKey } from "@src/utils/nativeAuthErrorKey";
+    import { VersionChecker } from "@src/utils/version.svelte";
     import {
         Body,
         BodySmall,
@@ -19,7 +19,6 @@
     import { OpenChat, type CreatedUser } from "@client";
     import { ErrorCode } from "@shared";
     import { navigate } from "@utils/navigation";
-    import { classifyAndroidWebAuthnSignInFailure } from "@src/utils/androidWebAuthnError";
     import { getContext, onMount } from "svelte";
     import { _ } from "svelte-i18n";
     import ChevronLeft from "svelte-material-icons/ChevronLeft.svelte";
@@ -28,7 +27,6 @@
     import Progress from "../Progress.svelte";
     import Translatable from "../Translatable.svelte";
     import SignUp from "./SignUp.svelte";
-    import ExistingAccountSignIn from "../../components_shared/ExistingAccountSignIn.svelte";
 
     const ALC_LENGTH = 6;
 
@@ -55,32 +53,18 @@
     });
 
     function signIn() {
-        const nativeAndroid = client.isNativeAndroid();
-        const nativeApp = client.isNativeApp();
-        (nativeApp ? client.signInWithAndroidWebAuthn() : client.signInWithWebAuthn()).catch(
-            async (e) => {
-                if (!nativeAndroid) {
-                    if ("AUTH_FAILED" === e) {
-                        error = nativeApp ? "native.auth.error" : "default";
-                        console.error("Auth error: ", e);
-                    } else {
-                        step = "one-time-password";
-                    }
-                    return;
-                }
-
-                const failure = classifyAndroidWebAuthnSignInFailure(e);
-                if (failure.kind === "cancelled") {
-                    return;
-                }
-                error = failure.errorCode;
-                if (failure.kind === "link_account") {
-                    step = "one-time-password";
-                } else {
-                    console.error("Android passkey sign-in error: ", e);
-                }
-            },
-        );
+        (client.isNativeApp()
+            ? client.signInWithAndroidWebAuthn()
+            : client.signInWithWebAuthn()
+        ).catch(async (e) => {
+            if ("AUTH_FAILED" === e) {
+                error = "native.auth.error";
+                console.error("Auth error: ", e);
+            } else {
+                // Passkey either not found, or user cancelled auth request
+                step = "one-time-password";
+            }
+        });
     }
 
     function signUp() {
@@ -311,35 +295,29 @@
     </Container>
 {/snippet}
 
-{#if client.existingAccountOnly()}
-    <Container supplementalClass="login_screen" padding={["xxl", "lg"]} direction={"vertical"}>
-        <ExistingAccountSignIn onSignedIn={() => navigate("/communities")} />
+<Container supplementalClass="login_screen" gap={"xl"} direction={"vertical"}>
+    <Container
+        supplementalClass={"login_mockup"}
+        height={{ size: step === "choose-auth" ? "23rem" : "11rem" }}
+        backgroundImage={"/assets/login_mockup.svg"}
+    >
+        <span></span>
     </Container>
-{:else}
-    <Container supplementalClass="login_screen" gap={"xl"} direction={"vertical"}>
-        <Container
-            supplementalClass={"login_mockup"}
-            height={{ size: step === "choose-auth" ? "23rem" : "11rem" }}
-            backgroundImage={"/assets/login_mockup.svg"}
-        >
-            <span></span>
+    {#if step === "choose-auth"}
+        {@render choosePath()}
+    {:else if step === "new-user"}
+        {@render newUserView()}
+    {:else if step === "one-time-password"}
+        {@render existingUserView()}
+    {/if}
+    {#if error !== undefined}
+        <Container gap={"md"} padding={["zero", "xxl"]} direction={"vertical"}>
+            <ErrorMessage>
+                <Translatable resourceKey={i18nKey(nativeAuthErrorKey(error))} />
+            </ErrorMessage>
         </Container>
-        {#if step === "choose-auth"}
-            {@render choosePath()}
-        {:else if step === "new-user"}
-            {@render newUserView()}
-        {:else if step === "one-time-password"}
-            {@render existingUserView()}
-        {/if}
-        {#if error !== undefined}
-            <Container gap={"md"} padding={["zero", "xxl"]} direction={"vertical"}>
-                <ErrorMessage>
-                    <Translatable resourceKey={i18nKey(nativeAuthErrorKey(error))} />
-                </ErrorMessage>
-            </Container>
-        {/if}
-    </Container>
-{/if}
+    {/if}
+</Container>
 
 <style lang="scss">
     :global(.container.login_mockup) {

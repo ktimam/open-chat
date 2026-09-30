@@ -113,6 +113,52 @@ function mutateMetadata(value, change) {
   return value;
 }
 
+for (const [name, workspaceFeatures, memberFeatures, expected] of [
+  ["identical", ["protocol-asset"], ["protocol-asset"], ["protocol-asset"]],
+  [
+    "overlapping",
+    ["workspace-only", "protocol-asset"],
+    ["protocol-asset", "member-only"],
+    ["member-only", "protocol-asset", "workspace-only"],
+  ],
+]) {
+  test(`${name} workspace/member feature declarations produce a sorted requested-feature set`, () => {
+    const input = fixture();
+    input.inputs.manifests["Cargo.toml"] +=
+      `\n[workspace.dependencies]\ncipher = { version = "1.0.0", features = ${JSON.stringify(workspaceFeatures)} }\n`;
+    input.inputs.manifests["feature/Cargo.toml"] +=
+      `\n[dependencies]\ncipher = { workspace = true, features = ${JSON.stringify(memberFeatures)} }\n`;
+    for (const [path, bytes] of Object.entries(input.inputs.manifests))
+      input.identity.manifestSha256[path] = hash(bytes);
+    // Cargo metadata retains both inherited and member requests, including overlap.
+    mutateMetadata(input, (metadata) => {
+      metadata.packages[0].dependencies[0].features = [
+        ...workspaceFeatures,
+        ...memberFeatures,
+      ];
+    });
+    const before = JSON.stringify(input);
+    const report = collectRustFeatureScope(input);
+    assert.deepEqual(report.roots[0].requestedFeatures, expected);
+    assert.equal(report.roots.length, 1);
+    assert.equal(report.roots[0].usesDefaultFeatures, true);
+    assert.equal(report.roots[0].optional, false);
+    assert.equal(report.edges.length, 5);
+    assert.equal(
+      JSON.stringify(input),
+      before,
+      "Raw bound evidence must remain unchanged",
+    );
+    const reversed = mutateMetadata(structuredClone(input), (metadata) => {
+      metadata.packages[0].dependencies[0].features.reverse();
+    });
+    assert.deepEqual(
+      collectRustFeatureScope(reversed).roots[0].requestedFeatures,
+      expected,
+    );
+  });
+}
+
 test("full selected closure retains version, checksum, edge kinds/targets, cycles and shared provenance without core siblings", () => {
   const input = fixture();
   const before = JSON.stringify(input);

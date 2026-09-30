@@ -1,7 +1,12 @@
 import { DelegationChain, DelegationIdentity, ECDSAKeyIdentity } from "@icp-sdk/core/identity";
 import { Principal } from "@icp-sdk/core/principal";
 import type { JsonnableIdentityKeyAndChain } from "../domain/identity";
-import type { SetAuthIdentity } from "../domain/worker";
+
+// Standalone legacy validation input, deliberately not part of the worker auth protocol.
+type NativeBrowserSessionCandidate = {
+    ocIdentity: JsonnableIdentityKeyAndChain;
+    expiresAtMs: number;
+};
 
 export class NativeBrowserSessionError extends Error {
     readonly code = "invalid_native_browser_session";
@@ -54,14 +59,14 @@ async function restoreSingle(source: JsonnableIdentityKeyAndChain) {
 }
 
 /**
- * Structural worker-side checks for a session whose signatures and official account mapping
- * were already verified by the explicit native-browser flow. This does NOT verify signatures
- * or authorize an external caller, and must never be exposed as a public auth callback.
+ * Standalone legacy structural checks, not an active worker authentication transport.
+ * This does NOT verify signatures or authorize an external caller, and must never be exposed
+ * as a public auth callback or used to adopt an identity supplied to the worker.
  * It performs local key restoration/consistency checks: no network, persistence, or identity minting.
  */
 export async function validateNativeBrowserSession(
     authIdentity: JsonnableIdentityKeyAndChain | undefined,
-    supplied: SetAuthIdentity["nativeBrowserSession"],
+    supplied: NativeBrowserSessionCandidate | undefined,
     isIIPrincipal: boolean,
     policy: Policy,
     nowMs = Date.now(),

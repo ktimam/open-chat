@@ -17,7 +17,9 @@
         android:usesCleartextTraffic="${usesCleartextTraffic}" android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules" android:fullBackupContent="@xml/backup_rules"
         tools:ignore="MissingTvBanner">
-        <!-- No official app links, auth RP association, push registration or OTA client. -->
+        <!-- No official app links, push registration or OTA client. The original
+             RP association does not authorize this fork's package/signature. -->
+        <meta-data android:name="asset_statements" android:resource="@string/asset_statements" />
         <provider android:name="com.google.firebase.provider.FirebaseInitProvider" tools:node="remove" />
         <service android:name="com.google.firebase.messaging.FirebaseMessagingService" tools:node="remove" />
         <receiver android:name="com.google.firebase.iid.FirebaseInstanceIdReceiver" tools:node="remove" />

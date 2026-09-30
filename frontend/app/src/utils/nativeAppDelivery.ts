@@ -287,14 +287,9 @@ export function nativeDeliveryAllowed(
     client:
         | {
               isNativeApp?: () => boolean;
-              existingAccountOnly?: () => boolean;
               clientOnlyApps?: () => boolean;
           }
         | undefined,
 ): boolean {
-    return (
-        client?.isNativeApp?.() === true &&
-        client.existingAccountOnly?.() === true &&
-        client.clientOnlyApps?.() === true
-    );
+    return client?.isNativeApp?.() === true && client.clientOnlyApps?.() === true;
 }

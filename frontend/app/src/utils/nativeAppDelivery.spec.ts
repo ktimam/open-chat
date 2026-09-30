@@ -351,13 +351,18 @@ describe("native private draft delivery", () => {
         expect(deps.begin).not.toHaveBeenCalled();
     });
 
-    it("requires all native local-test profile gates", () => {
+    it("requires native private-app capability, independent of the authentication implementation", () => {
         const enabled = {
             isNativeApp: () => true,
-            existingAccountOnly: () => true,
             clientOnlyApps: () => true,
         };
         expect(nativeDeliveryAllowed(enabled)).toBe(true);
+        expect(
+            nativeDeliveryAllowed({
+                ...enabled,
+                existingAccountOnly: () => false,
+            } as typeof enabled),
+        ).toBe(true);
         for (const key of Object.keys(enabled))
             expect(nativeDeliveryAllowed({ ...enabled, [key]: () => false })).toBe(false);
         expect(nativeDeliveryAllowed(undefined)).toBe(false);

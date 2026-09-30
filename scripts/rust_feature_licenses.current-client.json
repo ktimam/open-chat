@@ -1,15 +1,15 @@
 {
   "schemaVersion": 1,
   "scope": "current-client",
-  "cargoLockSha256": "0816a350d574b1a43bf7b5cbf4928862f1e5dd524878cec2c707e11a3e719cb9",
-  "sourceScopeSha256": "08dc4954f77f27197ae5181982445adaa242cf925c62c5e343a7c1c4b28da007",
+  "cargoLockSha256": "2ef5dd58038289bbdcb806b59e2bed1dbd7dfe265f1970791ad653c4fd0fff47",
+  "sourceScopeSha256": "ec757927fa7a63b5a937b3c395d17f78a028030dfdf0b6dcbd95fcc4a5c5fd4a",
   "modelIdentityResolutions": [
     {
       "name": "llama-cpp-sys-2",
       "historicalVersion": "0.1.150",
-      "version": "0.1.154",
+      "version": "0.1.150",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
-      "checksum": "13a9ea2ce0cdc20bcb1870534022e340b391663f8fe09133951e2fe37fbc29cf",
+      "checksum": "f67dab3ed2b68e4fc4a42471eac73e128ed2ee97bd10de66ddcc609dd5d838a0",
       "parent": {
         "name": "llama-cpp-2",
         "version": "0.1.150",
@@ -101,7 +101,7 @@
     },
     {
       "name": "llama-cpp-sys-2",
-      "version": "0.1.154",
+      "version": "0.1.150",
       "license": "MIT OR Apache-2.0",
       "source": "registry+https://github.com/rust-lang/crates.io-index"
     },

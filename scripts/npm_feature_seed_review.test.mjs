@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
@@ -186,8 +187,9 @@ test("current private-app, field-review and browser/native relay families are fi
   for (const file of [
     "frontend/app/src/components/home/ChatMessage.svelte",
     "frontend/openchat-client/src/openchat.ts",
-    "frontend/app/src/localBrowserAuth.ts",
-    "frontend/app/localBrowserAuthBuild.mjs",
+    "frontend/openchat-client/src/utils/browserPasskey.ts",
+    "frontend/openchat-client/src/utils/browserAccountLink.ts",
+    "frontend/openchat-worker/src/worker.ts",
     "frontend/openchat-service-worker/src/service_worker.ts",
     "frontend/app/src/components_shared/PrivateAppsWorkspace.card.spec.ts",
     "frontend/app/src/components_shared/PrivateAppsNavigation.spec.shell.svelte",
@@ -195,7 +197,7 @@ test("current private-app, field-review and browser/native relay families are fi
   ])
     assert(
       !owned.includes(file),
-      `mixed core, unrelated auth, tests or docs must not become dedicated source: ${file}`,
+      `mixed core, reached helpers, tests or docs must not become dedicated source: ${file}`,
     );
 });
 
@@ -210,12 +212,12 @@ test("current setup persistence is a dedicated builtin-API consumer with an exac
   const clientPath = "frontend/openchat-client/src/openchat.ts";
   const owned = featureOwnedFiles(root, config.scopeId);
   const fingerprint = seedSourceFingerprint(root, config);
-  assert.equal(owned.length, 100);
-  assert.equal(fingerprint.files.length, 118);
+  assert.equal(owned.length, 119);
+  assert.equal(fingerprint.files.length, 148);
   assert.equal(config.seeds.length, 25);
   assert.equal(
     config.seeds.reduce((count, seed) => count + seed.evidence.length, 0),
-    65,
+    86,
   );
   assert(owned.includes(storePath));
   assert(
@@ -228,10 +230,12 @@ test("current setup persistence is a dedicated builtin-API consumer with an exac
   const anchors = config.seeds
     .flatMap((seed) => seed.evidence)
     .filter((item) => item.file === clientPath);
-  assert.equal(anchors.length, 1);
-  assert.equal(
-    anchors[0].contains,
-    "return JSON.stringify([this.config.icUrl, this.config.userIndexCanister]);",
+  assert.deepEqual(
+    anchors.map((anchor) => anchor.contains).sort(),
+    [
+      "const webAuthnIdentity = new AndroidWebAuthnPasskeyIdentity((credentialId) =>",
+      "return JSON.stringify([this.config.icUrl, this.config.userIndexCanister]);",
+    ].sort(),
   );
   const client = readFileSync(resolve(root, clientPath), "utf8").replaceAll(
     "\r\n",
@@ -250,6 +254,7 @@ test("current setup persistence is a dedicated builtin-API consumer with an exac
   assert.deepEqual(featureDependencySpecifiers(source), [
     "./localAppCatalog",
     "./isolatedAppProcessor",
+    "./localAppDirectory",
   ]);
   assert.match(source, /globalThis\.indexedDB/u);
   assert.match(source, /crypto\.subtle\.digest\("SHA-256"/u);
@@ -257,6 +262,382 @@ test("current setup persistence is a dedicated builtin-API consumer with an exac
     source,
     /\b(?:fetch|WebSocket|XMLHttpRequest|Worker|runIsolatedAppProcessor)\s*\(/u,
   );
+});
+
+test("current app discovery and setup include every production owner but no test fixture or historical scope expansion", () => {
+  const config = JSON.parse(
+    readFileSync(
+      resolve(root, "scripts/npm_feature_scope.current-client.json"),
+      "utf8",
+    ),
+  );
+  const owned = featureOwnedFiles(root, config.scopeId);
+  const fingerprint = seedSourceFingerprint(root, config);
+  const additions = new Map([
+    [
+      "frontend/app/src/utils/localAppDirectory.ts",
+      ["./localAppCatalog", "./isolatedAppProcessor"],
+    ],
+    [
+      "frontend/app/src/utils/localAppSetupConnection.ts",
+      [
+        "@tauri-apps/api/core",
+        "./localAppDirectory",
+        "./localAppHandoff",
+        "./localAppSetupPopup",
+        "tauri-plugin-oc-api/commands/localAppSetup",
+        "tauri-plugin-oc-api/commands/openUrl",
+      ],
+    ],
+    ["frontend/app/src/utils/localAppSetupPopup.ts", ["./localAppHandoff"]],
+    ["frontend/app/local-native-app-setup.html", []],
+    ["frontend/app/public/local-app-setup.html", []],
+    ["frontend/app/src/localAppSetupRelay.ts", ["./utils/localAppSetupPopup"]],
+    [
+      "frontend/app/localNativeAppSetupBuild.mjs",
+      ["node:fs/promises", "node:url", "esbuild"],
+    ],
+    ["frontend/app/src/localNativeAppSetup.ts", ["./utils/localAppSetupPopup"]],
+    [
+      "frontend/tauri-plugin-oc/guest-js/commands/localAppSetup.ts",
+      ["@tauri-apps/api/core"],
+    ],
+  ]);
+  const roots = new Set(
+    config.seeds.map(
+      (seed) => seed.name ?? seed.location.replace(/^node_modules\//u, ""),
+    ),
+  );
+  for (const [file, imports] of additions) {
+    assert(owned.includes(file), `Missing production owner: ${file}`);
+    assert(
+      fingerprint.files.includes(file),
+      `Missing source identity: ${file}`,
+    );
+    const source = readFileSync(resolve(root, file), "utf8");
+    assert.deepEqual(featureDependencySpecifiers(source), imports, file);
+    assertReviewedFeatureImports(source, roots);
+    assert.throws(
+      () =>
+        assertReviewedFeatureImports(
+          `${source}\nimport "unreviewed-setup-package";\n`,
+          roots,
+        ),
+      /no reviewed root: unreviewed-setup-package/u,
+    );
+    for (const scope of ["pr1-model-npm", "pr2-app-card-ocr-npm"])
+      assert(
+        !featureOwnedFiles(root, scope).includes(file),
+        `Historical scope expanded: ${scope}: ${file}`,
+      );
+  }
+  const fixture = "frontend/app/src/utils/localAppDirectory.testFixtures.ts";
+  assert(!owned.includes(fixture));
+  assert(!fingerprint.files.includes(fixture));
+});
+
+test("retained legacy native sign-in helpers have exact reviewed imports and fail closed on source drift", () => {
+  const config = JSON.parse(
+    readFileSync(
+      resolve(root, "scripts/npm_feature_scope.current-client.json"),
+      "utf8",
+    ),
+  );
+  const owned = featureOwnedFiles(root, config.scopeId);
+  const fingerprint = seedSourceFingerprint(root, config);
+  const additions = new Map([
+    [
+      "frontend/app/localBrowserAuthBuild.mjs",
+      ["node:fs/promises", "node:url", "esbuild"],
+    ],
+    ["frontend/app/local-browser-auth.html", []],
+    [
+      "frontend/app/src/localBrowserAuth.ts",
+      [
+        "@icp-sdk/core/identity",
+        "@icp-sdk/core/agent",
+        "@agent/services/identityAgent",
+        "@agent/services/nativeBrowserAccountSession",
+        "@client/utils/browserAccountLink",
+        "@client/utils/nativeBrowserAuth",
+        "@client/utils/nativeBrowserSigner",
+      ],
+    ],
+    [
+      "frontend/openchat-client/src/utils/nativeBrowserAuth.ts",
+      [
+        "@icp-sdk/core/agent",
+        "@icp-sdk/core/identity",
+        "@icp-sdk/core/principal",
+        "@shared/utils/nativeBrowserSession",
+      ],
+    ],
+    [
+      "frontend/openchat-client/src/utils/nativeBrowserSigner.ts",
+      [
+        "@icp-sdk/core/agent",
+        "@icp-sdk/core/identity",
+        "@icp-sdk/core/principal",
+        "./browserPasskey",
+        "./nativeBrowserAuth",
+      ],
+    ],
+    [
+      "frontend/openchat-client/src/utils/nativeBrowserSignInFlow.ts",
+      ["@icp-sdk/core/identity", "./nativeBrowserAuth"],
+    ],
+    [
+      "frontend/openchat-client/src/utils/nativeBrowserSessionStorage.ts",
+      [
+        "idb",
+        "@icp-sdk/core/identity",
+        "@icp-sdk/core/principal",
+        "@shared/utils/nativeBrowserSession",
+      ],
+    ],
+    [
+      "frontend/openchat-agent/src/services/nativeBrowserAccountSession.ts",
+      [
+        "@icp-sdk/core/agent",
+        "@icp-sdk/core/identity",
+        "@icp-sdk/core/principal",
+        "@shared/utils/nativeBrowserSession",
+        "@shared",
+        "../typebox",
+        "./identity/identity.client",
+        "./canisterAgent/msgpack",
+        "./userIndex/mappers",
+      ],
+    ],
+    [
+      "frontend/openchat-shared/src/utils/nativeBrowserSession.ts",
+      [
+        "@icp-sdk/core/identity",
+        "@icp-sdk/core/principal",
+        "../domain/identity",
+      ],
+    ],
+    [
+      "frontend/tauri-plugin-oc/guest-js/commands/localBrowserAuth.ts",
+      ["@tauri-apps/api/core"],
+    ],
+  ]);
+  const roots = new Set(
+    config.seeds.map(
+      (seed) => seed.name ?? seed.location.replace(/^node_modules\//u, ""),
+    ),
+  );
+  const entries = fingerprint.files.map((file) => [
+    file,
+    readFileSync(resolve(root, file)),
+  ]);
+  for (const [file, imports] of additions) {
+    assert(owned.includes(file), `Missing approved auth owner: ${file}`);
+    assert(
+      fingerprint.files.includes(file),
+      `Missing source identity: ${file}`,
+    );
+    const source = readFileSync(resolve(root, file), "utf8");
+    assert.deepEqual(featureDependencySpecifiers(source), imports, file);
+    assertReviewedFeatureImports(source, roots);
+    assert.throws(
+      () =>
+        assertReviewedFeatureImports(
+          `${source}\nimport "unreviewed-native-auth-package";\n`,
+          roots,
+        ),
+      /no reviewed root: unreviewed-native-auth-package/u,
+    );
+    for (const historical of ["pr1-model-npm", "pr2-app-card-ocr-npm"])
+      assert(
+        !featureOwnedFiles(root, historical).includes(file),
+        `Historical scope expanded: ${file}`,
+      );
+    for (const changed of [
+      entries.filter(([entry]) => entry !== file),
+      entries.map(([entry, bytes]) => [
+        entry,
+        entry === file
+          ? Buffer.concat([bytes, Buffer.from("\n// changed auth behavior\n")])
+          : bytes,
+      ]),
+    ])
+      assert.throws(
+        () =>
+          assertReviewedSourceFingerprint(
+            sourceReviewFingerprintFromBytes(changed),
+            config.sourceReview,
+          ),
+        /feature source set changed/u,
+      );
+  }
+  for (const file of [
+    "frontend/openchat-client/src/openchat.ts",
+    "frontend/openchat-worker/src/worker.ts",
+    "frontend/openchat-client/src/utils/browserPasskey.ts",
+    "frontend/openchat-client/src/utils/browserAccountLink.ts",
+    "frontend/openchat-agent/src/services/identityAgent.ts",
+    "frontend/openchat-agent/src/utils/singleSubmissionFetch.ts",
+  ]) {
+    assert(
+      !owned.includes(file),
+      `Mixed/reached source must not expand direct-import scope: ${file}`,
+    );
+    assert(
+      fingerprint.files.includes(file),
+      `Missing exact reached-source identity: ${file}`,
+    );
+    assert(
+      config.seeds.some((seed) =>
+        seed.evidence.some((item) => item.file === file),
+      ),
+      file,
+    );
+  }
+});
+
+test("current auth uses original upstream paths without activating retained browser-session helpers", () => {
+  const config = JSON.parse(
+    readFileSync(
+      resolve(root, "scripts/npm_feature_scope.current-client.json"),
+      "utf8",
+    ),
+  );
+  const fingerprint = seedSourceFingerprint(root, config);
+  const read = (file) =>
+    readFileSync(resolve(root, file), "utf8").replaceAll("\r\n", "\n");
+  const client = read("frontend/openchat-client/src/openchat.ts");
+  assert.match(
+    client,
+    /this\.#authIdentityStorage = IdentityStorage\.createForAuthIdentity\(\)/u,
+  );
+  assert.match(client, /this\.#authClient = AuthClient\.create\(/u);
+  assert.match(client, /this\.#authIdentityStorage\.getKeyAndChain\(\)/u);
+  assert.match(client, /new AndroidWebAuthnPasskeyIdentity\(/u);
+  assert.doesNotMatch(
+    client,
+    /nativeBrowser|nativeSession|localBrowserAuth|existingAccountOnly/u,
+  );
+  const worker = read("frontend/openchat-worker/src/worker.ts");
+  assert.match(worker, /ocIdentityStorage\.get\(authPrincipalString\)/u);
+  assert.match(worker, /identityAgent\.getOpenChatIdentity\(sessionKey\)/u);
+  assert.match(
+    worker,
+    /assertUnofficialApiRequestAllowed\(payload, config\.clientOnlyApps\)/u,
+  );
+  assert.doesNotMatch(
+    worker,
+    /nativeBrowserSession|validateNativeBrowserSession|authRequestGeneration|singleSubmission/u,
+  );
+  const protocol = read("frontend/openchat-shared/src/domain/worker.ts");
+  assert.match(
+    protocol,
+    /export type SetAuthIdentity = \{\s*kind: "setAuthIdentity";\s*identity: JsonnableIdentityKeyAndChain \| undefined;\s*isIIPrincipal: boolean;\s*\};/u,
+  );
+  for (const file of [
+    "frontend/app/src/components/onboard/OnboardModal.svelte",
+    "frontend/app/src/components_mobile/onboard/OnboardModal.svelte",
+  ]) {
+    assert(fingerprint.files.includes(file), file);
+    assert.doesNotMatch(
+      read(file),
+      /ExistingAccountSignIn|existingAccountOnly|nativeBrowser|nativeSession/u,
+    );
+  }
+  const removed =
+    "frontend/app/src/components_shared/ExistingAccountSignIn.svelte";
+  assert(
+    !existsSync(resolve(root, removed)),
+    "The replacement auth screen must remain removed",
+  );
+  assert(!fingerprint.files.includes(removed));
+  for (const file of [
+    "frontend/app/src/components/App.svelte",
+    "frontend/app/src/components_mobile/App.svelte",
+  ]) {
+    assert.match(
+      read(file),
+      /clientOnlyApps: import\.meta\.env\.OC_UNOFFICIAL_CLIENT === "true"/u,
+    );
+    assert.doesNotMatch(read(file), /existingAccountOnly/u);
+  }
+  for (const file of [
+    "frontend/app/src/utils/nativeAppDelivery.ts",
+    "frontend/app/src/components_shared/PrivateAppsWorkspace.svelte",
+  ]) {
+    assert.match(read(file), /clientOnlyApps/u);
+    assert.doesNotMatch(read(file), /existingAccountOnly/u);
+  }
+  assert.doesNotMatch(
+    read("frontend/app/rollup.config.mjs"),
+    /localBrowserAuthBuildPlugin/u,
+  );
+  const builder = read("scripts/build-unofficial-local-apk.mjs");
+  assert.doesNotMatch(builder, /local-test-browser-auth/u);
+  assert.match(
+    builder,
+    /"transformers-webgpu-android,local-test-app-handoff"/u,
+  );
+  assert.match(
+    builder,
+    /existsSync\(path\.join\(output, "local-browser-auth\.html"\)\)/u,
+  );
+  assert.match(builder, /browser authentication assets must be absent/u);
+  assert(
+    config.sourceReview.snapshots.some(
+      (s) =>
+        s.sha256 ===
+        "bf0884970516515d0cd38b6a405e858c2db331bcbf633b6371320e91275153c9",
+    ),
+    "Preserve the prior browser-auth review as historical evidence",
+  );
+});
+
+test("current mobile error translation is an exact presentation-only source checkpoint", () => {
+  const config = JSON.parse(
+    readFileSync(
+      resolve(root, "scripts/npm_feature_scope.current-client.json"),
+      "utf8",
+    ),
+  );
+  const fingerprint = seedSourceFingerprint(root, config);
+  const file = "frontend/app/src/components_mobile/onboard/OnboardModal.svelte";
+  assert(fingerprint.files.includes(file));
+  const source = readFileSync(resolve(root, file), "utf8").replaceAll(
+    "\r\n",
+    "\n",
+  );
+  const hash = (text) => createHash("sha256").update(text).digest("hex");
+  assert.equal(
+    hash(source),
+    "251df92cfea239711f19508c72e08c50c0a5424c9285c7762ba9bf262ffae6e8",
+  );
+  const prior = source
+    .replace(
+      '    import { nativeAuthErrorKey } from "@src/utils/nativeAuthErrorKey";\n',
+      "",
+    )
+    .replace("i18nKey(nativeAuthErrorKey(error))", "i18nKey(error)");
+  assert.equal(
+    hash(prior),
+    "1c93d07d7b15826a5c0af8a593a86cffc092ff3dd1eb39911cb4a37114fb7785",
+  );
+  const previousFingerprint = sourceReviewFingerprintFromBytes(
+    fingerprint.files.map((entry) => [
+      entry,
+      entry === file ? Buffer.from(prior) : readFileSync(resolve(root, entry)),
+    ]),
+  );
+  assert.equal(
+    previousFingerprint.sha256,
+    "425a64c8f66fb23956590bc0a698e865bbf1e606d3144b2e8411ad3dc2f1898c",
+  );
+  assert.equal(
+    fingerprint.sha256,
+    "09b7e91e437cfbfb58c6029fbd51066967ffd27899a3406206dee87514e16341",
+  );
+  assertReviewedSourceFingerprint(previousFingerprint, config.sourceReview);
+  assertReviewedSourceFingerprint(fingerprint, config.sourceReview);
 });
 
 test("current named-choice module is app-owned and cannot disappear or add an unreviewed import", () => {
@@ -344,7 +725,16 @@ test("reviewed persistence writes setup-only fields at explicit mutations, never
   assert(snapshot, "Only an explicit setup snapshot can reach storage");
   assert.deepEqual(
     [...snapshot[1].matchAll(/^ {12}(\w+)(?::|,)/gmu)].map((match) => match[1]),
-    ["catalog", "appId", "actionId", "processor", "enabledChats"],
+    [
+      "catalog",
+      "appId",
+      "actionId",
+      "processor",
+      "processors",
+      "installations",
+      "disabledAppIds",
+      "enabledChats",
+    ],
   );
   assert.doesNotMatch(
     save,
@@ -388,7 +778,34 @@ test("reviewed persistence writes setup-only fields at explicit mutations, never
   );
   assert.match(
     store,
-    /exact\(value, \["catalog", "enabledChats"\], \["appId", "actionId", "processor"\]\)/u,
+    /exact\(\s*value,\s*\["catalog", "enabledChats"\],\s*\["appId", "actionId", "processor", "processors", "installations", "disabledAppIds"\],?\s*\)/u,
+  );
+  assert.match(store, /exact\(row, \["appId", "artifact"\]\)/u);
+  assert.match(
+    store,
+    /exact\(row\.artifact, \["source", "sha256", "byteLength"\]\)/u,
+  );
+  assert.match(store, /artifact\.sha256 !== owner\.processor\.sha256/u);
+  assert.match(store, /artifact\.byteLength !== owner\.processor\.byteLength/u);
+  assert.match(store, /verifyImportedLocalProcessor\(row\.artifact\)/u);
+  assert.match(
+    store,
+    /exact\(entry, \["appId", "sourceUrl", "descriptor", "publicCatalogJson"\]\)/u,
+  );
+  assert.match(store, /validateLocalAppInstallation\(/u);
+  for (const field of ["processors", "installations", "disabledAppIds"])
+    assert.match(store, new RegExp(`value\\.${field}\\.length > 16`, "u"));
+  assert.match(
+    store,
+    /new Set\(value\.disabledAppIds\)\.size !== value\.disabledAppIds\.length/u,
+  );
+  assert.match(
+    store,
+    /appIds\.some\(\(id\) => disabledAppIds\?\.includes\(id\)\)/u,
+  );
+  assert.doesNotMatch(
+    store,
+    /\b(?:fetch|WebSocket|XMLHttpRequest|Worker|runIsolatedAppProcessor)\s*\(/u,
   );
   assert.match(store, /storedOwner\.account !== owner\.account/u);
   assert.match(store, /storedOwner\.backend !== owner\.backend/u);

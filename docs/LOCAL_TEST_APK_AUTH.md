@@ -4,7 +4,8 @@ This prototype installs as `dev.openchatfork.localtest`, labelled **OpenChat For
 Its Java/JNI namespace is retained internally; its Android application ID, storage sandbox,
 launcher entry and FileProvider are separate from the official client. It does not update,
 uninstall or borrow the official APK's login state/model caches. It has no official app links,
-Digital Asset Links, Firebase initialization/registration or OTA updates.
+Firebase initialization/registration or OTA updates. Its original RP association declaration
+does not establish Digital Asset Links authorization for the fork's package/certificate.
 
 Build (after reviewed dependencies are available):
 
@@ -18,70 +19,69 @@ Missing Cargo dependencies fail offline rather than downloading. The fixed gener
 The compiled feature set retains the existing WebGPU image/text, optional audio and local OCR
 paths; runtime/device acceptance must still be exercised on the actual artifact.
 
-## Explicit browser handoff
+## Original native restore flow
 
-1. The APK asks for the existing username and consent to remembered access for up to 30 days.
-   A fresh, nonextractable session private key remains in the APK. The native listener binds
-   loopback before the URL is shown.
-2. An external browser opens `http://localhost:<ephemeral-port>/sign-in`. Its path and query
-   contain no credentials, secrets, linking code, username or delegation. The exact first-party
-   signer HTML and JS are bundled in the APK, not downloaded at runtime.
-3. Browser passkey user verification signs one AUTH-root delegation to the APK's exact public
-   key, expiring at the displayed time and targeted only to the official identity canister.
-   Linking, if needed, is a separate explicit flow; no automatic new account creation.
-4. The browser submits the candidate once. Native reception is **not sign-in**. The APK must
-   validate the actual signed WebAuthn CBOR challenge/origin/RP/UP+UV/signature and obtain
-   fresh authenticated proof of the exact expected official account.
-5. The native completion command must succeed before auth is installed or persisted. Pending
-   attempts expire after two minutes. Cancellation/expiry during account proof must discard
-   that result. The honest client requests and checks OC delegation expiry no later than the
-   original displayed consent deadline; a cached longer-lived session is not accepted.
+Both layouts use OpenChat's original onboarding components. On Android, the passkey
+action calls the original native Credential Manager implementation. An account-linking
+code follows the original sequence: verify code, create a provider-managed passkey,
+finalise account linking, and sign in to that account through the official identity service.
+There is no separate username/browser-login page or browser identity adoption.
 
-After verified activation, the APK stores the nonextractable key and delegation in its
-account/backend-scoped IndexedDB record. Restore validates the scope, key, fixed expiry and
-delegation, then obtains fresh authenticated proof of the saved official account before using
-the session. A temporary network failure retains the record for an explicit retry. Logout
-clears it; generation checks prevent an older in-flight write from restoring a removed session.
-This is not hardware-keystore protection or a guarantee of encryption at rest.
+The build selects `transformers-webgpu-android,local-test-app-handoff`, not
+`local-test-browser-auth`. The latter is no longer an application feature; the plugin's
+legacy implementation remains unselected source coverage only. Browser-auth capability
+and HTML/JS assets are excluded. App setup/delivery listeners remain separate features;
+they do not carry OpenChat login credentials.
 
-If cancellation after saving cannot remove the record, the client still rolls back the active
-identity and shows a specific cleanup warning. **Clear saved sign-in** retries the existing
-sign-out operation; the UI does not claim the saved session was removed until that succeeds.
-It does not create or delete a passkey.
+Saved sessions use the original AuthClient/IdentityStorage lifecycle and 30-day delegation
+policy. Former custom browser-session records are not adopted, converted or extended.
+A fresh sign-in after an older test build may be necessary, but no passkey, account or
+app data is deleted by this source change. Browser and native RP namespaces differ;
+a `localhost` passkey created by the former test page is not automatically an `oc.app`
+passkey. Do not recreate or relink credentials merely because a session is absent.
 
-The previous five-minute, memory-only session cannot be extended into a remembered session.
-The first sign-in after this update needs a fresh signature from the existing linked passkey,
-not another passkey or account-linking code. Session expiry or logout does not delete passkeys.
+## Provider qualification and non-goals
 
-Passkeys at `oc.app`, a private host, or another device are not automatically localhost passkeys.
-No Android Credential Manager fallback impersonates any of those origins. Browser localhost
-credentials previously explicitly linked on this device can be discovered across local ports.
+The profile currently preserves the original `oc.app` RP identifier. The separate package
+and local signer are not the official application's identity. Google Password Manager
+compatibility is required, but must be demonstrated on the actual build, independently
+of a KeePassDX emulator test. Source parity alone does not establish provider authorization.
 
-## Transport limits and non-goals
+Android's documented association requirements are not proof of the cause of a particular
+regression. A prior successful fresh code restore and new Google-managed passkey must not
+be relabelled as cached-session reuse. Compare the actual APK's package, signer, compiled
+RP and provider result before attributing a failure to association.
 
-- Only the bundled main WebView at exact origin `http://tauri.localhost`, without URL userinfo,
-  can invoke native bridge commands. The capability is not included in ordinary builds.
-- Native HTTP binds `127.0.0.1`, requires exact Host, same-origin POST and JSON, has no CORS,
-  serves only fixed routes, and caps requests/concurrency/time. Candidate delivery is one-use.
-- Native bounds: credential ID <=1,024 bytes; root DER <=4,096 bytes; CBOR signature <=16 KiB;
-  whole candidate <=64 KiB. The cryptographic helper may impose stricter independent bounds.
-- **Canister targets are not method-level privileges.** The intended client keeps both chains
-  within the displayed consent deadline, at most 30 days. A compromised native process or
-  session-key holder could ask the identity canister for a longer delegation while the AUTH
-  delegation is valid; this client cannot cryptographically prevent that using an unchanged
-  official backend. Do not advertise a
-  hard expiry security boundary against a compromised APK or device.
-- This bridge is authentication transport, not private-app delivery. A WebView and external
-  browser do not share BroadcastChannel storage; native app handoff needs its own reviewed
-  transport and cannot be claimed working from the browser relay tests.
-- No public distribution/domain, push-delivery support or official product identity is claimed.
+The historical PR2 source at `0bf6a357ec45fec3bdeb958c7f224e8780e0d9bf` already uses
+the code-verification, native passkey-creation and account-link completion sequence.
+Its artifact records name the installed package `com.oc.app`, unlike this separate
+test package. That PR's RP was configurable through `OC_ANDROID_RP_ID` or the bundled
+`android-rp-id`; its `oc.app` default is not proof of the successful APK's compiled RP.
+The exact old binary's RP and signing fingerprint have not been recovered. The user's
+confirmed fresh Google Password Manager registration stands; no domain-association
+failure diagnosis can be inferred from these incomplete historical artifact records.
+
+The isolated local asset canister in `tools/android-passkey-association` verifies the
+association document's hosting/response contract. It does not prove public HTTPS
+reachability or Google acceptance. No public deployment, official product identity,
+push-delivery support or hardware-keystore protection for session storage is claimed.
+
+Authentication still uses the unchanged official backend. Delegation target restrictions
+are not method-level permissions or protection against compromise of an authorized app
+process. Private-app payload consent remains a separate boundary.
 
 ## Verification
 
-`node --test scripts/build-unofficial-local-apk.test.mjs` exercises pure configuration/build
-contracts. Rust transport/state tests cover route/Host/Origin restrictions, exact window origin,
-replay, simultaneous attempts, expiry and cancellation with synthetic data. These checks do not
-replace a full Tauri/Gradle compile, APK manifest inspection, emulator or physical-device tests.
-Frontend session tests separately cover nonextractable-key storage, account/backend scope,
-expiry, restore proof, cancellation and logout/write races. A successful build alone does not
-prove that sign-in survives closing and reopening the installed APK.
+`node --test scripts/build-unofficial-local-apk.test.mjs` checks the native-auth profile,
+feature selection and exclusion of browser-login assets. `originalOnboard.spec.ts`,
+`androidWebAuthnOnboard.spec.ts` and `nativeSignInLifecycle.spec.ts` mount original UI or
+handlers and exercise sign-in/linking lifecycle. `signInAcceptance.spec.ts` invokes real
+OpenChat methods and IdentityStorage with synthetic provider, IndexedDB I/O and worker
+transport; worker tests exercise original identity lookup/linking boundaries.
+
+These checks are not credential-provider or real storage-persistence acceptance. Inspect
+the built APK's package, signer, RP, assets and resolved native features, then separately
+verify account identity after native restore and after closing/reopening the installed APK.
+Retain old build receipts as historical evidence; do not apply their runtime results to a
+new artifact. A successful build or emulator KeePassDX login does not qualify Google
+Password Manager on a physical phone.

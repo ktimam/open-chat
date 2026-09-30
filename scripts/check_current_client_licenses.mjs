@@ -11,17 +11,18 @@ import { verifyRustFeatureScopeReview } from "./rust_feature_seed_review.mjs";
 import { lockIdentities } from "./rust_feature_scope.mjs";
 
 const REGISTRY = "registry+https://github.com/rust-lang/crates.io-index";
-// The historical PR1 rule remains unchanged. The current lock selects this
-// compatible transitive version for the optional native inference profiles.
-// This is a reviewed exact identity, not a same-name or latest-version fallback.
+// The historical PR1 license obligation remains unchanged. The optional native
+// inference profiles now pin the wrapper/sys 0.1.150 ABI pair exactly. Retain
+// checksum and actual parent-edge verification even when the historical and
+// current versions are identical; this is not a same-name/version fallback.
 const CURRENT_MODEL_IDENTITY_RESOLUTIONS = [
   {
     name: "llama-cpp-sys-2",
     historicalVersion: "0.1.150",
-    version: "0.1.154",
+    version: "0.1.150",
     source: REGISTRY,
     checksum:
-      "13a9ea2ce0cdc20bcb1870534022e340b391663f8fe09133951e2fe37fbc29cf",
+      "f67dab3ed2b68e4fc4a42471eac73e128ed2ee97bd10de66ddcc609dd5d838a0",
     parent: { name: "llama-cpp-2", version: "0.1.150", source: REGISTRY },
     dependencyName: "llama_cpp_sys_2",
     dependencyKind: null,

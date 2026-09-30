@@ -1,13 +1,12 @@
 <script lang="ts">
-    import { onMount, type Snippet } from "svelte";
+    import type { Snippet } from "svelte";
     let {
         children,
-        body,
         header,
+        body,
         text,
         onclick,
         onClick,
-        onClose,
         title,
         name,
         resourceKey,
@@ -16,12 +15,11 @@
         error = $bindable(),
     }: {
         children?: Snippet;
-        body?: Snippet;
         header?: Snippet;
+        body?: Snippet;
         text?: Snippet | string;
         onclick?: () => void;
         onClick?: () => void;
-        onClose?: () => void;
         title?: string;
         name?: string;
         resourceKey?: string;
@@ -31,9 +29,6 @@
     } = $props();
     void value;
     void error;
-    // The real Overlay/ModalContent close during teardown; retain that lifecycle
-    // behavior while leaving their visual and portal implementation inert.
-    onMount(() => () => onClose?.());
 </script>
 
 {#if onclick || onClick}
@@ -44,11 +39,10 @@
             ""}{#if typeof text === "string"}{text}{:else}{@render text?.()}{/if}{@render children?.()}
     </button>
 {:else}
-    <section data-native-sign-in-layout>
+    <div>
         {title ??
             name ??
             resourceKey ??
             ""}{@render header?.()}{@render body?.()}{#if typeof text === "string"}{text}{:else}{@render text?.()}{/if}{@render children?.()}
-        {#if onClose}<button type="button" onclick={onClose}>Dismiss synthetic layout</button>{/if}
-    </section>
+    </div>
 {/if}

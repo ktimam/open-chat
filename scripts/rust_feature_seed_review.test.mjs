@@ -4,6 +4,9 @@ import { readFileSync, existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { localApkBuildPlan } from "./build-unofficial-local-apk.mjs";
+import { UNOFFICIAL_LOCAL_CANISTERS } from "../frontend/unofficialLocalProfile.mjs";
+import { localApkBundleMarker } from "../frontend/unofficialLocalApkProfile.mjs";
 import {
   prepareRustFeatureInventory,
   verifyRustFeatureScopeReview,
@@ -76,15 +79,15 @@ function currentClientFixture() {
   };
 }
 
-test("current-client live source review binds native model/auth/handoff without claiming backend or release acceptance", () => {
+test("current-client live source review binds native model/auth/handoff/setup without claiming backend or release acceptance", () => {
   const value = currentClientFixture();
   const { config } = value;
   const result = verifyRustFeatureScopeReview(value);
-  assert.equal(config.seeds.length, 25);
+  assert.equal(config.seeds.length, 26);
   assert.equal(config.profiles.length, 8);
-  assert.equal(result.reviewedSourceCount, 24);
-  assert.equal(result.reviewedSeedProfileCount, 152);
-  assert.equal(result.reviewedUnitCount, 29);
+  assert.equal(result.reviewedSourceCount, 28);
+  assert.equal(result.reviewedSeedProfileCount, 156);
+  assert.equal(result.reviewedUnitCount, 30);
   assert.equal(result.rootCompletenessVerified, true);
   assert.deepEqual(result.completeness, { status: "complete", unresolved: [] });
   for (const field of [
@@ -113,6 +116,7 @@ test("current-client live source review binds native model/auth/handoff without 
     "shell-asset-selection",
     "plugin.loopback.hyper",
     "plugin.native.inference",
+    "plugin.native.inference-sys",
   ]) {
     const missing = { ...value, review: structuredClone(value.review) };
     missing.review.units = missing.review.units.filter(
@@ -124,7 +128,11 @@ test("current-client live source review binds native model/auth/handoff without 
     "frontend/tauri-plugin-oc/src/model_manager.rs",
     "frontend/tauri-plugin-oc/src/local_app_handoff.rs",
     "frontend/tauri-plugin-oc/src/local_browser_auth.rs",
+    "frontend/tauri-plugin-oc/src/local_app_setup_protocol.rs",
+    "frontend/tauri-plugin-oc/src/local_app_setup.rs",
+    "frontend/tauri-plugin-oc/permissions/local-app-setup.toml",
     "scripts/build-unofficial-local-apk.mjs",
+    "frontend/unofficialLocalApkProfile.mjs",
   ]) {
     assert.throws(
       () =>
@@ -143,7 +151,62 @@ test("current-client live source review binds native model/auth/handoff without 
   }
 });
 
-test("current-client profiles exactly bind both APK feature triples and nonshipping host commands", () => {
+test("current-client setup reuses reviewed owners while its exact sys ABI constraint stays host-inference-only", () => {
+  const { config, review } = currentClientFixture();
+  const setupPaths = [
+    "frontend/tauri-plugin-oc/src/local_app_setup_protocol.rs",
+    "frontend/tauri-plugin-oc/src/local_app_setup.rs",
+  ];
+  assert.deepEqual(
+    config.seeds
+      .filter((seed) =>
+        seed.evidence.some((entry) => setupPaths.includes(entry.path)),
+      )
+      .map((seed) => seed.id)
+      .sort(),
+    [
+      "plugin.hash",
+      "plugin.hex",
+      "plugin.json",
+      "plugin.loopback.bytes",
+      "plugin.loopback.getrandom",
+      "plugin.loopback.http-body-util",
+      "plugin.loopback.hyper",
+      "plugin.loopback.hyper-util",
+      "plugin.model-and-handoff.url",
+      "plugin.model.async",
+      "plugin.schemas",
+    ],
+  );
+  const sys = config.seeds.find(
+    (seed) => seed.id === "plugin.native.inference-sys",
+  );
+  assert.equal(sys.ownerPackage, "tauri-plugin-oc");
+  assert.equal(sys.dependencyName, "llama_cpp_sys_2");
+  assert.equal(sys.review.basis, "new-feature-exclusive-manifest");
+  assert.equal(sys.originContext, "production");
+  assert.equal(sys.kind, "normal");
+  assert.equal(sys.target, null);
+  assert.deepEqual(sys.expected, {
+    name: "llama-cpp-sys-2",
+    version: "0.1.150",
+    source: "registry+https://github.com/rust-lang/crates.io-index",
+    checksum:
+      "f67dab3ed2b68e4fc4a42471eac73e128ed2ee97bd10de66ddcc609dd5d838a0",
+  });
+  assert.deepEqual(sys.profiles, [
+    "linux-inference-check",
+    "linux-inference-store-check",
+    "windows-inference-check",
+    "windows-inference-store-check",
+  ]);
+  assert.deepEqual(
+    review.units.find((unit) => unit.id === sys.id).profiles,
+    sys.profiles,
+  );
+});
+
+test("current-client profiles exactly bind both APK feature pairs and nonshipping host commands", () => {
   const { config, sourceBytes } = currentClientFixture();
   for (const [id, target] of [
     ["android-arm64-local-webgpu", "aarch64-linux-android"],
@@ -153,7 +216,6 @@ test("current-client profiles exactly bind both APK feature triples and nonshipp
     assert.equal(profile.target, target);
     assert.deepEqual(profile.features, [
       "open-chat/transformers-webgpu-android",
-      "open-chat/local-test-browser-auth",
       "open-chat/local-test-app-handoff",
     ]);
     assert.ok(
@@ -243,6 +305,109 @@ test("current-client profiles exactly bind both APK feature triples and nonshipp
     config.profiles.every((p) =>
       p.features.every((f) => !f.includes("devtools")),
     ),
+  );
+});
+
+test("current-client APK selection uses original native auth with dormant browser listener and preserved private-app handoff", () => {
+  const { config, sourceBytes, review } = currentClientFixture();
+  const text = (path) => sourceBytes[path].toString("utf8");
+  const canisters = Object.fromEntries(
+    Object.values(UNOFFICIAL_LOCAL_CANISTERS).map((name) => [
+      name,
+      { ic: "aaaaa-aa" },
+    ]),
+  );
+  for (const target of ["aarch64", "x86_64"]) {
+    const plan = localApkBuildPlan(".", canisters, {
+      target,
+      frontendOnly: false,
+    });
+    const features = plan.args[plan.args.indexOf("--features") + 1];
+    assert.equal(
+      features,
+      "transformers-webgpu-android,local-test-app-handoff",
+    );
+    assert.equal(
+      plan.options.env.OC_ANDROID_NATIVE_AUTH,
+      "android-credential-manager-v1",
+    );
+    assert.equal(plan.options.env.OC_ACCOUNT_LINKING_CODES_ENABLED, "true");
+    assert.equal(
+      plan.options.env.OC_ANDROID_RP_ID,
+      plan.options.env.OC_WEBAUTHN_ORIGIN,
+    );
+    assert.equal(plan.options.env.OC_BASE_ORIGIN, "http://tauri.localhost");
+    assert.equal(plan.options.env.CARGO_NET_OFFLINE, "true");
+    assert.ok(
+      !plan.args.some((arg) => /browser-auth|install|uninstall/.test(arg)),
+    );
+  }
+  const marker = localApkBundleMarker("aaaaa-aa", "ABCD");
+  assert.equal(marker.nativeAuthentication, "android-credential-manager-v1");
+  assert.equal(Object.hasOwn(marker, "digitalAssetLinksVerified"), false);
+  assert.equal(Object.hasOwn(marker, "providerQualified"), false);
+  assert.ok(
+    config.profiles.every((profile) =>
+      profile.features.every((feature) => !feature.includes("browser-auth")),
+    ),
+  );
+  const appManifest = text("frontend/src-tauri/Cargo.toml");
+  assert.doesNotMatch(
+    appManifest,
+    /local-test-browser-auth|tauri-plugin-oc\/local-browser-auth/,
+  );
+  assert.match(
+    appManifest,
+    /local-test-app-handoff = \["tauri-plugin-oc\/local-app-handoff"\]/,
+  );
+  const pluginManifest = text("frontend/tauri-plugin-oc/Cargo.toml");
+  assert.doesNotMatch(pluginManifest, /^default\s*=/m);
+  assert.match(pluginManifest, /^local-browser-auth = /m);
+  assert.doesNotMatch(
+    pluginManifest.match(/^local-app-handoff = .*$/m)[0],
+    /local-browser-auth/,
+  );
+  const plugin = text("frontend/tauri-plugin-oc/src/lib.rs");
+  assert.match(
+    plugin,
+    /#\[cfg\(feature = "local-browser-auth"\)\]\s*mod local_browser_auth;/,
+  );
+  assert.match(
+    plugin,
+    /#\[cfg\(feature = "local-app-handoff"\)\]\s*mod local_app_setup;/,
+  );
+  const overlay = JSON.parse(
+    text("frontend/src-tauri/tauri.localtest.conf.json"),
+  );
+  assert.doesNotMatch(JSON.stringify(overlay), /local-browser-auth/);
+  for (const name of ["local-app-handoff", "local-app-setup"]) {
+    const capability = overlay.app.security.capabilities.find(
+      (entry) => entry.identifier === name,
+    );
+    assert.equal(capability.local, true);
+    assert.deepEqual(capability.windows, ["main"]);
+    assert.deepEqual(capability.permissions, [`oc:allow-${name}`]);
+  }
+  const build = text("scripts/build-unofficial-local-apk.mjs");
+  assert.match(
+    build,
+    /marker.nativeAuthentication !== "android-credential-manager-v1"/,
+  );
+  for (const file of ["local-browser-auth.html", "local-browser-auth.js"]) {
+    assert.ok(build.includes(`existsSync(path.join(output, "${file}"))`));
+    assert.ok(!build.includes(`!existsSync(path.join(output, "${file}"))`));
+  }
+  const selection = review.units.find(
+    (unit) => unit.id === "shell-asset-selection",
+  );
+  assert.ok(
+    selection.sources.some(
+      (source) => source.path === "frontend/unofficialLocalApkProfile.mjs",
+    ),
+  );
+  assert.match(
+    review.boundary,
+    /no.*provider\/Digital Asset Links qualification/i,
   );
 });
 

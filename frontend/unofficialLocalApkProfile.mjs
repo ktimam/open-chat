@@ -27,10 +27,13 @@ export function createUnofficialLocalApkEnvironment(
         OC_APP_STORE: "false",
         OC_BASE_ORIGIN: "http://tauri.localhost",
         OC_II_DERIVATION_ORIGIN: "",
-        OC_WEBAUTHN_ORIGIN: "localhost",
-        OC_ANDROID_RP_ID: "",
-        OC_ACCOUNT_LINKING_CODES_ENABLED: "false",
-        OC_ANDROID_NATIVE_AUTH: "browser-bridge-v1",
+        // Restore OpenChat's original native RP identifier, not a claim that this
+        // fork's package/signature is authorized by oc.app Digital Asset Links.
+        // The selected provider must support the app's own package/signature trust.
+        OC_WEBAUTHN_ORIGIN: "oc.app",
+        OC_ANDROID_RP_ID: "oc.app",
+        OC_ACCOUNT_LINKING_CODES_ENABLED: "true",
+        OC_ANDROID_NATIVE_AUTH: "android-credential-manager-v1",
         OC_ANDROID_APPLICATION_ID: UNOFFICIAL_LOCAL_APK_ID,
         OC_ANDROID_VERSION_NAME: "0.0.1",
         OC_WEBSITE_VERSION: `2.0.0-localtest.${id}`,
@@ -61,7 +64,8 @@ export function localApkBundleMarker(identityCanister, identityTargetHex) {
         applicationId: UNOFFICIAL_LOCAL_APK_ID,
         label: UNOFFICIAL_LOCAL_APK_LABEL,
         ota: "none",
-        nativeAuthentication: "browser-bridge-v1",
+        nativeAuthentication: "android-credential-manager-v1",
+        androidRpId: "oc.app",
         identityCanister,
         identityTargetHex,
     });

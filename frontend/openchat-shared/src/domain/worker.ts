@@ -707,12 +707,6 @@ export type SetAuthIdentity = {
     kind: "setAuthIdentity";
     identity: JsonnableIdentityKeyAndChain | undefined;
     isIIPrincipal: boolean;
-    // Internal, ephemeral adoption only after the native-browser flow verifies the official
-    // delegation and the expected existing account. Never a public authentication callback.
-    nativeBrowserSession?: {
-        ocIdentity: JsonnableIdentityKeyAndChain;
-        expiresAtMs: number;
-    };
 };
 
 export type Logout = {

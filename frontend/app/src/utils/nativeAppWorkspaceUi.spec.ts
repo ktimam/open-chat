@@ -92,14 +92,13 @@ const state = privateAppWorkspaceState as unknown as { set(value: unknown): void
 const pair = nativeAppPairing as unknown as { set(value: unknown): void };
 const identity = identityStateStore as unknown as { set(value: unknown): void };
 const account = currentUserIdStore as unknown as { set(value: unknown): void };
-async function render(native = true, existing = true) {
+async function render(native = true, privateApps = true) {
     component = mount(PrivateAppsWorkspace, {
         target,
         props: {
             client: {
-                clientOnlyApps: () => true,
+                clientOnlyApps: () => privateApps,
                 isNativeApp: () => native,
-                existingAccountOnly: () => existing,
                 onLogout: vi.fn(),
             } as unknown as OpenChat,
         },
@@ -149,9 +148,9 @@ describe("native pairing and retry UI", () => {
         [true, false],
     ])(
         "never displays native pairing without both UI profile gates (%s/%s)",
-        async (native, existing) => {
+        async (native, privateApps) => {
             pair.set(pairing);
-            await render(native, existing);
+            await render(native, privateApps);
             expect(target.textContent).not.toContain(pairing.pairingCode);
             expect(button("Copy pairing code")).toBeUndefined();
         },

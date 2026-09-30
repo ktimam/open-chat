@@ -46,9 +46,9 @@ described in `MODEL_MODIFICATIONS.md`; cached publisher files remain unchanged.
 
 | Component                                                           | Version                                                                        | License           | Disposition                                                                           |
 | ------------------------------------------------------------------- | ------------------------------------------------------------------------------ | ----------------- | ------------------------------------------------------------------------------------- |
-| llama.cpp / ggml                                                    | Vendored source in the checksum-pinned `llama-cpp-sys-2` 0.1.154 archive below | MIT               | Compiled only when native inference is enabled. Copyright 2023-2026 the ggml authors. |
+| llama.cpp / ggml                                                    | Vendored source in the checksum-pinned `llama-cpp-sys-2` 0.1.150 archive below | MIT               | Compiled only when native inference is enabled. Copyright 2023-2026 the ggml authors. |
 | `llama-cpp-2`                                                       | 0.1.150                                                                        | MIT OR Apache-2.0 | OpenChat elects Apache-2.0 for the Rust wrapper code.                                 |
-| `llama-cpp-sys-2`                                                   | 0.1.154                                                                        | MIT OR Apache-2.0 | OpenChat elects Apache-2.0 for the Rust bindings; vendored llama.cpp remains MIT.     |
+| `llama-cpp-sys-2`                                                   | 0.1.150                                                                        | MIT OR Apache-2.0 | OpenChat elects Apache-2.0 for the Rust bindings; vendored llama.cpp remains MIT.     |
 | `open`                                                              | 5.4.1                                                                          | MIT               | Opens validated external URLs. Copyright 2015 Sebastian Thiel.                        |
 | `minijinja`, `minijinja-contrib`                                    | 2.21.0                                                                         | Apache-2.0        | Renders model-provided chat templates. Copyright Armin Ronacher and contributors.     |
 | `memo-map`                                                          | 0.3.3                                                                          | Apache-2.0        | Transitive template cache. Copyright Armin Ronacher and contributors.                 |
@@ -56,9 +56,9 @@ described in `MODEL_MODIFICATIONS.md`; cached publisher files remain unchanged.
 | `sha2`, `hex`, `cc`, `find-msvc-tools`, `find_cuda_helper`, `shlex` | versions pinned in `Cargo.lock`                                                | MIT OR Apache-2.0 | OpenChat elects Apache-2.0 for these integrity, build, and platform dependencies.     |
 | `bindgen`                                                           | 0.72.1                                                                         | BSD-3-Clause      | Build-time tool; it is not linked into or bundled with the application.               |
 
-The optional native inference dependency resolves `llama-cpp-2` 0.1.150 to
-`llama-cpp-sys-2` 0.1.154 from crates.io, whose source archive SHA-256 is
-`13a9ea2ce0cdc20bcb1870534022e340b391663f8fe09133951e2fe37fbc29cf` in `Cargo.lock`.
+The optional native inference dependency exactly pairs `llama-cpp-2` 0.1.150 with
+`llama-cpp-sys-2` 0.1.150 from crates.io, whose source archive SHA-256 is
+`f67dab3ed2b68e4fc4a42471eac73e128ed2ee97bd10de66ddcc609dd5d838a0` in `Cargo.lock`.
 This pins the published archive containing llama.cpp/ggml; the upstream llama.cpp
 Git revision has not been independently verified from the cached archive and is
 not asserted here. The local all-WebGPU Android builds do not enable native inference.

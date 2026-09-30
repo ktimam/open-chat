@@ -98,10 +98,19 @@ const selectors = {
 selectors["current-client-npm"] = [
   ...selectors["pr1-model-npm"],
   ...selectors["pr2-app-card-ocr-npm"],
-  ["frontend/app", /^(?:localAppRelay.*|localNativeAppHandoffBuild)\.mjs$/],
-  ["frontend/app", /^local-native-app-handoff\.html$/],
-  ["frontend/app/public", /^local-app-handoff\.html$/],
-  ["frontend/app/src", /^local(?:AppHandoffRelay|NativeAppHandoff)\.ts$/],
+  [
+    "frontend/app",
+    /^(?:localAppRelay.*|localNativeApp(?:Handoff|Setup)Build)\.mjs$/,
+  ],
+  ["frontend/app", /^local-native-app-(?:handoff|setup)\.html$/],
+  ["frontend/app", /^localBrowserAuthBuild\.mjs$/],
+  ["frontend/app", /^local-browser-auth\.html$/],
+  ["frontend/app/public", /^local-app-(?:handoff|setup)\.html$/],
+  [
+    "frontend/app/src",
+    /^local(?:App(?:Handoff|Setup)Relay|NativeApp(?:Handoff|Setup))\.ts$/,
+  ],
+  ["frontend/app/src", /^localBrowserAuth\.ts$/],
   [
     "frontend/app/src/utils",
     /^(?:localApp|privateApp|nativeApp|isolatedAppProcessor)/,
@@ -112,8 +121,14 @@ selectors["current-client-npm"] = [
   ],
   ["frontend/openchat-service-worker/src", /^local_app_relay\.ts$/],
   [
+    "frontend/openchat-client/src/utils",
+    /^nativeBrowser(?:Auth|Signer|SignInFlow|SessionStorage)\.ts$/,
+  ],
+  ["frontend/openchat-agent/src/services", /^nativeBrowserAccountSession\.ts$/],
+  ["frontend/openchat-shared/src/utils", /^nativeBrowserSession\.ts$/],
+  [
     "frontend/tauri-plugin-oc/guest-js/commands",
-    /^(?:localAppHandoff|onDeviceModels)\.ts$/,
+    /^(?:localApp(?:Handoff|Setup)|localBrowserAuth|onDeviceModels)\.ts$/,
   ],
 ];
 
@@ -135,7 +150,11 @@ export function featureOwnedFiles(repositoryRoot, scopeId) {
           entry.isFile() &&
           pattern.test(entry.name) &&
           /\.(?:ts|svelte|mjs|html)$/.test(entry.name) &&
-          !/\.(?:test|spec)\./.test(entry.name),
+          !/\.(?:test|spec)\./.test(entry.name) &&
+          !(
+            scopeId === "current-client-npm" &&
+            entry.name.endsWith(".testFixtures.ts")
+          ),
       )
       .map((entry) => `${directory}/${entry.name}`),
   );

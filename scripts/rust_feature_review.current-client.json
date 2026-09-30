@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "configSha256": "08dc4954f77f27197ae5181982445adaa242cf925c62c5e343a7c1c4b28da007",
-  "boundary": "Current unofficial local client only: source-traced native model store/IPC, optional nonshipping host llama.cpp checks, local browser authentication and private-app loopback handoff, nested generic schemas/errors, native build hooks and bundled asset selection. Eight explicit profiles bind the two actual all-WebGPU APK ABIs and existing Linux/Windows default-library/inference/inference+store checks. Browser WebGPU/NPM and Android JVM dependencies have separate inventories; no OpenChat backend, removed custom card/action-inbox canisters, release-canister tooling, core dependency audit, advisory acceptance, model quality, device runtime or publication approval is claimed. Historical PR2 inventories remain verbatim historical evidence and are not current build acceptance.",
+  "configSha256": "ec757927fa7a63b5a937b3c395d17f78a028030dfdf0b6dcbd95fcc4a5c5fd4a",
+  "boundary": "Current unofficial local client only: source-traced native model store/IPC, optional nonshipping host llama.cpp checks, private-app loopback handoff/setup, retained dormant browser-auth source/protocols, nested generic schemas/errors, native build hooks and bundled asset selection. Eight explicit profiles bind the two all-WebGPU APK source configurations and existing Linux/Windows default-library/inference/inference+store checks. Both APK profiles now select original native Credential Manager authentication, not the browser-auth listener. The imported environment/marker helper is bound because it controls packaged native-auth selection; it adds no Rust dependency owner. Browser WebGPU/NPM and Android JVM dependencies have separate inventories; no OpenChat backend, removed custom card/action-inbox canisters, release-canister tooling, core dependency audit, advisory acceptance, model quality, provider/Digital Asset Links qualification, device runtime or publication approval is claimed. Historical PR2 inventories remain verbatim historical evidence. This review binds the working source at head 7fe6c8925530962a222ba6b816b3c7998cb8d91f plus the approved native-auth restoration and exact native ABI pin through fresh source and lock hashes; those uncommitted bytes are not claimed present in that commit or installed APK014.",
   "units": [
     {
       "id": "plugin.model.stream",
@@ -18,10 +18,7 @@
         "windows-inference-store-check"
       ],
       "sources": [
-        {
-          "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [2]
-        },
+        { "path": "frontend/tauri-plugin-oc/Cargo.toml", "lines": [2] },
         {
           "path": "frontend/tauri-plugin-oc/src/model_manager.rs",
           "lines": [1, 621]
@@ -32,7 +29,7 @@
     {
       "id": "plugin.model-and-handoff.url",
       "disposition": "external-owner-edges",
-      "explanation": "Native model downloads/probes use this owner; the always-compiled private handoff protocol also uses reqwest::Url parsing (no outbound handoff request).",
+      "explanation": "Native model downloads/probes and always-compiled private handoff/setup origin validation use reqwest::Url. Setup parsing does not send an outbound request; it adds no new crate owner.",
       "profiles": [
         "android-arm64-local-webgpu",
         "android-x86_64-local-webgpu",
@@ -44,13 +41,14 @@
         "windows-inference-store-check"
       ],
       "sources": [
-        {
-          "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [2]
-        },
+        { "path": "frontend/tauri-plugin-oc/Cargo.toml", "lines": [2] },
         {
           "path": "frontend/tauri-plugin-oc/src/model_manager.rs",
           "lines": [2, 339]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/local_app_setup_protocol.rs",
+          "lines": [77]
         }
       ],
       "seeds": ["plugin.model-and-handoff.url"]
@@ -58,7 +56,7 @@
     {
       "id": "plugin.schemas",
       "disposition": "external-owner-edges",
-      "explanation": "Native model IPC and nested fields contain serde derives; generic app/auth protocols and bridge profiles share this owner.",
+      "explanation": "Native model IPC, nested fields and auth/handoff/setup protocols share serde derives; optional listeners serialize the corresponding bridge profiles.",
       "profiles": [
         "android-arm64-local-webgpu",
         "android-x86_64-local-webgpu",
@@ -70,13 +68,14 @@
         "windows-inference-store-check"
       ],
       "sources": [
-        {
-          "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [2]
-        },
+        { "path": "frontend/tauri-plugin-oc/Cargo.toml", "lines": [2] },
         {
           "path": "frontend/tauri-plugin-oc/src/models.rs",
           "lines": [1, 121, 206]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/local_app_setup_protocol.rs",
+          "lines": [3]
         }
       ],
       "seeds": ["plugin.schemas"]
@@ -84,7 +83,7 @@
     {
       "id": "plugin.json",
       "disposition": "external-owner-edges",
-      "explanation": "Strict generic private-handoff JSON schema/state, model manifests and local auth candidate serialization share this owner.",
+      "explanation": "Strict handoff/setup envelope JSON, model manifests and local auth candidate serialization share serde_json. The setup catalog remains an opaque bounded value here; complete catalog validation belongs to the frontend.",
       "profiles": [
         "android-arm64-local-webgpu",
         "android-x86_64-local-webgpu",
@@ -96,13 +95,14 @@
         "windows-inference-store-check"
       ],
       "sources": [
-        {
-          "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [2]
-        },
+        { "path": "frontend/tauri-plugin-oc/Cargo.toml", "lines": [2] },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff_protocol.rs",
           "lines": [4, 124]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/local_app_setup_protocol.rs",
+          "lines": [4, 93]
         }
       ],
       "seeds": ["plugin.json"]
@@ -110,7 +110,7 @@
     {
       "id": "plugin.hash",
       "disposition": "external-owner-edges",
-      "explanation": "Approved handoff proof hashes and verified model file hashes use SHA-256; production context is retained even though host tests exercise helpers.",
+      "explanation": "Handoff proofs, model integrity and setup catalog/envelope/challenge digests share SHA-256. These production owner edges remain production context when host tests exercise them.",
       "profiles": [
         "android-arm64-local-webgpu",
         "android-x86_64-local-webgpu",
@@ -122,13 +122,14 @@
         "windows-inference-store-check"
       ],
       "sources": [
-        {
-          "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [2]
-        },
+        { "path": "frontend/tauri-plugin-oc/Cargo.toml", "lines": [2] },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff_protocol.rs",
           "lines": [5, 162]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/local_app_setup_protocol.rs",
+          "lines": [5, 146, 175, 205]
         }
       ],
       "seeds": ["plugin.hash"]
@@ -136,7 +137,7 @@
     {
       "id": "plugin.hex",
       "disposition": "external-owner-edges",
-      "explanation": "Proof decoding, model checksum encoding, optional inference identity decoding, and random transport IDs use the same direct hex edge.",
+      "explanation": "Proof decoding, model checksum encoding, optional inference identity decoding and random transport IDs use the same hex edge; the setup listener adds an ID encoding call only when local-app-handoff is enabled.",
       "profiles": [
         "android-arm64-local-webgpu",
         "android-x86_64-local-webgpu",
@@ -148,13 +149,14 @@
         "windows-inference-store-check"
       ],
       "sources": [
-        {
-          "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [2]
-        },
+        { "path": "frontend/tauri-plugin-oc/Cargo.toml", "lines": [2] },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff_protocol.rs",
           "lines": [166]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/local_app_setup.rs",
+          "lines": [85]
         }
       ],
       "seeds": ["plugin.hex"]
@@ -162,7 +164,7 @@
     {
       "id": "plugin.ipc",
       "disposition": "external-owner-edges",
-      "explanation": "Feature-owned Tauri IPC commands, window checks, managed state, asset resolution, native runtime and nested errors. Unrelated core command behavior is not audited.",
+      "explanation": "Feature-owned Tauri IPC commands, main-window checks, managed auth/handoff/setup state, asset resolution, native runtime and nested errors retain the same owner. Unrelated core command behavior is not audited.",
       "profiles": [
         "android-arm64-local-webgpu",
         "android-x86_64-local-webgpu",
@@ -174,13 +176,10 @@
         "windows-inference-store-check"
       ],
       "sources": [
-        {
-          "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [2]
-        },
+        { "path": "frontend/tauri-plugin-oc/Cargo.toml", "lines": [2] },
         {
           "path": "frontend/tauri-plugin-oc/src/commands.rs",
-          "lines": [1, 20, 341]
+          "lines": [1, 20, 63, 81, 93, 116, 384]
         }
       ],
       "seeds": ["plugin.ipc"]
@@ -188,7 +187,7 @@
     {
       "id": "plugin.model.async",
       "disposition": "external-owner-edges",
-      "explanation": "Native model download/DNS/synchronization; optional inference spawn_blocking and local listener async operations retain this runtime owner.",
+      "explanation": "Native model download/DNS/synchronization, optional inference spawn_blocking and feature-gated auth/handoff/setup listener operations retain the Tokio owner.",
       "profiles": [
         "android-arm64-local-webgpu",
         "android-x86_64-local-webgpu",
@@ -200,13 +199,14 @@
         "windows-inference-store-check"
       ],
       "sources": [
-        {
-          "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [2]
-        },
+        { "path": "frontend/tauri-plugin-oc/Cargo.toml", "lines": [2] },
         {
           "path": "frontend/tauri-plugin-oc/src/model_manager.rs",
           "lines": [13, 317]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/local_app_setup.rs",
+          "lines": [19]
         }
       ],
       "seeds": ["plugin.model.async"]
@@ -226,10 +226,7 @@
         "windows-inference-store-check"
       ],
       "sources": [
-        {
-          "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [2]
-        },
+        { "path": "frontend/tauri-plugin-oc/Cargo.toml", "lines": [2] },
         {
           "path": "frontend/tauri-plugin-oc/src/model_manager.rs",
           "lines": [761, 763]
@@ -248,16 +245,28 @@
         "windows-inference-store-check"
       ],
       "sources": [
-        {
-          "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [2]
-        },
+        { "path": "frontend/tauri-plugin-oc/Cargo.toml", "lines": [2] },
         {
           "path": "frontend/tauri-plugin-oc/src/inference.rs",
           "lines": [17, 212]
         }
       ],
       "seeds": ["plugin.native.inference"]
+    },
+    {
+      "id": "plugin.native.inference-sys",
+      "disposition": "external-owner-edges",
+      "explanation": "The exact optional sys 0.1.150 constraint preserves the wrapper 0.1.150 native ABI. It adds no sys default features and is activated only by the four existing host inference profiles, not Android or default tests. This is a manifest compatibility edge, not a new direct FFI call.",
+      "profiles": [
+        "linux-inference-check",
+        "linux-inference-store-check",
+        "windows-inference-check",
+        "windows-inference-store-check"
+      ],
+      "sources": [
+        { "path": "frontend/tauri-plugin-oc/Cargo.toml", "lines": [17, 20, 53] }
+      ],
+      "seeds": ["plugin.native.inference-sys"]
     },
     {
       "id": "plugin.native.template",
@@ -270,14 +279,8 @@
         "windows-inference-store-check"
       ],
       "sources": [
-        {
-          "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [2]
-        },
-        {
-          "path": "frontend/tauri-plugin-oc/src/inference.rs",
-          "lines": [262]
-        }
+        { "path": "frontend/tauri-plugin-oc/Cargo.toml", "lines": [2] },
+        { "path": "frontend/tauri-plugin-oc/src/inference.rs", "lines": [262] }
       ],
       "seeds": ["plugin.native.template"]
     },
@@ -292,30 +295,25 @@
         "windows-inference-store-check"
       ],
       "sources": [
-        {
-          "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [2]
-        },
-        {
-          "path": "frontend/tauri-plugin-oc/src/inference.rs",
-          "lines": [264]
-        }
+        { "path": "frontend/tauri-plugin-oc/Cargo.toml", "lines": [2] },
+        { "path": "frontend/tauri-plugin-oc/src/inference.rs", "lines": [264] }
       ],
       "seeds": ["plugin.native.template-python"]
     },
     {
       "id": "plugin.loopback.bytes",
       "disposition": "external-owner-edges",
-      "explanation": "Both local transports use bytes in their actual optional feature-gated listeners. Only the exact local-test APK profiles enable these features; default/inference host checks do not.",
+      "explanation": "The selected handoff/setup listeners use bytes through the existing local-app-handoff feature gate in both APK profiles. The browser-auth listener remains as dormant reviewed source but local-browser-auth is not enabled by any reviewed profile. Default/inference host checks enable none of these listeners; removing the browser feature adds or removes no dependency root because handoff/setup retain this owner.",
       "profiles": ["android-arm64-local-webgpu", "android-x86_64-local-webgpu"],
       "sources": [
-        {
-          "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [2]
-        },
+        { "path": "frontend/tauri-plugin-oc/Cargo.toml", "lines": [2] },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff.rs",
           "lines": [4]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/local_app_setup.rs",
+          "lines": [5]
         }
       ],
       "seeds": ["plugin.loopback.bytes"]
@@ -323,16 +321,17 @@
     {
       "id": "plugin.loopback.getrandom",
       "disposition": "external-owner-edges",
-      "explanation": "Both local transports use getrandom in their actual optional feature-gated listeners. Only the exact local-test APK profiles enable these features; default/inference host checks do not.",
+      "explanation": "The selected handoff/setup listeners use getrandom through the existing local-app-handoff feature gate in both APK profiles. The browser-auth listener remains as dormant reviewed source but local-browser-auth is not enabled by any reviewed profile. Default/inference host checks enable none of these listeners; removing the browser feature adds or removes no dependency root because handoff/setup retain this owner.",
       "profiles": ["android-arm64-local-webgpu", "android-x86_64-local-webgpu"],
       "sources": [
-        {
-          "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [2]
-        },
+        { "path": "frontend/tauri-plugin-oc/Cargo.toml", "lines": [2] },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff.rs",
           "lines": [46]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/local_app_setup.rs",
+          "lines": [84]
         }
       ],
       "seeds": ["plugin.loopback.getrandom"]
@@ -340,16 +339,17 @@
     {
       "id": "plugin.loopback.http-body-util",
       "disposition": "external-owner-edges",
-      "explanation": "Both local transports use http-body-util in their actual optional feature-gated listeners. Only the exact local-test APK profiles enable these features; default/inference host checks do not.",
+      "explanation": "The selected handoff/setup listeners use http-body-util through the existing local-app-handoff feature gate in both APK profiles. The browser-auth listener remains as dormant reviewed source but local-browser-auth is not enabled by any reviewed profile. Default/inference host checks enable none of these listeners; removing the browser feature adds or removes no dependency root because handoff/setup retain this owner.",
       "profiles": ["android-arm64-local-webgpu", "android-x86_64-local-webgpu"],
       "sources": [
-        {
-          "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [2]
-        },
+        { "path": "frontend/tauri-plugin-oc/Cargo.toml", "lines": [2] },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff.rs",
           "lines": [5]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/local_app_setup.rs",
+          "lines": [6]
         }
       ],
       "seeds": ["plugin.loopback.http-body-util"]
@@ -357,16 +357,17 @@
     {
       "id": "plugin.loopback.hyper",
       "disposition": "external-owner-edges",
-      "explanation": "Both local transports use hyper in their actual optional feature-gated listeners. Only the exact local-test APK profiles enable these features; default/inference host checks do not.",
+      "explanation": "The selected handoff/setup listeners use hyper through the existing local-app-handoff feature gate in both APK profiles. The browser-auth listener remains as dormant reviewed source but local-browser-auth is not enabled by any reviewed profile. Default/inference host checks enable none of these listeners; removing the browser feature adds or removes no dependency root because handoff/setup retain this owner.",
       "profiles": ["android-arm64-local-webgpu", "android-x86_64-local-webgpu"],
       "sources": [
-        {
-          "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [2]
-        },
+        { "path": "frontend/tauri-plugin-oc/Cargo.toml", "lines": [2] },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff.rs",
           "lines": [6]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/local_app_setup.rs",
+          "lines": [7]
         }
       ],
       "seeds": ["plugin.loopback.hyper"]
@@ -374,16 +375,17 @@
     {
       "id": "plugin.loopback.hyper-util",
       "disposition": "external-owner-edges",
-      "explanation": "Both local transports use hyper-util in their actual optional feature-gated listeners. Only the exact local-test APK profiles enable these features; default/inference host checks do not.",
+      "explanation": "The selected handoff/setup listeners use hyper-util through the existing local-app-handoff feature gate in both APK profiles. The browser-auth listener remains as dormant reviewed source but local-browser-auth is not enabled by any reviewed profile. Default/inference host checks enable none of these listeners; removing the browser feature adds or removes no dependency root because handoff/setup retain this owner.",
       "profiles": ["android-arm64-local-webgpu", "android-x86_64-local-webgpu"],
       "sources": [
-        {
-          "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [2]
-        },
+        { "path": "frontend/tauri-plugin-oc/Cargo.toml", "lines": [2] },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff.rs",
           "lines": [7]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/local_app_setup.rs",
+          "lines": [11]
         }
       ],
       "seeds": ["plugin.loopback.hyper-util"]
@@ -401,14 +403,8 @@
         "windows-inference-store-check"
       ],
       "sources": [
-        {
-          "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [2]
-        },
-        {
-          "path": "frontend/tauri-plugin-oc/src/desktop.rs",
-          "lines": [29]
-        }
+        { "path": "frontend/tauri-plugin-oc/Cargo.toml", "lines": [2] },
+        { "path": "frontend/tauri-plugin-oc/src/desktop.rs", "lines": [29] }
       ],
       "seeds": ["plugin.host.open"]
     },
@@ -427,14 +423,8 @@
         "windows-inference-store-check"
       ],
       "sources": [
-        {
-          "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [2]
-        },
-        {
-          "path": "frontend/tauri-plugin-oc/src/error.rs",
-          "lines": [5]
-        }
+        { "path": "frontend/tauri-plugin-oc/Cargo.toml", "lines": [2] },
+        { "path": "frontend/tauri-plugin-oc/src/error.rs", "lines": [5] }
       ],
       "seeds": ["plugin.error.derive"]
     },
@@ -453,14 +443,8 @@
         "windows-inference-store-check"
       ],
       "sources": [
-        {
-          "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [2]
-        },
-        {
-          "path": "frontend/tauri-plugin-oc/src/error.rs",
-          "lines": [14]
-        }
+        { "path": "frontend/tauri-plugin-oc/Cargo.toml", "lines": [2] },
+        { "path": "frontend/tauri-plugin-oc/src/error.rs", "lines": [14] }
       ],
       "seeds": ["plugin.error.android-fs"]
     },
@@ -479,10 +463,7 @@
         "windows-inference-store-check"
       ],
       "sources": [
-        {
-          "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [2]
-        },
+        { "path": "frontend/tauri-plugin-oc/Cargo.toml", "lines": [2] },
         {
           "path": "frontend/tauri-plugin-oc/src/bundle_manager.rs",
           "lines": [109]
@@ -505,10 +486,7 @@
         "windows-inference-store-check"
       ],
       "sources": [
-        {
-          "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [2]
-        },
+        { "path": "frontend/tauri-plugin-oc/Cargo.toml", "lines": [2] },
         {
           "path": "frontend/tauri-plugin-oc/src/update_manager.rs",
           "lines": [3, 68]
@@ -519,7 +497,7 @@
     {
       "id": "plugin.build",
       "disposition": "external-owner-edges",
-      "explanation": "Native build script generates permissions for the model commands and local bridges for each selected plugin profile.",
+      "explanation": "The native build hook generates permissions for model commands and auth/handoff/setup bridges for each selected plugin profile; setup adds command names, not an external build dependency.",
       "profiles": [
         "android-arm64-local-webgpu",
         "android-x86_64-local-webgpu",
@@ -531,13 +509,10 @@
         "windows-inference-store-check"
       ],
       "sources": [
-        {
-          "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [2]
-        },
+        { "path": "frontend/tauri-plugin-oc/Cargo.toml", "lines": [2] },
         {
           "path": "frontend/tauri-plugin-oc/build.rs",
-          "lines": [51]
+          "lines": [14, 15, 16, 54]
         }
       ],
       "seeds": ["plugin.build"]
@@ -555,14 +530,8 @@
         "windows-inference-store-check"
       ],
       "sources": [
-        {
-          "path": "frontend/src-tauri/Cargo.toml",
-          "lines": [2]
-        },
-        {
-          "path": "frontend/src-tauri/src/lib.rs",
-          "lines": [9, 74]
-        }
+        { "path": "frontend/src-tauri/Cargo.toml", "lines": [2] },
+        { "path": "frontend/src-tauri/src/lib.rs", "lines": [9, 74] }
       ],
       "seeds": ["app.shell"]
     },
@@ -579,21 +548,15 @@
         "windows-inference-store-check"
       ],
       "sources": [
-        {
-          "path": "frontend/src-tauri/Cargo.toml",
-          "lines": [2]
-        },
-        {
-          "path": "frontend/src-tauri/build.rs",
-          "lines": [5]
-        }
+        { "path": "frontend/src-tauri/Cargo.toml", "lines": [2] },
+        { "path": "frontend/src-tauri/build.rs", "lines": [5] }
       ],
       "seeds": ["app.build"]
     },
     {
       "id": "composition-manifests",
       "disposition": "no-additional-external-owner-edge",
-      "explanation": "Workspace dependency versions and exact native feature forwarding are bound, not whole-workspace audit roots. There are no new target-specific Cargo declarations. Features from the APK builder include all-WebGPU, browser auth and private-app handoff; host commands are separate nonshipping checks.",
+      "explanation": "Workspace versions and exact feature forwarding are bound, not whole-workspace audit roots. No new target-specific Cargo declarations are added. The optional direct sys ABI constraint is covered by plugin.native.inference-sys. Both APK profiles retain all-WebGPU and private-app handoff (also gating setup), but the app no longer forwards local-test-browser-auth. The dormant plugin local-browser-auth declaration is not selected. Host commands remain separate nonshipping checks.",
       "profiles": [
         "android-arm64-local-webgpu",
         "android-x86_64-local-webgpu",
@@ -605,21 +568,15 @@
         "windows-inference-store-check"
       ],
       "sources": [
-        {
-          "path": "Cargo.toml",
-          "lines": [1, 287, 297]
-        },
+        { "path": "Cargo.toml", "lines": [1, 287, 297] },
         {
           "path": "frontend/tauri-plugin-oc/Cargo.toml",
-          "lines": [36, 39, 40, 50]
+          "lines": [37, 39, 42, 43, 53]
         },
-        {
-          "path": "frontend/src-tauri/Cargo.toml",
-          "lines": [27, 38, 39, 40]
-        },
+        { "path": "frontend/src-tauri/Cargo.toml", "lines": [27, 38, 39] },
         {
           "path": "scripts/build-unofficial-local-apk.mjs",
-          "lines": [37]
+          "lines": [40, 66, 67]
         }
       ],
       "seeds": []
@@ -627,7 +584,7 @@
     {
       "id": "plugin-module-and-schema-closure",
       "disposition": "no-additional-external-owner-edge",
-      "explanation": "Reviewed native module dispatch, commands, error schema and model nested structs. Dedicated protocols use only listed serde/JSON/reqwest/hex/SHA owner edges plus standard-library state. Model manager uses the listed stream, URL, JSON, hash, Tauri, Tokio and sysinfo roots; optional inference adds only llama-cpp-2/minijinja/minijinja-contrib. There are no separate dev dependencies for the embedded tests. Shared production edges are not downgraded to test context.",
+      "explanation": "Reviewed native dispatch, commands, errors and model nested structs. The unchanged browser-auth protocol remains compiled and its listener remains dormant source behind unselected local-browser-auth; it is not the APK sign-in path. Original Credential Manager auth/session restoration is reviewed in its frontend/JVM boundaries, not a new Rust credential store. Always-compiled setup validates a bounded opaque catalog envelope with the existing serde/JSON/reqwest/SHA owners and standard-library state; full catalog/package/processor/origin validation remains frontend responsibility. Optional inference retains llama-cpp-2/minijinja/minijinja-contrib plus the reviewed exact sys ABI constraint. Embedded tests add no separate dev dependencies or downgraded production edges.",
       "profiles": [
         "android-arm64-local-webgpu",
         "android-x86_64-local-webgpu",
@@ -641,11 +598,11 @@
       "sources": [
         {
           "path": "frontend/tauri-plugin-oc/src/lib.rs",
-          "lines": [18, 19, 27, 26]
+          "lines": [18, 19, 20, 23, 24, 66, 67, 68, 108, 109]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/local_browser_auth_protocol.rs",
-          "lines": [3]
+          "lines": [3, 7, 9]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff_protocol.rs",
@@ -655,9 +612,10 @@
           "path": "frontend/tauri-plugin-oc/src/models.rs",
           "lines": [188, 206]
         },
+        { "path": "frontend/tauri-plugin-oc/src/error.rs", "lines": [6] },
         {
-          "path": "frontend/tauri-plugin-oc/src/error.rs",
-          "lines": [6]
+          "path": "frontend/tauri-plugin-oc/src/local_app_setup_protocol.rs",
+          "lines": [3, 77, 93, 146, 175, 205]
         }
       ],
       "seeds": []
@@ -665,7 +623,7 @@
     {
       "id": "local-listener-closure",
       "disposition": "no-additional-external-owner-edge",
-      "explanation": "Both reviewed local listeners use only the listed bytes/getrandom/http-body-util/hyper/hyper-util plus serde/serde_json/hex/Tokio and standard library. They are feature-gated together only in the two APK profiles; pure protocol default-host tests do not imply listener tests or native APK runtime acceptance.",
+      "explanation": "The selected handoff/setup listeners retain bytes/getrandom/http-body-util/hyper/hyper-util, serde/JSON/hex/Tokio and standard-library owners. Setup shares the local-app-handoff gate and transports a bounded opaque catalog, not drafts or credentials. The retained browser-auth listener source uses the same owners but is unselected in every reviewed profile. Only the two APK profiles enable handoff/setup listeners; pure-protocol host tests imply neither listener coverage nor APK runtime acceptance.",
       "profiles": ["android-arm64-local-webgpu", "android-x86_64-local-webgpu"],
       "sources": [
         {
@@ -676,9 +634,10 @@
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff.rs",
           "lines": [4, 52]
         },
+        { "path": "frontend/tauri-plugin-oc/src/mobile.rs", "lines": [30] },
         {
-          "path": "frontend/tauri-plugin-oc/src/mobile.rs",
-          "lines": [30]
+          "path": "frontend/tauri-plugin-oc/src/local_app_setup.rs",
+          "lines": [5, 6, 7, 11, 12, 19, 84, 85, 330]
         }
       ],
       "seeds": []
@@ -686,7 +645,7 @@
     {
       "id": "shell-asset-selection",
       "disposition": "no-additional-external-owner-edge",
-      "explanation": "Current shell entry/navigation uses Tauri and the local oc plugin only at the changed feature boundary. Standard-library main calls app_lib; local-test capability JSON adds no Rust external owner. Existing unrelated notification/deep-link/media/update-download implementation and disabled devtools telemetry are outside the feature-owned roots, not claimed as audited. The changed bundled cache gate retains tauri, serde/JSON, semver and mime_guess owners; zip is only the unchanged legacy OTA downloader, not the selected local APK policy-none path.",
+      "explanation": "Current shell entry/navigation uses Tauri and the local oc plugin only at the changed feature boundary. Standard-library main calls app_lib; local-test capability JSON adds no Rust external owner. Existing unrelated notification/deep-link/media/update-download implementation and disabled devtools telemetry are outside the feature-owned roots, not claimed as audited. The bundled cache gate retains tauri, serde/JSON, semver and mime_guess owners; zip is only the unchanged legacy OTA downloader, not the selected local APK policy-none path. Local handoff/setup capabilities remain restricted to the bundled main window; browser-auth capability is absent. The builder requires the original Credential Manager marker and handoff/setup assets while rejecting browser-auth HTML/JS assets. Its imported profile helper selects the original RP identifier and account-linking UI without granting or asserting provider/Digital Asset Links authorization. These build inputs add no Rust dependency owner.",
       "profiles": [
         "android-arm64-local-webgpu",
         "android-x86_64-local-webgpu",
@@ -696,17 +655,11 @@
         "windows-inference-store-check"
       ],
       "sources": [
-        {
-          "path": "frontend/src-tauri/src/main.rs",
-          "lines": [5]
-        },
-        {
-          "path": "frontend/src-tauri/src/navigation.rs",
-          "lines": [11]
-        },
+        { "path": "frontend/src-tauri/src/main.rs", "lines": [5] },
+        { "path": "frontend/src-tauri/src/navigation.rs", "lines": [11] },
         {
           "path": "frontend/src-tauri/tauri.localtest.conf.json",
-          "lines": [13, 20]
+          "lines": [13, 17, 20, 24]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/bundle_manager.rs",
@@ -715,6 +668,18 @@
         {
           "path": "frontend/tauri-plugin-oc/src/update_manager.rs",
           "lines": [84]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/permissions/local-app-setup.toml",
+          "lines": [1, 2, 3, 4]
+        },
+        {
+          "path": "scripts/build-unofficial-local-apk.mjs",
+          "lines": [115, 116, 118, 119, 120, 121, 122, 123, 124, 125]
+        },
+        {
+          "path": "frontend/unofficialLocalApkProfile.mjs",
+          "lines": [7, 33, 34, 35, 36, 67, 68]
         }
       ],
       "seeds": []
@@ -723,7 +688,7 @@
   "resolutions": [
     {
       "id": "current-native-owner-review",
-      "explanation": "Source review traced each direct external owner and nested schema/build/dispatch closure at the current client boundary. Profile feature gating matches the local APK builder and separate host checks; removed backend roots are retired with the architecture, not waived. Live-source fingerprints now require renewed review on edits.",
+      "explanation": "Fresh source review binds the approved original native authentication build selection: both APK profiles omit browser-auth, handoff/setup and all prior dependency owners remain, and the environment/marker helper is included as a no-new-owner source. Dormant browser protocol/listener sources remain conservatively reviewed, not enabled. The exact optional wrapper/sys 0.1.150 pair is retained only in the four existing host inference profiles. Historical records, lock and dependency identities remain unchanged. This resolves inventory completeness only, not advisory, compile, provider/Digital Asset Links, device, installed APK or release qualification.",
       "units": [
         "plugin.model.stream",
         "plugin.model-and-handoff.url",
@@ -735,6 +700,7 @@
         "plugin.model.async",
         "plugin.model.resources",
         "plugin.native.inference",
+        "plugin.native.inference-sys",
         "plugin.native.template",
         "plugin.native.template-python",
         "plugin.loopback.bytes",

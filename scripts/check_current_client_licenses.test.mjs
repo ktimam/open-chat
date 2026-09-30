@@ -16,9 +16,9 @@ const id = (value) => `${value.source}#${value.name}@${value.version}`;
 const modelResolution = () => ({
   name: "llama-cpp-sys-2",
   historicalVersion: "0.1.150",
-  version: "0.1.154",
+  version: "0.1.150",
   source,
-  checksum: "13a9ea2ce0cdc20bcb1870534022e340b391663f8fe09133951e2fe37fbc29cf",
+  checksum: "f67dab3ed2b68e4fc4a42471eac73e128ed2ee97bd10de66ddcc609dd5d838a0",
   parent: { name: "llama-cpp-2", version: "0.1.150", source },
   dependencyName: "llama_cpp_sys_2",
   dependencyKind: null,
@@ -103,7 +103,7 @@ test("current licenses cover exact app owner roots plus all retained model licen
   assert.equal(result.advisoryChecksPerformed, false);
   assert.equal(result.releaseAcceptance, false);
 });
-test("the current mapping preserves historical obligations rather than rewriting them", () => {
+test("the exact ABI pair preserves historical licenses and still requires its actual parent edge", () => {
   const historical = ownedSecurityRules("pr1").introducedRustPackages;
   assert.equal(historical.length, 19);
   assert.deepEqual(
@@ -121,10 +121,7 @@ test("the current mapping preserves historical obligations rather than rewriting
     );
     assert.equal(current.license, previous.license);
     assert.equal(current.source, source);
-    assert.equal(
-      current.version,
-      previous.name === "llama-cpp-sys-2" ? "0.1.154" : previous.version,
-    );
+    assert.equal(current.version, previous.version);
   }
   assert.equal(validateCurrentClientLicenses(value).pass, true);
 });
@@ -137,7 +134,7 @@ test("missing, duplicate, stale and unreviewed identity mappings fail closed", (
     (value) => (value.policy.modelIdentityResolutions[0].name = "bindgen"),
     (value) =>
       (value.policy.modelIdentityResolutions[0].historicalVersion = "0.1.149"),
-    (value) => (value.policy.modelIdentityResolutions[0].version = "0.1.150"),
+    (value) => (value.policy.modelIdentityResolutions[0].version = "0.1.154"),
     (value) => (value.policy.modelIdentityResolutions[0].version = "0.1.155"),
     (value) =>
       (value.policy.modelIdentityResolutions[0].source =
@@ -174,7 +171,7 @@ test("resolved package version, source, license and locked archive remain exact"
     (value) =>
       (value.metadata.packages.find(
         (item) => item.name === "llama-cpp-sys-2",
-      ).version = "0.1.150"),
+      ).version = "0.1.154"),
     (value) =>
       (value.metadata.packages.find(
         (item) => item.name === "llama-cpp-sys-2",

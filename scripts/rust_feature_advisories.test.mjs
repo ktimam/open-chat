@@ -461,6 +461,13 @@ const mutations = [
     /features/u,
   ],
   [
+    "duplicate requested features",
+    (r) => {
+      r.roots[0].requestedFeatures.push(r.roots[0].requestedFeatures[0]);
+    },
+    /Duplicate requested features/u,
+  ],
+  [
     "missing default features",
     (r) => {
       delete r.roots[0].usesDefaultFeatures;
