@@ -525,7 +525,9 @@ export default {
                 process.env.OC_UNOFFICIAL_CLIENT === "true" ? "true" : "false",
             ),
             "import.meta.env.OC_APP_DIRECTORY_URL": JSON.stringify(
-                process.env.OC_UNOFFICIAL_CLIENT === "true" ? process.env.OC_APP_DIRECTORY_URL ?? "" : "",
+                process.env.OC_UNOFFICIAL_CLIENT === "true"
+                    ? (process.env.OC_APP_DIRECTORY_URL ?? "")
+                    : "",
             ),
             "import.meta.env.OC_UNOFFICIAL_LOCAL_APK": JSON.stringify(
                 localTestApk ? "true" : "false",

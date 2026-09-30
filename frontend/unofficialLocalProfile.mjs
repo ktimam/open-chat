@@ -1,3 +1,5 @@
+import { URL } from "node:url";
+
 /** Explicit local prototype configuration. Does not read env files, credentials, or the network. */
 export const UNOFFICIAL_LOCAL_DEFAULT_PORT = 5190;
 export const UNOFFICIAL_LOCAL_CANISTERS = Object.freeze({
@@ -38,8 +40,17 @@ export function parseAppDirectoryUrl(value = "") {
     if (typeof value !== "string" || value.length > 2048 || value.trim() !== value)
         throw new Error("Invalid public app directory URL");
     const url = new URL(value);
-    if (url.username || url.password || url.hash || url.search ||
-        (url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname))))
+    if (
+        url.username ||
+        url.password ||
+        url.hash ||
+        url.search ||
+        (url.protocol !== "https:" &&
+            !(
+                url.protocol === "http:" &&
+                ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
+            ))
+    )
         throw new Error("App directory requires HTTPS or explicit loopback HTTP");
     return url.href;
 }

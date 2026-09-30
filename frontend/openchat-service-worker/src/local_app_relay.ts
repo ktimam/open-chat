@@ -3,7 +3,12 @@ export function isLocalAppRelayRequest(request: Pick<Request, "url">, origin: st
     const url = new URL(request.url);
     return (
         url.origin === origin &&
-        ["/local-app-handoff.html", "/local-app-handoff.js", "/local-app-setup.html", "/local-app-setup.js"].includes(url.pathname)
+        [
+            "/local-app-handoff.html",
+            "/local-app-handoff.js",
+            "/local-app-setup.html",
+            "/local-app-setup.js",
+        ].includes(url.pathname)
     );
 }
 
