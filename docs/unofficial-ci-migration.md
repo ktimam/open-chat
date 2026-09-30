@@ -261,3 +261,13 @@ contracts pass, and the combined focused tool/startup/APK/CI contract run passes
 71/71 with no skips. No download, Gradle dependency resolution, production change,
 emulator action or APK installation is part of this evidence. It is not complete
 native compilation or device acceptance.
+
+## Current onboarding formatting checkpoint (2026-09-30)
+
+The restored desktop `OnboardModal.svelte` is fully formatted by the installed
+formatter and remains in the normal current-client formatting candidates. Its
+obsolete current-client inherited-formatting record is removed, leaving 11
+records. Every remaining mismatch still requires the exact live upstream edit
+proof; the regression checks both the complete record set and that onboarding
+needs no exemption. The upstream comparison baseline, historical registries and
+candidate-selection rules are unchanged.

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
-import { extname } from "node:path";
+import { extname, resolve } from "node:path";
 import {
   CURRENT_FORMAT_BASE,
   CURRENT_FORMAT_EDIT_ALGORITHM,
@@ -269,11 +269,27 @@ test("candidate filtering retains exactly the existing owned frontend rules", ()
   );
 });
 
+test("restored desktop onboarding is normally formatted and checked without an inherited exemption", () => {
+  const root = fileURLToPath(new URL("../", import.meta.url));
+  const path = "frontend/app/src/components/onboard/OnboardModal.svelte";
+  const registry = readCurrentFormattingRegistry();
+  assert.equal(registry.records.some((record) => record.path === path), false);
+  assert(
+    currentFormattingCandidates(root, CURRENT_FORMAT_BASE).paths.includes(path),
+  );
+  const source = readFileSync(resolve(root, path), "utf8");
+  assert.equal(
+    formatCurrentSource(resolve(root, "frontend"), path, source),
+    source.replaceAll("\r\n", "\n"),
+  );
+});
+
 test(
   "live Git and installed CLI regenerate every remaining mismatch, including prior historical records",
   { timeout: 120000 },
   () => {
     const registry = readCurrentFormattingRegistry();
+    assert.equal(registry.records.length, 11);
     const result = checkCurrentClientFormat({ report: () => {} });
     assert.deepEqual(result.failures, []);
     assert.equal(result.pass, true);

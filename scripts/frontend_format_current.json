@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "reviewedOn": "2026-09-29",
+  "reviewedOn": "2026-09-30",
   "normalization": "CRLF-to-LF-only",
   "editAlgorithm": "unique-common-line-anchors-v1",
   "proofMethod": "Actual installed CLI with root config, LF-normalized source and pinned current upstream Git blobs. Unique common lines anchor edit blocks; only byte-equal block prefix/suffix lines are removed. SHA-256(JSON.stringify([removedLines, addedLines])); every candidate edit and multiplicity must occur upstream. Recomputed live for each current-mode inherited mismatch.",
@@ -47,29 +47,6 @@
         ],
         "candidateEditSha256s": [
           "a8e91b2a1da16190fd7744fe765fdab2f023f807e1b12ba29b269f37dcddd31b"
-        ]
-      }
-    },
-    {
-      "scope": "current-client",
-      "path": "frontend/app/src/components/onboard/OnboardModal.svelte",
-      "baseCommit": "5f00758312735f2ddac9928e3aa60349964bf73a",
-      "baseSha256": "b1875c95c338dcd6a6cee1abf1ad5894fcb0393555218b553ace28e5d265f3d2",
-      "candidateSha256": "1a7a64c9e6167080cbda0bdff9a2cf82f98ba21c4f2a0401b973379ab564923c",
-      "justification": "Every remaining formatter edit, including repeated edits, is byte-identical to an edit in the pinned current upstream file. Fork-owned formatting is not exempted; source, formatter, config and live edit proof must all still match.",
-      "formatter": {
-        "prettierVersion": "3.8.4",
-        "sveltePluginVersion": "3.5.2",
-        "configSha256": "6a608fe0bd06378aa252d9bc4bf291eea44b90d15657b5e95dc02cde509a44aa"
-      },
-      "proof": {
-        "baseEditSha256s": [
-          "5a9fe2c51b2a6df99093710fc2e1496fa7f5ec64377f0eb3e973ccfae71c5fc5",
-          "185b3127a3f26f1f6f457a5c7ee9f1ecc116d1657617dc44ae540ef3224c5123"
-        ],
-        "candidateEditSha256s": [
-          "5a9fe2c51b2a6df99093710fc2e1496fa7f5ec64377f0eb3e973ccfae71c5fc5",
-          "185b3127a3f26f1f6f457a5c7ee9f1ecc116d1657617dc44ae540ef3224c5123"
         ]
       }
     },
