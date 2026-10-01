@@ -142,6 +142,345 @@ async function propose(workspace: PrivateAppWorkspace) {
 }
 
 describe("private workspace encrypted-card lifecycle", () => {
+    it("uses current connected configuration for new sources without retargeting the retained old card", async () => {
+        const first = fixture();
+        await start(first.workspace);
+        const source = { chatKey: "synthetic-chat", messageId: "1" };
+        await first.workspace.propose(client, content, { stillCurrent: () => true, source });
+        await saved(first.workspace);
+        const oldId = first.workspace.state.draft!.id;
+        const modified = JSON.parse(JSON.stringify(catalog));
+        modified.apps[0].revision = "2";
+        modified.apps[0].destination = "https://new.example.invalid/import";
+        first.shared.setupStorage.read = async () => ({
+            catalog: parseLocalAppCatalog(JSON.stringify(modified)),
+            appId: "sample",
+            actionId: "save",
+            enabledChats: [],
+        });
+        const next = fixture(first.shared);
+        await start(next.workspace);
+        expect(next.workspace.review()).toBe(false);
+        expect(
+            await next.workspace.propose(client, content, { stillCurrent: () => true, source }),
+        ).toBe("drafted");
+        expect(next.workspace.state.draft?.id).toBe(oldId);
+        expect(next.workspace.review()).toBe(false);
+        expect(next.extract).not.toHaveBeenCalled();
+        expect(
+            await next.workspace.propose(client, content, {
+                stillCurrent: () => true,
+                source: { ...source, messageId: "2" },
+            }),
+        ).toBe("drafted");
+        expect(next.workspace.state.draft?.target).toMatchObject({
+            appRevision: "2",
+            destination: "https://new.example.invalid/import",
+        });
+        expect(next.workspace.state.cards[0]).toMatchObject({
+            id: oldId,
+            target: { appRevision: "1", destination: "https://example.invalid/import" },
+        });
+        expect(next.workspace.review()).toBe(true);
+        expect(next.extract).toHaveBeenCalledOnce();
+        expect(next.deliver).not.toHaveBeenCalled();
+    });
+
+    it("restores the last explicitly selected card without a write or inference", async () => {
+        const first = fixture();
+        await start(first.workspace);
+        await propose(first.workspace);
+        const firstId = first.workspace.state.draft!.id;
+        await propose(first.workspace);
+        const secondId = first.workspace.state.draft!.id;
+        first.workspace.selectCard(firstId);
+        first.workspace.selectCard(secondId);
+        await saved(first.workspace);
+        const replace = vi.spyOn(first.shared.backend, "replace");
+        const next = fixture(first.shared);
+        await start(next.workspace);
+        expect(next.workspace.state.draft?.id).toBe(secondId);
+        expect(next.workspace.state.cards).toHaveLength(2);
+        expect(replace).not.toHaveBeenCalled();
+        expect(next.extract).not.toHaveBeenCalled();
+        expect(next.deliver).not.toHaveBeenCalled();
+    });
+
+    it("cancels new inference without discarding an existing card", async () => {
+        const first = fixture();
+        await start(first.workspace);
+        await propose(first.workspace);
+        const id = first.workspace.state.draft!.id;
+        let resolve!: (value: { kind: "extracted"; candidates: { value: number }[] }) => void;
+        first.extract.mockImplementationOnce(
+            () =>
+                new Promise((done) => {
+                    resolve = done;
+                }),
+        );
+        const pending = first.workspace.propose(client, content, { stillCurrent: () => true });
+        expect(first.workspace.state.busy).toBe(true);
+        expect(await first.workspace.forgetSetup()).toBe(false);
+        expect(first.workspace.state.cards.map((card) => card.id)).toEqual([id]);
+        first.workspace.discard();
+        resolve({ kind: "extracted", candidates: [{ value: 99 }] });
+        expect(await pending).toBe("retryable");
+        expect(first.workspace.state.cards.map((card) => card.id)).toEqual([id]);
+        expect(first.workspace.state.draft?.id).toBe(id);
+        expect((await first.storage.read(scope))?.cards.map((card) => card.saved.draft.id)).toEqual(
+            [id],
+        );
+    });
+
+    it("keeps original app presentation when setup changes and refuses changed action semantics", async () => {
+        const first = fixture();
+        await start(first.workspace);
+        await propose(first.workspace);
+        const original = first.workspace.selection()!.action;
+        const modified = JSON.parse(JSON.stringify(catalog));
+        modified.apps[0].actions[0].definition.card.title = "Changed heading";
+        first.shared.setupStorage.read = async () => ({
+            catalog: parseLocalAppCatalog(JSON.stringify(modified)),
+            appId: "sample",
+            actionId: "save",
+            enabledChats: [],
+        });
+        const next = fixture(first.shared);
+        await start(next.workspace);
+        expect(next.workspace.selection()?.action.definition.card).toEqual(
+            original.definition.card,
+        );
+        expect(next.workspace.state.activeCardApp?.actions[0].definition.card.title).toBe("Review");
+        expect(next.workspace.review()).toBe(false);
+        expect(next.deliver).not.toHaveBeenCalled();
+    });
+
+    it("retains an inspect-only legacy card without blocking a compatible sibling's save", async () => {
+        const first = fixture();
+        await start(first.workspace);
+        await propose(first.workspace);
+        const original = (await first.storage.read(scope))!.cards[0].saved;
+        // A migrated v1 card has no frozen app metadata; do not attach changed setup to it.
+        await first.storage.write(scope, { version: 2, cards: [{ saved: original }] });
+        first.workspace.clear();
+        const changed = JSON.parse(JSON.stringify(catalog));
+        changed.apps[0].destination = "https://another.invalid/import";
+        first.shared.setupStorage.read = async () => ({
+            catalog: parseLocalAppCatalog(JSON.stringify(changed)),
+            appId: "sample",
+            actionId: "save",
+            enabledChats: [],
+        });
+        const next = fixture(first.shared);
+        await start(next.workspace);
+        expect(next.workspace.state.draft?.id).toBe(original.draft.id);
+        expect(next.workspace.state.activeCardApp).toBeUndefined();
+        expect(next.workspace.review()).toBe(false);
+        expect(next.workspace.selectForProposal("sample", "save")).toBe(true);
+        await propose(next.workspace);
+        const siblingId = next.workspace.state.draft!.id;
+        next.workspace.edit('{"value":99}', "Sibling recipient");
+        await saved(next.workspace);
+        const stored = (await next.storage.read(scope))!;
+        expect(stored.cards).toHaveLength(2);
+        expect(stored.cards[0]).toEqual({ saved: original });
+        expect(stored.cards[1].saved.draft.id).toBe(siblingId);
+        expect(stored.cards[1].saved.editorJson).toBe('{"value":99}');
+        expect(stored.cards[1].app?.destination).toBe("https://another.invalid/import");
+        next.workspace.clear();
+        const restored = fixture(first.shared);
+        await start(restored.workspace);
+        expect(restored.workspace.state.cards.map((card) => card.id)).toEqual([
+            original.draft.id,
+            siblingId,
+        ]);
+        expect(restored.workspace.selectCard(original.draft.id)).toBe(true);
+        expect(restored.workspace.review()).toBe(false);
+        expect(restored.workspace.selectCard(siblingId)).toBe(true);
+        expect(restored.workspace.state.editorJson).toBe('{"value":99}');
+        expect(restored.workspace.review()).toBe(true);
+        await saved(restored.workspace);
+        expect(restored.extract).not.toHaveBeenCalled();
+        expect(next.deliver).not.toHaveBeenCalled();
+        expect(restored.deliver).not.toHaveBeenCalled();
+    });
+
+    it("restores a valid frozen action larger than the individual draft JSON cap", async () => {
+        const expanded = JSON.parse(JSON.stringify(catalog));
+        const action = expanded.apps[0].actions[0];
+        action.definition.responseSchema = { description: "s".repeat(40 * 1024) };
+        action.processorContext = { memo: "c".repeat(40 * 1024) };
+        const largeCatalog = parseLocalAppCatalog(JSON.stringify(expanded));
+        const actionBytes = new TextEncoder().encode(
+            JSON.stringify(largeCatalog.apps[0].actions[0]),
+        ).byteLength;
+        expect(actionBytes).toBeGreaterThan(64 * 1024);
+        expect(actionBytes).toBeLessThan(256 * 1024);
+        const shared = sharedStorage();
+        shared.setupStorage.read = async () => ({
+            catalog: largeCatalog,
+            appId: "sample",
+            actionId: "save",
+            enabledChats: [],
+        });
+        const first = fixture(shared);
+        await start(first.workspace);
+        await propose(first.workspace);
+        const original = (await first.storage.read(scope))!.cards[0];
+        first.workspace.clear();
+        const next = fixture(shared);
+        await start(next.workspace);
+        expect(next.workspace.state.draft?.id).toBe(original.saved.draft.id);
+        expect(next.workspace.state.activeCardApp?.actions[0]).toEqual(
+            largeCatalog.apps[0].actions[0],
+        );
+        expect(next.workspace.state.draftStorageStatus).toContain("restored");
+        expect(next.workspace.state.draft?.approval).toBeUndefined();
+        expect(next.workspace.review()).toBe(true);
+        await saved(next.workspace);
+        expect(next.workspace.state.draft?.approval?.request.payload).toEqual({ value: 42 });
+        expect(next.workspace.state.draft?.approval?.request.idempotencyKey).toBe(
+            original.saved.draft.idempotencyKey,
+        );
+        expect(next.extract).not.toHaveBeenCalled();
+        expect(next.deliver).not.toHaveBeenCalled();
+    });
+
+    it("retains two message-linked editors across reload and resumes without inference or sending", async () => {
+        const first = fixture();
+        await start(first.workspace);
+        const sourceA = { chatKey: "direct:synthetic", messageId: "10", threadRootMessageIndex: 4 };
+        const sourceB = { chatKey: "direct:synthetic", messageId: "11", threadRootMessageIndex: 4 };
+        await first.workspace.propose(client, content, {
+            stillCurrent: () => true,
+            source: sourceA,
+        });
+        first.workspace.edit('{"value":43}', "recipient A");
+        const idA = first.workspace.state.draft!.id;
+        first.workspace.review();
+        const oldApproval = first.workspace.state.draft!.approval!;
+        await first.workspace.propose(client, content, {
+            stillCurrent: () => true,
+            source: sourceB,
+        });
+        const idB = first.workspace.state.draft!.id;
+        first.workspace.edit('{"value":44}', "recipient B");
+        await saved(first.workspace);
+        expect(first.workspace.state.cards.map((card) => card.id)).toEqual([idA, idB]);
+        expect(first.workspace.selectCard(idA)).toBe(true);
+        expect(first.workspace.state.editorJson).toBe('{"value":43}');
+        expect(first.workspace.state.recipient).toBe("recipient A");
+        expect(first.workspace.state.draft?.approval).toBeUndefined();
+        await first.workspace.confirm(oldApproval.approvalId);
+        expect(first.crossed).not.toHaveBeenCalled();
+        const recorded = await first.storage.read(scope);
+        expect(recorded?.cards.map((card) => card.source)).toEqual([sourceA, sourceB]);
+        expect(JSON.stringify([...first.shared.records.values()])).not.toContain(sourceA.chatKey);
+        first.workspace.clear();
+        const next = fixture(first.shared);
+        await start(next.workspace);
+        expect(next.workspace.state.cards.map((card) => card.id)).toEqual([idA, idB]);
+        expect(next.workspace.selectCard(idB)).toBe(true);
+        expect(next.workspace.state.editorJson).toBe('{"value":44}');
+        expect(next.workspace.state.recipient).toBe("recipient B");
+        await next.workspace.propose(client, content, {
+            stillCurrent: () => true,
+            source: sourceA,
+        });
+        expect(next.workspace.state.draft?.id).toBe(idA);
+        expect(next.workspace.state.cards).toHaveLength(2);
+        expect(next.extract).not.toHaveBeenCalled();
+        expect(next.deliver).not.toHaveBeenCalled();
+        next.workspace.review();
+        expect(next.workspace.state.draft?.approval?.request.idempotencyKey).toBe(
+            oldApproval.request.idempotencyKey,
+        );
+        expect(next.workspace.state.draft?.approval?.request).not.toHaveProperty("source");
+    });
+
+    it("discards only the selected card and does not erase its sibling on reload", async () => {
+        const first = fixture();
+        await start(first.workspace);
+        await propose(first.workspace);
+        const idA = first.workspace.state.draft!.id;
+        await propose(first.workspace);
+        const idB = first.workspace.state.draft!.id;
+        first.workspace.selectCard(idA);
+        first.workspace.discard();
+        await vi.waitFor(() => expect(first.workspace.state.draftLoading).toBe(false));
+        expect(first.workspace.state.draft?.id).toBe(idB);
+        const next = fixture(first.shared);
+        await start(next.workspace);
+        expect(next.workspace.state.cards.map((card) => card.id)).toEqual([idB]);
+        expect(next.deliver).not.toHaveBeenCalled();
+    });
+
+    it("keeps attempted A immutable while editing B and write-ahead retains both cards", async () => {
+        const first = fixture();
+        await start(first.workspace);
+        await propose(first.workspace);
+        const idA = first.workspace.state.draft!.id;
+        first.workspace.review();
+        const original = first.workspace.state.draft!.approval!;
+        await first.workspace.confirm(original.approvalId);
+        await propose(first.workspace);
+        const idB = first.workspace.state.draft!.id;
+        first.workspace.edit('{"value":99}', "recipient B");
+        await saved(first.workspace);
+        const stored = await first.storage.read(scope);
+        expect(
+            stored?.cards.map((card) => [card.saved.draft.id, card.saved.draft.attempted]),
+        ).toEqual([
+            [idA, true],
+            [idB, false],
+        ]);
+        first.workspace.selectCard(idA);
+        expect(first.workspace.state.draft?.status).toBe("delivered");
+        expect(first.workspace.state.draft?.approval).toBeUndefined();
+        first.workspace.edit('{"value":100}', "changed");
+        expect(first.workspace.state.draft?.payload).toEqual(original.request.payload);
+        await first.workspace.reopenDelivered(original.approvalId);
+        expect(first.crossed).toHaveBeenCalledTimes(1);
+        expect(first.workspace.review()).toBe(true);
+        expect(first.workspace.state.draft?.approval?.request).toEqual(original.request);
+        await first.workspace.reopenDelivered(first.workspace.state.draft!.approval!.approvalId);
+        expect(first.crossed).toHaveBeenCalledTimes(2);
+        expect((await first.storage.read(scope))?.cards).toHaveLength(2);
+    });
+
+    it("fails at capacity before inference without replacing any saved card", async () => {
+        const first = fixture();
+        await start(first.workspace);
+        for (let index = 0; index < 8; index++) await propose(first.workspace);
+        const ids = first.workspace.state.cards.map((card) => card.id);
+        expect(await first.workspace.propose(client, content, { stillCurrent: () => true })).toBe(
+            "retryable",
+        );
+        expect(first.extract).toHaveBeenCalledTimes(8);
+        expect(first.workspace.state.cards.map((card) => card.id)).toEqual(ids);
+        expect((await first.storage.read(scope))?.cards.map((card) => card.saved.draft.id)).toEqual(
+            ids,
+        );
+    });
+
+    it("does not authorize overwrite after a failed restore", async () => {
+        const write = vi.fn(async () => {});
+        const first = fixture(undefined, {
+            read: async () => {
+                throw new Error("corrupt");
+            },
+            write,
+            remove: async () => {},
+        });
+        await start(first.workspace);
+        expect(await first.workspace.propose(client, content, { stillCurrent: () => true })).toBe(
+            "retryable",
+        );
+        expect(first.extract).not.toHaveBeenCalled();
+        expect(write).not.toHaveBeenCalled();
+        expect(first.workspace.state.draftStorageStatus).toContain("could not be restored");
+    });
+
     it("restores edited card across restart with no inference, approval, transmission or source message", async () => {
         const first = fixture();
         await start(first.workspace);
@@ -194,7 +533,7 @@ describe("private workspace encrypted-card lifecycle", () => {
         await propose(first.workspace);
         first.workspace.discard();
         await vi.waitFor(() => expect(first.workspace.state.draftLoading).toBe(false));
-        expect(await first.storage.read(scope)).toBeUndefined();
+        expect((await first.storage.read(scope))?.cards).toEqual([]);
         await propose(first.workspace);
         await expect(first.workspace.forgetSetup()).resolves.toBe(true);
         expect(await first.storage.read(scope)).toBeUndefined();
@@ -230,7 +569,7 @@ describe("private workspace encrypted-card lifecycle", () => {
         await pending;
         await saved(first.workspace);
         expect(first.crossed).toHaveBeenCalledOnce();
-        expect((await first.storage.read(scope))?.draft.attempted).toBe(true);
+        expect((await first.storage.read(scope))?.cards[0].saved.draft.attempted).toBe(true);
     });
 
     it("does not deliver when write-ahead storage fails and visibly reports unsaved changes", async () => {

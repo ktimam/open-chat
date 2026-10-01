@@ -102,6 +102,14 @@
           "contains": "import PrivateAppsWorkspace from \"@shared_components/PrivateAppsWorkspace.svelte\";"
         },
         {
+          "file": "frontend/app/src/components/home/ChatMessage.svelte",
+          "contains": "messageId: capturedMessageId.toString(),"
+        },
+        {
+          "file": "frontend/app/src/components_mobile/home/ChatMessage.svelte",
+          "contains": "messageId: capturedMessageId.toString(),"
+        },
+        {
           "file": "frontend/openchat-client/src/openchat.ts",
           "contains": "return JSON.stringify([this.config.icUrl, this.config.userIndexCanister]);"
         },
@@ -629,6 +637,11 @@
         "sha256": "166cb8127e259451ac0041463ca814a941322ed5cf11894a990cbe0df7fe264d",
         "reviewRecord": "npm_feature_scope.current-client.review.md",
         "workingTreeReview": "2026-10-02: approved source review of merged fork main bb2a8d712bdac6f59c183951e453bc0e18bb64bb (upstream 944efe4a7) plus the bounded app-owned card presentation worktree. Independently reconstructed aggregate 68f06f6f from committed parent 240007855dbec16b77bc532a78dc121a75ad058d. Exactly eight fingerprinted inputs differ: three generic PrivateApp Svelte components, localAppDraftPresentation, and the already anchored chatsDb/client/worker protocol/worker implementation. Controls accept bounded plain string text/multiline/date hints, fullWidth and nonrestrictive suggestions only; labels/order and named choices remain app-owned, all outgoing fields remain visible, malformed supplied dates stay exact text and block review, and the explicit destination/recipient/encrypted-delivery approval boundary remains. New imports are existing Svelte and relative helpers only. Mixed upstream changes cover details cache153/member paging, access-gate payment dispatch, preview/mention refresh and operator migration requests; client-only app guards, original auth, encrypted private persistence and model/runtime/prompt source remain unchanged. Mixed files remain anchored-only, not new dedicated owners. Counts remain 122 dedicated modules, 151 fingerprinted paths, 25 roots and 86 anchors; selectors, root arrays, frontend manifest/lock identities and all historical PR policies remain unchanged. Earlier68f06/95eb/84f449 and September aggregate proofs retain independently bound old identities, with live current drift/import rejection. No advisory query, installation, waiver, core audit, native/provider/model-quality acceptance, build, deployment or release acceptance is implied."
+      },
+      {
+        "sha256": "8cc7a0ec5387cc68d875eb71e10f54e60efdf07c4ac020cbf9e23650954554a9",
+        "reviewRecord": "npm_feature_scope.current-client.review.md",
+        "workingTreeReview": "2026-10-02: approved scoped source review against committed main 5a36a3c22bf53b4111824606ec51b23c8c3e80ee after final card-collection and Forget UI/API changes were frozen. Independently reproduced all 151 Git-blob identities for checkpoint 166cb and earlier 240007 aggregate 68f06. Six existing feature sources change: localAppDraftPersistence, privateAppWorkspace, localAppDrafts, localAppDraftPresentation, PrivateAppDraftFields and PrivateAppsWorkspace. Bounded eight-card encrypted collection storage migrates prior single-card records, binds saved app presentation and host-only source references, retains generation/revision CAS, and blocks stale refreshed writes. Card selection revokes approval, recovered values remain manual, attempted requests keep their import ID, source references never enter delivery DTOs, and malformed/capacity failures retain old cards. Discard removes the selected card; Forget removes all cards/setup and remains available with retained cards but blocked during loading or active retained-card work. Generic linear-time bounded string patterns and nonrestrictive select hints add no app-specific field logic. Two exact desktop/mobile ChatMessage proposal source anchors are added only under existing Svelte ownership; their files are fingerprinted, not dedicated core import owners. Composition is 153 sources and 88 anchors with unchanged 122 dedicated modules, 25 roots, selectors and import-denial rules. Historical 151/148 proofs omit only the two newly tracked paths and substitute independently verified historical hashes; the separate live gate and per-file drift/import/anchor negatives bind current source. No package/lock, historical PR inventory, advisory decision, model/prompt, auth/backend, dependency scan, installation, waiver, build, device or release acceptance is changed by this source-only receipt."
       }
     ]
   }

@@ -29,7 +29,9 @@
             workspaceView.account === $currentUserIdStore,
     );
     const selected = $derived(
-        workspaceView.catalog?.apps.find((app) => app.id === workspaceView.appId),
+        workspaceView.draft
+            ? workspaceView.activeCardApp
+            : workspaceView.catalog?.apps.find((app) => app.id === workspaceView.appId),
     );
     const selectedAction = $derived(
         selected?.actions.find((action) => action.definition.name === workspaceView.actionId),
@@ -38,7 +40,7 @@
         workspaceView.setupLoading ||
             workspaceView.draftLoading ||
             workspaceView.busy ||
-            workspaceView.draft !== undefined,
+            workspaceView.cards.length > 0,
     );
     const editable = $derived(
         workspaceView.draft?.status === "draft" || workspaceView.draft?.status === "reviewed",
@@ -67,6 +69,7 @@
     );
 
     $effect(() => {
+        workspaceView.draft?.id;
         workspaceView.draft?.revision;
         confirmed = false;
     });
@@ -141,11 +144,11 @@
     }
     function blockFieldEdit(blocked: boolean) {
         blockedFieldDraft = { id: workspaceView.draft?.id, blocked };
+        workspace.setFieldEditBlocked(blocked);
         if (blocked) {
             confirmed = false;
             retryConfirmed = false;
             // An unrepresentable edit must not leave the previous payload approved.
-            workspace.invalidateReview();
         }
     }
     function updateRecipient(event: Event) {
@@ -170,19 +173,35 @@
             </h2>
             <button type="button" onclick={() => workspace.close()}>Close</button>
         </header>
+        {#if workspaceView.cards.length > 0}
+            <nav aria-label="Saved private cards on this device" class="card-selector">
+                <p class="small">Saved locally, not posted in chat. Select a card to review it.</p>
+                {#each workspaceView.cards as card, index (card.id)}
+                    <button
+                        type="button"
+                        aria-pressed={workspaceView.draft?.id === card.id}
+                        disabled={workspaceView.busy ||
+                            workspaceView.draftLoading ||
+                            fieldEditBlocked}
+                        onclick={() => workspace.selectCard(card.id)}
+                        >Card {index + 1} · {card.status}</button
+                    >
+                {/each}
+            </nav>
+        {/if}
         {#snippet secondarySetup()}
             <details class="privacy-disclosure">
                 <summary>Privacy and device storage</summary>
                 <p>
                     App setup and enabled chats are remembered for this account on this device.
                     Imported setup may contain private app configuration. It is stored locally, not
-                    synced, and is not protected by chat encryption. The current private card is
-                    saved separately in encrypted device storage for this account and backend, not
-                    synced or posted to chat. Closing this panel, restarting or signing out does not
-                    delete it. Use Discard or Forget to delete it. The local key is nonextractable,
-                    but code running in this client can still use it; this does not protect against
-                    malicious client code. Restoring a card never restores your approval or sends
-                    anything automatically.
+                    synced, and is not protected by chat encryption. Private cards are saved
+                    separately in encrypted device storage for this account and backend, not synced
+                    or posted to chat. Closing this panel, restarting or signing out does not delete
+                    them. Discard removes only the selected card; Forget removes all cards and
+                    setup. The local key is nonextractable, but code running in this client can
+                    still use it; this does not protect against malicious client code. Restoring a
+                    card never restores your approval or sends anything automatically.
                 </p>
             </details>
             {#if workspaceView.setupLoading}<p role="status">Loading saved app setup…</p>{/if}
@@ -193,8 +212,14 @@
             <details class="setup-disclosure" open={!workspaceView.draft && !workspaceView.busy}>
                 <summary>App setup</summary>
                 <div class="setup">
-                    <button type="button" disabled={locked} onclick={() => workspace.forgetSetup()}>
-                        Forget this account's app setup and private card on this device
+                    <button
+                        type="button"
+                        disabled={workspaceView.setupLoading ||
+                            workspaceView.draftLoading ||
+                            workspaceView.busy}
+                        onclick={() => workspace.forgetSetup()}
+                    >
+                        Forget this account's app setup and ALL saved private cards on this device
                     </button>
                     <h3>Available apps</h3>
                     <p class="small">
@@ -406,7 +431,7 @@
                             if (!fieldEditBlocked) workspace.review();
                         }}>Review full request</button
                     >{/if}
-                {#if workspaceView.draft.status === "uncertain" && !workspaceView.draft.approval}
+                {#if (workspaceView.draft.status === "uncertain" || workspaceView.draft.status === "delivered") && !workspaceView.draft.approval}
                     <button
                         type="button"
                         disabled={workspaceView.busy || fieldEditBlocked}

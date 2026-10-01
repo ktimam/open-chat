@@ -194,17 +194,19 @@ opt-ins; directory updates preserve unaffected apps and approved compatible setu
 Setup controls wait for restoration; a failed read/write is shown rather than
 reported as saved. Invalid or future-version records are not silently accepted.
 
-**Forget this account's app setup on this device** removes catalog, processor,
-selection and chat opt-in content. A minimal account/backend invalidation marker
+**Forget this account's app setup and ALL saved private cards on this device**
+removes catalog, processor, selection, chat opt-in content and all locally saved
+private cards and their encryption key. A minimal account/backend invalidation marker
 remains to reject writes started by an older tab before Forget. Another tab may
 still hold its previous setup in memory, but cannot silently save that stale copy
 over the removal. Clearing browser/app storage also removes these markers.
 
-The active private card is now saved encrypted on this device, separately from setup,
-scoped to its OpenChat account/backend. Closing the panel does not delete it. Explicit
-discard/Forget does; source images/chat history and approval/transport tokens are not
-persisted. Restoration requires fresh review and never sends automatically. Attempted
-deliveries retain their original fields, destination and import ID for explicit retry.
+Up to eight private cards are saved encrypted on this device, separately from setup,
+scoped to their OpenChat account/backend. Closing the panel does not delete them.
+Discard removes only the selected card; Forget removes all saved cards and setup.
+Source images/chat history and approval/transport tokens are not persisted.
+Restoration requires fresh review and never sends automatically. Attempted deliveries
+retain their original fields, destination and import ID for explicit retry.
 Storage failures must be shown, and delivery stops if its attempted state cannot be saved.
 Downloaded model caches remain separate. See [encrypted delivery and storage](private-app-encrypted-delivery.md)
 for the complete workflow and device-local key threat boundary.
@@ -508,3 +510,35 @@ Neither APK019 was installed or runtime-tested. Original authentication code and
 an `oc.app` association declaration do not prove that this fork package is
 authorized by the public association file. Native/provider acceptance, voice
 accuracy, current-source hosted CI and release acceptance remain open.
+
+### October 2 source and hosted checks
+
+This checkpoint covers commit
+`5a36a3c22bf53b4111824606ec51b23c8c3e80ee`, not the subsequent uncommitted
+card, schema or CI changes. The committed frontend passed 5,423 local tests with
+no failures or pending tests; Svelte checking reported zero errors and 572
+warnings. The [hosted frontend run](https://github.com/ktimam/open-chat/actions/runs/36937390340)
+also completed its production build successfully.
+
+The [separate scoped-security run](https://github.com/ktimam/open-chat/actions/runs/36937390360)
+passed the model contracts, Linux and Windows native hermetic checks, and the
+real small-model inference fixture. Its dependency job passed 32 hash contracts,
+format checking of 477 selected files, 774 offline scoped contracts and the
+exact CI wiring check. The npm advisory gate still failed on seven `devalue`
+5.8.1 findings. Their [explicit local-test deferral](releases/npm-feature-advisory-triage.md#october-2-local-test-deferral)
+preserves that failure; it is not a clean scan, dependency fix or public-release
+approval. Under that workflow's original success gating, the later Rust metadata,
+license and advisory steps did not run. The missing Rust report was a secondary
+failure, not evidence that those checks passed.
+
+Android passed its 57 preliminary tool and wiring tests but failed downloading
+the pinned Kotlin 2.2.0 compiler before compilation. The unchanged Android-only
+rerun failed at the same download stage. The two attempts reported 68 ms and
+85 ms respectively, `deadlineExceeded: false`, and `TypeError`/`Error` cause
+names without a more specific transport cause. These are download failures,
+not demonstrated compiler or application regressions. The rerun did not
+re-execute the successful native/model jobs or the dependency advisory gate.
+
+This checkpoint does not qualify later working-tree changes, a new APK, native
+sign-in, phone inference or public release. The earlier APK019 artifact and
+runtime-acceptance limits remain in force.

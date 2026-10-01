@@ -55,6 +55,7 @@ vi.mock("../utils/privateAppWorkspace", async () => {
         directoryStatus: "",
         appUpdates: {},
         disabledAppIds: [],
+        cards: [],
     });
     calls.open.mockImplementation(() => state.update((value) => ({ ...value, open: true })));
     calls.close.mockImplementation(() => state.update((value) => ({ ...value, open: false })));
@@ -173,6 +174,7 @@ beforeEach(() => {
         directoryStatus: "",
         appUpdates: {},
         disabledAppIds: [],
+        cards: [],
     } as never);
 });
 afterEach(async () => {
@@ -182,6 +184,47 @@ afterEach(async () => {
 });
 
 describe("private apps use normal navigation rather than a composer overlay", () => {
+    it.each(["setupLoading", "draftLoading", "busy"] as const)(
+        "allows explicit all-card Forget with retained cards, but not while %s",
+        async (blocked) => {
+            privateAppWorkspaceState.update((state) => ({
+                ...state,
+                open: true,
+                cards: [
+                    {
+                        id: "retained",
+                        revision: 0,
+                        status: "draft",
+                        target: {
+                            appId: "synthetic",
+                            actionId: "add",
+                            destination: "https://example.test/import",
+                            recipient: "Synthetic account",
+                        },
+                        payload: {},
+                    },
+                ],
+            }));
+            const { target } = render(PrivateAppsWorkspace);
+            await tick();
+            const forget = [...target.querySelectorAll("button")].find((button) =>
+                button.textContent?.includes("Forget this account"),
+            )!;
+            expect(forget.textContent).toContain("ALL saved private cards");
+            expect(forget.disabled).toBe(false);
+            expect(calls.forgetSetup).not.toHaveBeenCalled();
+            privateAppWorkspaceState.update((state) => ({ ...state, [blocked]: true }));
+            await tick();
+            expect(forget.disabled).toBe(true);
+            forget.click();
+            expect(calls.forgetSetup).not.toHaveBeenCalled();
+            privateAppWorkspaceState.update((state) => ({ ...state, [blocked]: false }));
+            await tick();
+            forget.click();
+            expect(calls.forgetSetup).toHaveBeenCalledOnce();
+        },
+    );
+
     it("discloses encrypted card retention, waits for restore and offers explicit device-local forgetting", async () => {
         privateAppWorkspaceState.update((state) => ({
             ...state,
@@ -193,7 +236,10 @@ describe("private apps use normal navigation rather than a composer overlay", ()
         await tick();
         const text = target.textContent?.replace(/\s+/g, " ");
         expect(text).toContain("not protected by chat encryption");
-        expect(text).toContain("current private card is saved separately");
+        expect(text).toContain("Private cards are saved separately");
+        expect(text).toContain(
+            "Discard removes only the selected card; Forget removes all cards and setup",
+        );
         expect(text).toContain("Restoring a card never restores your approval");
         expect(calls.setAccount).toHaveBeenLastCalledWith("synthetic-user", "synthetic-backend");
         const forget = [...target.querySelectorAll("button")].find((button) =>

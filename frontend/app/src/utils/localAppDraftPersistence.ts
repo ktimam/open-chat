@@ -1,9 +1,11 @@
 import {
     snapshotLocalDraftRecovery,
     snapshotLocalDraftPayload,
+    snapshotLocalDraftJson,
     type LocalDraftSnapshot,
 } from "./localAppDrafts";
 import type { LocalAppSetupScope } from "./localAppSetupStore";
+import { parseLocalAppCatalog, type LocalAppCatalogEntry } from "./localAppCatalog";
 
 export interface SavedLocalAppDraft {
     readonly version: 1;
@@ -11,13 +13,31 @@ export interface SavedLocalAppDraft {
     readonly editorJson: string;
     readonly recipient: string;
 }
+export interface LocalAppDraftSourceReference {
+    readonly chatKey: string;
+    readonly messageId: string;
+    readonly threadRootMessageIndex?: number;
+}
+export interface SavedLocalAppDraftCollection {
+    readonly version: 2;
+    readonly activeDraftId?: string;
+    readonly cards: readonly {
+        readonly saved: SavedLocalAppDraft;
+        readonly source?: LocalAppDraftSourceReference;
+        readonly app?: LocalAppCatalogEntry;
+    }[];
+}
+export const MAX_SAVED_LOCAL_APP_DRAFTS = 8;
 export interface LocalAppDraftStorage {
-    read(scope: LocalAppSetupScope): Promise<SavedLocalAppDraft | undefined>;
-    write(scope: LocalAppSetupScope, value: SavedLocalAppDraft): Promise<void>;
+    read(scope: LocalAppSetupScope): Promise<SavedLocalAppDraftCollection | undefined>;
+    write(
+        scope: LocalAppSetupScope,
+        value: SavedLocalAppDraftCollection | SavedLocalAppDraft,
+    ): Promise<void>;
     remove(scope: LocalAppSetupScope): Promise<void>;
 }
 export interface EncryptedLocalDraftRecord {
-    readonly version: 1;
+    readonly version: 1 | 2;
     readonly generation: string;
     readonly revision: string;
     readonly key?: CryptoKey;
@@ -97,6 +117,172 @@ export function snapshotSavedLocalAppDraft(value: unknown): SavedLocalAppDraft {
     if (encoder.encode(JSON.stringify(snapshot)).byteLength > LIMIT) invalid();
     return snapshot;
 }
+function plainFields(
+    value: unknown,
+    required: readonly string[],
+    optional: readonly string[] = [],
+): Record<string, unknown> {
+    if (
+        !value ||
+        typeof value !== "object" ||
+        Array.isArray(value) ||
+        ![Object.prototype, null].includes(Object.getPrototypeOf(value))
+    )
+        invalid();
+    const fields: Record<string, unknown> = Object.create(null);
+    for (const name of Reflect.ownKeys(value)) {
+        if (typeof name !== "string" || ![...required, ...optional].includes(name)) invalid();
+        const descriptor = Object.getOwnPropertyDescriptor(value, name);
+        if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) invalid();
+        fields[name] = descriptor.value;
+    }
+    if (required.some((name) => !Object.hasOwn(fields, name))) invalid();
+    return fields;
+}
+/** Host-owned navigation identity only. Never carries source content or delivery authority. */
+export function snapshotLocalAppDraftSourceReference(value: unknown): LocalAppDraftSourceReference {
+    const fields = plainFields(value, ["chatKey", "messageId"], ["threadRootMessageIndex"]);
+    for (const [name, limit] of [
+        ["chatKey", 2048],
+        ["messageId", 128],
+    ] as const) {
+        const text = fields[name];
+        if (
+            typeof text !== "string" ||
+            !text.trim() ||
+            text.length > limit ||
+            // Navigation identifiers must not contain control characters.
+            // eslint-disable-next-line no-control-regex
+            /[\u0000-\u001f\u007f-\u009f]/u.test(text)
+        )
+            invalid();
+    }
+    const thread = fields.threadRootMessageIndex;
+    if (
+        Object.hasOwn(fields, "threadRootMessageIndex") &&
+        (typeof thread !== "number" || !Number.isSafeInteger(thread) || thread < 0)
+    )
+        invalid();
+    return Object.freeze({
+        chatKey: fields.chatKey as string,
+        messageId: fields.messageId as string,
+        ...(thread === undefined ? {} : { threadRootMessageIndex: thread as number }),
+    });
+}
+function snapshotSavedApp(value: unknown, saved: SavedLocalAppDraft): LocalAppCatalogEntry {
+    // Inspect descriptors before serialization: JSON.stringify itself invokes getters/toJSON.
+    // The catalog may exceed the draft payload's 64 KiB limit, but never this store's total cap.
+    let values = 0;
+    const active = new Set<object>();
+    const copy = (input: unknown, depth: number): unknown => {
+        if (++values > LIMIT || depth > 32) invalid();
+        if (input === null || typeof input === "boolean") return input;
+        if (typeof input === "number") {
+            if (!Number.isFinite(input)) invalid();
+            return input;
+        }
+        if (typeof input === "string") {
+            if (encoder.encode(input).byteLength > LIMIT) invalid();
+            return input;
+        }
+        if (!input || typeof input !== "object" || active.has(input)) invalid();
+        active.add(input);
+        try {
+            if (Array.isArray(input)) {
+                if (input.length > LIMIT || Reflect.ownKeys(input).length !== input.length + 1)
+                    invalid();
+                const result: unknown[] = [];
+                for (let index = 0; index < input.length; index++) {
+                    const descriptor = Object.getOwnPropertyDescriptor(input, String(index));
+                    if (!descriptor || !("value" in descriptor) || !descriptor.enumerable)
+                        invalid();
+                    result.push(copy(descriptor.value, depth + 1));
+                }
+                return result;
+            }
+            const fields = plainFields(input, Object.keys(input));
+            const result: Record<string, unknown> = Object.create(null);
+            for (const [name, field] of Object.entries(fields)) {
+                if (["__proto__", "prototype", "constructor"].includes(name)) invalid();
+                result[name] = copy(field, depth + 1);
+            }
+            return result;
+        } finally {
+            active.delete(input);
+        }
+    };
+    const json = JSON.stringify({ version: 1, apps: [copy(value, 0)] });
+    if (encoder.encode(json).byteLength > LIMIT) invalid();
+    const app = parseLocalAppCatalog(json).apps[0];
+    const target = saved.draft.target;
+    const action = app.actions.find((entry) => entry.definition.name === target.actionId);
+    if (
+        app.id !== target.appId ||
+        app.revision !== target.appRevision ||
+        app.destination !== target.destination ||
+        JSON.stringify(snapshotLocalDraftJson(app.deliveryEncryption ?? null)) !==
+            JSON.stringify(snapshotLocalDraftJson(target.deliveryEncryption ?? null)) ||
+        !action ||
+        JSON.stringify(snapshotLocalDraftJson(action.draftSchema)) !==
+            JSON.stringify(snapshotLocalDraftJson(saved.draft.schema))
+    )
+        invalid();
+    return app;
+}
+export function snapshotSavedLocalAppDraftCollection(value: unknown): SavedLocalAppDraftCollection {
+    if (!value || typeof value !== "object" || Array.isArray(value)) invalid();
+    const version = Object.getOwnPropertyDescriptor(value, "version");
+    if (!version || !("value" in version) || !version.enumerable) invalid();
+    if (version.value === 1) {
+        return snapshotSavedLocalAppDraftCollection({
+            version: 2,
+            cards: [{ saved: snapshotSavedLocalAppDraft(value) }],
+        });
+    }
+    const fields = plainFields(value, ["version", "cards"], ["activeDraftId"]);
+    if (
+        fields.version !== 2 ||
+        !Array.isArray(fields.cards) ||
+        fields.cards.length > MAX_SAVED_LOCAL_APP_DRAFTS ||
+        Reflect.ownKeys(fields.cards).length !== fields.cards.length + 1
+    )
+        invalid();
+    const ids = new Set<string>();
+    const importIds = new Set<string>();
+    const cards: SavedLocalAppDraftCollection["cards"][number][] = [];
+    for (let index = 0; index < fields.cards.length; index++) {
+        const descriptor = Object.getOwnPropertyDescriptor(fields.cards, String(index));
+        if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) invalid();
+        const entry = plainFields(descriptor.value, ["saved"], ["source", "app"]);
+        const saved = snapshotSavedLocalAppDraft(entry.saved);
+        if (ids.has(saved.draft.id) || importIds.has(saved.draft.idempotencyKey)) invalid();
+        ids.add(saved.draft.id);
+        importIds.add(saved.draft.idempotencyKey);
+        cards.push(
+            Object.freeze({
+                saved,
+                ...(Object.hasOwn(entry, "source")
+                    ? { source: snapshotLocalAppDraftSourceReference(entry.source) }
+                    : {}),
+                ...(Object.hasOwn(entry, "app") ? { app: snapshotSavedApp(entry.app, saved) } : {}),
+            }),
+        );
+    }
+    if (
+        Object.hasOwn(fields, "activeDraftId") &&
+        (typeof fields.activeDraftId !== "string" || !ids.has(fields.activeDraftId))
+    )
+        invalid();
+    const snapshot = Object.freeze({
+        version: 2 as const,
+        cards: Object.freeze(cards),
+        ...(typeof fields.activeDraftId === "string"
+            ? { activeDraftId: fields.activeDraftId }
+            : {}),
+    });
+    if (encoder.encode(JSON.stringify(snapshot)).byteLength > LIMIT) invalid();
+    return snapshot;
+}
 function generation(): string {
     return Array.from(crypto.getRandomValues(new Uint8Array(32)), (byte) =>
         byte.toString(16).padStart(2, "0"),
@@ -114,7 +300,7 @@ function checkRecord(record: EncryptedLocalDraftRecord | undefined): void {
     )
         invalid();
     if (
-        record.version !== 1 ||
+        (record.version !== 1 && record.version !== 2) ||
         !/^[a-f0-9]{64}$/.test(record.generation) ||
         !/^[a-f0-9]{64}$/.test(record.revision)
     )
@@ -148,13 +334,16 @@ function queued<T>(key: string, task: () => Promise<T>): Promise<T> {
     });
     return pending;
 }
-const aad = (key: string, generation: string, revision: string) =>
-    encoder.encode(JSON.stringify(["oc-private-card", 1, key, generation, revision]));
+const aad = (version: 1 | 2, key: string, generation: string, revision: string) =>
+    encoder.encode(JSON.stringify(["oc-private-card", version, key, generation, revision]));
 
 /** Device-only encryption. Same-origin code can use this key; it is not chat E2EE or XSS isolation. */
 export function createLocalAppDraftStorage(backend: LocalDraftRecordBackend): LocalAppDraftStorage {
     const observed = new Map<string, string>();
     const revisions = new Map<string, string>();
+    // Reads replace the observation; own queued writes advance only its CAS revision.
+    // A later refresh must not silently rebase an already-captured stale collection.
+    const observations = new Map<string, object>();
     return {
         read(scope) {
             const key = scopeKey(scope);
@@ -162,42 +351,64 @@ export function createLocalAppDraftStorage(backend: LocalDraftRecordBackend): Lo
                 try {
                     const record = await backend.read(key);
                     checkRecord(record);
-                    observed.set(key, record?.generation ?? ZERO);
-                    revisions.set(key, record?.revision ?? ZERO);
-                    if (!record?.key) return undefined;
+                    if (!record?.key) {
+                        observed.set(key, record?.generation ?? ZERO);
+                        revisions.set(key, record?.revision ?? ZERO);
+                        observations.set(key, {});
+                        return undefined;
+                    }
                     const plaintext = await crypto.subtle.decrypt(
                         {
                             name: "AES-GCM",
                             iv: record.iv!,
-                            additionalData: aad(key, record.generation, record.revision),
+                            additionalData: aad(
+                                record.version,
+                                key,
+                                record.generation,
+                                record.revision,
+                            ),
                         },
                         record.key,
                         record.ciphertext!,
                     );
                     try {
-                        return snapshotSavedLocalAppDraft(JSON.parse(decoder.decode(plaintext)));
+                        const decoded = JSON.parse(decoder.decode(plaintext));
+                        if (decoded?.version !== record.version) invalid();
+                        const snapshot = snapshotSavedLocalAppDraftCollection(decoded);
+                        observed.set(key, record.generation);
+                        revisions.set(key, record.revision);
+                        observations.set(key, {});
+                        return snapshot;
                     } finally {
                         new Uint8Array(plaintext).fill(0);
                     }
                 } catch {
+                    observed.delete(key);
+                    revisions.delete(key);
+                    observations.delete(key);
                     throw failure();
                 }
             });
         },
         write(scope, value) {
             const key = scopeKey(scope);
-            const snapshot = snapshotSavedLocalAppDraft(value);
+            const snapshot = snapshotSavedLocalAppDraftCollection(value);
             const capturedGeneration = observed.get(key);
+            const capturedObservation = observations.get(key);
             return queued(key, async () => {
                 try {
                     const previous = await backend.read(key);
                     checkRecord(previous);
-                    const expected =
-                        capturedGeneration ?? observed.get(key) ?? previous?.generation ?? ZERO;
+                    if (
+                        (previous !== undefined && capturedObservation === undefined) ||
+                        observations.get(key) !== capturedObservation
+                    )
+                        invalid();
+                    const expected = capturedGeneration ?? observed.get(key) ?? ZERO;
                     if ((previous?.generation ?? ZERO) !== expected) invalid();
                     // Ordinary saves also invalidate stale tabs. Otherwise a stale editor could
                     // overwrite attempted=true after another tab has dispatched the request.
-                    const revision = revisions.get(key) ?? previous?.revision ?? ZERO;
+                    const revision = revisions.get(key) ?? ZERO;
                     if ((previous?.revision ?? ZERO) !== revision) invalid();
                     const nextRevision = generation();
                     const secret =
@@ -208,12 +419,16 @@ export function createLocalAppDraftStorage(backend: LocalDraftRecordBackend): Lo
                         ]));
                     const iv = crypto.getRandomValues(new Uint8Array(12));
                     const ciphertext = await crypto.subtle.encrypt(
-                        { name: "AES-GCM", iv, additionalData: aad(key, expected, nextRevision) },
+                        {
+                            name: "AES-GCM",
+                            iv,
+                            additionalData: aad(2, key, expected, nextRevision),
+                        },
                         secret,
                         encoder.encode(JSON.stringify(snapshot)),
                     );
                     await backend.replace(key, previous?.revision, {
-                        version: 1,
+                        version: 2,
                         generation: expected,
                         revision: nextRevision,
                         key: secret,
@@ -222,6 +437,7 @@ export function createLocalAppDraftStorage(backend: LocalDraftRecordBackend): Lo
                     });
                     observed.set(key, expected);
                     revisions.set(key, nextRevision);
+                    if (!capturedObservation) observations.set(key, {});
                 } catch {
                     throw failure();
                 }
@@ -233,9 +449,10 @@ export function createLocalAppDraftStorage(backend: LocalDraftRecordBackend): Lo
                 try {
                     const next = generation();
                     // No ciphertext or key survives Forget. Tombstone rejects writes from old tabs.
-                    await backend.remove(key, { version: 1, generation: next, revision: next });
+                    await backend.remove(key, { version: 2, generation: next, revision: next });
                     observed.set(key, next);
                     revisions.set(key, next);
+                    observations.set(key, {});
                 } catch {
                     throw failure();
                 }

@@ -27,7 +27,11 @@ import {
 } from "./localAppDrafts";
 import {
     createBrowserLocalAppDraftStorage,
-    snapshotSavedLocalAppDraft,
+    snapshotSavedLocalAppDraftCollection,
+    snapshotLocalAppDraftSourceReference,
+    MAX_SAVED_LOCAL_APP_DRAFTS,
+    type LocalAppDraftSourceReference,
+    type SavedLocalAppDraftCollection,
     type LocalAppDraftStorage,
 } from "./localAppDraftPersistence";
 import {
@@ -89,6 +93,8 @@ export interface PrivateAppWorkspaceState {
     phase?: ProposalPhase;
     message: string;
     draft?: LocalDraftView;
+    cards: readonly LocalDraftView[];
+    activeCardApp?: LocalAppCatalogEntry;
     editorJson: string;
     recipient: string;
     draftManualValues: boolean;
@@ -118,7 +124,42 @@ export type PrivateAppProposalOptions = {
     stillCurrent: () => boolean;
     sourceTimestamp?: number;
     onPhase?: ProposalPhaseListener;
+    /** Host-captured identifiers only; never included in the app's outgoing DTO. */
+    source?: LocalAppDraftSourceReference;
 };
+
+type CardSession = {
+    app?: LocalAppCatalogEntry;
+    editorJson: string;
+    recipient: string;
+    manual: boolean;
+    choices?: LocalAppDraftChoiceSession;
+    blocked: boolean;
+    targetMatches: boolean;
+    source?: LocalAppDraftSourceReference;
+};
+
+/** Both inputs are already bounded, data-only catalog snapshots; object order is immaterial. */
+function sameCardConfiguration(left: unknown, right: unknown): boolean {
+    if (left === right) return true;
+    if (!left || !right || typeof left !== "object" || typeof right !== "object") return false;
+    if (Array.isArray(left) || Array.isArray(right))
+        return (
+            Array.isArray(left) &&
+            Array.isArray(right) &&
+            left.length === right.length &&
+            left.every((value, index) => sameCardConfiguration(value, right[index]))
+        );
+    const leftEntries = Object.entries(left);
+    const rightEntries = new Map(Object.entries(right));
+    return (
+        leftEntries.length === rightEntries.size &&
+        leftEntries.every(
+            ([key, value]) =>
+                rightEntries.has(key) && sameCardConfiguration(value, rightEntries.get(key)),
+        )
+    );
+}
 
 type PrivateProcessorOutcome = Awaited<ReturnType<typeof runIsolatedAppProcessor>>["kind"];
 
@@ -177,6 +218,7 @@ const initial = (): PrivateAppWorkspaceState => ({
     setupGeneration: 0,
     draftLoading: false,
     draftStorageStatus: "",
+    cards: Object.freeze([]),
     enabledChats: Object.freeze([]),
     editorJson: "",
     recipient: "",
@@ -214,6 +256,8 @@ export class PrivateAppWorkspace {
     #fieldEditBlocked = false;
     #draftSaveRevision = 0;
     #restoredTargetMatches = true;
+    #draftRestoreFailed = false;
+    readonly #cards = new Map<string, CardSession>();
     readonly #drafts: LocalAppDraftStore;
 
     constructor(
@@ -254,7 +298,69 @@ export class PrivateAppWorkspace {
     }
     #set(patch: Partial<PrivateAppWorkspaceState>) {
         this.#state = { ...this.#state, ...patch };
+        this.#rememberActive();
+        this.#state.cards = Object.freeze(
+            [...this.#cards.keys()].flatMap((id) => {
+                const draft = this.#drafts.get(id);
+                return draft ? [draft] : [];
+            }),
+        );
+        this.#state.activeCardApp = this.#state.draft
+            ? this.#cards.get(this.#state.draft.id)?.app
+            : undefined;
         this.onChange(this.state);
+    }
+    #rememberActive(): void {
+        const card = this.#state.draft && this.#cards.get(this.#state.draft.id);
+        if (!card) return;
+        Object.assign(card, {
+            editorJson: this.#state.editorJson,
+            recipient: this.#state.recipient,
+            manual: this.#state.draftManualValues,
+            choices: this.#choiceSession,
+            blocked: this.#fieldEditBlocked,
+            targetMatches: this.#restoredTargetMatches,
+        });
+    }
+    #leaveCard(): void {
+        const current = this.#state.draft;
+        if (current?.approval) this.#set({ draft: this.#drafts.revokeApproval(current.id) });
+        this.#rememberActive();
+    }
+    selectCard(id: string, persistSelection = true): boolean {
+        if (this.#state.busy || this.#state.draftLoading || this.#fieldEditBlocked) return false;
+        const card = this.#cards.get(id);
+        const draft = this.#drafts.get(id);
+        if (!card || !draft) return false;
+        this.#leaveCard();
+        this.#choiceSession = card.choices;
+        this.#fieldEditBlocked = card.blocked;
+        this.#restoredTargetMatches = card.targetMatches;
+        this.#processor = this.#processors.get(draft.target.appId);
+        this.#set({
+            draft: this.#drafts.get(id),
+            appId: draft.target.appId,
+            actionId: draft.target.actionId,
+            editorJson: card.editorJson,
+            recipient: card.recipient,
+            draftManualValues: card.manual,
+            processorReady:
+                !!this.#processor ||
+                !(
+                    card.app ??
+                    this.#state.catalog?.apps.find((app) => app.id === draft.target.appId)
+                )?.processor,
+            message: card.targetMatches
+                ? "Private card selected. Review it before confirming any handoff."
+                : "This saved card's app configuration changed or is unavailable. Inspect or discard it; it cannot be sent to a changed destination.",
+        });
+        if (persistSelection) this.#saveDraft();
+        return true;
+    }
+    setFieldEditBlocked(blocked: boolean): void {
+        this.#fieldEditBlocked = blocked;
+        if (blocked) this.invalidateReview();
+        this.#rememberActive();
     }
     setAccount(account: string | undefined, backend?: string): void {
         if (account === this.#account && backend === this.#backend && !this.#setupNeedsRestore)
@@ -304,6 +410,8 @@ export class PrivateAppWorkspace {
         this.#choiceSession = undefined;
         this.#fieldEditBlocked = false;
         this.#restoredTargetMatches = true;
+        this.#draftRestoreFailed = false;
+        this.#cards.clear();
         this.#drafts.clear();
         this.deps.cancelDelivery();
         this.#state = {
@@ -398,82 +506,110 @@ export class PrivateAppWorkspace {
                 });
                 return;
             }
-            const saved = snapshotSavedLocalAppDraft(raw);
-            const app = this.#state.catalog?.apps.find(
-                (app) => app.id === saved.draft.target.appId,
-            );
-            const action = app?.actions.find(
-                (action) => action.definition.name === saved.draft.target.actionId,
-            );
-            this.#restoredTargetMatches =
-                !!app &&
-                !!action &&
-                app.destination === saved.draft.target.destination &&
-                app.revision === saved.draft.target.appRevision &&
-                JSON.stringify(snapshotLocalDraftJson(app.deliveryEncryption ?? null)) ===
-                    JSON.stringify(
-                        snapshotLocalDraftJson(saved.draft.target.deliveryEncryption ?? null),
-                    ) &&
-                JSON.stringify(snapshotLocalDraftJson(action.draftSchema)) ===
-                    JSON.stringify(saved.draft.schema);
-            const draft = this.#drafts.restore(saved.draft);
-            if (action && this.#restoredTargetMatches) {
-                // Original default/choice history is not a permission to recompute fields.
-                // Treat every recovered value as manual; default selection cannot overwrite it.
-                const session = initializeLocalAppDraftChoices(
-                    action,
-                    JSON.stringify(draft.payload),
+            const collection = snapshotSavedLocalAppDraftCollection(raw);
+            for (const { saved, source, app: savedApp } of collection.cards) {
+                const configuredApp = this.#state.catalog?.apps.find(
+                    (app) => app.id === saved.draft.target.appId,
                 );
-                this.#choiceSession = resetLocalAppDraftChoices(session, saved.editorJson);
+                const app = savedApp ?? configuredApp;
+                const action = app?.actions.find(
+                    (action) => action.definition.name === saved.draft.target.actionId,
+                );
+                const configuredAction = configuredApp?.actions.find(
+                    (action) => action.definition.name === saved.draft.target.actionId,
+                );
+                const targetMatches =
+                    !!configuredApp &&
+                    !!action &&
+                    configuredApp.destination === saved.draft.target.destination &&
+                    configuredApp.revision === saved.draft.target.appRevision &&
+                    JSON.stringify(
+                        snapshotLocalDraftJson(configuredApp.deliveryEncryption ?? null),
+                    ) ===
+                        JSON.stringify(
+                            snapshotLocalDraftJson(saved.draft.target.deliveryEncryption ?? null),
+                        ) &&
+                    JSON.stringify(snapshotLocalDraftJson(action.draftSchema)) ===
+                        JSON.stringify(saved.draft.schema) &&
+                    (!savedApp || sameCardConfiguration(configuredAction, action));
+                const draft = this.#drafts.restore(saved.draft);
+                let choices: LocalAppDraftChoiceSession | undefined;
+                if (action && targetMatches) {
+                    // Original default/choice history is not a permission to recompute fields.
+                    // Treat every recovered value as manual; default selection cannot overwrite it.
+                    const session = initializeLocalAppDraftChoices(
+                        action,
+                        JSON.stringify(draft.payload),
+                    );
+                    choices = resetLocalAppDraftChoices(session, saved.editorJson);
+                }
+                this.#cards.set(draft.id, {
+                    app: savedApp ?? (targetMatches ? configuredApp : undefined),
+                    editorJson: saved.editorJson,
+                    recipient: saved.recipient,
+                    manual: true,
+                    choices,
+                    blocked: false,
+                    targetMatches,
+                    source,
+                });
             }
-            this.#processor = this.#processors.get(draft.target.appId);
             this.#set({
-                draft,
-                appId: draft.target.appId,
-                actionId: draft.target.actionId,
-                editorJson: saved.editorJson,
-                recipient: saved.recipient,
-                draftManualValues: true,
                 draftLoading: false,
                 draftStorageStatus:
-                    "Private card restored from encrypted storage on this device. No approval or handoff session was restored.",
-                message: !this.#restoredTargetMatches
-                    ? "This saved card's app configuration changed or is unavailable. Inspect or discard it; it cannot be sent to a changed destination."
-                    : saved.draft.attempted
-                      ? "This request may already have reached the app. Check the app, then review the unchanged request before explicitly retrying with the same import ID."
-                      : "Private card restored. Review every field again before sending; no consent was restored.",
+                    "Private cards restored from encrypted storage on this device. No approval or handoff session was restored.",
             });
+            const first = collection.activeDraftId ?? this.#cards.keys().next().value;
+            if (first) this.selectCard(first, false);
         } catch {
-            if (epoch === this.#setupEpoch)
+            if (epoch === this.#setupEpoch) {
+                this.#draftRestoreFailed = true;
+                this.#cards.clear();
+                this.#drafts.clear();
                 this.#set({
                     draftLoading: false,
                     draftStorageStatus:
                         "The saved private card could not be restored. Nothing was sent. Use Forget to remove unavailable saved data.",
                 });
+            }
         }
+    }
+
+    #collection(): SavedLocalAppDraftCollection {
+        this.#rememberActive();
+        return snapshotSavedLocalAppDraftCollection({
+            version: 2,
+            ...(this.#state.draft ? { activeDraftId: this.#state.draft.id } : {}),
+            cards: [...this.#cards].map(([id, card]) => {
+                const draft = this.#drafts.snapshot(id);
+                return {
+                    saved: {
+                        version: 1,
+                        draft,
+                        editorJson: draft.attempted
+                            ? JSON.stringify(draft.payload, null, 2)
+                            : card.editorJson,
+                        recipient: draft.attempted ? draft.target.recipient : card.recipient,
+                    },
+                    ...(card.source ? { source: card.source } : {}),
+                    ...(card.app ? { app: card.app } : {}),
+                };
+            }),
+        });
     }
 
     async #persistDraft(): Promise<void> {
         const scope = this.#setupScope();
         const storage = this.deps.draftStorage;
-        const draft = this.#state.draft;
-        if (!storage || !draft) return;
+        if (!storage) return;
         const epoch = this.#setupEpoch,
             revision = ++this.#draftSaveRevision;
         this.#set({ draftStorageStatus: "Saving this private card on this device…" });
         try {
             if (!scope)
                 throw new Error("Private card storage requires a signed-in account and backend");
-            const snapshot = this.#drafts.snapshot(draft.id);
-            const saved = snapshotSavedLocalAppDraft({
-                version: 1,
-                draft: snapshot,
-                editorJson: snapshot.attempted
-                    ? JSON.stringify(snapshot.payload, null, 2)
-                    : this.#state.editorJson,
-                recipient: snapshot.attempted ? snapshot.target.recipient : this.#state.recipient,
-            });
-            await storage.write(scope, saved);
+            if (this.#draftRestoreFailed) throw new Error("Saved cards could not be read");
+            await storage.write(scope, this.#collection());
             if (epoch === this.#setupEpoch && revision === this.#draftSaveRevision)
                 this.#set({
                     draftStorageStatus:
@@ -565,7 +701,13 @@ export class PrivateAppWorkspace {
     }
 
     async forgetSetup(): Promise<boolean> {
-        if (this.#state.setupLoading || this.#state.draftLoading || !this.#account) return false;
+        if (
+            this.#state.setupLoading ||
+            this.#state.draftLoading ||
+            (this.#state.busy && this.#cards.size > 0) ||
+            !this.#account
+        )
+            return false;
         const scope = this.#setupScope();
         if (this.deps.setupStorage && !scope) return false;
         this.clear();
@@ -643,7 +785,7 @@ export class PrivateAppWorkspace {
 
     async refreshDirectory(): Promise<boolean> {
         if (!this.#directorySource || !this.#account || this.#state.setupLoading) return false;
-        if (this.#state.busy || this.#state.draft) {
+        if (this.#state.busy || this.#cards.size > 0) {
             this.#refreshDeferred = true;
             this.#set({
                 directoryStatus:
@@ -674,7 +816,7 @@ export class PrivateAppWorkspace {
                 return false;
             const updates: Record<string, string> = {};
             this.#set({ directory });
-            if (this.#state.busy || this.#state.draft) {
+            if (this.#state.busy || this.#cards.size > 0) {
                 this.#refreshDeferred = true;
                 this.#set({
                     directoryStatus:
@@ -743,7 +885,7 @@ export class PrivateAppWorkspace {
                     abort.signal.aborted
                 )
                     return false;
-                if (this.#state.busy || this.#state.draft) {
+                if (this.#state.busy || this.#cards.size > 0) {
                     this.#refreshDeferred = true;
                     break;
                 }
@@ -916,10 +1058,11 @@ export class PrivateAppWorkspace {
         this.#saveSetup();
     }
 
-    #setupAllowed(): boolean {
+    #setupAllowed(retainCards = false): boolean {
         if (
             this.#state.setupLoading ||
             this.#state.draftLoading ||
+            this.#draftRestoreFailed ||
             ((this.deps.setupStorage || this.deps.draftStorage) && !this.#setupScope())
         ) {
             this.#set({
@@ -936,7 +1079,7 @@ export class PrivateAppWorkspace {
             });
             return false;
         }
-        if (this.#state.busy || this.#state.draft) {
+        if (this.#state.busy || (retainCards ? this.#fieldEditBlocked : this.#cards.size > 0)) {
             this.#set({
                 message:
                     "Discard the current draft or cancel processing before changing app setup.",
@@ -975,7 +1118,9 @@ export class PrivateAppWorkspace {
     }
 
     selection(): { app: LocalAppCatalogEntry; action: LocalAppAction } | undefined {
-        const app = this.#state.catalog?.apps.find((app) => app.id === this.#state.appId);
+        const app = this.#state.draft
+            ? this.#cards.get(this.#state.draft.id)?.app
+            : this.#state.catalog?.apps.find((app) => app.id === this.#state.appId);
         const action = app?.actions.find(
             (action) => action.definition.name === this.#state.actionId,
         );
@@ -998,15 +1143,32 @@ export class PrivateAppWorkspace {
     }
 
     select(appId: string, actionId: string): boolean {
-        if (!this.#setupAllowed()) return false;
+        return this.#select(appId, actionId, false);
+    }
+
+    /** Choosing a proposal target preserves retained cards instead of retargeting them. */
+    selectForProposal(appId: string, actionId: string): boolean {
+        return this.#select(appId, actionId, true);
+    }
+
+    #select(appId: string, actionId: string, retainCards: boolean): boolean {
+        if (!this.#setupAllowed(retainCards)) return false;
         const app = this.#state.catalog?.apps.find((app) => app.id === appId);
         const action = app?.actions.find((action) => action.definition.name === actionId);
         if (!app || !action) return false;
+        this.#leaveCard();
+        this.#choiceSession = undefined;
+        this.#fieldEditBlocked = false;
+        this.#restoredTargetMatches = true;
         ++this.#epoch;
         this.#processor = this.#processors.get(appId);
         this.#set({
             appId,
             actionId,
+            draft: undefined,
+            editorJson: "",
+            recipient: "",
+            draftManualValues: false,
             processorReady:
                 !this.#state.disabledAppIds.includes(appId) &&
                 (app.processor === undefined || !!this.#processor),
@@ -1076,7 +1238,8 @@ export class PrivateAppWorkspace {
             });
             return "retryable";
         }
-        if (!this.#setupAllowed()) return "retryable";
+        if (!this.#setupAllowed(true)) return "retryable";
+        if (!options.stillCurrent()) return "retryable";
         const selection = this.selection();
         if (!selection) {
             this.#set({
@@ -1085,7 +1248,44 @@ export class PrivateAppWorkspace {
             });
             return "retryable";
         }
-        const { app, action } = selection;
+        const selectedAppId = selection.app.id;
+        const selectedActionId = selection.action.definition.name;
+        let source: LocalAppDraftSourceReference | undefined;
+        try {
+            source =
+                options.source === undefined
+                    ? undefined
+                    : snapshotLocalAppDraftSourceReference(options.source);
+        } catch {
+            this.#set({ message: "The message reference is invalid. No draft was created." });
+            return "retryable";
+        }
+        if (source) {
+            const existing = [...this.#cards].find(([id, card]) => {
+                const target = this.#drafts.get(id)?.target;
+                return (
+                    target?.appId === selectedAppId &&
+                    target.actionId === selectedActionId &&
+                    JSON.stringify(card.source) === JSON.stringify(source)
+                );
+            });
+            if (existing && this.selectCard(existing[0])) return "drafted";
+        }
+        if (this.#cards.size >= MAX_SAVED_LOCAL_APP_DRAFTS) {
+            this.#set({
+                message:
+                    "The private card limit is reached. Discard a card before creating another; no existing card was replaced.",
+            });
+            return "retryable";
+        }
+        // A retained card's immutable presentation is for reviewing that card only.
+        // Every new proposal is pinned afresh to the currently connected configuration.
+        const app = this.#state.catalog?.apps.find((app) => app.id === selectedAppId);
+        const action = app?.actions.find((action) => action.definition.name === selectedActionId);
+        if (!app || !action) {
+            this.#set({ message: "Reconnect the app before creating another private card." });
+            return "retryable";
+        }
         if (this.#state.disabledAppIds.includes(app.id)) {
             this.#set({
                 message:
@@ -1093,7 +1293,7 @@ export class PrivateAppWorkspace {
             });
             return "retryable";
         }
-        const artifact = this.#processor;
+        const artifact = this.#processors.get(app.id);
         if (app.processor && (!artifact || !this.#state.processorReady)) {
             this.#set({
                 message:
@@ -1184,6 +1384,25 @@ export class PrivateAppWorkspace {
                 schema: action.draftSchema,
                 payload: JSON.parse(choiceSession.editorJson),
             });
+            this.#rememberActive();
+            this.#cards.set(draft.id, {
+                app,
+                editorJson: choiceSession.editorJson,
+                recipient: draft.target.recipient,
+                manual: false,
+                choices: choiceSession,
+                blocked: false,
+                targetMatches: true,
+                source,
+            });
+            try {
+                this.#collection();
+            } catch {
+                this.#cards.delete(draft.id);
+                this.#drafts.cancel(draft.id);
+                throw new Error("Private card collection is full");
+            }
+            this.#leaveCard();
             this.#choiceSession = choiceSession;
             this.#fieldEditBlocked = false;
             this.#restoredTargetMatches = true;
@@ -1302,8 +1521,13 @@ export class PrivateAppWorkspace {
 
     review(): boolean {
         const draft = this.#state.draft;
-        if (!this.#restoredTargetMatches) return false;
-        if (draft?.status === "uncertain" && !draft.approval && !this.#state.busy) {
+        if (!this.#restoredTargetMatches || this.#fieldEditBlocked) return false;
+        if (
+            draft &&
+            ["uncertain", "delivered"].includes(draft.status) &&
+            !draft.approval &&
+            !this.#state.busy
+        ) {
             this.#drafts.reviewRecovered(draft.id);
             this.#set({
                 draft: this.#drafts.get(draft.id),
@@ -1376,6 +1600,8 @@ export class PrivateAppWorkspace {
         if (
             !draft ||
             this.#state.busy ||
+            this.#fieldEditBlocked ||
+            !this.#restoredTargetMatches ||
             draft.status !== expectedStatus ||
             draft.approval?.approvalId !== approvalId ||
             (expectedStatus === "delivered" &&
@@ -1410,16 +1636,24 @@ export class PrivateAppWorkspace {
     }
 
     discard(): void {
-        const scope = this.#setupScope();
+        if (this.#abort) {
+            ++this.#epoch;
+            this.#abort.abort();
+            this.#abort = undefined;
+            this.#set({
+                busy: false,
+                phase: undefined,
+                message:
+                    "Processing cancelled. Existing private cards were retained; no new handoff was requested.",
+            });
+            return;
+        }
         ++this.#epoch;
-        this.#abort?.abort();
-        this.#abort = undefined;
         const dispatched = this.#state.draft
             ? this.#drafts.cancel(this.#state.draft.id).deliveryMayHaveOccurred
             : false;
+        if (this.#state.draft) this.#cards.delete(this.#state.draft.id);
         this.deps.cancelDelivery();
-        this.#deliveryClient = undefined;
-        this.#nativeDelivery = false;
         this.#choiceSession = undefined;
         this.#fieldEditBlocked = false;
         this.#restoredTargetMatches = true;
@@ -1434,19 +1668,21 @@ export class PrivateAppWorkspace {
                 ? "Local draft discarded. A remote handoff may already have occurred; check the app before sending again."
                 : "Local draft or processing discarded. Nothing was sent to the app.",
         });
-        if (scope && this.deps.draftStorage) {
+        const next = this.#cards.keys().next().value;
+        if (next) this.selectCard(next, false);
+        if (this.#setupScope() && this.deps.draftStorage) {
             const epoch = this.#setupEpoch;
             this.#set({
                 draftLoading: true,
                 draftStorageStatus: "Removing this private card from this device…",
             });
-            void this.deps.draftStorage.remove(scope).then(
+            void this.#persistDraft().then(
                 () => {
                     if (epoch === this.#setupEpoch)
                         this.#set({
                             draftLoading: false,
                             draftStorageStatus:
-                                "Private card and its local encryption key removed.",
+                                "Selected private card removed. Other cards remain encrypted on this device.",
                         });
                 },
                 () => {
@@ -1459,7 +1695,7 @@ export class PrivateAppWorkspace {
                 },
             );
         }
-        if (this.#refreshDeferred) {
+        if (this.#refreshDeferred && this.#cards.size === 0) {
             this.#refreshDeferred = false;
             void this.refreshDirectory();
         }

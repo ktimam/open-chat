@@ -102,13 +102,20 @@ function commands(job) {
   );
 }
 
-function requiredCommand(job, predicate, label) {
+function requiredCommand(job, predicate, label, condition) {
   const matches = commands(job).filter(({ command }) => predicate(command));
   assert.equal(matches.length, 1, `Expected one executable ${label}`);
+  assert.deepEqual(
+    [...matches[0].step.matchAll(/^(?:if:| {8}if:)(?: (.*))?$/gmu)].map(
+      (m) => m[1],
+    ),
+    condition === undefined ? [] : [condition],
+    `Exact condition required for ${label}`,
+  );
   assert.doesNotMatch(
     matches[0].step,
-    /^(?:if:|continue-on-error:| {8}(?:if|continue-on-error):)/mu,
-    `Conditional/ignored ${label}`,
+    /^(?:continue-on-error:| {8}continue-on-error:)/mu,
+    `Ignored ${label}`,
   );
   assert.doesNotMatch(
     matches[0].command,
@@ -1254,24 +1261,46 @@ export function checkCurrentClientSecurityCi({
     ],
     [CURRENT_CLIENT_SECURITY_TEST_COMMAND, ".", false],
     ["node scripts/check_feature_ci.mjs current-client-security", ".", false],
-    [npmFeatureSmokeCommand("current-client"), ".", true],
+    [npmFeatureSmokeCommand("current-client"), ".", true, "scope_validated"],
     [npmFeatureQueryCommand("current-client"), ".", true],
-    [RUST_FEATURE_FETCH_COMMAND, ".", true],
-    [CURRENT_CLIENT_LICENSE_COMMAND, ".", true],
-    [rustFeatureCiCommand("current-client"), ".", true],
+    [RUST_FEATURE_FETCH_COMMAND, ".", true, "rust_inputs", "scope_validated"],
+    [CURRENT_CLIENT_LICENSE_COMMAND, ".", true, "rust_licenses", "rust_inputs"],
+    [
+      rustFeatureCiCommand("current-client"),
+      ".",
+      true,
+      undefined,
+      "rust_licenses",
+    ],
   ];
   assert.deepEqual(
     commands(job).map(({ command }) => command),
     required.map(([command]) => command),
     "Exact source/test/runtime/query/fetch/license/Rust order; no extra execution",
   );
-  for (const [expected, directory, literalBlock] of required) {
+  for (const [
+    expected,
+    directory,
+    literalBlock,
+    id,
+    prerequisite,
+  ] of required) {
     requiredCommand(
       job,
       (command) => command === expected,
       "current-client security command",
+      prerequisite === undefined
+        ? undefined
+        : "${{ !cancelled() && steps." +
+            prerequisite +
+            ".outcome == 'success' }}",
     );
     const step = commands(job).find(({ command }) => command === expected).step;
+    assert.deepEqual(
+      [...step.matchAll(/^ {8}id: (.+)$/gmu)].map((m) => m[1]),
+      id === undefined ? [] : [id],
+      "Exact prerequisite identity; no aliases or duplicates",
+    );
     assert.deepEqual(
       [...step.matchAll(/^ {8}working-directory: (.+)$/gmu)].map(
         (match) => match[1],

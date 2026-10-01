@@ -585,3 +585,61 @@ This refresh runs offline contract tests only. It does not perform an advisory
 query, install packages, waive failures, audit OpenChat core, deploy, or establish
 model accuracy, browser/APK acceptance or release readiness. Existing advisory
 decisions and their separate gates remain in force.
+
+## October 2 card collection and proposal entry points
+
+This source-only checkpoint binds main
+`5a36a3c22bf53b4111824606ec51b23c8c3e80ee` plus the frozen card-collection and
+bounded-control changes. Its aggregate is
+`8cc7a0ec5387cc68d875eb71e10f54e60efdf07c4ac020cbf9e23650954554a9`:
+**153 fingerprinted files, 88 exact anchors, 122 dedicated modules and 25 npm
+roots**. The two additional files are the desktop/mobile `ChatMessage.svelte`
+proposal entry points. Their captured-message anchors belong to the existing
+Svelte root; neither becomes a dedicated owner or subjects unrelated core imports
+to scanning. Dedicated selectors and import-denial rules are unchanged.
+
+Six previously fingerprinted feature files change:
+
+- `localAppDraftPersistence.ts` and `privateAppWorkspace.ts` retain up to eight
+  encrypted private cards, migrate version-one single-card records, bind saved
+  app presentation to the original target/schema, and retain bounded host-only
+  source references. Generation/revision compare-and-write and captured read
+  observations reject stale writes, including writes queued before a refresh.
+  Recovery grants no consent or automatic handoff; corrupt or full collections
+  do not silently replace retained cards.
+- `localAppDrafts.ts` and `PrivateAppsWorkspace.svelte` revoke consent when cards
+  change, retain attempted requests and import IDs, expose saved-card selection,
+  and distinguish selected-card Discard from account-wide Forget. Forget remains
+  available with retained cards, but cannot interrupt their active work or
+  loading. Setup persistence remains separate from card/delivery state.
+- `localAppDrafts.ts`, `localAppDraftPresentation.ts` and
+  `PrivateAppDraftFields.svelte` add only generic bounded ASCII-range string
+  constraints and nonrestrictive select hints. The host never executes app regex
+  code or names app-specific fields. Supplied values stay exact; suggestions do
+  not override final schema validation.
+
+The two mixed chat entry points preserve the captured chat/message/thread
+identity when proposing and use the card-preserving selection method. The source
+reference is local navigation/deduplication metadata, not an outgoing app field.
+The reviewed files add only relative helpers and existing Svelte imports.
+
+All 151 committed Git blobs independently reproduce both the `166cb8127` source
+checkpoint above and the earlier `68f06f6f` checkpoint from
+`240007855dbec16b77bc532a78dc121a75ad058d`. Historical tests exclude only the two
+newly tracked paths, substitute the six verified pre-collection hashes and retain
+the earlier eight pre-merge substitutions where applicable. The original
+151-file and September 148-file aggregate identities are unchanged. Separate
+current-source tests reject drift/removal in all six owners and both entry
+points, changed/missing anchors, and new unreviewed dedicated imports. The setup
+snapshot test follows the extracted private selection helper instead of assuming
+that the public wrapper still writes setup directly.
+
+This is source ownership and identity verification only. No dependency root,
+manifest/lockfile, historical PR inventory, advisory decision or model/prompt
+changes; no audit, network request, installation, build, deployment or native
+acceptance is performed or implied by this refresh.
+
+Verification with pinned Node 24.18.1: all **158/158** tests in the same five
+offline npm contract suites pass, with zero failures, skips or cancellations.
+The initial stale-source run failed ten of 65 seed-review tests; its source
+identity and selection-delegation failures were repaired rather than waived.

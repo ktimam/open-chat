@@ -631,6 +631,39 @@ describe("draft presentation safe JSON and resource bounds", () => {
     });
 });
 
+describe("bounded app-owned string pickers", () => {
+    const schema = {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+            code: { type: "string", pattern: "^[A-Z]{3}$" },
+        },
+    } as const;
+    const declaration = {
+        version: 1,
+        enumLabels: [],
+        controls: [{ field: "code", kind: "select", suggestions: ["ABC", "XYZ"] }],
+    };
+    it("keeps suggestions immutable without restricting valid unlisted values", () => {
+        const parsed = validate(declaration, schema, single);
+        expect(parsed).toEqual(declaration);
+        expect(Object.isFrozen(parsed.controls?.[0].suggestions)).toBe(true);
+        expect(snapshotLocalDraftPayload({ code: "ZZZ" }, schema)).toEqual({ code: "ZZZ" });
+    });
+    it.each([undefined, [], ["abc"], ["123"], ["ABC", "ABC"], ["<script>"]])(
+        "rejects absent, invalid or duplicate options %j",
+        (suggestions) => {
+            const control =
+                suggestions === undefined
+                    ? { field: "code", kind: "select" }
+                    : { field: "code", kind: "select", suggestions };
+            expect(() =>
+                validate({ version: 1, enumLabels: [], controls: [control] }, schema, single),
+            ).toThrow();
+        },
+    );
+});
+
 describe("draft presentation catalog compatibility", () => {
     it.each(["single", "list", "wrapped-list"] as const)(
         "imports %s presentation as immutable metadata, never projected DTO data",

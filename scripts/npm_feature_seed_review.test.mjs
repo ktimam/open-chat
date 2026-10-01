@@ -53,19 +53,58 @@ const beforeOctoberRefresh = new Map([
     "b7f05d722ed8d3bb5c18153597d755342b9f0bc5a75c2e7f197e2b03428844d7",
   ],
 ]);
-function octoberPriorFingerprint(fingerprint, replacements = new Map()) {
-  for (const path of beforeOctoberRefresh.keys())
+// Independently read from the full 151-file Git 5a36a3c checkpoint. These six
+// hashes reconstruct its prior bytes only; the current gate still binds every
+// live input. The two proposal entry points were not in any historical aggregate.
+const mixedProposalFiles = [
+  "frontend/app/src/components/home/ChatMessage.svelte",
+  "frontend/app/src/components_mobile/home/ChatMessage.svelte",
+];
+const beforeCardCollection = new Map([
+  [
+    "frontend/app/src/components_shared/PrivateAppDraftFields.svelte",
+    "81c4afd2dff50a7d69e7d8c78b01fd58a7f63c86e061bb2ff58d016141444ee2",
+  ],
+  [
+    "frontend/app/src/components_shared/PrivateAppsWorkspace.svelte",
+    "230cc611fe4a9d6560c150a64cddfcef067f5aed79c0421480396a02beec3ed9",
+  ],
+  [
+    "frontend/app/src/utils/localAppDraftPersistence.ts",
+    "5ad14adf943a7f1fd73342cd2c7b322f82264d65fd858ed1dc9cf12b9ffc1237",
+  ],
+  [
+    "frontend/app/src/utils/localAppDraftPresentation.ts",
+    "dcd42a9891da2be24566cfbab308d80f3a8683ddf07639a127353f94c417b0e2",
+  ],
+  [
+    "frontend/app/src/utils/localAppDrafts.ts",
+    "6fe69445a1d327a66fa7ad6a45b930e007d5b8274bb992936d2928a97997b54b",
+  ],
+  [
+    "frontend/app/src/utils/privateAppWorkspace.ts",
+    "821780fbc338896830d1dbae1292e13a91b332e2704c816b53800096b9ea6b9d",
+  ],
+]);
+function priorFingerprint(fingerprint, hashes, replacements = new Map()) {
+  for (const path of mixedProposalFiles)
     assert(fingerprint.files.includes(path));
+  for (const path of hashes.keys()) assert(fingerprint.files.includes(path));
+  const files = fingerprint.files.filter(
+    (file) => !mixedProposalFiles.includes(file),
+  );
+  assert.equal(files.length, 151);
   const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
   return {
     ...fingerprint,
+    files,
     sha256: hash(
       JSON.stringify(
-        fingerprint.files.map((file) => [
+        files.map((file) => [
           file,
           replacements.has(file)
             ? hash(replacements.get(file))
-            : (beforeOctoberRefresh.get(file) ??
+            : (hashes.get(file) ??
               hash(
                 readFileSync(resolve(root, file), "utf8").replaceAll(
                   "\r\n",
@@ -77,13 +116,23 @@ function octoberPriorFingerprint(fingerprint, replacements = new Map()) {
     ),
   };
 }
+function octoberPriorFingerprint(fingerprint, replacements = new Map()) {
+  for (const path of beforeOctoberRefresh.keys())
+    assert(fingerprint.files.includes(path));
+  return priorFingerprint(
+    fingerprint,
+    new Map([...beforeCardCollection, ...beforeOctoberRefresh]),
+    replacements,
+  );
+}
 
 // Historical aggregate proofs retain the exact committed 07aa47ba inputs. Only
 // these independently read pre-extension identities, three new paths and the
 // separately reviewed immutable-asset routing pair differ. Every other input
-// remains live, and the separate current gate binds all 151.
+// remains live, and the separate current gate binds all 153.
 function septemberCheckpointEntries(fingerprint) {
   const laterFiles = new Set([
+    ...mixedProposalFiles,
     "frontend/app/src/utils/localAppDraftPersistence.ts",
     "frontend/app/src/utils/localAppDraftPresentation.ts",
     "frontend/app/src/utils/localAppEncryption.ts",
@@ -439,12 +488,12 @@ test("current encryption, recovery and enum-label owners use existing selectors 
       ),
     );
   assert.equal(owned.length, 122);
-  assert.equal(fingerprint.files.length, 151);
+  assert.equal(fingerprint.files.length, 153);
   assert.equal(config.seeds.length, 25);
-  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 86);
+  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 88);
   assert.equal(
     fingerprint.sha256,
-    "166cb8127e259451ac0041463ca814a941322ed5cf11894a990cbe0df7fe264d",
+    "8cc7a0ec5387cc68d875eb71e10f54e60efdf07c4ac020cbf9e23650954554a9",
   );
   assertReviewedSourceFingerprint(fingerprint, config.sourceReview);
 });
@@ -478,10 +527,10 @@ test("cache hashing responsiveness preserves exact prior source identity and int
   );
   assertReviewedSourceFingerprint(previous, config.sourceReview);
   assertReviewedSourceFingerprint(actual, config.sourceReview);
-  assert.equal(actual.files.length, 151);
+  assert.equal(actual.files.length, 153);
   assert.equal(featureOwnedFiles(root, config.scopeId).length, 122);
   assert.equal(config.seeds.length, 25);
-  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 86);
+  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 88);
   for (const unchanged of [
     "const CACHED_HASH_UPDATE_MAX_BYTES = 64 * 1024;",
     "const CACHED_HASH_TASK_MAX_BYTES = 4 * 1024 * 1024;",
@@ -547,9 +596,9 @@ test("unofficial immutable-asset routing preserves the exact prior source aggreg
   );
   assertReviewedSourceFingerprint(previous, config.sourceReview);
   assertReviewedSourceFingerprint(actual, config.sourceReview);
-  assert.equal(actual.files.length, 151);
+  assert.equal(actual.files.length, 153);
   assert.equal(config.seeds.length, 25);
-  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 86);
+  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 88);
   assert(
     !actual.files.includes("frontend/app/transformersWebGpuFeatureFlag.d.mts"),
   );
@@ -640,11 +689,11 @@ test("current setup persistence is a dedicated builtin-API consumer with an exac
   const owned = featureOwnedFiles(root, config.scopeId);
   const fingerprint = seedSourceFingerprint(root, config);
   assert.equal(owned.length, 122);
-  assert.equal(fingerprint.files.length, 151);
+  assert.equal(fingerprint.files.length, 153);
   assert.equal(config.seeds.length, 25);
   assert.equal(
     config.seeds.reduce((count, seed) => count + seed.evidence.length, 0),
-    86,
+    88,
   );
   assert(owned.includes(storePath));
   assert(
@@ -690,6 +739,164 @@ test("current setup persistence is a dedicated builtin-API consumer with an exac
     /\b(?:fetch|WebSocket|XMLHttpRequest|Worker|runIsolatedAppProcessor)\s*\(/u,
   );
 });
+
+test("card collection and bounded controls preserve the exact 5a36 source checkpoint without accepting current drift", () => {
+  const config = JSON.parse(
+    readFileSync(
+      resolve(root, "scripts/npm_feature_scope.current-client.json"),
+      "utf8",
+    ),
+  );
+  const actual = seedSourceFingerprint(root, config);
+  const previous = priorFingerprint(actual, beforeCardCollection);
+  assert.equal(previous.files.length, 151);
+  assert.equal(
+    previous.sha256,
+    "166cb8127e259451ac0041463ca814a941322ed5cf11894a990cbe0df7fe264d",
+  );
+  assertReviewedSourceFingerprint(previous, config.sourceReview);
+  assertReviewedSourceFingerprint(actual, config.sourceReview);
+  const owned = featureOwnedFiles(root, config.scopeId);
+  const names = new Set(
+    config.seeds.map(
+      (seed) => seed.name ?? seed.location.replace(/^node_modules\//u, ""),
+    ),
+  );
+  const entries = actual.files.map((file) => [
+    file,
+    readFileSync(resolve(root, file)),
+  ]);
+  for (const file of beforeCardCollection.keys()) {
+    assert(owned.includes(file));
+    const source = readFileSync(resolve(root, file), "utf8");
+    assertReviewedFeatureImports(source, names);
+    assert.throws(
+      () =>
+        assertReviewedFeatureImports(
+          `${source}\nimport "unreviewed-private-card-package";\n`,
+          names,
+        ),
+      /no reviewed root/u,
+    );
+    for (const changed of [
+      entries.filter(([path]) => path !== file),
+      entries.map(([path, bytes]) => [
+        path,
+        path === file
+          ? Buffer.concat([bytes, Buffer.from("\n// unreviewed behavior\n")])
+          : bytes,
+      ]),
+    ]) {
+      assert.throws(
+        () =>
+          assertReviewedSourceFingerprint(
+            sourceReviewFingerprintFromBytes(changed),
+            config.sourceReview,
+          ),
+        /source set changed/u,
+      );
+    }
+  }
+});
+
+for (const file of mixedProposalFiles) {
+  test(`proposal source entry point is anchored but never a dedicated core import owner: ${file}`, () => {
+    const config = JSON.parse(
+      readFileSync(
+        resolve(root, "scripts/npm_feature_scope.current-client.json"),
+        "utf8",
+      ),
+    );
+    const owned = featureOwnedFiles(root, config.scopeId);
+    const actual = seedSourceFingerprint(root, config);
+    assert(!owned.includes(file));
+    assert(actual.files.includes(file));
+    const svelte = config.seeds.find((seed) => seed.name === "svelte");
+    assert.deepEqual(
+      svelte.evidence.filter((entry) => entry.file === file),
+      [{ file, contains: "messageId: capturedMessageId.toString()," }],
+    );
+    const source = readFileSync(resolve(root, file), "utf8").replaceAll(
+      "\r\n",
+      "\n",
+    );
+    assert.equal(
+      source.split("messageId: capturedMessageId.toString(),").length,
+      2,
+    );
+    assert(
+      source.includes(
+        "return proposePrivateAppMessage(client, capturedContent, {\n" +
+          "                    stillCurrent,\n" +
+          "                    onPhase,\n" +
+          "                    sourceTimestamp: Number(timestamp),\n" +
+          "                    source: {\n" +
+          "                        chatKey: capturedChatKey,\n" +
+          "                        messageId: capturedMessageId.toString(),\n" +
+          "                        ...(capturedContext.threadRootMessageIndex === undefined\n" +
+          "                            ? {}\n" +
+          "                            : {\n" +
+          "                                  threadRootMessageIndex: capturedContext.threadRootMessageIndex,\n" +
+          "                              }),\n" +
+          "                    },\n" +
+          "                });",
+      ),
+    );
+    assert(source.includes("privateAppWorkspace.selectForProposal("));
+    const missing = structuredClone(config);
+    missing.seeds.find((seed) => seed.name === "svelte").evidence =
+      svelte.evidence.filter((entry) => entry.file !== file);
+    assert.throws(
+      () => reviewFeatureSeeds(root, missing),
+      /source set changed/u,
+    );
+    const wrong = structuredClone(config);
+    wrong.seeds
+      .find((seed) => seed.name === "svelte")
+      .evidence.find((entry) => entry.file === file).contains =
+      "messageId: unreviewedMessageId.toString(),";
+    assert.throws(
+      () => reviewFeatureSeeds(root, wrong),
+      /source ownership anchor changed/u,
+    );
+    const entries = actual.files.map((path) => [
+      path,
+      readFileSync(resolve(root, path)),
+    ]);
+    for (const changed of [
+      entries.filter(([path]) => path !== file),
+      entries.map(([path, bytes]) => [
+        path,
+        path === file
+          ? Buffer.from(
+              source.replace(
+                "messageId: capturedMessageId.toString(),",
+                "messageId: 'wrong-source',",
+              ),
+            )
+          : bytes,
+      ]),
+      entries.map(([path, bytes]) => [
+        path,
+        path === file
+          ? Buffer.concat([
+              bytes,
+              Buffer.from("\n// unreviewed mixed-file change\n"),
+            ])
+          : bytes,
+      ]),
+    ]) {
+      assert.throws(
+        () =>
+          assertReviewedSourceFingerprint(
+            sourceReviewFingerprintFromBytes(changed),
+            config.sourceReview,
+          ),
+        /source set changed/u,
+      );
+    }
+  });
+}
 
 test("current app discovery and setup include every production owner but no test fixture or historical scope expansion", () => {
   const config = JSON.parse(
@@ -1130,10 +1337,10 @@ test("current upstream merge preserves scoped startup, model and private-app bou
     readFileSync(resolve(root, file), "utf8").replaceAll("\r\n", "\n");
   const hash = (text) => createHash("sha256").update(text).digest("hex");
   const fingerprint = seedSourceFingerprint(root, config);
-  assert.equal(fingerprint.files.length, 151);
+  assert.equal(fingerprint.files.length, 153);
   assert.equal(featureOwnedFiles(root, config.scopeId).length, 122);
   assert.equal(config.seeds.length, 25);
-  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 86);
+  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 88);
   // Preserve the committed merge identity after the separately reviewed Windows
   // path-only repair and the independently bound later-extension identities.
   const mergeFingerprint = {
@@ -1377,11 +1584,19 @@ test("reviewed persistence writes setup-only fields at explicit mutations, never
   for (const name of [
     "importCatalog",
     "chooseApp",
-    "select",
+    "#select",
     "importProcessor",
     "replaceEnabledChats",
   ])
     assert.match(method(name), /#saveSetup\(/u, name);
+  assert.match(
+    method("select"),
+    /return this\.#select\(appId, actionId, false\)/u,
+  );
+  assert.match(
+    method("selectForProposal"),
+    /return this\.#select\(appId, actionId, true\)/u,
+  );
   assert.match(method("#setupScope"), /this\.#account && this\.#backend/u);
   assert.match(method("setAccount"), /backend === this\.#backend/u);
   assert.match(

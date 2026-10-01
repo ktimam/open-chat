@@ -886,6 +886,47 @@ describe("mounted generic private draft fields", () => {
         expect(view.payload()).toEqual(initial());
     });
 
+    it("renders app-declared string options and preserves an unlisted exact value", async () => {
+        const definition = hintedAction();
+        const hint = definition.draftPresentation!.controls!.find(
+            (item) => item.field === "currencyValue",
+        )!;
+        Object.assign(hint, { kind: "select" });
+        const view = render(definition, { ...initial(), currencyValue: "ZZZ" });
+        const picker = control(view.target, "Item 1 — Currency") as HTMLSelectElement;
+        expect(picker.tagName).toBe("SELECT");
+        expect(picker.value).toBe("ZZZ");
+        expect([...picker.options].map((option) => option.value)).toEqual(["ZZZ", "USD", "EUR"]);
+        expect(view.onchange).not.toHaveBeenCalled();
+        picker.value = "EUR";
+        picker.dispatchEvent(new Event("change", { bubbles: true }));
+        await tick();
+        expect(view.payload().currencyValue).toBe("EUR");
+    });
+
+    it("does not replace an absent picker value with the first option", () => {
+        const definition = hintedAction();
+        Object.assign(definition.draftPresentation!.controls![1], { kind: "select" });
+        const view = render(definition);
+        expect(control(view.target, "Item 1 — Currency").value).toBe("");
+        expect(view.payload()).not.toHaveProperty("currencyValue");
+        expect(view.onchange).not.toHaveBeenCalled();
+    });
+
+    it.each([123, null, { unexpected: true }, ["ABC"]])(
+        "keeps wrongly typed picker input visible without coercion or crashes: %j",
+        (value) => {
+            const definition = hintedAction();
+            Object.assign(definition.draftPresentation!.controls![1], { kind: "select" });
+            const view = render(definition, { ...initial(), currencyValue: value });
+            const field = control(view.target, "Item 1 — Currency");
+            expect(field.tagName).toBe("INPUT");
+            expect(field.getAttribute("aria-invalid")).toBe("true");
+            expect(view.payload().currencyValue).toEqual(value);
+            expect(view.onchange).not.toHaveBeenCalled();
+        },
+    );
+
     it("renders imported labels/values as escaped inert text without executing or networking", () => {
         const fetchSpy = vi.fn();
         const workerSpy = vi.fn();

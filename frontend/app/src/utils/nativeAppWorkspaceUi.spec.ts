@@ -60,6 +60,7 @@ const view = (status = "sending") => ({
     directoryStatus: "",
     appUpdates: {},
     disabledAppIds: [],
+    cards: [],
     editorJson: '{"value":42}',
     recipient: "Review app account",
     draft: {

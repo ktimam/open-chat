@@ -238,6 +238,76 @@ afterEach(async () => {
 });
 
 describe("private workspace declarative card and authoritative review", () => {
+    it("forgets all retained local cards only on the explicit all-card action", async () => {
+        await propose();
+        expect(workspace.state.cards).toHaveLength(2);
+        const forget = [...target.querySelectorAll<HTMLButtonElement>("button")].find((node) =>
+            node.textContent?.includes("ALL saved private cards"),
+        )!;
+        expect(forget.disabled).toBe(false);
+        expect(workspace.state.catalog).toBeDefined();
+        expect(calls.deliver).not.toHaveBeenCalled();
+        forget.click();
+        await settle();
+        expect(workspace.state.cards).toEqual([]);
+        expect(workspace.state.draft).toBeUndefined();
+        expect(workspace.state.catalog).toBeUndefined();
+        expect(calls.deliver).not.toHaveBeenCalled();
+    });
+
+    it("selects retained local cards without re-inference and requires fresh consent", async () => {
+        await changeNumber("43");
+        button("Review full request").click();
+        await settle();
+        confirmation().click();
+        await settle();
+        const first = workspace.state.draft!.id;
+        const approval = workspace.state.draft!.approval!.approvalId;
+        await propose();
+        const second = workspace.state.draft!.id;
+        expect(second).not.toBe(first);
+        const selector = target.querySelector(
+            'nav[aria-label="Saved private cards on this device"]',
+        )!;
+        expect(selector.textContent).toContain("not posted in chat");
+        expect(selector.querySelectorAll("button")).toHaveLength(2);
+        const inferences = calls.extract.mock.calls.length;
+        selector.querySelector<HTMLButtonElement>("button")!.click();
+        await settle();
+        expect(workspace.state.draft?.id).toBe(first);
+        expect(numericFields()[0].value).toBe("43");
+        expect(workspace.state.draft?.approval).toBeUndefined();
+        await workspace.confirm(approval);
+        expect(calls.deliver).not.toHaveBeenCalled();
+        button("Review full request").click();
+        await settle();
+        expect(confirmation().checked).toBe(false);
+        expect(calls.extract).toHaveBeenCalledTimes(inferences);
+        expect(workspace.state.cards).toHaveLength(2);
+    });
+
+    it("keeps a pending unrepresentable edit visible and blocks card switching", async () => {
+        await propose();
+        await changeExtra("x".repeat(70000));
+        const current = workspace.state.draft!.id;
+        const selector = target.querySelector(
+            'nav[aria-label="Saved private cards on this device"]',
+        )!;
+        expect(
+            [...selector.querySelectorAll<HTMLButtonElement>("button")].every(
+                (node) => node.disabled,
+            ),
+        ).toBe(true);
+        expect(workspace.selectCard(workspace.state.cards[0].id)).toBe(false);
+        expect(workspace.state.draft?.id).toBe(current);
+        expect(extraField().value).toHaveLength(70000);
+        expect(calls.deliver).not.toHaveBeenCalled();
+        await changeExtra("corrected");
+        expect(workspace.selectCard(workspace.state.cards[0].id)).toBe(true);
+        await settle();
+        expect(workspace.state.cards).toHaveLength(2);
+    });
+
     it("keeps invalid supplied dates visible and blocks stale approval until exact correction", async () => {
         const declaration = JSON.parse(catalog);
         const action = declaration.apps[0].actions[0];

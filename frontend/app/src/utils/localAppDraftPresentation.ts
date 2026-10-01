@@ -16,7 +16,7 @@ export interface DraftPresentationV1 {
     }>[];
     readonly controls?: readonly Readonly<{
         field: string;
-        kind: "text" | "multiline" | "date";
+        kind: "text" | "multiline" | "date" | "select";
         fullWidth?: boolean;
         /** Suggestions are not an enum: existing schema-valid values remain editable. */
         suggestions?: readonly string[];
@@ -120,15 +120,16 @@ export function validateLocalAppDraftPresentation(
                 ["__proto__", "constructor", "prototype"].includes(control.field) ||
                 !Object.hasOwn(row.properties, control.field) ||
                 controlled.has(control.field) ||
-                !["text", "multiline", "date"].includes(control.kind as string) ||
+                !["text", "multiline", "date", "select"].includes(control.kind as string) ||
                 (Object.hasOwn(control, "fullWidth") && typeof control.fullWidth !== "boolean")
             )
                 invalid();
             controlled.add(control.field);
             const property = row.properties[control.field];
             if (property.type !== "string" || property.enum) invalid();
+            if (control.kind === "select" && !Object.hasOwn(control, "suggestions")) invalid();
             if (Object.hasOwn(control, "suggestions")) {
-                if (control.kind !== "text") invalid();
+                if (control.kind !== "text" && control.kind !== "select") invalid();
                 list(control.suggestions, 256);
                 const seen = new Set<string>();
                 for (const suggestion of control.suggestions) {

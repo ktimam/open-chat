@@ -42,6 +42,7 @@ const publish = (patch: Partial<PrivateAppWorkspaceState> = {}) =>
         setupGeneration: 1,
         draftLoading: false,
         draftStorageStatus: "",
+        cards: [],
         directoryLoading: false,
         directoryStatus: "",
         appUpdates: {},

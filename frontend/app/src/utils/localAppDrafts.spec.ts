@@ -42,6 +42,61 @@ function pendingDelivery() {
 }
 
 describe("private local drafts", () => {
+    it("revokes unattempted consent without replacing the draft or import ID", async () => {
+        const { store, transport } = setup();
+        const draft = store.create(input);
+        const first = store.review(draft.id);
+        const before = store.snapshot(draft.id);
+        expect(store.revokeApproval(draft.id)).toMatchObject({ id: draft.id, status: "draft" });
+        expect(store.snapshot(draft.id)).toEqual(before);
+        expect(await store.confirm(draft.id, first.approvalId)).toEqual({ kind: "blocked" });
+        const next = store.review(draft.id);
+        expect(next.approvalId).not.toBe(first.approvalId);
+        expect(next.request).toEqual(first.request);
+        expect(transport).not.toHaveBeenCalled();
+    });
+
+    it.each(["delivered", "uncertain"] as const)(
+        "revokes %s consent while retaining immutable request and outcome",
+        async (kind) => {
+            const { store, transport } = setup(async () => ({ kind }));
+            const draft = store.create(input);
+            const first = store.review(draft.id);
+            await store.confirm(draft.id, first.approvalId);
+            const before = store.snapshot(draft.id);
+            expect(store.revokeApproval(draft.id)).toMatchObject({ status: kind });
+            expect(store.get(draft.id)?.approval).toBeUndefined();
+            expect(store.snapshot(draft.id)).toEqual(before);
+            expect(() =>
+                store.edit(draft.id, { payload: { label: "changed", count: 1 } }),
+            ).toThrow();
+            const dispatch =
+                kind === "delivered"
+                    ? store.reopenDelivered.bind(store)
+                    : store.retryUncertain.bind(store);
+            expect(await dispatch(draft.id, first.approvalId)).toEqual({ kind: "blocked" });
+            const next = store.reviewRecovered(draft.id);
+            expect(next.approvalId).not.toBe(first.approvalId);
+            expect(next.request).toEqual(first.request);
+            expect(store.get(draft.id)?.status).toBe(kind);
+            expect(transport).toHaveBeenCalledOnce();
+            await dispatch(draft.id, next.approvalId);
+            expect(transport).toHaveBeenCalledTimes(2);
+        },
+    );
+
+    it("does not revoke or switch a sending request", async () => {
+        const pending = pendingDelivery();
+        const { store } = setup(() => pending.deliver);
+        const draft = store.create(input);
+        const approval = store.review(draft.id);
+        const sending = store.confirm(draft.id, approval.approvalId);
+        expect(() => store.revokeApproval(draft.id)).toThrow(/sending/);
+        expect(store.get(draft.id)?.approval).toBe(approval);
+        pending.resolve({ kind: "delivered" });
+        await sending;
+    });
+
     it("never calls delivery before a valid host review and explicit confirmation", async () => {
         const { store, transport } = setup();
         const draft = store.create(input);

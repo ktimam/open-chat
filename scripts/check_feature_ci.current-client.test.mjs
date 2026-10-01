@@ -502,6 +502,50 @@ test("current security rejects license and Rust gate reordering", () => {
   assert.throws(() => check(changed));
 });
 
+for (const prerequisite of [
+  "scope_validated",
+  "rust_inputs",
+  "rust_licenses",
+]) {
+  const condition =
+    "${{ !cancelled() && steps." + prerequisite + ".outcome == 'success' }}";
+  for (const replacement of [
+    "false",
+    "always()",
+    "${{ !cancelled() }}",
+    condition.replace("!cancelled()", "success()"),
+    condition.replace(" == 'success'", " != 'cancelled'"),
+    condition.replace(" && ", " || "),
+    condition.replace(prerequisite, "wrong_step"),
+  ]) {
+    test(`independent Rust evidence rejects altered ${prerequisite} condition: ${replacement}`, () => {
+      const changed = original.replace(condition, replacement);
+      assert.notEqual(changed, original);
+      assert.throws(() => check(changed));
+    });
+  }
+  test(`independent Rust evidence requires one exact ${prerequisite} step identity`, () => {
+    const anchor = "        id: " + prerequisite + "\n";
+    for (const replacement of [
+      "",
+      anchor + anchor,
+      anchor.replace(prerequisite, "wrong_step"),
+    ]) {
+      const changed = original.replace(anchor, replacement);
+      assert.notEqual(changed, original);
+      assert.throws(() => check(changed));
+    }
+  });
+  test(`independent Rust evidence cannot fall back to default success gating: ${prerequisite}`, () => {
+    const anchor = "        if: " + condition + "\n";
+    for (const replacement of ["", "        if:\n", anchor + anchor]) {
+      const changed = original.replace(anchor, replacement);
+      assert.notEqual(changed, original);
+      assert.throws(() => check(changed));
+    }
+  });
+}
+
 test("literal CRLF representation preserves current security semantics", () => {
   assert.deepEqual(check(original.replaceAll("\n", "\r\n")), check());
 });

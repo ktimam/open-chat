@@ -40,12 +40,13 @@ fields. Existing schema enums and `draftEditor` named choices remain authoritati
 
 An action may supply `draftPresentation` version 1 with `enumLabels` and optional
 `controls`. Each control names one plain, non-enum string field and selects `kind`
-`text`, `multiline` or `date`, with an optional boolean `fullWidth`. Text controls may
-provide `suggestions`; these are suggestions, not a new enum. A value absent from the
-list remains editable and is accepted when it satisfies the original field schema.
-Named choices take precedence over string-control hints.
+`text`, `multiline`, `date` or `select`, with an optional boolean `fullWidth`. Text
+controls may provide `suggestions`; select controls require them. These lists are
+suggestions, not a new enum: an existing value absent from the list remains visible
+and is not replaced or normalized. It is accepted only when it satisfies the field
+schema. Named choices take precedence over string-control hints.
 
-There may be at most 32 controls and 256 unique suggestions per text control. Each
+There may be at most 32 controls and 256 unique suggestions per text or select control. Each
 suggestion is trimmed, nonempty, at most 128 characters, free of control/invisible
 format characters, and valid under the existing string schema. The complete metadata
 retains the 64 KiB safe-JSON limit. Unknown keys, hidden-field flags, HTML controls,
@@ -59,6 +60,15 @@ value. A supplied malformed date must remain visible as text and require correct
 before review; it must not become an empty native date input and silently disappear.
 An absent optional date remains absent. These hints contain no executable markup,
 app business rules or delivery authority, and are never added to the encrypted DTO.
+
+Final draft string schemas may declare a bounded `pattern`, separate from the app's
+model extraction schema. The supported form is an anchored character class containing
+one or more distinct ASCII ranges `A-Z`, `a-z` or `0-9`, followed by `{n}` or `{min,max}`;
+for example, `^[A-Z]{3}$`. Bounds must be ordered nonnegative integers no greater than
+65,536. OpenChat parses this limited notation and checks characters and length; it
+never compiles or executes an app-supplied regular expression. Other pattern syntax
+is rejected. A pattern does not trim, normalize or replace values: invalid edits remain
+visible but fail final draft validation before review or delivery.
 
 ## Cryptographic and transport contract
 
@@ -95,14 +105,40 @@ recipient, not proof of who authored the message or truthfulness of the extracte
 
 ## Local storage and restart
 
-Persist the existing active card, schema and delivery binding encrypted with AES-GCM
-and a nonextractable device-local IndexedDB key, scoped to OpenChat account and backend.
-Do not persist approval tokens, transport pairing codes, original images or chat history.
-Panel close/navigation do not discard the card. Logout clears the live view but keeps
-the encrypted card for the same account/backend. Discard removes its local card/key;
-Forget removes both app setup and the card/key. Neither operation recalls a delivery
-or undoes an entry saved in the receiving app. Forget must prevent stale asynchronous
-or other-tab writes from resurrecting it.
+The October 2 collection format retains up to eight private cards, with a combined
+256 KiB plaintext limit including their schemas, frozen app configuration and local
+references. Each card retains its editor, recipient, draft/request IDs and attempted
+state. The collection and active-card selection are encrypted with AES-GCM and a
+nonextractable device-local IndexedDB key, scoped to OpenChat account and backend.
+Capacity failure never evicts or replaces an existing card. App/action presentation,
+choice semantics and delivery keys remain pinned to the card that used them; changed
+configuration cannot silently retarget a saved request. New proposals use the current
+connected configuration, not an old card's frozen configuration.
+
+Only host-captured chat/message identifiers and an optional thread index associate a
+card with its source. These references stay inside the encrypted local collection;
+they are not source content, chat messages or outgoing app DTO fields. Re-proposing
+the same source for the same app/action resumes its retained card without inference.
+The saved-card selector is device-local and does not imply posting cards to chat or
+provide remote source navigation. Do not persist approval tokens, transport pairing
+codes, original images or chat history.
+
+Panel close/navigation do not discard cards. Logout clears the live view but keeps
+the encrypted collection for the same account/backend. Discard removes only the
+selected card; an empty collection is retained until explicit Forget. Forget removes
+app setup and all cards/key. Neither operation recalls a delivery or undoes an entry
+saved in the receiving app. Cancelling new inference retains existing cards. Switching
+cards revokes approval tokens and resets explicit consent; pending unrepresentable
+field edits block switching rather than hiding a stale payload.
+
+Version 2 is bound in both the outer record and authenticated data, so an older
+single-card client cannot read or overwrite it. An authenticated legacy card is read
+without rewriting storage and migrates atomically on the next explicit write, keeping
+its exact draft and request IDs. A legacy card lacking frozen app metadata uses matching
+current configuration only; unavailable or changed bindings remain inspect-only.
+Per-write revisions and atomic compare-and-swap prevent stale tabs from replacing a
+newer collection or erasing attempted-send state. Forget rotates the generation to
+prevent stale asynchronous or other-tab writes from resurrecting removed data.
 Show storage failures honestly and block delivery if write-ahead persistence fails.
 
 Restore an unsent card as unreviewed. Restore an attempted card conservatively as
@@ -127,8 +163,8 @@ decryption, the receiving app frontend can read the fields and must itself be tr
 
 ## Source verification checkpoint: 2026-10-01
 
-The implementation and tests now cover the contract above. The current local results
-are:
+The October 1 single-card checkpoint had the following local results. These historical
+counts do not establish acceptance of the later multi-card extension:
 
 | Check | Result | Boundary |
 | --- | --- | --- |
@@ -181,6 +217,17 @@ no real chat or ledger entry was sent or saved.
 These source and isolated-browser checks are distinct from the built-artifact and
 authenticated browser results below. Model packages and prompts are unchanged;
 neither checkpoint is new image-accuracy or physical-phone GPU acceptance.
+
+### October 2 multi-card source checks
+
+The collection, workspace, UI and existing private-app suites pass 734/734 tests in
+28 files. They include authenticated legacy migration, two-card reload and selection,
+per-card discard, attempted-A/editable-B isolation, source resumption, frozen app
+configuration, stale-writer/Forget races, capacity/quota failures and mandatory
+write-ahead delivery. Svelte checking reports zero errors with 572 existing warnings;
+targeted TypeScript lint passes. These are source checks, not browser, APK or native
+provider acceptance. Existing installed artifacts and the earlier single-card browser
+receipts must not be relabeled as multi-card verification.
 
 ## Built artifacts and authenticated browser verification
 

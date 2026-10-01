@@ -53,6 +53,7 @@ jobs:
         working-directory: .
         run: node scripts/check_feature_ci.mjs current-client-security
       - name: Validate the actual collector runtime offline before advisory requests
+        id: scope_validated
         working-directory: .
         run: |
           set -euo pipefail
@@ -74,6 +75,10 @@ jobs:
           path: ${{ runner.temp }}/npm-feature-advisories-*
           if-no-files-found: error
       - name: Prepare locked Rust metadata inputs explicitly
+        id: rust_inputs
+        # An npm finding must not suppress independent Rust evidence. All earlier
+        # source/scope/runtime checks must still pass; cancellation stops work.
+        if: ${{ !cancelled() && steps.scope_validated.outcome == 'success' }}
         working-directory: .
         run: |
           set -euo pipefail
@@ -82,6 +87,8 @@ jobs:
           rustc_path="$(rustup which --toolchain 1.95.0 rustc)"
           RUSTC="$rustc_path" "$cargo_path" fetch --locked
       - name: Check current-client direct and model dependency licenses offline
+        id: rust_licenses
+        if: ${{ !cancelled() && steps.rust_inputs.outcome == 'success' }}
         working-directory: .
         # Fails closed if locked Cargo metadata is not already cached.
         run: |
@@ -89,6 +96,7 @@ jobs:
           cargo_path="$(rustup which --toolchain 1.95.0 cargo)"
           node scripts/check_current_client_licenses.mjs --scope current-client --cargo-executable "$cargo_path"
       - name: Run scoped Rust collection, schema and advisory gate
+        if: ${{ !cancelled() && steps.rust_licenses.outcome == 'success' }}
         working-directory: .
         # Incomplete source review stops before advisory egress; no broad fallback.
         run: |

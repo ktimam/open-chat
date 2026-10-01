@@ -281,6 +281,34 @@
                                         >
                                     {/each}
                                 </select>
+                            {:else if field.schema.type === "string" && controlHint(field)?.kind === "select" && (!field.present || typeof field.value === "string")}
+                                <select
+                                    aria-label={`Item ${index + 1} — ${field.label}`}
+                                    aria-invalid={!field.valid}
+                                    disabled={fieldDisabled(field, index)}
+                                    value={field.present ? field.value : ""}
+                                    onchange={(event) =>
+                                        change(
+                                            field,
+                                            index,
+                                            event.currentTarget.value,
+                                            event.currentTarget.value,
+                                        )}
+                                >
+                                    {#if !field.present}<option value="" disabled
+                                            >{field.required
+                                                ? "Not supplied (required)"
+                                                : "Not supplied"}</option
+                                        >{/if}
+                                    {#if field.present && !controlHint(field)?.suggestions?.includes(String(field.value))}
+                                        <option value={String(field.value)}
+                                            >{String(field.value)} (supplied value)</option
+                                        >
+                                    {/if}
+                                    {#each controlHint(field)?.suggestions ?? [] as suggestion}
+                                        <option value={suggestion}>{suggestion}</option>
+                                    {/each}
+                                </select>
                             {:else if field.schema.type === "string" && controlHint(field)?.kind !== "multiline" && controlHint(field)}
                                 <input
                                     type={controlHint(field)?.kind === "date"

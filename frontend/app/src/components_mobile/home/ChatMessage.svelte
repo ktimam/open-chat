@@ -516,7 +516,7 @@
                     ) {
                         privateAppWorkspace.open();
                         if (
-                            !privateAppWorkspace.select(
+                            !privateAppWorkspace.selectForProposal(
                                 privateSuggested.appId,
                                 privateSuggested.actionId,
                             )
@@ -529,6 +529,15 @@
                     stillCurrent,
                     onPhase,
                     sourceTimestamp: Number(timestamp),
+                    source: {
+                        chatKey: capturedChatKey,
+                        messageId: capturedMessageId.toString(),
+                        ...(capturedContext.threadRootMessageIndex === undefined
+                            ? {}
+                            : {
+                                  threadRootMessageIndex: capturedContext.threadRootMessageIndex,
+                              }),
+                    },
                 });
             }
             return runProposeFlow({

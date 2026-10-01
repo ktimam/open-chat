@@ -16,7 +16,13 @@ type Scalar = null | boolean | number | string;
 type EnumConstraint = { readonly enum?: readonly Scalar[] };
 export type LocalDraftSchema = EnumConstraint &
     (
-        | { readonly type: "string"; readonly minLength?: number; readonly maxLength?: number }
+        | {
+              readonly type: "string";
+              readonly minLength?: number;
+              readonly maxLength?: number;
+              /** Anchored ASCII ranges with bounded repetition; never executable regular expressions. */
+              readonly pattern?: string;
+          }
         | {
               readonly type: "number" | "integer";
               readonly minimum?: number;
@@ -119,6 +125,41 @@ const DISPLAY_CONTROLS = /[\u007F-\u009F\p{Cf}\u2028\u2029]/gu;
 function invalid(): never {
     // Do not echo payload, destination, or private schema content into errors/logs.
     throw new Error("Invalid private draft data or unsupported schema");
+}
+
+// Deliberately support a small, linear-time subset of JSON Schema patterns. App declarations
+// cannot introduce backtracking, lookarounds, callbacks, normalization or unbounded repetition.
+function boundedStringPattern(value: unknown) {
+    if (typeof value !== "string" || value.length > 64) invalid();
+    const match = /^\^\[((?:A-Z|a-z|0-9){1,3})\]\{(0|[1-9]\d{0,4})(?:,(0|[1-9]\d{0,4}))?\}\$$/.exec(
+        value,
+    );
+    if (!match || match[0] !== value) invalid();
+    const ranges = match[1].match(/A-Z|a-z|0-9/g)!;
+    const minimum = Number(match[2]);
+    const maximum = Number(match[3] ?? match[2]);
+    if (new Set(ranges).size !== ranges.length || minimum > maximum || maximum > MAX_BYTES)
+        invalid();
+    return { ranges, minimum, maximum };
+}
+
+function matchesBoundedStringPattern(value: string, pattern: string): boolean {
+    const { ranges, minimum, maximum } = boundedStringPattern(pattern);
+    if (value.length < minimum || value.length > maximum) return false;
+    for (const character of value) {
+        const code = character.codePointAt(0)!;
+        if (
+            !ranges.some((range) =>
+                range === "A-Z"
+                    ? code >= 65 && code <= 90
+                    : range === "a-z"
+                      ? code >= 97 && code <= 122
+                      : code >= 48 && code <= 57,
+            )
+        )
+            return false;
+    }
+    return true;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -232,8 +273,9 @@ function validateSchema(value: unknown): asserts value is LocalDraftSchema {
     }
     switch (value.type) {
         case "string":
-            allowed.push("minLength", "maxLength");
+            allowed.push("minLength", "maxLength", "pattern");
             bounds(value, "minLength", "maxLength", true);
+            if (value.pattern !== undefined) boundedStringPattern(value.pattern);
             break;
         case "number":
         case "integer":
@@ -282,7 +324,9 @@ function validatePayload(value: LocalDraftJson, schema: LocalDraftSchema): void 
             if (typeof value !== "string") invalid();
             if (
                 Array.from(value).length < (schema.minLength ?? 0) ||
-                Array.from(value).length > (schema.maxLength ?? Infinity)
+                Array.from(value).length > (schema.maxLength ?? Infinity) ||
+                (schema.pattern !== undefined &&
+                    !matchesBoundedStringPattern(value, schema.pattern))
             )
                 invalid();
             break;
@@ -511,9 +555,29 @@ export class LocalAppDraftStore {
     /** A recovered attempted request is immutable. Fresh review restores no old consent. */
     reviewRecovered(id: string): LocalDraftApproval {
         const record = this.#required(id);
-        if (!record.attempted || record.view.status !== "uncertain" || record.view.approval)
+        const status = record.view.status;
+        if (
+            !record.attempted ||
+            (status !== "uncertain" && status !== "delivered") ||
+            record.view.approval
+        )
             throw new Error("This private draft is not awaiting recovery review");
-        return this.#approve(record, "uncertain");
+        return this.#approve(record, status);
+    }
+
+    /** Changing active cards revokes consent without changing a possibly delivered request. */
+    revokeApproval(id: string): LocalDraftView {
+        const record = this.#required(id);
+        if (record.view.status === "sending") throw new Error("A sending card cannot be switched");
+        const view = record.view;
+        record.view = Object.freeze({
+            id: view.id,
+            revision: view.revision,
+            target: view.target,
+            payload: view.payload,
+            status: record.attempted ? view.status : "draft",
+        });
+        return record.view;
     }
 
     edit(id: string, changes: { target?: LocalDraftTarget; payload?: unknown }): LocalDraftView {
@@ -541,7 +605,10 @@ export class LocalAppDraftStore {
         return this.#approve(record, "reviewed");
     }
 
-    #approve(record: DraftRecord, status: "reviewed" | "uncertain"): LocalDraftApproval {
+    #approve(
+        record: DraftRecord,
+        status: "reviewed" | "uncertain" | "delivered",
+    ): LocalDraftApproval {
         const id = record.view.id;
         const request: LocalDraftDeliveryRequest = Object.freeze({
             ...record.view.target,
