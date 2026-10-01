@@ -174,6 +174,9 @@ import type {
     SetPinNumberResponse,
     SetUserUpgradeConcurrencyResponse,
     CreateMultiUserCanisterResponse,
+    MigrateUsersResponse,
+    UserMigrationResponse,
+    UsersToMigrate,
     SetUsernameResponse,
     SetVideoCallPresenceResponse,
     SiwePrepareLoginResponse,
@@ -238,9 +241,11 @@ import type {
     DailyPuzzleSubmitResponse,
     PublicDailyPuzzle,
     SyncSinceResponse,
+    LookupMembersResponse,
 } from "@shared";
 import {
     ANON_USER_ID,
+    APPROVAL_VALIDITY_MS,
     ChatMap,
     CommonResponses,
     DestinationInvalidError,
@@ -300,6 +305,7 @@ import {
 import { createHttpAgentSync } from "../utils/httpAgent";
 import { chunk, distinctBy, toRecord, toRecord2 } from "../utils/list";
 import { bytesToHexString, mapOptional } from "../utils/mapping";
+import { withLatestUserIds } from "../utils/latestUserIds";
 import { mean } from "../utils/maths";
 import { extractMessagePreviews } from "@shared";
 import { AsyncMessageContextMap } from "../utils/messageContext";
@@ -369,6 +375,11 @@ export class OpenChatAgent extends EventTarget {
     private _dailyPuzzleClient: Lazy<DailyPuzzleClient>;
     private _groupIndexClient: GroupIndexClient;
     private _userClient: UserClient | AnonUserClient;
+    // The current user's id, and the ids they had before being migrated to a MultiUser canister, as
+    // last returned by `getCurrentUser`
+    private _ownUserIds: { userId: string; previousUserIds: string[] } | undefined;
+    // Each of the user's ids other than the one this session is under, mapped to that one
+    private _ownLatestUserIds: ReadonlyMap<string, string> = new Map();
     private _notificationClient: NotificationsClient;
     private _registryClient: RegistryClient;
     private _identityClient: IdentityClient;
@@ -552,6 +563,8 @@ export class OpenChatAgent extends EventTarget {
     // `amount` is all that the payment takes from the wallet, so includes the fee of each transfer
     // the spender makes, and `fee` is what the ledger charges for the approval itself. Without
     // knowing that, there is no telling whether the wallet can afford both, so nothing is approved.
+    // `validityMs` is how long the spender has to pull the payment, by default long enough for one
+    // pulled at once.
     //
     // The approval is made, and paid for, before the spender has checked anything, so a payment it
     // then refuses, such as one with the wrong PIN, still costs the approval's fee, and leaves the
@@ -561,13 +574,14 @@ export class OpenChatAgent extends EventTarget {
         ledger: string,
         amount: bigint,
         fee: bigint | undefined,
+        validityMs: number = APPROVAL_VALIDITY_MS,
     ): Promise<OCError | undefined> {
         if (fee === undefined) {
             return { kind: "error", code: ErrorCode.ApprovalFailed, message: undefined };
         }
 
         const response = await this._ledgerClient
-            .approveSpending(ledger, spender, amount, fee)
+            .approveSpending(ledger, spender, amount, fee, validityMs)
             .catch((err) => {
                 console.warn("Failed to approve a payment being pulled from the wallet", err);
                 return "failure" as const;
@@ -605,10 +619,15 @@ export class OpenChatAgent extends EventTarget {
     // its own, under the subaccount derived from the member's principal, so that it only ever
     // spends a member's own approval. Mirrors `ledger_utils::spender_subaccount`.
     private chatSpenderAccount(chatId: GroupChatIdentifier | ChannelIdentifier): IcrcAccount {
+        return this.memberSpenderAccount(
+            chatId.kind === "channel" ? chatId.communityId : chatId.groupId,
+        );
+    }
+
+    // The same, given the group or community's canister id
+    private memberSpenderAccount(canisterId: string): IcrcAccount {
         return {
-            owner: Principal.fromText(
-                chatId.kind === "channel" ? chatId.communityId : chatId.groupId,
-            ),
+            owner: Principal.fromText(canisterId),
             subaccount: spenderSubaccount(this.principal),
         };
     }
@@ -680,7 +699,27 @@ export class OpenChatAgent extends EventTarget {
 
         this._userClient = userClient;
         this._chatEventsReader.setUserClient(userClient);
+        this.updateOwnLatestUserIds();
         return this;
+    }
+
+    // Maps each of the user's ids to the one this session is under. That's their latest id, unless the
+    // session carries on under an earlier one, which the client does if it can't restart under the
+    // latest, in which case whatever they did under either still shows as their own. An id the
+    // session doesn't recognise as one of the user's, eg. a new account on the same principal, maps
+    // nothing onto it.
+    private updateOwnLatestUserIds() {
+        const own = this._ownUserIds;
+        if (own === undefined) {
+            this._ownLatestUserIds = new Map();
+            return;
+        }
+        const ids = [...own.previousUserIds, own.userId];
+        const sessionUserId = this._userClient.userId;
+        const target = ids.includes(sessionUserId) ? sessionUserId : own.userId;
+        this._ownLatestUserIds = new Map(
+            ids.filter((id) => id !== target).map((id) => [id, target]),
+        );
     }
 
     get communityClient(): CommunityClient {
@@ -1273,7 +1312,10 @@ export class OpenChatAgent extends EventTarget {
                     threadRootMessageIndex,
                 );
                 if (groupResp.kind === "success") {
-                    groupResp.content = this.rehydrateMessageContent(groupResp.content);
+                    groupResp.content = withLatestUserIds(
+                        this.rehydrateMessageContent(groupResp.content),
+                        this._ownLatestUserIds,
+                    );
                 }
                 return groupResp;
             case "channel":
@@ -1283,7 +1325,10 @@ export class OpenChatAgent extends EventTarget {
                     threadRootMessageIndex,
                 );
                 if (channelResp.kind === "success") {
-                    channelResp.content = this.rehydrateMessageContent(channelResp.content);
+                    channelResp.content = withLatestUserIds(
+                        this.rehydrateMessageContent(channelResp.content),
+                        this._ownLatestUserIds,
+                    );
                 }
                 return channelResp;
         }
@@ -1295,7 +1340,10 @@ export class OpenChatAgent extends EventTarget {
     ): Promise<DeletedDirectMessageResponse> {
         const response = await this.userClient.getDeletedMessage(userId, messageId);
         if (response.kind === "success") {
-            response.content = this.rehydrateMessageContent(response.content);
+            response.content = withLatestUserIds(
+                this.rehydrateMessageContent(response.content),
+                this._ownLatestUserIds,
+            );
         }
         return response;
     }
@@ -1450,7 +1498,31 @@ export class OpenChatAgent extends EventTarget {
         return { messages, previews };
     }
 
+    // Rehydrates the event's content and reply context, and refers to the user by their current id
+    // wherever it was from before they were migrated to a MultiUser canister. Events read from the
+    // cache or a canister pass through here. Those which don't, ie. the messages returned by
+    // `updateProposalTallies`, failed messages, and the content of deleted and undeleted messages,
+    // are mapped where they are returned.
     private rehydrateEvent<T extends ChatEvent>(
+        ev: EventWrapper<T>,
+        defaultChatId: ChatIdentifier,
+        missingReplies: AsyncMessageContextMap<EventWrapper<Message>>,
+        missingMessagePreviews: ResolvedMessagePreviews,
+        threadRootMessageIndex: number | undefined,
+    ): EventWrapper<T> {
+        return withLatestUserIds(
+            this.rehydrateEventContent(
+                ev,
+                defaultChatId,
+                missingReplies,
+                missingMessagePreviews,
+                threadRootMessageIndex,
+            ),
+            this._ownLatestUserIds,
+        );
+    }
+
+    private rehydrateEventContent<T extends ChatEvent>(
         ev: EventWrapper<T>,
         defaultChatId: ChatIdentifier,
         missingReplies: AsyncMessageContextMap<EventWrapper<Message>>,
@@ -1659,11 +1731,11 @@ export class OpenChatAgent extends EventTarget {
         );
     }
 
-    searchUsers(searchTerm: string, maxResults = 20): Promise<UserSummary[]> {
+    searchUsers(searchTerm: string, maxResults = 20, pageIndex?: number): Promise<UserSummary[]> {
         if (offline()) return Promise.resolve([]);
 
         return this._userIndexClient
-            .searchUsers(searchTerm, maxResults)
+            .searchUsers(searchTerm, maxResults, pageIndex)
             .then((users) => users.map((u) => this.rehydrateUserSummary(u)));
     }
 
@@ -2656,6 +2728,11 @@ export class OpenChatAgent extends EventTarget {
     }
 
     hydrateChatSummary<T extends ChatSummary>(chat: T): T {
+        // The latest message may be from before the user was migrated to a MultiUser canister
+        const latestMessage = withLatestUserIds(chat.latestMessage, this._ownLatestUserIds);
+        if (latestMessage !== chat.latestMessage) {
+            chat = { ...chat, latestMessage };
+        }
         switch (chat.kind) {
             case "direct_chat":
                 return chat;
@@ -2667,7 +2744,18 @@ export class OpenChatAgent extends EventTarget {
     }
 
     getCurrentUser(): Stream<CurrentUserResponse> {
-        return this._userIndexClient.getCurrentUser();
+        return this._userIndexClient.getCurrentUser().map((user) => {
+            // Taken from each result, the cached user then the live one. The client creates the user
+            // client from the first, and restarts the session if the live one's id differs.
+            if (user.kind === "created_user") {
+                this._ownUserIds = {
+                    userId: user.userId,
+                    previousUserIds: user.previousUserIds ?? [],
+                };
+                this.updateOwnLatestUserIds();
+            }
+            return user;
+        });
     }
 
     acceptTerms(version: number): Promise<boolean> {
@@ -3264,6 +3352,19 @@ export class OpenChatAgent extends EventTarget {
     ): Promise<UndeleteMessageResponse> {
         if (offline()) return Promise.resolve(CommonResponses.offline());
 
+        return this.undeleteMessageInternal(chatId, messageId, threadRootMessageIndex).then(
+            (resp) =>
+                resp.kind === "success"
+                    ? { ...resp, message: withLatestUserIds(resp.message, this._ownLatestUserIds) }
+                    : resp,
+        );
+    }
+
+    private undeleteMessageInternal(
+        chatId: ChatIdentifier,
+        messageId: bigint,
+        threadRootMessageIndex?: number,
+    ): Promise<UndeleteMessageResponse> {
         switch (chatId.kind) {
             case "group_chat":
                 return this._groupClient.undeleteMessage(
@@ -3365,14 +3466,54 @@ export class OpenChatAgent extends EventTarget {
         }
     }
 
+    searchCommunityMembers(
+        id: CommunityIdentifier,
+        searchTerm: string,
+        maxResults: number,
+        latestKnownUpdate: bigint,
+    ): Promise<LookupMembersResponse> {
+        return this._communityClient.searchMembers(
+            id.communityId,
+            searchTerm,
+            maxResults,
+            latestKnownUpdate,
+        );
+    }
+
+    lookupMembers(
+        id: MultiUserChatIdentifier | CommunityIdentifier,
+        userIds: string[],
+        latestKnownUpdate: bigint,
+    ): Promise<LookupMembersResponse> {
+        switch (id.kind) {
+            case "group_chat":
+                return this._groupClient.lookupMembers(id.groupId, userIds, latestKnownUpdate);
+            case "channel":
+                return this._communityClient.lookupChannelMembers(id, userIds, latestKnownUpdate);
+            case "community":
+                return this._communityClient.lookupMembers(
+                    id.communityId,
+                    userIds,
+                    latestKnownUpdate,
+                );
+        }
+    }
+
     getPublicGroupSummary(chatId: GroupChatIdentifier): Promise<PublicGroupSummaryResponse> {
         return this._groupClient
             .getPublicSummary(chatId.groupId)
             .then((resp) => {
                 if (resp.kind === "success") {
+                    const group = this.rehydrateDataContent(resp.group, "avatar");
                     return {
                         kind: "success",
-                        group: this.rehydrateDataContent(resp.group, "avatar"),
+                        group: {
+                            ...group,
+                            latestMessage: withLatestUserIds(
+                                group.latestMessage,
+                                this._ownLatestUserIds,
+                            ),
+                        },
                     } as PublicGroupSummaryResponse;
                 }
                 return resp;
@@ -4060,12 +4201,14 @@ export class OpenChatAgent extends EventTarget {
     }
 
     loadFailedMessages(): Promise<Map<string, Record<number, EventWrapper<Message>>>> {
-        return this._chatsDb
-            .loadFailedMessages()
-            .then(
-                (messages) =>
-                    messages.toMap() as Map<string, Record<number, EventWrapper<Message>>>,
-            );
+        return this._chatsDb.loadFailedMessages().then((messages) => {
+            const byChat = messages.toMap() as Map<string, Record<number, EventWrapper<Message>>>;
+            // A message which failed before the user was migrated was sent under their earlier id
+            for (const [chatKey, failed] of byChat) {
+                byChat.set(chatKey, withLatestUserIds(failed, this._ownLatestUserIds));
+            }
+            return byChat;
+        });
     }
 
     deleteFailedMessage(
@@ -4170,6 +4313,22 @@ export class OpenChatAgent extends EventTarget {
 
     setMultiUserCanistersEnabled(enabled: boolean): Promise<boolean> {
         return this._userIndexClient.setMultiUserCanistersEnabled(enabled);
+    }
+
+    migrateUsers(users: UsersToMigrate): Promise<MigrateUsersResponse> {
+        return this._userIndexClient.migrateUsers(users);
+    }
+
+    setUserMigrationConcurrency(value: number): Promise<boolean> {
+        return this._userIndexClient.setUserMigrationConcurrency(value);
+    }
+
+    userMigration(userId: string): Promise<UserMigrationResponse> {
+        return this._userIndexClient.userMigration(userId);
+    }
+
+    cancelUserMigration(userId: string, multiUserCanisterId: string): Promise<Success | OCError> {
+        return this._userIndexClient.cancelUserMigration(userId, multiUserCanisterId);
     }
 
     markLocalGroupIndexFull(canisterId: string, full: boolean): Promise<boolean> {
@@ -4401,10 +4560,11 @@ export class OpenChatAgent extends EventTarget {
     ): Promise<SubmitProposalResponse> {
         if (offline()) return Promise.resolve(CommonResponses.offline());
 
+        // The ProposalsBot pulls the fee from the user's wallet, which they have approved it to
         return this._proposalsBotClient
             .get()
             .submitProposal(
-                currentUserId,
+                encodeIcrcAccount(this.walletAccount(currentUserId)),
                 governanceCanisterId,
                 proposal,
                 ledger,
@@ -4561,6 +4721,9 @@ export class OpenChatAgent extends EventTarget {
         return this._registryValue?.swapProviders ?? [];
     }
 
+    // Approves `spender`, a canister such as the ProposalsBot which spends as its own default
+    // account, to pull up to `amount` from the user's wallet within `expiresIn` ms (see
+    // `approveSpender`)
     approveTransfer(
         spender: string,
         ledger: string,
@@ -4568,7 +4731,62 @@ export class OpenChatAgent extends EventTarget {
         expiresIn: bigint | undefined,
         pin: string | undefined,
     ): Promise<ApproveTransferResponse> {
-        return this.userClient.approveTransfer(spender, ledger, amount, expiresIn, pin);
+        return this.approveSpender(
+            { owner: Principal.fromText(spender) },
+            ledger,
+            amount,
+            expiresIn,
+            pin,
+        );
+    }
+
+    // Approves a group or community (`canisterId`) to pull an access gate's payment of up to
+    // `amount` from the user's wallet when they join, within `expiresIn` ms. It pulls the payment as
+    // the user's member spender account, as it does any other payment from a member's wallet (see
+    // `approveSpender`).
+    approveAccessGatePayment(
+        canisterId: string,
+        ledger: string,
+        amount: bigint,
+        expiresIn: bigint,
+        pin: string | undefined,
+    ): Promise<ApproveTransferResponse> {
+        return this.approveSpender(
+            this.memberSpenderAccount(canisterId),
+            ledger,
+            amount,
+            expiresIn,
+            pin,
+        );
+    }
+
+    // Approves `spender` to pull up to `amount` from the user's wallet within `expiresIn` ms. A user
+    // alone in their canister has it make the approval, which checks their PIN, and replaces
+    // whatever the spender could pull before.
+    //
+    // A user who holds their own funds can't have their canister approve anything, so approves the
+    // spender on the ledger themselves, adding `amount` to what it may pull already, with the
+    // approval's fee on top. Their PIN isn't checked, since nothing between them and the ledger
+    // holds it. Without `expiresIn` their approval lasts only long enough for a payment pulled at
+    // once, rather than never lapsing.
+    private approveSpender(
+        spender: IcrcAccount,
+        ledger: string,
+        amount: bigint,
+        expiresIn: bigint | undefined,
+        pin: string | undefined,
+    ): Promise<ApproveTransferResponse> {
+        if (!this.holdsOwnFunds()) {
+            return this.userClient.approveTransfer(spender, ledger, amount, expiresIn, pin);
+        }
+
+        return this.approveToPull(
+            spender,
+            ledger,
+            amount,
+            this.ledgerFee(ledger),
+            expiresIn === undefined ? undefined : Number(expiresIn),
+        ).then((error) => error ?? CommonResponses.success());
     }
 
     deleteDirectChat(userId: string, blockUser: boolean): Promise<boolean> {
@@ -5683,7 +5901,8 @@ export class OpenChatAgent extends EventTarget {
         if (version !== undefined) {
             await this.#announceSyncHead(version);
         }
-        return messages;
+        // Returned straight from the cache, so not through `rehydrateEvent`
+        return withLatestUserIds(messages, this._ownLatestUserIds);
     }
 
     async #updateCachedProposalTallies(localUserIndex: string, chatIds: MultiUserChatIdentifier[]) {

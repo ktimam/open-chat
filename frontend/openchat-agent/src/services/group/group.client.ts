@@ -56,8 +56,9 @@ import type {
     User,
     VideoCallParticipantsResponse,
     VideoCallPresence,
+    LookupMembersResponse,
 } from "@shared";
-import { MAX_EVENTS, MAX_MESSAGES, random32 } from "@shared";
+import { MAX_EVENTS, MAX_MESSAGES, MEMBERS_PAGE_SIZE, random32 } from "@shared";
 import type { AgentConfig } from "../../config";
 import {
     ActiveProposalTalliesResponse,
@@ -114,6 +115,7 @@ import {
     GroupReportMessageArgs,
     GroupSearchMessagesArgs,
     GroupSearchMessagesResponse,
+    GroupSelectedInitialArgs,
     GroupSelectedInitialResponse,
     GroupSelectedUpdatesArgs,
     GroupSelectedUpdatesResponse,
@@ -142,9 +144,11 @@ import {
     GroupWebhookResponse,
     Empty as TEmpty,
     UnitResult,
+    GroupLookupMembersArgs,
+    GroupLookupMembersResponse,
 } from "../../typebox";
 import { type ChatsDb } from "../../utils/chatsDb";
-import { loadGroupDetails } from "../../utils/details";
+import { addMembersToCachedGroupDetails, loadGroupDetails } from "../../utils/details";
 import {
     apiOptionUpdateV2,
     identity,
@@ -173,6 +177,7 @@ import {
     getMessagesSuccess,
     groupDetailsSuccess,
     groupDetailsUpdatesResponse,
+    lookupGroupMembersSuccess,
     inviteCodeSuccess,
     isSuccess,
     mapResult,
@@ -645,25 +650,57 @@ export class GroupClient
                 this.query(
                     groupId,
                     "selected_initial",
-                    {},
+                    // The rest of the members are only loaded when they are needed
+                    { max_members: MEMBERS_PAGE_SIZE },
                     (resp) =>
                         mapResult(resp, (value) =>
                             groupDetailsSuccess(value, this.config.blobUrlPattern, groupId),
                         ),
-                    TEmpty,
+                    GroupSelectedInitialArgs,
                     GroupSelectedInitialResponse,
                 ),
             (since) =>
                 this.query(
                     groupId,
                     "selected_updates_v2",
-                    { updates_since: since },
+                    // The details are returned in full if some of the updates are too old to have
+                    // been kept, in which case only the first page of members is wanted
+                    { updates_since: since, max_members: MEMBERS_PAGE_SIZE },
                     (value) =>
                         groupDetailsUpdatesResponse(value, this.config.blobUrlPattern, groupId),
                     GroupSelectedUpdatesArgs,
                     GroupSelectedUpdatesResponse,
                 ),
         );
+    }
+
+    // Those of the users who are members, who are added to the cached details.
+    // `latestKnownUpdate` is the time up to which the details held are known to be up to date.
+    async lookupMembers(
+        groupId: string,
+        userIds: string[],
+        latestKnownUpdate: bigint,
+    ): Promise<LookupMembersResponse> {
+        const response = await this.query(
+            groupId,
+            "lookup_members",
+            {
+                user_ids: userIds.map(principalStringToBytes),
+                latest_known_update: latestKnownUpdate,
+            },
+            (resp) => mapResult(resp, lookupGroupMembersSuccess),
+            GroupLookupMembersArgs,
+            GroupLookupMembersResponse,
+        );
+        if (response.kind === "success") {
+            await addMembersToCachedGroupDetails(
+                this.chatsDb,
+                groupId,
+                response.members,
+                latestKnownUpdate,
+            );
+        }
+        return response;
     }
 
     getPublicSummary(groupId: string): Promise<PublicGroupSummaryResponse> {

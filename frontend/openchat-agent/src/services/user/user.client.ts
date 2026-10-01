@@ -22,6 +22,7 @@ import {
     type BlockUserResponse,
     type CancelP2PSwapResponse,
     type CandidateGroupChat,
+    type IcrcAccount,
     type ChannelIdentifier,
     type ChatEvent,
     type ChatIdentifier,
@@ -216,6 +217,7 @@ import { createAiAppChatLinkTokenResponse } from "../common/aiAppChatLinkToken";
 import {
     acceptP2PSwapSuccess,
     addressToIcrcAccount,
+    apiAccount,
     apiChatIdentifier,
     apiCommunityPermissions,
     apiExternalBotPermissions,
@@ -1528,7 +1530,7 @@ export class UserClient
     }
 
     approveTransfer(
-        spender: string,
+        spender: IcrcAccount,
         ledger: string,
         amount: bigint,
         expiresIn: bigint | undefined,
@@ -1537,10 +1539,7 @@ export class UserClient
         return this.update(
             "approve_transfer",
             {
-                spender: {
-                    owner: principalStringToBytes(spender),
-                    subaccount: undefined,
-                },
+                spender: apiAccount(spender),
                 ledger_canister_id: principalStringToBytes(ledger),
                 amount,
                 expires_in: expiresIn,

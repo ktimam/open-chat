@@ -39,7 +39,7 @@ import type {
     GateCheckFailedReason,
     GiphyContent,
     GiphyImage,
-    GroupChatDetailsResponse,
+    GroupChatDetails,
     GroupChatDetailsUpdatesResponse,
     GroupChatIdentifier,
     GroupChatSummary,
@@ -50,6 +50,7 @@ import type {
     InviteCodeSuccess,
     JoinGroupResponse,
     LeafGate,
+    LookupMembersResponse,
     Member,
     MemberRole,
     Mention,
@@ -144,6 +145,7 @@ import {
     toBigInt32,
     toBigInt64,
     videoCallTypeFromWire,
+    type IcrcAccount,
 } from "@shared";
 import type {
     AcceptSwapSuccess,
@@ -162,6 +164,7 @@ import type {
     CommunityDeletedMessageSuccessResult,
     CommunityEnableInviteCodeSuccessResult,
     CommunityInviteCodeSuccessResult,
+    CommunityLookupChannelMembersSuccessResult,
     CommunitySearchChannelResponse,
     CommunitySelectedChannelInitialSuccessResult,
     CommunitySelectedChannelUpdatesResponse,
@@ -172,6 +175,7 @@ import type {
     GroupDeletedMessageSuccessResult,
     GroupEnableInviteCodeSuccessResult,
     GroupInviteCodeSuccessResult,
+    GroupLookupMembersSuccessResult,
     GroupSearchMessagesResponse,
     GroupSelectedInitialSuccessResult,
     GroupSelectedUpdatesResponse,
@@ -2761,26 +2765,15 @@ export function groupDetailsSuccess(
     blobUrlPattern: string,
     canisterId: string,
     channelId?: number,
-): GroupChatDetailsResponse {
-    const members = ("participants" in value ? value.participants : value.members).map(member);
-
-    const basicMembers = "basic_members" in value ? value.basic_members : [];
-    const membersSet = new Set<string>();
-    members.forEach((m) => membersSet.add(m.userId));
-    for (const id of basicMembers) {
-        const userId = principalBytesToString(id);
-        if (membersSet.add(userId)) {
-            members.push({
-                role: ROLE_MEMBER,
-                userId,
-                displayName: undefined,
-                lapsed: false,
-            });
-        }
-    }
+): GroupChatDetails {
+    const members = groupMembers(
+        "participants" in value ? value.participants : value.members,
+        value.basic_members,
+    );
     const bots = "bots" in value ? value.bots : [];
     return {
         members,
+        moreMembersAfter: mapOptional(value.more_members_after, principalBytesToString),
         blockedUsers: new Set(value.blocked_users?.map(principalBytesToString) ?? []),
         invitedUsers: new Set(value.invited_users?.map(principalBytesToString) ?? []),
         pinnedMessages: new Set(value.pinned_messages ?? []),
@@ -2791,6 +2784,31 @@ export function groupDetailsSuccess(
             value.webhooks?.map((v) => webhookDetails(v, blobUrlPattern, canisterId, channelId)) ??
             [],
     };
+}
+
+// The members of a group or channel, of whom those whose details are all the defaults are returned
+// as just their ids
+function groupMembers(full: TGroupMember[], basic: ApiPrincipal[] | undefined): Member[] {
+    const members = full.map(member);
+    const userIds = new Set(members.map((m) => m.userId));
+    for (const id of basic ?? []) {
+        const userId = principalBytesToString(id);
+        if (!userIds.has(userId)) {
+            userIds.add(userId);
+            members.push(basicMember(userId));
+        }
+    }
+    return members;
+}
+
+export function basicMember(userId: string): Member {
+    return { role: ROLE_MEMBER, userId, displayName: undefined, lapsed: false };
+}
+
+export function lookupGroupMembersSuccess(
+    value: GroupLookupMembersSuccessResult | CommunityLookupChannelMembersSuccessResult,
+): LookupMembersResponse {
+    return { kind: "success", members: value.members.map(member) };
 }
 
 export function groupDetailsUpdatesResponse(
@@ -2832,6 +2850,16 @@ export function groupDetailsUpdatesResponse(
             return {
                 kind: "success_no_updates",
                 timestamp: value.SuccessNoUpdates,
+            };
+        } else if ("SuccessSnapshot" in value) {
+            return {
+                kind: "snapshot",
+                details: groupDetailsSuccess(
+                    value.SuccessSnapshot,
+                    blobUrlPattern,
+                    canisterId,
+                    channelId,
+                ),
             };
         }
     }
@@ -3189,14 +3217,13 @@ export function principalToIcrcAccount(principal: string): AccountICRC1 {
 }
 
 export function addressToIcrcAccount(address: string): AccountICRC1 {
-    const icrcAccount = decodeIcrcAccount(address);
+    return apiAccount(decodeIcrcAccount(address));
+}
 
+export function apiAccount({ owner, subaccount }: IcrcAccount): AccountICRC1 {
     return {
-        owner: icrcAccount.owner.toUint8Array(),
-        subaccount:
-            icrcAccount?.subaccount !== undefined
-                ? ([...icrcAccount.subaccount] as NumberArray32)
-                : undefined,
+        owner: owner.toUint8Array(),
+        subaccount: subaccount !== undefined ? ([...subaccount] as NumberArray32) : undefined,
     };
 }
 

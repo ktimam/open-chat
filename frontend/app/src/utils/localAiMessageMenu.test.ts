@@ -9,6 +9,25 @@ function source(path: string): string {
 }
 
 describe("Process with AI message menus", () => {
+    it("keeps translated display content separate from original proposal and AI inputs", () => {
+        const component = source("components/home/ChatMessage.svelte");
+        const proposalStart = component.indexOf("function runAiActionHandler(");
+        const processStart = component.indexOf("async function processMessageWithAi()");
+        const nextHandler = component.indexOf("async function proposeSuggestedAiAction(");
+        expect(proposalStart).toBeGreaterThan(-1);
+        expect(processStart).toBeGreaterThan(proposalStart);
+        expect(nextHandler).toBeGreaterThan(processStart);
+        expect(component).toContain("content={displayContent}");
+        for (const handler of [
+            component.slice(proposalStart, processStart),
+            component.slice(processStart, nextHandler),
+        ]) {
+            expect(handler).toContain("const capturedContent = msg.content;");
+            expect(handler).not.toContain("displayContent");
+        }
+        expect(component.match(/let inert = \$derived\(/g)).toHaveLength(1);
+    });
+
     it("keeps a distinct classic menu item next to Propose action", () => {
         const menu = source("components/home/ChatMessageMenu.svelte");
 

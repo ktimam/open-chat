@@ -243,11 +243,18 @@ export type CommunityDetailsUpdatesResponse =
           kind: "success_no_updates";
           lastUpdated: bigint;
       }
+    // The details in full, because the canister no longer has all of the updates asked for
+    | { kind: "snapshot"; details: CommunityDetails }
     | Failure;
 
 export type CommunityDetails = {
     kind: "success";
+    // All of the members, unless `moreMembersAfter` is set, in which case the first page of them
+    // and any who have since been looked up
     members: Member[];
+    // Set if not all of the members are held, to the user id after which those not in the first
+    // page start
+    moreMembersAfter?: string;
     blockedUsers: Set<string>;
     invitedUsers: Set<string>;
     rules: VersionedRules;

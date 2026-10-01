@@ -463,6 +463,17 @@ function getAction(
                 payload.detailsSyncedUpTo,
             );
 
+        case "lookupMembers":
+            return agent.lookupMembers(payload.id, payload.userIds, payload.latestKnownUpdate);
+
+        case "searchCommunityMembers":
+            return agent.searchCommunityMembers(
+                payload.id,
+                payload.searchTerm,
+                payload.maxResults,
+                payload.latestKnownUpdate,
+            );
+
         case "lastOnline":
             return agent.lastOnline(payload.userIds);
 
@@ -498,7 +509,7 @@ function getAction(
             return agent.checkUsername(payload.username, payload.isBot);
 
         case "searchUsers":
-            return agent.searchUsers(payload.searchTerm, payload.maxResults);
+            return agent.searchUsers(payload.searchTerm, payload.maxResults, payload.pageIndex);
 
         case "getUserStorageLimits":
             return agent.getUserStorageLimits();
@@ -912,6 +923,18 @@ function getAction(
         case "setMultiUserCanistersEnabled":
             return agent.setMultiUserCanistersEnabled(payload.enabled);
 
+        case "migrateUsers":
+            return agent.migrateUsers(payload.users);
+
+        case "setUserMigrationConcurrency":
+            return agent.setUserMigrationConcurrency(payload.value);
+
+        case "userMigration":
+            return agent.userMigration(payload.userId);
+
+        case "cancelUserMigration":
+            return agent.cancelUserMigration(payload.userId, payload.multiUserCanisterId);
+
         case "markLocalGroupIndexFull":
             return agent.markLocalGroupIndexFull(payload.canisterId, payload.full);
 
@@ -982,6 +1005,15 @@ function getAction(
         case "approveTransfer":
             return agent.approveTransfer(
                 payload.spender,
+                payload.ledger,
+                payload.amount,
+                payload.expiresIn,
+                payload.pin,
+            );
+
+        case "approveAccessGatePayment":
+            return agent.approveAccessGatePayment(
+                payload.canisterId,
                 payload.ledger,
                 payload.amount,
                 payload.expiresIn,

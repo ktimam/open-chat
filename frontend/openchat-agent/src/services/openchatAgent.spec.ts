@@ -1,9 +1,11 @@
 import { Principal } from "@icp-sdk/core/principal";
 import {
+    APPROVAL_VALIDITY_MS,
     ErrorCode,
     indexedUserId,
     LEDGER_CANISTER_CHAT,
     spenderSubaccount,
+    Stream,
     type CryptocurrencyContent,
     type EventWrapper,
     type Message,
@@ -15,6 +17,7 @@ import {
     type TokenInfo,
 } from "@shared";
 import { beforeEach, describe, expect, test, vi } from "vitest";
+import { AsyncMessageContextMap } from "../utils/messageContext";
 import { OpenChatAgent } from "./openchatAgent";
 
 const ICP_LEDGER = "ryjl3-tyaaa-aaaaa-aaaba-cai";
@@ -244,14 +247,16 @@ describe("OpenChatAgent paying from the user's wallet", () => {
         test.each(payments)("%s is approved first", async (_, pay, ledger, amount) => {
             await pay();
 
-            expect(approvals).toEqual([[ledger, spender, amount, FEE]]);
+            expect(approvals).toEqual([[ledger, spender, amount, FEE, APPROVAL_VALIDITY_MS]]);
             expect(calls.length).toEqual(1);
         });
 
         test("streak insurance is approved first, with no fee since it is burned", async () => {
             await agent.payForStreakInsurance(1, 5_000n, undefined);
 
-            expect(approvals).toEqual([[LEDGER_CANISTER_CHAT, spender, 5_000n, CHAT_FEE]]);
+            expect(approvals).toEqual([
+                [LEDGER_CANISTER_CHAT, spender, 5_000n, CHAT_FEE, APPROVAL_VALIDITY_MS],
+            ]);
             expect(calls).toEqual(["payForStreakInsurance"]);
         });
 
@@ -323,7 +328,7 @@ describe("OpenChatAgent paying from the user's wallet", () => {
         test("crypto for another user in a MultiUser canister is approved and sent like any other", async () => {
             await sendDirectMessage(crypto(undefined, OTHER_MULTI_USER_CANISTER_USER));
 
-            expect(approvals).toEqual([[ICP_LEDGER, spender, 110n, FEE]]);
+            expect(approvals).toEqual([[ICP_LEDGER, spender, 110n, FEE, APPROVAL_VALIDITY_MS]]);
             expect(calls).toEqual(["sendMessage"]);
         });
 
@@ -350,7 +355,9 @@ describe("OpenChatAgent paying from the user's wallet", () => {
                 async (_, content, amount) => {
                     await send(GROUP, content());
 
-                    expect(approvals).toEqual([[ICP_LEDGER, spender(GROUP.groupId), amount, FEE]]);
+                    expect(approvals).toEqual([
+                        [ICP_LEDGER, spender(GROUP.groupId), amount, FEE, APPROVAL_VALIDITY_MS],
+                    ]);
                     expect(calls).toEqual(["groupSendMessage"]);
                     expect(callArgs[0].at(-1)).toEqual(ME.toText());
                 },
@@ -362,7 +369,13 @@ describe("OpenChatAgent paying from the user's wallet", () => {
                     await send(CHANNEL, content());
 
                     expect(approvals).toEqual([
-                        [ICP_LEDGER, spender(CHANNEL.communityId), amount, FEE],
+                        [
+                            ICP_LEDGER,
+                            spender(CHANNEL.communityId),
+                            amount,
+                            FEE,
+                            APPROVAL_VALIDITY_MS,
+                        ],
                     ]);
                     expect(calls).toEqual(["communitySendMessage"]);
                     expect(callArgs[0].at(-1)).toEqual(ME.toText());
@@ -452,7 +465,9 @@ describe("OpenChatAgent paying from the user's wallet", () => {
                         true,
                     );
 
-                    expect(approvals).toEqual([[ICP_LEDGER, spender(canisterId), 110n, FEE]]);
+                    expect(approvals).toEqual([
+                        [ICP_LEDGER, spender(canisterId), 110n, FEE, APPROVAL_VALIDITY_MS],
+                    ]);
                     expect(calls).toEqual([call]);
                     expect(callArgs[0][3]).toEqual({ ...transfer(), fromAccount: ME.toText() });
                 },
@@ -652,5 +667,400 @@ describe("OpenChatAgent withdrawing from the user's wallet", () => {
         expect(await agent.withdrawCryptocurrency(WITHDRAWAL, PIN)).toBe(CANISTER_RESPONSE);
         expect(canisterWithdrawals).toEqual([[WITHDRAWAL, PIN]]);
         expect(ledgerWithdrawals).toEqual([]);
+    });
+});
+
+// A user migrated to a MultiUser canister is referred to by their earlier id in the events from
+// before then, which the agent replaces with their current id
+describe("OpenChatAgent referring to the user by their current id", () => {
+    const PREVIOUS = USER_CANISTER_USER;
+    const CURRENT = MULTI_USER_CANISTER_USER;
+    const GROUP_ID = { kind: "group_chat", groupId: "rdmx6-jaaaa-aaaaa-aaadq-cai" } as const;
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    function agent(previousUserIds: string[]): any {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const agent = Object.create(OpenChatAgent.prototype) as any;
+        agent._ownLatestUserIds = new Map(previousUserIds.map((id) => [id, CURRENT]));
+        return agent;
+    }
+
+    function sentBy(sender: string): EventWrapper<Message> {
+        return {
+            index: 3,
+            timestamp: 10n,
+            event: {
+                kind: "message",
+                messageId: 1n,
+                messageIndex: 2,
+                sender,
+                content: { kind: "text_content", text: "hello" },
+                reactions: [{ reaction: "👍", userIds: new Set([sender, THEM]) }],
+                tips: { [ICP_LEDGER]: { [sender]: 100n } },
+                edited: false,
+                forwarded: false,
+                deleted: false,
+                blockLevelMarkdown: false,
+                senderContext: undefined,
+                ogPreviews: [],
+                messagePreviews: [],
+            },
+        } as EventWrapper<Message>;
+    }
+
+    function rehydrated(previousUserIds: string[], event: EventWrapper<Message>) {
+        return agent(previousUserIds).rehydrateEvent(
+            event,
+            GROUP_ID,
+            new AsyncMessageContextMap(),
+            { messages: new AsyncMessageContextMap(), previews: new Map() },
+            undefined,
+        );
+    }
+
+    test("an event from before they were migrated is from their current id", () => {
+        expect(rehydrated([PREVIOUS], sentBy(PREVIOUS)).event).toMatchObject({
+            sender: CURRENT,
+            reactions: [{ reaction: "👍", userIds: new Set([CURRENT, THEM]) }],
+            tips: { [ICP_LEDGER]: { [CURRENT]: 100n } },
+        });
+    });
+
+    test("an event from anyone else, or for a user who wasn't migrated, is left as it is", () => {
+        const fromThem = sentBy(THEM);
+        expect(rehydrated([PREVIOUS], fromThem)).toBe(fromThem);
+
+        const fromPrevious = sentBy(PREVIOUS);
+        expect(rehydrated([], fromPrevious)).toBe(fromPrevious);
+    });
+
+    // Runs `getCurrentUser` with the given results, the last being the live one, as the session
+    // `sessionUserId`, returning the mapping after each
+    async function mappingsAfter(
+        sessionUserId: string,
+        results: { userId: string; previousUserIds?: string[] }[],
+    ) {
+        const user = agent([]);
+        user._userClient = { userId: sessionUserId };
+        user._userIndexClient = {
+            getCurrentUser: () =>
+                new Stream((resolve) =>
+                    queueMicrotask(() =>
+                        results.forEach((r, i) =>
+                            resolve({ kind: "created_user", ...r }, i === results.length - 1),
+                        ),
+                    ),
+                ),
+        };
+        const seen: Map<string, string>[] = [];
+        await new Promise<void>((done) =>
+            user.getCurrentUser().subscribe({
+                onResult: (_: unknown, final: boolean) => {
+                    seen.push(new Map(user._ownLatestUserIds));
+                    if (final) done();
+                },
+            }),
+        );
+        return { user, seen };
+    }
+
+    test("the previous ids are taken from each current user result, the cached one then the live one", async () => {
+        // A user cached before their previous ids were, then the live one
+        const { seen } = await mappingsAfter(CURRENT, [
+            { userId: CURRENT },
+            { userId: CURRENT, previousUserIds: [PREVIOUS] },
+        ]);
+
+        expect(seen).toEqual([new Map(), new Map([[PREVIOUS, CURRENT]])]);
+    });
+
+    test("the user's ids are mapped to the one the session is under", async () => {
+        // Before the user client is created, the result's own id
+        const before = await mappingsAfter("anon", [
+            { userId: CURRENT, previousUserIds: [PREVIOUS] },
+        ]);
+        expect(before.seen).toEqual([new Map([[PREVIOUS, CURRENT]])]);
+
+        // A session carrying on under the earlier id, which the client does if it can't restart
+        // under the latest, has what they did under the latest mapped back to it
+        const stayed = await mappingsAfter(PREVIOUS, [
+            { userId: PREVIOUS },
+            { userId: CURRENT, previousUserIds: [PREVIOUS] },
+        ]);
+        expect(stayed.seen).toEqual([new Map(), new Map([[CURRENT, PREVIOUS]])]);
+
+        // And once the session's user client is created under the latest id, the other way round
+        stayed.user._chatEventsReader = { setUserClient: () => {} };
+        stayed.user.createUserClient(CURRENT);
+        expect(stayed.user._ownLatestUserIds).toEqual(new Map([[PREVIOUS, CURRENT]]));
+    });
+
+    test("an id which isn't one of the user's maps nothing onto the session's", async () => {
+        // eg. a new account on the same principal as a deleted one
+        const { seen } = await mappingsAfter(THEM, [{ userId: THEM }, { userId: CURRENT }]);
+
+        expect(seen).toEqual([new Map(), new Map()]);
+    });
+
+    test("a reply to a message from before they were migrated is from their current id", () => {
+        const missingReplies = new AsyncMessageContextMap<EventWrapper<Message>>();
+        missingReplies.insert(
+            { chatId: GROUP_ID, threadRootMessageIndex: undefined },
+            {
+                ...sentBy(PREVIOUS),
+                index: 7,
+            },
+        );
+        const reply = sentBy(THEM);
+        reply.event.repliesTo = {
+            kind: "raw_reply_context",
+            eventIndex: 7,
+        } as unknown as Message["repliesTo"];
+
+        const replied = agent([PREVIOUS]).rehydrateEvent(
+            reply,
+            GROUP_ID,
+            missingReplies,
+            { messages: new AsyncMessageContextMap(), previews: new Map() },
+            undefined,
+        );
+
+        expect(replied.event.repliesTo).toMatchObject({
+            kind: "rehydrated_reply_context",
+            senderId: CURRENT,
+        });
+    });
+
+    test("a message which failed before they were migrated is from their current id", async () => {
+        const user = agent([PREVIOUS]);
+        const failed = { 2: sentBy(PREVIOUS) };
+        user._chatsDb = {
+            loadFailedMessages: () => Promise.resolve({ toMap: () => new Map([["chat", failed]]) }),
+        };
+
+        const loaded = await user.loadFailedMessages();
+
+        expect(loaded.get("chat")[2].event.sender).toEqual(CURRENT);
+    });
+
+    test("a message deleted or undeleted from before they were migrated refers to their current id", async () => {
+        const user = agent([PREVIOUS]);
+        const content = crypto(undefined, PREVIOUS);
+        user._userClient = {
+            getDeletedMessage: () => Promise.resolve({ kind: "success", content }),
+            undeleteMessage: () =>
+                Promise.resolve({
+                    kind: "success",
+                    message: { ...sentBy(PREVIOUS).event, content },
+                }),
+        };
+        user._groupClient = {
+            getDeletedMessage: () => Promise.resolve({ kind: "success", content }),
+        };
+
+        const direct = await user.getDeletedDirectMessage(THEM, 1n);
+        const group = await user.getDeletedGroupMessage(GROUP_ID, 1n);
+        const undeleted = await user.undeleteMessage({ kind: "direct_chat", userId: THEM }, 1n);
+
+        expect(direct.content.transfer.recipient).toEqual(CURRENT);
+        expect(group.content.transfer.recipient).toEqual(CURRENT);
+        expect(undeleted.message).toMatchObject({
+            sender: CURRENT,
+            content: { transfer: { recipient: CURRENT } },
+        });
+    });
+
+    test("a chat's latest message from before they were migrated is from their current id", () => {
+        const chat = { kind: "direct_chat", them: THEM, latestMessage: sentBy(PREVIOUS) };
+
+        expect(agent([PREVIOUS]).hydrateChatSummary(chat).latestMessage.event.sender).toEqual(
+            CURRENT,
+        );
+        // The other user in the chat is left as they are
+        expect(agent([THEM]).hydrateChatSummary(chat).them).toEqual(THEM);
+    });
+});
+
+// Approvals the website asks for directly, for a group or community to pull an access gate's
+// payment when the user joins, and for the ProposalsBot, Registry or UserIndex to pull what a
+// proposal costs
+describe("OpenChatAgent approving a spender", () => {
+    const PROPOSALS_BOT = "rno2w-sqaaa-aaaaa-aaacq-cai";
+    const FIVE_MINUTES = 5n * 60n * 1000n;
+    // What the website approves for a gate of 1,000: the gate's amount less the approval's fee, so
+    // that the user pays exactly the gate's amount. The group pulls it less another fee, plus the
+    // fee for pulling it.
+    const GATE_APPROVAL = 1_000n - FEE;
+
+    let approvals: unknown[][];
+    let approveResponse: "success" | "insufficient_funds" | "failure";
+    let userCanisterApprovals: unknown[][];
+    let submitted: unknown[][];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let agent: any;
+
+    function setup(userId: string) {
+        agent = Object.create(OpenChatAgent.prototype);
+        agent.identity = { getPrincipal: () => ME };
+        agent._registryValue = { tokenDetails: [{ ledger: ICP_LEDGER, transferFee: FEE }] };
+        agent._ledgerClient = {
+            approveSpending: (...args: unknown[]) => {
+                approvals.push(args);
+                return Promise.resolve(approveResponse);
+            },
+        };
+        agent._userClient = {
+            userId,
+            approveTransfer: (...args: unknown[]) => {
+                userCanisterApprovals.push(args);
+                return Promise.resolve({ kind: "success" });
+            },
+        };
+        agent._proposalsBotClient = {
+            get: () => ({
+                submitProposal: (...args: unknown[]) => {
+                    submitted.push(args);
+                    return Promise.resolve({ kind: "success" });
+                },
+            }),
+        };
+    }
+
+    // A group or community pulls a gate's payment as the member's spender account, while the
+    // ProposalsBot pulls a proposal's fee as its own default account
+    const memberSpender = (canisterId: string) => ({
+        owner: Principal.fromText(canisterId),
+        subaccount: spenderSubaccount(ME),
+    });
+    const proposalsBotSpender = { owner: Principal.fromText(PROPOSALS_BOT) };
+
+    const approveGatePayment = (canisterId: string = GROUP.groupId) =>
+        agent.approveAccessGatePayment(canisterId, ICP_LEDGER, GATE_APPROVAL, FIVE_MINUTES, "1234");
+
+    const approveProposalFee = () =>
+        agent.approveTransfer(PROPOSALS_BOT, ICP_LEDGER, 100n, FIVE_MINUTES, "1234");
+
+    const submitProposal = (userId: string) =>
+        agent.submitProposal(
+            userId,
+            "rrkah-fqaaa-aaaaa-aaaaq-cai",
+            { title: "title", url: undefined, summary: "summary", action: { kind: "motion" } },
+            ICP_LEDGER,
+            "ICP",
+            1_000n,
+            FEE,
+        );
+
+    beforeEach(() => {
+        approvals = [];
+        approveResponse = "success";
+        userCanisterApprovals = [];
+        submitted = [];
+    });
+
+    describe("by a user in a MultiUser canister", () => {
+        beforeEach(() => setup(MULTI_USER_CANISTER_USER));
+
+        test.each([
+            ["group", GROUP.groupId],
+            ["community", CHANNEL.communityId],
+        ])(
+            "a %s is approved on the ledger to pull a gate's payment from their wallet as their member spender, for as long as asked",
+            async (_, canisterId) => {
+                expect(await approveGatePayment(canisterId)).toEqual({ kind: "success" });
+
+                // The wallet pays the approval's fee on top
+                expect(approvals).toEqual([
+                    [
+                        ICP_LEDGER,
+                        memberSpender(canisterId),
+                        GATE_APPROVAL,
+                        FEE,
+                        Number(FIVE_MINUTES),
+                    ],
+                ]);
+                expect(userCanisterApprovals).toEqual([]);
+            },
+        );
+
+        test("the ProposalsBot is approved on the ledger to pull a proposal's fee as its own account", async () => {
+            expect(await approveProposalFee()).toEqual({ kind: "success" });
+
+            expect(approvals).toEqual([
+                [ICP_LEDGER, proposalsBotSpender, 100n, FEE, Number(FIVE_MINUTES)],
+            ]);
+            expect(userCanisterApprovals).toEqual([]);
+        });
+
+        test("with no expiry, the approval lasts only as long as a payment pulled at once needs", async () => {
+            await agent.approveTransfer(PROPOSALS_BOT, ICP_LEDGER, 100n, undefined, undefined);
+
+            expect(approvals).toEqual([
+                [ICP_LEDGER, proposalsBotSpender, 100n, FEE, APPROVAL_VALIDITY_MS],
+            ]);
+        });
+
+        test.each([
+            ["insufficient_funds", ErrorCode.InsufficientFunds],
+            ["failure", ErrorCode.ApprovalFailed],
+        ] as const)("an approval which fails with %s is reported", async (response, code) => {
+            approveResponse = response;
+
+            expect(await approveGatePayment()).toEqual({ kind: "error", code, message: undefined });
+        });
+
+        test("nothing is approved while the ledger's fee isn't known", async () => {
+            agent._registryValue = undefined;
+
+            expect(await approveGatePayment()).toEqual({
+                kind: "error",
+                code: ErrorCode.ApprovalFailed,
+                message: undefined,
+            });
+            expect(approvals).toEqual([]);
+            expect(userCanisterApprovals).toEqual([]);
+        });
+
+        test("a proposal's fee is pulled from their wallet", async () => {
+            await submitProposal(MULTI_USER_CANISTER_USER);
+
+            expect(submitted.length).toEqual(1);
+            expect(submitted[0][0]).toEqual(ME.toText());
+        });
+    });
+
+    describe("by a user alone in their canister", () => {
+        beforeEach(() => setup(USER_CANISTER_USER));
+
+        test.each([
+            ["group", GROUP.groupId],
+            ["community", CHANNEL.communityId],
+        ])(
+            "their canister approves a %s to pull a gate's payment as their member spender, checking their PIN",
+            async (_, canisterId) => {
+                expect(await approveGatePayment(canisterId)).toEqual({ kind: "success" });
+
+                expect(userCanisterApprovals).toEqual([
+                    [memberSpender(canisterId), ICP_LEDGER, GATE_APPROVAL, FIVE_MINUTES, "1234"],
+                ]);
+                expect(approvals).toEqual([]);
+            },
+        );
+
+        test("their canister approves the ProposalsBot to pull a proposal's fee as its own account, checking their PIN", async () => {
+            expect(await approveProposalFee()).toEqual({ kind: "success" });
+
+            expect(userCanisterApprovals).toEqual([
+                [proposalsBotSpender, ICP_LEDGER, 100n, FIVE_MINUTES, "1234"],
+            ]);
+            expect(approvals).toEqual([]);
+        });
+
+        test("a proposal's fee is pulled from their canister's account", async () => {
+            await submitProposal(USER_CANISTER_USER);
+
+            expect(submitted.length).toEqual(1);
+            expect(submitted[0][0]).toEqual(USER_CANISTER_USER);
+        });
     });
 });

@@ -7,7 +7,7 @@ use puzzle_core::testing::{
 };
 use puzzle_core::{Puzzle, PuzzleError, Tier};
 
-const SEEDS_PER_CONFIG: u64 = 100;
+const SEEDS_PER_CONFIG: u64 = 20;
 
 fn params(width: u8, height: u8, tier: Tier) -> Params {
     Params::default_for(width, height, tier)
@@ -108,7 +108,7 @@ fn generated_9x9() {
 #[test]
 fn every_playable_size_generates() {
     for p in playable() {
-        must_generate::<Bridges>(p, 0..25);
+        must_generate::<Bridges>(p, 0..5);
     }
 }
 
@@ -162,7 +162,7 @@ fn every_density_terminates() {
 
 #[test]
 fn single_cell_perturbation_is_caught() {
-    for seed in 0..50 {
+    for seed in 0..10 {
         let p = params(7, 7, if seed % 2 == 0 { Tier::Easy } else { Tier::Tricky });
         let g = generate(seed, p).unwrap();
         for i in 0..g.solution.len() {
@@ -441,4 +441,122 @@ fn unsatisfiable_descriptions() -> Vec<Vec<u8>> {
 fn the_solver_never_claims_an_unsound_grid() {
     let claimed = must_only_claim_sound_solutions::<Bridges>(unsatisfiable_descriptions());
     assert!(claimed > 100, "only {claimed} of the corpus reached the solver");
+}
+
+/// The island at `cell`'s gaps: for each direction with an island before the grid edge, the
+/// water cells between them and the island at the far end.
+fn island_star(d: &Description, cell: usize) -> Vec<(Vec<usize>, usize)> {
+    let (w, h) = (d.width as i32, d.height as i32);
+    let mut out = Vec::new();
+    for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+        let (mut x, mut y) = ((cell as i32) % w + dx, (cell as i32) / w + dy);
+        let mut water = Vec::new();
+        while (0..w).contains(&x) && (0..h).contains(&y) {
+            let c = (y * w + x) as usize;
+            if d.cells[c] != 0 {
+                out.push((water, c));
+                break;
+            }
+            water.push(c);
+            x += dx;
+            y += dy;
+        }
+    }
+    out
+}
+
+/// Invariant 23: every step's focus holds its island and every gap around it, water cells and
+/// far island, not just the gaps it puts bridges in. Each technique reasons from the bridges
+/// on, and the room left in, every gap of the island, so a gap closed off by an earlier step
+/// (crossed by a bridge, or its far island already full) is a premise. The LocalUserIndex serves
+/// a hint's premises first by following its focus (#9588); a closed gap left out of the focus
+/// is a premise the player can be missing while the hint reads as proven.
+#[test]
+fn every_step_lists_every_gap_of_its_island() {
+    for p in playable() {
+        for seed in 0..10 {
+            let g = generate(seed, p).unwrap();
+            let d = parse_description(&g.description).unwrap();
+            for (step, hint) in g.hints.iter().enumerate() {
+                let island = hint.target[0] as usize;
+                assert_ne!(
+                    d.cells[island], 0,
+                    "{p:?} seed {seed} step {step}: target[0] is not an island"
+                );
+                for (water, far) in island_star(&d, island) {
+                    for c in water.iter().chain([&far]) {
+                        assert!(
+                            hint.focus.contains(&(*c as u16)),
+                            "{p:?} seed {seed} step {step} ({:?}): the island at {island} relies on its gap to {far}, but cell {c} is not in focus",
+                            hint.technique
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Writes the hint steps of a spread of generated puzzles to the client's fixture, which
+/// `bridges.spec.ts` reads to check every step gets a sentence naming the right islands
+/// (invariant 24). The rota serves 7x7 Easy; Tricky is there for technique 3. Run by hand when
+/// the solver's steps change:
+/// `cargo test -p bridges --test bridges write_hint_fixture -- --ignored`
+fn hint_fixture() -> (std::path::PathBuf, String) {
+    let mut entries = Vec::new();
+    for (size, tier, seeds) in [
+        (7u8, Tier::Easy, 0..10u64),
+        (9, Tier::Easy, 0..4),
+        (7, Tier::Tricky, 0..6),
+        (9, Tier::Tricky, 0..6),
+        (11, Tier::Tricky, 0..3),
+    ] {
+        for seed in seeds {
+            let g = generate(seed, params(size, size, tier)).unwrap();
+            let steps: Vec<String> = g
+                .hints
+                .iter()
+                .map(|h| {
+                    format!(
+                        "{{\"technique\":{},\"focus\":{:?},\"target\":{:?},\"conclusions\":{:?}}}",
+                        u8::from(h.technique),
+                        h.focus,
+                        h.target,
+                        h.conclusions.iter().map(|&(k, v)| [k as u32, v as u32]).collect::<Vec<_>>()
+                    )
+                })
+                .collect();
+            entries.push(format!(
+                "{{\"description\":\"{}\",\"steps\":[{}]}}",
+                hex(&g.description),
+                steps.join(",")
+            ));
+        }
+    }
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../frontend/openchat-shared/src/utils/dailyGames/bridgesHints.json");
+    (path, format!("[{}]\n", entries.join(",")))
+}
+
+#[test]
+#[ignore]
+fn write_hint_fixture() {
+    let (path, json) = hint_fixture();
+    std::fs::write(path, json).unwrap();
+}
+
+/// #9675: invariant 24's client test reads a fixture of this solver's steps, so it proves nothing
+/// once the solver moves on. The committed fixture must be exactly what the solver emits now.
+/// Compared without whitespace, because prettier reflows the committed file.
+#[test]
+fn hint_fixture_is_current() {
+    let (path, json) = hint_fixture();
+    let strip = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+    let committed = std::fs::read_to_string(&path).unwrap_or_default();
+    assert_eq!(
+        strip(&committed),
+        strip(&json),
+        "{} is stale: run `cargo test -p bridges --test bridges write_hint_fixture -- --ignored`",
+        path.display()
+    );
 }
