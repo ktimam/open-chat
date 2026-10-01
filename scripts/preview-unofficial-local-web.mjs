@@ -40,7 +40,7 @@ export function validateManifest(manifest) {
         manifest.origin !== `http://localhost:${port}` || manifest.buildMode !== "optimized" ||
         typeof manifest.version !== "string" || !/^2\.0\.0-localtest\.[a-f0-9]{32}$/.test(manifest.version) ||
         !["v1", "v2"].includes(manifest.layout) || manifest.officialBackend !== "https://icp-api.io" ||
-        manifest.existingAccountOnly !== true || manifest.clientOnlyApps !== true || manifest.ota !== "none" ||
+        manifest.existingAccountOnly !== false || manifest.clientOnlyApps !== true || manifest.ota !== "none" ||
         manifest.native !== false || manifest.runtimeNodeEnvironment !== "development" ||
         manifest.relay?.html !== "/local-app-handoff.html" || manifest.relay?.script !== "/local-app-handoff.js") {
         throw new Error("Not a supported local-only web build manifest");

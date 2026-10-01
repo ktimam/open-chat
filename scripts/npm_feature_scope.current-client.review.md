@@ -1,6 +1,6 @@
 # Current unofficial-client npm source ownership
 
-Latest disposition: see **Windows startup module-ID checkpoint (2026-09-30)**
+Latest disposition: see **October 2 upstream merge and card presentation**
 below. Earlier sections and their hashes remain historical evidence; they do not
 describe the now-removed active browser-auth transport.
 
@@ -534,3 +534,54 @@ loopback claim/dispatch/origin/lifecycle tests and plaintext/malformed-envelope
 rejection. This is not Android packaging, provider qualification or a rebuilt
 APK. Dependency collection, advisory acceptance, hosted CI and release acceptance
 remain separate gates; this checkpoint performs no core audit or waiver.
+
+## October 2 upstream merge and card presentation
+
+This source-only review binds merged main `bb2a8d712bdac6f59c183951e453bc0e18bb64bb`
+(upstream `944efe4a7`) plus the reviewed card-presentation worktree. The aggregate is
+`166cb8127e259451ac0041463ca814a941322ed5cf11894a990cbe0df7fe264d`.
+The source set remains **122 dedicated modules, 151 fingerprinted files, 25 npm
+roots and 86 exact ownership anchors**. No selector, root, import-denial rule or
+historical PR inventory changes.
+
+The preceding aggregate `68f06f6f5cf986b836f570e42102cf68125e425b08469a41a0073997c6c2cd42`
+was independently reproduced from all 151 Git blobs in committed parent
+`240007855dbec16b77bc532a78dc121a75ad058d`. Only eight fingerprinted inputs differ:
+
+- The three `PrivateApp` Svelte components and `localAppDraftPresentation.ts`
+  implement app-owned labels/order, bounded text/date/multiline controls and
+  nonrestrictive suggestions. Schema enums and named-choice IDs stay exact.
+  Additional fields remain visible; raw JSON is secondary, not discarded.
+  Malformed supplied dates remain text and block review. Destination/recipient
+  review, explicit delivery consent and the encrypted transport boundary remain.
+  Their new imports are relative helpers and the existing Svelte root only.
+- The anchored `chatsDb.ts`, OpenChat client, worker protocol and worker dispatch
+  adopt upstream details cache version 153, member paging/search, access-gate
+  payment dispatch, mention/preview refresh and operator migration requests.
+  Their mixed core imports are not new feature owners. Original auth, client-only
+  app guards, private persistence and model/prompt sources remain unchanged.
+
+The regression reconstructs the preceding aggregate using only the eight exact
+parent hashes. The earlier cache-yield, immutable-asset routing and September
+proofs retain their original hashes; all unchanged inputs remain live. Separate
+current-source assertions and per-file drift/import tests prevent these historical
+substitutions from accepting an unreviewed current change. Frontend manifests and
+the npm lockfile are unchanged by this merge and presentation update.
+
+The parallel native review still has **26 seeds, eight profiles and 28 sources**.
+Only the workspace `Cargo.toml` source pin changes: upstream registers the backend
+`chat_rooms` package and its development optimization. The new normalized Cargo
+lock hash is `838a61f0d25f13fa92fd1d118a139d2cd00c2dfbcf625949e45a8f589e5f3ae4`.
+Its changes are one new local package block and dependency links in four other
+backend-local blocks. Exact reversal reproduces the prior manifest and lock
+hashes. A conservative lock-graph traversal from the existing 26 seeds finds the
+same 512 package blocks, including their dependency edges, with aggregate
+`eab474e68deb86860dafb04295ffa864cb9d5c8714983b2131880f7a853b9f34`.
+This is not a target/feature-filtered Cargo collection or a refreshed SBOM.
+Native source, dependency identities, profiles and historical PR2 records remain
+unchanged; the source-review receipt is rebound to the current inventory bytes.
+
+This refresh runs offline contract tests only. It does not perform an advisory
+query, install packages, waive failures, audit OpenChat core, deploy, or establish
+model accuracy, browser/APK acceptance or release readiness. Existing advisory
+decisions and their separate gates remain in force.

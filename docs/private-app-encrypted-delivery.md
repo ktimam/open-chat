@@ -32,6 +32,34 @@ Source/test updates are not evidence that an existing server or APK is updated.
 12. Retry only on explicit user action, preserving destination, payload and request ID.
     Restoring a card never restores a sending approval or automatically sends anything.
 
+## App-owned card presentation
+
+The app's `definition.card.rows` supplies the order and labels of its review fields.
+Fields omitted from those rows remain visible; presentation never removes payload
+fields. Existing schema enums and `draftEditor` named choices remain authoritative.
+
+An action may supply `draftPresentation` version 1 with `enumLabels` and optional
+`controls`. Each control names one plain, non-enum string field and selects `kind`
+`text`, `multiline` or `date`, with an optional boolean `fullWidth`. Text controls may
+provide `suggestions`; these are suggestions, not a new enum. A value absent from the
+list remains editable and is accepted when it satisfies the original field schema.
+Named choices take precedence over string-control hints.
+
+There may be at most 32 controls and 256 unique suggestions per text control. Each
+suggestion is trimmed, nonempty, at most 128 characters, free of control/invisible
+format characters, and valid under the existing string schema. The complete metadata
+retains the 64 KiB safe-JSON limit. Unknown keys, hidden-field flags, HTML controls,
+duplicate fields and value defaults are rejected. `enumLabels` remains required but
+may be empty when nonempty controls are supplied. Earlier label-only catalogs remain
+valid and catalogs without presentation hints use the generic controls.
+
+Date hints use exact Gregorian `YYYY-MM-DD` dates in years 0001–9999. The shared
+`isValidLocalDraftIsoDate` helper only checks: it never trims, normalizes or replaces a
+value. A supplied malformed date must remain visible as text and require correction
+before review; it must not become an empty native date input and silently disappear.
+An absent optional date remains absent. These hints contain no executable markup,
+app business rules or delivery authority, and are never added to the encrypted DTO.
+
 ## Cryptographic and transport contract
 
 Private setup contains `deliveryEncryption` version 1, scheme

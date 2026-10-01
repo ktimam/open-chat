@@ -94,7 +94,9 @@ export function unofficialLocalWebManifest(environment) {
         origin: environment.OC_BASE_ORIGIN,
         layout: environment.OC_MOBILE_LAYOUT,
         officialBackend: "https://icp-api.io",
-        existingAccountOnly: true,
+        // The original OpenChat authentication flow was restored; this marker must not
+        // claim that the optional existing-account-only guard is active.
+        existingAccountOnly: false,
         clientOnlyApps: true,
         ota: "none",
         native: false,

@@ -8,19 +8,21 @@
     } from "../utils/privateAppWorkspace";
     import { localAppDeliveryStatus } from "../utils/localAppRelayDelivery";
     import { nativeAppDelivery, nativeAppPairing } from "../utils/nativeAppDelivery";
-    import PrivateAppCardPreview from "./PrivateAppCardPreview.svelte";
     import PrivateAppDraftFields from "./PrivateAppDraftFields.svelte";
     import { connectLocalAppSetup } from "../utils/localAppSetupConnection";
 
     let { client }: { client: OpenChat } = $props();
     let confirmed = $state(false);
     let retryConfirmed = $state(false);
-    let fieldEditBlocked = $state(false);
+    let blockedFieldDraft = $state<{ id: string | undefined; blocked: boolean }>();
     let fieldEditorGeneration = $state(0);
     let discoveredScope = "";
     let discoveryOpen = false;
     const workspaceView = $derived($privateAppWorkspaceState);
     const fieldDraftScope = $derived(workspaceView.draft?.id);
+    const fieldEditBlocked = $derived(
+        blockedFieldDraft?.id === fieldDraftScope && blockedFieldDraft?.blocked === true,
+    );
     const accountReady = $derived(
         $identityStateStore.kind === "logged_in" &&
             $currentUserIdStore !== ANON_USER_ID &&
@@ -67,10 +69,6 @@
     $effect(() => {
         workspaceView.draft?.revision;
         confirmed = false;
-    });
-    $effect(() => {
-        fieldDraftScope;
-        fieldEditBlocked = false;
     });
     $effect(() => {
         retryConsentScope;
@@ -134,7 +132,7 @@
         // An explicit advanced edit also replaces any oversized pending field value,
         // including when the user restores the byte-identical canonical JSON.
         fieldEditorGeneration += 1;
-        fieldEditBlocked = false;
+        blockedFieldDraft = undefined;
         updateFields((event.currentTarget as HTMLTextAreaElement).value);
     }
     function updateFields(editorJson: string) {
@@ -142,9 +140,10 @@
         workspace.edit(editorJson, workspaceView.recipient);
     }
     function blockFieldEdit(blocked: boolean) {
-        fieldEditBlocked = blocked;
+        blockedFieldDraft = { id: workspaceView.draft?.id, blocked };
         if (blocked) {
             confirmed = false;
+            retryConfirmed = false;
             // An unrepresentable edit must not leave the previous payload approved.
             workspace.invalidateReview();
         }
@@ -164,162 +163,176 @@
         aria-busy={workspaceView.busy || workspaceView.setupLoading || workspaceView.draftLoading}
     >
         <header>
-            <h2>{workspaceView.draft ? "Review app draft" : "Private apps"}</h2>
+            <h2>
+                {workspaceView.draft
+                    ? (selectedAction?.definition.card.title ?? "Review app draft")
+                    : "Private apps"}
+            </h2>
             <button type="button" onclick={() => workspace.close()}>Close</button>
         </header>
-        <p>
-            App setup and enabled chats are remembered for this account on this device. Imported
-            setup may contain private app configuration. It is stored locally, not synced, and is
-            not protected by chat encryption. The current private card is saved separately in
-            encrypted device storage for this account and backend, not synced or posted to chat.
-            Closing this panel, restarting or signing out does not delete it. Use Discard or Forget
-            to delete it. The local key is nonextractable, but code running in this client can still
-            use it; this does not protect against malicious client code. Restoring a card never
-            restores your approval or sends anything automatically.
-        </p>
-        {#if workspaceView.setupLoading}<p role="status">Loading saved app setup…</p>{/if}
-        {#if workspaceView.setupStatus}<p role="status">{workspaceView.setupStatus}</p>{/if}
-        {#if workspaceView.draftStorageStatus}<p role="status">
-                {workspaceView.draftStorageStatus}
-            </p>{/if}
-        <details class="setup-disclosure" open={!workspaceView.draft && !workspaceView.busy}>
-            <summary>App setup</summary>
-            <div class="setup">
-                <button type="button" disabled={locked} onclick={() => workspace.forgetSetup()}>
-                    Forget this account's app setup and private card on this device
-                </button>
-                <h3>Available apps</h3>
-                <p class="small">
-                    Connecting approves this publisher's compatible future app updates. Changed
-                    destinations or private setup require connecting again. New apps are never
-                    enabled in your chats automatically.
+        {#snippet secondarySetup()}
+            <details class="privacy-disclosure">
+                <summary>Privacy and device storage</summary>
+                <p>
+                    App setup and enabled chats are remembered for this account on this device.
+                    Imported setup may contain private app configuration. It is stored locally, not
+                    synced, and is not protected by chat encryption. The current private card is
+                    saved separately in encrypted device storage for this account and backend, not
+                    synced or posted to chat. Closing this panel, restarting or signing out does not
+                    delete it. Use Discard or Forget to delete it. The local key is nonextractable,
+                    but code running in this client can still use it; this does not protect against
+                    malicious client code. Restoring a card never restores your approval or sends
+                    anything automatically.
                 </p>
-                {#if workspaceView.directorySource}<p class="small">
-                        Publisher directory: <span class="destination"
-                            >{workspaceView.directorySource}</span
-                        >
-                    </p>{/if}
-                <button
-                    type="button"
-                    disabled={locked ||
-                        workspaceView.directoryLoading ||
-                        !workspaceView.directorySource}
-                    onclick={() => workspace.refreshDirectory()}
-                >
-                    {workspaceView.directoryLoading ? "Checking apps…" : "Refresh available apps"}
-                </button>
-                {#if workspaceView.directoryStatus}<p role="status">
-                        {workspaceView.directoryStatus}
-                    </p>{/if}
-                {#each workspaceView.directory?.apps ?? [] as app (app.id)}
-                    <section aria-label={`Available app: ${app.name}`}>
-                        <h4>{app.name}</h4>
-                        <p>{app.description}</p>
-                        <p class="small">
-                            Connection page: <span class="destination">{app.setupUrl}</span>
-                        </p>
-                        {#if workspaceView.appUpdates[app.id]}<p role="status">
-                                {workspaceView.appUpdates[app.id]}
-                            </p>{/if}
-                        <button
-                            type="button"
-                            disabled={locked || workspaceView.directoryLoading}
-                            onclick={() => workspace.connectApp(app.id)}
-                        >
-                            {workspaceView.catalog?.apps.some(
-                                (installed) => installed.id === app.id,
-                            )
-                                ? "Reconnect / refresh setup"
-                                : "Connect"}
-                        </button>
-                    </section>
-                {/each}
-                <details>
-                    <summary>Advanced recovery: import app files</summary>
-                    <label
-                        >Import app catalog (JSON, up to 1 MB)
-                        <input
-                            type="file"
-                            accept=".json,application/json"
-                            disabled={locked}
-                            onchange={(event) => importFile(event, false)}
-                        />
-                    </label>
-                    {#if selected?.processor}
+            </details>
+            {#if workspaceView.setupLoading}<p role="status">Loading saved app setup…</p>{/if}
+            {#if workspaceView.setupStatus}<p role="status">{workspaceView.setupStatus}</p>{/if}
+            {#if workspaceView.draftStorageStatus}<p role="status">
+                    {workspaceView.draftStorageStatus}
+                </p>{/if}
+            <details class="setup-disclosure" open={!workspaceView.draft && !workspaceView.busy}>
+                <summary>App setup</summary>
+                <div class="setup">
+                    <button type="button" disabled={locked} onclick={() => workspace.forgetSetup()}>
+                        Forget this account's app setup and private card on this device
+                    </button>
+                    <h3>Available apps</h3>
+                    <p class="small">
+                        Connecting approves this publisher's compatible future app updates. Changed
+                        destinations or private setup require connecting again. New apps are never
+                        enabled in your chats automatically.
+                    </p>
+                    {#if workspaceView.directorySource}<p class="small">
+                            Publisher directory: <span class="destination"
+                                >{workspaceView.directorySource}</span
+                            >
+                        </p>{/if}
+                    <button
+                        type="button"
+                        disabled={locked ||
+                            workspaceView.directoryLoading ||
+                            !workspaceView.directorySource}
+                        onclick={() => workspace.refreshDirectory()}
+                    >
+                        {workspaceView.directoryLoading
+                            ? "Checking apps…"
+                            : "Refresh available apps"}
+                    </button>
+                    {#if workspaceView.directoryStatus}<p role="status">
+                            {workspaceView.directoryStatus}
+                        </p>{/if}
+                    {#each workspaceView.directory?.apps ?? [] as app (app.id)}
+                        <section aria-label={`Available app: ${app.name}`}>
+                            <h4>{app.name}</h4>
+                            <p>{app.description}</p>
+                            <p class="small">
+                                Connection page: <span class="destination">{app.setupUrl}</span>
+                            </p>
+                            {#if workspaceView.appUpdates[app.id]}<p role="status">
+                                    {workspaceView.appUpdates[app.id]}
+                                </p>{/if}
+                            <button
+                                type="button"
+                                disabled={locked || workspaceView.directoryLoading}
+                                onclick={() => workspace.connectApp(app.id)}
+                            >
+                                {workspaceView.catalog?.apps.some(
+                                    (installed) => installed.id === app.id,
+                                )
+                                    ? "Reconnect / refresh setup"
+                                    : "Connect"}
+                            </button>
+                        </section>
+                    {/each}
+                    <details>
+                        <summary>Advanced recovery: import app files</summary>
                         <label
-                            >Import matching local processor (JavaScript, up to 1 MB)
+                            >Import app catalog (JSON, up to 1 MB)
                             <input
                                 type="file"
-                                accept=".js,.mjs,text/javascript,application/javascript"
-                                disabled={locked || !workspaceView.actionId}
-                                onchange={(event) => importFile(event, true)}
+                                accept=".json,application/json"
+                                disabled={locked}
+                                onchange={(event) => importFile(event, false)}
                             />
                         </label>
-                    {/if}
-                </details>
-                {#if workspaceView.catalog}
-                    <label
-                        >App
-                        <select
-                            value={workspaceView.appId ?? ""}
-                            disabled={locked}
-                            onchange={(event) => workspace.chooseApp(event.currentTarget.value)}
-                        >
-                            <option value="">Choose an app</option>
-                            {#each workspaceView.catalog.apps as app}<option value={app.id}
-                                    >{app.name}</option
-                                >{/each}
-                        </select>
-                    </label>
-                    {#if selected}
-                        <p>{selected.description}</p>
-                        {#if workspaceView.disabledAppIds.includes(selected.id)}<p role="status">
-                                This app is disabled because it is no longer listed by its
-                                publisher. Reconnect if it becomes available again, or use Advanced
-                                recovery.
-                            </p>{/if}
-                        {#if workspaceView.appUpdates[selected.id]}<p role="status">
-                                {workspaceView.appUpdates[selected.id]}
-                            </p>{/if}
-                        <p>
-                            <strong>Destination declared by app:</strong>
-                            <span class="destination">{selected.destination}</span>
-                        </p>
-                        <p>
-                            <strong>Recipient declared by app:</strong>
-                            {selected.recipientLabel ??
-                                "Not specified; choose in the receiving app."} This label is not proof
-                            of the receiving account.
-                        </p>
+                        {#if selected?.processor}
+                            <label
+                                >Import matching local processor (JavaScript, up to 1 MB)
+                                <input
+                                    type="file"
+                                    accept=".js,.mjs,text/javascript,application/javascript"
+                                    disabled={locked || !workspaceView.actionId}
+                                    onchange={(event) => importFile(event, true)}
+                                />
+                            </label>
+                        {/if}
+                    </details>
+                    {#if workspaceView.catalog}
                         <label
-                            >Action
+                            >App
                             <select
-                                value={workspaceView.appId === selected.id
-                                    ? (workspaceView.actionId ?? "")
-                                    : ""}
+                                value={workspaceView.appId ?? ""}
                                 disabled={locked}
-                                onchange={selectAction}
+                                onchange={(event) => workspace.chooseApp(event.currentTarget.value)}
                             >
-                                <option value="">Choose an action</option>
-                                {#each selected.actions as action}<option
-                                        value={action.definition.name}
-                                        >{action.definition.name} — {action.definition
-                                            .description}</option
+                                <option value="">Choose an app</option>
+                                {#each workspaceView.catalog.apps as app}<option value={app.id}
+                                        >{app.name}</option
                                     >{/each}
                             </select>
                         </label>
-                        {#if selected.processor}
-                            <p class="small">
-                                SHA-256: <code>{selected.processor.sha256}</code>. {workspaceView.appId ===
-                                    selected.id && workspaceView.processorReady
-                                    ? "Verified imported file."
-                                    : "No matching processor imported for this selection."}
+                        {#if selected}
+                            <p>{selected.description}</p>
+                            {#if workspaceView.disabledAppIds.includes(selected.id)}<p
+                                    role="status"
+                                >
+                                    This app is disabled because it is no longer listed by its
+                                    publisher. Reconnect if it becomes available again, or use
+                                    Advanced recovery.
+                                </p>{/if}
+                            {#if workspaceView.appUpdates[selected.id]}<p role="status">
+                                    {workspaceView.appUpdates[selected.id]}
+                                </p>{/if}
+                            <p>
+                                <strong>Destination declared by app:</strong>
+                                <span class="destination">{selected.destination}</span>
                             </p>
+                            <p>
+                                <strong>Recipient declared by app:</strong>
+                                {selected.recipientLabel ??
+                                    "Not specified; choose in the receiving app."} This label is not proof
+                                of the receiving account.
+                            </p>
+                            <label
+                                >Action
+                                <select
+                                    value={workspaceView.appId === selected.id
+                                        ? (workspaceView.actionId ?? "")
+                                        : ""}
+                                    disabled={locked}
+                                    onchange={selectAction}
+                                >
+                                    <option value="">Choose an action</option>
+                                    {#each selected.actions as action}<option
+                                            value={action.definition.name}
+                                            >{action.definition.name} — {action.definition
+                                                .description}</option
+                                        >{/each}
+                                </select>
+                            </label>
+                            {#if selected.processor}
+                                <p class="small">
+                                    SHA-256: <code>{selected.processor.sha256}</code>. {workspaceView.appId ===
+                                        selected.id && workspaceView.processorReady
+                                        ? "Verified imported file."
+                                        : "No matching processor imported for this selection."}
+                                </p>
+                            {/if}
                         {/if}
                     {/if}
-                {/if}
-            </div>
-        </details>
+                </div>
+            </details>
+        {/snippet}
         <p role="status">{workspaceView.message}</p>
         {#if workspaceView.phase}<p>
                 Local processing: {workspaceView.phase.replaceAll("_", " ")}
@@ -327,19 +340,25 @@
         {#if workspaceView.draft}
             <div class="draft">
                 {#if selectedAction}
-                    {#key `${workspaceView.draft.id}:${fieldEditorGeneration}`}
-                        <PrivateAppDraftFields
-                            action={selectedAction}
-                            editorJson={workspaceView.editorJson}
-                            disabled={!editable || workspaceView.busy}
-                            onchange={updateFields}
-                            onblocked={blockFieldEdit}
-                            onfieldedit={(item, field, value) =>
-                                workspace.editDraftField(item, field, value)}
-                            onchoiceedit={(item, field, value) =>
-                                workspace.selectDraftChoice(item, field, value)}
-                        />
-                    {/key}
+                    <section
+                        aria-label={fieldEditBlocked ? undefined : "App-declared draft preview"}
+                        class="primary-card"
+                    >
+                        {#key `${workspaceView.draft.id}:${fieldEditorGeneration}`}
+                            <PrivateAppDraftFields
+                                showTitle={false}
+                                action={selectedAction}
+                                editorJson={workspaceView.editorJson}
+                                disabled={!editable || workspaceView.busy}
+                                onchange={updateFields}
+                                onblocked={blockFieldEdit}
+                                onfieldedit={(item, field, value) =>
+                                    workspace.editDraftField(item, field, value)}
+                                onchoiceedit={(item, field, value) =>
+                                    workspace.selectDraftChoice(item, field, value)}
+                            />
+                        {/key}
+                    </section>
                     {#if selectedAction.draftEditor && workspaceView.draftManualValues}
                         <p class="small">
                             Advanced JSON keeps your explicit field values. Selecting a named choice
@@ -348,14 +367,9 @@
                     {/if}
                     {#if fieldEditBlocked}
                         <p role="status">
-                            A field edit could not be represented in the draft. Correct it before
-                            review; no previous payload can be approved or sent.
+                            A field edit is incomplete or invalid. Correct it before review; no
+                            previous payload can be approved or sent.
                         </p>
-                    {:else}
-                        <PrivateAppCardPreview
-                            action={selectedAction}
-                            editorJson={workspaceView.editorJson}
-                        />
                     {/if}
                 {/if}
                 <h3>Review destination and recipient</h3>
@@ -395,15 +409,19 @@
                 {#if workspaceView.draft.status === "uncertain" && !workspaceView.draft.approval}
                     <button
                         type="button"
-                        disabled={workspaceView.busy}
-                        onclick={() => workspace.review()}
+                        disabled={workspaceView.busy || fieldEditBlocked}
+                        onclick={() => {
+                            if (!fieldEditBlocked) workspace.review();
+                        }}
                     >
                         Review recovered request before retrying
                     </button>
                 {/if}
                 {#if workspaceView.draft.approval}
-                    <h3>Exact request to be handed off</h3>
-                    <pre>{workspaceView.draft.approval.summary}</pre>
+                    <details class="request-details">
+                        <summary>Advanced: exact reviewed request</summary>
+                        <pre>{workspaceView.draft.approval.summary}</pre>
+                    </details>
                     {#if workspaceView.draft.status === "reviewed"}
                         <label class="confirmation"
                             ><input
@@ -418,11 +436,17 @@
                         <button
                             class="confirm"
                             type="button"
-                            disabled={!confirmed || workspaceView.busy}
+                            aria-label="Send reviewed request"
+                            disabled={!confirmed || workspaceView.busy || fieldEditBlocked}
                             onclick={() => {
                                 const id = workspaceView.draft?.approval?.approvalId;
-                                if (confirmed && id) void workspace.confirm(id);
-                            }}>Send reviewed request</button
+                                if (confirmed && id && !fieldEditBlocked)
+                                    void workspace.confirm(id);
+                            }}
+                            ><span
+                                >{selectedAction?.definition.card.confirmLabel ??
+                                    "Send reviewed request"}</span
+                            ><small>Send reviewed request</small></button
                         >
                     {/if}
                 {/if}
@@ -475,10 +499,10 @@
                     >
                     <button
                         type="button"
-                        disabled={!retryConfirmed || workspaceView.busy}
+                        disabled={!retryConfirmed || workspaceView.busy || fieldEditBlocked}
                         onclick={() => {
                             const id = workspaceView.draft?.approval?.approvalId;
-                            if (retryConfirmed && id) {
+                            if (retryConfirmed && id && !fieldEditBlocked) {
                                 retryConfirmed = false;
                                 void workspace.retryUncertain(id);
                             }
@@ -500,10 +524,15 @@
                     >
                     <button
                         type="button"
-                        disabled={!retryConfirmed || workspaceView.busy}
+                        disabled={!retryConfirmed || workspaceView.busy || fieldEditBlocked}
                         onclick={() => {
                             const id = workspaceView.draft?.approval?.approvalId;
-                            if (retryConfirmed && id && delivery?.status !== "saved") {
+                            if (
+                                retryConfirmed &&
+                                id &&
+                                !fieldEditBlocked &&
+                                delivery?.status !== "saved"
+                            ) {
                                 retryConfirmed = false;
                                 void workspace.reopenDelivered(id);
                             }
@@ -536,6 +565,7 @@
                     ? "Cancel / discard local draft"
                     : "Discard local draft"}</button
             >{/if}
+        {@render secondarySetup()}
     </section>
 {/if}
 
@@ -592,8 +622,14 @@
         margin-top: 0.75rem;
     }
     .draft {
-        padding-top: 1rem;
-        border-top: 1px solid #888;
+        gap: 0.75rem;
+    }
+    .primary-card {
+        min-width: 0;
+    }
+    .privacy-disclosure,
+    .setup-disclosure {
+        font-size: 0.875rem;
     }
     label {
         display: flex;
@@ -611,6 +647,7 @@
         min-width: 0;
     }
     button {
+        min-height: 44px;
         padding: 0.65rem 0.8rem;
         border-radius: 0.5rem;
         border: 1px solid #888;
@@ -619,6 +656,7 @@
     input[type="text"],
     select,
     textarea {
+        min-height: 44px;
         width: 100%;
         padding: 0.65rem;
         border: 1px solid #888;
@@ -659,6 +697,10 @@
     .confirm {
         background: #292345;
         color: white;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.2rem;
     }
     .small {
         font-size: 0.875rem;

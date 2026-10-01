@@ -86,7 +86,7 @@ const item = (value = "SYNTHETIC VALUE") => ({
 });
 
 let instances: ReturnType<typeof mount>[] = [];
-function render(definition: LocalAppAction, initial: string) {
+function render(definition: LocalAppAction, initial: string, additionalOnly = false) {
     const target = document.createElement("div");
     document.body.append(target);
     const editor = writable(initial);
@@ -99,6 +99,7 @@ function render(definition: LocalAppAction, initial: string) {
                 get editorJson() {
                     return reactiveEditor.current;
                 },
+                additionalOnly,
             },
         }),
     );
@@ -207,6 +208,131 @@ describe("generic app-declared preview projection", () => {
 });
 
 describe("actual mounted app-declared preview", () => {
+    it("uses friendly enum and named-choice labels without wire IDs while retaining exact raw additional data", () => {
+        const definition: LocalAppAction = {
+            ...action(),
+            definition: {
+                ...action().definition,
+                card: {
+                    ...action().definition.card,
+                    rows: [
+                        { label: "Status", valueKey: "statusCode" },
+                        { label: "Category", valueKey: "categoryId" },
+                        ...action().definition.card.rows,
+                    ],
+                },
+            },
+            draftSchema: {
+                ...itemSchema,
+                properties: {
+                    ...itemSchema.properties,
+                    statusCode: { type: "string", enum: ["wire-pending", "wire-ready"] },
+                    categoryId: { type: "string" },
+                    categoryLabel: { type: "string" },
+                },
+            },
+            draftPresentation: {
+                version: 1,
+                enumLabels: [
+                    {
+                        field: "statusCode",
+                        options: [
+                            { value: "wire-pending", label: "Pending review" },
+                            { value: "wire-ready", label: "Ready" },
+                        ],
+                    },
+                ],
+            },
+            draftEditor: {
+                version: 1,
+                choices: [
+                    {
+                        field: "categoryId",
+                        label: "Saved category",
+                        noneLabel: "None",
+                        options: [
+                            {
+                                value: "raw-alpha",
+                                label: "Friendly Alpha",
+                                assign: [{ field: "categoryLabel", value: "Assigned Alpha" }],
+                                defaults: [],
+                            },
+                            {
+                                value: "raw-beta",
+                                label: "Friendly Beta",
+                                assign: [{ field: "categoryLabel", value: "Assigned Beta" }],
+                                defaults: [],
+                            },
+                        ],
+                    },
+                ],
+            },
+        };
+        const payload = {
+            ...item(),
+            statusCode: "wire-pending",
+            categoryId: "raw-alpha",
+            categoryLabel: "Supplied companion, unchanged",
+        };
+        const editorJson = JSON.stringify(payload);
+        const { target } = render(definition, editorJson);
+        expect(target.textContent).toContain("Pending review");
+        expect(target.textContent).toContain("Friendly Alpha");
+        expect(target.textContent).not.toContain("wire-pending");
+        expect(target.textContent).not.toContain("raw-alpha");
+        expect(target.textContent).toContain('"Supplied companion, unchanged"');
+        expect(target.textContent).toContain('"ADDITIONAL ITEM FIELD"');
+        expect(target.textContent).toContain(JSON.stringify(payload.nested, null, 2));
+        const labels = [...target.querySelectorAll("dt")].map((node) => node.textContent?.trim());
+        expect(labels[0]).toBe("Status");
+        expect(labels[1]).toBe("Saved category");
+        expect(target.querySelector("input, select, textarea, button")).toBeNull();
+        expect(JSON.parse(editorJson)).toEqual(payload);
+        expect(JSON.parse(editorJson).statusCode).toBe("wire-pending");
+        expect(JSON.parse(editorJson).categoryId).toBe("raw-alpha");
+    });
+
+    it.each(["single", "list", "wrapped-list"] as const)(
+        "keeps complex and unknown additional data visible in the primary %s card without duplicating scalar controls",
+        (kind) => {
+            const definition = action(
+                kind === "wrapped-list" ? { kind, field: "customRecords" } : { kind },
+            );
+            const record = { ...item(), unknown: { retained: [false, 0, null, ""] } };
+            const payload =
+                kind === "single"
+                    ? record
+                    : kind === "list"
+                      ? [record]
+                      : { customRecords: [record], envelopeNote: "VISIBLE ENVELOPE FIELD" };
+            const editorJson = JSON.stringify(payload);
+            const { target } = render(definition, editorJson, true);
+            expect(target.textContent).toContain(JSON.stringify(record.nested, null, 2));
+            expect(target.textContent).toContain(JSON.stringify(record.unknown, null, 2));
+            expect(target.textContent).not.toContain('"SYNTHETIC VALUE"');
+            expect(target.textContent).not.toContain('"ADDITIONAL ITEM FIELD"');
+            expect(target.querySelector("details")).toBeNull();
+            const envelope = target.querySelector('[aria-label="Additional envelope fields"]');
+            if (kind === "wrapped-list")
+                expect(envelope?.textContent).toContain('"VISIBLE ENVELOPE FIELD"');
+            else expect(envelope).toBeNull();
+            expect(JSON.parse(editorJson)).toEqual(payload);
+            // Default read-only review retains its schema gate; the primary extra-data surface
+            // must not conceal these values merely because their presence makes approval invalid.
+            expect(localAppCardPreview(definition, editorJson)).toBeUndefined();
+        },
+    );
+
+    it("removes additional-only values immediately when external JSON becomes malformed", async () => {
+        const { target, update } = render(action(), JSON.stringify(item()), true);
+        expect(target.textContent).toContain('"one"');
+        await update("{broken");
+        expect(target.textContent).not.toContain('"one"');
+        expect(target.querySelectorAll("pre")).toHaveLength(0);
+        await update(JSON.stringify({ ...item(), nested: { items: ["new nested value"] } }));
+        expect(target.textContent).toContain('"new nested value"');
+    });
+
     it.each(["single", "list", "wrapped-list"] as const)(
         "renders %s title, disclosure, item rows and every additional field",
         (kind) => {
@@ -229,8 +355,8 @@ describe("actual mounted app-declared preview", () => {
             const firstRows = [...target.querySelectorAll(".item:first-of-type dt")].map(
                 (node) => node.textContent,
             );
-            expect(firstRows[0]).toContain("Count first");
-            expect(firstRows[1]).toContain("Value second");
+            expect(firstRows[0]?.trim()).toBe("Count first");
+            expect(firstRows[1]?.trim()).toBe("Value second");
             const values = [...target.querySelectorAll(".item")][0].querySelectorAll("pre");
             expect([...values].map((node) => node.textContent)).toEqual([
                 "0",

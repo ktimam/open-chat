@@ -1,7 +1,12 @@
 <script lang="ts">
+    import { untrack } from "svelte";
     import type { LocalAppAction } from "../utils/localAppCatalog";
     import { formatLocalDraftJson } from "../utils/localAppDrafts";
-    import { validateLocalAppDraftPresentation } from "../utils/localAppDraftPresentation";
+    import {
+        isValidLocalDraftIsoDate,
+        validateLocalAppDraftPresentation,
+    } from "../utils/localAppDraftPresentation";
+    import PrivateAppCardPreview from "./PrivateAppCardPreview.svelte";
     import {
         editLocalAppDraftField,
         localAppDraftFields,
@@ -14,6 +19,7 @@
         action,
         editorJson,
         disabled = false,
+        showTitle = true,
         onchange,
         onblocked,
         onfieldedit,
@@ -22,6 +28,7 @@
         action: LocalAppAction;
         editorJson: string;
         disabled?: boolean;
+        showTitle?: boolean;
         onchange: (nextJson: string) => void;
         onblocked: (blocked: boolean) => void;
         onfieldedit?: (
@@ -47,13 +54,50 @@
         }
     });
     let pending = $state<{ item: number; key: string; text: string; source: string }>();
+    const controlId = $props.id();
+    const invalidDate = $derived(
+        fields?.items.some((item) =>
+            item.some(
+                (field) =>
+                    controlHint(field)?.kind === "date" &&
+                    field.present &&
+                    !isValidLocalDraftIsoDate(field.value),
+            ),
+        ) ?? false,
+    );
+
+    $effect(() => {
+        const blocked = !!pending || invalidDate;
+        // The host revokes approval by publishing workspace state. That state is not an input
+        // to this field validity check and must not create a reactive invalidation loop.
+        untrack(() => onblocked(blocked));
+    });
 
     $effect(() => {
         if (pending && pending.source !== editorJson) {
             pending = undefined;
-            onblocked(false);
         }
     });
+
+    function controlHint(field: LocalAppDraftField) {
+        if (namedChoice(field)) return undefined;
+        return presentation?.controls?.find((control) => control.field === field.key);
+    }
+
+    function dateInvalid(field: LocalAppDraftField): boolean {
+        return (
+            controlHint(field)?.kind === "date" &&
+            field.present &&
+            !isValidLocalDraftIsoDate(field.value)
+        );
+    }
+
+    function dateInputType(field: LocalAppDraftField, item: number): "text" | "date" {
+        // Native date controls erase invalid strings. Keep those exact edits visible instead.
+        return dateInvalid(field) || (pending?.item === item && pending.key === field.key)
+            ? "text"
+            : "date";
+    }
 
     function choices(field: LocalAppDraftField): readonly LocalAppDraftScalar[] | undefined {
         return (
@@ -138,7 +182,11 @@
         // Workspace-owned operations retain baseline/manual-edit history. Do not turn them into
         // a second Advanced JSON edit, which deliberately resets that history.
         if (!namedChoice(field) && !onfieldedit) onchange(next);
-        onblocked(false);
+        onblocked(
+            localAppDraftFields(action, next)?.items.some((fields) =>
+                fields.some((candidate) => dateInvalid(candidate)),
+            ) ?? false,
+        );
     }
 
     function select(field: LocalAppDraftField, item: number, value: string) {
@@ -163,19 +211,21 @@
 </script>
 
 <section class="draft-fields" aria-label="Edit private app draft fields">
-    <h3>{action.definition.card.title}</h3>
+    {#if showTitle}<h3>{action.definition.card.title}</h3>{/if}
+    {#if action.definition.card.disclosure}<p class="disclosure">
+            {action.definition.card.disclosure}
+        </p>{/if}
     {#if fields}
         {#each fields.items as item, index}
             <fieldset {disabled} aria-label={`Draft fields for item ${index + 1}`}>
                 <legend>{fields.items.length > 1 ? `Item ${index + 1}` : "Draft fields"}</legend>
                 {#each item as field (field.key)}
-                    <div class="field">
+                    <div class="field" class:full-width={controlHint(field)?.fullWidth}>
                         <label>
                             <span
                                 >{fieldLabel(field)}
-                                <code>({field.displayKey})</code>{field.required
-                                    ? " — required"
-                                    : " — optional"}</span
+                                {#if field.required}<span class="required">Required</span
+                                    >{/if}</span
                             >
                             {#if companionOwner(field)}
                                 <output aria-label={`Item ${index + 1} — ${field.label}`}>
@@ -205,7 +255,7 @@
                                         >{/if}
                                     {#each namedChoice(field)?.options ?? [] as option, optionIndex}
                                         <option value={`option-${optionIndex}`}
-                                            >{option.label} ({option.value})</option
+                                            >{option.label}</option
                                         >
                                     {/each}
                                 </select>
@@ -231,6 +281,37 @@
                                         >
                                     {/each}
                                 </select>
+                            {:else if field.schema.type === "string" && controlHint(field)?.kind !== "multiline" && controlHint(field)}
+                                <input
+                                    type={controlHint(field)?.kind === "date"
+                                        ? dateInputType(field, index)
+                                        : "text"}
+                                    aria-label={`Item ${index + 1} — ${field.label}`}
+                                    aria-invalid={!field.valid ||
+                                        dateInvalid(field) ||
+                                        (pending?.item === index && pending.key === field.key)}
+                                    autocomplete="off"
+                                    spellcheck={false}
+                                    disabled={fieldDisabled(field, index)}
+                                    list={controlHint(field)?.suggestions?.length
+                                        ? `${controlId}-${index}-${field.key}`
+                                        : undefined}
+                                    value={inputValue(field, index)}
+                                    oninput={(event) =>
+                                        change(
+                                            field,
+                                            index,
+                                            event.currentTarget.value,
+                                            event.currentTarget.value,
+                                        )}
+                                />
+                                {#if controlHint(field)?.suggestions?.length}
+                                    <datalist id={`${controlId}-${index}-${field.key}`}>
+                                        {#each controlHint(field)?.suggestions ?? [] as suggestion}<option
+                                                value={suggestion}
+                                            ></option>{/each}
+                                    </datalist>
+                                {/if}
                             {:else if field.schema.type === "string"}
                                 <textarea
                                     aria-label={`Item ${index + 1} — ${field.label}`}
@@ -270,14 +351,30 @@
                                 />
                             {/if}
                         </label>
-                        <small class="current-value">
-                            {#if pending?.item === index && pending.key === field.key}
+                        {#if pending?.item === index && pending.key === field.key}
+                            <small class="invalid">
                                 This edit exceeds the draft limit. Shorten it or remove this field
                                 before review.
-                            {:else if field.present}
-                                Supplied value: <code>{formatLocalDraftJson(field.value)}</code>
-                            {:else}Not supplied.{/if}
-                        </small>
+                            </small>
+                        {/if}
+                        {#if dateInvalid(field)}<small class="invalid"
+                                >Enter a real date in YYYY-MM-DD format before review. The supplied
+                                text has not been changed.</small
+                            >{/if}
+                        {#if !(pending?.item === index && pending.key === field.key) && field.present && typeof field.value === "string" && formatLocalDraftJson(field.value) !== JSON.stringify(field.value)}
+                            <small
+                                >Hidden text controls (escaped exact value): <code
+                                    >{formatLocalDraftJson(field.value)}</code
+                                ></small
+                            >
+                        {/if}
+                        {#if field.present && ((namedChoice(field) && namedSelection(field) === "invalid") || (choices(field) && selection(field) === "invalid"))}
+                            <small class="invalid"
+                                >Unrecognized supplied value: <code
+                                    >{formatLocalDraftJson(field.value)}</code
+                                ></small
+                            >
+                        {/if}
                         {#if !field.valid}<small class="invalid"
                                 >{field.present
                                     ? "This value does not match the app's field schema."
@@ -315,6 +412,9 @@
                 advanced JSON to edit them.
             </p>
         {/if}
+        {#if !pending}
+            <PrivateAppCardPreview {action} {editorJson} additionalOnly />
+        {/if}
     {:else}
         <p role="status">
             Field editing is unavailable for this JSON structure. Correct the complete payload in
@@ -325,7 +425,6 @@
 
 <style>
     .draft-fields,
-    fieldset,
     .field,
     label {
         display: flex;
@@ -334,15 +433,28 @@
         min-width: 0;
     }
     fieldset {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr));
         border: 1px solid #888;
         border-radius: 0.5rem;
         padding: 0.75rem;
-        gap: 1rem;
+        gap: 0.75rem;
+    }
+    .full-width {
+        grid-column: 1 / -1;
+    }
+    .required {
+        font-size: 0.75em;
+        opacity: 0.7;
+    }
+    .disclosure {
+        font-size: 0.875rem;
     }
     input,
     textarea,
     select {
         width: 100%;
+        min-height: 44px;
         min-width: 0;
         box-sizing: border-box;
         font: inherit;
@@ -363,6 +475,7 @@
         white-space: pre-wrap;
     }
     button {
+        min-height: 44px;
         align-self: flex-start;
         max-width: 100%;
         overflow-wrap: anywhere;

@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { flushSync, mount, tick, unmount } from "svelte";
 import { fromStore, writable } from "svelte/store";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -154,6 +156,49 @@ function namedAction(): LocalAppAction {
         },
     };
 }
+function hintedAction(): LocalAppAction {
+    return {
+        ...action(),
+        definition: {
+            ...action().definition,
+            card: {
+                ...action().definition.card,
+                rows: [
+                    ...action().definition.card.rows,
+                    { label: "Recorded date", valueKey: "whenValue" },
+                    { label: "Currency", valueKey: "currencyValue" },
+                    { label: "Details", valueKey: "notesValue" },
+                ],
+            },
+        },
+        draftSchema: {
+            ...schema,
+            properties: {
+                ...schema.properties,
+                whenValue: { type: "string" },
+                currencyValue: { type: "string" },
+                notesValue: { type: "string" },
+            },
+        },
+        draftPresentation: {
+            version: 1,
+            enumLabels: [
+                {
+                    field: "option",
+                    options: [
+                        { value: "first", label: "First" },
+                        { value: "second", label: "Second" },
+                    ],
+                },
+            ],
+            controls: [
+                { field: "whenValue", kind: "date" },
+                { field: "currencyValue", kind: "text", suggestions: ["USD", "EUR"] },
+                { field: "notesValue", kind: "multiline", fullWidth: true },
+            ],
+        },
+    };
+}
 function renderNamed(payload: unknown = initial(), disabled = false, definition = namedAction()) {
     let session = initializeLocalAppDraftChoices(definition, JSON.stringify(payload));
     const onfieldedit = vi.fn(
@@ -255,7 +300,7 @@ describe("mounted generic private draft fields", () => {
         ]);
         expect(view.onchange).not.toHaveBeenCalled();
         expect(view.payload()).toEqual(payload);
-        expect(view.target.textContent).toContain('Supplied value: "first"');
+        expect(JSON.stringify(view.payload())).toContain('"option":"first"');
         await input(view.target, "Item 1 — option", "option-1");
         await input(view.target, "Item 1 — enabled", "option-1");
         await input(view.target, "Item 1 — numberChoice", "option-1");
@@ -371,14 +416,15 @@ describe("mounted generic private draft fields", () => {
         expect(invalid.onchange).not.toHaveBeenCalled();
     });
 
-    it("shows named labels with exact raw values and keeps assigned companions read-only", async () => {
+    it("shows friendly named labels without wire IDs while preserving raw values and read-only companions", async () => {
         const view = renderNamed();
         const choice = control(view.target, "Item 1 — Saved category") as HTMLSelectElement;
         expect([...choice.options].map((option) => [option.value, option.textContent])).toEqual([
             ["absent", "None — restore extracted values"],
-            ["option-0", "Friendly Alpha (raw-alpha)"],
-            ["option-1", "Friendly Beta (raw-beta)"],
+            ["option-0", "Friendly Alpha"],
+            ["option-1", "Friendly Beta"],
         ]);
+        expect(choice.closest("label")?.textContent).not.toContain("(category)");
         expect(choice.value).toBe("absent");
         expect(view.onchoiceedit).not.toHaveBeenCalled();
         expect(view.onchange).not.toHaveBeenCalled();
@@ -390,6 +436,7 @@ describe("mounted generic private draft fields", () => {
             category: "raw-beta",
             categoryLabel: "Assigned Beta",
         });
+        expect(JSON.stringify(view.payload())).toContain('"category":"raw-beta"');
         const companion = view.target.querySelector('output[aria-label="Item 1 — categoryLabel"]');
         expect(companion?.textContent).toContain('"Assigned Beta"');
         expect(
@@ -441,7 +488,8 @@ describe("mounted generic private draft fields", () => {
         expect(choice.getAttribute("aria-invalid")).toBe("true");
         expect(choice.selectedOptions[0].textContent).toBe("Unknown supplied choice");
         expect(choice.selectedOptions[0].disabled).toBe(true);
-        expect(view.target.textContent).toContain('"unrecognized-id"');
+        expect(choice.closest(".field")?.textContent).toContain('"unrecognized-id"');
+        expect(choice.closest("details")).toBeNull();
         expect(view.payload()).toEqual(payload);
         expect(view.onchoiceedit).not.toHaveBeenCalled();
         await input(view.target, "Item 1 — Saved category", "option-0");
@@ -463,6 +511,8 @@ describe("mounted generic private draft fields", () => {
         expect(unwired.payload()).toEqual(initial());
         const locked = renderNamed(initial(), true);
         expect(control(locked.target, "Item 1 — Saved category").disabled).toBe(true);
+        expect(locked.onblocked).toHaveBeenLastCalledWith(false);
+        locked.onblocked.mockClear();
         await input(locked.target, "Item 1 — Saved category", "option-1");
         expect(locked.onchoiceedit).not.toHaveBeenCalled();
         expect(locked.onblocked).not.toHaveBeenCalled();
@@ -496,13 +546,158 @@ describe("mounted generic private draft fields", () => {
     });
 
     it("uses app labels and does not infer values or emit on mount", () => {
-        const { target, onchange } = render();
+        const { target, onchange, payload } = render();
         expect(control(target, "Item 1 — App count").value).toBe("0");
         expect(control(target, "Item 1 — enabled").value).toBe("option-0");
         expect(control(target, "Item 1 — empty").value).toBe("");
         expect(control(target, "Item 1 — option").value).toBe("absent");
-        expect(target.textContent).toContain("Complex and additional values are preserved");
+        expect(control(target, "Item 1 — App count").closest("label")?.textContent).not.toContain(
+            "(count)",
+        );
+        expect(control(target, "Item 1 — App text").closest("label")?.textContent).not.toContain(
+            "(text)",
+        );
+        expect(payload()).toEqual(initial());
         expect(onchange).not.toHaveBeenCalled();
+    });
+
+    it("uses app-hinted date, text suggestions and multiline controls without guessing or narrowing outgoing values", async () => {
+        const definition = hintedAction();
+        const payload = {
+            ...initial(),
+            whenValue: "2024-02-29",
+            currencyValue: "XBT",
+            notesValue: "Line one\nLine two",
+        };
+        const view = render(definition, payload);
+        const date = control(view.target, "Item 1 — Recorded date") as HTMLInputElement;
+        const currency = control(view.target, "Item 1 — Currency") as HTMLInputElement;
+        expect(date.tagName).toBe("INPUT");
+        expect(date.type).toBe("date");
+        expect(date.value).toBe("2024-02-29");
+        expect(currency.type).toBe("text");
+        expect(currency.value).toBe("XBT");
+        expect(control(view.target, "Item 1 — Details").tagName).toBe("TEXTAREA");
+        expect(
+            control(view.target, "Item 1 — Details")
+                .closest(".field")
+                ?.classList.contains("full-width"),
+        ).toBe(true);
+        expect(date.closest(".field")?.classList.contains("full-width")).toBe(false);
+        expect(control(view.target, "Item 1 — App text").tagName).toBe("TEXTAREA");
+        const suggestionList = document.getElementById(currency.getAttribute("list") ?? "");
+        expect(suggestionList?.tagName).toBe("DATALIST");
+        expect(
+            [...(suggestionList?.querySelectorAll("option") ?? [])].map((option) => option.value),
+        ).toEqual(["USD", "EUR"]);
+        expect(view.payload()).toEqual(payload);
+        expect(view.onchange).not.toHaveBeenCalled();
+        await input(view.target, "Item 1 — Currency", "  usd  ");
+        await input(view.target, "Item 1 — Recorded date", "2000-02-29");
+        expect(view.payload()).toEqual({
+            ...payload,
+            currencyValue: "  usd  ",
+            whenValue: "2000-02-29",
+        });
+        expect(snapshotLocalDraftPayload(view.payload(), definition.draftSchema)).toEqual(
+            view.payload(),
+        );
+        expect(typeof view.payload().whenValue).toBe("string");
+        expect(typeof view.payload().currencyValue).toBe("string");
+    });
+
+    it("declares compact wrapping field columns and at least 44px controls without relying on jsdom layout", () => {
+        const source = readFileSync(resolve(__dirname, "PrivateAppDraftFields.svelte"), "utf8");
+        const style = source.match(/<style>([\s\S]*?)<\/style>/)?.[1] ?? "";
+        const declarations = (selector: string) =>
+            [...style.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+                .filter((match) =>
+                    match[1]
+                        .split(",")
+                        .map((part) => part.trim())
+                        .includes(selector),
+                )
+                .map((match) => match[2])
+                .join("\n");
+        expect(declarations("fieldset")).toMatch(/display:\s*grid\s*;/);
+        expect(declarations("fieldset")).toMatch(/grid-template-columns:\s*repeat\(auto-fit,/);
+        for (const selector of ["input", "textarea", "select", "button"])
+            expect(declarations(selector)).toMatch(/min-height:\s*44px\s*;/);
+        expect(declarations("label")).toMatch(/overflow-wrap:\s*anywhere\s*;/);
+        expect(declarations(".full-width")).toMatch(/grid-column:\s*1\s*\/\s*-1\s*;/);
+    });
+
+    it.each(["0001-01-01", "2000-02-29", "2024-02-29", "9999-12-31"])(
+        "accepts the exact Gregorian date %s without automatic edits",
+        (whenValue) => {
+            const payload = { ...initial(), whenValue };
+            const view = render(hintedAction(), payload);
+            const date = control(view.target, "Item 1 — Recorded date") as HTMLInputElement;
+            expect(date.type).toBe("date");
+            expect(date.value).toBe(whenValue);
+            expect(date.getAttribute("aria-invalid")).toBe("false");
+            expect(view.onblocked).not.toHaveBeenCalledWith(true);
+            expect(view.onchange).not.toHaveBeenCalled();
+            expect(view.payload()).toEqual(payload);
+        },
+    );
+
+    it.each([
+        "1900-02-29",
+        "2023-02-29",
+        "2024-04-31",
+        "2024-13-01",
+        "0000-01-01",
+        "2024-2-9",
+        "2024-02-29T00:00:00Z",
+        " 2024-02-29 ",
+    ])(
+        "keeps invalid supplied date %s visible as text and blocks approval until repaired",
+        async (whenValue) => {
+            const payload = { ...initial(), whenValue };
+            const view = render(hintedAction(), payload);
+            const date = control(view.target, "Item 1 — Recorded date") as HTMLInputElement;
+            expect(date.tagName).toBe("INPUT");
+            expect(date.type).toBe("text");
+            expect(date.value).toBe(whenValue);
+            expect(date.getAttribute("aria-invalid")).toBe("true");
+            expect(date.closest("details")).toBeNull();
+            expect(view.onblocked).toHaveBeenLastCalledWith(true);
+            expect(view.onchange).not.toHaveBeenCalled();
+            expect(view.payload()).toEqual(payload);
+            await input(view.target, "Item 1 — Recorded date", "2024-02-29");
+            expect(view.payload()).toEqual({ ...payload, whenValue: "2024-02-29" });
+            expect(view.onblocked).toHaveBeenLastCalledWith(false);
+            expect((control(view.target, "Item 1 — Recorded date") as HTMLInputElement).type).toBe(
+                "date",
+            );
+        },
+    );
+
+    it("removes an invalid optional date explicitly, but keeps a cleared date as invalid supplied text", async () => {
+        const view = render(hintedAction(), { ...initial(), whenValue: "2023-02-29" });
+        button(view.target, "Remove Recorded date").click();
+        await tick();
+        expect(view.payload()).toEqual(initial());
+        expect(view.onblocked).toHaveBeenLastCalledWith(false);
+        await input(view.target, "Item 1 — Recorded date", "2024-02-29");
+        await input(view.target, "Item 1 — Recorded date", "");
+        expect(view.payload()).toEqual({ ...initial(), whenValue: "" });
+        expect(view.onblocked).toHaveBeenLastCalledWith(true);
+        expect(control(view.target, "Item 1 — Recorded date").value).toBe("");
+    });
+
+    it("does not infer calendar or currency controls from a field name or its existing value", () => {
+        const hinted = hintedAction();
+        const view = render(
+            { ...hinted, draftPresentation: undefined },
+            { ...initial(), whenValue: "2023-02-29", currencyValue: "USD" },
+        );
+        expect(control(view.target, "Item 1 — Recorded date").tagName).toBe("TEXTAREA");
+        expect(control(view.target, "Item 1 — Currency").tagName).toBe("TEXTAREA");
+        expect(view.target.querySelector("datalist")).toBeNull();
+        expect(view.onblocked).not.toHaveBeenCalledWith(true);
+        expect(view.onchange).not.toHaveBeenCalled();
     });
 
     it("disables browser spell checking and autocomplete for private text and numeric controls", () => {
@@ -571,6 +766,13 @@ describe("mounted generic private draft fields", () => {
         const view = render(action(), { ...initial(), option: "not-an-option", numberChoice: "0" });
         expect(control(view.target, "Item 1 — option").value).toBe("invalid");
         expect(control(view.target, "Item 1 — numberChoice").value).toBe("invalid");
+        expect(control(view.target, "Item 1 — option").closest(".field")?.textContent).toContain(
+            '"not-an-option"',
+        );
+        expect(
+            control(view.target, "Item 1 — numberChoice").closest(".field")?.textContent,
+        ).toContain('"0"');
+        expect(control(view.target, "Item 1 — option").closest("details")).toBeNull();
         expect(view.onchange).not.toHaveBeenCalled();
         await input(view.target, "Item 1 — option", "option-0");
         expect(view.payload().option).toBe("first");
@@ -675,6 +877,8 @@ describe("mounted generic private draft fields", () => {
                 node.matches(":disabled"),
             ),
         ).toBe(true);
+        expect(view.onblocked).toHaveBeenLastCalledWith(false);
+        view.onblocked.mockClear();
         await input(view.target, "Item 1 — App text", "not accepted");
         await input(view.target, "Item 1 — enabled", "option-1");
         expect(view.onchange).not.toHaveBeenCalled();

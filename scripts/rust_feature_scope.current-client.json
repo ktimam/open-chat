@@ -4,9 +4,9 @@
   "feature": "unofficial-current-client-models-and-private-app-native-interface",
   "sourceRevision": {
     "base": "5f00758312735f2ddac9928e3aa60349964bf73a",
-    "head": "6249be2431cdae3c4b9fd61b44aa186e223121e6"
+    "head": "bb2a8d712bdac6f59c183951e453bc0e18bb64bb"
   },
-  "cargoLockSha256": "19ecd477d56d040426bda36300fea34bf20243574a5e2bc578c0d6ebb86199c2",
+  "cargoLockSha256": "838a61f0d25f13fa92fd1d118a139d2cd00c2dfbcf625949e45a8f589e5f3ae4",
   "completeness": {
     "status": "incomplete",
     "unresolved": [
@@ -81,7 +81,7 @@
     }
   ],
   "sourceFiles": {
-    "Cargo.toml": "97b50c6823b10cee51b418bd3ac1249ea4433a1133a8f2850b5d9e53275f3b45",
+    "Cargo.toml": "102d09f9ebc6da1b015e8d8ad38798dbb2dc1ec49bae5768ca697e876449acf0",
     "frontend/tauri-plugin-oc/Cargo.toml": "3ece55c163a25b4d0f99ab49679a2e35b6db66218924beca4568155d06d44703",
     "frontend/src-tauri/Cargo.toml": "0dc8a7053d3978b483306bff04f084bb8183c21447be5e00fab8173b1527db40",
     "frontend/tauri-plugin-oc/build.rs": "5bcd390e221eedf25ac628cd464eefd82f3106eb791ac7bc031f642e982e5a4e",

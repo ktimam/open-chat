@@ -331,6 +331,14 @@ const mutations = [
       ),
   ],
   [
+    "superseded a4cc formatting baseline",
+    (s) =>
+      s.replace(
+        CURRENT_CLIENT_FORMAT_BASE_EXPRESSION,
+        "a4cc691e2c30a73b93c0fb52563168e88082c40e",
+      ),
+  ],
+  [
     "push-before comparison includes upstream-only changes and omits prior fork changes",
     (s) =>
       s.replace(

@@ -14,7 +14,7 @@ const manifest = {
     schemaVersion: 1, profile: "unofficial-local-web", buildMode: "optimized", runtimeNodeEnvironment: "development",
     version: `2.0.0-localtest.${"a".repeat(32)}`,
     port: 5194, origin: "http://localhost:5194", layout: "v2", officialBackend: "https://icp-api.io",
-    existingAccountOnly: true, clientOnlyApps: true, ota: "none", native: false,
+    existingAccountOnly: false, clientOnlyApps: true, ota: "none", native: false,
     relay: { html: "/local-app-handoff.html", script: "/local-app-handoff.js" },
 };
 const ortBase = "/assets/transformers-webgpu/ort-1.29.0-dev.20260723-1b1e1db7bc";
@@ -71,7 +71,7 @@ test("CLI arguments cannot change the preview host/port or invoke a shell", (t) 
 
 test("preview accepts only the pinned local manifest and a complete artifact", (t) => {
     assert.deepEqual(validateManifest(manifest), { port: 5194, origin: "http://localhost:5194", layout: "v2", version: manifest.version });
-    for (const override of [{ port: undefined }, { port: "5194" }, { version: "2.0.0-localtest" }, { version: undefined }, { origin: "https://oc.app" }, { port: 5195 }, { ota: "minor" }, { existingAccountOnly: false }, { clientOnlyApps: false }, { native: true }, { officialBackend: "http://wrong" }, { buildMode: "development" }, { runtimeNodeEnvironment: "production" }, { relay: { html: "/index.html", script: "/local-app-handoff.js" } }]) {
+    for (const override of [{ port: undefined }, { port: "5194" }, { version: "2.0.0-localtest" }, { version: undefined }, { origin: "https://oc.app" }, { port: 5195 }, { ota: "minor" }, { existingAccountOnly: true }, { existingAccountOnly: undefined }, { clientOnlyApps: false }, { native: true }, { officialBackend: "http://wrong" }, { buildMode: "development" }, { runtimeNodeEnvironment: "production" }, { relay: { html: "/index.html", script: "/local-app-handoff.js" } }]) {
         assert.throws(() => validateManifest({ ...manifest, ...override }));
     }
     const { root } = fixture(t);

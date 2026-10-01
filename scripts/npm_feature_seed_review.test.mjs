@@ -15,6 +15,69 @@ import {
   sourceReviewFingerprintFromBytes,
 } from "./npm_feature_seed_review.mjs";
 
+// Exact LF identities independently read from committed 240007855 before the
+// October upstream merge and app-owned card controls. Historical aggregates use
+// only these eight replacements; all other inputs remain live and the current
+// gate separately fingerprints every current byte.
+const beforeOctoberRefresh = new Map([
+  [
+    "frontend/app/src/components_shared/PrivateAppCardPreview.svelte",
+    "abbe38c8167627ad3b941062e2b8e13c755483107a38111eb3966715ec9f668d",
+  ],
+  [
+    "frontend/app/src/components_shared/PrivateAppDraftFields.svelte",
+    "0d5d28b9a835db821753b665947fbcc8a0e4f54cb369215b1dd38eb956674d5e",
+  ],
+  [
+    "frontend/app/src/components_shared/PrivateAppsWorkspace.svelte",
+    "d84eee1a4c5c022e61ed7a02d6ac1a942d6febb1766e8f6660fd8f131b02af86",
+  ],
+  [
+    "frontend/app/src/utils/localAppDraftPresentation.ts",
+    "d29d8ba48c6b1d850b30f18a16a33915a9ce58045343fe1ab7df82d3959d5d36",
+  ],
+  [
+    "frontend/openchat-agent/src/utils/chatsDb.ts",
+    "b21c79583f218c23db163d486e50dc333cb28b357bb8eb610a1aac536f9b386f",
+  ],
+  [
+    "frontend/openchat-client/src/openchat.ts",
+    "fe42fb5926d7abc0b8af005d7a2ec0c36f9c8d76df21bf767a79f0201c639e7f",
+  ],
+  [
+    "frontend/openchat-shared/src/domain/worker.ts",
+    "e680e4d277e18f71a1be45660287e5eac0563bb3c59e278df5354b08ba476bf7",
+  ],
+  [
+    "frontend/openchat-worker/src/worker.ts",
+    "b7f05d722ed8d3bb5c18153597d755342b9f0bc5a75c2e7f197e2b03428844d7",
+  ],
+]);
+function octoberPriorFingerprint(fingerprint, replacements = new Map()) {
+  for (const path of beforeOctoberRefresh.keys())
+    assert(fingerprint.files.includes(path));
+  const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
+  return {
+    ...fingerprint,
+    sha256: hash(
+      JSON.stringify(
+        fingerprint.files.map((file) => [
+          file,
+          replacements.has(file)
+            ? hash(replacements.get(file))
+            : (beforeOctoberRefresh.get(file) ??
+              hash(
+                readFileSync(resolve(root, file), "utf8").replaceAll(
+                  "\r\n",
+                  "\n",
+                ),
+              )),
+        ]),
+      ),
+    ),
+  };
+}
+
 // Historical aggregate proofs retain the exact committed 07aa47ba inputs. Only
 // these independently read pre-extension identities, three new paths and the
 // separately reviewed immutable-asset routing pair differ. Every other input
@@ -98,6 +161,7 @@ function septemberCheckpointEntries(fingerprint) {
     .map((path) => [
       path,
       beforeExtension.get(path) ??
+        beforeOctoberRefresh.get(path) ??
         createHash("sha256")
           .update(
             readFileSync(resolve(root, path), "utf8").replaceAll("\r\n", "\n"),
@@ -380,7 +444,7 @@ test("current encryption, recovery and enum-label owners use existing selectors 
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 86);
   assert.equal(
     fingerprint.sha256,
-    "68f06f6f5cf986b836f570e42102cf68125e425b08469a41a0073997c6c2cd42",
+    "166cb8127e259451ac0041463ca814a941322ed5cf11894a990cbe0df7fe264d",
   );
   assertReviewedSourceFingerprint(fingerprint, config.sourceReview);
 });
@@ -407,12 +471,7 @@ test("cache hashing responsiveness preserves exact prior source identity and int
     featureDependencySpecifiers(source),
     featureDependencySpecifiers(prior),
   );
-  const previous = sourceReviewFingerprintFromBytes(
-    actual.files.map((entry) => [
-      entry,
-      entry === file ? Buffer.from(prior) : readFileSync(resolve(root, entry)),
-    ]),
-  );
+  const previous = octoberPriorFingerprint(actual, new Map([[file, prior]]));
   assert.equal(
     previous.sha256,
     "95eb35428d98c8af8b7d7a81af121ccae5275d3aa09b2f8a0adc2a9e0abb0e62",
@@ -481,14 +540,7 @@ test("unofficial immutable-asset routing preserves the exact prior source aggreg
       expected,
     );
   }
-  const previous = sourceReviewFingerprintFromBytes(
-    actual.files.map((file) => [
-      file,
-      prior.has(file)
-        ? Buffer.from(prior.get(file))
-        : readFileSync(resolve(root, file)),
-    ]),
-  );
+  const previous = octoberPriorFingerprint(actual, prior);
   assert.equal(
     previous.sha256,
     "84f4494dc4a493fa56ac72f31a10c9a0055ab06ae493e4e073b2e4c30d590e08",
@@ -500,6 +552,79 @@ test("unofficial immutable-asset routing preserves the exact prior source aggreg
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 86);
   assert(
     !actual.files.includes("frontend/app/transformersWebGpuFeatureFlag.d.mts"),
+  );
+});
+
+test("October merge and card controls retain the exact previous aggregate and fail closed on new imports or drift", () => {
+  const config = JSON.parse(
+    readFileSync(
+      resolve(root, "scripts/npm_feature_scope.current-client.json"),
+      "utf8",
+    ),
+  );
+  const actual = seedSourceFingerprint(root, config);
+  const previous = octoberPriorFingerprint(actual);
+  assert.equal(
+    previous.sha256,
+    "68f06f6f5cf986b836f570e42102cf68125e425b08469a41a0073997c6c2cd42",
+  );
+  assertReviewedSourceFingerprint(previous, config.sourceReview);
+  assertReviewedSourceFingerprint(actual, config.sourceReview);
+  const owned = featureOwnedFiles(root, config.scopeId);
+  const names = new Set(
+    config.seeds.map(
+      (seed) => seed.name ?? seed.location.replace(/^node_modules\//u, ""),
+    ),
+  );
+  const entries = actual.files.map((file) => [
+    file,
+    readFileSync(resolve(root, file)),
+  ]);
+  for (const file of beforeOctoberRefresh.keys()) {
+    // Mixed upstream sources keep their anchored-only ownership; the four
+    // dedicated presentation consumers remain subject to full import checks.
+    const dedicated = file.startsWith("frontend/app/");
+    assert.equal(owned.includes(file), dedicated);
+    if (dedicated) {
+      const source = readFileSync(resolve(root, file), "utf8");
+      assertReviewedFeatureImports(source, names);
+      assert.throws(
+        () =>
+          assertReviewedFeatureImports(
+            `${source}\nimport "unreviewed-card-control";\n`,
+            names,
+          ),
+        /no reviewed root/u,
+      );
+    }
+    assert.throws(
+      () =>
+        assertReviewedSourceFingerprint(
+          sourceReviewFingerprintFromBytes(
+            entries.map(([path, bytes]) => [
+              path,
+              path === file
+                ? Buffer.concat([bytes, Buffer.from("\n// drift\n")])
+                : bytes,
+            ]),
+          ),
+          config.sourceReview,
+        ),
+      /source set changed/u,
+    );
+  }
+  const presentation = readFileSync(
+    resolve(root, "frontend/app/src/utils/localAppDraftPresentation.ts"),
+    "utf8",
+  );
+  assert.deepEqual(featureDependencySpecifiers(presentation), [
+    "./localAppCatalog",
+    "./localAppDraftFields",
+    "./localAppDrafts",
+  ]);
+  assert.doesNotMatch(
+    presentation,
+    /\b(?:fetch|WebSocket|XMLHttpRequest|Worker|indexedDB|localStorage|sessionStorage)\s*\(/u,
   );
 });
 

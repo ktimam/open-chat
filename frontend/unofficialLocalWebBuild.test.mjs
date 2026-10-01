@@ -100,7 +100,7 @@ test("manifest is fixed local build metadata, without credentials or arbitrary f
         origin: "http://localhost:5193",
         layout: "v2",
         officialBackend: "https://icp-api.io",
-        existingAccountOnly: true,
+        existingAccountOnly: false,
         clientOnlyApps: true,
         ota: "none",
         native: false,

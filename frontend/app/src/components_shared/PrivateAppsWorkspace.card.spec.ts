@@ -99,8 +99,19 @@ const settle = async () => {
     flushSync();
 };
 const button = (label: string) =>
-    [...target.querySelectorAll("button")].find((node) => node.textContent === label)!;
+    [...target.querySelectorAll("button")].find(
+        (node) => node.textContent === label || node.getAttribute("aria-label") === label,
+    )!;
 const preview = () => target.querySelector('[aria-label="App-declared draft preview"]')!;
+const cardText = () =>
+    [
+        preview().textContent,
+        ...preview().querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(
+            "input, textarea, select",
+        ),
+    ]
+        .map((value) => (typeof value === "string" || value === null ? value : value.value))
+        .join(" ");
 const visibleText = () => target.textContent?.replace(/\s+/g, " ");
 const editor = () =>
     target.querySelector<HTMLTextAreaElement>('textarea[aria-label="Complete payload (JSON)"]')!;
@@ -227,10 +238,69 @@ afterEach(async () => {
 });
 
 describe("private workspace declarative card and authoritative review", () => {
+    it("keeps invalid supplied dates visible and blocks stale approval until exact correction", async () => {
+        const declaration = JSON.parse(catalog);
+        const action = declaration.apps[0].actions[0];
+        action.draftSchema.properties.date = { type: "string" };
+        action.draftPresentation = {
+            version: 1,
+            enumLabels: [],
+            controls: [{ field: "date", kind: "date" }],
+        };
+        workspace.discard();
+        expect(workspace.importCatalog(JSON.stringify(declaration))).toBe(true);
+        expect(workspace.select("synthetic", "capture")).toBe(true);
+        calls.extract.mockResolvedValue({
+            kind: "extracted",
+            candidates: [{ value: 42, date: "2026-02-30" }],
+        });
+        await propose();
+        const date = () =>
+            target.querySelector<HTMLInputElement>('input[aria-label="Item 1 — date"]')!;
+        expect(date().type).toBe("text");
+        expect(date().value).toBe("2026-02-30");
+        expect(JSON.parse(editor().value).date).toBe("2026-02-30");
+        expect(button("Review full request").disabled).toBe(true);
+        expect(workspace.state.draft!.approval).toBeUndefined();
+        date().value = "2026-02-28";
+        date().dispatchEvent(new Event("input", { bubbles: true }));
+        await settle();
+        expect(date().type).toBe("date");
+        expect(button("Review full request").disabled).toBe(false);
+        button("Review full request").click();
+        await settle();
+        const staleApproval = workspace.state.draft!.approval!.approvalId;
+        confirmation().click();
+        await settle();
+        await changeJson(JSON.stringify({ value: 42, date: "" }));
+        expect(date().type).toBe("text");
+        expect(date().value).toBe("");
+        expect(JSON.parse(editor().value)).toEqual({ value: 42, date: "" });
+        expect(button("Review full request").disabled).toBe(true);
+        expect(workspace.state.draft!.approval).toBeUndefined();
+        await workspace.confirm(staleApproval);
+        expect(calls.deliver).not.toHaveBeenCalled();
+        date().value = "2026-03-01";
+        date().dispatchEvent(new Event("input", { bubbles: true }));
+        await settle();
+        button("Review full request").click();
+        await settle();
+        expect(confirmation().checked).toBe(false);
+        expect(button("Send reviewed request").disabled).toBe(true);
+        confirmation().click();
+        await settle();
+        button("Send reviewed request").click();
+        await settle();
+        expect(calls.deliver).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({ payload: { value: 42, date: "2026-03-01" } }),
+            expect.any(AbortSignal),
+        );
+    });
+
     it("wires named labels to exact values, preserves manual edits, and revokes consent synchronously", async () => {
         await proposeNamed();
         expect(categoryChoice().value).toBe("option-0");
-        expect(categoryChoice().selectedOptions[0].textContent).toBe("Friendly Alpha (category-a)");
+        expect(categoryChoice().selectedOptions[0].textContent).toBe("Friendly Alpha");
         expect(JSON.parse(editor().value)).toEqual({
             value: 10,
             extra: "Also sent",
@@ -386,16 +456,34 @@ describe("private workspace declarative card and authoritative review", () => {
             (node) => node.textContent === summary,
         )!;
         expect(review).toBeDefined();
-        expect(review.closest("details")).toBeNull();
+        expect(review.closest("details")?.classList.contains("request-details")).toBe(true);
+        expect(review.closest("details")?.open).toBe(false);
+        expect(cardText()).toContain("42");
+        expect(cardText()).toContain("Also sent");
+        expect(preview().closest("details")).toBeNull();
+        expect(target.querySelector(".privacy-disclosure")?.hasAttribute("open")).toBe(false);
         expect(setup.open).toBe(false);
         expect(advanced.open).toBe(false);
         expect(calls.deliver).not.toHaveBeenCalled();
     });
 
     it("shows declared labels and additional fields without replacing explicit host sharing consent", async () => {
-        expect(preview().textContent).toContain("App-defined title");
+        expect(target.querySelector("h2")?.textContent).toBe("App-defined title");
+        expect(
+            [...target.querySelectorAll("h2, h3")].filter(
+                (node) => node.textContent === "App-defined title",
+            ),
+        ).toHaveLength(1);
+        expect(
+            preview().compareDocumentPosition(target.querySelector(".privacy-disclosure")!) &
+                Node.DOCUMENT_POSITION_FOLLOWING,
+        ).toBeTruthy();
+        expect(
+            preview().compareDocumentPosition(target.querySelector(".setup-disclosure")!) &
+                Node.DOCUMENT_POSITION_FOLLOWING,
+        ).toBeTruthy();
         expect(preview().textContent).toContain("App-defined value");
-        expect(preview().textContent).toContain("Also sent");
+        expect(cardText()).toContain("Also sent");
         expect(editor().value).toContain('"extra": "Also sent"');
         expect(calls.deliver).not.toHaveBeenCalled();
         expect(visibleText()).not.toContain("Preview only");
@@ -403,6 +491,8 @@ describe("private workspace declarative card and authoritative review", () => {
         button("Review full request").click();
         await settle();
         expect(button("Send reviewed request").disabled).toBe(true);
+        expect(button("Send reviewed request").textContent).toContain("Preview only");
+        expect(button("Send reviewed request").textContent).toContain("Send reviewed request");
         expect(visibleText()).toContain("Send exactly this request outside OpenChat.");
         button("Send reviewed request").click();
         await settle();
@@ -428,15 +518,15 @@ describe("private workspace declarative card and authoritative review", () => {
         confirmation().click();
         await settle();
         await changeJson('{"value":43,"extra":"Edited payload"}');
-        expect(preview().textContent).toContain("43");
-        expect(preview().textContent).toContain("Edited payload");
-        expect(preview().textContent).not.toContain("Also sent");
+        expect(cardText()).toContain("43");
+        expect(cardText()).toContain("Edited payload");
+        expect(cardText()).not.toContain("Also sent");
         expect(workspace.state.draft!.approval).toBeUndefined();
         expect(button("Send reviewed request")).toBeUndefined();
         await workspace.confirm(firstApproval);
         expect(calls.deliver).not.toHaveBeenCalled();
         await changeJson('{"value":');
-        expect(preview().textContent).toContain("Preview unavailable");
+        expect(preview().textContent).toContain("Field editing is unavailable");
         expect(preview().textContent).not.toContain("Edited payload");
         expect(preview().querySelector("dl")).toBeNull();
         button("Review full request").click();
@@ -554,8 +644,8 @@ describe("private workspace declarative card and authoritative review", () => {
                     ? editedRecords
                     : { customRecords: editedRecords, envelopeNote: "ENVELOPE MUST REMAIN" };
             expect(JSON.parse(editor().value)).toEqual(expected);
-            expect(preview().textContent).toContain("FIRST ITEM MUST REMAIN");
-            expect(preview().textContent).toContain("SECOND ITEM EXTRA");
+            expect(cardText()).toContain("FIRST ITEM MUST REMAIN");
+            expect(cardText()).toContain("SECOND ITEM EXTRA");
             if (kind === "wrapped-list")
                 expect(preview().textContent).toContain("ENVELOPE MUST REMAIN");
             await workspace.confirm(firstApproval);
@@ -639,7 +729,7 @@ describe("private workspace declarative card and authoritative review", () => {
             expect(visibleText()).not.toContain(
                 "The pending field edit cannot be reviewed or sent",
             );
-            expect(preview().textContent).toContain("Recovered extra");
+            expect(cardText()).toContain("Recovered extra");
             expect(button("Review full request").disabled).toBe(false);
             await approveAndSend();
             expect(calls.deliver).toHaveBeenCalledExactlyOnceWith(
@@ -658,7 +748,7 @@ describe("private workspace declarative card and authoritative review", () => {
         expect(extraField().value).toBe("Also sent");
         expect(visibleText()).not.toContain("The pending field edit cannot be reviewed or sent");
         expect(button("Review full request").disabled).toBe(false);
-        expect(preview().textContent).toContain("Also sent");
+        expect(cardText()).toContain("Also sent");
         expect(calls.deliver).not.toHaveBeenCalled();
     });
 

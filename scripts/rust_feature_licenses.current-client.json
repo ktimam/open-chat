@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "scope": "current-client",
-  "cargoLockSha256": "19ecd477d56d040426bda36300fea34bf20243574a5e2bc578c0d6ebb86199c2",
-  "sourceScopeSha256": "216b0d58bdc52e764dc46c91bea8431251e9ff62ad6031429d00f65060970791",
+  "cargoLockSha256": "838a61f0d25f13fa92fd1d118a139d2cd00c2dfbcf625949e45a8f589e5f3ae4",
+  "sourceScopeSha256": "6af99cfce56ea7478268e8d4dc434d2a2a13f8af056e5e7dcbe8119556082294",
   "modelIdentityResolutions": [
     {
       "name": "llama-cpp-sys-2",

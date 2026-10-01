@@ -5,8 +5,11 @@ import {
     type LocalAppAction,
 } from "./localAppCatalog";
 import { validateLocalAppDraftEditor } from "./localAppDraftChoices";
-import { validateLocalAppDraftPresentation as validate } from "./localAppDraftPresentation";
-import type { LocalDraftSchema } from "./localAppDrafts";
+import {
+    isValidLocalDraftIsoDate,
+    validateLocalAppDraftPresentation as validate,
+} from "./localAppDraftPresentation";
+import { snapshotLocalDraftPayload, type LocalDraftSchema } from "./localAppDrafts";
 
 type Scalar = string | number | boolean | null;
 type Presentation = {
@@ -137,6 +140,208 @@ function boundedCase(fields: number, options: number) {
     };
 }
 const bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).byteLength;
+
+describe("bounded optional string controls", () => {
+    const controls = () => [
+        { field: "preset", kind: "text", suggestions: ["One", "Two"] },
+        { field: "presetName", kind: "date" },
+        { field: "note", kind: "multiline", fullWidth: true },
+    ];
+    it.each(["single", "list", "wrapped-list"] as const)(
+        "preserves hints, arbitrary string values and invalid date text for %s",
+        (kind) => {
+            const handoff = kind === "wrapped-list" ? { kind, field: "records" } : { kind };
+            const schema = schemaFor(handoff);
+            const before = JSON.stringify(schema);
+            const declaration = { ...presentation(), controls: controls() };
+            const result = validate(declaration, schema, handoff);
+            expect(result).toEqual(declaration);
+            expect(JSON.stringify(schema)).toBe(before);
+            expect(Object.isFrozen(result.controls)).toBe(true);
+            expect(Object.isFrozen(result.controls?.[0].suggestions)).toBe(true);
+            const row = {
+                side: "incoming",
+                category: "planned",
+                preset: "Not a suggestion",
+                presetName: "2026-02-30",
+                note: "Exact\ntext",
+            };
+            expect(snapshotLocalDraftPayload(row, rowSchema)).toEqual(row);
+            declaration.controls[0].suggestions?.push("Later");
+            expect(result.controls?.[0].suggestions).toEqual(["One", "Two"]);
+        },
+    );
+    it("permits controls without enum labels, but not a wholly empty declaration", () => {
+        expect(
+            validate({ version: 1, enumLabels: [], controls: controls() }, rowSchema, single)
+                .controls,
+        ).toEqual(controls());
+        expect(() =>
+            validate({ version: 1, enumLabels: [], controls: [] }, rowSchema, single),
+        ).toThrow();
+    });
+    it.each([
+        { field: "absent", kind: "text" },
+        { field: "nested.side", kind: "text" },
+        { field: "__proto__", kind: "text" },
+        { field: "constructor", kind: "text" },
+        { field: "side", kind: "text" },
+        { field: "nested", kind: "text" },
+        { field: "list", kind: "text" },
+        { field: "note", kind: "html" },
+        { field: "note", kind: null },
+        { field: "note" },
+        { field: "note", kind: "text", hidden: true },
+        { field: "note", kind: "text", default: "Invented" },
+        { field: "note", kind: "text", fullWidth: "true" },
+        { field: "note", kind: "date", suggestions: ["2026-01-01"] },
+        { field: "note", kind: "multiline", suggestions: ["Text"] },
+        { field: "note", kind: "text", suggestions: [] },
+        { field: "note", kind: "text", suggestions: ["same", "same"] },
+        { field: "note", kind: "text", suggestions: [1] },
+        { field: "note", kind: "text", suggestions: [""] },
+        { field: "note", kind: "text", suggestions: [" leading"] },
+        { field: "note", kind: "text", suggestions: ["trailing "] },
+        { field: "note", kind: "text", suggestions: ["hidden\u200b"] },
+        { field: "note", kind: "text", suggestions: ["line\nvalue"] },
+        { field: "note", kind: "text", suggestions: ["x".repeat(129)] },
+    ])("rejects unsafe, unsupported or value-changing hints %#", (control) => {
+        expect(() =>
+            validate({ ...presentation(), controls: [control] }, rowSchema, single),
+        ).toThrow();
+    });
+    it("rejects duplicate controls and suggestions outside existing string bounds", () => {
+        expect(() =>
+            validate(
+                { ...presentation(), controls: [controls()[0], controls()[0]] },
+                rowSchema,
+                single,
+            ),
+        ).toThrow();
+        for (const suggestion of ["a", "abcd"]) {
+            expect(() =>
+                validate(
+                    {
+                        version: 1,
+                        enumLabels: [],
+                        controls: [{ field: "value", kind: "text", suggestions: [suggestion] }],
+                    },
+                    {
+                        type: "object",
+                        additionalProperties: false,
+                        properties: { value: { type: "string", minLength: 2, maxLength: 3 } },
+                    },
+                    single,
+                ),
+            ).toThrow();
+        }
+    });
+    it("enforces 32 controls, 256 suggestions and the shared total byte budget", () => {
+        const names = Array.from({ length: 33 }, (_, i) => `field${i}`);
+        const schema: LocalDraftSchema = {
+            type: "object",
+            additionalProperties: false,
+            properties: Object.fromEntries(
+                names.slice(0, 32).map((name) => [name, { type: "string" }]),
+            ),
+        };
+        const all = names.map((field) => ({
+            field,
+            kind: "text",
+            fullWidth: false,
+            suggestions: Array.from({ length: 256 }, (_, i) => `value${i}`),
+        }));
+        expect(
+            validate(
+                {
+                    version: 1,
+                    enumLabels: [],
+                    controls: all.slice(0, 32).map(({ suggestions: _unused, ...rest }) => rest),
+                },
+                schema,
+                single,
+            ).controls,
+        ).toHaveLength(32);
+        expect(() =>
+            validate(
+                {
+                    version: 1,
+                    enumLabels: [],
+                    controls: all.map(({ suggestions: _unused, ...rest }) => rest),
+                },
+                schema,
+                single,
+            ),
+        ).toThrow();
+        expect(
+            validate({ version: 1, enumLabels: [], controls: [all[0]] }, schema, single)
+                .controls?.[0].suggestions,
+        ).toHaveLength(256);
+        expect(() =>
+            validate(
+                {
+                    version: 1,
+                    enumLabels: [],
+                    controls: [{ ...all[0], suggestions: [...all[0].suggestions, "extra"] }],
+                },
+                schema,
+                single,
+            ),
+        ).toThrow();
+        const oversized = { version: 1, enumLabels: [], controls: all.slice(0, 32) };
+        expect(bytes(oversized)).toBeGreaterThan(65536);
+        expect(() => validate(oversized, schema, single)).toThrow();
+    });
+    it("parses hints through the catalog without including them in delivered fields", () => {
+        const source = catalog();
+        Object.assign(source.apps[0].actions[0], {
+            draftPresentation: { ...presentation(), controls: controls() },
+        });
+        const action = parseLocalAppCatalog(JSON.stringify(source)).apps[0].actions[0];
+        expect(action.draftPresentation?.controls).toEqual(controls());
+        const payload = { side: "incoming", category: "planned", note: "unchanged" };
+        expect(projectLocalAppPayload(action, [payload])).toEqual(payload);
+    });
+});
+
+describe("exact calendar date presentation guard", () => {
+    it.each([
+        "0001-01-01",
+        "0096-02-29",
+        "1900-02-28",
+        "2000-02-29",
+        "2024-02-29",
+        "2026-08-14",
+        "9999-12-31",
+    ])("accepts %s without normalization", (value) =>
+        expect(isValidLocalDraftIsoDate(value)).toBe(true),
+    );
+    it.each([
+        undefined,
+        null,
+        false,
+        20260814,
+        "",
+        "0000-01-01",
+        "1900-02-29",
+        "2100-02-29",
+        "2026-02-29",
+        "2026-04-31",
+        "2026-00-01",
+        "2026-13-01",
+        "2026-01-00",
+        "2026-01-32",
+        "2026-8-14",
+        "14-08-2026",
+        " 2026-08-14",
+        "2026-08-14\n",
+        "2026-08-14T00:00:00Z",
+    ])("rejects malformed supplied value %# without replacing it", (value) => {
+        const before = value;
+        expect(isValidLocalDraftIsoDate(value)).toBe(false);
+        expect(value).toBe(before);
+    });
+});
 
 describe("generic label-only draft presentation", () => {
     it.each(["single", "list", "wrapped-list"] as const)(

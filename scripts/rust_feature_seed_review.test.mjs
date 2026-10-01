@@ -155,7 +155,7 @@ test("current-client review binds the encrypted-only native handoff without addi
   const { config, review, sourceBytes } = currentClientFixture();
   assert.equal(
     config.sourceRevision.head,
-    "6249be2431cdae3c4b9fd61b44aa186e223121e6",
+    "bb2a8d712bdac6f59c183951e453bc0e18bb64bb",
   );
   assert.equal(
     config.sourceRevision.base,
@@ -194,6 +194,64 @@ test("current-client review binds the encrypted-only native handoff without addi
       profile.features.includes("open-chat/local-browser-auth"),
       false,
     );
+});
+
+test("current-client merge lock refresh reverses only upstream backend edges and workspace registration", () => {
+  const { config, cargoLock, sourceBytes } = currentClientFixture();
+  const lf = (bytes) =>
+    Buffer.from(bytes).toString("utf8").replaceAll("\r\n", "\n");
+  const current = lf(cargoLock);
+  assert.equal(
+    hash(current),
+    "838a61f0d25f13fa92fd1d118a139d2cd00c2dfbcf625949e45a8f589e5f3ae4",
+  );
+  const added =
+    '[[package]]\nname = "chat_rooms"\nversion = "0.1.0"\ndependencies = [\n "puzzle_core",\n]\n\n';
+  assert.equal(current.split(added).length, 2);
+  let previous = current.replace(added, "");
+  for (const [name, edges] of [
+    ["daily_puzzle_canister_impl", ["chat_rooms"]],
+    ["gated_groups", ["ledger_utils"]],
+    ["integration_tests", ["chat_rooms", "tokio"]],
+    ["user_canister", ["msgpack"]],
+  ]) {
+    const expression = new RegExp(
+      `\\[\\[package\\]\\]\\nname = "${name}"\\n[\\s\\S]*?(?=\\n\\[\\[package\\]\\]|$)`,
+      "u",
+    );
+    const block = previous.match(expression)?.[0];
+    assert(block, name);
+    let restored = block;
+    for (const edge of edges) {
+      const line = ` "${edge}",\n`;
+      assert.equal(restored.split(line).length, 2);
+      restored = restored.replace(line, "");
+    }
+    previous = previous.replace(block, restored);
+  }
+  assert.equal(
+    hash(previous),
+    "19ecd477d56d040426bda36300fea34bf20243574a5e2bc578c0d6ebb86199c2",
+  );
+  const manifest = lf(sourceBytes["Cargo.toml"]);
+  assert.equal(
+    hash(manifest),
+    "102d09f9ebc6da1b015e8d8ad38798dbb2dc1ec49bae5768ca697e876449acf0",
+  );
+  assert.equal(
+    hash(
+      manifest
+        .replace('    "backend/libraries/chat_rooms",\n', "")
+        .replace("[profile.dev.package.chat_rooms]\nopt-level = 3\n", ""),
+    ),
+    "97b50c6823b10cee51b418bd3ac1249ea4433a1133a8f2850b5d9e53275f3b45",
+  );
+  assert.equal(config.seeds.length, 26);
+  assert.equal(config.profiles.length, 8);
+  assert.equal(Object.keys(config.sourceFiles).length, 28);
+  assert(
+    config.seeds.every((seed) => !seed.ownerManifest.startsWith("backend/")),
+  );
 });
 
 test("current-client setup reuses reviewed owners while its exact sys ABI constraint stays host-inference-only", () => {
