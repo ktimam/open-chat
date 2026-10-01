@@ -141,3 +141,93 @@ Private local compatibility receipts are retained beneath the project-specific
 temporary root in `sharp-0354-candidate-20260915-OanUei/` and
 `sharp-0354-pr1-candidate-20260915-ee2qMa/`. The initial response identity and
 failed historical results above remain intact.
+
+## October 1 narrow adm-zip patch
+
+The user separately approved changing only the existing
+`onnxruntime-node@1.24.3` override from adm-zip `0.6.0` to `0.6.1`.
+The frontend lock changes only that package's version, archive URL and integrity;
+all other package records, parent ranges, model runtimes, prompts and assets are
+unchanged. The normalized frontend lock SHA-256 is
+`dcba45844bb8ddc1a3acd2e9cd31df61e0a466324ce641462cec4eb398d9689d`.
+No shared frontend or Rust dependency was upgraded.
+
+The 35,489-byte registry archive was fetched with lifecycle scripts disabled and
+verified against registry SHA-512
+`Xwrja8nx9e5o2N1my4DsKCeKpdrnACyr1wtbPxBDgGzKzKyE9kRtBFA8mWldI+RVlD7CBZNWY/wQ2+ydwOR6kQ==`.
+It was first extracted into isolated project temporary storage. The actual
+installed ONNX `1.24.3` package metadata and `script/install-utils.js` were copied
+byte-for-byte there; no ONNX lifecycle installer, optional binary download or
+repository `node_modules` update was performed during that initial validation.
+
+The approved narrow upgrade was then applied to the existing installed package.
+All 20 candidate files were checked against the pinned official archive; its file
+list was identical to the old package. Only the eight changed files and the
+package's single generated npm metadata record were replaced, after backing up
+and verifying the original files. The installed package now resolves to `0.6.1`,
+and the real canonical ONNX parent passes the same 17 offline checks. No other
+dependency, source file, lifecycle script or model asset changed. The backup,
+exact file inventories and test log remain in `installed-alignment/` beneath
+the patch's project temporary directory.
+
+The real parent extraction/copy helper passes all 11 preceding compatibility and
+cleanup checks plus six checks for rejecting dishonest zero-size DEFLATE data and
+duplicate entry names without copying an output or leaving temporary extraction
+files. The new fixture expands to at most 4 KiB even with the old library; it is
+not a large decompression bomb. The old `0.6.0` actual-parent control fails the
+new zero-size rejection as expected. A separate bounded old/new comparison
+confirms that `0.6.0` accepts both inputs while `0.6.1` rejects both. Socket
+creation is forbidden and the parent's HTTPS calls receive only a fixed in-memory
+synthetic feed. These checks are not an exhaustive exploit assessment of every
+advisory or a Linux/physical-device qualification.
+
+The five existing offline npm contract suites and model CI coverage suite pass
+188 tests with zero skips. The real pinned npm/Arborist offline smoke and current
+inventory plan pass without forbidden network/install operations. The runtime
+source fingerprint remains
+`95eb35428d98c8af8b7d7a81af121ccae5275d3aa09b2f8a0adc2a9e0abb0e62`:
+151 source files, 25 roots and 86 ownership anchors; no source-review baseline or
+historical fixture was rebound for this dependency patch.
+
+One separately approved npm bulk request sent only `{"adm-zip":["0.6.1"]}`
+without credentials. At `2026-10-01T16:04:27Z`, npm returned HTTP 200 and the exact
+two-byte response `{}` (SHA-256
+`44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a`).
+This establishes no advisories returned for that one requested package/version
+at that time, not a new whole-feature scan or a clean overall advisory gate.
+The [maintainer's 0.6.1 release](https://github.com/cthackers/adm-zip/releases/tag/v0.6.1)
+describes the ZIP fixes. Earlier failed receipts and the exact historical
+deferral remain preserved; other npm/Rust findings are not waived or resolved.
+All new private receipts are under `adm-zip-061-20261001/` beneath the
+project-specific temporary root. No hosted run, commit, push, build or deployment
+was performed by this patch validation.
+
+The subsequent already-approved feature-scoped query, verified at 17:38 UTC, used the same
+25 roots, 151 source files, 318 public package names and 322 versions. Its only
+dependency-inventory change was adm-zip 0.6.0 to 0.6.1, which again returned no
+findings. The overall gate still fails: devalue 5.8.1 returned seven advisories,
+including six IDs absent from the previous response. These are
+`GHSA-j22f-vq7h-c4qm`, `GHSA-hx4r-w6wj-j8fg`, `GHSA-mcm9-63f2-9j32`,
+`GHSA-wf3x-273g-mvxv`, `GHSA-x5rw-q4pp-hg5g` and `GHSA-4q55-j62x-fr9h`,
+in addition to the previously reported `GHSA-9rgm-9g3h-6x36`.
+This records the returned findings, not a determination of application
+exploitability. The existing deferrals were not extended to these IDs. No shared
+dependency upgrade or additional waiver was authorized by the adm-zip approval.
+The exact request, response and scope bindings are retained in
+`scoped-advisories-20261001-post-adm061/receipt.json` under the project temporary
+root; the repeated Rust query returned the same ten earlier finding records.
+
+## October 2 local test deferral
+
+After reviewing the pending findings, the user explicitly chose to defer the
+seven recorded advisories for `devalue@5.8.1` listed above for the unofficial
+local-test release. That exact package version, archive URL and integrity are
+already present in the integrated upstream baseline; this comparison does not
+establish application exploitability or make the findings harmless.
+
+Keep these findings open and disclosed, but do not treat their disposition as
+a remaining local-test approval blocker. Preserve the raw failed scanner result;
+this decision is not a clean scan, dependency fix, scanner suppression or a
+public-release approval. It does not cover other versions or future findings,
+and does not authorize a broad OpenChat core audit or shared dependency upgrade.
+The separate approved `adm-zip@0.6.1` fix remains unchanged.

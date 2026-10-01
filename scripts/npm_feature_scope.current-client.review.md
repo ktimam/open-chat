@@ -475,3 +475,62 @@ Verification with pinned Node **24.18.1**: the current source gate reports the
 aggregate and unchanged counts above; the same five offline npm contract suites
 pass **151/151**, with no failed, skipped or cancelled tests. The exact-reversal
 test is additive; no preceding test expectation or enforcement rule is waived.
+
+## Encrypted private delivery and local card recovery checkpoint (2026-10-01)
+
+The reviewed source aggregate is
+`84f4494dc4a493fa56ac72f31a10c9a0055ab06ae493e4e073b2e4c30d590e08`.
+It binds committed fork `6249be2431cdae3c4b9fd61b44aa186e223121e6` plus the
+approved, still-uncommitted encrypted-handoff and draft-recovery source. It does
+not claim a clean checkout or include the two separately pending Android
+diagnostic tools in runtime ownership. Counts are **122 dedicated owners, 151
+fingerprinted sources, 25 dependency roots and 86 exact anchors**. Selectors,
+root sets, advisory rules, deferrals and historical PR records are unchanged.
+
+Compared with committed checkpoint `07aa47ba`, 14 existing inputs change and
+three modules are newly selected by the existing `localApp*` rule:
+
+- `localAppDraftPresentation.ts`: bounded immutable, app-declared enum labels;
+  exact scalar values, required validation and choice/default behavior remain.
+- `localAppEncryption.ts`: authenticated-connect recipient key/context binding,
+  P-256 ECDH, HKDF-SHA256 and AES-256-GCM through built-in Web Crypto. A fresh
+  ephemeral key, salt and IV are generated for every send. Routing, app revision,
+  import ID and recipient key/context are authenticated. Only the encrypted
+  envelope reaches BroadcastChannel, native IPC, loopback and app postMessage;
+  no plaintext payload or recipient label is in those wire objects. Public
+  routing metadata remains visible. This is recipient confidentiality, not
+  sender authentication or backend attestation.
+- `localAppDraftPersistence.ts`: bounded account/backend-scoped IndexedDB storage
+  with a nonextractable AES-GCM key, fresh IV and authenticated generation and
+  record revision. Atomic compare-and-write rejects both stale writes after
+  Forget and stale-tab edits after another tab marks the request attempted.
+  Same-origin code can still use the stored key; this is not XSS isolation.
+
+Catalog, public-directory, editor/workspace and both delivery paths were reviewed
+with these owners. The public directory rejects private recipient keys. The
+workspace durably records possible dispatch before either adapter releases an
+encrypted request. Recovery keeps the exact request, schema, destination and
+idempotency key, restores neither approval nor transport state, protects manual
+values, never auto-sends, and blocks changed app configuration. The separate
+setup store continues to exclude drafts and approvals. No app-specific business
+logic or new package import is introduced.
+
+The other three changed mixed inputs are the OpenChat client and worker protocol/
+implementation: upstream `a4cc691e` adds swap token/amount fields and tipping
+metadata/routing. Existing auth/session and unofficial policy guards remain
+intact; their unrelated core dependency imports are not selected or accepted by
+this source review. Model assets, runtime choices and prompts are unchanged.
+
+The exact mobile error-translation reversal and Windows startup-path reversal
+remain checked against their original file and aggregate hashes. Their September
+148-file inputs are reconstructed using only the 14 independently read `07aa47ba`
+pre-extension hashes and omission of the three later files. Unchanged inputs
+remain live; the separate current fingerprint binds all 151 current inputs.
+No historical snapshot is relabelled as current or silently rehashed.
+
+Native envelope tests compile the two actual Rust handoff modules on Windows
+with offline canonical-lock package identities: **18/18 pass**, including actual
+loopback claim/dispatch/origin/lifecycle tests and plaintext/malformed-envelope
+rejection. This is not Android packaging, provider qualification or a rebuilt
+APK. Dependency collection, advisory acceptance, hosted CI and release acceptance
+remain separate gates; this checkpoint performs no core audit or waiver.

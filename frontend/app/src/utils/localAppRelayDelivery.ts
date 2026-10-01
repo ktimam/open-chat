@@ -1,6 +1,7 @@
 import { writable } from "svelte/store";
 import type { LocalDraftDeliveryRequest } from "./localAppDrafts";
 import { localAppSessionNonce } from "./localAppHandoff";
+import { sealLocalAppDelivery } from "./localAppEncryption";
 
 export const localAppDeliveryStatus = writable<
     | {
@@ -25,7 +26,10 @@ import.meta.hot?.dispose(cancelLocalAppHandoffs);
 export function deliverLocalAppViaRelay(
     request: LocalDraftDeliveryRequest,
     signal: AbortSignal,
+    beforeDelivery?: Promise<void>,
 ): Promise<{ kind: "delivered" | "uncertain" }> {
+    // Observe failure even if the caller was cancelled before this adapter could open.
+    void beforeDelivery?.catch(() => {});
     if (signal.aborted || typeof BroadcastChannel === "undefined") {
         return Promise.resolve({ kind: "uncertain" });
     }
@@ -36,6 +40,7 @@ export function deliverLocalAppViaRelay(
     return new Promise((resolve) => {
         const channel = new BroadcastChannel(`openchat-local-handoff-v1:${nonce}`);
         let approvedSent = false;
+        let preparing = false;
         let received = false;
         let settled = false;
         let closed = false;
@@ -81,6 +86,9 @@ export function deliverLocalAppViaRelay(
         active.set(request.idempotencyKey, cancel);
         signal.addEventListener("abort", cancel, { once: true });
         window.addEventListener("pagehide", cancel, { once: true });
+        // Attach immediately: a failed durable write must not become an unhandled rejection
+        // while waiting for the relay, and must close an otherwise empty popup session.
+        void beforeDelivery?.catch(() => uncertain());
         channel.onmessage = (event) => {
             if (closed) return;
             const message = event.data;
@@ -88,19 +96,27 @@ export function deliverLocalAppViaRelay(
             if (
                 message.type === "relay-ready" &&
                 !approvedSent &&
+                !preparing &&
                 Object.keys(message).sort().join(",") === "sessionNonce,type,version"
             ) {
-                approvedSent = true;
-                try {
-                    channel.postMessage({
-                        type: "relay-approved",
-                        version: 1,
-                        sessionNonce: nonce,
-                        request,
-                    });
-                } catch {
-                    uncertain();
-                }
+                preparing = true;
+                void (async () => {
+                    try {
+                        await beforeDelivery;
+                        if (closed || signal.aborted) return;
+                        const encrypted = await sealLocalAppDelivery(request, signal);
+                        if (closed || signal.aborted) return;
+                        approvedSent = true;
+                        channel.postMessage({
+                            type: "relay-approved",
+                            version: 1,
+                            sessionNonce: nonce,
+                            request: encrypted,
+                        });
+                    } catch {
+                        uncertain();
+                    }
+                })();
             } else if (
                 message.type === "relay-outcome" &&
                 approvedSent &&

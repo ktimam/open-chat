@@ -3,7 +3,11 @@ import {
     localAppSessionNonce,
     type LocalAppHandoffOutcome,
 } from "./utils/localAppHandoff";
-import { snapshotLocalDraftJson, type LocalDraftDeliveryRequest } from "./utils/localAppDrafts";
+import {
+    MAX_ENCRYPTED_REQUEST_BYTES,
+    validateEncryptedLocalAppDeliveryRequest,
+    type EncryptedLocalAppDeliveryRequest,
+} from "./utils/localAppEncryption";
 import { formatLocalHandoffReview } from "./localAppHandoffRelay";
 
 const NONCE = /^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/;
@@ -45,43 +49,13 @@ function nativeStatus(value: unknown): NativeStatus {
 
 /** Native already validated duplicate keys and retained the exact approved JSON. Recheck the
  * bounded envelope before rendering it or exposing it to a popup; never trust model routing. */
-export function parseNativeApprovedRequest(json: unknown): LocalDraftDeliveryRequest {
-    if (typeof json !== "string" || new TextEncoder().encode(json).length > 72 * 1024)
-        throw new Error("Invalid approved request");
-    const value: unknown = JSON.parse(json);
+export function parseNativeApprovedRequest(json: unknown): EncryptedLocalAppDeliveryRequest {
     if (
-        !record(value) ||
-        !exact(value, [
-            "appId",
-            "actionId",
-            "destination",
-            "recipient",
-            "idempotencyKey",
-            "payload",
-        ]) ||
-        ["appId", "actionId", "destination", "recipient", "idempotencyKey"].some(
-            (key) => typeof value[key] !== "string" || !(value[key] as string).trim(),
-        ) ||
-        !NONCE.test(value.idempotencyKey as string)
+        typeof json !== "string" ||
+        new TextEncoder().encode(json).length > MAX_ENCRYPTED_REQUEST_BYTES
     )
         throw new Error("Invalid approved request");
-    const destination = new URL(value.destination as string);
-    if (
-        destination.username ||
-        destination.password ||
-        destination.hash ||
-        (destination.protocol !== "https:" &&
-            !(
-                destination.protocol === "http:" &&
-                ["localhost", "127.0.0.1", "[::1]"].includes(destination.hostname)
-            ))
-    ) {
-        throw new Error("Invalid approved destination");
-    }
-    return Object.freeze({
-        ...value,
-        payload: snapshotLocalDraftJson(value.payload),
-    }) as LocalDraftDeliveryRequest;
+    return validateEncryptedLocalAppDeliveryRequest(JSON.parse(json));
 }
 
 async function boundedJson(response: Response, limit: number): Promise<unknown> {
@@ -138,7 +112,7 @@ export function startLocalNativeAppHandoff(): () => void {
     window.opener = null;
     let closed = false;
     let claimAttempted = false;
-    let request: LocalDraftDeliveryRequest | undefined;
+    let request: EncryptedLocalAppDeliveryRequest | undefined;
     let browserProofHex = "";
     let handoffId = "";
     let connectionId = "";
@@ -249,7 +223,7 @@ export function startLocalNativeAppHandoff(): () => void {
                 return;
             }
             const data = sessionNonce
-                ? { type: "oc:app-import:hello", version: 1, sessionNonce }
+                ? { type: "oc:app-import:hello", version: 2, sessionNonce }
                 : { type: "oc:app-import:connect", version: 1, connectionId };
             popup.postMessage(data, new URL(request.destination).origin);
         } catch {
@@ -369,7 +343,7 @@ export function startLocalNativeAppHandoff(): () => void {
             summary.textContent = formatLocalHandoffReview(request);
             summary.hidden = false;
             status.textContent =
-                "Review every field below. Nothing has been sent to the app. Open the app and allow this connection once to send the displayed payload for review.";
+                "The approved fields were encrypted inside OpenChat. This page cannot read them. Open the linked app to decrypt and review them; nothing has been saved yet.";
             open.disabled = false;
             expiryTimer = setTimeout(
                 () =>

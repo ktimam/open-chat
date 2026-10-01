@@ -5,22 +5,18 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatLocalHandoffReview, startLocalAppHandoffRelay } from "./localAppHandoffRelay";
-import type { LocalDraftDeliveryRequest } from "./utils/localAppDrafts";
+import { encryptedRequestFixture } from "./utils/localAppEncryption.testFixtures";
 
-describe("exact relay review rendering", () => {
-    it("exposes hidden controls without losing astral surrogate code units or changing payload", () => {
-        const request = {
-            appId: "example",
-            actionId: "record",
-            destination: "https://app.example/import",
-            recipient: "Review only",
-            idempotencyKey: "A".repeat(43),
-            payload: { text: "plain\u202E\u{E0001}\u0085\u2028🙂" },
-        };
+describe("encrypted relay metadata rendering", () => {
+    it("shows destination metadata without fields or ciphertext", () => {
+        const request = encryptedRequestFixture();
         const formatted = formatLocalHandoffReview(request);
-        expect(formatted).toContain("\\u202e\\udb40\\udc01\\u0085\\u2028🙂");
-        expect(JSON.parse(formatted)).toEqual(request);
-        expect(formatted).not.toContain("\u{E0001}");
+        expect(JSON.parse(formatted)).toMatchObject({
+            destination: request.destination,
+            recipientKey: request.envelope.keyId,
+        });
+        expect(formatted).not.toContain('"payload"');
+        expect(formatted).not.toContain(request.envelope.ciphertext);
     });
 });
 
@@ -29,17 +25,7 @@ const html = readFileSync(
     "utf8",
 );
 const nonce = "A".repeat(43);
-const approvedRequest: LocalDraftDeliveryRequest = Object.freeze({
-    appId: "synthetic.app",
-    actionId: "record",
-    destination: "https://app.example/import",
-    recipient: "Review the synthetic destination in the app",
-    idempotencyKey: "B".repeat(42) + "A",
-    payload: Object.freeze({
-        reading: 42,
-        note: "SYNTHETIC_APPROVED_MARKER <img src=x onerror=alert(1)>\u202E",
-    }),
-});
+const approvedRequest = encryptedRequestFixture({ appId: "synthetic.app" });
 
 // Mount the shipped page and execute its actual relay/session logic. Only browser
 // transport/popup APIs are doubles; no account, processor, model or backend is used.
@@ -88,7 +74,7 @@ describe("mounted private relay consent and lifecycle", () => {
                     source: source as Window,
                     data: {
                         type: `oc:app-import:${type}`,
-                        version: 1,
+                        version: 2,
                         sessionNonce: nonce,
                         ...extra,
                     },
@@ -151,8 +137,11 @@ describe("mounted private relay consent and lifecycle", () => {
         f.appMessage("ready");
         f.approve();
         expect(f.button.disabled).toBe(false);
-        expect(JSON.parse(f.summary.textContent!)).toEqual(approvedRequest);
-        expect(f.summary.textContent).toContain("\\u202e");
+        expect(JSON.parse(f.summary.textContent!)).toMatchObject({
+            destination: approvedRequest.destination,
+            recipientKey: approvedRequest.envelope.keyId,
+        });
+        expect(f.summary.textContent).not.toContain("SYNTHETIC_APPROVED_MARKER");
         expect(document.querySelector("img")).toBeNull();
         f.appMessage("ready");
         vi.advanceTimersByTime(1_000);
@@ -172,7 +161,7 @@ describe("mounted private relay consent and lifecycle", () => {
         expect(JSON.stringify(f.open.mock.calls)).not.toContain("MARKER");
         expect(f.receiver.postMessage.mock.calls).toEqual([
             [
-                { type: "oc:app-import:hello", version: 1, sessionNonce: nonce },
+                { type: "oc:app-import:hello", version: 2, sessionNonce: nonce },
                 "https://app.example",
             ],
         ]);
@@ -188,11 +177,14 @@ describe("mounted private relay consent and lifecycle", () => {
         expect(f.receiver.postMessage.mock.calls[1]).toEqual([
             {
                 type: "oc:app-import:offer",
-                version: 1,
+                version: 2,
                 sessionNonce: nonce,
                 importId: approvedRequest.idempotencyKey,
                 actionId: approvedRequest.actionId,
-                payload: approvedRequest.payload,
+                appId: approvedRequest.appId,
+                appRevision: approvedRequest.appRevision,
+                destination: approvedRequest.destination,
+                envelope: approvedRequest.envelope,
             },
             "https://app.example",
         ]);
@@ -213,7 +205,10 @@ describe("mounted private relay consent and lifecycle", () => {
         f.hostMessage("relay-approved", {
             request: { ...approvedRequest, destination: "https://other.example/import" },
         });
-        expect(JSON.parse(f.summary.textContent!)).toEqual(approvedRequest);
+        expect(JSON.parse(f.summary.textContent!)).toMatchObject({
+            destination: approvedRequest.destination,
+            recipientKey: approvedRequest.envelope.keyId,
+        });
         expect(f.open).not.toHaveBeenCalled();
     });
 
@@ -368,7 +363,7 @@ describe("mounted private relay consent and lifecycle", () => {
             },
         ]);
         expect(f.status.textContent).toContain("not yet a saved entry");
-        expect(f.summary.textContent).toContain("SYNTHETIC_APPROVED_MARKER");
+        expect(f.summary.textContent).not.toContain("SYNTHETIC_APPROVED_MARKER");
         f.appMessage("committed", { ...saved, acceptedCount: 0 });
         f.appMessage("committed", { ...saved, importId: "wrong" });
         f.appMessage("committed", { ...saved, extra: "not allowed" });

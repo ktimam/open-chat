@@ -19,7 +19,17 @@ import {
     verifyImportedLocalProcessor,
     type ImportedLocalProcessor,
 } from "./isolatedAppProcessor";
-import { LocalAppDraftStore, type LocalDraftDelivery, type LocalDraftView } from "./localAppDrafts";
+import {
+    LocalAppDraftStore,
+    snapshotLocalDraftJson,
+    type LocalDraftDelivery,
+    type LocalDraftView,
+} from "./localAppDrafts";
+import {
+    createBrowserLocalAppDraftStorage,
+    snapshotSavedLocalAppDraft,
+    type LocalAppDraftStorage,
+} from "./localAppDraftPersistence";
 import {
     initializeLocalAppDraftChoices,
     selectLocalAppDraftChoice,
@@ -68,6 +78,8 @@ export interface PrivateAppWorkspaceState {
     setupLoading: boolean;
     setupStatus: string;
     setupGeneration: number;
+    draftLoading: boolean;
+    draftStorageStatus: string;
     enabledChats: LocalAppSetupSnapshot["enabledChats"];
     catalog?: LocalAppCatalog;
     appId?: string;
@@ -97,6 +109,7 @@ type Dependencies = {
     cancelDelivery: () => void;
     deliverySaved: (importId: string) => boolean;
     setupStorage?: LocalAppSetupStorage;
+    draftStorage?: LocalAppDraftStorage;
     connectAppSetup?: ConnectLocalAppSetup;
     loadDirectory?: typeof loadLocalAppDirectory;
     loadPublicPackage?: typeof loadLocalAppPublicPackage;
@@ -162,6 +175,8 @@ const initial = (): PrivateAppWorkspaceState => ({
     setupLoading: false,
     setupStatus: "Setup stays in memory for this session.",
     setupGeneration: 0,
+    draftLoading: false,
+    draftStorageStatus: "",
     enabledChats: Object.freeze([]),
     editorJson: "",
     recipient: "",
@@ -170,10 +185,11 @@ const initial = (): PrivateAppWorkspaceState => ({
     directoryStatus: "",
     appUpdates: Object.freeze({}),
     disabledAppIds: Object.freeze([]),
-    message: "Connect an available app and select its action. Drafts stay in memory only.",
+    message:
+        "Connect an available app and select its action. Private cards are saved only on this device.",
 });
 
-/** Drafts are ephemeral. Optional persistence contains only explicitly imported app setup. */
+/** Private cards are device-local, never chat messages; restored cards never restore consent. */
 export class PrivateAppWorkspace {
     #state = initial();
     #account?: string;
@@ -196,6 +212,8 @@ export class PrivateAppWorkspace {
     #nativeDelivery = false;
     #choiceSession?: LocalAppDraftChoiceSession;
     #fieldEditBlocked = false;
+    #draftSaveRevision = 0;
+    #restoredTargetMatches = true;
     readonly #drafts: LocalAppDraftStore;
 
     constructor(
@@ -204,13 +222,23 @@ export class PrivateAppWorkspace {
     ) {
         this.#connectAppSetup = deps.connectAppSetup;
         this.#drafts = new LocalAppDraftStore((request, signal) => {
+            // Write-ahead: a restart must know this exact request MAY have been sent, with its
+            // original import ID. A failed save is not permission to send an unrecorded request.
+            const beforeDelivery = this.deps.draftStorage ? this.#persistDraft() : undefined;
+            // The adapter opens its empty handoff window synchronously; it MUST await this
+            // gate before putting encrypted fields into any native or browser transport.
+            void beforeDelivery?.catch(() => {});
             if (this.#nativeDelivery) {
                 // A native client must never fall back to a browser BroadcastChannel or app backend.
                 return nativeDeliveryAllowed(this.#deliveryClient) && deps.nativeDeliver
-                    ? deps.nativeDeliver(request, signal)
+                    ? beforeDelivery
+                        ? deps.nativeDeliver(request, signal, beforeDelivery)
+                        : deps.nativeDeliver(request, signal)
                     : Promise.resolve({ kind: "uncertain" });
             }
-            return deps.deliver(request, signal);
+            return beforeDelivery
+                ? deps.deliver(request, signal, beforeDelivery)
+                : deps.deliver(request, signal);
         });
     }
 
@@ -219,6 +247,10 @@ export class PrivateAppWorkspace {
     }
     get contextVersion(): number {
         return this.#epoch;
+    }
+    setClient(client: OpenChat): void {
+        this.#deliveryClient = client;
+        this.#nativeDelivery = client.isNativeApp?.() === true;
     }
     #set(patch: Partial<PrivateAppWorkspaceState>) {
         this.#state = { ...this.#state, ...patch };
@@ -246,7 +278,13 @@ export class PrivateAppWorkspace {
                     ? "App setup is unavailable until this client's backend identity is known."
                     : "Restoring saved app setup on this device…",
         });
+        if (scope && this.deps.draftStorage)
+            this.#set({
+                draftLoading: true,
+                draftStorageStatus: "Restoring this account's private card…",
+            });
         if (loading && scope) void this.#restoreSetup(scope, this.#setupEpoch);
+        else if (scope) void this.#restoreDraft(scope, this.#setupEpoch);
     }
     clear(): void {
         ++this.#epoch;
@@ -265,6 +303,7 @@ export class PrivateAppWorkspace {
         this.#nativeDelivery = false;
         this.#choiceSession = undefined;
         this.#fieldEditBlocked = false;
+        this.#restoredTargetMatches = true;
         this.#drafts.clear();
         this.deps.cancelDelivery();
         this.#state = {
@@ -274,7 +313,7 @@ export class PrivateAppWorkspace {
             directorySource: this.#directorySource,
             setupGeneration: this.#setupGeneration,
             setupStatus: this.deps.setupStorage
-                ? "Workspace cleared. Any saved setup is unchanged; drafts were not saved."
+                ? "Workspace cleared from memory. Saved setup and private cards remain on this device."
                 : "Setup stays in memory for this session.",
         };
         this.onChange(this.state);
@@ -332,7 +371,7 @@ export class PrivateAppWorkspace {
                 setupGeneration: this.#setupGeneration,
                 setupLoading: false,
                 setupStatus: setup
-                    ? "App setup restored on this device. No draft, message, or approval was restored."
+                    ? "App setup restored on this device. No message or approval was restored."
                     : "No saved app setup for this account and backend. Connect an available app to begin.",
             });
         } catch {
@@ -342,7 +381,116 @@ export class PrivateAppWorkspace {
                     setupStatus:
                         "Saved app setup could not be restored. Import it again; nothing was run or sent.",
                 });
+        } finally {
+            if (epoch === this.#setupEpoch) await this.#restoreDraft(scope, epoch);
         }
+    }
+
+    async #restoreDraft(scope: LocalAppSetupScope, epoch: number): Promise<void> {
+        if (!this.deps.draftStorage) return;
+        try {
+            const raw = await this.deps.draftStorage.read(scope);
+            if (epoch !== this.#setupEpoch) return;
+            if (!raw) {
+                this.#set({
+                    draftLoading: false,
+                    draftStorageStatus: "No saved private card for this account and backend.",
+                });
+                return;
+            }
+            const saved = snapshotSavedLocalAppDraft(raw);
+            const app = this.#state.catalog?.apps.find(
+                (app) => app.id === saved.draft.target.appId,
+            );
+            const action = app?.actions.find(
+                (action) => action.definition.name === saved.draft.target.actionId,
+            );
+            this.#restoredTargetMatches =
+                !!app &&
+                !!action &&
+                app.destination === saved.draft.target.destination &&
+                app.revision === saved.draft.target.appRevision &&
+                JSON.stringify(snapshotLocalDraftJson(app.deliveryEncryption ?? null)) ===
+                    JSON.stringify(
+                        snapshotLocalDraftJson(saved.draft.target.deliveryEncryption ?? null),
+                    ) &&
+                JSON.stringify(snapshotLocalDraftJson(action.draftSchema)) ===
+                    JSON.stringify(saved.draft.schema);
+            const draft = this.#drafts.restore(saved.draft);
+            if (action && this.#restoredTargetMatches) {
+                // Original default/choice history is not a permission to recompute fields.
+                // Treat every recovered value as manual; default selection cannot overwrite it.
+                const session = initializeLocalAppDraftChoices(
+                    action,
+                    JSON.stringify(draft.payload),
+                );
+                this.#choiceSession = resetLocalAppDraftChoices(session, saved.editorJson);
+            }
+            this.#processor = this.#processors.get(draft.target.appId);
+            this.#set({
+                draft,
+                appId: draft.target.appId,
+                actionId: draft.target.actionId,
+                editorJson: saved.editorJson,
+                recipient: saved.recipient,
+                draftManualValues: true,
+                draftLoading: false,
+                draftStorageStatus:
+                    "Private card restored from encrypted storage on this device. No approval or handoff session was restored.",
+                message: !this.#restoredTargetMatches
+                    ? "This saved card's app configuration changed or is unavailable. Inspect or discard it; it cannot be sent to a changed destination."
+                    : saved.draft.attempted
+                      ? "This request may already have reached the app. Check the app, then review the unchanged request before explicitly retrying with the same import ID."
+                      : "Private card restored. Review every field again before sending; no consent was restored.",
+            });
+        } catch {
+            if (epoch === this.#setupEpoch)
+                this.#set({
+                    draftLoading: false,
+                    draftStorageStatus:
+                        "The saved private card could not be restored. Nothing was sent. Use Forget to remove unavailable saved data.",
+                });
+        }
+    }
+
+    async #persistDraft(): Promise<void> {
+        const scope = this.#setupScope();
+        const storage = this.deps.draftStorage;
+        const draft = this.#state.draft;
+        if (!storage || !draft) return;
+        const epoch = this.#setupEpoch,
+            revision = ++this.#draftSaveRevision;
+        this.#set({ draftStorageStatus: "Saving this private card on this device…" });
+        try {
+            if (!scope)
+                throw new Error("Private card storage requires a signed-in account and backend");
+            const snapshot = this.#drafts.snapshot(draft.id);
+            const saved = snapshotSavedLocalAppDraft({
+                version: 1,
+                draft: snapshot,
+                editorJson: snapshot.attempted
+                    ? JSON.stringify(snapshot.payload, null, 2)
+                    : this.#state.editorJson,
+                recipient: snapshot.attempted ? snapshot.target.recipient : this.#state.recipient,
+            });
+            await storage.write(scope, saved);
+            if (epoch === this.#setupEpoch && revision === this.#draftSaveRevision)
+                this.#set({
+                    draftStorageStatus:
+                        "Private card saved in encrypted storage on this device. It is not chat-synced.",
+                });
+        } catch {
+            if (epoch === this.#setupEpoch && revision === this.#draftSaveRevision)
+                this.#set({
+                    draftStorageStatus:
+                        "Private card could not be saved. Recent changes are only in memory; sending is blocked until storage works.",
+                });
+            throw new Error("Private card storage is unavailable");
+        }
+    }
+
+    #saveDraft(): void {
+        void this.#persistDraft().catch(() => {});
     }
 
     #saveSetup(): void {
@@ -372,7 +520,8 @@ export class PrivateAppWorkspace {
             () => {
                 if (epoch === this.#setupEpoch && revision === this.#saveRevision)
                     this.#set({
-                        setupStatus: "App setup saved on this device. Drafts are never saved.",
+                        setupStatus:
+                            "App setup saved on this device. Private cards use separate encrypted local storage.",
                     });
             },
             () => {
@@ -416,13 +565,13 @@ export class PrivateAppWorkspace {
     }
 
     async forgetSetup(): Promise<boolean> {
-        if (this.#state.setupLoading || !this.#account) return false;
+        if (this.#state.setupLoading || this.#state.draftLoading || !this.#account) return false;
         const scope = this.#setupScope();
         if (this.deps.setupStorage && !scope) return false;
         this.clear();
         // Forget is itself the new empty setup, not a request to rehydrate on remount.
         this.#setupNeedsRestore = false;
-        if (!this.deps.setupStorage || !scope) return true;
+        if ((!this.deps.setupStorage && !this.deps.draftStorage) || !scope) return true;
         const epoch = this.#setupEpoch;
         this.#set({
             setupLoading: true,
@@ -430,11 +579,14 @@ export class PrivateAppWorkspace {
         });
         try {
             // Removal follows earlier captured writes. They cannot resurrect a forgotten setup.
-            await this.#queueSetup(scope, () => this.deps.setupStorage!.remove(scope));
+            if (this.deps.setupStorage)
+                await this.#queueSetup(scope, () => this.deps.setupStorage!.remove(scope));
+            if (this.deps.draftStorage) await this.deps.draftStorage.remove(scope);
             if (epoch === this.#setupEpoch)
                 this.#set({
                     setupLoading: false,
-                    setupStatus: "Saved app setup removed from this device.",
+                    setupStatus: "Saved app setup and private card removed from this device.",
+                    draftStorageStatus: "Saved private card and its encryption key were removed.",
                 });
             return true;
         } catch {
@@ -765,11 +917,16 @@ export class PrivateAppWorkspace {
     }
 
     #setupAllowed(): boolean {
-        if (this.#state.setupLoading || (this.deps.setupStorage && !this.#setupScope())) {
+        if (
+            this.#state.setupLoading ||
+            this.#state.draftLoading ||
+            ((this.deps.setupStorage || this.deps.draftStorage) && !this.#setupScope())
+        ) {
             this.#set({
-                setupStatus: this.#state.setupLoading
-                    ? "Wait for app setup restoration or removal to finish before continuing."
-                    : "App setup is unavailable until the signed-in account and backend identity are known.",
+                setupStatus:
+                    this.#state.setupLoading || this.#state.draftLoading
+                        ? "Wait for app setup restoration or removal to finish before continuing."
+                        : "App setup is unavailable until the signed-in account and backend identity are known.",
             });
             return false;
         }
@@ -1019,12 +1176,17 @@ export class PrivateAppWorkspace {
                     actionId: action.definition.name,
                     destination: app.destination,
                     recipient: app.recipientLabel ?? "Choose the receiving account in the app",
+                    appRevision: app.revision,
+                    ...(app.deliveryEncryption
+                        ? { deliveryEncryption: app.deliveryEncryption }
+                        : {}),
                 },
                 schema: action.draftSchema,
                 payload: JSON.parse(choiceSession.editorJson),
             });
             this.#choiceSession = choiceSession;
             this.#fieldEditBlocked = false;
+            this.#restoredTargetMatches = true;
             this.#deliveryClient = client;
             this.#nativeDelivery = client.isNativeApp?.() === true;
             this.#set({
@@ -1035,6 +1197,7 @@ export class PrivateAppWorkspace {
                 message:
                     "Private draft ready. Edit and review every field before choosing to send it outside OpenChat.",
             });
+            this.#saveDraft();
             return "drafted";
         } catch {
             if (stillCurrent())
@@ -1061,7 +1224,12 @@ export class PrivateAppWorkspace {
 
     #editable(): boolean {
         const draft = this.#state.draft;
-        return !!draft && !this.#state.busy && ["draft", "reviewed"].includes(draft.status);
+        return (
+            this.#restoredTargetMatches &&
+            !!draft &&
+            !this.#state.busy &&
+            ["draft", "reviewed"].includes(draft.status)
+        );
     }
 
     #commitEdit(
@@ -1079,6 +1247,7 @@ export class PrivateAppWorkspace {
             draftManualValues: manual,
             message: "Draft changed. Review the full request again before sending.",
         });
+        this.#saveDraft();
     }
 
     /** Recipient and approval changes do not erase session-only field history. */
@@ -1133,6 +1302,16 @@ export class PrivateAppWorkspace {
 
     review(): boolean {
         const draft = this.#state.draft;
+        if (!this.#restoredTargetMatches) return false;
+        if (draft?.status === "uncertain" && !draft.approval && !this.#state.busy) {
+            this.#drafts.reviewRecovered(draft.id);
+            this.#set({
+                draft: this.#drafts.get(draft.id),
+                message:
+                    "Review the exact recovered request. A retry needs separate confirmation and keeps its original import ID.",
+            });
+            return true;
+        }
         if (!draft || this.#state.busy || !["draft", "reviewed"].includes(draft.status))
             return false;
         if (this.#fieldEditBlocked) {
@@ -1156,6 +1335,7 @@ export class PrivateAppWorkspace {
                 message:
                     "Review the entire request below. Sending requires a separate explicit confirmation.",
             });
+            this.#saveDraft();
             return true;
         } catch {
             this.#set({
@@ -1186,6 +1366,13 @@ export class PrivateAppWorkspace {
         expectedStatus: "reviewed" | "uncertain" | "delivered",
     ): Promise<void> {
         const draft = this.#state.draft;
+        if (draft && (!draft.target.deliveryEncryption || !draft.target.appRevision)) {
+            this.#set({
+                message:
+                    "Reconnect this app before sending. This saved connection has no verified recipient encryption key; no fields were handed off.",
+            });
+            return;
+        }
         if (
             !draft ||
             this.#state.busy ||
@@ -1219,9 +1406,11 @@ export class PrivateAppWorkspace {
                     ? "The app received the handoff. Review and save it in the app; delivery is not proof that it was saved."
                     : "The handoff outcome is unknown. Check the receiving app first. An explicit retry keeps this exact reviewed request and import ID; no automatic retry will occur.",
         });
+        this.#saveDraft();
     }
 
     discard(): void {
+        const scope = this.#setupScope();
         ++this.#epoch;
         this.#abort?.abort();
         this.#abort = undefined;
@@ -1233,6 +1422,7 @@ export class PrivateAppWorkspace {
         this.#nativeDelivery = false;
         this.#choiceSession = undefined;
         this.#fieldEditBlocked = false;
+        this.#restoredTargetMatches = true;
         this.#set({
             draft: undefined,
             editorJson: "",
@@ -1244,6 +1434,31 @@ export class PrivateAppWorkspace {
                 ? "Local draft discarded. A remote handoff may already have occurred; check the app before sending again."
                 : "Local draft or processing discarded. Nothing was sent to the app.",
         });
+        if (scope && this.deps.draftStorage) {
+            const epoch = this.#setupEpoch;
+            this.#set({
+                draftLoading: true,
+                draftStorageStatus: "Removing this private card from this device…",
+            });
+            void this.deps.draftStorage.remove(scope).then(
+                () => {
+                    if (epoch === this.#setupEpoch)
+                        this.#set({
+                            draftLoading: false,
+                            draftStorageStatus:
+                                "Private card and its local encryption key removed.",
+                        });
+                },
+                () => {
+                    if (epoch === this.#setupEpoch)
+                        this.#set({
+                            draftLoading: false,
+                            draftStorageStatus:
+                                "Card cleared from memory, but saved data could not be removed. Use Forget before leaving this device.",
+                        });
+                },
+            );
+        }
         if (this.#refreshDeferred) {
             this.#refreshDeferred = false;
             void this.refreshDirectory();
@@ -1268,6 +1483,7 @@ export const privateAppWorkspace = new PrivateAppWorkspace(
             nativeAppDelivery.cancelAll();
         },
         setupStorage: createBrowserLocalAppSetupStorage(),
+        draftStorage: createBrowserLocalAppDraftStorage(),
     },
     (state) => privateAppWorkspaceState.set(state),
 );

@@ -151,6 +151,51 @@ test("current-client live source review binds native model/auth/handoff/setup wi
   }
 });
 
+test("current-client review binds the encrypted-only native handoff without adding dependency owners or changing auth", () => {
+  const { config, review, sourceBytes } = currentClientFixture();
+  assert.equal(
+    config.sourceRevision.head,
+    "6249be2431cdae3c4b9fd61b44aa186e223121e6",
+  );
+  assert.equal(
+    config.sourceRevision.base,
+    "5f00758312735f2ddac9928e3aa60349964bf73a",
+  );
+  assert.match(review.boundary, /working-tree encrypted-only handoff/u);
+  assert.match(
+    review.boundary,
+    /no advisory waiver, crate upgrade or profile expansion/u,
+  );
+  assert.equal(config.seeds.length, 26);
+  assert.equal(config.profiles.length, 8);
+  const protocol = sourceBytes[
+    "frontend/tauri-plugin-oc/src/local_app_handoff_protocol.rs"
+  ]
+    .toString("utf8")
+    .split("#[cfg(test)]")[0];
+  assert.match(
+    protocol,
+    /let fields = \["appId", "appRevision", "actionId", "destination", "idempotencyKey", "envelope"\]/u,
+  );
+  assert.match(protocol, /p256-hkdf-sha256-aes-256-gcm-v1/u);
+  assert.match(
+    protocol,
+    /encoded_bytes\(&envelope\["ciphertext"\], 17, 65552\)/u,
+  );
+  assert.doesNotMatch(protocol, /object\["(?:payload|recipient)"\]/u);
+  assert.match(
+    sourceBytes["frontend/tauri-plugin-oc/src/local_app_handoff.rs"].toString(
+      "utf8",
+    ),
+    /validate_approved_request\(&request\.approved_request_json\)/u,
+  );
+  for (const profile of config.profiles)
+    assert.equal(
+      profile.features.includes("open-chat/local-browser-auth"),
+      false,
+    );
+});
+
 test("current-client setup reuses reviewed owners while its exact sys ABI constraint stays host-inference-only", () => {
   const { config, review } = currentClientFixture();
   const setupPaths = [

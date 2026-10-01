@@ -1,4 +1,4 @@
-//! Separate from authentication: a bounded loopback server for one explicitly approved draft.
+//! Separate from authentication: a bounded loopback server for one already encrypted, approved draft.
 //! No request logging, outbound requests, cookies, filesystem routes or unauthenticated data GET.
 use crate::local_app_handoff_protocol::*;
 use bytes::Bytes;
@@ -213,7 +213,8 @@ mod tests {
         BundledProfile::parse(br#"{"version":1,"applicationId":"dev.openchatfork.localtest","transport":"private-app-code-v1"}"#).unwrap()
     }
     fn raw_approved() -> String {
-        format!(r#"{{"appId":"fixture","actionId":"add","destination":"https://example.test/import","recipient":"Fixture user","idempotencyKey":"{}","payload":{{"amount":1.2300,"note":"\u0627"}}}}"#, "A".repeat(43))
+        format!(r#"{{ "appId":"fixture","appRevision":"revision-1","actionId":"add","destination":"https://example.test/import","idempotencyKey":"{}","envelope":{{"version":1,"scheme":"p256-hkdf-sha256-aes-256-gcm-v1","keyId":"{}","recipientContext":"AA","ephemeralPublicKey":"BA{}","salt":"{}","iv":"{}","ciphertext":"{}"}} }}"#,
+            "A".repeat(43), "a".repeat(64), "A".repeat(85), "A".repeat(43), "A".repeat(16), "A".repeat(23))
     }
     async fn fixture() -> (LocalAppHandoffBridge, BeginResponse) {
         let bridge = LocalAppHandoffBridge::default();
@@ -266,7 +267,11 @@ mod tests {
         assert_eq!(status(&post(&start, "/status", proof(&start)).await), 403);
         let response = claim(&start).await;
         assert_eq!(status(&response), 200);
+        assert_eq!(body(&response)["version"], 1); // Bridge control stays v1; the app offer uses v2.
         assert_eq!(body(&response)["approvedRequestJson"], raw_approved());
+        let encrypted: Value = serde_json::from_str(body(&response)["approvedRequestJson"].as_str().unwrap()).unwrap();
+        assert!(encrypted.get("payload").is_none() && encrypted.get("recipient").is_none());
+        assert!(encrypted["envelope"]["ciphertext"].is_string());
         assert_eq!(status(&claim(&start).await), 403);
         let response = post(&start, "/status", proof(&start)).await;
         assert_eq!(status(&response), 200);
@@ -310,7 +315,7 @@ mod tests {
         }
         let duplicate = body.replacen("{", "{\"version\":1,", 1);
         assert_eq!(status(&wire(&start, format!("POST /claim HTTP/1.1\r\nHost: {host}\r\nOrigin: http://{host}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{duplicate}", duplicate.len())).await), 403);
-        assert_eq!(status(&claim(&start).await), 200); // Invalid requests did not release the payload.
+        assert_eq!(status(&claim(&start).await), 200); // Invalid requests did not release the encrypted request.
     }
     #[tokio::test]
     async fn static_navigation_exception_is_narrow_and_invalid_pairs_lock_out() {
@@ -335,6 +340,20 @@ mod tests {
         assert_ne!(next.handoff_id, start.handoff_id);
         assert_ne!(next.pairing_code, start.pairing_code);
         assert_eq!(status(&post(&next, "/status", proof(&start)).await), 403);
+    }
+    #[tokio::test]
+    async fn begin_rejects_plaintext_and_malformed_envelopes_without_creating_session() {
+        let bridge = LocalAppHandoffBridge::default();
+        for raw in [r#"{"appId":"fixture","actionId":"add","destination":"https://example.test/import","recipient":"Private user","idempotencyKey":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","payload":{"secret":"private note"}}"#.to_owned(),
+            raw_approved().replace("\"version\":1", "\"version\":2"),
+            raw_approved().replacen('{', "{\"payload\":{\"secret\":1},", 1),
+            raw_approved().replace("\"recipientContext\":\"AA\"", "\"recipientContext\":\"AB\""),
+            " ".repeat(MAX_REQUEST_BYTES + 1)] {
+            let error = bridge.begin(BeginRequest { approved_request_json: raw }, profile(), BrowserAssets { html: vec![1], script: vec![1] }).await.err().unwrap();
+            assert!(!error.contains("Private user") && !error.contains("private note"));
+            assert!(bridge.session.lock().await.is_none());
+        }
+        assert!(bridge.begin(BeginRequest { approved_request_json: raw_approved() }, profile(), BrowserAssets { html: vec![1], script: vec![1] }).await.is_ok());
     }
     #[test]
     fn wrong_or_ambiguous_profile_is_unavailable() {

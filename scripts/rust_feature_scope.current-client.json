@@ -4,9 +4,9 @@
   "feature": "unofficial-current-client-models-and-private-app-native-interface",
   "sourceRevision": {
     "base": "5f00758312735f2ddac9928e3aa60349964bf73a",
-    "head": "7fe6c8925530962a222ba6b816b3c7998cb8d91f"
+    "head": "6249be2431cdae3c4b9fd61b44aa186e223121e6"
   },
-  "cargoLockSha256": "2ef5dd58038289bbdcb806b59e2bed1dbd7dfe265f1970791ad653c4fd0fff47",
+  "cargoLockSha256": "19ecd477d56d040426bda36300fea34bf20243574a5e2bc578c0d6ebb86199c2",
   "completeness": {
     "status": "incomplete",
     "unresolved": [
@@ -97,9 +97,9 @@
     "frontend/tauri-plugin-oc/src/bundle_manager.rs": "d6d534e5a2daec09af940d91a408666361f4ad45e5bfd7f8cc5d7e6d7503446f",
     "frontend/tauri-plugin-oc/src/update_manager.rs": "44072afcb06efca06e4527140b9eba84868f17c9cfba54dc139967c2ef865cac",
     "frontend/tauri-plugin-oc/src/local_browser_auth_protocol.rs": "92369a69e68e2c04cfb0a877d2bef47957863c83a1e3759ad83f36f328d9ef19",
-    "frontend/tauri-plugin-oc/src/local_app_handoff_protocol.rs": "0c881e347101cb1b26ddc254450a02d25c58e5cba45392e4617f02aecbc6a2ca",
+    "frontend/tauri-plugin-oc/src/local_app_handoff_protocol.rs": "c4e85a73d9307178ec7a8c12def42bcba966a8a7099d2e3fb38dca35db6c1aa2",
     "frontend/tauri-plugin-oc/src/local_browser_auth.rs": "6c78debd919b12665553c298f7e70670435a3f2040c31d53b022d2172f64d475",
-    "frontend/tauri-plugin-oc/src/local_app_handoff.rs": "9c0632334c939eaebf6853d123703942974c220cf573007a7ab09da70bd08614",
+    "frontend/tauri-plugin-oc/src/local_app_handoff.rs": "6c8f4f7ecc303bb73b257726871c94d87a9480d0bb4eea940ee86020c668ff52",
     "frontend/src-tauri/src/lib.rs": "f2b3c4d29956531cfd2f55eb8397a9d0be7ee749a9c5df37fa11dbd8422bfa7d",
     "frontend/src-tauri/src/main.rs": "e5dfab54c7a9843285d54ff5a783c00813cd3f28d1bb2f6982aa348697cbb1c4",
     "frontend/src-tauri/src/navigation.rs": "0ddee2abb8f0eb2fbcf094fcb293d4b28423aab744a6b20319831f2fba9ee4b3",
@@ -299,7 +299,7 @@
       "evidence": [
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff_protocol.rs",
-          "lines": [5, 162]
+          "lines": [5, 198]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_setup_protocol.rs",
@@ -339,7 +339,7 @@
       "evidence": [
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff_protocol.rs",
-          "lines": [166]
+          "lines": [202]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_setup.rs",

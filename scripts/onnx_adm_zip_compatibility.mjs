@@ -4,6 +4,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import https from "node:https";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
@@ -24,7 +25,7 @@ assert.equal(
 );
 assert.equal(
   requireParent("adm-zip/package.json").version,
-  "0.6.0",
+  "0.6.1",
   "Test the exact overridden dependency",
 );
 const AdmZip = requireParent("adm-zip");
@@ -33,6 +34,7 @@ const fixtureRoot = fs.mkdtempSync(
   path.join(path.resolve(process.argv[3] ?? os.tmpdir()), "openchat-onnx-zip-"),
 );
 const originalGet = https.get;
+const originalConnect = net.Socket.prototype.connect;
 const originalTmpdir = os.tmpdir;
 const originalRmSync = fs.rmSync;
 const originalAlloc = Buffer.alloc;
@@ -72,6 +74,11 @@ const install = (paths) =>
   );
 
 try {
+  // The real parent receives only the synthetic feed below. Fail closed if any
+  // new code path attempts a socket, including a redirect or an unstubbed API.
+  net.Socket.prototype.connect = () => {
+    throw new Error("Network is forbidden in the offline installer regression");
+  };
   // No socket is ever opened. Unexpected requests fail closed, including redirects.
   https.get = (url, callback) => {
     requests++;
@@ -170,11 +177,56 @@ try {
   assert.ok(largestAllocation < 8 * 1024 * 1024);
   assert.equal(requests, 12);
   checks += 3;
+
+  // Tiny DEFLATE data with a dishonest zero size must not disable the bound.
+  // The full expansion is only 4 KiB even if the regression returns.
+  Buffer.alloc = originalAlloc;
+  const zeroSize = new AdmZip();
+  zeroSize.addFile("runtimes/native/zero.bin", Buffer.alloc(4096, 65));
+  archive = zeroSize.toBuffer();
+  const zeroCentral = archive.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
+  assert.ok(zeroCentral >= 0);
+  archive.writeUInt32LE(0, zeroCentral + 24);
+  await assert.rejects(install([["runtimes/native/zero.bin", "zero.bin"]]));
+  assert.equal(fs.existsSync(path.join(fixtureRoot, "output/zero.bin")), false);
+  assert.deepEqual(fs.readdirSync(fixtureRoot), ["output"]);
+  checks += 3;
+
+  // Duplicate names must not let name lookup approve different content from
+  // extraction. Mutate equal-length local and central names in a tiny archive.
+  const duplicate = new AdmZip();
+  duplicate.addFile("runtimes/native/a.bin", binaryA);
+  duplicate.addFile("runtimes/native/b.bin", binaryB);
+  archive = duplicate.toBuffer();
+  const from = Buffer.from("runtimes/native/b.bin");
+  const to = Buffer.from("runtimes/native/a.bin");
+  let replacements = 0;
+  for (
+    let at = archive.indexOf(from);
+    at !== -1;
+    at = archive.indexOf(from, at + to.length)
+  ) {
+    to.copy(archive, at);
+    replacements++;
+  }
+  assert.equal(replacements, 2);
+  await assert.rejects(
+    install([["runtimes/native/a.bin", "duplicate.bin"]]),
+    /duplicate/i,
+  );
+  assert.equal(
+    fs.existsSync(path.join(fixtureRoot, "output/duplicate.bin")),
+    false,
+  );
+  assert.deepEqual(fs.readdirSync(fixtureRoot), ["output"]);
+  checks += 3;
+  assert.equal(requests, 18);
   console.log(
-    `ONNX 1.24.3 / adm-zip 0.6.0 compatibility: ${checks} checks passed (offline, real parent installer)`,
+    `ONNX 1.24.3 / adm-zip 0.6.1 compatibility: ${checks} checks passed (offline, real parent installer)`,
   );
 } finally {
   https.get = originalGet;
+  net.Socket.prototype.connect = originalConnect;
   os.tmpdir = originalTmpdir;
   fs.rmSync = originalRmSync;
   Buffer.alloc = originalAlloc;

@@ -1334,11 +1334,12 @@ test("every scoped dependency contract exists and triggers the model PR workflow
 
 test("Node image and installer fixes stay scoped to their reviewed model parents", () => {
   const manifest = JSON.parse(read("frontend/package.json"));
+  const lock = JSON.parse(read("frontend/package-lock.json"));
   const overrides = manifest.overrides;
   assert.equal(manifest.dependencies["@huggingface/transformers"], "4.2.0");
   for (const [parent, dependency, version] of [
     ["@huggingface/transformers@4.2.0", "sharp", "0.35.4"],
-    ["onnxruntime-node@1.24.3", "adm-zip", "0.6.0"],
+    ["onnxruntime-node@1.24.3", "adm-zip", "0.6.1"],
   ]) {
     assert.deepEqual(overrides[parent], { [dependency]: version });
     assert.equal(Object.hasOwn(overrides, dependency), false);
@@ -1347,6 +1348,20 @@ test("Node image and installer fixes stay scoped to their reviewed model parents
       false,
     );
   }
+  assert.equal(lock.packages["node_modules/adm-zip"].version, "0.6.1");
+  assert.equal(
+    lock.packages["node_modules/onnxruntime-node"].version,
+    "1.24.3",
+  );
+  assert.equal(
+    lock.packages["node_modules/onnxruntime-node"].dependencies["adm-zip"],
+    "^0.5.16",
+    "The explicit parent-scoped override, not an invented parent range, selects the patch",
+  );
+  assert.equal(
+    lock.packages["node_modules/@huggingface/transformers"].version,
+    "4.2.0",
+  );
 });
 
 function assertCurrentAndroidSdkPackages(text) {

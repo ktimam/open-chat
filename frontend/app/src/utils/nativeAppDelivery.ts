@@ -1,5 +1,6 @@
 import { writable } from "svelte/store";
 import type { LocalDraftDelivery } from "./localAppDrafts";
+import { sealLocalAppDelivery } from "./localAppEncryption";
 import { localAppDeliveryStatus } from "./localAppRelayDelivery";
 import type {
     LocalAppHandoffStart,
@@ -85,7 +86,8 @@ export function createNativeAppDelivery(deps: Dependencies) {
         show(undefined);
         deps.status(undefined);
     };
-    const deliver: LocalDraftDelivery = (request, signal) => {
+    const deliver: LocalDraftDelivery = (request, signal, beforeDelivery) => {
+        void beforeDelivery?.catch(() => {});
         if (signal.aborted) return Promise.resolve({ kind: "uncertain" });
         active?.cancel();
         show(undefined);
@@ -192,8 +194,12 @@ export function createNativeAppDelivery(deps: Dependencies) {
             // begin receives exactly the frozen draft snapshot; it is never called from polling.
             void (async () => {
                 try {
+                    await beforeDelivery;
+                    if (closed || signal.aborted) return;
+                    const encrypted = await sealLocalAppDelivery(request, signal);
+                    if (closed || signal.aborted) return;
                     const result = await deps.begin({
-                        approvedRequestJson: JSON.stringify(request),
+                        approvedRequestJson: JSON.stringify(encrypted),
                     });
                     if (closed) {
                         if (result && /^[a-f0-9]{32}$/.test(result.handoffId))

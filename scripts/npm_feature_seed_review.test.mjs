@@ -15,6 +15,147 @@ import {
   sourceReviewFingerprintFromBytes,
 } from "./npm_feature_seed_review.mjs";
 
+// Historical aggregate proofs retain the exact committed 07aa47ba inputs. Only
+// these independently read pre-extension identities, three new paths and the
+// separately reviewed immutable-asset routing pair differ. Every other input
+// remains live, and the separate current gate binds all 151.
+function septemberCheckpointEntries(fingerprint) {
+  const laterFiles = new Set([
+    "frontend/app/src/utils/localAppDraftPersistence.ts",
+    "frontend/app/src/utils/localAppDraftPresentation.ts",
+    "frontend/app/src/utils/localAppEncryption.ts",
+  ]);
+  const beforeExtension = new Map([
+    [
+      "frontend/app/transformersWebGpuFeatureFlag.mjs",
+      "41aafc4115aba2469e2d3b5f5ae212b4ee19651379b80644abc05b1d8fefb6c7",
+    ],
+    [
+      "frontend/app/src/utils/transformersWebGpuInference.ts",
+      "119af14a570ab4e37df34ab3272a43be47c6276f298955caf5d729deb2930b43",
+    ],
+    [
+      "frontend/app/src/components_shared/PrivateAppDraftFields.svelte",
+      "d92d1c009e31feac6171e3c77be9d6f9a991da16324740f3ad8b1841e198607f",
+    ],
+    [
+      "frontend/app/src/components_shared/PrivateAppsWorkspace.svelte",
+      "16a576ec2a9c8a08fa77bda70f4cfc26f8a58879898a365430254a0e31540a55",
+    ],
+    [
+      "frontend/app/src/localAppHandoffRelay.ts",
+      "5f758f1c026edca61965638be1e1a3006d68ebfc629b1179ae86bda47fef3efd",
+    ],
+    [
+      "frontend/app/src/localNativeAppHandoff.ts",
+      "2237706250985d601c0de73c98f18df3d227dd51c7170e3898a8a05403707352",
+    ],
+    [
+      "frontend/app/src/utils/localAppCatalog.ts",
+      "809df079e4f417435c87f3c8637b3ed024711cbae3e15cdac538dbbebc2c9449",
+    ],
+    [
+      "frontend/app/src/utils/localAppDirectory.ts",
+      "ce390c32cfd8e8019e9461168f92cd2d450fb4c5a3e47f8ea17e84fe24851376",
+    ],
+    [
+      "frontend/app/src/utils/localAppDrafts.ts",
+      "e53ca77a4fee7e49469efa67a9014386c5de0616b170b17e217d5bc7bdaeecd3",
+    ],
+    [
+      "frontend/app/src/utils/localAppHandoff.ts",
+      "5836223d6781760d71b1f2ef3854cb62902f9b81e2910c2b864ad75be728120c",
+    ],
+    [
+      "frontend/app/src/utils/localAppRelayDelivery.ts",
+      "d9eee3cc0b99f33c46dc3cf1ba239c4efe6bed2c295bf5eca6b381f34428bc8c",
+    ],
+    [
+      "frontend/app/src/utils/nativeAppDelivery.ts",
+      "a2a00ac40e7aab976d8c4360b3851c4f782d6481f29f381a1f3b72a2cba17d95",
+    ],
+    [
+      "frontend/app/src/utils/privateAppWorkspace.ts",
+      "9de2384df69c5e3d9597bbd47b7290e9d0a07cd6a44256860037d6969c13ec05",
+    ],
+    [
+      "frontend/openchat-client/src/openchat.ts",
+      "02ad6bbcf479dcbbe3953dde40d4de4b82b33f12f8432e3fa3d49beb54831225",
+    ],
+    [
+      "frontend/openchat-shared/src/domain/worker.ts",
+      "1ea0366173425e6d75e51a51959794c98a1b9289164d25167f44b5bc16f52bba",
+    ],
+    [
+      "frontend/openchat-worker/src/worker.ts",
+      "ca4e3b081c74a4b421d4f3598d3ea9631f36438d8aa803534f8bb3e5e112db42",
+    ],
+  ]);
+  for (const path of [...laterFiles, ...beforeExtension.keys()])
+    assert(fingerprint.files.includes(path), path);
+  const entries = fingerprint.files
+    .filter((path) => !laterFiles.has(path))
+    .map((path) => [
+      path,
+      beforeExtension.get(path) ??
+        createHash("sha256")
+          .update(
+            readFileSync(resolve(root, path), "utf8").replaceAll("\r\n", "\n"),
+          )
+          .digest("hex"),
+    ]);
+  assert.equal(entries.length, 148);
+  assert.equal(
+    createHash("sha256").update(JSON.stringify(entries)).digest("hex"),
+    "f987610e19dd0790765bbe2209b109c7a987d10d09f082a0400e702efca5c67d",
+  );
+  return entries;
+}
+
+// Reverse only the reviewed cache-verifier responsiveness helpers. The exact
+// pre-change file hash and aggregate below keep the earlier routing proof live.
+function beforeCachedHashResponsiveness(source) {
+  const prior = source
+    .replace(
+      /^async function yieldCachedHashTask\(\): Promise<void> \{[\s\S]*?^\}\n\n/mu,
+      "",
+    )
+    .replace(
+      /^    let readerCancelled = false;\n[\s\S]*?^    signal\?\.addEventListener\("abort", onAbort, \{ once: true \}\);\n/mu,
+      "",
+    )
+    .replaceAll(
+      "cancelReader(abortReason(signal));",
+      "await reader.cancel(abortReason(signal));",
+    )
+    .replace(
+      "                cancelReader();",
+      "                await reader.cancel();",
+    )
+    .replace(
+      "            // cancel() resolves a pending read with done=true; cancellation is not a short or\n" +
+        "            // corrupt cache body and must never enter the caller's cache-eviction branch.\n" +
+        "            if (signal?.aborted) throw abortReason(signal);\n",
+      "",
+    )
+    .replace(
+      "await yieldCachedHashTask();",
+      "await new Promise<void>((resolve) => setTimeout(resolve, 0));",
+    )
+    .replace(
+      "    } finally {\n" +
+        '        signal?.removeEventListener("abort", onAbort);\n' +
+        "        reader.releaseLock();\n",
+      "",
+    );
+  assert.notEqual(prior, source);
+  assert.equal(
+    createHash("sha256").update(prior).digest("hex"),
+    "e80115d3981346feb720c1732158663b330d57d144f669467278394a5698cd57",
+  );
+  return prior;
+}
+
 test("source review accepts CRLF/LF equivalence but rejects real content or source-set changes", () => {
   const path = "frontend/app/src/model.ts";
   const lf = Buffer.from('import model from "model";\nconst label = "مبلغ";\n');
@@ -201,6 +342,167 @@ test("current private-app, field-review and browser/native relay families are fi
     );
 });
 
+test("current encryption, recovery and enum-label owners use existing selectors without package or historical scope expansion", () => {
+  const config = JSON.parse(
+    readFileSync(
+      resolve(root, "scripts/npm_feature_scope.current-client.json"),
+      "utf8",
+    ),
+  );
+  const owned = featureOwnedFiles(root, config.scopeId);
+  const fingerprint = seedSourceFingerprint(root, config);
+  const additions = [
+    "localAppDraftPersistence",
+    "localAppDraftPresentation",
+    "localAppEncryption",
+  ];
+  for (const name of additions) {
+    const file = `frontend/app/src/utils/${name}.ts`;
+    assert(owned.includes(file));
+    assert(fingerprint.files.includes(file));
+    assert(
+      featureDependencySpecifiers(
+        readFileSync(resolve(root, file), "utf8"),
+      ).every((specifier) => specifier.startsWith("./")),
+    );
+    for (const historical of ["pr1-model-npm", "pr2-app-card-ocr-npm"])
+      assert(!featureOwnedFiles(root, historical).includes(file));
+  }
+  for (const suffix of [".testFixtures.ts", ".spec.ts"])
+    assert(
+      !fingerprint.files.includes(
+        `frontend/app/src/utils/localAppEncryption${suffix}`,
+      ),
+    );
+  assert.equal(owned.length, 122);
+  assert.equal(fingerprint.files.length, 151);
+  assert.equal(config.seeds.length, 25);
+  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 86);
+  assert.equal(
+    fingerprint.sha256,
+    "68f06f6f5cf986b836f570e42102cf68125e425b08469a41a0073997c6c2cd42",
+  );
+  assertReviewedSourceFingerprint(fingerprint, config.sourceReview);
+});
+
+test("cache hashing responsiveness preserves exact prior source identity and integrity boundaries", () => {
+  const config = JSON.parse(
+    readFileSync(
+      resolve(root, "scripts/npm_feature_scope.current-client.json"),
+      "utf8",
+    ),
+  );
+  const actual = seedSourceFingerprint(root, config);
+  const file = "frontend/app/src/utils/transformersWebGpuInference.ts";
+  const source = readFileSync(resolve(root, file), "utf8").replaceAll(
+    "\r\n",
+    "\n",
+  );
+  assert.equal(
+    createHash("sha256").update(source).digest("hex"),
+    "e797afe96025f79b8b0b9ebfc64aeee86aa1a9fa14a83d394d32dbe23b0693a2",
+  );
+  const prior = beforeCachedHashResponsiveness(source);
+  assert.deepEqual(
+    featureDependencySpecifiers(source),
+    featureDependencySpecifiers(prior),
+  );
+  const previous = sourceReviewFingerprintFromBytes(
+    actual.files.map((entry) => [
+      entry,
+      entry === file ? Buffer.from(prior) : readFileSync(resolve(root, entry)),
+    ]),
+  );
+  assert.equal(
+    previous.sha256,
+    "95eb35428d98c8af8b7d7a81af121ccae5275d3aa09b2f8a0adc2a9e0abb0e62",
+  );
+  assertReviewedSourceFingerprint(previous, config.sourceReview);
+  assertReviewedSourceFingerprint(actual, config.sourceReview);
+  assert.equal(actual.files.length, 151);
+  assert.equal(featureOwnedFiles(root, config.scopeId).length, 122);
+  assert.equal(config.seeds.length, 25);
+  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 86);
+  for (const unchanged of [
+    "const CACHED_HASH_UPDATE_MAX_BYTES = 64 * 1024;",
+    "const CACHED_HASH_TASK_MAX_BYTES = 4 * 1024 * 1024;",
+    "const CACHED_HASH_TASK_BUDGET_MS = 8;",
+    "return received === expectedBytes && digestHex(digest.digest()) === expectedSha256;",
+  ]) {
+    assert(source.includes(unchanged));
+    assert(prior.includes(unchanged));
+  }
+});
+
+test("unofficial immutable-asset routing preserves the exact prior source aggregate and feature roots", () => {
+  const config = JSON.parse(
+    readFileSync(
+      resolve(root, "scripts/npm_feature_scope.current-client.json"),
+      "utf8",
+    ),
+  );
+  const actual = seedSourceFingerprint(root, config);
+  const flag = "frontend/app/transformersWebGpuFeatureFlag.mjs";
+  const inference = "frontend/app/src/utils/transformersWebGpuInference.ts";
+  const text = (file) =>
+    readFileSync(resolve(root, file), "utf8").replaceAll("\r\n", "\n");
+  const prior = new Map([
+    [
+      flag,
+      text(flag).replace(
+        /\/\*\* Static unofficial previews use the immutable sources without becoming production builds\. \*\/\nexport function transformersWebGpuImmutableAssetsEnabled\(environment\) \{[\s\S]*?\n\}\n\n/u,
+        "",
+      ),
+    ],
+    [
+      inference,
+      beforeCachedHashResponsiveness(text(inference))
+        .replaceAll(
+          "transformersWebGpuImmutableAssetsEnabled",
+          "transformersWebGpuProductionAssetsEnabled",
+        )
+        .replaceAll("immutableAssets", "productionAssets")
+        .replace(
+          " * Production web and the explicit unofficial static profile use the same sources, with those\n * graphs served by the web bundle. Only local-network development relies on the Vite model proxy.",
+          " * The production web contract uses the same sources, with those graphs served by the web bundle.",
+        ),
+    ],
+  ]);
+  for (const [file, expected] of [
+    [flag, "41aafc4115aba2469e2d3b5f5ae212b4ee19651379b80644abc05b1d8fefb6c7"],
+    [
+      inference,
+      "119af14a570ab4e37df34ab3272a43be47c6276f298955caf5d729deb2930b43",
+    ],
+  ]) {
+    assert.notEqual(prior.get(file), text(file));
+    assert.equal(
+      createHash("sha256").update(prior.get(file)).digest("hex"),
+      expected,
+    );
+  }
+  const previous = sourceReviewFingerprintFromBytes(
+    actual.files.map((file) => [
+      file,
+      prior.has(file)
+        ? Buffer.from(prior.get(file))
+        : readFileSync(resolve(root, file)),
+    ]),
+  );
+  assert.equal(
+    previous.sha256,
+    "84f4494dc4a493fa56ac72f31a10c9a0055ab06ae493e4e073b2e4c30d590e08",
+  );
+  assertReviewedSourceFingerprint(previous, config.sourceReview);
+  assertReviewedSourceFingerprint(actual, config.sourceReview);
+  assert.equal(actual.files.length, 151);
+  assert.equal(config.seeds.length, 25);
+  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 86);
+  assert(
+    !actual.files.includes("frontend/app/transformersWebGpuFeatureFlag.d.mts"),
+  );
+});
+
 test("current setup persistence is a dedicated builtin-API consumer with an exact mixed-client scope anchor", () => {
   const config = JSON.parse(
     readFileSync(
@@ -212,8 +514,8 @@ test("current setup persistence is a dedicated builtin-API consumer with an exac
   const clientPath = "frontend/openchat-client/src/openchat.ts";
   const owned = featureOwnedFiles(root, config.scopeId);
   const fingerprint = seedSourceFingerprint(root, config);
-  assert.equal(owned.length, 119);
-  assert.equal(fingerprint.files.length, 148);
+  assert.equal(owned.length, 122);
+  assert.equal(fingerprint.files.length, 151);
   assert.equal(config.seeds.length, 25);
   assert.equal(
     config.seeds.reduce((count, seed) => count + seed.evidence.length, 0),
@@ -625,7 +927,7 @@ test("current mobile error translation is an exact presentation-only source chec
   // The mobile file is unchanged by the later upstream merge. Preserve its exact
   // two-line proof and both historical aggregates by using only these eight
   // pre-merge UTF-8/LF identities, independently read from committed 77346e24c.
-  // All other identities still come from live source, so unrelated drift fails.
+  // The later extension helper preserves the separately committed September inputs.
   const beforeUpstreamMerge = new Map([
     [
       "frontend/app/rollup.config.mjs",
@@ -666,18 +968,14 @@ test("current mobile error translation is an exact presentation-only source chec
     ...fingerprint,
     sha256: hash(
       JSON.stringify(
-        fingerprint.files.map((entry) => [
-          entry,
-          entry === file
-            ? hash(mobileSource)
-            : (beforeUpstreamMerge.get(entry) ??
-              hash(
-                readFileSync(resolve(root, entry), "utf8").replaceAll(
-                  "\r\n",
-                  "\n",
-                ),
-              )),
-        ]),
+        septemberCheckpointEntries(fingerprint).map(
+          ([entry, checkpointHash]) => [
+            entry,
+            entry === file
+              ? hash(mobileSource)
+              : (beforeUpstreamMerge.get(entry) ?? checkpointHash),
+          ],
+        ),
       ),
     ),
   });
@@ -707,22 +1005,24 @@ test("current upstream merge preserves scoped startup, model and private-app bou
     readFileSync(resolve(root, file), "utf8").replaceAll("\r\n", "\n");
   const hash = (text) => createHash("sha256").update(text).digest("hex");
   const fingerprint = seedSourceFingerprint(root, config);
-  assert.equal(fingerprint.files.length, 148);
-  assert.equal(featureOwnedFiles(root, config.scopeId).length, 119);
+  assert.equal(fingerprint.files.length, 151);
+  assert.equal(featureOwnedFiles(root, config.scopeId).length, 122);
   assert.equal(config.seeds.length, 25);
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 86);
   // Preserve the committed merge identity after the separately reviewed Windows
-  // path-only repair; every other file still uses its live content hash.
+  // path-only repair and the independently bound later-extension identities.
   const mergeFingerprint = {
     ...fingerprint,
     sha256: hash(
       JSON.stringify(
-        fingerprint.files.map((file) => [
-          file,
-          file === "frontend/app/rollup.extras.mjs"
-            ? "ed9641516ca65a821c6b4a5f4bcae1e51449be786d1ddbed04fdc2b2d7e32203"
-            : hash(read(file)),
-        ]),
+        septemberCheckpointEntries(fingerprint).map(
+          ([file, checkpointHash]) => [
+            file,
+            file === "frontend/app/rollup.extras.mjs"
+              ? "ed9641516ca65a821c6b4a5f4bcae1e51449be786d1ddbed04fdc2b2d7e32203"
+              : checkpointHash,
+          ],
+        ),
       ),
     ),
   };
@@ -807,18 +1107,25 @@ test("Windows startup module-ID repair preserves the exact committed merge check
     hash(prior),
     "ed9641516ca65a821c6b4a5f4bcae1e51449be786d1ddbed04fdc2b2d7e32203",
   );
-  const restored = sourceReviewFingerprintFromBytes(
-    fingerprint.files.map((entry) => [
-      entry,
-      entry === file ? Buffer.from(prior) : readFileSync(resolve(root, entry)),
-    ]),
-  );
+  const checkpointEntries = septemberCheckpointEntries(fingerprint);
+  const restored = {
+    ...fingerprint,
+    files: checkpointEntries.map(([entry]) => entry),
+    sha256: hash(
+      JSON.stringify(
+        checkpointEntries.map(([entry, checkpointHash]) => [
+          entry,
+          entry === file ? hash(prior) : checkpointHash,
+        ]),
+      ),
+    ),
+  };
   assert.equal(
     restored.sha256,
     "3e5e911fe406ba81cee7320c706bc1482ffdc02b977f684b5cc55185e0fcdb33",
   );
   assert.equal(
-    fingerprint.sha256,
+    hash(JSON.stringify(checkpointEntries)),
     "f987610e19dd0790765bbe2209b109c7a987d10d09f082a0400e702efca5c67d",
   );
   assertReviewedSourceFingerprint(restored, config.sourceReview);

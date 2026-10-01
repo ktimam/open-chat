@@ -2,15 +2,9 @@
 // @vitest-environment-options {"url":"http://localhost:45821/handoff"}
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { parseNativeApprovedRequest, startLocalNativeAppHandoff } from "./localNativeAppHandoff";
+import { encryptedRequestFixture } from "./utils/localAppEncryption.testFixtures";
 
-const request = {
-    appId: "generic-app",
-    actionId: "record",
-    destination: "https://app.example/import",
-    recipient: "Review in the app",
-    idempotencyKey: "A".repeat(43),
-    payload: { reading: 42, note: "private-marker\u202e<script>" },
-};
+const request = encryptedRequestFixture({ appId: "generic-app", idempotencyKey: "A".repeat(43) });
 const nonce = "B".repeat(42) + "A";
 let cleanup: (() => void) | undefined;
 let phase: string;
@@ -46,7 +40,7 @@ function connected(overrides: object = {}, origin?: string, source?: object) {
     );
 }
 function appMessage(type: string, extra: object = {}) {
-    postEvent({ type: `oc:app-import:${type}`, version: 1, sessionNonce: nonce, ...extra });
+    postEvent({ type: `oc:app-import:${type}`, version: 2, sessionNonce: nonce, ...extra });
 }
 async function load() {
     el<HTMLInputElement>("pairing-code").value = "ABCDEFGHIJKLMNOPQRST";
@@ -121,8 +115,11 @@ describe("native private app browser relay", () => {
             browserProofHex: expect.stringMatching(/^[a-f0-9]{64}$/),
         });
         expect(el<HTMLInputElement>("pairing-code").value).toBe("");
-        expect(JSON.parse(el("handoff-summary").textContent!)).toEqual(request);
-        expect(el("handoff-summary").textContent).toContain("\\u202e");
+        expect(JSON.parse(el("handoff-summary").textContent!)).toMatchObject({
+            destination: request.destination,
+            recipientKey: request.envelope.keyId,
+        });
+        expect(el("handoff-summary").textContent).not.toContain("private-marker");
         expect(el("handoff-summary").querySelector("script")).toBeNull();
         expect(window.open).not.toHaveBeenCalled();
         el<HTMLButtonElement>("open-app").click();
@@ -170,11 +167,14 @@ describe("native private app browser relay", () => {
         expect(offers[0]).toEqual([
             {
                 type: "oc:app-import:offer",
-                version: 1,
+                version: 2,
                 sessionNonce: nonce,
                 importId: request.idempotencyKey,
                 actionId: request.actionId,
-                payload: request.payload,
+                appId: request.appId,
+                appRevision: request.appRevision,
+                destination: request.destination,
+                envelope: request.envelope,
             },
             "https://app.example",
         ]);

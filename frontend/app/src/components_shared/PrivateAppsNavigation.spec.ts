@@ -20,6 +20,7 @@ const calls = vi.hoisted(() => ({
     close: vi.fn(),
     clear: vi.fn(),
     setAccount: vi.fn(),
+    setClient: vi.fn(),
     setConnectAppSetup: vi.fn(),
     configureDirectory: vi.fn(),
     refreshDirectory: vi.fn(async () => false),
@@ -181,7 +182,7 @@ afterEach(async () => {
 });
 
 describe("private apps use normal navigation rather than a composer overlay", () => {
-    it("discloses setup-only retention, waits for restore and offers explicit device-local forgetting", async () => {
+    it("discloses encrypted card retention, waits for restore and offers explicit device-local forgetting", async () => {
         privateAppWorkspaceState.update((state) => ({
             ...state,
             open: true,
@@ -192,7 +193,8 @@ describe("private apps use normal navigation rather than a composer overlay", ()
         await tick();
         const text = target.textContent?.replace(/\s+/g, " ");
         expect(text).toContain("not protected by chat encryption");
-        expect(text).toContain("Drafts and handoff details stay in memory only");
+        expect(text).toContain("current private card is saved separately");
+        expect(text).toContain("Restoring a card never restores your approval");
         expect(calls.setAccount).toHaveBeenLastCalledWith("synthetic-user", "synthetic-backend");
         const forget = [...target.querySelectorAll("button")].find((button) =>
             button.textContent?.includes("Forget this account"),

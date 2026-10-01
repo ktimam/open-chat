@@ -8,7 +8,7 @@ import {
   inheritedFormattingDigest as digest,
 } from "./frontend_format_inherited.mjs";
 
-export const CURRENT_FORMAT_BASE = "c0ac3178f70f5e9de2f6ee532ce1415ab32a47cd";
+export const CURRENT_FORMAT_BASE = "a4cc691e2c30a73b93c0fb52563168e88082c40e";
 export const CURRENT_FORMAT_EDIT_ALGORITHM = "unique-common-line-anchors-v1";
 
 // Same edit identity as the historical review: exact removed/added lines,

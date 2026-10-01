@@ -4,6 +4,10 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import {
+    createUnofficialLocalEnvironment,
+    UNOFFICIAL_LOCAL_CANISTERS,
+} from "../../../unofficialLocalProfile.mjs";
 import { patchQwen3Vl2bDecoderGraph } from "../../transformersWebGpuDecoderGraph.mjs";
 import {
     patchQwen3Vl2bDeepStackDecoderGraph,
@@ -94,6 +98,35 @@ function cachedBodyVerificationFixture(expected: Uint8Array, chunks: Uint8Array[
                 signal,
             }),
     };
+}
+
+function stubCachedHashScheduler(scheduler: unknown): () => void {
+    const original = Object.getOwnPropertyDescriptor(globalThis, "scheduler");
+    vi.stubGlobal("scheduler", scheduler);
+    return () => {
+        if (original === undefined) Reflect.deleteProperty(globalThis, "scheduler");
+        else Object.defineProperty(globalThis, "scheduler", original);
+    };
+}
+
+function stubUnofficialLocalWebEnvironment(layout: "v1" | "v2" = "v2") {
+    const canisters = Object.fromEntries(
+        Object.values(UNOFFICIAL_LOCAL_CANISTERS).map((name) => [
+            name,
+            { ic: `official-${name.replaceAll("_", "-")}-cai` },
+        ]),
+    );
+    const environment = createUnofficialLocalEnvironment(canisters, { layout });
+    for (const key of [
+        "OC_BUILD_ENV",
+        "OC_DFX_NETWORK",
+        "OC_UNOFFICIAL_CLIENT",
+        "OC_TRANSFORMERS_WEBGPU_IMAGE_SPIKE",
+        "OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY",
+    ] as const) {
+        vi.stubEnv(key, environment[key]);
+    }
+    return environment;
 }
 
 function runtimeBytes(asset: (typeof TRANSFORMERS_WEBGPU_RUNTIME_ASSETS)[number]): Uint8Array {
@@ -284,6 +317,37 @@ describe("Transformers.js Qwen WebGPU spike", () => {
         }
     });
 
+    it.each(["v1", "v2"] as const)(
+        "unofficial static %s downloads all base and optional audio artifacts without a proxy",
+        (layout) => {
+            const environment = stubUnofficialLocalWebEnvironment(layout);
+            try {
+                const baseUrl = `${environment.OC_BASE_ORIGIN}/chat/example`;
+                for (const modelId of [PHONE_QWEN3_VL_2B_MODEL_ID, PHONE_GEMMA4_E2B_MODEL_ID]) {
+                    const spec = gpuProtocol.transformersWebGpuModelSpec(modelId)!;
+                    for (const artifact of [
+                        ...spec.artifacts,
+                        ...(spec.optionalAudio?.artifacts ?? []),
+                    ]) {
+                        const url = transformersWebGpuArtifactDownloadUrl(
+                            artifact.path,
+                            { baseUrl, packagedAndroid: false },
+                            modelId,
+                        );
+                        const source = artifact.source ?? { ...spec, path: artifact.path };
+                        const expected = spec.packagedArtifacts.includes(artifact.path)
+                            ? `${environment.OC_BASE_ORIGIN}${spec.packagedModelBase}${artifact.path}`
+                            : `https://huggingface.co/${source.repository}/resolve/${source.revision}/${source.path}`;
+                        expect(url).toBe(expected);
+                        expect(new URL(url).pathname).not.toContain("/hf-model/");
+                    }
+                }
+            } finally {
+                vi.unstubAllEnvs();
+            }
+        },
+    );
+
     it.each([
         "../config.json",
         "https://example.invalid/weights",
@@ -456,6 +520,98 @@ describe("Transformers.js Qwen WebGPU spike", () => {
         ).resolves.toBe(true);
         for (const artifact of TRANSFORMERS_GEMMA_ARTIFACTS) {
             expect(entries.has(modelUrl(artifact.path))).toBe(true);
+        }
+    });
+
+    it("downloads uncached optional audio from pinned Hub URLs but keeps local cache identities", async () => {
+        const environment = stubUnofficialLocalWebEnvironment();
+        const baseUrl = `${environment.OC_BASE_ORIGIN}/chat/example`;
+        const spec = gpuProtocol.transformersWebGpuModelSpec(PHONE_GEMMA4_E2B_MODEL_ID)!;
+        const audioBodies = spec.optionalAudio!.artifacts.map((_, index) =>
+            Uint8Array.of(10, 20, index),
+        );
+        const audioArtifacts = spec.optionalAudio!.artifacts.map((artifact, index) => ({
+            ...artifact,
+            bytes: audioBodies[index].length,
+            sha256: createHash("sha256").update(audioBodies[index]).digest("hex"),
+        }));
+        const specSpy = vi.spyOn(gpuProtocol, "transformersWebGpuModelSpec").mockReturnValue({
+            ...spec,
+            optionalAudio: {
+                artifacts: audioArtifacts,
+                artifactBytes: audioArtifacts.reduce(
+                    (total, artifact) => total + artifact.bytes,
+                    0,
+                ),
+            },
+        });
+        try {
+            const cachedUrl = (path: string) =>
+                `${environment.OC_BASE_ORIGIN}/hf-model/${spec.repository}/resolve/${spec.revision}/${path}`;
+            const sourceUrl = (path: string) =>
+                `https://huggingface.co/${spec.repository}/resolve/${spec.revision}/${path}`;
+            const entries = new Map<string, Response>();
+            for (const artifact of spec.artifacts) {
+                entries.set(
+                    cachedUrl(artifact.path),
+                    new Response(null, {
+                        headers: {
+                            "content-length": String(artifact.bytes),
+                            "x-content-sha256": artifact.sha256,
+                        },
+                    }),
+                );
+            }
+            for (const asset of TRANSFORMERS_WEBGPU_RUNTIME_ASSETS) {
+                entries.set(
+                    transformersWebGpuRuntimeAssetUrl(asset, baseUrl),
+                    runtimeCacheResponse(asset),
+                );
+            }
+            const cache: TransformersWebGpuArtifactCache = {
+                match: vi.fn(async (request) => entries.get(String(request))?.clone()),
+                put: vi.fn(async (request, response) => {
+                    entries.set(
+                        String(request),
+                        new Response(await response.arrayBuffer(), {
+                            headers: response.headers,
+                        }),
+                    );
+                }),
+                delete: vi.fn(async (request) => entries.delete(String(request))),
+            };
+            const fetcher = vi.fn(async (request: RequestInfo | URL) => {
+                const index = audioArtifacts.findIndex(
+                    (artifact) => sourceUrl(artifact.path) === String(request),
+                );
+                // The real static preview has no model proxy; never turn a wrong URL into success.
+                return index < 0
+                    ? new Response(null, { status: 404 })
+                    : new Response(audioBodies[index], {
+                          headers: { "content-length": String(audioArtifacts[index].bytes) },
+                      });
+            });
+            const options = {
+                baseUrl,
+                packagedAndroid: false,
+                fetcher,
+                cacheStorage: { open: async () => cache },
+                cacheBodyVerifier: async () => true,
+            };
+            expect(await transformersWebGpuAudioDownloaded(spec.id, options)).toBe(false);
+            await preloadTransformersWebGpuAudio(spec.id, options);
+            expect(fetcher.mock.calls.map(([url]) => String(url))).toEqual(
+                audioArtifacts.map((artifact) => sourceUrl(artifact.path)),
+            );
+            expect(vi.mocked(cache.put).mock.calls.map(([url]) => String(url))).toEqual(
+                audioArtifacts.map((artifact) => cachedUrl(artifact.path)),
+            );
+            expect(await transformersWebGpuAudioDownloaded(spec.id, options)).toBe(true);
+            for (const artifact of spec.artifacts)
+                expect(entries.has(cachedUrl(artifact.path))).toBe(true);
+        } finally {
+            specSpy.mockRestore();
+            vi.unstubAllEnvs();
         }
     });
 
@@ -1095,11 +1251,92 @@ describe("Transformers.js Qwen WebGPU spike", () => {
     });
 
     it.each([
+        { label: "before its first byte", provideBytes: false, stallCancel: false },
+        { label: "after hashing its valid bytes", provideBytes: true, stallCancel: false },
+        { label: "with never-settling stream cancellation", provideBytes: true, stallCancel: true },
+    ])(
+        "cancels and unlocks a cached body stalled $label",
+        async ({ provideBytes, stallCancel }) => {
+            const expected = new Uint8Array([1, 2, 3, 4]);
+            const fixture = cachedBodyVerificationFixture(expected, []);
+            const controller = new AbortController();
+            const reason = new Error("cancelled while the cache reader is stalled");
+            const cancelled = vi.fn(() =>
+                stallCancel ? new Promise<void>(() => undefined) : undefined,
+            );
+            let streamController!: ReadableStreamDefaultController<Uint8Array>;
+            let readStalled: () => void = () => undefined;
+            const stalledRead = new Promise<void>((resolve) => {
+                readStalled = resolve;
+            });
+            let pulls = 0;
+            const body = new ReadableStream<Uint8Array>(
+                {
+                    start(stream) {
+                        streamController = stream;
+                    },
+                    pull(stream) {
+                        if (provideBytes && pulls++ === 0) {
+                            stream.enqueue(expected);
+                        } else {
+                            // With no queued bytes and no close/error, reader.read() stays pending.
+                            readStalled();
+                        }
+                    },
+                    cancel: cancelled,
+                },
+                { highWaterMark: 0 },
+            );
+            vi.mocked(fixture.cache.match).mockResolvedValue(
+                new Response(body, {
+                    headers: {
+                        "content-length": String(expected.length),
+                        "x-content-sha256": createHash("sha256").update(expected).digest("hex"),
+                    },
+                }),
+            );
+            const verification = fixture.verify(controller.signal).then(
+                (value) => ({ kind: "resolved" as const, value }),
+                (error: unknown) => ({ kind: "rejected" as const, error }),
+            );
+            let nextTask: ReturnType<typeof setTimeout> | undefined;
+            try {
+                await stalledRead;
+                controller.abort(reason);
+                // A task-turn probe, not a delay-based race with stream production: no more bytes
+                // will arrive. An abort must itself unblock the pending read before the next task.
+                const outcome = await Promise.race([
+                    verification,
+                    new Promise<"still pending">((resolve) => {
+                        nextTask = setTimeout(() => resolve("still pending"), 0);
+                    }),
+                ]);
+                expect(outcome).toEqual({ kind: "rejected", error: reason });
+                if (outcome !== "still pending" && outcome.kind === "rejected") {
+                    expect(outcome.error).toBe(reason);
+                }
+                expect(cancelled).toHaveBeenCalledOnce();
+                expect(cancelled).toHaveBeenCalledWith(reason);
+                expect(body.locked).toBe(false);
+                expect(fixture.cache.delete).not.toHaveBeenCalled();
+            } finally {
+                if (nextTask !== undefined) clearTimeout(nextTask);
+                // Also settle the unchanged buggy implementation, so a failing test leaks no read.
+                streamController.error(new Error("test stream cleanup"));
+                await verification;
+                fixture.restore();
+            }
+        },
+        1_000,
+    );
+
+    it.each([
         { label: "prequeued stream chunks", chunkBytes: 64 * 1024 },
         { label: "one large stream chunk", chunkBytes: 8 * 1024 * 1024 },
     ])(
         "allows a timer heartbeat before cached SHA-256 completes with $label",
         async ({ chunkBytes }) => {
+            const restoreScheduler = stubCachedHashScheduler(undefined);
             const expected = new Uint8Array(8 * 1024 * 1024).fill(17);
             const chunks = [];
             for (let offset = 0; offset < expected.length; offset += chunkBytes) {
@@ -1138,11 +1375,13 @@ describe("Transformers.js Qwen WebGPU spike", () => {
                 await heartbeat;
                 hashSpy.mockRestore();
                 fixture.restore();
+                restoreScheduler();
             }
         },
     );
 
     it("honors timer-triggered cancellation while hashing prequeued cached bodies", async () => {
+        const restoreScheduler = stubCachedHashScheduler(undefined);
         const expected = new Uint8Array(8 * 1024 * 1024).fill(17);
         const chunks = [];
         for (let offset = 0; offset < expected.length; offset += 64 * 1024) {
@@ -1166,6 +1405,99 @@ describe("Transformers.js Qwen WebGPU spike", () => {
         } finally {
             await heartbeat;
             fixture.restore();
+            restoreScheduler();
+        }
+    });
+
+    it("uses scheduler.yield with its receiver while verifying real cached SHA-256", async () => {
+        const expected = new Uint8Array(4 * 1024 * 1024).fill(23);
+        const fixture = cachedBodyVerificationFixture(expected, [expected]);
+        const receivers: unknown[] = [];
+        const scheduler = {
+            yield: vi.fn(function (this: unknown) {
+                receivers.push(this);
+                return Promise.resolve();
+            }),
+        };
+        const restoreScheduler = stubCachedHashScheduler(scheduler);
+        try {
+            await expect(fixture.verify()).resolves.toBe(true);
+            expect(scheduler.yield).toHaveBeenCalled();
+            for (const receiver of receivers) expect(receiver).toBe(scheduler);
+            expect(fixture.cache.delete).not.toHaveBeenCalled();
+        } finally {
+            fixture.restore();
+            restoreScheduler();
+        }
+    });
+
+    it.each(["rejects", "throws"])(
+        "falls back to a real timer without evicting valid cached bytes when scheduler.yield %s",
+        async (failureMode) => {
+            const expected = new Uint8Array(4 * 1024 * 1024).fill(29);
+            const fixture = cachedBodyVerificationFixture(expected, [expected]);
+            const scheduler = {
+                yield: vi.fn(() => {
+                    const error = new Error("scheduler yield unavailable");
+                    if (failureMode === "throws") throw error;
+                    return Promise.reject(error);
+                }),
+            };
+            const restoreScheduler = stubCachedHashScheduler(scheduler);
+            let completed = false;
+            let heartbeatBeforeCompletion = false;
+            const heartbeat = new Promise<void>((resolve) =>
+                setTimeout(() => {
+                    heartbeatBeforeCompletion = !completed;
+                    resolve();
+                }, 0),
+            );
+            try {
+                await expect(fixture.verify()).resolves.toBe(true);
+                completed = true;
+                await heartbeat;
+                expect(scheduler.yield).toHaveBeenCalled();
+                expect(heartbeatBeforeCompletion).toBe(true);
+                expect(fixture.cache.delete).not.toHaveBeenCalled();
+            } finally {
+                completed = true;
+                await heartbeat;
+                fixture.restore();
+                restoreScheduler();
+            }
+        },
+    );
+
+    it("honors cancellation during a scheduler yielded turn without evicting cached bytes", async () => {
+        const expected = new Uint8Array(8 * 1024 * 1024).fill(31);
+        const chunks = [];
+        for (let offset = 0; offset < expected.length; offset += 64 * 1024) {
+            chunks.push(expected.subarray(offset, offset + 64 * 1024));
+        }
+        const fixture = cachedBodyVerificationFixture(expected, chunks);
+        const controller = new AbortController();
+        const reason = new Error("cancelled during scheduler yield");
+        const scheduler = {
+            yield: vi.fn(
+                () =>
+                    new Promise<void>((resolve) =>
+                        setTimeout(() => {
+                            controller.abort(reason);
+                            resolve();
+                        }, 0),
+                    ),
+            ),
+        };
+        const restoreScheduler = stubCachedHashScheduler(scheduler);
+        try {
+            await expect(fixture.verify(controller.signal)).rejects.toBe(reason);
+            expect(scheduler.yield).toHaveBeenCalledOnce();
+            expect(fixture.cancelled).toHaveBeenCalledOnce();
+            expect(fixture.cancelled).toHaveBeenCalledWith(reason);
+            expect(fixture.cache.delete).not.toHaveBeenCalled();
+        } finally {
+            fixture.restore();
+            restoreScheduler();
         }
     });
 
@@ -1542,7 +1874,15 @@ describe("Transformers.js Qwen WebGPU spike", () => {
 
     it("decodes Gemma voice bytes once and transfers only exact 16 kHz PCM to the worker", async () => {
         const worker = new FakeWorker();
-        const decodeAudio = vi.fn(async () => new Float32Array([0.125, -0.25, 0.5]));
+        // A valid-length view with unrelated data on both sides catches accidental transfer of
+        // the decoder's whole backing buffer. Codec and Worker execution are tested separately.
+        const backing = new Float32Array(171).fill(42);
+        const decoded = backing.subarray(3, 164);
+        decoded.fill(0);
+        decoded.set([0.125, -0.25, 0.5]);
+        decoded[decoded.length - 1] = -0.75;
+        const expectedPcm = decoded.slice();
+        const decodeAudio = vi.fn(async () => decoded);
         const encoded = new Uint8Array([9, 8, 7, 6]);
         const engine = createTransformersWebGpuEngine(() => worker, {
             available: () => ({ available: true }),
@@ -1569,9 +1909,11 @@ describe("Transformers.js Qwen WebGPU spike", () => {
             image: undefined,
         });
         expect("audio" in sent).toBe(false);
-        expect(sent.kind === "infer" && [...new Float32Array(sent.audioSamples!)]).toEqual([
-            0.125, -0.25, 0.5,
-        ]);
+        expect(sent.kind === "infer" && new Float32Array(sent.audioSamples!)).toEqual(expectedPcm);
+        expect(sent.kind === "infer" && sent.audioSamples!.byteLength).toBe(161 * 4);
+        expect(decoded).toEqual(expectedPcm);
+        expect(backing.slice(0, 3)).toEqual(new Float32Array(3).fill(42));
+        expect(backing.slice(164)).toEqual(new Float32Array(7).fill(42));
         expect(worker.transfers[0]).toEqual([
             sent.kind === "infer" ? sent.audioSamples : undefined,
         ]);

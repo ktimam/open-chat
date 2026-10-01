@@ -6,6 +6,7 @@ import { verifyImportedLocalProcessor, type runIsolatedAppProcessor } from "./is
 import type { LocalDraftDelivery, LocalDraftSchema } from "./localAppDrafts";
 import { PrivateAppWorkspace } from "./privateAppWorkspace";
 import { parseLocalAppCatalog } from "./localAppCatalog";
+import type { LocalAppDraftStorage } from "./localAppDraftPersistence";
 import type {
     LocalAppSetupScope,
     LocalAppSetupSnapshot,
@@ -42,6 +43,13 @@ const app = (id: string, processor = false) => ({
     description: "Synthetic test app",
     destination: `https://example.test/${id}`,
     recipientLabel: "Review account in app",
+    deliveryEncryption: {
+        version: 1,
+        scheme: "p256-hkdf-sha256-aes-256-gcm-v1",
+        keyId: "a".repeat(64),
+        publicKeySpki: btoa("\0".repeat(91)).replace(/=+$/, ""),
+        recipientContext: "AQ",
+    },
     ...(processor ? { processor: { sha256: "a".repeat(64), byteLength: 4 } } : {}),
     actions: [
         {
@@ -71,7 +79,11 @@ const app = (id: string, processor = false) => ({
 const catalog = (processor = false) =>
     JSON.stringify({ version: 1, apps: [app("one", processor), app("two")] });
 
-function fixture(processor = false, setupStorage?: LocalAppSetupStorage) {
+function fixture(
+    processor = false,
+    setupStorage?: LocalAppSetupStorage,
+    draftStorage?: LocalAppDraftStorage,
+) {
     const deps = {
         extract: vi.fn<typeof extractPrivateAppAction>(async () => ({
             kind: "extracted",
@@ -87,6 +99,7 @@ function fixture(processor = false, setupStorage?: LocalAppSetupStorage) {
         cancelDelivery: vi.fn(),
         deliverySaved: vi.fn(() => false),
         setupStorage,
+        draftStorage,
     };
     const workspace = new PrivateAppWorkspace(deps);
     if (!setupStorage) {
@@ -871,6 +884,7 @@ async function connect(
 ) {
     workspace.setAccount(account, backend);
     await vi.waitFor(() => expect(workspace.state.setupLoading).toBe(false));
+    await vi.waitFor(() => expect(workspace.state.draftLoading).toBe(false));
 }
 const saved = (workspace: PrivateAppWorkspace) =>
     vi.waitFor(() => expect(workspace.state.setupStatus).toContain("App setup saved"));

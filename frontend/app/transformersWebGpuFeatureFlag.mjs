@@ -15,6 +15,19 @@ export function transformersWebGpuProductionAssetsEnabled(environment) {
     );
 }
 
+/** Static unofficial previews use the immutable sources without becoming production builds. */
+export function transformersWebGpuImmutableAssetsEnabled(environment) {
+    return (
+        transformersWebGpuProductionAssetsEnabled(environment) ||
+        (environment?.OC_BUILD_ENV === "development" &&
+            environment?.OC_DFX_NETWORK === "ic" &&
+            environment?.OC_UNOFFICIAL_CLIENT === "true" &&
+            environment?.OC_TRANSFORMERS_WEBGPU_IMAGE_SPIKE === "true" &&
+            environment?.OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY ===
+                TRANSFORMERS_WEBGPU_IMMUTABLE_DELIVERY)
+    );
+}
+
 export function transformersWebGpuFeatureEnabled(environment) {
     return (
         (environment?.OC_BUILD_ENV === "development" &&

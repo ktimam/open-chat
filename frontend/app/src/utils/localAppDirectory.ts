@@ -233,6 +233,7 @@ export function publicLocalAppCatalog(
         app.description !== descriptor.description ||
         app.processor?.sha256 !== descriptor.processor.sha256 ||
         app.processor.byteLength !== descriptor.processor.byteLength ||
+        app.deliveryEncryption !== undefined ||
         app.actions.some((action) => action.processorContext !== undefined)
     )
         invalid();

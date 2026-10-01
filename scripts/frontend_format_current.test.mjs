@@ -71,6 +71,27 @@ function fixture() {
   };
 }
 
+test("current formatting follows the reviewed merged upstream without new exemptions", () => {
+  const baseline = JSON.parse(
+    readFileSync(
+      new URL("../.github/unofficial-client-baseline.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  assert.equal(CURRENT_FORMAT_BASE, "a4cc691e2c30a73b93c0fb52563168e88082c40e");
+  assert.equal(baseline.upstreamCommit, CURRENT_FORMAT_BASE);
+  assert.equal(
+    baseline.backendTree,
+    "2aa18d204b5ce4aeee13998c271c839f7af65dca",
+  );
+  assert(
+    readCurrentFormattingRegistry().records.every(
+      (record) => record.baseCommit === CURRENT_FORMAT_BASE,
+    ),
+  );
+  assert.equal(readCurrentFormattingRegistry().records.length, 11);
+});
+
 test("current review regenerates exact edit proof after all identity checks", () => {
   const { registry, input, format } = fixture();
   const seen = [];

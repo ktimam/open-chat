@@ -1,15 +1,26 @@
 import { createLocalAppHandoffSession } from "./utils/localAppHandoff";
-import type { LocalDraftDeliveryRequest } from "./utils/localAppDrafts";
+import {
+    validateEncryptedLocalAppDeliveryRequest,
+    type EncryptedLocalAppDeliveryRequest,
+} from "./utils/localAppEncryption";
 
 /** Preserve every UTF-16 code unit when exposing hidden controls in the exact JSON review. */
-export function formatLocalHandoffReview(request: LocalDraftDeliveryRequest): string {
-    return JSON.stringify(request, null, 2).replace(
-        /[\u007F-\u009F\p{Cf}\u2028\u2029]/gu,
-        (character) =>
-            Array.from(
-                { length: character.length },
-                (_, index) => `\\u${character.charCodeAt(index).toString(16).padStart(4, "0")}`,
-            ).join(""),
+export function formatLocalHandoffReview(request: EncryptedLocalAppDeliveryRequest): string {
+    return JSON.stringify(
+        {
+            appId: request.appId,
+            destination: request.destination,
+            importId: request.idempotencyKey,
+            recipientKey: request.envelope.keyId,
+            protection: "Encrypted in OpenChat. Only the linked recipient can decrypt the fields.",
+        },
+        null,
+        2,
+    ).replace(/[\u007F-\u009F\p{Cf}\u2028\u2029]/gu, (character) =>
+        Array.from(
+            { length: character.length },
+            (_, index) => `\\u${character.charCodeAt(index).toString(16).padStart(4, "0")}`,
+        ).join(""),
     );
 }
 
@@ -34,7 +45,7 @@ export function startLocalAppHandoffRelay(): () => void {
     }
     history.replaceState(null, "", location.pathname);
     const channel = new BroadcastChannel(`openchat-local-handoff-v1:${nonce}`);
-    let request: LocalDraftDeliveryRequest | undefined;
+    let request: EncryptedLocalAppDeliveryRequest | undefined;
     let session: ReturnType<typeof createLocalAppHandoffSession> | undefined;
     let popup: Window | null = null;
     let closed = false;
@@ -83,36 +94,11 @@ export function startLocalAppHandoffRelay(): () => void {
         )
             return;
         try {
-            const value = message.request;
-            if (
-                !value ||
-                Object.keys(value).sort().join(",") !==
-                    "actionId,appId,destination,idempotencyKey,payload,recipient" ||
-                ["appId", "actionId", "destination", "recipient", "idempotencyKey"].some(
-                    (key) => typeof value[key] !== "string",
-                ) ||
-                !/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/.test(value.idempotencyKey)
-            )
-                throw new Error();
-            const destination = new URL(value.destination);
-            if (
-                destination.username ||
-                destination.password ||
-                destination.hash ||
-                (destination.protocol !== "https:" &&
-                    !(
-                        destination.protocol === "http:" &&
-                        ["localhost", "127.0.0.1", "[::1]"].includes(destination.hostname)
-                    ))
-            )
-                throw new Error();
-            const json = JSON.stringify(value);
-            if (new TextEncoder().encode(json).length > 72 * 1024) throw new Error();
-            request = JSON.parse(json) as LocalDraftDeliveryRequest;
+            request = validateEncryptedLocalAppDeliveryRequest(message.request);
             // textContent never interprets app names, URLs, or values as HTML.
             summary.textContent = formatLocalHandoffReview(request);
             status.textContent =
-                "This is the draft you approved in the client. Opening the app sends exactly its payload for the app's own review. Nothing has been saved yet.";
+                "The approved fields were encrypted in OpenChat. This page cannot read them. Open the linked app to decrypt and review them; nothing has been saved yet.";
             openButton.disabled = false;
         } catch {
             status.textContent = "The approved draft is invalid. No app was opened.";
@@ -157,7 +143,7 @@ export function startLocalAppHandoffRelay(): () => void {
         // repeated; the bound protocol sends its private offer at most once, after ready.
         session.start();
         if (closed) return;
-        const hello = { type: "oc:app-import:hello", version: 1, sessionNonce: nonce };
+        const hello = { type: "oc:app-import:hello", version: 2, sessionNonce: nonce };
         let helloCount = 0;
         helloTimer = setInterval(() => {
             if (closed || ++helloCount >= 60) {

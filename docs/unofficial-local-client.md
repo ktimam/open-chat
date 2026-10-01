@@ -73,9 +73,11 @@ workspace; they do not run inference or send app data.
    for structured fields and repairs. Nothing is posted to the chat or sent to the
    app for card verification. Every edit invalidates the previous approval.
 5. Confirm the full request, including its destination and recipient review label.
-   A separate browser relay displays it again and asks before opening the receiving
-   app. In the local-test APK, first pair that relay as described below.
-6. Review the actual account/destination inside the app, then explicitly save there.
+   OpenChat encrypts the fields before handing them to a separate browser relay.
+   The relay displays only routing/key metadata and asks before opening the receiving
+   app; it cannot read the fields. In the local-test APK, first pair that relay below.
+6. Sign in to the app, decrypt for the linked destination, review the full fields and
+   actual account/destination again, then explicitly save there.
    **Received** is not **saved**; the latter means the app reports that it saved.
 
 Per-chat app opt-in enables suggestions from app-owned declarative rules for fresh
@@ -119,11 +121,13 @@ enter the code only on that displayed page, then select **Load reviewed draft**.
 The URL itself contains neither the code nor the draft. Copying is optional and
 explicit; your device clipboard may retain the code after it expires.
 
-The code expires after two minutes and can claim the approved draft only once.
+The code expires after two minutes and can claim the encrypted approved draft only once.
 After a successful claim, the browser has up to ten minutes to complete delivery.
-Review every field and the destination again before opening the receiving app.
+Check the destination and recipient-key metadata before opening the receiving app.
+The relay cannot display or decrypt the fields; they were encrypted inside OpenChat.
 The receiving app asks you to allow the one-time connection before it receives the
-approved payload. Review its actual account and destination, then save there.
+encrypted payload. After signing in and decrypting locally, review every field and
+its actual account and destination, then save there.
 **Received** does not mean that anything has been saved.
 
 Discarding the draft or changing account cancels the pending native handoff. Data
@@ -174,7 +178,7 @@ an unsent private app proposal; use **Propose** instead.
 Voice messages are supported by **Process with AI** when a compatible model's
 optional audio support is enabled. This does not add voice input to app proposals.
 
-### Remembered setup; session-only drafts
+### Remembered setup and locally saved private cards
 
 Connected or explicitly imported app catalogs, the selected app/action, verified processors and
 enabled chats are remembered on the same device for the same signed-in account
@@ -196,13 +200,14 @@ remains to reject writes started by an older tab before Forget. Another tab may
 still hold its previous setup in memory, but cannot silently save that stale copy
 over the removal. Clearing browser/app storage also removes these markers.
 
-Drafts, source messages/images, extraction results, edited fields, recipients,
-approvals and handoff details stay in memory only. Reload/logout/account change
-discards them. An uncertain delivery is never retried automatically. Check the
-receiving app first, then use **Retry the same reviewed request** if the draft is
-still available, preserving its import ID. Create a new draft only after checking
-that the earlier request was not already saved. Downloaded model caches are
-separate and are not deleted when changing apps or models.
+The active private card is now saved encrypted on this device, separately from setup,
+scoped to its OpenChat account/backend. Closing the panel does not delete it. Explicit
+discard/Forget does; source images/chat history and approval/transport tokens are not
+persisted. Restoration requires fresh review and never sends automatically. Attempted
+deliveries retain their original fields, destination and import ID for explicit retry.
+Storage failures must be shown, and delivery stops if its attempted state cannot be saved.
+Downloaded model caches remain separate. See [encrypted delivery and storage](private-app-encrypted-delivery.md)
+for the complete workflow and device-local key threat boundary.
 
 ### App-defined choices in the private draft
 
@@ -213,7 +218,10 @@ outside Advanced JSON. Clearing a choice removes its companions and restores the
 original defaulted values, unless the user has explicitly edited those values.
 
 Choice history remains in the current draft session through closing/reopening the
-panel and changing the recipient. It is not saved with app setup or sent to the app.
+panel and changing the recipient. It is not saved with app setup/card or sent to the app.
+After reload or logout/return, restored card values are treated as manually supplied:
+choices still update their companion fields, but do not reapply defaults or reconstruct
+the previous baseline on clearing. Edit those values explicitly after restoration.
 Advanced JSON is authoritative: editing it clears that history, and later choices do
 not reapply automatic defaults. Unknown choices or inconsistent companion values block
 review. Every edit invalidates the previous approval; changing a choice does not run a
@@ -238,9 +246,11 @@ imported recovery setups remain explicit and are not silently reassigned a publi
   secure-context profile and does not require cross-origin isolation: its local
   inference runtime uses single-threaded WASM support alongside WebGPU. Imported
   app processors still run in the separately isolated, network-blocked sandbox.
-- The handoff binds exact origin, popup and fresh nonce. It does not authenticate a
-  destination pathname, receiving account, or the honesty of an approved app.
-- The relay holds only approved data and severs its opener to the main client. The
+- The handoff binds exact origin, popup and fresh nonce; encrypted AAD binds destination,
+  app/action/revision, request ID and the connected recipient context. IOU checks its
+  current authenticated recipient before decryption. This is not sender attestation or
+  protection from malicious app frontend code after authorized decryption.
+- The relay holds only encrypted fields and severs its opener to the main client. The
   app cannot gain the main client's chat access through that opener chain.
 
 See `frontend/app/src/utils/localAppDrafts.md` and `isolatedAppProcessor.md` for the
@@ -435,3 +445,66 @@ The remaining gates are current image extraction and reviewed app-save acceptanc
 native restore/reopen/provider and app-flow acceptance, and the unresolved scoped
 security/tool checks. This checkpoint is not release-ready. Public branding/domain
 and publication remain deferred; it requires no OpenChat backend deployment.
+
+### October 1 encrypted delivery and persistent cards
+
+The [current encrypted-delivery workflow](private-app-encrypted-delivery.md) supersedes
+the older plaintext and memory-only draft descriptions. The active card is encrypted
+in device-local storage; restart/logout do not discard it or restore approval.
+App setup must include a recipient public key, obtained through Connect. The relay
+receives ciphertext only, and the receiving app decrypts for a second review before
+its existing encrypted save.
+
+Both web layouts and APK018 ABIs were rebuilt from main `6249be2431` plus the reviewed
+uncommitted changes. The local preview serves the verified v2 bundle. Actual desktop
+Edge testing passed card recovery, authenticated encrypted delivery and saved-entry
+readback. An explicit same-ID retry after reload was deduplicated by IOU; a fresh
+sheet reload still contained only one matching synthetic entry. V1 restored the same
+locked card and required new consent. The source-test and native artifact boundaries
+are detailed in the workflow document; this does not qualify phone inference or
+native authentication/handoff.
+
+Local artifacts and receipts remain under `F:/Temp/OpenChat-IOU`:
+
+- Web: `encrypted-handoff-20261001`, with separate v1/v2 independent receipts and
+  `live-browser-acceptance.json` recording the actual browser checks and their limits.
+- APK018 x86: `auth-native-restore-018/artifacts/openchat-fork-local-test-x86_64.apk`,
+  SHA256 `8f13f5310f9445a2a6087463160e26bd94c5545cc573bab603946830c400db86`.
+- APK018 ARM: `auth-native-restore-018/artifacts/openchat-fork-local-test-aarch64.apk`,
+  SHA256 `1d36bd5bbcad87d3afc9a77f439055bda8ec347b53f9eddb5929e6202b8d4553`.
+
+The APKs keep the separate test package and signer. Independent verification checks
+the frozen source, native binaries and embedded non-map assets; it explicitly leaves
+CI and release acceptance false. Documentation and a test-mock-only repair made after
+the freeze are not compiled into these artifacts. No model weights/prompts, official
+backend or account credentials changed. The unresolved security/tool, image-accuracy
+and native runtime gates above remain open; public publication is still deferred.
+
+The x86 APK018 was installed over the existing emulator test package with `install -r`.
+The installed bytes match the verified APK; UID and original installation time were
+preserved. Cold startup succeeded, the process stayed alive on follow-up, and its
+crash buffer was empty. This verifies update/startup only, not visible account restore,
+provider sign-in, card recovery or encrypted handoff. No phone install was performed.
+
+### October 1 current APK artifacts
+
+APK019 supersedes APK018 as the current build candidate. Both architectures include
+the encrypted local-card and recipient-delivery implementation, the corrected
+optional-audio download routing and the approved installer lock update. The
+catalog, model weights, default prompts and completion guard remain unchanged.
+The build did not install dependencies; its existing installed adm-zip remains
+0.6.0 while the frozen lock selects 0.6.1. The installer fix was tested separately.
+
+- x86: `auth-native-restore-019/artifacts/openchat-fork-local-test-x86_64.apk`,
+  SHA256 `7391571912ec8573198dc222d3535c6a14d754fac1633a985544f53fde356a33`.
+- ARM: `auth-native-restore-019/artifacts/openchat-fork-local-test-aarch64.apk`,
+  SHA256 `73bdc0a1ac64505650eee9342cab1d663af45414d91e71736d8d2f6be06dc278`.
+
+Independent verification passed for both frozen builds, their embedded assets,
+eight exact feature-source emissions, native libraries, unchanged package/signer
+and original authentication code. Two earlier verifier-only source-map failures
+remain recorded; their corrections did not change the APKs or waive checks.
+Neither APK019 was installed or runtime-tested. Original authentication code and
+an `oc.app` association declaration do not prove that this fork package is
+authorized by the public association file. Native/provider acceptance, voice
+accuracy, current-source hosted CI and release acceptance remain open.

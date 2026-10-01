@@ -22,6 +22,7 @@ vi.mock("./privateAppWorkspace", async () => {
         privateAppWorkspaceState: writable({}),
         privateAppWorkspace: {
             setAccount: vi.fn(),
+            setClient: vi.fn(),
             setConnectAppSetup: vi.fn(),
             configureDirectory: vi.fn(),
             refreshDirectory: vi.fn(async () => false),

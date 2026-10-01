@@ -1,5 +1,9 @@
 // Private proposals are not chat messages or backend-attested ActionCards. This module has no
 // network, storage, iframe, model, or app-code dependency. Only explicit confirmation calls delivery.
+import {
+    validateLocalAppDeliveryEncryption,
+    type LocalAppDeliveryEncryption,
+} from "./localAppEncryption";
 export type LocalDraftJson =
     | null
     | boolean
@@ -38,6 +42,8 @@ export interface LocalDraftTarget {
     readonly actionId: string;
     readonly destination: string;
     readonly recipient: string;
+    readonly appRevision?: string;
+    readonly deliveryEncryption?: LocalAppDeliveryEncryption;
 }
 
 export interface LocalDraftInput {
@@ -76,6 +82,7 @@ export interface LocalDraftView {
 export type LocalDraftDelivery = (
     request: LocalDraftDeliveryRequest,
     signal: AbortSignal,
+    beforeDelivery?: Promise<void>,
 ) => Promise<{ kind: "delivered" } | { kind: "uncertain" }>;
 
 export type LocalDraftConfirmationResult =
@@ -89,6 +96,18 @@ interface DraftRecord {
     idempotencyKey: string;
     attempted: boolean;
     controller?: AbortController;
+}
+
+/** Device-local recovery data. Deliberately excludes approval tokens and transport sessions. */
+export interface LocalDraftSnapshot {
+    readonly version: 1;
+    readonly id: string;
+    readonly idempotencyKey: string;
+    readonly revision: number;
+    readonly attempted: boolean;
+    readonly target: LocalDraftTarget;
+    readonly schema: LocalDraftSchema;
+    readonly payload: LocalDraftJson;
 }
 
 const MAX_BYTES = 64 * 1024;
@@ -299,11 +318,34 @@ function validatePayload(value: LocalDraftJson, schema: LocalDraftSchema): void 
 
 function snapshotTarget(input: LocalDraftTarget): LocalDraftTarget {
     const value = snapshotJson(input);
-    if (!isObject(value) || Object.keys(value).length !== 4) invalid();
+    if (
+        !isObject(value) ||
+        Object.keys(value).some(
+            (key) =>
+                ![
+                    "appId",
+                    "actionId",
+                    "destination",
+                    "recipient",
+                    "appRevision",
+                    "deliveryEncryption",
+                ].includes(key),
+        )
+    )
+        invalid();
     for (const key of ["appId", "actionId", "destination", "recipient"]) {
         if (typeof value[key] !== "string" || value[key].length === 0 || value[key].length > 2048)
             invalid();
     }
+    if (
+        value.appRevision !== undefined &&
+        (typeof value.appRevision !== "string" ||
+            !value.appRevision ||
+            value.appRevision.length > 128)
+    )
+        invalid();
+    if (value.deliveryEncryption !== undefined)
+        validateLocalAppDeliveryEncryption(value.deliveryEncryption);
     let url: URL;
     try {
         url = new URL(value.destination as string);
@@ -323,6 +365,51 @@ function snapshotTarget(input: LocalDraftTarget): LocalDraftTarget {
         invalid();
     // Review the canonical URL, which is also the only URL handed to the delivery adapter.
     return Object.freeze({ ...value, destination: url.href }) as unknown as LocalDraftTarget;
+}
+
+export function snapshotLocalDraftRecovery(value: unknown): LocalDraftSnapshot {
+    if (!isObject(value)) invalid();
+    const keys = [
+        "version",
+        "id",
+        "idempotencyKey",
+        "revision",
+        "attempted",
+        "target",
+        "schema",
+        "payload",
+    ];
+    if (
+        Reflect.ownKeys(value).length !== keys.length ||
+        keys.some((key) => {
+            const descriptor = Object.getOwnPropertyDescriptor(value, key);
+            return !descriptor || !("value" in descriptor) || !descriptor.enumerable;
+        })
+    )
+        invalid();
+    if (
+        value.version !== 1 ||
+        typeof value.id !== "string" ||
+        !/^[A-Za-z0-9_-]{43}$/.test(value.id) ||
+        typeof value.idempotencyKey !== "string" ||
+        !/^[A-Za-z0-9_-]{43}$/.test(value.idempotencyKey) ||
+        typeof value.revision !== "number" ||
+        !Number.isSafeInteger(value.revision) ||
+        value.revision < 0 ||
+        typeof value.attempted !== "boolean"
+    )
+        invalid();
+    const schema = snapshotLocalDraftSchema(value.schema);
+    return Object.freeze({
+        version: 1,
+        id: value.id,
+        idempotencyKey: value.idempotencyKey,
+        revision: value.revision,
+        attempted: value.attempted,
+        target: snapshotTarget(value.target as LocalDraftTarget),
+        schema,
+        payload: snapshotLocalDraftPayload(value.payload, schema),
+    });
 }
 
 /** Host-owned JSON display: preserve exact values while exposing hidden text controls. */
@@ -387,6 +474,48 @@ export class LocalAppDraftStore {
         return this.#drafts.get(id)?.view;
     }
 
+    snapshot(id: string): LocalDraftSnapshot {
+        const record = this.#required(id);
+        return snapshotLocalDraftRecovery({
+            version: 1,
+            id,
+            idempotencyKey: record.idempotencyKey,
+            revision: record.view.revision,
+            attempted: record.attempted,
+            target: record.view.target,
+            schema: record.schema,
+            payload: record.view.payload,
+        });
+    }
+
+    restore(value: unknown): LocalDraftView {
+        if (!this.#account) throw new Error("A signed-in account is required for a private draft");
+        const snapshot = snapshotLocalDraftRecovery(value);
+        if (this.#drafts.has(snapshot.id)) throw new Error("Private draft is already open");
+        const view: LocalDraftView = Object.freeze({
+            id: snapshot.id,
+            revision: snapshot.revision,
+            status: snapshot.attempted ? "uncertain" : "draft",
+            target: snapshot.target,
+            payload: snapshot.payload,
+        });
+        this.#drafts.set(view.id, {
+            view,
+            schema: snapshot.schema,
+            idempotencyKey: snapshot.idempotencyKey,
+            attempted: snapshot.attempted,
+        });
+        return view;
+    }
+
+    /** A recovered attempted request is immutable. Fresh review restores no old consent. */
+    reviewRecovered(id: string): LocalDraftApproval {
+        const record = this.#required(id);
+        if (!record.attempted || record.view.status !== "uncertain" || record.view.approval)
+            throw new Error("This private draft is not awaiting recovery review");
+        return this.#approve(record, "uncertain");
+    }
+
     edit(id: string, changes: { target?: LocalDraftTarget; payload?: unknown }): LocalDraftView {
         const record = this.#required(id);
         if (record.attempted) throw new Error("A dispatched draft cannot be edited");
@@ -409,6 +538,11 @@ export class LocalAppDraftStore {
     review(id: string): LocalDraftApproval {
         const record = this.#required(id);
         if (record.attempted) throw new Error("Use the existing review for a dispatched draft");
+        return this.#approve(record, "reviewed");
+    }
+
+    #approve(record: DraftRecord, status: "reviewed" | "uncertain"): LocalDraftApproval {
+        const id = record.view.id;
         const request: LocalDraftDeliveryRequest = Object.freeze({
             ...record.view.target,
             idempotencyKey: record.idempotencyKey,
@@ -421,7 +555,7 @@ export class LocalAppDraftStore {
             request,
             summary: formatLocalDraftJson(request),
         });
-        record.view = Object.freeze({ ...record.view, status: "reviewed", approval });
+        record.view = Object.freeze({ ...record.view, status, approval });
         return approval;
     }
 

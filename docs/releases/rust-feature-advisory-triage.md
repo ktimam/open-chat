@@ -68,3 +68,29 @@ been attempted.
 The PR1 query approval is resolved for the completed invocation. Current-APK
 physical-phone qualification remains outstanding. The private catalog is sufficient
 for local model testing; public model hosting is a later distribution concern.
+
+## October 2 local test deferral
+
+The current-client scoped scan additionally reported the following exact
+package/advisory identities. The user reviewed the pending-decision explanation
+and explicitly chose to defer them for the unofficial local-test release.
+
+| Package | Recorded advisory IDs |
+| --- | --- |
+| glib 0.18.5 | GHSA-wrw7-89jp-8q8g; RUSTSEC-2024-0429 |
+| proc-macro-error 1.0.4 | RUSTSEC-2024-0370 |
+| h2 0.4.15 | RUSTSEC-2026-0258 |
+| rustls 0.23.42 | RUSTSEC-2026-0285 |
+
+These exact package identities are inherited from the integrated upstream
+baseline. The selected graph also includes additional Android app-handoff paths
+to `h2`; inherited versions do not prove unchanged exposure. The graph is not
+a function-level exploitability assessment. The glib and proc-macro-error
+findings occur in the selected Linux profiles; this is not a whole-APK absence
+claim. Existing exact-version deferrals for the five unic packages remain intact.
+
+The findings remain open and disclosed, but their disposition is no longer a
+local-test approval blocker. Preserve the original failed scanner results and
+do not suppress findings or claim a clean scan. This narrow decision does not
+cover future findings or versions, approve public publication, or authorize
+OpenChat core dependency upgrades or a broad core audit.

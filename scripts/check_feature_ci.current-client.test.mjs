@@ -323,6 +323,14 @@ const mutations = [
       ),
   ],
   [
+    "superseded c0ac formatting baseline",
+    (s) =>
+      s.replace(
+        CURRENT_CLIENT_FORMAT_BASE_EXPRESSION,
+        "c0ac3178f70f5e9de2f6ee532ce1415ab32a47cd",
+      ),
+  ],
+  [
     "push-before comparison includes upstream-only changes and omits prior fork changes",
     (s) =>
       s.replace(

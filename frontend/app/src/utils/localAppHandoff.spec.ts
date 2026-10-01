@@ -1,20 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { createLocalAppHandoffSession } from "./localAppHandoff";
-import type { LocalDraftDeliveryRequest } from "./localAppDrafts";
+import { encryptedRequestFixture } from "./localAppEncryption.testFixtures";
 
 function fixture(authorizeOffer?: () => Promise<boolean>) {
     const receiver = {};
     const send = vi.fn();
     const onOutcome = vi.fn();
     const sessionNonce = "A".repeat(43);
-    const request: LocalDraftDeliveryRequest = Object.freeze({
-        appId: "example",
-        actionId: "record",
-        destination: "https://app.example/import",
-        recipient: "Review in the app",
-        idempotencyKey: "B".repeat(42) + "A",
-        payload: Object.freeze({ reading: 42, note: "private-marker" }),
-    });
+    const request = encryptedRequestFixture();
     const session = createLocalAppHandoffSession({
         receiver,
         send,
@@ -26,7 +19,7 @@ function fixture(authorizeOffer?: () => Promise<boolean>) {
     const event = (type: string, rest: object = {}) => ({
         origin: "https://app.example",
         source: receiver,
-        data: { type: `oc:app-import:${type}`, version: 1, sessionNonce, ...rest },
+        data: { type: `oc:app-import:${type}`, version: 2, sessionNonce, ...rest },
     });
     return { receiver, send, onOutcome, request, session, event };
 }
@@ -116,11 +109,14 @@ describe("explicit private app handoff", () => {
         expect(f.send).toHaveBeenCalledTimes(2);
         expect(f.send.mock.calls[1][0]).toEqual({
             type: "oc:app-import:offer",
-            version: 1,
+            version: 2,
             sessionNonce: "A".repeat(43),
             importId: f.request.idempotencyKey,
             actionId: "record",
-            payload: f.request.payload,
+            appId: f.request.appId,
+            appRevision: f.request.appRevision,
+            destination: f.request.destination,
+            envelope: f.request.envelope,
         });
         expect(f.send.mock.calls[1][1]).toBe("https://app.example");
     });

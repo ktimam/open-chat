@@ -7,7 +7,7 @@ use std::fmt;
 
 pub const CLAIM_LIFETIME_MS: u64 = 120_000;
 pub const DELIVERY_LIFETIME_MS: u64 = 600_000;
-pub const MAX_REQUEST_BYTES: usize = 72 * 1024;
+pub const MAX_REQUEST_BYTES: usize = 112 * 1024;
 pub const MAX_POST_BYTES: usize = 2048;
 
 #[derive(Deserialize)]
@@ -125,37 +125,73 @@ pub fn parse_strict<T: serde::de::DeserializeOwned>(body: &[u8], max: usize) -> 
     serde_json::from_value(value).map_err(|_| "Invalid local handoff request")
 }
 
-fn bounded_tree(value: &Value, depth: usize, nodes: &mut usize) -> bool {
-    *nodes += 1;
-    if depth > 16 || *nodes > 4096 { return false; }
-    match value {
-        Value::Array(v) => v.iter().all(|v| bounded_tree(v, depth + 1, nodes)),
-        Value::Object(v) => v.values().all(|v| bounded_tree(v, depth + 1, nodes)),
-        _ => true,
+fn base64url_digit(byte: u8) -> Option<u8> {
+    match byte {
+        b'A'..=b'Z' => Some(byte - b'A'),
+        b'a'..=b'z' => Some(byte - b'a' + 26),
+        b'0'..=b'9' => Some(byte - b'0' + 52),
+        b'-' => Some(62), b'_' => Some(63), _ => None,
     }
+}
+
+// Validate the canonical unpadded encoding, decoded bounds and first byte without allocating a
+// decoded ciphertext. This is wire-shape validation, not decryption or authentication of a sender.
+fn encoded_bytes(value: &Value, minimum: usize, maximum: usize) -> Result<u8, &'static str> {
+    let text = value.as_str().ok_or("Invalid encrypted private handoff")?;
+    let bytes = text.as_bytes();
+    if bytes.len() < 2 || bytes.len() > (maximum * 4).div_ceil(3) || bytes.len() % 4 == 1 ||
+        bytes.iter().any(|b| base64url_digit(*b).is_none()) { return Err("Invalid encrypted private handoff"); }
+    let length = bytes.len() * 3 / 4;
+    let last = base64url_digit(*bytes.last().unwrap()).unwrap();
+    if length < minimum || length > maximum ||
+        (bytes.len() % 4 == 2 && last & 15 != 0) || (bytes.len() % 4 == 3 && last & 3 != 0) {
+        return Err("Invalid encrypted private handoff");
+    }
+    Ok((base64url_digit(bytes[0]).unwrap() << 2) | (base64url_digit(bytes[1]).unwrap() >> 4))
+}
+
+fn identity(value: &Value, maximum: usize) -> Result<&str, &'static str> {
+    let text = value.as_str().ok_or("Invalid private handoff target")?;
+    // Match the client UTF-16 length and Cc/Cf rejection, including non-BMP format controls.
+    let hidden = |c: char| c.is_control() || matches!(c as u32,
+        0x00ad | 0x0600..=0x0605 | 0x061c | 0x06dd | 0x070f | 0x0890..=0x0891 | 0x08e2 |
+        0x180e | 0x200b..=0x200f | 0x202a..=0x202e | 0x2060..=0x2064 | 0x2066..=0x206f |
+        0xfeff | 0xfff9..=0xfffb | 0x110bd | 0x110cd | 0x13430..=0x1343f |
+        0x1bca0..=0x1bca3 | 0x1d173..=0x1d17a | 0xe0001 | 0xe0020..=0xe007f);
+    if text.trim().is_empty() || text.encode_utf16().count() > maximum || text.chars().any(hidden) {
+        return Err("Invalid private handoff target");
+    }
+    Ok(text)
 }
 
 pub fn validate_approved_request(raw: &str) -> Result<String, &'static str> {
     let value: Value = parse_strict(raw.as_bytes(), MAX_REQUEST_BYTES)?;
     let object = value.as_object().ok_or("Invalid private handoff request")?;
-    let fields = ["appId", "actionId", "destination", "recipient", "idempotencyKey", "payload"];
+    let fields = ["appId", "appRevision", "actionId", "destination", "idempotencyKey", "envelope"];
     if object.len() != fields.len() || fields.iter().any(|key| !object.contains_key(*key)) { return Err("Invalid private handoff request"); }
-    for key in &fields[..5] {
-        let text = object[*key].as_str().ok_or("Invalid private handoff target")?;
-        if text.is_empty() || text.len() > 2048 { return Err("Invalid private handoff target"); }
-    }
-    let import_id = object["idempotencyKey"].as_str().unwrap();
+    for key in &fields[..3] { identity(&object[*key], 128)?; }
+    let import_id = object["idempotencyKey"].as_str().ok_or("Invalid private handoff identifier")?;
     if import_id.len() != 43 || !import_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') ||
         !b"AEIMQUYcgkosw048".contains(&import_id.as_bytes()[42]) { return Err("Invalid private handoff identifier"); }
-    let destination = object["destination"].as_str().unwrap();
+    let destination = identity(&object["destination"], 2048)?;
     let url = reqwest::Url::parse(destination).map_err(|_| "Invalid private handoff destination")?;
     if !url.username().is_empty() || url.password().is_some() || url.fragment().is_some() ||
         !(url.scheme() == "https" || (url.scheme() == "http" && matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]")))) ||
         url.as_str() != destination { return Err("Invalid private handoff destination"); }
-    let payload = &object["payload"];
-    if !bounded_tree(payload, 0, &mut 0) || serde_json::to_vec(payload).map_err(|_| "Invalid private payload")?.len() > 64 * 1024 {
-        return Err("Invalid private handoff payload");
+    let envelope = object["envelope"].as_object().ok_or("Invalid encrypted private handoff")?;
+    let fields = ["version", "scheme", "keyId", "recipientContext", "ephemeralPublicKey", "salt", "iv", "ciphertext"];
+    if envelope.len() != fields.len() || fields.iter().any(|key| !envelope.contains_key(*key)) ||
+        envelope["version"].as_u64() != Some(1) ||
+        envelope["scheme"].as_str() != Some("p256-hkdf-sha256-aes-256-gcm-v1") { return Err("Invalid encrypted private handoff"); }
+    let key_id = envelope["keyId"].as_str().ok_or("Invalid encrypted private handoff")?;
+    if key_id.len() != 64 || !key_id.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+        return Err("Invalid encrypted private handoff");
     }
+    encoded_bytes(&envelope["recipientContext"], 1, 1536)?;
+    if encoded_bytes(&envelope["ephemeralPublicKey"], 65, 65)? != 4 { return Err("Invalid encrypted private handoff"); }
+    encoded_bytes(&envelope["salt"], 32, 32)?;
+    encoded_bytes(&envelope["iv"], 12, 12)?;
+    encoded_bytes(&envelope["ciphertext"], 17, 65552)?;
     Ok(import_id.into())
 }
 
@@ -223,7 +259,7 @@ impl Attempt {
         self.proof_hash = proof;
         self.code_hash = None;
         self.phase = Phase::Reviewing;
-        // Taking the payload and consuming the code is atomic even if the HTTP response is lost.
+        // Taking the encrypted request and consuming the code is atomic even if the response is lost.
         let approved_request_json = self.approved_json.take().ok_or("Local handoff has no approved request")?;
         Ok(ClaimResponse { version: 1, handoff_id: self.handoff_id.clone(), approved_request_json, expires_at_ms: self.expires_at_ms })
     }
@@ -272,7 +308,8 @@ mod tests {
     const CODE: &str = "ABCDEFGHIJKLMNOPQRST";
     const PROOF: &str = "1111111111111111111111111111111111111111111111111111111111111111";
     pub(super) fn approved() -> String {
-        r#"{ "appId":"fixture", "actionId":"add", "destination":"https://example.test/import", "recipient":"Fixture recipient", "idempotencyKey":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "payload":{"amount":1.2300,"note":"\u0627"} }"#.into()
+        format!(r#"{{ "appId":"fixture", "appRevision":"revision-1", "actionId":"add", "destination":"https://example.test/import", "idempotencyKey":"{}", "envelope":{{"version":1,"scheme":"p256-hkdf-sha256-aes-256-gcm-v1","keyId":"{}","recipientContext":"AA","ephemeralPublicKey":"BA{}","salt":"{}","iv":"{}","ciphertext":"{}"}} }}"#,
+            "A".repeat(43), "a".repeat(64), "A".repeat(85), "A".repeat(43), "A".repeat(16), "A".repeat(23))
     }
     fn fixture() -> Attempt { Attempt::new(BeginRequest { approved_request_json: approved() }, "22".repeat(16), CODE, 1000).unwrap() }
     fn claim_body(code: &str) -> Vec<u8> { serde_json::to_vec(&serde_json::json!({"version":1,"code":code,"browserProofHex":PROOF})).unwrap() }
@@ -362,9 +399,9 @@ mod tests {
     #[test]
     fn duplicate_keys_unknown_fields_and_invalid_utf8_fail_closed() {
         for raw in [approved().replace("\"appId\":\"fixture\"", "\"appId\":\"fixture\",\"appId\":\"other\""),
-            approved().replace("\"amount\":1.2300", "\"amount\":1,\"amount\":2"),
-            approved().replace("\"amount\":1.2300", "\"__proto__\":{}"),
-            approved().replace("\"amount\":1.2300", "\"constructor\":{}"),
+            approved().replace("\"version\":1", "\"version\":1,\"version\":2"),
+            approved().replace("\"version\":1", "\"__proto__\":{}"),
+            approved().replace("\"version\":1", "\"constructor\":{}"),
             approved().replacen("{", "{\"rawMessage\":\"not accepted\",", 1)] {
             assert!(validate_approved_request(&raw).is_err());
         }
@@ -373,22 +410,83 @@ mod tests {
         assert!(parse_strict::<ProofRequest>(br#"{"version":1,"handoffId":"x","browserProofHex":"00","extra":true}"#, MAX_POST_BYTES).is_err());
     }
     #[test]
-    fn target_payload_and_collection_bounds_are_enforced() {
+    fn target_and_request_bounds_are_enforced() {
         for target in ["http://remote.example/import", "https://user:pass@example.test/import", "https://example.test/import#hidden", "javascript:alert(1)", "https://EXAMPLE.test/import"] {
             assert!(validate_approved_request(&approved().replace("https://example.test/import", target)).is_err());
         }
         for target in ["http://localhost:5000/import", "http://127.0.0.1:5000/import", "http://[::1]:5000/import"] {
             assert!(validate_approved_request(&approved().replace("https://example.test/import", target)).is_ok());
         }
-        let mut value: Value = serde_json::from_str(&approved()).unwrap();
-        value["payload"] = Value::String("x".repeat(64 * 1024));
-        assert!(validate_approved_request(&value.to_string()).is_err());
-        value["payload"] = serde_json::json!([0]);
-        for _ in 0..17 { value["payload"] = serde_json::json!([value["payload"].clone()]); }
-        assert!(validate_approved_request(&value.to_string()).is_err());
-        value["payload"] = serde_json::json!(vec![0; 257]);
-        assert!(validate_approved_request(&value.to_string()).is_err());
+        for field in ["appId", "appRevision", "actionId"] {
+            for text in ["".into(), " ".into(), "a".repeat(129), "a\u{0000}".into(), "a\u{202e}".into(), "a\u{e0001}".into()] {
+                let mut value: Value = serde_json::from_str(&approved()).unwrap();
+                value[field] = text.into();
+                assert!(validate_approved_request(&value.to_string()).is_err(), "{field}");
+            }
+            let mut value: Value = serde_json::from_str(&approved()).unwrap();
+            value[field] = "😀".repeat(64).into();
+            assert!(validate_approved_request(&value.to_string()).is_ok());
+            value[field] = "😀".repeat(65).into();
+            assert!(validate_approved_request(&value.to_string()).is_err());
+        }
+        let mut padded = approved();
+        padded.push_str(&" ".repeat(MAX_REQUEST_BYTES - padded.len()));
+        assert!(validate_approved_request(&padded).is_ok());
+        padded.push(' ');
+        assert!(validate_approved_request(&padded).is_err());
         assert!(validate_approved_request(&" ".repeat(MAX_REQUEST_BYTES + 1)).is_err());
+    }
+    #[test]
+    fn only_exact_encrypted_shape_is_accepted_never_plaintext_or_recipient_labels() {
+        let valid: Value = serde_json::from_str(&approved()).unwrap();
+        assert!(validate_approved_request(&approved()).is_ok());
+        for field in ["appId", "appRevision", "actionId", "destination", "idempotencyKey", "envelope"] {
+            let mut value = valid.clone(); value.as_object_mut().unwrap().remove(field);
+            assert!(validate_approved_request(&value.to_string()).is_err());
+        }
+        for (field, extra) in [("payload", serde_json::json!({"secret":"private note"})), ("recipient", "Private user".into())] {
+            let mut value = valid.clone(); value[field] = extra;
+            assert!(validate_approved_request(&value.to_string()).is_err());
+        }
+        let legacy = r#"{"appId":"fixture","actionId":"add","destination":"https://example.test/import","recipient":"Private user","idempotencyKey":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","payload":{"secret":"private note"}}"#;
+        assert!(Attempt::new(BeginRequest { approved_request_json: legacy.into() }, "22".repeat(16), CODE, 1000).is_err());
+        for field in ["version", "scheme", "keyId", "recipientContext", "ephemeralPublicKey", "salt", "iv", "ciphertext"] {
+            let mut value = valid.clone(); value["envelope"].as_object_mut().unwrap().remove(field);
+            assert!(validate_approved_request(&value.to_string()).is_err());
+            for wrong_type in [Value::Null, true.into(), serde_json::json!([]), serde_json::json!({})] {
+                let mut value = valid.clone(); value["envelope"][field] = wrong_type;
+                assert!(validate_approved_request(&value.to_string()).is_err());
+            }
+        }
+        for (field, wrong) in [("version", 2.into()), ("scheme", "other".into()), ("keyId", "A".repeat(64).into()),
+            ("keyId", "a".repeat(63).into()), ("extra", "not allowed".into()), ("payload", serde_json::json!({"secret":1})),
+            ("ephemeralPublicKey", "A".repeat(87).into())] {
+            let mut value = valid.clone(); value["envelope"][field] = wrong;
+            assert!(validate_approved_request(&value.to_string()).is_err(), "{field}");
+        }
+    }
+    #[test]
+    fn canonical_encoding_and_all_decoded_boundaries_are_enforced() {
+        for (encoded, first) in [("AA", 0), ("_w", 255), ("-_8", 251), ("____", 255)] {
+            assert_eq!(encoded_bytes(&encoded.into(), 1, 3).unwrap(), first);
+        }
+        for encoded in ["", "A", "AAAAA", "AB", "_x", "-_9", "AA=", "AA==", "AA\n", "AA ", "+w", "/w", "éA"] {
+            assert!(encoded_bytes(&encoded.into(), 1, 3).is_err(), "{encoded}");
+        }
+        for (field, minimum, maximum) in [("recipientContext", 1usize, 1536usize), ("ephemeralPublicKey", 65, 65),
+            ("salt", 32, 32), ("iv", 12, 12), ("ciphertext", 17, 65552)] {
+            for length in [minimum - 1, minimum, maximum, maximum + 1] {
+                let mut value: Value = serde_json::from_str(&approved()).unwrap();
+                let mut encoded = "A".repeat((length * 4).div_ceil(3));
+                if field == "ephemeralPublicKey" { encoded.replace_range(..1, "B"); }
+                value["envelope"][field] = encoded.into();
+                assert_eq!(validate_approved_request(&value.to_string()).is_ok(), (minimum..=maximum).contains(&length), "{field} {length}");
+            }
+            let mut value: Value = serde_json::from_str(&approved()).unwrap();
+            let original = value["envelope"][field].as_str().unwrap().to_owned();
+            value["envelope"][field] = format!("{original}=").into();
+            assert!(validate_approved_request(&value.to_string()).is_err(), "{field}");
+        }
     }
     #[test]
     fn native_window_is_exact_main_origin() {

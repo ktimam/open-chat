@@ -26,6 +26,10 @@ vi.mock("../utils/localAppSetupStore", async (importOriginal) => ({
         remove: async () => {},
     }),
 }));
+vi.mock("../utils/localAppDraftPersistence", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../utils/localAppDraftPersistence")>()),
+    createBrowserLocalAppDraftStorage: () => undefined,
+}));
 vi.mock("../utils/localAppRelayDelivery", async () => ({
     deliverLocalAppViaRelay: vi.fn(),
     cancelLocalAppHandoffs: vi.fn(),

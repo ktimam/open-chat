@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "configSha256": "ec757927fa7a63b5a937b3c395d17f78a028030dfdf0b6dcbd95fcc4a5c5fd4a",
-  "boundary": "Current unofficial local client only: source-traced native model store/IPC, optional nonshipping host llama.cpp checks, private-app loopback handoff/setup, retained dormant browser-auth source/protocols, nested generic schemas/errors, native build hooks and bundled asset selection. Eight explicit profiles bind the two all-WebGPU APK source configurations and existing Linux/Windows default-library/inference/inference+store checks. Both APK profiles now select original native Credential Manager authentication, not the browser-auth listener. The imported environment/marker helper is bound because it controls packaged native-auth selection; it adds no Rust dependency owner. Browser WebGPU/NPM and Android JVM dependencies have separate inventories; no OpenChat backend, removed custom card/action-inbox canisters, release-canister tooling, core dependency audit, advisory acceptance, model quality, provider/Digital Asset Links qualification, device runtime or publication approval is claimed. Historical PR2 inventories remain verbatim historical evidence. This review binds the working source at head 7fe6c8925530962a222ba6b816b3c7998cb8d91f plus the approved native-auth restoration and exact native ABI pin through fresh source and lock hashes; those uncommitted bytes are not claimed present in that commit or installed APK014.",
+  "configSha256": "216b0d58bdc52e764dc46c91bea8431251e9ff62ad6031429d00f65060970791",
+  "boundary": "Current unofficial local client only: source-traced native model store/IPC, optional nonshipping host llama.cpp checks, encrypted private-app loopback handoff/setup, retained dormant browser-auth source/protocols, nested generic schemas/errors, native build hooks and bundled asset selection. Eight explicit profiles bind the two all-WebGPU APK source configurations and existing Linux/Windows default-library/inference/inference+store checks. Both APK profiles select original native Credential Manager authentication, not the browser-auth listener. The imported environment/marker helper controls packaged native-auth selection and adds no Rust dependency owner. Browser WebGPU/NPM and Android JVM dependencies have separate inventories; no OpenChat backend, removed custom card/action-inbox canisters, release-canister tooling, core dependency audit, advisory acceptance, model quality, provider/Digital Asset Links qualification, device runtime or publication approval is claimed. Historical PR2 inventories remain verbatim historical evidence. The sourceRevision base remains the native feature's reviewed inception, not the latest whole-fork formatter baseline. This review binds committed main head 6249be2431cdae3c4b9fd61b44aa186e223121e6 plus the approved 2026-10-01 working-tree encrypted-only handoff protocol/transport changes through exact source hashes; those working-tree bytes are not claimed present in that commit or an installed APK. The current normalized Cargo.lock differs from the preceding reviewed lock only by two upstream backend workspace dependency edges; native package identities and all 26 owner seeds remain unchanged. The native boundary accepts the client-encrypted envelope, not payload/recipient plaintext, uses only existing serde/JSON/URL/hash and standard-library owners, and performs no field decryption. This refresh introduces no advisory waiver, crate upgrade or profile expansion.",
   "units": [
     {
       "id": "plugin.model.stream",
@@ -125,7 +125,7 @@
         { "path": "frontend/tauri-plugin-oc/Cargo.toml", "lines": [2] },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff_protocol.rs",
-          "lines": [5, 162]
+          "lines": [5, 198]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_setup_protocol.rs",
@@ -152,7 +152,7 @@
         { "path": "frontend/tauri-plugin-oc/Cargo.toml", "lines": [2] },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff_protocol.rs",
-          "lines": [166]
+          "lines": [202]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_setup.rs",
@@ -584,7 +584,7 @@
     {
       "id": "plugin-module-and-schema-closure",
       "disposition": "no-additional-external-owner-edge",
-      "explanation": "Reviewed native dispatch, commands, errors and model nested structs. The unchanged browser-auth protocol remains compiled and its listener remains dormant source behind unselected local-browser-auth; it is not the APK sign-in path. Original Credential Manager auth/session restoration is reviewed in its frontend/JVM boundaries, not a new Rust credential store. Always-compiled setup validates a bounded opaque catalog envelope with the existing serde/JSON/reqwest/SHA owners and standard-library state; full catalog/package/processor/origin validation remains frontend responsibility. Optional inference retains llama-cpp-2/minijinja/minijinja-contrib plus the reviewed exact sys ABI constraint. Embedded tests add no separate dev dependencies or downgraded production edges.",
+      "explanation": "Reviewed native dispatch, commands, errors and model nested structs. The unchanged browser-auth protocol remains compiled and its listener remains dormant source behind unselected local-browser-auth; it is not the APK sign-in path. Original Credential Manager auth/session restoration is reviewed in its frontend/JVM boundaries, not a new Rust credential store. Always-compiled handoff validation now accepts only the exact client-encrypted envelope and rejects plaintext payload/recipient fields, malformed encodings and wrong bounds with existing serde/JSON/reqwest/SHA owners and standard-library validation; Rust never decrypts its fields. Setup validates a bounded opaque catalog envelope with those same owners; full catalog/package/processor/origin validation remains frontend responsibility. Optional inference retains llama-cpp-2/minijinja/minijinja-contrib plus the reviewed exact sys ABI constraint. Embedded tests add no separate dev dependencies or downgraded production edges.",
       "profiles": [
         "android-arm64-local-webgpu",
         "android-x86_64-local-webgpu",
@@ -606,7 +606,7 @@
         },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff_protocol.rs",
-          "lines": [151]
+          "lines": [167, 185, 194]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/models.rs",
@@ -688,7 +688,7 @@
   "resolutions": [
     {
       "id": "current-native-owner-review",
-      "explanation": "Fresh source review binds the approved original native authentication build selection: both APK profiles omit browser-auth, handoff/setup and all prior dependency owners remain, and the environment/marker helper is included as a no-new-owner source. Dormant browser protocol/listener sources remain conservatively reviewed, not enabled. The exact optional wrapper/sys 0.1.150 pair is retained only in the four existing host inference profiles. Historical records, lock and dependency identities remain unchanged. This resolves inventory completeness only, not advisory, compile, provider/Digital Asset Links, device, installed APK or release qualification.",
+      "explanation": "The 2026-10-01 source review binds committed fork main plus the approved working-tree encrypted-only native handoff. Original native authentication selection remains: both APK profiles omit browser-auth, handoff/setup retain all prior dependency owners, and the environment/marker helper remains a no-new-owner source. Dormant browser protocol/listener sources remain conservatively reviewed, not enabled. Client-side encryption adds no Rust dependency: native parsing transports bounded ciphertext and never decrypts fields. The exact optional wrapper/sys 0.1.150 pair remains limited to four host inference profiles. Historical PR records and native dependency identities are unchanged; the refreshed lock hash accounts for two upstream backend workspace dependency edges only. This resolves inventory completeness only, not advisory, compile, provider/Digital Asset Links, device, installed APK or release qualification.",
       "units": [
         "plugin.model.stream",
         "plugin.model-and-handoff.url",

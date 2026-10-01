@@ -44,7 +44,7 @@ jobs:
         # Check the complete fork delta against the reviewed integrated upstream.
         # A push/PR base can include upstream-only formatting or omit older fork edits.
         env:
-          PR_BASE_SHA: c0ac3178f70f5e9de2f6ee532ce1415ab32a47cd
+          PR_BASE_SHA: a4cc691e2c30a73b93c0fb52563168e88082c40e
         run: node scripts/check_current_client_format.mjs --scope current-client
       - name: Test current-client security contracts offline
         working-directory: .

@@ -33,7 +33,10 @@
         selected?.actions.find((action) => action.definition.name === workspaceView.actionId),
     );
     const locked = $derived(
-        workspaceView.setupLoading || workspaceView.busy || workspaceView.draft !== undefined,
+        workspaceView.setupLoading ||
+            workspaceView.draftLoading ||
+            workspaceView.busy ||
+            workspaceView.draft !== undefined,
     );
     const editable = $derived(
         workspaceView.draft?.status === "draft" || workspaceView.draft?.status === "reviewed",
@@ -78,9 +81,10 @@
         const account = $currentUserIdStore;
         // Authentication briefly clears currentUser before loading the same account again.
         // Keep drafts hidden but intact during that transition; actual logout clears them.
-        if (kind === "logged_in" && account !== ANON_USER_ID)
+        if (kind === "logged_in" && account !== ANON_USER_ID) {
             workspace.setAccount(account, client.privateAppStorageBackend?.());
-        else if (kind === "anon" || kind === "registering") workspace.setAccount(undefined);
+            workspace.setClient(client);
+        } else if (kind === "anon" || kind === "registering") workspace.setAccount(undefined);
     });
     $effect(() => {
         client.onLogout(async () => workspace.setAccount(undefined));
@@ -94,7 +98,7 @@
             discoveryOpen = false;
             return;
         }
-        if (workspaceView.setupLoading) return;
+        if (workspaceView.setupLoading || workspaceView.draftLoading) return;
         const scope = JSON.stringify([
             workspaceView.account,
             workspaceView.backend,
@@ -157,7 +161,7 @@
         class="workspace"
         hidden={!workspaceView.open}
         aria-label="Private app workspace"
-        aria-busy={workspaceView.busy || workspaceView.setupLoading}
+        aria-busy={workspaceView.busy || workspaceView.setupLoading || workspaceView.draftLoading}
     >
         <header>
             <h2>{workspaceView.draft ? "Review app draft" : "Private apps"}</h2>
@@ -166,16 +170,23 @@
         <p>
             App setup and enabled chats are remembered for this account on this device. Imported
             setup may contain private app configuration. It is stored locally, not synced, and is
-            not protected by chat encryption. Drafts and handoff details stay in memory only:
-            reloading or changing account discards them. Nothing is posted to the chat.
+            not protected by chat encryption. The current private card is saved separately in
+            encrypted device storage for this account and backend, not synced or posted to chat.
+            Closing this panel, restarting or signing out does not delete it. Use Discard or Forget
+            to delete it. The local key is nonextractable, but code running in this client can still
+            use it; this does not protect against malicious client code. Restoring a card never
+            restores your approval or sends anything automatically.
         </p>
         {#if workspaceView.setupLoading}<p role="status">Loading saved app setup…</p>{/if}
         {#if workspaceView.setupStatus}<p role="status">{workspaceView.setupStatus}</p>{/if}
+        {#if workspaceView.draftStorageStatus}<p role="status">
+                {workspaceView.draftStorageStatus}
+            </p>{/if}
         <details class="setup-disclosure" open={!workspaceView.draft && !workspaceView.busy}>
             <summary>App setup</summary>
             <div class="setup">
                 <button type="button" disabled={locked} onclick={() => workspace.forgetSetup()}>
-                    Forget this account's app setup on this device
+                    Forget this account's app setup and private card on this device
                 </button>
                 <h3>Available apps</h3>
                 <p class="small">
@@ -381,6 +392,15 @@
                             if (!fieldEditBlocked) workspace.review();
                         }}>Review full request</button
                     >{/if}
+                {#if workspaceView.draft.status === "uncertain" && !workspaceView.draft.approval}
+                    <button
+                        type="button"
+                        disabled={workspaceView.busy}
+                        onclick={() => workspace.review()}
+                    >
+                        Review recovered request before retrying
+                    </button>
+                {/if}
                 {#if workspaceView.draft.approval}
                     <h3>Exact request to be handed off</h3>
                     <pre>{workspaceView.draft.approval.summary}</pre>

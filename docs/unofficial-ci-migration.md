@@ -289,3 +289,71 @@ exceptions stay frozen; no dependency root, advisory decision or release gate is
 waived. The backend identity guard still checks committed HEAD and requires the
 merge commit before it can pass. This baseline update is not device, account,
 provider, APK, advisory or release acceptance.
+
+## Current upstream baseline refresh (2026-10-01)
+
+The approved current-only comparison now pins merged upstream
+`a4cc691e2c30a73b93c0fb52563168e88082c40e` and backend tree
+`2aa18d204b5ce4aeee13998c271c839f7af65dca`. Root Cargo and deployment-script
+blob identities did not change. All 11 existing formatter records have the same
+upstream and candidate source hashes and the same recomputed installed-CLI edit
+proofs; only their current baseline pins advance. No exemption was added.
+
+The six previously reported formatting failures in the two `P2PSwapContent`
+components, generated ledger candid files, and `signer.ts`/`signer.spec.ts` are
+byte-identical (CRLF-to-LF only) to this merged upstream. They are not new fork
+edits. Future fork changes remain subject to normal candidate selection and
+formatting. Historical registries, advisory rules and deferrals stay unchanged.
+This baseline refresh is source/format identity evidence, not dependency audit,
+device, hosted CI, provider or release acceptance.
+
+## Current scoped verification results (2026-10-01)
+
+The approved encryption and local-card persistence composition passed the actual
+offline license check (39 packages and 19 model obligations), all eight Rust
+collection profiles and validation of the 435-component SBOM. The npm runtime
+smoke check and current plan passed with 25 reviewed feature roots, 151 source
+files and 322 selected package locations. The Android resolver and CI coverage
+contracts passed 64 tests. No dependency was installed or changed by these checks.
+
+The subsequent feature-only advisory requests exported public package names and
+versions, not repository source, chat contents, card fields or credentials. npm
+received 318 names and 322 versions; OSV received 435 selected crates.io identities,
+with none left unqueried. Source, lockfile and collection bindings stayed unchanged.
+Neither request expanded into a whole-core OpenChat audit.
+
+Both advisory gates remain failed. The first npm response returned eight findings:
+seven for `adm-zip 0.6.0` and one for `devalue 5.8.1`. Following the separately
+approved installer-only patch, the same scoped query, verified at 17:38 UTC, returned no
+findings for locked `adm-zip 0.6.1`, but seven for `devalue 5.8.1` (six newly
+returned advisory IDs). The installed repository copy was subsequently aligned
+to `adm-zip 0.6.1` using the approved narrow upgrade, with a verified backup and
+17 passing offline checks against the canonical ONNX installer. This does not
+resolve the remaining findings or change the historical APK019 build evidence.
+The Rust response still returned the same ten advisory IDs across nine package
+identities, including two IDs for `glib 0.18.5`. Existing
+documented deferrals cover only their exact recorded findings; they do not waive
+new findings or turn the scanner result into a pass. No advisory policy was relaxed.
+
+Hosted run [36774407598](https://github.com/ktimam/open-chat/actions/runs/36774407598)
+tested the older pushed commit `ce5b7990da`, not this uncommitted implementation.
+Its real inference fixture, frontend model contracts, and Linux and Windows native
+jobs passed. The dependency job failed at its advisory step. The Android component
+job failed while resolving its pinned Kotlin compiler from Maven, before reaching
+compilation; the recorded generic fetch error does not establish its network cause.
+Local APK build success is not a substitute for that hosted gate. Current-source
+hosted execution and native runtime acceptance remain separate unfinished checks.
+
+The later optional-audio routing correction has its own approved source identity,
+`95eb35428d98c8af8b7d7a81af121ccae5275d3aa09b2f8a0adc2a9e0abb0e62`.
+Only two fingerprinted runtime files changed: the exact unofficial static-profile
+asset predicate and the artifact download URL selection. The current gate retains
+151 sources, 25 roots and 86 anchors; 153 focused offline contracts pass, including
+exact reversal to the preceding source aggregate. Historical snapshots and advisory
+enforcement are unchanged. The full frontend rerun, including four actual HF audio-merge
+regressions, passes 5,073 tests in 339 files. Runtime source identity remains unchanged.
+The source refresh itself does not establish advisory acceptance. The later
+scoped query described above retained exactly these roots and source identities;
+only the approved adm-zip version changed in its dependency inventory. Its receipt
+is `scoped-advisories-20261001-post-adm061/receipt.json` under the project temporary
+root. No new deferral, scanner waiver or core OpenChat audit was applied.

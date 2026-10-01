@@ -1,5 +1,6 @@
 import {
     transformersWebGpuFeatureEnabled,
+    transformersWebGpuImmutableAssetsEnabled,
     transformersWebGpuProductionAssetsEnabled,
 } from "../../transformersWebGpuFeatureFlag.mjs";
 
@@ -62,6 +63,41 @@ describe("all-WebGPU build feature flag", () => {
             { OC_TRANSFORMERS_WEBGPU_IMAGE_SPIKE: "false" },
         ])
             expect(transformersWebGpuFeatureEnabled({ ...localPrototype, ...change })).toBe(false);
+    });
+
+    it("uses immutable asset delivery for the exact unofficial profile without calling it production", () => {
+        const unofficial = {
+            ...production,
+            OC_BUILD_ENV: "development",
+            OC_UNOFFICIAL_CLIENT: "true",
+        };
+        expect(transformersWebGpuImmutableAssetsEnabled(production)).toBe(true);
+        expect(transformersWebGpuImmutableAssetsEnabled(unofficial)).toBe(true);
+        expect(transformersWebGpuProductionAssetsEnabled(unofficial)).toBe(false);
+        for (const change of [
+            { OC_BUILD_ENV: undefined },
+            { OC_BUILD_ENV: "test" },
+            { OC_DFX_NETWORK: undefined },
+            { OC_DFX_NETWORK: "local" },
+            { OC_UNOFFICIAL_CLIENT: undefined },
+            { OC_UNOFFICIAL_CLIENT: "false" },
+            { OC_UNOFFICIAL_CLIENT: "TRUE" },
+            { OC_TRANSFORMERS_WEBGPU_IMAGE_SPIKE: undefined },
+            { OC_TRANSFORMERS_WEBGPU_IMAGE_SPIKE: "false" },
+            { OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY: undefined },
+            { OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY: "hf-proxy" },
+        ]) {
+            expect(transformersWebGpuImmutableAssetsEnabled({ ...unofficial, ...change })).toBe(
+                false,
+            );
+        }
+        expect(
+            transformersWebGpuImmutableAssetsEnabled({
+                OC_BUILD_ENV: "development",
+                OC_DFX_NETWORK: "local",
+                OC_TRANSFORMERS_WEBGPU_IMAGE_SPIKE: "true",
+            }),
+        ).toBe(false);
     });
 
     it("keeps production disabled even when the development flag is exported", () => {

@@ -6,6 +6,23 @@ import {
     localAppDeliveryStatus,
 } from "./localAppRelayDelivery";
 import type { LocalDraftDeliveryRequest } from "./localAppDrafts";
+import { encryptedRequestFixture } from "./localAppEncryption.testFixtures";
+// Lifecycle tests stub only sealing; real crypto/transport boundary is covered without mocks separately.
+vi.mock("./localAppEncryption", async (original) => {
+    const actual = await original<typeof import("./localAppEncryption")>();
+    const { encryptedRequestFixture: fixture } = await import("./localAppEncryption.testFixtures");
+    return {
+        ...actual,
+        sealLocalAppDelivery: vi.fn(async (r: LocalDraftDeliveryRequest) =>
+            fixture({
+                appId: r.appId,
+                actionId: r.actionId,
+                destination: r.destination,
+                idempotencyKey: r.idempotencyKey,
+            }),
+        ),
+    };
+});
 
 const request: LocalDraftDeliveryRequest = Object.freeze({
     appId: "example",
@@ -14,6 +31,12 @@ const request: LocalDraftDeliveryRequest = Object.freeze({
     recipient: "Review in app",
     idempotencyKey: "B".repeat(42) + "A",
     payload: Object.freeze({ reading: 42, note: "SYNTHETIC_APPROVED_MARKER" }),
+});
+const encryptedRequest = encryptedRequestFixture({
+    appId: request.appId,
+    actionId: request.actionId,
+    destination: request.destination,
+    idempotencyKey: request.idempotencyKey,
 });
 
 function fixture() {
@@ -40,8 +63,10 @@ function fixture() {
     const result = deliverLocalAppViaRelay(request, controller.signal);
     const channel = channels[0];
     const nonce = channel.name.split(":")[1];
-    const emit = (type: string, rest: object = {}) =>
+    const emit = async (type: string, rest: object = {}) => {
         channel.onmessage?.({ data: { type, version: 1, sessionNonce: nonce, ...rest } });
+        for (let i = 0; i < 8; i++) await Promise.resolve();
+    };
     return { channel, channels, nonce, open, result, controller, listeners, emit };
 }
 
@@ -56,21 +81,21 @@ describe("confirmed local relay delivery lifecycle", () => {
         const f = fixture();
         expect(JSON.stringify(f.open.mock.calls)).not.toContain("SYNTHETIC_APPROVED_MARKER");
         expect(f.channel.postMessage).not.toHaveBeenCalled();
-        f.emit("relay-ready", { sessionNonce: "wrong" });
+        await f.emit("relay-ready", { sessionNonce: "wrong" });
         expect(f.channel.postMessage).not.toHaveBeenCalled();
-        f.emit("relay-ready");
-        f.emit("relay-ready");
+        await f.emit("relay-ready");
+        await f.emit("relay-ready");
         expect(f.channel.postMessage).toHaveBeenCalledTimes(1);
         expect(f.channel.postMessage.mock.calls[0][0]).toMatchObject({
             type: "relay-approved",
-            request,
+            request: encryptedRequest,
         });
         f.controller.abort();
         expect(await f.result).toEqual({ kind: "uncertain" });
     });
     it("cancels a live relay on decoding failure before receipt and ignores late messages", async () => {
         const f = fixture();
-        f.emit("relay-ready");
+        await f.emit("relay-ready");
         f.channel.onmessageerror?.();
         expect(await f.result).toEqual({ kind: "uncertain" });
         expect(f.channel.postMessage.mock.calls.at(-1)?.[0].type).toBe("relay-cancel");
@@ -81,19 +106,19 @@ describe("confirmed local relay delivery lifecycle", () => {
     });
     it("stops the relay on host navigation without reconnecting or retrying", async () => {
         const f = fixture();
-        f.emit("relay-ready");
+        await f.emit("relay-ready");
         f.listeners.get("pagehide")?.();
         expect(await f.result).toEqual({ kind: "uncertain" });
         expect(f.channel.postMessage.mock.calls.map(([message]) => message.type)).toEqual([
             "relay-approved",
             "relay-cancel",
         ]);
-        f.emit("relay-ready");
+        await f.emit("relay-ready");
         expect(f.channel.postMessage).toHaveBeenCalledTimes(2);
     });
     it("preserves received-not-saved after communication loss", async () => {
         const f = fixture();
-        f.emit("relay-ready");
+        await f.emit("relay-ready");
         f.emit("relay-outcome", { outcome: "received", importId: request.idempotencyKey });
         expect(await f.result).toEqual({ kind: "delivered" });
         f.channel.onmessageerror?.();
@@ -105,7 +130,7 @@ describe("confirmed local relay delivery lifecycle", () => {
     it("starts a fresh relay only on an explicit second delivery of the same approved import", async () => {
         vi.useFakeTimers();
         const f = fixture();
-        f.emit("relay-ready");
+        await f.emit("relay-ready");
         f.emit("relay-outcome", { outcome: "received", importId: request.idempotencyKey });
         expect(await f.result).toEqual({ kind: "delivered" });
         expect(get(localAppDeliveryStatus)).toEqual({
@@ -122,12 +147,19 @@ describe("confirmed local relay delivery lifecycle", () => {
         const retryResult = deliverLocalAppViaRelay(request, retryController.signal);
         const retryChannel = f.channels[1];
         const retryNonce = retryChannel.name.split(":")[1];
-        const emitRetry = (type: string, rest: object = {}) =>
+        const emitRetry = async (type: string, rest: object = {}) => {
             retryChannel.onmessage?.({
                 data: { type, version: 1, sessionNonce: retryNonce, ...rest },
             });
+            for (let i = 0; i < 8; i++) await Promise.resolve();
+        };
         expect(f.channel.postMessage.mock.calls.map(([message]) => message)).toEqual([
-            { type: "relay-approved", version: 1, sessionNonce: f.nonce, request },
+            {
+                type: "relay-approved",
+                version: 1,
+                sessionNonce: f.nonce,
+                request: encryptedRequest,
+            },
             { type: "relay-cancel", version: 1, sessionNonce: f.nonce },
         ]);
         expect(f.channel.close).toHaveBeenCalledOnce();
@@ -150,16 +182,16 @@ describe("confirmed local relay delivery lifecycle", () => {
             });
         }
 
-        emitRetry("relay-ready");
-        emitRetry("relay-ready");
+        await emitRetry("relay-ready");
+        await emitRetry("relay-ready");
         expect(retryChannel.postMessage).toHaveBeenCalledTimes(1);
         expect(retryChannel.postMessage.mock.calls[0][0]).toEqual({
             type: "relay-approved",
             version: 1,
             sessionNonce: retryNonce,
-            request,
+            request: encryptedRequest,
         });
-        expect(retryChannel.postMessage.mock.calls[0][0].request).toBe(request);
+        expect(retryChannel.postMessage.mock.calls[0][0].request).toEqual(encryptedRequest);
         emitRetry("relay-outcome", { outcome: "received", importId: request.idempotencyKey });
         expect(await retryResult).toEqual({ kind: "delivered" });
         for (const outcome of ["saved", "rejected"]) {
@@ -169,8 +201,8 @@ describe("confirmed local relay delivery lifecycle", () => {
         emitRetry("relay-outcome", { outcome: "saved", importId: request.idempotencyKey });
         expect(get(localAppDeliveryStatus)?.status).toBe("saved");
         f.emit("relay-outcome", { outcome: "rejected", importId: request.idempotencyKey });
-        f.emit("relay-ready");
-        emitRetry("relay-ready");
+        await f.emit("relay-ready");
+        await emitRetry("relay-ready");
         await vi.advanceTimersByTimeAsync(10 * 60_000);
         expect(get(localAppDeliveryStatus)?.status).toBe("saved");
         expect(retryChannel.postMessage.mock.calls.map(([message]) => message.type)).toEqual([
@@ -189,17 +221,19 @@ describe("confirmed local relay delivery lifecycle", () => {
         async (teardown) => {
             vi.useFakeTimers();
             const f = fixture();
-            f.emit("relay-ready");
+            await f.emit("relay-ready");
             f.emit("relay-outcome", { outcome: "received", importId: request.idempotencyKey });
             expect(await f.result).toEqual({ kind: "delivered" });
             const retryController = new AbortController();
             const retryResult = deliverLocalAppViaRelay(request, retryController.signal);
             const retryChannel = f.channels[1];
             const retryNonce = retryChannel.name.split(":")[1];
-            const emitRetry = (type: string, rest: object = {}) =>
+            const emitRetry = async (type: string, rest: object = {}) => {
                 retryChannel.onmessage?.({
                     data: { type, version: 1, sessionNonce: retryNonce, ...rest },
                 });
+                for (let i = 0; i < 8; i++) await Promise.resolve();
+            };
             expect(retryNonce).not.toBe(f.nonce);
             expect(f.channel.close).toHaveBeenCalledOnce();
             expect(f.channel.postMessage.mock.calls.at(-1)?.[0]).toEqual({
@@ -207,8 +241,8 @@ describe("confirmed local relay delivery lifecycle", () => {
                 version: 1,
                 sessionNonce: f.nonce,
             });
-            emitRetry("relay-ready");
-            expect(retryChannel.postMessage.mock.calls[0][0].request).toBe(request);
+            await emitRetry("relay-ready");
+            expect(retryChannel.postMessage.mock.calls[0][0].request).toEqual(encryptedRequest);
             if (teardown === "account teardown") {
                 emitRetry("relay-outcome", {
                     outcome: "received",
@@ -252,7 +286,7 @@ describe("confirmed local relay delivery lifecycle", () => {
     );
     it("clears account-scoped monitoring and ignores a late saved claim", async () => {
         const f = fixture();
-        f.emit("relay-ready");
+        await f.emit("relay-ready");
         cancelLocalAppHandoffs();
         expect(await f.result).toEqual({ kind: "uncertain" });
         f.emit("relay-outcome", { outcome: "saved", importId: request.idempotencyKey });

@@ -3,7 +3,7 @@ import { isAndroidTauriApp, type InferenceRequest, type InferenceResult } from "
 import { sha256 } from "@noble/hashes/sha2.js";
 import {
     transformersWebGpuFeatureEnabled,
-    transformersWebGpuProductionAssetsEnabled,
+    transformersWebGpuImmutableAssetsEnabled,
 } from "../../transformersWebGpuFeatureFlag.mjs";
 import { readTransformersWebGpuDevRuntimeVersion } from "./transformersWebGpuDevRuntimeVersion";
 import {
@@ -215,7 +215,8 @@ export function transformersWebGpuPackagedAndroidClient(): boolean {
  * Source used only while Model Manager owns the pinned download. Cache identity remains the local
  * `/hf-model/...` URL consumed by the fail-closed worker. A packaged Android app has no Vite proxy,
  * so immutable Hub files are fetched directly while the two audited Adreno graphs come from the APK.
- * The production web contract uses the same sources, with those graphs served by the web bundle.
+ * Production web and the explicit unofficial static profile use the same sources, with those
+ * graphs served by the web bundle. Only local-network development relies on the Vite model proxy.
  */
 export function transformersWebGpuArtifactDownloadUrl(
     path: string,
@@ -232,13 +233,13 @@ export function transformersWebGpuArtifactDownloadUrl(
     const packaged =
         options.packagedAndroid === true ||
         (options.packagedAndroid === undefined && transformersWebGpuPackagedAndroidClient());
-    const productionAssets = transformersWebGpuProductionAssetsEnabled(
+    const immutableAssets = transformersWebGpuImmutableAssetsEnabled(
         transformersWebGpuBuildEnvironment(),
     );
     if (artifact.source !== undefined) {
         transformersWebGpuArtifactSourceHeaders(artifact);
         const source = artifact.source;
-        return !packaged && !productionAssets
+        return !packaged && !immutableAssets
             ? artifactUrl(source, source.path, options.baseUrl)
             : new URL(
                   `${source.repository}/resolve/${source.revision}/${source.path}`,
@@ -252,12 +253,12 @@ export function transformersWebGpuArtifactDownloadUrl(
                 ? "http://tauri.localhost/"
                 : globalThis.location.href);
         const hostedBase =
-            !packaged && !productionAssets
+            !packaged && !immutableAssets
                 ? (spec.developmentModelBase ?? spec.packagedModelBase)
                 : spec.packagedModelBase;
         return new URL(`${hostedBase}${path}`, base).href;
     }
-    if (!packaged && !productionAssets) return artifactUrl(spec, path, options.baseUrl);
+    if (!packaged && !immutableAssets) return artifactUrl(spec, path, options.baseUrl);
     return new URL(
         `${spec.repository}/resolve/${spec.revision}/${path}`,
         TRANSFORMERS_WEBGPU_HUGGING_FACE_BASE,
@@ -1174,6 +1175,22 @@ async function cachedRuntimeAssetMatches(
     return verifier(response!, bytes, digest, signal);
 }
 
+async function yieldCachedHashTask(): Promise<void> {
+    const scheduler = (
+        globalThis as typeof globalThis & { scheduler?: { yield?: () => Promise<void> } }
+    ).scheduler;
+    if (typeof scheduler?.yield === "function") {
+        try {
+            // Give input/rendering a task without timer clamping each verification slice.
+            await scheduler.yield();
+            return;
+        } catch {
+            // Scheduling support must not turn an intact cached artifact into corruption.
+        }
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+}
+
 async function cachedResponseBodyMatches(
     response: Response,
     expectedBytes: number,
@@ -1183,20 +1200,35 @@ async function cachedResponseBodyMatches(
     if (response.body === null) return false;
     const digest = sha256.create();
     const reader = response.body.getReader();
+    let readerCancelled = false;
+    const cancelReader = (reason?: unknown) => {
+        if (readerCancelled) return;
+        readerCancelled = true;
+        // Closing the readable side settles a pending read immediately. Do not wait for an
+        // underlying source's cancellation promise: it may itself be stalled.
+        void reader.cancel(reason).catch(() => undefined);
+    };
+    const onAbort = () => {
+        if (signal !== undefined) cancelReader(abortReason(signal));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
     let received = 0;
     let taskBytes = 0;
     let taskHashMs = 0;
     try {
         while (true) {
             if (signal?.aborted === true) {
-                await reader.cancel(abortReason(signal));
+                cancelReader(abortReason(signal));
                 throw abortReason(signal);
             }
             const { done, value } = await reader.read();
+            // cancel() resolves a pending read with done=true; cancellation is not a short or
+            // corrupt cache body and must never enter the caller's cache-eviction branch.
+            if (signal?.aborted) throw abortReason(signal);
             if (done) break;
             received += value.byteLength;
             if (received > expectedBytes) {
-                await reader.cancel();
+                cancelReader();
                 return false;
             }
             // Cache streams may queue all their chunks already; awaiting read() alone then
@@ -1208,7 +1240,7 @@ async function cachedResponseBodyMatches(
                 offset += CACHED_HASH_UPDATE_MAX_BYTES
             ) {
                 if (signal?.aborted) {
-                    await reader.cancel(abortReason(signal));
+                    cancelReader(abortReason(signal));
                     throw abortReason(signal);
                 }
                 const chunk = value.subarray(offset, offset + CACHED_HASH_UPDATE_MAX_BYTES);
@@ -1220,7 +1252,7 @@ async function cachedResponseBodyMatches(
                     taskHashMs >= CACHED_HASH_TASK_BUDGET_MS ||
                     taskBytes >= CACHED_HASH_TASK_MAX_BYTES
                 ) {
-                    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+                    await yieldCachedHashTask();
                     taskHashMs = 0;
                     taskBytes = 0;
                 }
@@ -1229,6 +1261,9 @@ async function cachedResponseBodyMatches(
     } catch (error) {
         if (signal?.aborted === true) throw abortReason(signal);
         return false;
+    } finally {
+        signal?.removeEventListener("abort", onAbort);
+        reader.releaseLock();
     }
     return received === expectedBytes && digestHex(digest.digest()) === expectedSha256;
 }

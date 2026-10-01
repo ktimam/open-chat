@@ -31,6 +31,11 @@ vi.mock("../utils/localAppSetupStore", async (importOriginal) => ({
         remove: vi.fn(async () => {}),
     }),
 }));
+vi.mock("../utils/localAppDraftPersistence", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../utils/localAppDraftPersistence")>()),
+    // Card-editor tests isolate storage; encrypted recovery is exercised by dedicated suites.
+    createBrowserLocalAppDraftStorage: () => undefined,
+}));
 vi.mock("../utils/localAppRelayDelivery", async () => ({
     deliverLocalAppViaRelay: calls.deliver,
     cancelLocalAppHandoffs: calls.cancel,
@@ -51,6 +56,13 @@ const catalog = JSON.stringify({
             name: "Synthetic app",
             description: "Test only",
             destination: "https://example.test/import",
+            deliveryEncryption: {
+                version: 1,
+                scheme: "p256-hkdf-sha256-aes-256-gcm-v1",
+                keyId: "a".repeat(64),
+                publicKeySpki: btoa("\0".repeat(91)).replace(/=+$/, ""),
+                recipientContext: "AQ",
+            },
             actions: [
                 {
                     definition: {

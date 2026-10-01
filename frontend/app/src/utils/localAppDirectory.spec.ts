@@ -24,6 +24,18 @@ type CatalogJson = {
 };
 
 describe("generic public app directory", () => {
+    it("never provisions a user delivery key from a public discovery catalog", async () => {
+        const fixture = await directoryFixture();
+        const value = JSON.parse(fixture.catalogJson);
+        value.apps[0].deliveryEncryption = {
+            version: 1,
+            scheme: "p256-hkdf-sha256-aes-256-gcm-v1",
+            keyId: "a".repeat(64),
+            publicKeySpki: btoa("a".repeat(91)).replace(/=+$/, ""),
+            recipientContext: "Y29udGV4dA",
+        };
+        expect(() => publicLocalAppCatalog(JSON.stringify(value), fixture.descriptor)).toThrow();
+    });
     it("resolves same-origin resources, freezes declarations, and fetches no credentials or referrer", async () => {
         const fixture = await directoryFixture();
         const fetcher = vi.fn<typeof fetch>(async () => new Response(fixture.directoryJson));

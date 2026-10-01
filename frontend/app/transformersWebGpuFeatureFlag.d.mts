@@ -15,3 +15,7 @@ export function transformersWebGpuFeatureEnabled(
 export function transformersWebGpuProductionAssetsEnabled(
     environment: TransformersWebGpuBuildEnvironment | undefined,
 ): boolean;
+
+export function transformersWebGpuImmutableAssetsEnabled(
+    environment: TransformersWebGpuBuildEnvironment | undefined,
+): boolean;

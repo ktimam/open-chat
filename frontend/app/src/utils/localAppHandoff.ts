@@ -1,4 +1,7 @@
-import type { LocalDraftDeliveryRequest } from "./localAppDrafts";
+import {
+    validateEncryptedLocalAppDeliveryRequest,
+    type EncryptedLocalAppDeliveryRequest,
+} from "./localAppEncryption";
 
 export type LocalAppHandoffOutcome = "received" | "saved" | "rejected" | "uncertain";
 
@@ -14,7 +17,7 @@ export function localAppSessionNonce(): string {
  * A received acknowledgement is NOT a saved entry. There are no automatic reconnects/retries.
  */
 export function createLocalAppHandoffSession(options: {
-    request: LocalDraftDeliveryRequest;
+    request: EncryptedLocalAppDeliveryRequest;
     sessionNonce: string;
     receiver: object;
     send: (message: unknown, exactOrigin: string) => void;
@@ -24,6 +27,7 @@ export function createLocalAppHandoffSession(options: {
     authorizeOffer?: () => Promise<boolean>;
 }) {
     const { request, sessionNonce, receiver, send, onOutcome } = options;
+    validateEncryptedLocalAppDeliveryRequest(request);
     const destination = new URL(request.destination);
     if (
         !/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/.test(sessionNonce) ||
@@ -45,7 +49,7 @@ export function createLocalAppHandoffSession(options: {
     let offered = false;
     let received = false;
     let ended = false;
-    const common = { version: 1, sessionNonce };
+    const common = { version: 2, sessionNonce };
     function exact(value: Record<string, unknown>, keys: string[]): boolean {
         return (
             Object.keys(value).length === keys.length &&
@@ -66,8 +70,11 @@ export function createLocalAppHandoffSession(options: {
                     ...common,
                     type: "oc:app-import:offer",
                     importId: request.idempotencyKey,
+                    appId: request.appId,
+                    appRevision: request.appRevision,
                     actionId: request.actionId,
-                    payload: request.payload,
+                    destination: request.destination,
+                    envelope: request.envelope,
                 },
                 origin,
             );
@@ -97,7 +104,7 @@ export function createLocalAppHandoffSession(options: {
             )
                 return;
             const value = event.data as Record<string, unknown>;
-            if (value.version !== 1 || value.sessionNonce !== sessionNonce) return;
+            if (value.version !== 2 || value.sessionNonce !== sessionNonce) return;
             if (
                 value.type === "oc:app-import:ready" &&
                 exact(value, ["type", "version", "sessionNonce"])

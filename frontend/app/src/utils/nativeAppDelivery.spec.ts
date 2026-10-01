@@ -3,6 +3,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { get } from "svelte/store";
 import { createNativeAppDelivery, nativeDeliveryAllowed } from "./nativeAppDelivery";
 import type { LocalDraftDeliveryRequest } from "./localAppDrafts";
+import { encryptedRequestFixture } from "./localAppEncryption.testFixtures";
+// Lifecycle tests stub only sealing; real crypto/transport boundary is covered without mocks separately.
+vi.mock("./localAppEncryption", async (original) => {
+    const actual = await original<typeof import("./localAppEncryption")>();
+    const { encryptedRequestFixture: fixture } = await import("./localAppEncryption.testFixtures");
+    return {
+        ...actual,
+        sealLocalAppDelivery: vi.fn(async (r: LocalDraftDeliveryRequest) =>
+            fixture({
+                appId: r.appId,
+                actionId: r.actionId,
+                destination: r.destination,
+                idempotencyKey: r.idempotencyKey,
+            }),
+        ),
+    };
+});
 import type {
     LocalAppHandoffStart,
     LocalAppHandoffStatus,
@@ -17,6 +34,13 @@ const request: LocalDraftDeliveryRequest = Object.freeze({
     idempotencyKey: "a".repeat(43),
     payload: Object.freeze({ marker: "approved synthetic fields only" }),
 });
+const encryptedRequest = encryptedRequestFixture({
+    appId: request.appId,
+    actionId: request.actionId,
+    destination: request.destination,
+    idempotencyKey: request.idempotencyKey,
+});
+
 const start = (): LocalAppHandoffStart => ({
     handoffId: "a".repeat(32),
     url: "http://localhost:41000/handoff",
@@ -89,7 +113,7 @@ describe("native private draft delivery", () => {
         const pending = adapter.deliver(request, abort.signal);
         await flush();
         expect(deps.begin).toHaveBeenCalledExactlyOnceWith({
-            approvedRequestJson: JSON.stringify(request),
+            approvedRequestJson: JSON.stringify(encryptedRequest),
         });
         expect(get(adapter.pairing)?.pairingCode).toBe("A".repeat(20));
         expect(deps.copy).not.toHaveBeenCalled();
@@ -143,8 +167,8 @@ describe("native private draft delivery", () => {
             const { adapter, deps, previousAbort, pending, replacementStart, finishPreviousPoll } =
                 await receivedReplacementFixture();
             expect(deps.begin.mock.calls).toEqual([
-                [{ approvedRequestJson: JSON.stringify(request) }],
-                [{ approvedRequestJson: JSON.stringify(request) }],
+                [{ approvedRequestJson: JSON.stringify(encryptedRequest) }],
+                [{ approvedRequestJson: JSON.stringify(encryptedRequest) }],
             ]);
             expect(deps.cancel).toHaveBeenCalledExactlyOnceWith(start().handoffId);
             expect(get(adapter.pairing)).toMatchObject({
@@ -266,6 +290,7 @@ describe("native private draft delivery", () => {
                 }),
         );
         const pending = adapter.deliver(request, abort.signal);
+        await flush();
         adapter.cancelAll();
         await expect(pending).resolves.toEqual({ kind: "uncertain" });
         finish(start());
