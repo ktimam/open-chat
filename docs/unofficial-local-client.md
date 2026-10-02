@@ -803,14 +803,30 @@ checks establish raw-worker results and app normalization for these fixtures, no
 normal-app image proposals, native inference or private-Type matching. The temporary
 diagnostic route is off and the normal preview was restored (observed PID 77136).
 
+The [normal image-proposal observation](F:/Temp/OpenChat-IOU/private-card-ui-web-024/browser-image-proposal-observation.json)
+then used the existing synthetic invoice in message 28 through the normal Propose
+action. It produced a new local card with 123.45 USD and 2026-09-27 while retaining
+both older cards. Gemma was selected in the preceding settings observation; this
+check did not capture a fresh inference-configuration trace. The card retained the
+invoice heading, but not its printed direction, description or footer keyword:
+it displayed **Owed to you**, not the printed **You owe**, and selected no saved Type.
+This matches the existing heading-only image contract and its explicit
+`localProcessorArtifact.test.ts` limitation test, rather than demonstrating a new
+024 regression. Missing direction defaults to `credit`; the omitted `TEST ONLY`
+footer cannot match the private Type's keyword. The normal proposal flow completed,
+but this is not full image-fidelity or private-Type matching acceptance. The new
+card remains unsent; no IOU entry was saved by this check.
+
 The [emulator installation receipt](F:/Temp/OpenChat-IOU/private-card-ui-apk-024/artifacts/emulator-install-receipt.json)
 records successful in-place x86 replacement with app data and the original install
-date preserved. Emulator phase A is not accepted: Chrome repeatedly stopped
-responding during the IOU connection. A data-preserving reboot completed. Its
-ten-second screen timeout was resolved by connecting virtual power under the
-existing stay-awake setting, and the original user storage unlocked with the
-existing PIN. Android System UI subsequently stopped responding during APK
-startup; post-reboot account restoration has not yet been observed.
+date preserved. After Chrome repeatedly stopped responding during the IOU connection,
+one data-preserving cold restart of the same
+AVD, using 4 GB memory, host GPU and no snapshots, restored the existing account and
+chat without relinking or resetting data. Phase A subsequently reached IOU's final
+**Review the setup you will share** page with the approved existing account and
+sheet selected. The final Share action stopped at an explicit human approval
+boundary. Native connection now awaits approval for the IOU-to-APK setup share;
+the recovered ANRs are not the current blocker. Phase A is not yet accepted.
 No native setup Share, send or save occurred, and phase B has not run. ARM remains
 statically verified only. The current
 commit's hosted [frontend checks](https://github.com/ktimam/open-chat/actions/runs/37037525607)
@@ -846,10 +862,10 @@ actual artifact; documentation-only changes do not change the packaged source id
 | --- | --- | --- |
 | One fork main; official OpenChat services and unchanged backend | Source `d9b6d3e48`, integrated upstream `5ca61b627`; reviewed backend baseline and independent web/APK checks | No OpenChat canister deployment is required |
 | Normal Apps UI; no technical setup/import page | Both web bundles verified; desktop Apps flow passes; APK024 reaches its normal mobile Apps entry | Complete the native connection and card flow below |
-| Automatic app discovery and explicit connection | Desktop IOU reconnect passes with the current generated public catalog; emulator directory and Connect navigation pass | Native connection hit repeated Chrome ANRs; setup sharing is not accepted |
+| Automatic app discovery and explicit connection | Desktop IOU reconnect passes; native flow reaches IOU's final setup review with the approved account/sheet | Final IOU-to-APK setup Share awaits explicit human approval; connection is not yet accepted |
 | Encrypted persistent private cards and confirmed app delivery | Desktop editing, reload, source navigation, second IOU review/save/readback and same-ID duplicate protection pass | APK prepare/restart/delivery/readback and same-ID retry remain unverified |
-| Preserved model features and accurate image proposals | Four actual Qwen/Gemma image runs and exact-output IOU normalization pass for the two fixtures; complete cache SHA and cleanup pass | Normal-app image proposals, native model inference, private-Type matching and a successful cached-model switch remain unverified |
-| Separate local APK and account preservation | Both ABIs independently verified; in-place x86 install retained the account and normal main UI before reboot | Post-reboot account restoration is not yet observed; ARM physical-phone testing and public provider qualification are deferred, not passed |
+| Preserved model features and accurate image proposals | Four actual Qwen/Gemma image runs and exact-output IOU normalization pass; cache SHA and cleanup pass; normal invoice Propose produces matching amount/currency/date and retains older cards | Known invoice direction/description/footer-Type fidelity limits remain; broader normal-app/native accuracy, private-Type matching and a successful cached-model switch are not accepted |
+| Separate local APK and account preservation | Both ABIs independently verified; in-place x86 install and a data-preserving cold restart retain the existing account and chat without relinking | Native IOU connection remains pending; ARM physical-phone testing and public provider qualification are deferred, not passed |
 | Scoped source/hosted verification | 5,662 frontend tests and both local typechecks pass; current hosted frontend checks pass; Rust collection and SBOM pass | Raw security gate remains failed: ten exactly deferred Rust tuples; Android compiler acquisition failed before compilation on both attempts; no waiver or clean scan |
 
 Optional synthetic-voice accuracy, physical-phone testing, public branding/domain,
