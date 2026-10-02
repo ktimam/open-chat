@@ -488,11 +488,11 @@ preserved. Cold startup succeeded, the process stayed alive on follow-up, and it
 crash buffer was empty. This verifies update/startup only, not visible account restore,
 provider sign-in, card recovery or encrypted handoff. No phone install was performed.
 
-### October 1 current APK artifacts
+### October 1 APK019 artifact checkpoint
 
-APK019 supersedes APK018 as the current build candidate. Both architectures include
-the encrypted local-card and recipient-delivery implementation, the corrected
-optional-audio download routing and the approved installer lock update. The
+At this checkpoint, APK019 superseded APK018 as the build candidate. Both
+architectures included the encrypted local-card and recipient-delivery implementation,
+the corrected optional-audio download routing and the approved installer lock update. The
 catalog, model weights, default prompts and completion guard remain unchanged.
 The build did not install dependencies; its existing installed adm-zip remains
 0.6.0 while the frozen lock selects 0.6.1. The installer fix was tested separately.
@@ -542,3 +542,63 @@ re-execute the successful native/model jobs or the dependency advisory gate.
 This checkpoint does not qualify later working-tree changes, a new APK, native
 sign-in, phone inference or public release. The earlier APK019 artifact and
 runtime-acceptance limits remain in force.
+
+### October 2 multi-card web and APK020 checkpoint
+
+Both optimized web layouts and both APK020 architectures were built from commit
+`94cb746197cd9ac0c05a0235a64a959ff259da0e`, with reviewed feature fingerprint
+`8cc7a0ec5387cc68d875eb71e10f54e60efdf07c4ac020cbf9e23650954554a9`.
+Independent artifact checks passed. They bind the compact app-defined card UI,
+encrypted eight-card collection, source references and frozen app definitions to
+the packaged bytes. Official service configuration, disabled OTA, original native
+authentication code and unchanged pinned model assets were verified. No OpenChat
+backend deployment was performed. APK020 supersedes APK019 as the local-test
+artifact candidate, not as a runtime-qualified release.
+
+The web receipts are
+`card-collection-release-20261002/web-v1-independent-verification.json` and
+`card-collection-release-20261002/web-v2-independent-verification.json` under the
+project temporary directory. APK files and receipts are under
+`card-first-apk-020/artifacts`:
+
+- `openchat-fork-local-test-x86_64.apk`: 72,334,219 bytes, SHA256
+  `dc919cf9ae5e021c2dc124d6c57fc541196695871c83d2075d12bf67d2e3c07c`;
+  final receipt `independent-x86_64-verification-v2.json`.
+- `openchat-fork-local-test-aarch64.apk`: 79,609,609 bytes, SHA256
+  `9e28a3767268a136e3cf67b57b2f5d1a54ebbb421c616c8c50b9ac44c01bcee3`;
+  receipt `independent-aarch64-verification.json`.
+
+A fresh read-only emulator check matched the installed
+`dev.openchatfork.localtest` APK exactly to the verified x86 artifact. Device
+package metadata reported `firstInstallTime: 2026-09-30 18:30:29` and
+`lastUpdateTime: 2026-10-02 03:25:57`; these times are quoted without timezone
+reinterpretation. Receipt `emulator-installed-identity-20261002.json`, SHA256
+`0cbc3af090667f0482e7733b97e9ec34c7b2eeb357c2562035055920deb8afc1`,
+records file identity and selected package metadata only. It did not launch the
+app or verify account restoration, provider behavior, card storage or delivery.
+
+The [hosted frontend run for this commit](https://github.com/ktimam/open-chat/actions/runs/36942932312)
+succeeded. The [scoped-security run](https://github.com/ktimam/open-chat/actions/runs/36942932279)
+failed and is not accepted. Unlike the earlier workflow, its Rust checks ran
+after the npm failure. The Rust preflight rejected the installed Linux Cargo
+binary because its 42,185,192 bytes exceeded the collector's 32 MiB input-file
+limit; this failure was not an advisory finding.
+
+A subsequent CI-only correction gives Cargo and rustc binaries a separate 64 MiB
+cap while retaining the 32 MiB source-file and 128 MiB aggregate-input limits,
+path checks, proxy rejection and exact hash bindings. It passed 277 scoped
+offline tests and 373 scoped CI-guard tests with no failures or skips; workflow wiring
+and targeted formatting also passed. Read-only preparation with the actual installed
+Linux Cargo and rustc passed all eight configured profiles, recorded in
+`card-collection-release-20261002/ci-repair/canonical-linux-binary-preflight.json`.
+That preparation did not execute either tool, collect metadata or query
+advisories. No hosted rerun result is recorded for the correction, and it does
+not resolve or waive the npm or Android failures in the earlier run.
+
+Current-artifact runtime checks remain open: familiar compact-card editing and
+responsive layout, multi-card recovery and source association, reviewed encrypted
+delivery, native account/provider restoration and repeated inference. Neither
+static artifacts nor installed-file identity prove visual or interaction parity
+with the earlier app cards. The RP/association declaration does not prove public
+authorization of this fork package. Physical-phone testing remains deferred;
+public-release and general voice-accuracy acceptance are not claimed.

@@ -33,6 +33,7 @@ export const RUST_COLLECTION_LIMITS = Object.freeze({
   profiles: 8,
   sourceFiles: 4096,
   fileBytes: 32 * 1024 * 1024,
+  toolBinaryBytes: 64 * 1024 * 1024,
   inputBytes: 128 * 1024 * 1024,
   metadataBytes: 32 * 1024 * 1024,
   metadataTotalBytes: 128 * 1024 * 1024,
@@ -112,17 +113,18 @@ export function prepareRustFeatureCollection(args) {
   );
   const bindings = new Map();
   let inputBytes = 0;
-  const capture = (path, expected) => {
+  const capture = (
+    path,
+    expected,
+    maxBytes = RUST_COLLECTION_LIMITS.fileBytes,
+  ) => {
     path = resolve(path);
     const stat = ordinary(path);
-    assert(
-      stat.size <= RUST_COLLECTION_LIMITS.fileBytes,
-      "Input exceeds byte limit",
-    );
+    assert(stat.size <= maxBytes, "Input exceeds byte limit");
     const bytes = readFileSync(path);
     inputBytes += bytes.length;
     assert(
-      bytes.length <= RUST_COLLECTION_LIMITS.fileBytes &&
+      bytes.length <= maxBytes &&
         inputBytes <= RUST_COLLECTION_LIMITS.inputBytes,
       "Input byte limit",
     );
@@ -191,10 +193,14 @@ export function prepareRustFeatureCollection(args) {
     /^(?:cargo|cargo\.exe)$/u.test(basename(cargoExecutable)),
     "Installed Cargo executable required",
   );
-  capture(args.cargoExecutable);
+  capture(
+    args.cargoExecutable,
+    undefined,
+    RUST_COLLECTION_LIMITS.toolBinaryBytes,
+  );
   const suffix = basename(cargoExecutable).endsWith(".exe") ? ".exe" : "";
   const rustcExecutable = join(dirname(cargoExecutable), "rustc" + suffix);
-  capture(rustcExecutable);
+  capture(rustcExecutable, undefined, RUST_COLLECTION_LIMITS.toolBinaryBytes);
   // Require direct toolchain binaries, not rustup's identically-backed launcher
   // proxies, so a missing toolchain cannot cause implicit installation.
   assert.notEqual(

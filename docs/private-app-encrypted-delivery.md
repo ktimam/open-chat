@@ -284,6 +284,15 @@ model assets. The live v2 browser successfully installed voice support, but actu
 synthetic voice transcription still failed. A public recording subsequently passed
 both isolated inference and the normal message action. See
 [the web test boundary](unofficial-local-web.md#checks) for the remaining accuracy
-and latency limits. Both verified APK019 artifacts now include the routing fix;
-they have not been installed or runtime-qualified. See
-[the APK checkpoint](unofficial-local-client.md#october-1-current-apk-artifacts).
+and latency limits. Both verified APK019 artifacts included the routing fix;
+neither was installed or runtime-qualified at that checkpoint.
+
+The subsequent October 2 web and APK020 artifacts include the compact app-defined
+card UI and encrypted eight-card collection from commit `94cb746197`. Independent
+artifact checks passed for both layouts and architectures, and a read-only check
+matched the emulator's installed x86 APK to the verified artifact. These are
+packaging and installed-file identity results, not current multi-card UI,
+storage, provider or delivery runtime acceptance. See
+[the current artifact checkpoint](unofficial-local-client.md#october-2-multi-card-web-and-apk020-checkpoint)
+for exact identities, hosted CI results and remaining gates. The earlier browser
+acceptance above must not be relabeled as acceptance of these newer artifacts.

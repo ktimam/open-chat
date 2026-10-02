@@ -7,6 +7,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  truncateSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -696,6 +697,65 @@ test("current-client preparation validates all existing native profiles without 
   prepared.verify();
   assert.equal(f.calls.length, 0);
   assert.equal(readdirSync(f.output).length, 0);
+});
+
+test("bounded tool inputs: large direct binaries retain exact size/hash bindings without execution", (t) => {
+  const f = fixture(t);
+  assert.equal(RUST_COLLECTION_LIMITS.fileBytes, 32 * 1024 * 1024);
+  assert.equal(RUST_COLLECTION_LIMITS.inputBytes, 128 * 1024 * 1024);
+  // Synthetic files match the observed Linux Cargo size; they are never executed.
+  const sizes = { cargo: 42_185_192, rustc: 40 * 1024 * 1024 };
+  for (const [name, size] of Object.entries(sizes))
+    truncateSync(join(f.tools, name), size);
+  const prepared = prepareRustFeatureCollection(f.args);
+  assert.equal(RUST_COLLECTION_LIMITS.toolBinaryBytes, 64 * 1024 * 1024);
+  for (const [name, size] of Object.entries(sizes)) {
+    const path = resolve(join(f.tools, name));
+    assert.deepEqual(
+      prepared.bindings.find((bound) => bound.path === path),
+      {
+        path,
+        bytes: size,
+        sha256: hash(readFileSync(path)),
+      },
+    );
+  }
+  prepared.verify();
+  assert.equal(f.calls.length, 0);
+  assert.deepEqual(readdirSync(f.output), []);
+});
+
+test("bounded tool inputs: source files still reject 32 MiB plus one byte", (t) => {
+  const f = fixture(t);
+  truncateSync(join(f.repo, "feature/lib.rs"), 32 * 1024 * 1024 + 1);
+  assert.throws(
+    () => prepareRustFeatureCollection(f.args),
+    /Input exceeds byte limit/,
+  );
+  assert.equal(f.calls.length, 0);
+  assert.deepEqual(readdirSync(f.output), []);
+});
+
+test("bounded tool inputs: either tool rejects 64 MiB plus one byte", (t) => {
+  for (const name of ["cargo", "rustc"]) {
+    const f = fixture(t);
+    truncateSync(join(f.tools, name), 64 * 1024 * 1024 + 1);
+    assert.throws(
+      () => prepareRustFeatureCollection(f.args),
+      /Input exceeds byte limit/,
+    );
+    assert.equal(f.calls.length, 0);
+    assert.deepEqual(readdirSync(f.output), []);
+  }
+});
+
+test("bounded tool inputs: individually allowed binaries still enforce the 128 MiB aggregate", (t) => {
+  const f = fixture(t);
+  for (const name of ["cargo", "rustc"])
+    truncateSync(join(f.tools, name), 64 * 1024 * 1024);
+  assert.throws(() => prepareRustFeatureCollection(f.args), /Input byte limit/);
+  assert.equal(f.calls.length, 0);
+  assert.deepEqual(readdirSync(f.output), []);
 });
 
 test("CLI requires exact explicit paths, scope, pin and offline mode without executable arguments", (t) => {
