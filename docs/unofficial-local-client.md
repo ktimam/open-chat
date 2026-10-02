@@ -773,11 +773,50 @@ required fresh review, reported the earlier save as already accepted, and left o
 row per unique test note. These are visible UI/readback observations, not a wire
 capture or model-inference result.
 
-The [model-settings observations](F:/Temp/OpenChat-IOU/private-card-ui-web-024/browser-model-settings-observations.json)
-show retained Gemma, downloaded Qwen and the optional voice add-on. Cached Qwen
-activation stopped at the existing background-cancellation guard; Gemma remained
-selected. No weights were removed. These settings observations alone establish
-neither inference nor a successful cached-model switch.
+The earlier [model-settings observations](F:/Temp/OpenChat-IOU/private-card-ui-web-024/browser-model-settings-observations.json)
+retain the background-cancelled Qwen activation attempt, during which Gemma stayed
+selected. A subsequent normal-UI [cached-model roundtrip](F:/Temp/OpenChat-IOU/private-card-ui-web-024/browser-cache-roundtrip-observation.json)
+passed: Qwen became Current with all three stages showing WebGPU/q4 while Gemma
+remained Downloaded; switching back restored Gemma Current with WebGPU/q4f16,
+Qwen Downloaded and the optional voice add-on retained. Normal reload preserved
+Gemma Current, Model only, the 96-token limit and optional voice. No weights were
+deleted. This is successful UI switching and retained settings, not a network trace,
+fresh byte-level cache audit or inference-after-switch acceptance.
+
+The subsequent [normal post-switch `/ai` observation](F:/Temp/OpenChat-IOU/private-card-ui-web-024/browser-post-switch-inference-observation.json)
+completed inference but failed instruction-following. The request
+`Reply with exactly APK024 SWITCH OK.` produced
+`Amount: 123.45 USD | Direction: You owe | TEST ONLY — OpenChat IOU acceptance`
+instead. Source review found no instruction truncation, message-order defect or
+stale-completion reuse. A cache-only [11-run context investigation](F:/Temp/OpenChat-IOU/text-context-024/observations.json)
+reproduced the wrong-task behavior by placing the visible older multiline extraction
+request in the current wrapper. The same new request succeeds without history.
+JSON quoting alone and moving the current request first did not fix that case.
+Explicit current-task framing with JSON-quoted history returned the intended words
+on both models; both also answered a question requiring the historical amount.
+Gemma returned the intended words with a reconstructed 24-message history. Qwen's
+24-message case returned a worker error with cleanup acknowledged. An
+[error-visible replay](F:/Temp/OpenChat-IOU/text-context-024-errors/qwen-long-context-observation.json)
+confirmed the existing context guard: the request needed 1,025 positions against
+Qwen's 1,024-position limit, including the catalog-clamped 96-token output allowance.
+This is a bounded rejection before generation, not a GPU crash or a successful
+long-context answer. History remains character-bounded rather than tokenizer-aware;
+the fix does not silently trim more history or reduce the requested output allowance.
+Most intended-word answers omitted the final period, so these are semantic
+task-following observations, not byte-exact response passes. The reconstructed
+history is not a capture of the production request, and framing is not a security
+guarantee against arbitrary historical instructions.
+
+The generic command builder now uses that tested framing, valid JSON within its
+existing 8,000-character/newest-24 history bounds, and unchanged no-context input.
+The actual builder reproduced all three executed candidate prompt strings exactly.
+The regression-first run failed 13 assertions against the old builder; after the
+fix, [151 tests in six focused suites pass](F:/Temp/OpenChat-IOU/text-context-024/local-ai-context-green.json).
+Model weights, worker code, media prompt constants and app-owned image prompts are
+unchanged. These source changes are not yet packaged into a replacement for 024;
+normal-UI acceptance of the replacement remains pending. Cached-model switching
+and reload remain valid observations, not evidence that the original 024 command
+failure has been fixed in the running browser or installed APK.
 
 Separate [four-case image observations](F:/Temp/OpenChat-IOU/image-worker-024/actual-image-observations.json)
 record actual Qwen and Gemma WebGPU runs using the unchanged compiled 024 worker,
@@ -864,7 +903,7 @@ actual artifact; documentation-only changes do not change the packaged source id
 | Normal Apps UI; no technical setup/import page | Both web bundles verified; desktop Apps flow passes; APK024 reaches its normal mobile Apps entry | Complete the native connection and card flow below |
 | Automatic app discovery and explicit connection | Desktop IOU reconnect passes; native flow reaches IOU's final setup review with the approved account/sheet | Final IOU-to-APK setup Share awaits explicit human approval; connection is not yet accepted |
 | Encrypted persistent private cards and confirmed app delivery | Desktop editing, reload, source navigation, second IOU review/save/readback and same-ID duplicate protection pass | APK prepare/restart/delivery/readback and same-ID retry remain unverified |
-| Preserved model features and accurate image proposals | Four actual Qwen/Gemma image runs and exact-output IOU normalization pass; cache SHA and cleanup pass; normal invoice Propose produces matching amount/currency/date and retains older cards | Known invoice direction/description/footer-Type fidelity limits remain; broader normal-app/native accuracy, private-Type matching and a successful cached-model switch are not accepted |
+| Preserved model features and accurate image proposals | Four actual Qwen/Gemma image runs and exact-output IOU normalization pass; cached switching/reload and retained voice pass; generic `/ai` context fix has focused regression and bounded real-model evidence | Original 024 `/ai` task failure remains in deployed artifacts until replacement and normal-UI verification; Qwen's 1,024-position context limit still applies. Known invoice direction/description/footer-Type limits remain; broader normal-app/native accuracy and private-Type matching are not accepted |
 | Separate local APK and account preservation | Both ABIs independently verified; in-place x86 install and a data-preserving cold restart retain the existing account and chat without relinking | Native IOU connection remains pending; ARM physical-phone testing and public provider qualification are deferred, not passed |
 | Scoped source/hosted verification | 5,662 frontend tests and both local typechecks pass; current hosted frontend checks pass; Rust collection and SBOM pass | Raw security gate remains failed: ten exactly deferred Rust tuples; Android compiler acquisition failed before compilation on both attempts; no waiver or clean scan |
 
