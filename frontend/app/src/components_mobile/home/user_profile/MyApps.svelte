@@ -8,6 +8,7 @@
     import { Body, BodySmall, CommonButton, Container, Subtitle } from "component-lib";
     import { type AiAppRegistration, type OpenChat } from "@client";
     import { getContext, onMount } from "svelte";
+    import LocalAppDirectory from "../../../components_shared/LocalAppDirectory.svelte";
     import CheckDecagram from "svelte-material-icons/CheckDecagram.svelte";
     import Upload from "svelte-material-icons/Upload.svelte";
     import Translatable from "../../Translatable.svelte";
@@ -22,6 +23,10 @@
     let publishing = $state(new Set<number>());
 
     async function load(reset = true) {
+        if (client.clientOnlyApps()) {
+            loading = false;
+            return;
+        }
         if (reset) loading = true;
         const pageIndex = reset ? 0 : Math.floor(apps.length / 8);
         const page = await client.myAiAppsPage(pageIndex, 8);
@@ -40,6 +45,7 @@
     onMount(load);
 
     async function publishApp(app: AiAppRegistration) {
+        if (client.clientOnlyApps()) return;
         if (publishing.has(app.id)) return;
         publishing = new Set(publishing).add(app.id);
         const ok = await client.publishAiApp(app.id);
@@ -57,7 +63,9 @@
 
 <SlidingPageContent title={i18nKey("aiApps.myApps")}>
     <Container padding={["xxl", "lg", "huge"]} gap={"lg"} height={"fill"} direction={"vertical"}>
-        {#if loading}
+        {#if client.clientOnlyApps()}
+            <LocalAppDirectory mobile connectedOnly />
+        {:else if loading}
             <BodySmall colour={"textSecondary"}>
                 <Translatable resourceKey={i18nKey("aiApps.loading")} />
             </BodySmall>

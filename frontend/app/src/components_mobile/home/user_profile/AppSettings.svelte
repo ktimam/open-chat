@@ -2,8 +2,8 @@
     import { i18nKey } from "@src/i18n/i18n";
     import { BodySmall, Container, MenuItem } from "component-lib";
     import { anonUserStore, OpenChat, publish } from "@client";
+    import { navigateToMainApps } from "@utils/mainAppsNavigation";
     import { navigate } from "@utils/navigation";
-    import { privateAppWorkspace } from "@utils/privateAppWorkspace";
     import AccountMultiple from "svelte-material-icons/AccountMultiple.svelte";
     import AutoFix from "svelte-material-icons/AutoFix.svelte";
     import CellphoneLink from "svelte-material-icons/CellphoneLink.svelte";
@@ -26,8 +26,7 @@
     }
 
     function openPrivateApps() {
-        publish("closeModalStack");
-        privateAppWorkspace.open();
+        navigateToMainApps();
     }
 </script>
 
@@ -106,8 +105,8 @@
                 <LinkedCard
                     onClick={openPrivateApps}
                     Icon={AutoFix}
-                    title={i18nKey("Private apps")}
-                    info={i18nKey("Import app setup and review private drafts locally.")}
+                    title={i18nKey("Apps")}
+                    info={i18nKey("Explore and connect apps.")}
                 />
             {/if}
 

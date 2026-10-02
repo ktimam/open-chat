@@ -3614,7 +3614,16 @@ describe("both ChatMessage trees run the SHARED propose flow", () => {
                 ),
             ).not.toMatch(handlerSignature);
             expect(src).toContain("if (client.clientOnlyApps()) {");
+            expect(src).not.toContain("privateAppWorkspace.open()");
+            expect(src).toContain("!privateAppWorkspace.selectForProposal(");
+            expect(src).toContain("if (privateAppWorkspace.selection() === undefined) {");
+            expect(src).toContain("navigateToMainApps();");
             expect(src).toContain("return proposePrivateAppMessage(client, capturedContent, {");
+            expect(
+                src.indexOf("if (privateAppWorkspace.selection() === undefined) {"),
+            ).toBeLessThan(
+                src.indexOf("return proposePrivateAppMessage(client, capturedContent, {"),
+            );
             expect(
                 src.indexOf("return proposePrivateAppMessage(client, capturedContent, {"),
             ).toBeLessThan(src.indexOf("return runProposeFlow({"));

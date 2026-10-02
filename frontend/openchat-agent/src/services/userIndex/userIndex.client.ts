@@ -224,6 +224,10 @@ export class UserIndexClient extends SingleCanisterMsgpackAgent {
 
                 const isOffline = offline();
 
+                if (isOffline && cachedUser === undefined) {
+                    throw new Error("Current user is unavailable offline without a cached profile");
+                }
+
                 if (cachedUser !== undefined) {
                     resolve(cachedUser, isOffline);
                 }

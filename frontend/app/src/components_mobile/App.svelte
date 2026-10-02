@@ -67,7 +67,7 @@
     import VideoCallAccessRequests from "./home/video/VideoCallAccessRequests.svelte";
     import Router from "./Router.svelte";
     import StartupFailure from "@shared_components/StartupFailure.svelte";
-    import PrivateAppsWorkspace from "@shared_components/PrivateAppsWorkspace.svelte";
+    import LocalAppCards from "@shared_components/LocalAppCards.svelte";
     import UpgradeBanner from "./UpgradeBanner.svelte";
     import { keyboard } from "@src/stores/keyboard.svelte";
 
@@ -428,7 +428,7 @@
 <svelte:boundary onerror={boundaryError}>
     <Head />
     {#if client.clientOnlyApps()}
-        <PrivateAppsWorkspace {client} />
+        <LocalAppCards {client} />
     {/if}
 
     <ActiveCall

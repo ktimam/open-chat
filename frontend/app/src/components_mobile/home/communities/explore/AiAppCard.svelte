@@ -3,13 +3,13 @@
     // generic. There is no app detail screen yet; per-chat enablement (the actionable surface)
     // lives in each chat's Apps settings, which this card points the user towards.
     import { BodySmall, Container, Subtitle } from "component-lib";
-    import type { AiAppRegistration } from "@client";
+    import { isLocalAiApp, type AiAppPresentation } from "@utils/localAppDirectoryPresentation";
     import { i18nKey } from "../../../../i18n/i18n";
     import Translatable from "../../../Translatable.svelte";
     import AiAppIcon from "./AiAppIcon.svelte";
 
     interface Props {
-        app: AiAppRegistration;
+        app: AiAppPresentation;
         // The signed-in user already holds a delivery key for this app (per-user-keys pairing).
         connected: boolean;
         // Opens the app's detail sheet (connection lifecycle + full action list).
@@ -40,14 +40,14 @@
                     {app.manifest.description}
                 </BodySmall>
             {/if}
-            <BodySmall colour={"textSecondary"}>
-                <Translatable
-                    resourceKey={i18nKey(
-                        actionCount === 1 ? "aiApps.actionCountOne" : "aiApps.actionCount",
-                        { count: actionCount.toString() },
-                    )}
-                />
-            </BodySmall>
+            {#if !isLocalAiApp(app) || app.actionsKnown}<BodySmall colour={"textSecondary"}>
+                    <Translatable
+                        resourceKey={i18nKey(
+                            actionCount === 1 ? "aiApps.actionCountOne" : "aiApps.actionCount",
+                            { count: actionCount.toString() },
+                        )}
+                    />
+                </BodySmall>{/if}
         </Container>
     </Container>
 </Container>

@@ -6,7 +6,7 @@ import { privateAppWorkspaceState, privateAppWorkspace } from "./privateAppWorks
 import { nativeAppDelivery, nativeAppPairing } from "./nativeAppDelivery";
 import { localAppDeliveryStatus } from "./localAppRelayDelivery";
 import { identityStateStore, currentUserIdStore } from "@client";
-import PrivateAppsWorkspace from "../components_shared/PrivateAppsWorkspace.svelte";
+import LocalAppCards from "../components_shared/LocalAppCards.svelte";
 
 vi.mock("@client", async () => {
     const { writable } = await import("svelte/store");
@@ -97,7 +97,7 @@ const pair = nativeAppPairing as unknown as { set(value: unknown): void };
 const identity = identityStateStore as unknown as { set(value: unknown): void };
 const account = currentUserIdStore as unknown as { set(value: unknown): void };
 async function render(native = true, privateApps = true) {
-    component = mount(PrivateAppsWorkspace, {
+    component = mount(LocalAppCards, {
         target,
         props: {
             client: {

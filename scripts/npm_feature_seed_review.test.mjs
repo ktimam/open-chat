@@ -119,11 +119,116 @@ const beforeCardCollection = new Map([
     "821780fbc338896830d1dbae1292e13a91b332e2704c816b53800096b9ea6b9d",
   ],
 ]);
+
+// The current main Apps flow replaces the technical workspace page, reaches the
+// normal desktop/mobile discovery and My Apps entry points, and adds one narrow
+// current-user startup completion seam. These paths were absent from the prior
+// 158-file source-navigation checkpoint.
+const priorPrivateAppsWorkspace =
+  "frontend/app/src/components_shared/PrivateAppsWorkspace.svelte";
+const mainAppsFlowAdditions = [
+  "frontend/app/src/components/home/communities/explore/AiAppCard.svelte",
+  "frontend/app/src/components/home/communities/explore/Explore.svelte",
+  "frontend/app/src/components/home/nav/MainMenu.svelte",
+  "frontend/app/src/components/home/profile/MyApps.svelte",
+  "frontend/app/src/components_mobile/home/communities/explore/AiAppCard.svelte",
+  "frontend/app/src/components_mobile/home/communities/explore/AiAppSheet.svelte",
+  "frontend/app/src/components_mobile/home/communities/explore/Explore.svelte",
+  "frontend/app/src/components_mobile/home/user_profile/AppSettings.svelte",
+  "frontend/app/src/components_mobile/home/user_profile/MyApps.svelte",
+  "frontend/app/src/components_shared/LocalAppCards.svelte",
+  "frontend/app/src/components_shared/LocalAppDirectory.svelte",
+  "frontend/app/src/utils/localAppDirectoryPresentation.ts",
+  "frontend/app/src/utils/mainAppsNavigation.ts",
+  "frontend/openchat-agent/src/services/userIndex/userIndex.client.ts",
+];
+// Exact LF identities independently read from committed 7a95466f, whose live
+// 158-file aggregate is a52d271a. The deleted workspace blob is retained only in
+// this historical reconstruction; every current byte has a separate live gate.
+const beforeMainAppsFlow = new Map([
+  [
+    "frontend/app/src/components/App.svelte",
+    "121439b91a99aaa3c3876424c698bb407cd81b903f65816722e495b6728642cd",
+  ],
+  [
+    "frontend/app/src/components/home/AiAppModal.svelte",
+    "ab165ae966fd9cf959d407af14c06aa06a337a5e00340d79ceaa92c1d68142de",
+  ],
+  [
+    "frontend/app/src/components/home/ChatMessage.svelte",
+    "b44b1c6b359b781fe5798143892abeb1b9d8aadb7c300c77ec9850b5f61f6c07",
+  ],
+  [
+    "frontend/app/src/components_mobile/App.svelte",
+    "402b98544fd1bd53a7815afe15eef662c04063c0855582dbc5c9cdfe325c808a",
+  ],
+  [
+    "frontend/app/src/components_mobile/home/ChatMessage.svelte",
+    "2a71e63c4f76214be072cf20fe744b3e662b4e69de5f5f7b406aff9799a301a1",
+  ],
+  [
+    "frontend/app/src/components_shared/LocalAppsChatSettings.svelte",
+    "af76fcddf761a0ee77289ca45ff59fd95039b60d9a333d4536e99c8e0b416b7b",
+  ],
+  [
+    priorPrivateAppsWorkspace,
+    "1fb60e2497a511162dbbda47796c7d9f094edf85f7c35e718daa0026b2721b6a",
+  ],
+  [
+    "frontend/app/src/utils/privateAppWorkspace.ts",
+    "23c7eaff69860b42a658a8815edb1d683954c1907317818ccbb7c28a1bda230e",
+  ],
+  [
+    "frontend/openchat-agent/src/utils/indexedDb.ts",
+    "35f75653aa02ddd0d97c4608ffc65352977983abb787bfd82ad9d9c39cdac443",
+  ],
+  [
+    "frontend/openchat-client/src/openchat.ts",
+    "55adc1e7aba58313c1e4b01410cdbff4b2aa43f0873fe006afc08398d26e105d",
+  ],
+]);
+function sourceHash(file) {
+  return createHash("sha256")
+    .update(readFileSync(resolve(root, file), "utf8").replaceAll("\r\n", "\n"))
+    .digest("hex");
+}
+function beforeMainAppsFlowFingerprint(fingerprint) {
+  for (const path of mainAppsFlowAdditions)
+    assert(fingerprint.files.includes(path), path);
+  assert(!fingerprint.files.includes(priorPrivateAppsWorkspace));
+  for (const path of beforeMainAppsFlow.keys())
+    if (path !== priorPrivateAppsWorkspace)
+      assert(fingerprint.files.includes(path), path);
+  const files = [
+    ...fingerprint.files.filter(
+      (file) => !mainAppsFlowAdditions.includes(file),
+    ),
+    priorPrivateAppsWorkspace,
+  ].sort();
+  assert.equal(files.length, 158);
+  return {
+    ...fingerprint,
+    files,
+    sha256: createHash("sha256")
+      .update(
+        JSON.stringify(
+          files.map((file) => [
+            file,
+            beforeMainAppsFlow.get(file) ?? sourceHash(file),
+          ]),
+        ),
+      )
+      .digest("hex"),
+  };
+}
 function priorFingerprint(fingerprint, hashes, replacements = new Map()) {
+  const sourceNavigationFingerprint =
+    beforeMainAppsFlowFingerprint(fingerprint);
   for (const path of [...mixedProposalFiles, ...sourceNavigationAdditions])
-    assert(fingerprint.files.includes(path));
-  for (const path of hashes.keys()) assert(fingerprint.files.includes(path));
-  const files = fingerprint.files.filter(
+    assert(sourceNavigationFingerprint.files.includes(path));
+  for (const path of hashes.keys())
+    assert(sourceNavigationFingerprint.files.includes(path));
+  const files = sourceNavigationFingerprint.files.filter(
     (file) =>
       !mixedProposalFiles.includes(file) &&
       !sourceNavigationAdditions.includes(file),
@@ -140,20 +245,18 @@ function priorFingerprint(fingerprint, hashes, replacements = new Map()) {
           replacements.has(file)
             ? hash(replacements.get(file))
             : (hashes.get(file) ??
-              hash(
-                readFileSync(resolve(root, file), "utf8").replaceAll(
-                  "\r\n",
-                  "\n",
-                ),
-              )),
+              beforeMainAppsFlow.get(file) ??
+              sourceHash(file)),
         ]),
       ),
     ),
   };
 }
 function octoberPriorFingerprint(fingerprint, replacements = new Map()) {
+  const sourceNavigationFingerprint =
+    beforeMainAppsFlowFingerprint(fingerprint);
   for (const path of beforeOctoberRefresh.keys())
-    assert(fingerprint.files.includes(path));
+    assert(sourceNavigationFingerprint.files.includes(path));
   return priorFingerprint(
     fingerprint,
     new Map([...beforeCardCollection, ...beforeOctoberRefresh]),
@@ -166,6 +269,8 @@ function octoberPriorFingerprint(fingerprint, replacements = new Map()) {
 // separately reviewed immutable-asset routing pair differ. Every other input
 // remains live, and the separate current gate binds all current sources.
 function septemberCheckpointEntries(fingerprint) {
+  const sourceNavigationFingerprint =
+    beforeMainAppsFlowFingerprint(fingerprint);
   const laterFiles = new Set([
     ...mixedProposalFiles,
     ...sourceNavigationAdditions,
@@ -240,18 +345,15 @@ function septemberCheckpointEntries(fingerprint) {
     ],
   ]);
   for (const path of [...laterFiles, ...beforeExtension.keys()])
-    assert(fingerprint.files.includes(path), path);
-  const entries = fingerprint.files
+    assert(sourceNavigationFingerprint.files.includes(path), path);
+  const entries = sourceNavigationFingerprint.files
     .filter((path) => !laterFiles.has(path))
     .map((path) => [
       path,
       beforeExtension.get(path) ??
         beforeOctoberRefresh.get(path) ??
-        createHash("sha256")
-          .update(
-            readFileSync(resolve(root, path), "utf8").replaceAll("\r\n", "\n"),
-          )
-          .digest("hex"),
+        beforeMainAppsFlow.get(path) ??
+        sourceHash(path),
     ]);
   assert.equal(entries.length, 148);
   assert.equal(
@@ -463,7 +565,6 @@ test("current private-app, field-review and browser/native relay families are fi
     "frontend/app/src/utils/localAppCardPreview.ts",
     "frontend/app/src/utils/privateAppWorkspace.ts",
     "frontend/app/src/utils/nativeAppDelivery.ts",
-    "frontend/app/src/components_shared/PrivateAppsWorkspace.svelte",
     "frontend/app/src/components_shared/PrivateAppDraftFields.svelte",
     "frontend/app/src/components_shared/PrivateAppCardPreview.svelte",
     "frontend/app/src/components_shared/LocalAppsChatSettings.svelte",
@@ -474,6 +575,14 @@ test("current private-app, field-review and browser/native relay families are fi
     assert(owned.includes(file), file);
     assert(fingerprint.files.includes(file), file);
   }
+  assert(
+    fingerprint.files.includes(
+      "frontend/app/src/components_shared/LocalAppCards.svelte",
+    ),
+  );
+  assert(
+    !owned.includes("frontend/app/src/components_shared/LocalAppCards.svelte"),
+  );
   for (const file of [
     "frontend/app/src/components/home/ChatMessage.svelte",
     "frontend/openchat-client/src/openchat.ts",
@@ -481,7 +590,7 @@ test("current private-app, field-review and browser/native relay families are fi
     "frontend/openchat-client/src/utils/browserAccountLink.ts",
     "frontend/openchat-worker/src/worker.ts",
     "frontend/openchat-service-worker/src/service_worker.ts",
-    "frontend/app/src/components_shared/PrivateAppsWorkspace.card.spec.ts",
+    "frontend/app/src/components_shared/LocalAppCards.card.spec.ts",
     "frontend/app/src/components_shared/PrivateAppsNavigation.spec.shell.svelte",
     "frontend/app/src/utils/localAppDrafts.md",
   ])
@@ -489,6 +598,86 @@ test("current private-app, field-review and browser/native relay families are fi
       !owned.includes(file),
       `mixed core, reached helpers, tests or docs must not become dedicated source: ${file}`,
     );
+});
+
+test("main Apps flow, retained local cards and startup completion have an exact current checkpoint", () => {
+  const config = JSON.parse(
+    readFileSync(
+      resolve(root, "scripts/npm_feature_scope.current-client.json"),
+      "utf8",
+    ),
+  );
+  const actual = seedSourceFingerprint(root, config);
+  const previous = beforeMainAppsFlowFingerprint(actual);
+  assert.equal(
+    previous.sha256,
+    "a52d271ac945ba6ebd5971f10ca94d256db981fac53979542cbed8377025e4d9",
+  );
+  assertReviewedSourceFingerprint(previous, config.sourceReview);
+  assertReviewedSourceFingerprint(actual, config.sourceReview);
+  assert.equal(featureOwnedFiles(root, config.scopeId).length, 123);
+  assert.equal(actual.files.length, 171);
+  assert.equal(config.seeds.length, 26);
+  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
+  assert.equal(
+    actual.sha256,
+    "83d70d96f0b74618f59ef52327f2d3bf104a2895231e686f9557cb9e068a5b14",
+  );
+
+  const owned = featureOwnedFiles(root, config.scopeId);
+  for (const file of mainAppsFlowAdditions) {
+    assert(actual.files.includes(file), file);
+    assert.equal(
+      owned.includes(file),
+      file === "frontend/app/src/utils/localAppDirectoryPresentation.ts",
+      `Only the selector-matched presentation helper is a dedicated owner: ${file}`,
+    );
+  }
+  assert(!existsSync(resolve(root, priorPrivateAppsWorkspace)));
+  assert(!actual.files.includes(priorPrivateAppsWorkspace));
+  for (const file of [
+    "frontend/app/src/components_shared/LocalAppCards.card.spec.ts",
+    "frontend/app/src/components_shared/LocalAppDirectory.spec.ts",
+    "frontend/app/src/utils/localAppDirectoryPresentation.spec.ts",
+    "frontend/app/src/utils/mainAppsNavigation.spec.ts",
+    "frontend/openchat-agent/src/utils/indexedDb.spec.ts",
+  ])
+    assert(!actual.files.includes(file), file);
+
+  const mainAppsNavigation = readFileSync(
+    resolve(root, "frontend/app/src/utils/mainAppsNavigation.ts"),
+    "utf8",
+  );
+  assert(
+    mainAppsNavigation.indexOf("privateAppWorkspace.invalidateReview();") <
+      mainAppsNavigation.indexOf("privateAppWorkspace.close();") &&
+      mainAppsNavigation.indexOf("privateAppWorkspace.close();") <
+        mainAppsNavigation.indexOf("navigate(MAIN_APPS_ROUTE);"),
+  );
+  assert.doesNotMatch(
+    mainAppsNavigation,
+    /clearCards|discardCard|forget|disconnectApp/u,
+  );
+  const directory = readFileSync(
+    resolve(
+      root,
+      "frontend/app/src/components_shared/LocalAppDirectory.svelte",
+    ),
+    "utf8",
+  );
+  assert(directory.includes("Saved cards ({workspaceView.cards.length})"));
+  assert(directory.includes("workspace.open();"));
+  const userIndex = readFileSync(
+    resolve(
+      root,
+      "frontend/openchat-agent/src/services/userIndex/userIndex.client.ts",
+    ),
+    "utf8",
+  );
+  assert.match(
+    userIndex,
+    /if \(isOffline && cachedUser === undefined\) \{\s*throw new Error\("Current user is unavailable offline without a cached profile"\);\s*\}/u,
+  );
 });
 
 test("current encryption, recovery and enum-label owners use existing selectors without package or historical scope expansion", () => {
@@ -524,12 +713,12 @@ test("current encryption, recovery and enum-label owners use existing selectors 
       ),
     );
   assert.equal(owned.length, 123);
-  assert.equal(fingerprint.files.length, 158);
+  assert.equal(fingerprint.files.length, 171);
   assert.equal(config.seeds.length, 26);
-  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 96);
+  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   assert.equal(
     fingerprint.sha256,
-    "a52d271ac945ba6ebd5971f10ca94d256db981fac53979542cbed8377025e4d9",
+    "83d70d96f0b74618f59ef52327f2d3bf104a2895231e686f9557cb9e068a5b14",
   );
   assertReviewedSourceFingerprint(fingerprint, config.sourceReview);
 });
@@ -563,10 +752,10 @@ test("cache hashing responsiveness preserves exact prior source identity and int
   );
   assertReviewedSourceFingerprint(previous, config.sourceReview);
   assertReviewedSourceFingerprint(actual, config.sourceReview);
-  assert.equal(actual.files.length, 158);
+  assert.equal(actual.files.length, 171);
   assert.equal(featureOwnedFiles(root, config.scopeId).length, 123);
   assert.equal(config.seeds.length, 26);
-  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 96);
+  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   for (const unchanged of [
     "const CACHED_HASH_UPDATE_MAX_BYTES = 64 * 1024;",
     "const CACHED_HASH_TASK_MAX_BYTES = 4 * 1024 * 1024;",
@@ -632,9 +821,9 @@ test("unofficial immutable-asset routing preserves the exact prior source aggreg
   );
   assertReviewedSourceFingerprint(previous, config.sourceReview);
   assertReviewedSourceFingerprint(actual, config.sourceReview);
-  assert.equal(actual.files.length, 158);
+  assert.equal(actual.files.length, 171);
   assert.equal(config.seeds.length, 26);
-  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 96);
+  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   assert(
     !actual.files.includes("frontend/app/transformersWebGpuFeatureFlag.d.mts"),
   );
@@ -666,6 +855,15 @@ test("October merge and card controls retain the exact previous aggregate and fa
     readFileSync(resolve(root, file)),
   ]);
   for (const file of beforeOctoberRefresh.keys()) {
+    if (file === priorPrivateAppsWorkspace) {
+      assert(!existsSync(resolve(root, file)));
+      assert(
+        actual.files.includes(
+          "frontend/app/src/components_shared/LocalAppCards.svelte",
+        ),
+      );
+      continue;
+    }
     // Mixed upstream sources keep their anchored-only ownership; the four
     // dedicated presentation consumers remain subject to full import checks.
     const dedicated = file.startsWith("frontend/app/");
@@ -725,11 +923,11 @@ test("current setup persistence is a dedicated builtin-API consumer with an exac
   const owned = featureOwnedFiles(root, config.scopeId);
   const fingerprint = seedSourceFingerprint(root, config);
   assert.equal(owned.length, 123);
-  assert.equal(fingerprint.files.length, 158);
+  assert.equal(fingerprint.files.length, 171);
   assert.equal(config.seeds.length, 26);
   assert.equal(
     config.seeds.reduce((count, seed) => count + seed.evidence.length, 0),
-    96,
+    108,
   );
   assert(owned.includes(storePath));
   assert(
@@ -803,6 +1001,15 @@ test("card collection and bounded controls preserve the exact 5a36 source checkp
     readFileSync(resolve(root, file)),
   ]);
   for (const file of beforeCardCollection.keys()) {
+    if (file === priorPrivateAppsWorkspace) {
+      assert(!existsSync(resolve(root, file)));
+      assert(
+        actual.files.includes(
+          "frontend/app/src/components_shared/LocalAppCards.svelte",
+        ),
+      );
+      continue;
+    }
     assert(owned.includes(file));
     const source = readFileSync(resolve(root, file), "utf8");
     assertReviewedFeatureImports(source, names);
@@ -952,25 +1159,26 @@ test("source navigation preserves the exact committed 153-file checkpoint", () =
     ),
   );
   const actual = seedSourceFingerprint(root, config);
-  const files = actual.files.filter(
+  const sourceNavigation = beforeMainAppsFlowFingerprint(actual);
+  assert.equal(
+    sourceNavigation.sha256,
+    "a52d271ac945ba6ebd5971f10ca94d256db981fac53979542cbed8377025e4d9",
+  );
+  const files = sourceNavigation.files.filter(
     (file) => !sourceNavigationAdditions.includes(file),
   );
   assert.equal(files.length, 153);
   const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
   const previous = {
-    ...actual,
+    ...sourceNavigation,
     files,
     sha256: hash(
       JSON.stringify(
         files.map((file) => [
           file,
           beforeSourceNavigation.get(file) ??
-            hash(
-              readFileSync(resolve(root, file), "utf8").replaceAll(
-                "\r\n",
-                "\n",
-              ),
-            ),
+            beforeMainAppsFlow.get(file) ??
+            sourceHash(file),
         ]),
       ),
     ),
@@ -1024,10 +1232,7 @@ test("source navigation uses the real host codec and only the precisely reached 
     /\b(?:fetch|WebSocket|XMLHttpRequest|Worker|indexedDB|localStorage|sessionStorage)\s*\(/u,
   );
   const ui = readFileSync(
-    resolve(
-      root,
-      "frontend/app/src/components_shared/PrivateAppsWorkspace.svelte",
-    ),
+    resolve(root, "frontend/app/src/components_shared/LocalAppCards.svelte"),
     "utf8",
   );
   assert(ui.includes('import { navigate } from "@utils/navigation";'));
@@ -1454,7 +1659,7 @@ test("current auth uses original upstream paths without activating retained brow
   }
   for (const file of [
     "frontend/app/src/utils/nativeAppDelivery.ts",
-    "frontend/app/src/components_shared/PrivateAppsWorkspace.svelte",
+    "frontend/app/src/components_shared/LocalAppCards.svelte",
   ]) {
     assert.match(read(file), /clientOnlyApps/u);
     assert.doesNotMatch(read(file), /existingAccountOnly/u);
@@ -1594,10 +1799,10 @@ test("current upstream merge preserves scoped startup, model and private-app bou
     readFileSync(resolve(root, file), "utf8").replaceAll("\r\n", "\n");
   const hash = (text) => createHash("sha256").update(text).digest("hex");
   const fingerprint = seedSourceFingerprint(root, config);
-  assert.equal(fingerprint.files.length, 158);
+  assert.equal(fingerprint.files.length, 171);
   assert.equal(featureOwnedFiles(root, config.scopeId).length, 123);
   assert.equal(config.seeds.length, 26);
-  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 96);
+  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   // Preserve the committed merge identity after the separately reviewed Windows
   // path-only repair and the independently bound later-extension identities.
   const mergeFingerprint = {

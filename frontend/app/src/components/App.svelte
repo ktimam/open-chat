@@ -61,7 +61,7 @@
     import Profiler from "./Profiler.svelte";
     import Router from "./Router.svelte";
     import StartupFailure from "@shared_components/StartupFailure.svelte";
-    import PrivateAppsWorkspace from "@shared_components/PrivateAppsWorkspace.svelte";
+    import LocalAppCards from "@shared_components/LocalAppCards.svelte";
     import UpgradeBanner from "./UpgradeBanner.svelte";
     import Witch from "@shared_components/Witch.svelte";
     import InstallPrompt from "./home/InstallPrompt.svelte";
@@ -708,7 +708,7 @@
 
     <Head />
     {#if client.clientOnlyApps()}
-        <PrivateAppsWorkspace {client} />
+        <LocalAppCards {client} />
     {/if}
 
     <ActiveCall

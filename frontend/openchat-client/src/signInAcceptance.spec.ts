@@ -137,6 +137,7 @@ import {
 import { OpenChat } from "./openchat";
 import type { OpenChatConfig } from "./config";
 import {
+    chatsInitialisedStore,
     currentUserStore,
     identityStateStore,
     selectedAuthProviderStore,
@@ -378,6 +379,97 @@ describe("OpenChat original authentication pipeline", () => {
         expect(authenticated()).toHaveLength(0);
         gate.resolve(workerSuccess());
         await vi.waitFor(() => expect(authenticated()).toHaveLength(1));
+        expect(seam.providerSign).not.toHaveBeenCalled();
+    });
+    it.each(["error", "null", "undefined"] as const)(
+        "preserves a saved sign-in and reports a generic failure when the initial profile lookup rejects (%s)",
+        async (failure) => {
+            await seedIdentity();
+            const savedIdentity = new Map(seam.data);
+            const privateMarker = "synthetic-private-profile-error";
+            const error =
+                failure === "error"
+                    ? new Error(privateMarker)
+                    : failure === "null"
+                      ? null
+                      : undefined;
+            seam.stream.mockImplementationOnce((request) => {
+                expect(request.kind).toBe("getCurrentUser");
+                return new Stream<CreatedUser>((_resolve, reject) =>
+                    queueMicrotask(() => reject(error)),
+                );
+            });
+            build();
+
+            await vi.waitFor(() => expect(startupErrorStore.value).toContain("load your account"));
+            expect(startupErrorStore.value).toContain("Check your connection and reload");
+            expect(startupErrorStore.value).not.toContain(privateMarker);
+            expect(identityStateStore.value.kind).toBe("loading_user");
+            expect(chatsInitialisedStore.value).toBe(false);
+            expect(created).not.toHaveBeenCalled();
+            expect(seam.data).toEqual(savedIdentity);
+            expect(seam.storageRemove).not.toHaveBeenCalled();
+            expect(seam.authLogout).not.toHaveBeenCalled();
+            expect(seam.providerSign).not.toHaveBeenCalled();
+        },
+    );
+    it("ignores a stale profile rejection after the same account has signed in successfully", async () => {
+        await seedIdentity();
+        let rejectInitialProfile: ((error: unknown) => void) | undefined;
+        seam.stream.mockImplementationOnce((request) => {
+            expect(request.kind).toBe("getCurrentUser");
+            return new Stream<CreatedUser>((_resolve, reject) => {
+                rejectInitialProfile = reject;
+            });
+        });
+        build();
+        await vi.waitFor(() => expect(rejectInitialProfile).toBeTypeOf("function"));
+        const principal = client.AuthPrincipal;
+
+        await client.signInWithAndroidWebAuthn();
+        expect(client.AuthPrincipal).toBe(principal);
+        expect(authenticated()).toEqual([[profile]]);
+        expect(startupErrorStore.value).toBeUndefined();
+        const savedIdentity = new Map(seam.data);
+
+        rejectInitialProfile!(new Error("synthetic-stale-profile-error"));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(startupErrorStore.value).toBeUndefined();
+        expect(created).toHaveBeenCalledOnce();
+        expect(currentUserStore.value).toEqual(profile);
+        expect(seam.data).toEqual(savedIdentity);
+        expect(seam.storageRemove).not.toHaveBeenCalled();
+        expect(seam.authLogout).not.toHaveBeenCalled();
+    });
+    it("does not show a stale profile error or restore account state after an explicit logout", async () => {
+        await seedIdentity();
+        let rejectInitialProfile: ((error: unknown) => void) | undefined;
+        seam.stream.mockImplementationOnce((request) => {
+            expect(request.kind).toBe("getCurrentUser");
+            return new Stream<CreatedUser>((_resolve, reject) => {
+                rejectInitialProfile = reject;
+            });
+        });
+        build();
+        await vi.waitFor(() => expect(rejectInitialProfile).toBeTypeOf("function"));
+
+        await client.logout();
+        expect(seam.send).toHaveBeenCalledWith({ kind: "logout" });
+        // Original logout ends the session by navigation. jsdom does not navigate;
+        // the old profile continuation must leave that completed teardown untouched.
+        const identityAfterLogout = identityStateStore.value;
+        const callsAfterLogout = created.mock.calls.length;
+        const storageAfterLogout = new Map(seam.data);
+        const userAfterLogout = currentUserStore.value;
+        rejectInitialProfile!(new Error("synthetic-profile-error-after-logout"));
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(startupErrorStore.value).toBeUndefined();
+        expect(identityStateStore.value).toEqual(identityAfterLogout);
+        expect(created).toHaveBeenCalledTimes(callsAfterLogout);
+        expect(currentUserStore.value).toEqual(userAfterLogout);
+        expect(seam.data).toEqual(storageAfterLogout);
+        expect(seam.authLogout).toHaveBeenCalledOnce();
         expect(seam.providerSign).not.toHaveBeenCalled();
     });
     it("rejects an expired delegation through real IdentityStorage and starts anonymously", async () => {

@@ -3,7 +3,7 @@ import { flushSync, mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { currentUserIdStore, type OpenChat, type MessageContent } from "@client";
 import type { Writable } from "svelte/store";
-import PrivateAppsWorkspace from "./PrivateAppsWorkspace.svelte";
+import LocalAppCards from "./LocalAppCards.svelte";
 import { privateAppWorkspace as workspace } from "../utils/privateAppWorkspace";
 
 const calls = vi.hoisted(() => ({
@@ -232,7 +232,7 @@ beforeEach(async () => {
         existingAccountOnly: () => true,
         onLogout: vi.fn(),
     } as unknown as OpenChat;
-    mounted = mount(PrivateAppsWorkspace, { target, props: { client } });
+    mounted = mount(LocalAppCards, { target, props: { client } });
     flushSync();
     await settle();
     await propose();
@@ -243,7 +243,46 @@ afterEach(async () => {
     document.body.replaceChildren();
 });
 
-describe("private workspace declarative card and authoritative review", () => {
+describe("local app card modal and authoritative review", () => {
+    it("stays headless without an opened card and renders only status for an empty opened action", async () => {
+        workspace.discard();
+        workspace.close();
+        await settle();
+        expect(target.textContent).toBe("");
+        expect(workspace.state.account).toBe("synthetic-account");
+        expect(workspace.state.catalog).toBeDefined();
+
+        workspace.open();
+        await settle();
+        expect(target.querySelector('[role="dialog"]')).not.toBeNull();
+        expect(target.querySelector('[role="status"]')).not.toBeNull();
+        expect(preview()).toBeNull();
+        expect(target.querySelector("input, select, textarea")).toBeNull();
+        expect(button("Connect")).toBeUndefined();
+        expect(button("Refresh available apps")).toBeUndefined();
+        expect(calls.extract).toHaveBeenCalledOnce();
+        expect(calls.deliver).not.toHaveBeenCalled();
+    });
+
+    it("clears visible consent when the card modal closes and reopens", async () => {
+        button("Review full request").click();
+        await settle();
+        confirmation().click();
+        await settle();
+        expect(button("Send reviewed request").disabled).toBe(false);
+        const id = workspace.state.draft!.id;
+        window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+        await settle();
+        expect(workspace.state.open).toBe(false);
+        workspace.open();
+        await settle();
+        expect(workspace.state.draft!.id).toBe(id);
+        expect(confirmation().checked).toBe(false);
+        expect(button("Send reviewed request").disabled).toBe(true);
+        expect(calls.extract).toHaveBeenCalledOnce();
+        expect(calls.deliver).not.toHaveBeenCalled();
+    });
+
     it("returns to the exact source without losing edits, delivering, or rerunning inference", async () => {
         await workspace.propose(
             client,
@@ -448,20 +487,16 @@ describe("private workspace declarative card and authoritative review", () => {
         expect(calls.deliver).not.toHaveBeenCalled();
     });
 
-    it("forgets all retained local cards only on the explicit all-card action", async () => {
+    it("never exposes setup, file import, directory or all-card deletion in the card modal", async () => {
         await propose();
         expect(workspace.state.cards).toHaveLength(2);
-        const forget = [...target.querySelectorAll<HTMLButtonElement>("button")].find((node) =>
-            node.textContent?.includes("ALL saved private cards"),
-        )!;
-        expect(forget.disabled).toBe(false);
+        expect(target.querySelector('input[type="file"]')).toBeNull();
+        expect(target.querySelector(".setup-disclosure")).toBeNull();
+        expect(target.querySelector(".privacy-disclosure")).toBeNull();
+        expect(visibleText()).not.toContain("Forget");
+        expect(visibleText()).not.toContain("Refresh available apps");
+        expect(target.querySelector('[role="dialog"]')).not.toBeNull();
         expect(workspace.state.catalog).toBeDefined();
-        expect(calls.deliver).not.toHaveBeenCalled();
-        forget.click();
-        await settle();
-        expect(workspace.state.cards).toEqual([]);
-        expect(workspace.state.draft).toBeUndefined();
-        expect(workspace.state.catalog).toBeUndefined();
         expect(calls.deliver).not.toHaveBeenCalled();
     });
 
@@ -718,12 +753,10 @@ describe("private workspace declarative card and authoritative review", () => {
         expect(calls.extract).toHaveBeenCalledOnce();
     });
 
-    it("starts proposals with setup and advanced JSON collapsed without hiding the complete review", async () => {
-        const setup = target.querySelector<HTMLDetailsElement>("details.setup-disclosure")!;
+    it("starts proposals with no management page and advanced JSON collapsed without hiding the complete review", async () => {
         const advanced = target.querySelector<HTMLDetailsElement>("details.advanced-editor")!;
-        expect(setup.open).toBe(false);
+        expect(target.querySelector("details.setup-disclosure")).toBeNull();
         expect(advanced.open).toBe(false);
-        expect(setup.querySelector("summary")?.textContent).toContain("App setup");
         expect(advanced.querySelector("summary")?.textContent).toContain("complete payload");
         expect(numericFields()[0].value).toBe("42");
         expect(JSON.parse(editor().value)).toEqual({ value: 42, extra: "Also sent" });
@@ -741,8 +774,7 @@ describe("private workspace declarative card and authoritative review", () => {
         expect(cardText()).toContain("42");
         expect(cardText()).toContain("Also sent");
         expect(preview().closest("details")).toBeNull();
-        expect(target.querySelector(".privacy-disclosure")?.hasAttribute("open")).toBe(false);
-        expect(setup.open).toBe(false);
+        expect(target.querySelector(".privacy-disclosure")).toBeNull();
         expect(advanced.open).toBe(false);
         expect(calls.deliver).not.toHaveBeenCalled();
     });
@@ -754,14 +786,8 @@ describe("private workspace declarative card and authoritative review", () => {
                 (node) => node.textContent === "App-defined title",
             ),
         ).toHaveLength(1);
-        expect(
-            preview().compareDocumentPosition(target.querySelector(".privacy-disclosure")!) &
-                Node.DOCUMENT_POSITION_FOLLOWING,
-        ).toBeTruthy();
-        expect(
-            preview().compareDocumentPosition(target.querySelector(".setup-disclosure")!) &
-                Node.DOCUMENT_POSITION_FOLLOWING,
-        ).toBeTruthy();
+        expect(target.querySelector(".privacy-disclosure")).toBeNull();
+        expect(target.querySelector(".setup-disclosure")).toBeNull();
         expect(preview().textContent).toContain("App-defined value");
         expect(cardText()).toContain("Also sent");
         expect(editor().value).toContain('"extra": "Also sent"');
@@ -1041,18 +1067,18 @@ describe("private workspace declarative card and authoritative review", () => {
         button("Close").click();
         await settle();
         expect(workspace.state.open).toBe(false);
-        expect(
-            target.querySelector<HTMLElement>('[aria-label="Private app workspace"]')!.hidden,
-        ).toBe(true);
+        expect(target.querySelector<HTMLElement>('[aria-label="Local app cards"]')!.hidden).toBe(
+            true,
+        );
         expect(extraField().value).toBe(oversized);
         expect(workspace.state.draft!.approval).toBeUndefined();
         await workspace.confirm(firstApproval);
         expect(calls.deliver).not.toHaveBeenCalled();
         workspace.open();
         await settle();
-        expect(
-            target.querySelector<HTMLElement>('[aria-label="Private app workspace"]')!.hidden,
-        ).toBe(false);
+        expect(target.querySelector<HTMLElement>('[aria-label="Local app cards"]')!.hidden).toBe(
+            false,
+        );
         expect(extraField().value).toBe(oversized);
         expect(button("Review full request").disabled).toBe(true);
         expect(preview()).toBeNull();
@@ -1081,7 +1107,7 @@ describe("private workspace declarative card and authoritative review", () => {
                 await settle();
                 expect(workspace.state.account).toBe("another-synthetic-account");
                 expect(workspace.state.draft).toBeUndefined();
-                expect(target.querySelector('[aria-label="Private app workspace"]')).toBeNull();
+                expect(target.querySelector('[aria-label="Local app cards"]')).toBeNull();
                 await vi.waitFor(() => expect(workspace.state.setupLoading).toBe(false));
                 expect(workspace.importCatalog(catalog)).toBe(true);
                 expect(workspace.select("synthetic", "capture")).toBe(true);

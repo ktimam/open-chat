@@ -217,6 +217,27 @@ describe("full-client identity worker integration (synthetic only)", () => {
         expect(JSON.parse(result.error)).toMatchObject({ name: "TypeboxValidationError" });
     });
 
+    it("settles an offline current-user cache miss with an error after identity startup succeeds", async () => {
+        expect(await signIn()).toMatchObject({ response: { kind: "success" } });
+        const callsBeforeProfile = methods();
+        // The real UserIndexClient above has no cached current user. Going offline must
+        // not silently leave the real worker request pending or invent an anonymous user.
+        vi.stubGlobal("navigator", { onLine: false });
+        try {
+            const result = await send({ kind: "getCurrentUser" });
+            expect(result).toMatchObject({
+                kind: "worker_error",
+                requestKind: "getCurrentUser",
+            });
+            expect(JSON.parse(result.error)).toMatchObject({
+                message: "Current user is unavailable offline without a cached profile",
+            });
+            expect(methods()).toEqual(callsBeforeProfile);
+        } finally {
+            vi.stubGlobal("navigator", { onLine: true });
+        }
+    });
+
     it("does not create an account when the authentication principal is not linked", async () => {
         seam.transport!.replies.set("check_auth_principal_v2_msgpack", "NotFound");
         expect(await signIn()).toMatchObject({

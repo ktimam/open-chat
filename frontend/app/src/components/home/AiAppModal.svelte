@@ -7,7 +7,8 @@
     import { i18nKey } from "@src/i18n/i18n";
     import { toastStore } from "@src/stores/toast";
     import { homeSurfaceOpening, type SurfaceOpening } from "@utils/aiAppSurfaces";
-    import { mobileWidth, type AiAppRegistration, type OpenChat } from "@client";
+    import { mobileWidth, type OpenChat } from "@client";
+    import { isLocalAiApp, type AiAppPresentation } from "@utils/localAppDirectoryPresentation";
     import { getContext } from "svelte";
     import Web from "svelte-material-icons/Web.svelte";
     import Button from "../Button.svelte";
@@ -20,7 +21,7 @@
     const client = getContext<OpenChat>("client");
 
     interface Props {
-        app: AiAppRegistration;
+        app: AiAppPresentation;
         connected: boolean;
         onDismiss: () => void;
         // Open the pairing (link-code) modal for this app — the caller swaps the modals.
@@ -28,26 +29,49 @@
         // The user's key was removed — the caller refreshes its connected set.
         onDisconnected: () => void;
         // Embed a "sheet"-display surface (the in-window browser) — the caller swaps the modals.
-        onOpenSurface: (opening: SurfaceOpening) => void;
+        onOpenSurface?: (opening: SurfaceOpening) => void;
+        onDisconnect?: () => Promise<boolean>;
+        busy?: boolean;
+        connectionMessage?: string;
+        onCancelConnection?: () => void;
     }
 
-    let { app, connected, onDismiss, onConnect, onDisconnected, onOpenSurface }: Props = $props();
+    let {
+        app,
+        connected,
+        onDismiss,
+        onConnect,
+        onDisconnected,
+        onOpenSurface,
+        onDisconnect,
+        busy = false,
+        connectionMessage = "",
+        onCancelConnection,
+    }: Props = $props();
 
     // The app's own webpage, when its manifest declares a "home" surface.
-    let homeSurface = $derived(homeSurfaceOpening(app));
+    let homeSurface = $derived(isLocalAiApp(app) ? undefined : homeSurfaceOpening(app));
 
     function openHome() {
         if (homeSurface === undefined) return;
-        onOpenSurface(homeSurface);
+        onOpenSurface?.(homeSurface);
     }
 
     let disconnecting = $state(false);
 
     async function disconnect() {
-        if (disconnecting) return;
+        if (disconnecting || busy) return;
         disconnecting = true;
-        const ok = await client.removeMyAiAppKey(app.id);
-        disconnecting = false;
+        let ok = false;
+        try {
+            ok = isLocalAiApp(app)
+                ? (await onDisconnect?.()) === true
+                : await client.removeMyAiAppKey(app.id);
+        } catch {
+            ok = false;
+        } finally {
+            disconnecting = false;
+        }
         if (ok) {
             toastStore.showSuccessToast(i18nKey("aiApps.disconnected"));
             onDisconnected();
@@ -85,19 +109,37 @@
                     </div>
                 {/if}
 
-                <div class="actions">
-                    <span class="heading">
-                        <Translatable resourceKey={i18nKey("aiApps.actionsHeading")} />
-                    </span>
-                    {#each app.manifest.actions as action (action.name)}
-                        <div class="action">
-                            <span class="action-name">{action.name}</span>
-                            {#if action.description.length > 0}
-                                <span class="desc">{action.description}</span>
-                            {/if}
-                        </div>
-                    {/each}
-                </div>
+                {#if !isLocalAiApp(app) || app.actionsKnown}<div class="actions">
+                        <span class="heading">
+                            <Translatable resourceKey={i18nKey("aiApps.actionsHeading")} />
+                        </span>
+                        {#each app.manifest.actions as action (action.name)}
+                            <div class="action">
+                                <span class="action-name">{action.name}</span>
+                                {#if action.description.length > 0}
+                                    <span class="desc">{action.description}</span>
+                                {/if}
+                            </div>
+                        {/each}
+                    </div>{/if}
+
+                {#if isLocalAiApp(app)}
+                    {#if app.setupOrigin}
+                        <p class="desc">
+                            Connect opens {app.setupOrigin} to choose and approve your app setup. No chat
+                            messages or draft fields are sent when connecting.
+                        </p>
+                    {:else}
+                        <p class="desc">
+                            This connected app is not in the current directory. Disconnect remains
+                            available.
+                        </p>
+                    {/if}
+                    {#if app.status}<p class="desc" role="status">{app.status}</p>{/if}
+                    {#if connectionMessage}<p class="desc" role="status">
+                            {connectionMessage}
+                        </p>{/if}
+                {/if}
 
                 <p class="desc">
                     <Translatable resourceKey={i18nKey("aiApps.enableHint")} />
@@ -106,11 +148,12 @@
         {/snippet}
         {#snippet footer()}
             <ButtonGroup>
-                {#if app.manifest.perUserKeys}
+                {#if isLocalAiApp(app) || app.manifest.perUserKeys}
                     {#if connected}
                         <Button
                             danger
                             loading={disconnecting}
+                            disabled={busy}
                             small={!$mobileWidth}
                             tiny={$mobileWidth}
                             onClick={disconnect}
@@ -118,11 +161,19 @@
                             <Translatable resourceKey={i18nKey("aiApps.disconnect")} />
                         </Button>
                     {/if}
-                    <Button small={!$mobileWidth} tiny={$mobileWidth} onClick={onConnect}>
+                    <Button
+                        small={!$mobileWidth}
+                        tiny={$mobileWidth}
+                        onClick={onConnect}
+                        disabled={busy || (isLocalAiApp(app) && !app.setupOrigin)}
+                    >
                         <Translatable
                             resourceKey={i18nKey(connected ? "aiApps.reconnect" : "aiApps.connect")}
                         />
                     </Button>
+                    {#if isLocalAiApp(app) && onCancelConnection}
+                        <Button secondary onClick={onCancelConnection}>Cancel connection</Button>
+                    {/if}
                 {:else}
                     <Button secondary small={!$mobileWidth} tiny={$mobileWidth} onClick={onDismiss}>
                         <Translatable resourceKey={i18nKey("close")} />

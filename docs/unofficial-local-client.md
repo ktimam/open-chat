@@ -51,25 +51,27 @@ regression. The local-only association asset canister under
 `tools/android-passkey-association` tests hosting/response behavior, not public
 HTTPS reachability or Google provider authorization.
 
-## Private apps
+## Connect apps and review local cards
 
-Open **Private apps** from the classic (v1) main menu or profile's apps section.
-In the responsive v2 interface, use your profile's **App settings → Private apps**.
-There is no floating launcher over the chat. These entries open the same private
-workspace; they do not run inference or send app data.
+Open **Apps**, then **AI Apps** in the normal Explore interface. In the responsive
+v2 interface, the entry is **App settings → Apps**. The profile's connected-apps
+view uses the same app cards and offers **Discover apps**. There is no separate
+Private apps management page or floating launcher over the chat. Opening the list
+does not run inference or send chat data.
 
-1. Open **Private apps**. Apps from the operator-configured public directory appear
+1. Open **Apps → AI Apps**. Apps from the operator-configured public directory appear
    automatically; no catalog or processor files need to be uploaded.
-2. Choose **Connect** and continue to the app's page. Approve the exact requester
-   origin and choose the app account and destination there. Only app setup returns
+2. Open an app's card, choose **Connect** in its details, and continue to the app's page.
+   Approve the exact requester origin and choose the app account and destination there.
+   Only app setup returns
    to OpenChat; discovery and connection send no messages, drafts or credentials.
    Enable the connected app in the intended chat. New apps are never auto-enabled.
 3. Select an available local model, or a supported local-reader mode, and use
    **Propose** on one text or image message. Both UIs share this pipeline; app
    proposals do not currently accept voice messages.
    App prompts, labels, rules, extraction and normalization remain app-owned.
-4. Edit the local draft using its app-labelled fields. Setup controls are collapsed
-   once there is a draft; **Advanced: complete payload (JSON)** remains available
+4. Edit the local card using its app-labelled fields. This panel contains card review,
+   not app setup; **Advanced: complete payload (JSON)** remains available
    for structured fields and repairs. Nothing is posted to the chat or sent to the
    app for card verification. Every edit invalidates the previous approval.
 5. Confirm the full request, including its destination and recipient review label.
@@ -88,16 +90,25 @@ The operator supplies `--app-directory <HTTPS-or-loopback-public-URL>` to the lo
 web startup, optimized web build or APK build command. The directory lists bounded,
 same-publisher catalog/processor URLs, byte lengths, SHA-256 hashes and Connect URLs.
 It must contain no private account configuration. Hashes verify exact artifacts,
-not publisher honesty. The APK needs one update to add this directory capability;
-subsequent compatible app additions/updates at that URL do not require rebuilding it.
+not publisher honesty. Clients supporting this directory can discover compatible
+app additions/updates at that URL without rebuilding the APK.
 Changing the publisher origin or client-supported protocol still requires review.
 
-Opening Apps refreshes the public directory with no cookies or referrer. Verified
-compatible updates are atomic; failures retain the last working setup. Changes to
-private recipes or trust/destination require Reconnect. Updates wait while a draft
-or processing operation is active. Publisher removal disables that app's proposals
-and chat opt-ins while retaining its local setup for recovery. File imports remain
-under advanced recovery controls, not the normal connection workflow.
+Opening Apps refreshes the public directory with no cookies or referrer. A busy
+processing operation defers the refresh. With saved cards retained, the list can
+refresh, but automatic recipe changes wait; each card keeps its frozen configuration.
+Explicit Connect can still establish or change a connection without deleting cards.
+Verified compatible updates are atomic; failures retain the last working setup.
+Private recipe or trust/destination changes require an explicit connection. When
+updates can be applied, publisher removal disables that app's proposals and chat
+opt-ins while retaining its setup for recovery. Manual file-import controls are not
+part of the normal Apps interface.
+
+**Saved cards (N)** in Apps opens the card-only panel, including cards whose app is
+disconnected. It restores neither sending consent nor a handoff. **Disconnect** in
+app details removes that app's connection and chat opt-ins but retains its cards.
+Those cards stay inspect-only until a matching connection is restored and reviewed;
+a changed connection cannot silently retarget their fields or destination.
 
 The local-test APK uses a separate ten-minute setup bridge. A one-use random launch
 fragment is immediately removed from the browser URL and authenticates the initial
@@ -134,7 +145,7 @@ Discarding the draft or changing account cancels the pending native handoff. Dat
 already handed to the receiving app cannot be recalled. If the outcome is uncertain,
 check the app before choosing the explicitly confirmed retry with the same import
 ID. There is no automatic retry or automatic browser/clipboard action.
-**Close** only hides the workspace; use **Cancel / discard local draft** to cancel
+**Close** only hides the card panel; use **Cancel / discard local draft** to cancel
 pending work.
 
 If the receiving page closes or reloads after **Received** but before saving,
@@ -180,7 +191,7 @@ optional audio support is enabled. This does not add voice input to app proposal
 
 ### Remembered setup and locally saved private cards
 
-Connected or explicitly imported app catalogs, the selected app/action, verified processors and
+Connected app catalogs, the selected app/action, verified processors and
 enabled chats are remembered on the same device for the same signed-in account
 and configured backend. This includes private app-owned setup/context, such as
 user-defined labels. A separate IndexedDB store is used; nothing is synchronized
@@ -191,19 +202,14 @@ Restore revalidates catalog declarations and processor hashes without executing
 app code, running a model or contacting an app. Chat opt-ins bind to the exact
 catalog, not only its reusable app ID. Explicit replacement clears the affected
 opt-ins; directory updates preserve unaffected apps and approved compatible setup.
-Setup controls wait for restoration; a failed read/write is shown rather than
+Connection controls wait for restoration; a failed read/write is shown rather than
 reported as saved. Invalid or future-version records are not silently accepted.
-
-**Forget this account's app setup and ALL saved private cards on this device**
-removes catalog, processor, selection, chat opt-in content and all locally saved
-private cards and their encryption key. A minimal account/backend invalidation marker
-remains to reject writes started by an older tab before Forget. Another tab may
-still hold its previous setup in memory, but cannot silently save that stale copy
-over the removal. Clearing browser/app storage also removes these markers.
 
 Up to eight private cards are saved encrypted on this device, separately from setup,
 scoped to their OpenChat account/backend. Closing the panel does not delete them.
-Discard removes only the selected card; Forget removes all saved cards and setup.
+**Discard local draft** removes only the selected card. Disconnecting its app does
+not discard it; use **Saved cards (N)** to inspect retained cards. The former setup
+import and account-wide Forget buttons are not present in the normal Apps flow.
 Source images/chat history and approval/transport tokens are not persisted.
 Restoration requires fresh review and never sends automatically. Attempted deliveries
 retain their original fields, destination and import ID for explicit retry.
@@ -232,9 +238,10 @@ model or processor again or contact the receiving app.
 Apps own the declarations and meanings. OpenChat implements only the bounded generic
 editor contract; it does not interpret app-specific Types, dates or business rules.
 The receiver sees only the final reviewed payload, not the sender's editing history.
-Directory-managed compatible processor/catalog updates are checked automatically
-when Apps opens; private setup that needs regeneration asks for Reconnect. Manually
-imported recovery setups remain explicit and are not silently reassigned a publisher.
+Directory-managed compatible processor/catalog updates are checked when Apps opens,
+subject to the saved-card and processing deferrals above. Private setup that needs
+regeneration asks for an explicit connection. Previously imported setups are not
+silently reassigned a publisher; this does not restore the removed file-import UI.
 
 ## Boundaries and developer checks
 
@@ -552,8 +559,8 @@ Independent artifact checks passed. They bind the compact app-defined card UI,
 encrypted eight-card collection, source references and frozen app definitions to
 the packaged bytes. Official service configuration, disabled OTA, original native
 authentication code and unchanged pinned model assets were verified. No OpenChat
-backend deployment was performed. APK020 supersedes APK019 as the local-test
-artifact candidate, not as a runtime-qualified release.
+backend deployment was performed. At that checkpoint, APK020 superseded APK019 as
+the local-test artifact candidate, not as a runtime-qualified release.
 
 The web receipts are
 `card-collection-release-20261002/web-v1-independent-verification.json` and
@@ -611,3 +618,46 @@ static artifacts nor installed-file identity prove visual or interaction parity
 with the earlier app cards. The RP/association declaration does not prove public
 authorization of this fork package. Physical-phone testing remains deferred;
 public-release and general voice-accuracy acceptance are not claimed.
+
+### October 2 main Apps web and APK022 checkpoint
+
+The restored main Apps flow is built from commit
+`7a95466f1dd34220b4e8fe78f0210f2a53810d46` plus the explicitly reviewed working-tree
+overlay and deletions, not from a new clean commit. The shared feature fingerprint is
+`83d70d96f0b74618f59ef52327f2d3bf104a2895231e686f9557cb9e068a5b14`.
+The source includes upstream through `944efe4a7270d42f62dc3bfa5bad853b237d4b69`;
+newer upstream commits have not been integrated into this checkpoint.
+
+The separate management page is removed. Both interfaces reuse the normal AI Apps
+cards and app details for Connect; the local card panel retains editing, source
+navigation, encryption and explicit delivery review. App-specific definitions stay
+app-owned. No OpenChat canister change or deployment, model prompt/weight change,
+authentication bridge or OTA update is introduced by this flow.
+
+Independent verification passed for the optimized v2 web build and both APK022
+architectures against the same frozen source inventory. The web build is
+`2.0.0-localtest.97e550caa950a73371bc695846e50cf0`; its final receipt is
+`main-ui-web-20261002/web-v2-independent-verification-v4.json` under the project
+temporary directory. The APK receipts are under `main-ui-apk-022/artifacts`.
+These checks bind source, official service configuration, original authentication,
+disabled OTA, package/signing identity and packaged assets. This checkpoint does
+not rebuild v1 web or inherit its earlier runtime acceptance. The local-test APK
+permits cleartext only to its localhost/127.0.0.1 development endpoints; remote
+cleartext remains blocked and the production policy is unchanged.
+
+The emulator's installed x86 APK matches SHA256
+`9b2ab2ffc968b80092219b8d9ae7ee3694862cba8f7e9ba5e02dca9f1014f45d`.
+A normal UI test followed App settings → Apps → AI Apps, observed the automatically
+listed IOU card and its original details/Connect control, and confirmed the removed
+management UI was absent. Pressing Connect left OpenChat, but the observed foreground
+was the Launcher, not a browser. This is not successful setup handoff or connection
+completion. The bounded UI receipt is
+`emulator-public-ui-20261002/runner-v10/observations/apk022-main-apps-r1/result.json`.
+
+The web preview serves the verified version and returns HTTP 200 for normal
+communities navigation; current normal-browser runtime acceptance is still pending.
+APK connection completion, familiar card editing/layout, recovery/source navigation,
+encrypted app review/save/retry, provider restoration and model inference remain
+separate current-artifact checks. ARM has static verification only; physical-phone
+testing remains deferred. Neither this UI check nor the packaging proofs waive the
+recorded CI/advisory gates or establish public-release readiness.

@@ -180,12 +180,13 @@ describe("private app workspace boundaries", () => {
         expect(deps.extract).not.toHaveBeenCalled();
     });
 
-    it("explains setup without fetching any catalog or starting inference", async () => {
+    it("directs missing setup to AI Apps without opening a management panel or starting inference", async () => {
         const { workspace, deps } = fixture();
         workspace.clear();
         await expect(propose(workspace)).resolves.toBe("retryable");
-        expect(workspace.state.open).toBe(true);
-        expect(workspace.state.message).toContain("Nothing is fetched automatically");
+        expect(workspace.state.open).toBe(false);
+        expect(workspace.state.message).toContain("Connect an app from AI Apps");
+        expect(workspace.state.message).toContain("Nothing was sent");
         expect(deps.extract).not.toHaveBeenCalled();
         expect(deps.deliver).not.toHaveBeenCalled();
     });

@@ -1,7 +1,8 @@
 <script lang="ts">
     import { currentUserIdStore, type ChatIdentifier } from "@client";
     import { chatIdentifierToString } from "@shared";
-    import { privateAppWorkspace, privateAppWorkspaceState } from "../utils/privateAppWorkspace";
+    import { navigateToMainApps } from "../utils/mainAppsNavigation";
+    import { privateAppWorkspaceState } from "../utils/privateAppWorkspace";
     import { localAppChatConfiguration, localAppChatRevision } from "../utils/localAppChatState";
     let { chatId }: { chatId: ChatIdentifier } = $props();
     const chatKey = $derived(chatIdentifierToString(chatId));
@@ -17,15 +18,13 @@
     <h3>Private apps for this chat</h3>
     <p>
         These are your local settings only, not group-wide permissions. Suggestions inspect new
-        message text locally using the imported app’s declared keywords; images are offered only for
-        image-capable actions. Nothing is sent to an app until you review and confirm a handoff.
+        message text locally using each connected app’s declared keywords; images are offered only
+        for image-capable actions. Nothing is sent to an app until you review and confirm a handoff.
     </p>
-    <button type="button" onclick={() => privateAppWorkspace.open()}
-        >Import or manage private apps</button
-    >
+    <button type="button" onclick={navigateToMainApps}>Explore or connect apps</button>
     {#if $privateAppWorkspaceState.setupLoading}
         <p role="status">Loading saved app setup…</p>
-    {:else if apps.length === 0}<p>No private app catalog imported for this account.</p>{/if}
+    {:else if apps.length === 0}<p>No apps connected for this account.</p>{/if}
     {#if $privateAppWorkspaceState.setupStatus}<p role="status">
             {$privateAppWorkspaceState.setupStatus}
         </p>{/if}
@@ -50,8 +49,9 @@
     {/each}
     <p class="small">
         Off by default. Enabled chats are remembered for this account on this device, not shared
-        with other accounts. Replacing or forgetting app setup clears these opt-ins. The global AI
-        suggestions setting and chat mute still apply. Drafts are not saved across restarts.
+        with other accounts. Connect or disconnect apps from Explore. The global AI suggestions
+        setting and chat mute still apply. Private cards are kept separately in encrypted local
+        storage and are not sent until you confirm them.
     </p>
 </section>
 

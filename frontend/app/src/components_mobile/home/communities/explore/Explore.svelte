@@ -1,5 +1,6 @@
 <script lang="ts">
-    import { privateAppWorkspace } from "@utils/privateAppWorkspace";
+    import LocalAppDirectory from "../../../../components_shared/LocalAppDirectory.svelte";
+    import { isMainAppsRoute } from "@utils/mainAppsNavigation";
     import { disableRestrictedContent } from "@src/utils/features";
     import { communityPreviewState } from "@src/utils/preview.svelte";
     import {
@@ -25,6 +26,7 @@
         identityStateStore,
         offlineStore,
         publish,
+        routeStore,
         showUnpublishedBots,
         type AiAppRegistration,
         type BotMatch,
@@ -168,7 +170,6 @@
     function searchAiApps(reset = false) {
         if (client.clientOnlyApps()) {
             searching = false;
-            privateAppWorkspace.open();
             return;
         }
         if (reset) {
@@ -267,10 +268,6 @@
     });
 
     function setView(v: View) {
-        if (v === "aiApps" && client.clientOnlyApps()) {
-            privateAppWorkspace.open();
-            return;
-        }
         transition(["fade"], () => {
             view = v;
         });
@@ -289,8 +286,24 @@
             searchState.scrollPos = scrollableElement.scrollTop;
         }
     }
-    let more = $derived(searchState.total > searchState.results.length);
-    let loading = $derived(searching && searchState.results.length === 0);
+    let more = $derived(
+        !(view === "aiApps" && client.clientOnlyApps()) &&
+            searchState.total > searchState.results.length,
+    );
+    let loading = $derived(
+        !(view === "aiApps" && client.clientOnlyApps()) &&
+            searching &&
+            searchState.results.length === 0,
+    );
+
+    $effect(() => {
+        $routeStore;
+        if (isMainAppsRoute(location.search))
+            untrack(() => {
+                view = "aiApps";
+                searchFor("aiApps", true);
+            });
+    });
 
     function goToCommunity(community: CommunityMatch) {
         communityPreviewState.setOrigin(community.id.communityId, "/communities");
@@ -450,7 +463,9 @@
         direction={"vertical"}
         padding={["zero", "lg", "md", "lg"]}
     >
-        {#if loading}
+        {#if view === "aiApps" && client.clientOnlyApps()}
+            <LocalAppDirectory mobile searchTerm={aiAppSearchState.term} />
+        {:else if loading}
             <FancyLoader size={"4rem"} />
         {:else if searchState.results.length === 0}
             <Container

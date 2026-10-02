@@ -8,7 +8,7 @@
     import { i18nKey } from "@src/i18n/i18n";
     import { toastStore } from "@src/stores/toast";
     import { anonUserStore, type AiAppRegistration, type OpenChat } from "@client";
-    import { privateAppWorkspace } from "@utils/privateAppWorkspace";
+    import LocalAppDirectory from "../../../components_shared/LocalAppDirectory.svelte";
     import { getContext, onMount } from "svelte";
     import CheckDecagram from "svelte-material-icons/CheckDecagram.svelte";
     import Upload from "svelte-material-icons/Upload.svelte";
@@ -60,7 +60,13 @@
 
 {#if client.clientOnlyApps()}
     {#if !$anonUserStore}
-        <Button onClick={() => privateAppWorkspace.open()}>Private apps</Button>
+        <CollapsibleCard
+            onToggle={myAppsSectionOpen.toggle}
+            open={$myAppsSectionOpen}
+            headerText={i18nKey("aiApps.myApps")}
+        >
+            <LocalAppDirectory connectedOnly />
+        </CollapsibleCard>
     {/if}
 {:else if apps.length > 0}
     <CollapsibleCard

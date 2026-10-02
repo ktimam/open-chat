@@ -809,6 +809,7 @@ export class OpenChat {
     #getBtcAddressPromise: Promise<string> | undefined = undefined;
     #getOneSecAddressPromise: Promise<string> | undefined = undefined;
     #evmContractAddresses: EvmContractAddress[] = [];
+    #authenticationLoadSequence = 0;
 
     currentAirdropChannel: AirdropChannelDetails | undefined = undefined;
 
@@ -1004,6 +1005,7 @@ export class OpenChat {
         authProvider: AuthProvider | undefined,
         registering: boolean = false,
     ) {
+        const loadSequence = ++this.#authenticationLoadSequence;
         startupErrorStore.set(undefined);
         const anon = identityKeyAndChain === undefined;
         const identity = anon
@@ -1036,6 +1038,7 @@ export class OpenChat {
                 : undefined,
             isIIPrincipal: authProvider == AuthProvider.II,
         });
+        if (loadSequence !== this.#authenticationLoadSequence) return;
 
         this.#startRegistryPoller();
 
@@ -1062,6 +1065,7 @@ export class OpenChat {
                 this.#startSession(ocIdentity.ocIdentityPrincipal, ocIdentity.ocIdentityExpiry);
             }
 
+            let currentUserLoadFailed = false;
             createdUser = await this.getCurrentUser()
                 .then((user) => {
                     switch (user.kind) {
@@ -1073,13 +1077,22 @@ export class OpenChat {
                     }
                 })
                 .catch((e) => {
-                    if (e.code === 403) {
+                    currentUserLoadFailed = true;
+                    if (loadSequence !== this.#authenticationLoadSequence) return undefined;
+                    if (e?.code === 403) {
                         // This happens locally if you run a new instance of the IC and have an identity based on the
                         // previous version's root key in the cache
                         this.logout();
+                    } else {
+                        // A failed lookup is not an anonymous account. Keep the saved sign-in
+                        // intact and let the user retry, without exposing backend error data.
+                        startupErrorStore.set(
+                            "OpenChat could not load your account. Check your connection and reload. Your saved sign-in has not been removed.",
+                        );
                     }
                     return undefined;
                 });
+            if (currentUserLoadFailed || loadSequence !== this.#authenticationLoadSequence) return;
         }
 
         this.onCreatedUser(createdUser ?? anonymousUser());
@@ -1580,6 +1593,7 @@ export class OpenChat {
     // its pre-logout window removing the push token, which then failed with "Worker has no agent"
     // and left the Android token registered to a signed-out user.
     logout(): Promise<void> {
+        if (this.#logoutPromise === undefined) this.#authenticationLoadSequence++;
         this.#logoutPromise ??= this.#doLogout();
         return this.#logoutPromise;
     }

@@ -7,8 +7,8 @@
         platformOperatorStore,
         publish,
     } from "@client";
+    import { navigateToMainApps } from "@utils/mainAppsNavigation";
     import { navigate } from "@utils/navigation";
-    import { privateAppWorkspace } from "@utils/privateAppWorkspace";
     import { getContext } from "svelte";
     import AccountSettings from "svelte-material-icons/AccountSettingsOutline.svelte";
     import Apps from "svelte-material-icons/Apps.svelte";
@@ -53,11 +53,11 @@
             {/snippet}
         </MenuItem>
         {#if client.clientOnlyApps()}
-            <MenuItem onclick={() => privateAppWorkspace.open()}>
+            <MenuItem onclick={navigateToMainApps}>
                 {#snippet icon()}
                     <Apps size={$iconSize} color={"var(--icon-inverted-txt)"} />
                 {/snippet}
-                {#snippet text()}Private apps{/snippet}
+                {#snippet text()}Apps{/snippet}
             </MenuItem>
         {/if}
         <MenuItem onclick={() => publish("upgrade")}>
@@ -68,7 +68,8 @@
                 <Translatable
                     resourceKey={i18nKey(
                         $canExtendDiamondStore ? "upgrade.extend" : "upgrade.diamond",
-                    )} />
+                    )}
+                />
             {/snippet}
         </MenuItem>
         <MenuItem separator />

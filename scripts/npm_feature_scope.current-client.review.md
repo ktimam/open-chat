@@ -685,3 +685,57 @@ with no failures, skips or cancellations. The source gate reports the aggregate
 above with advisory acceptance explicitly false; all four changed review files
 pass the existing formatter. This checkpoint records source ownership only,
 not advisory, browser, APK, provider, model-quality or release acceptance.
+
+## October 2 main Apps flow, retained cards and startup completion
+
+This superseding source-only checkpoint binds committed fork
+`7a95466f1dd34220b4e8fe78f0210f2a53810d46` plus the frozen main Apps/card-host
+and startup-completion working tree. Its aggregate is
+`83d70d96f0b74618f59ef52327f2d3bf104a2895231e686f9557cb9e068a5b14`:
+**171 fingerprinted files, 123 dedicated owners, 108 exact anchors and the
+unchanged 26 npm roots**.
+
+The technical `PrivateAppsWorkspace.svelte` management page is removed. The
+replacement `LocalAppCards.svelte` is a card-only host: it retains saved-card
+selection, schema-driven fields, review/approval, retry and guarded source
+navigation, but exposes no setup import, directory management or Forget panel.
+Desktop and mobile App roots mount that host only for the unofficial client.
+The normal Apps menu/settings entries now route to the existing Explore Apps
+surface. `LocalAppDirectory.svelte` adapts public and connected local entries to
+the existing desktop/mobile app cards, modal and sheet; both Explore variants,
+both My Apps variants and their reached renderers are exact anchored mixed UI.
+The app-owned presentation helper is the only new selector-matched dedicated
+owner. A visible Saved cards control reopens retained encrypted cards, including
+disconnected or legacy cards, without model inference. Navigation invalidates
+review and closes the host without deleting cards; missing proposal selection
+routes to Apps rather than opening an empty technical panel.
+
+The workspace changes preserve the explicit approval boundary and encrypted
+device-local collection. Connecting or disconnecting setup does not discard
+cards, restore consent or send a request. Source references remain host-only and
+do not enter delivery DTOs. Existing per-chat enablement remains the selectable
+action path. No OpenChat backend/canister, app credential, model asset, model
+prompt, package manifest or lockfile changes are included by this receipt.
+
+The startup portion is narrow. `getCurrentUser` now rejects a cache miss while
+offline instead of leaving its stream unresolved. The existing IndexedDB
+connection manager reports a fixed cache-unavailable error after a bounded open,
+does not delete the database, avoids retry flooding while an uncancellable open
+is pending, closes a late stale handle, and preserves version-change cleanup.
+These reached core files are fingerprinted by exact anchors only; this does not
+expand their unrelated import ownership or constitute a broader core audit.
+
+Relative to the preceding source-navigation checkpoint, fourteen paths are newly
+reached, the deleted workspace path is removed and ten prior inputs have new
+bytes. The regression independently reconstructs the prior **158-file**
+`a52d271ac945ba6ebd5971f10ca94d256db981fac53979542cbed8377025e4d9`
+aggregate using its committed blob identities. All earlier 153/151/148-file
+proofs and historical records remain unchanged. Selectors, direct-import
+denials, dependency roots, exclusions and advisory decisions are not relaxed.
+
+Local evidence is separate from the source receipt: the focused seed-review
+suite passes **77/77**; the supplied combined feature suites pass **418/418**;
+the Svelte check reports zero errors (572 existing warnings across 211 files),
+and the OpenChat agent TypeScript check passes. These are local checks only.
+This checkpoint does not claim live browser, phone, APK/provider, hosted,
+deployment or release acceptance.

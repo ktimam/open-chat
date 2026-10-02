@@ -166,7 +166,10 @@ android {
         )
     }
     
-    if (unofficialLocalTest) sourceSets.getByName("main").manifest.srcFile("src/localTest/AndroidManifest.xml")
+    if (unofficialLocalTest) {
+        sourceSets.getByName("main").manifest.srcFile("src/localTest/AndroidManifest.xml")
+        sourceSets.getByName("main").res.srcDir("src/localTest/res")
+    }
 
     signingConfigs {
         if (releaseKeystore != null) {

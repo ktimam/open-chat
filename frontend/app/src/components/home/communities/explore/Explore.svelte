@@ -1,5 +1,6 @@
 <script lang="ts">
-    import { privateAppWorkspace } from "@utils/privateAppWorkspace";
+    import LocalAppDirectory from "../../../../components_shared/LocalAppDirectory.svelte";
+    import { isMainAppsRoute } from "@utils/mainAppsNavigation";
     import type { AiAppRegistration, OpenChat } from "@client";
     import {
         anonUserStore,
@@ -11,6 +12,7 @@
         mobileWidth,
         offlineStore,
         publish,
+        routeStore,
         ScreenWidth,
         screenWidth,
     } from "@client";
@@ -58,10 +60,6 @@
     let searchTerm = $state(communitySearchState.term);
 
     function setView(v: View) {
-        if (v === "aiApps" && client.clientOnlyApps()) {
-            privateAppWorkspace.open();
-            return;
-        }
         view = v;
         searchTerm = v === "aiApps" ? aiAppSearchState.term : communitySearchState.term;
         if (v === "aiApps") {
@@ -84,7 +82,6 @@
     function searchAiApps(reset = false) {
         if (client.clientOnlyApps()) {
             searching = false;
-            privateAppWorkspace.open();
             return;
         }
         searching = true;
@@ -210,16 +207,24 @@
     }
     let pageSize = $derived(calculatePageSize($screenWidth));
     let more = $derived(
-        view === "aiApps"
-            ? aiAppSearchState.total > aiAppSearchState.results.length
-            : communitySearchState.total > communitySearchState.results.length,
+        view === "aiApps" && client.clientOnlyApps()
+            ? false
+            : view === "aiApps"
+              ? aiAppSearchState.total > aiAppSearchState.results.length
+              : communitySearchState.total > communitySearchState.results.length,
     );
     let loading = $derived(
-        searching &&
+        !(view === "aiApps" && client.clientOnlyApps()) &&
+            searching &&
             (view === "aiApps"
                 ? aiAppSearchState.results.length === 0
                 : communitySearchState.results.length === 0),
     );
+
+    $effect(() => {
+        $routeStore;
+        if (isMainAppsRoute(location.search)) untrack(() => setView("aiApps"));
+    });
 
     $effect(() => {
         if (
@@ -318,14 +323,16 @@
         <div
             class="communities"
             class:loading
-            class:empty={communitySearchState.results.length === 0}
+            class:empty={view !== "aiApps" && communitySearchState.results.length === 0}
         >
             {#if loading}
                 <div class="loading">
                     <FancyLoader />
                 </div>
             {:else if view === "aiApps"}
-                {#if aiAppSearchState.results.length === 0}
+                {#if client.clientOnlyApps()}
+                    <LocalAppDirectory {searchTerm} />
+                {:else if aiAppSearchState.results.length === 0}
                     {#if $offlineStore}
                         <div class="no-match">
                             <CloudOffOutline size={"1.8em"} color={"var(--txt-light)"} />

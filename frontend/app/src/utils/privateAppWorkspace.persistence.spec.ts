@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import type { ChatIdentifier, MessageContent, OpenChat } from "@client";
+import { chatIdentifierToString } from "@shared/utils/chat";
 import { PrivateAppWorkspace } from "./privateAppWorkspace";
 import { parseLocalAppCatalog } from "./localAppCatalog";
 import {
@@ -349,8 +350,6 @@ describe("private workspace encrypted-card lifecycle", () => {
     it("retains two message-linked editors across reload and resumes without inference or sending", async () => {
         const first = fixture();
         await start(first.workspace);
-        const { chatIdentifierToString } =
-            await vi.importActual<typeof import("@shared")>("@shared");
         const directChat = { kind: "direct_chat", userId: "2vxsx-fae" } satisfies ChatIdentifier;
         const sourceA = {
             chatKey: chatIdentifierToString(directChat),
@@ -420,8 +419,6 @@ describe("private workspace encrypted-card lifecycle", () => {
     it("backfills legacy source navigation metadata without inference or consent", async () => {
         const first = fixture();
         await start(first.workspace);
-        const { chatIdentifierToString } =
-            await vi.importActual<typeof import("@shared")>("@shared");
         const directChat = { kind: "direct_chat", userId: "2vxsx-fae" } satisfies ChatIdentifier;
         const legacySource = {
             chatKey: chatIdentifierToString(directChat),
@@ -472,8 +469,6 @@ describe("private workspace encrypted-card lifecycle", () => {
     it("does not merge known direct and group kinds that share the same stable key", async () => {
         const current = fixture();
         await start(current.workspace);
-        const { chatIdentifierToString } =
-            await vi.importActual<typeof import("@shared")>("@shared");
         const principal = "rrkah-fqaaa-aaaaa-aaaaq-cai";
         const directChat = { kind: "direct_chat", userId: principal } satisfies ChatIdentifier;
         const groupChat = { kind: "group_chat", groupId: principal } satisfies ChatIdentifier;

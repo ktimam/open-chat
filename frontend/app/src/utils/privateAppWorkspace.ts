@@ -286,6 +286,8 @@ export class PrivateAppWorkspace {
     #directoryAbort?: AbortController;
     #refreshDeferred = false;
     #connectAppSetup?: ConnectLocalAppSetup;
+    #connectionAbort?: AbortController;
+    #cancelledConnection?: AbortController;
     #abort?: AbortController;
     #deliveryClient?: OpenChat;
     #nativeDelivery = false;
@@ -678,12 +680,16 @@ export class PrivateAppWorkspace {
         const scope = this.#setupScope();
         const catalog = this.#state.catalog;
         if (!storage || !scope || !catalog) return;
+        // Inspecting a retained card from a disconnected app is not a new setup selection.
+        const selected = catalog.apps.find((app) => app.id === this.#state.appId);
         // Capture only setup at the explicit user mutation. Never serialize workspace state.
         const snapshot: LocalAppSetupSnapshot = {
             catalog,
-            appId: this.#state.appId,
-            actionId: this.#state.actionId,
-            processor: this.#processor,
+            appId: selected?.id,
+            actionId: selected?.actions.find(
+                (action) => action.definition.name === this.#state.actionId,
+            )?.definition.name,
+            processor: selected ? this.#processor : undefined,
             processors: Object.freeze(
                 [...this.#processors].map(([appId, artifact]) =>
                     Object.freeze({ appId, artifact }),
@@ -829,7 +835,7 @@ export class PrivateAppWorkspace {
 
     async refreshDirectory(): Promise<boolean> {
         if (!this.#directorySource || !this.#account || this.#state.setupLoading) return false;
-        if (this.#state.busy || this.#cards.size > 0) {
+        if (this.#state.busy) {
             this.#refreshDeferred = true;
             this.#set({
                 directoryStatus:
@@ -864,7 +870,7 @@ export class PrivateAppWorkspace {
                 this.#refreshDeferred = true;
                 this.#set({
                     directoryStatus:
-                        "App list checked; installation changes are deferred until processing or the draft is discarded.",
+                        "Available apps updated. Saved cards keep their existing configuration; connect explicitly to change an app.",
                 });
                 return false;
             }
@@ -972,7 +978,7 @@ export class PrivateAppWorkspace {
     }
 
     async connectApp(appId: string): Promise<boolean> {
-        if (!this.#setupAllowed() || this.#state.directoryLoading || !this.#connectAppSetup)
+        if (!this.#setupAllowed(true) || this.#state.directoryLoading || !this.#connectAppSetup)
             return false;
         const descriptor = this.#state.directory?.apps.find((app) => app.id === appId);
         const source = this.#directorySource;
@@ -980,13 +986,21 @@ export class PrivateAppWorkspace {
         const epoch = this.#epoch;
         const abort = new AbortController();
         this.#abort = abort;
+        this.#connectionAbort = abort;
         let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+        let removeCancellationListener = () => {};
         this.#set({
             busy: true,
             message:
                 "Checking the app recipe and opening its account connection. No chat content is sent.",
         });
         try {
+            const cancelled = new Promise<never>((_resolve, reject) => {
+                const listener = () => reject(new Error("App connection cancelled"));
+                abort.signal.addEventListener("abort", listener, { once: true });
+                removeCancellationListener = () =>
+                    abort.signal.removeEventListener("abort", listener);
+            });
             // The transport may finish before the public downloads. Bound the complete atomic
             // operation even when a download stalls or ignores its cancellation signal.
             const deadline = new Promise<never>((_resolve, reject) => {
@@ -1007,6 +1021,7 @@ export class PrivateAppWorkspace {
                     connection,
                 ]),
                 deadline,
+                cancelled,
             ]);
             const app = bindConnectedLocalApp(json, pkg.catalog);
             if (epoch !== this.#epoch || source !== this.#directorySource || abort.signal.aborted)
@@ -1027,14 +1042,87 @@ export class PrivateAppWorkspace {
             if (epoch === this.#epoch)
                 this.#set({
                     message:
-                        "The app connection could not be verified. Previously installed setup is unchanged; retry Connect explicitly.",
+                        this.#cancelledConnection === abort
+                            ? "Connection cancelled. Existing apps and saved cards are unchanged."
+                            : "The app connection could not be verified. Previously installed setup is unchanged; retry Connect explicitly.",
                 });
             return false;
         } finally {
             clearTimeout(deadlineTimer);
+            removeCancellationListener();
+            if (this.#connectionAbort === abort) this.#connectionAbort = undefined;
+            if (this.#cancelledConnection === abort) this.#cancelledConnection = undefined;
             if (this.#abort === abort) {
                 this.#abort = undefined;
                 this.#set({ busy: false });
+            }
+        }
+    }
+
+    /** Cancel only a connection attempt; never discard a card or interrupt model processing. */
+    cancelConnection(): boolean {
+        const abort = this.#connectionAbort;
+        if (!abort || this.#abort !== abort || abort.signal.aborted) return false;
+        this.#cancelledConnection = abort;
+        abort.abort();
+        return true;
+    }
+
+    /** Disconnect only this app. Retained cards stay inspectable but cannot use a removed connection. */
+    async disconnectApp(appId: string): Promise<boolean> {
+        if (!this.#setupAllowed(true) || this.#state.directoryLoading) return false;
+        if (!this.#state.catalog?.apps.some((app) => app.id === appId)) return false;
+        const catalog = parseLocalAppCatalog(
+            JSON.stringify({
+                version: 1,
+                apps: this.#state.catalog.apps.filter((app) => app.id !== appId),
+            }),
+        );
+        ++this.#epoch;
+        this.#processors.delete(appId);
+        this.#installations.delete(appId);
+        this.#updateCardConnection(appId);
+        const enabledChats = Object.freeze(
+            this.#state.enabledChats
+                .map((row) =>
+                    Object.freeze({
+                        ...row,
+                        appIds: Object.freeze(row.appIds.filter((id) => id !== appId)),
+                    }),
+                )
+                .filter((row) => row.appIds.length),
+        );
+        const updates = { ...this.#state.appUpdates };
+        delete updates[appId];
+        const retainSelection = !!this.#state.draft || this.#state.appId !== appId;
+        const selectedId = retainSelection ? this.#state.appId : undefined;
+        this.#processor = selectedId ? this.#processors.get(selectedId) : undefined;
+        this.#set({
+            catalog,
+            enabledChats,
+            appId: selectedId,
+            actionId: retainSelection ? this.#state.actionId : undefined,
+            processorReady: selectedId !== appId && this.#state.processorReady,
+            disabledAppIds: Object.freeze(this.#state.disabledAppIds.filter((id) => id !== appId)),
+            appUpdates: Object.freeze(updates),
+            setupGeneration: ++this.#setupGeneration,
+            message:
+                "App disconnected on this device. Its saved cards are retained; nothing was sent or deleted.",
+        });
+        this.#saveSetup();
+        this.#saveDraft();
+        return true;
+    }
+
+    #updateCardConnection(appId: string, app?: LocalAppCatalogEntry): void {
+        for (const [id, card] of this.#cards) {
+            const draft = this.#drafts.get(id);
+            if (draft?.target.appId !== appId) continue;
+            card.targetMatches = !!app && sameCardConfiguration(card.app, app);
+            if (!card.targetMatches && draft.approval) this.#drafts.revokeApproval(id);
+            if (id === this.#state.draft?.id) {
+                this.#restoredTargetMatches = card.targetMatches;
+                this.#state = { ...this.#state, draft: this.#drafts.get(id) };
             }
         }
     }
@@ -1071,15 +1159,19 @@ export class PrivateAppWorkspace {
         );
         this.#processors.set(app.id, processor);
         this.#installations.set(app.id, Object.freeze(installation));
-        const appId = select ? app.id : this.#state.appId;
+        this.#updateCardConnection(app.id, app);
+        const activeDraft = this.#state.draft;
+        const appId = activeDraft?.target.appId ?? (select ? app.id : this.#state.appId);
         const oldAction = this.#state.actionId;
         const selected = catalog.apps.find((entry) => entry.id === appId);
-        const actionId = select
-            ? app.actions.length === 1
-                ? app.actions[0].definition.name
-                : undefined
-            : selected?.actions.find((action) => action.definition.name === oldAction)?.definition
-                  .name;
+        const actionId = activeDraft
+            ? activeDraft.target.actionId
+            : select
+              ? app.actions.length === 1
+                  ? app.actions[0].definition.name
+                  : undefined
+              : selected?.actions.find((action) => action.definition.name === oldAction)?.definition
+                    .name;
         this.#processor = appId ? this.#processors.get(appId) : undefined;
         const disabledAppIds = select
             ? Object.freeze(this.#state.disabledAppIds.filter((id) => id !== app.id))
@@ -1100,6 +1192,7 @@ export class PrivateAppWorkspace {
             setupGeneration: ++this.#setupGeneration,
         });
         this.#saveSetup();
+        if (this.#cards.size > 0) this.#saveDraft();
     }
 
     #setupAllowed(retainCards = false): boolean {
@@ -1275,7 +1368,6 @@ export class PrivateAppWorkspace {
         content: MessageContent,
         options: PrivateAppProposalOptions,
     ): Promise<"drafted" | "retryable"> {
-        this.open();
         if (!this.#account || client.clientOnlyApps?.() !== true) {
             this.#set({
                 message: "Private app drafts require a signed-in unofficial client.",
@@ -1288,10 +1380,11 @@ export class PrivateAppWorkspace {
         if (!selection) {
             this.#set({
                 message:
-                    "Import an app catalog, select its action, then press Propose on this message again. Nothing is fetched automatically.",
+                    "Connect an app from AI Apps and enable it in this chat, then propose the message again. Nothing was sent.",
             });
             return "retryable";
         }
+        this.open();
         const selectedAppId = selection.app.id;
         const selectedActionId = selection.action.definition.name;
         let source: LocalAppDraftSourceReference | undefined;

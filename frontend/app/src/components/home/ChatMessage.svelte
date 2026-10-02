@@ -14,6 +14,7 @@
         type ProposalPhase,
     } from "@utils/aiActionRunner";
     import { privateAppWorkspace, proposePrivateAppMessage } from "@utils/privateAppWorkspace";
+    import { navigateToMainApps } from "@utils/mainAppsNavigation";
     import {
         localAppChatConfiguration,
         localAutoProposeSuggestions,
@@ -622,16 +623,20 @@
                         selected?.app.id !== privateSuggested.appId ||
                         selected?.action.definition.name !== privateSuggested.actionId
                     ) {
-                        privateAppWorkspace.open();
                         if (
                             !privateAppWorkspace.selectForProposal(
                                 privateSuggested.appId,
                                 privateSuggested.actionId,
                             )
                         ) {
+                            navigateToMainApps();
                             return Promise.resolve("retryable" as const);
                         }
                     }
+                }
+                if (privateAppWorkspace.selection() === undefined) {
+                    navigateToMainApps();
+                    return Promise.resolve("retryable" as const);
                 }
                 return proposePrivateAppMessage(client, capturedContent, {
                     stillCurrent,

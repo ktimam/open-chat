@@ -75,7 +75,7 @@
       "kind": "edge",
       "from": "",
       "name": "svelte",
-      "purpose": "Runtime: model stores, private local-draft editor and navigation, native handoff state, retained card display, and original upstream onboarding UI",
+      "purpose": "Runtime: model stores, main Apps discovery and navigation, private local-card editor, native handoff state, retained card display, and original upstream onboarding UI",
       "evidence": [
         {
           "file": "frontend/app/src/stores/customModels.ts",
@@ -90,16 +90,16 @@
           "contains": "import { writable } from \"svelte/store\";"
         },
         {
-          "file": "frontend/app/src/components_shared/PrivateAppsWorkspace.svelte",
-          "contains": "\"svelte\""
+          "file": "frontend/app/src/components_shared/LocalAppCards.svelte",
+          "contains": "import { onDestroy } from \"svelte\";"
         },
         {
           "file": "frontend/app/src/components/App.svelte",
-          "contains": "import PrivateAppsWorkspace from \"@shared_components/PrivateAppsWorkspace.svelte\";"
+          "contains": "import LocalAppCards from \"@shared_components/LocalAppCards.svelte\";"
         },
         {
           "file": "frontend/app/src/components_mobile/App.svelte",
-          "contains": "import PrivateAppsWorkspace from \"@shared_components/PrivateAppsWorkspace.svelte\";"
+          "contains": "import LocalAppCards from \"@shared_components/LocalAppCards.svelte\";"
         },
         {
           "file": "frontend/app/src/components/home/ChatMessage.svelte",
@@ -108,6 +108,46 @@
         {
           "file": "frontend/app/src/components_mobile/home/ChatMessage.svelte",
           "contains": "messageId: capturedMessageId.toString(),"
+        },
+        {
+          "file": "frontend/app/src/components_shared/LocalAppDirectory.svelte",
+          "contains": "Saved cards ({workspaceView.cards.length})"
+        },
+        {
+          "file": "frontend/app/src/components/home/nav/MainMenu.svelte",
+          "contains": "import { navigateToMainApps } from \"@utils/mainAppsNavigation\";"
+        },
+        {
+          "file": "frontend/app/src/components_mobile/home/user_profile/AppSettings.svelte",
+          "contains": "import { navigateToMainApps } from \"@utils/mainAppsNavigation\";"
+        },
+        {
+          "file": "frontend/app/src/components/home/communities/explore/Explore.svelte",
+          "contains": "import { isMainAppsRoute } from \"@utils/mainAppsNavigation\";"
+        },
+        {
+          "file": "frontend/app/src/components_mobile/home/communities/explore/Explore.svelte",
+          "contains": "import { isMainAppsRoute } from \"@utils/mainAppsNavigation\";"
+        },
+        {
+          "file": "frontend/app/src/components/home/profile/MyApps.svelte",
+          "contains": "import LocalAppDirectory from \"../../../components_shared/LocalAppDirectory.svelte\";"
+        },
+        {
+          "file": "frontend/app/src/components_mobile/home/user_profile/MyApps.svelte",
+          "contains": "import LocalAppDirectory from \"../../../components_shared/LocalAppDirectory.svelte\";"
+        },
+        {
+          "file": "frontend/app/src/components/home/communities/explore/AiAppCard.svelte",
+          "contains": "import { isLocalAiApp, type AiAppPresentation } from \"@utils/localAppDirectoryPresentation\";"
+        },
+        {
+          "file": "frontend/app/src/components_mobile/home/communities/explore/AiAppCard.svelte",
+          "contains": "import { isLocalAiApp, type AiAppPresentation } from \"@utils/localAppDirectoryPresentation\";"
+        },
+        {
+          "file": "frontend/app/src/components_mobile/home/communities/explore/AiAppSheet.svelte",
+          "contains": "import { isLocalAiApp, type AiAppPresentation } from \"@utils/localAppDirectoryPresentation\";"
         },
         {
           "file": "frontend/openchat-shared/src/utils/chat.ts",
@@ -256,6 +296,10 @@
         {
           "file": "frontend/app/src/utils/navigation.ts",
           "contains": "page.replace(to);"
+        },
+        {
+          "file": "frontend/app/src/utils/mainAppsNavigation.ts",
+          "contains": "navigate(MAIN_APPS_ROUTE);"
         }
       ]
     },
@@ -514,7 +558,7 @@
       "kind": "edge",
       "from": "",
       "name": "idb",
-      "purpose": "Runtime: retained action-card cache reconciliation; the separate legacy native-browser remembered-session helper remains covered but is not used by current sign-in; private drafts remain memory-only",
+      "purpose": "Runtime: retained action-card cache reconciliation, bounded cache-open failure, and offline current-user completion; the separate legacy native-browser remembered-session helper remains covered but is not used by current sign-in; private cards use separate encrypted device-local persistence",
       "evidence": [
         {
           "file": "frontend/openchat-agent/src/utils/chatsDb.ts",
@@ -527,6 +571,10 @@
         {
           "file": "frontend/openchat-agent/src/utils/indexedDb.ts",
           "contains": "openDB,"
+        },
+        {
+          "file": "frontend/openchat-agent/src/services/userIndex/userIndex.client.ts",
+          "contains": "throw new Error(\"Current user is unavailable offline without a cached profile\");"
         },
         {
           "file": "frontend/openchat-client/src/utils/nativeBrowserSessionStorage.ts",
@@ -687,6 +735,11 @@
         "sha256": "a52d271ac945ba6ebd5971f10ca94d256db981fac53979542cbed8377025e4d9",
         "reviewRecord": "npm_feature_scope.current-client.review.md",
         "workingTreeReview": "2026-10-02: bounded source-navigation review against main 49450039825edaa2bade427e2525696a7c5d9d22. All 153 committed source blobs independently reproduce prior aggregate 8cc7a0ec. Five existing files change: desktop/mobile proposal captures, source-reference persistence, workspace and card UI. The new helper validates the actual chatIdentifierToString codec, principal/kind/index bounds and canonical roundtrip; ambiguous legacy bare principals do not guess direct versus group. Recovered-request consent is revoked before source navigation. Four reached mixed helpers have exact chat/routes/string/navigation anchors without core import scanning. The existing page dependency is newly feature-reached through the normal router: manifest ^1.3.7, lock 1.11.6, no package or lock changes. Current composition is 158 sources, 123 dedicated owners, 96 anchors and 26 roots. Historical 153/151/148 identities remain exact; current drift, anchor and root-removal tests remain enabled. This is source ownership only, not an advisory decision, audit, waiver, build, device test or release acceptance."
+      },
+      {
+        "sha256": "83d70d96f0b74618f59ef52327f2d3bf104a2895231e686f9557cb9e068a5b14",
+        "reviewRecord": "npm_feature_scope.current-client.review.md",
+        "workingTreeReview": "2026-10-02: bounded main Apps, retained-card and startup-completion source review against committed fork 7a95466f1dd34220b4e8fe78f0210f2a53810d46. The technical PrivateAppsWorkspace page is removed and replaced by a card-only LocalAppCards host. Normal desktop/mobile Apps, Explore and My Apps surfaces share the local directory presentation; Saved cards reopens retained encrypted cards without reinference, while proposal entry points route missing selections to main Apps. Disconnect and navigation retain cards and revoke review rather than sending, deleting or restoring consent. The user-index offline cache-miss path now rejects instead of leaving getCurrentUser unresolved, and IndexedDB open has a bounded fixed cache-unavailable failure without database deletion. Fourteen newly reached paths and ten changed prior inputs are exact anchored/fingerprinted; the prior 158-file a52d271a aggregate is independently reconstructed with the deleted component's committed blob identity. Current composition is 171 sources, 123 dedicated owners, 108 anchors and the unchanged 26 roots. Selectors, direct-import denials, manifests, lockfiles, historical policies and advisory decisions are unchanged; mixed host/core files remain exact anchored only. No OpenChat backend/canister, credential, model/prompt or dependency change is approved. This is source ownership evidence, not browser/phone/APK runtime, deployment or release acceptance."
       }
     ]
   }

@@ -36,8 +36,12 @@ The explicit unofficial web profile admits desktop and mobile browsers to the
 all-WebGPU model chooser. Use **On-device models** to select or download a model;
 actual inference still requires the supported GPU/image APIs and verified artifacts.
 The official desktop policy and non-Android native exclusions are unchanged.
-Open **Private apps** from the classic main menu/profile, or from
-**App settings → Private apps** in the responsive v2 interface, not a floating button.
+Open **Apps → AI Apps** in the normal Explore interface; responsive v2 exposes the
+entry through **App settings → Apps**. Open an app's card and choose **Connect** in
+its details. The connected-apps view shares these cards and offers **Discover apps**.
+No separate management page, manual catalog upload or floating launcher is required.
+**Saved cards (N)** opens only local card review. See the
+[connection and card guide](unofficial-local-client.md#connect-apps-and-review-local-cards).
 
 The output must already exist, be empty, and not traverse a symbolic link/junction. No
 output cleanup is performed. If a build fails, preserve that directory for diagnosis and

@@ -170,6 +170,55 @@ test("only private-app bridges remain in the local overlay; browser authenticati
     );
 });
 
+test("only the local-test APK permits exact loopback cleartext without changing trust anchors", () => {
+    const gradle = read("frontend/src-tauri/gen/android/app/build.gradle.kts");
+    const localManifest = read(
+        "frontend/src-tauri/gen/android/app/src/localTest/AndroidManifest.xml",
+    );
+    const productionManifest = read(
+        "frontend/src-tauri/gen/android/app/src/main/AndroidManifest.xml",
+    );
+    const policy = read(
+        "frontend/src-tauri/gen/android/app/src/localTest/res/xml/local_test_network_security_config.xml",
+    );
+    const normalize = (text) => text.replace(/\s+/g, " ").trim();
+    const expected =
+        '<?xml version="1.0" encoding="utf-8"?> <network-security-config> <base-config cleartextTrafficPermitted="false" /> <domain-config cleartextTrafficPermitted="true"> <domain includeSubdomains="false">localhost</domain> <domain includeSubdomains="false">127.0.0.1</domain> </domain-config> </network-security-config>';
+    assert.equal(normalize(policy), expected);
+    assert.equal(
+        (
+            localManifest.match(
+                /android:networkSecurityConfig="@xml\/local_test_network_security_config"/g,
+            ) ?? []
+        ).length,
+        1,
+    );
+    assert.doesNotMatch(productionManifest, /local_test_network_security_config/);
+    assert.match(
+        gradle,
+        /if \(unofficialLocalTest\) \{\s*sourceSets\.getByName\("main"\)\.manifest\.srcFile\("src\/localTest\/AndroidManifest.xml"\)\s*sourceSets\.getByName\("main"\)\.res\.srcDir\("src\/localTest\/res"\)\s*\}/,
+    );
+    assert.equal((gradle.match(/res\.srcDir\("src\/localTest\/res"\)/g) ?? []).length, 1);
+    assert.match(
+        gradle,
+        /defaultConfig \{\s*manifestPlaceholders\["usesCleartextTraffic"\] = "false"/,
+    );
+    for (const changed of [
+        policy.replace(
+            'base-config cleartextTrafficPermitted="false"',
+            'base-config cleartextTrafficPermitted="true"',
+        ),
+        policy.replace('includeSubdomains="false"', 'includeSubdomains="true"'),
+        policy.replace(">localhost<", ">example.com<"),
+        policy.replace(">127.0.0.1<", ">10.0.2.2<"),
+        policy.replace(
+            "</network-security-config>",
+            '<debug-overrides><trust-anchors><certificates src="user" /></trust-anchors></debug-overrides></network-security-config>',
+        ),
+    ])
+        assert.notEqual(normalize(changed), expected);
+});
+
 test("Rollup keeps local web/private-app modes but emits no browser authentication assets", () => {
     const rollup = read("frontend/app/rollup.config.mjs");
     assert.match(rollup, /localAppRelayPlugin\(\{ enabled: localWebBuild \}\)/);

@@ -2,13 +2,13 @@
     // One published AI app in the explorer. Everything shown is manifest data — the card is fully
     // generic. Clicking it opens the app's detail modal (connection lifecycle + full action list);
     // per-chat enablement (the actionable surface) lives in each chat's Apps settings.
-    import type { AiAppRegistration } from "@client";
+    import { isLocalAiApp, type AiAppPresentation } from "@utils/localAppDirectoryPresentation";
     import { i18nKey } from "../../../../i18n/i18n";
     import Translatable from "../../../Translatable.svelte";
     import AiAppIcon from "./AiAppIcon.svelte";
 
     interface Props {
-        app: AiAppRegistration;
+        app: AiAppPresentation;
         // The signed-in user already holds a delivery key for this app (per-user-keys pairing).
         connected: boolean;
         // Opens the app's detail modal (connection lifecycle + full action list).
@@ -34,14 +34,14 @@
         {#if app.manifest.description.length > 0}
             <span class="desc">{app.manifest.description}</span>
         {/if}
-        <span class="desc">
-            <Translatable
-                resourceKey={i18nKey(
-                    actionCount === 1 ? "aiApps.actionCountOne" : "aiApps.actionCount",
-                    { count: actionCount.toString() },
-                )}
-            />
-        </span>
+        {#if !isLocalAiApp(app) || app.actionsKnown}<span class="desc">
+                <Translatable
+                    resourceKey={i18nKey(
+                        actionCount === 1 ? "aiApps.actionCountOne" : "aiApps.actionCount",
+                        { count: actionCount.toString() },
+                    )}
+                />
+            </span>{/if}
     </div>
 </button>
 

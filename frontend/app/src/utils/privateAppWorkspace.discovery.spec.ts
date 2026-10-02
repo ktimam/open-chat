@@ -89,6 +89,151 @@ const propose = (workspace: PrivateAppWorkspace) =>
     );
 
 describe("automatic app setup atomicity and privacy", () => {
+    it("disconnects only one app while retaining its card and revoking permission to send", async () => {
+        const { workspace, deps } = await fixture();
+        await workspace.connectApp("one");
+        await workspace.connectApp("two");
+        workspace.replaceEnabledChats("synthetic-account", workspace.state.catalog!, [
+            { chatKey: "chat", appIds: ["one", "two"] },
+        ]);
+        workspace.selectForProposal("one", "add");
+        await propose(workspace);
+        const cardId = workspace.state.draft!.id;
+        const fields = workspace.state.editorJson;
+        expect(workspace.review()).toBe(true);
+        const approvalId = workspace.state.draft!.approval!.approvalId;
+
+        expect(await workspace.disconnectApp("one")).toBe(true);
+        expect(workspace.state.catalog?.apps.map((app) => app.id)).toEqual(["two"]);
+        expect(workspace.state.enabledChats).toEqual([{ chatKey: "chat", appIds: ["two"] }]);
+        expect(workspace.state.cards.map((card) => card.id)).toEqual([cardId]);
+        expect(workspace.state.editorJson).toBe(fields);
+        expect(workspace.state.activeCardApp?.id).toBe("one");
+        expect(workspace.state.draft?.approval).toBeUndefined();
+        expect(workspace.review()).toBe(false);
+        await workspace.confirm(approvalId);
+        expect(deps.deliver).not.toHaveBeenCalled();
+    });
+
+    it("connects another app without replacing the active saved card or its fields", async () => {
+        const { workspace, deps } = await fixture();
+        await workspace.connectApp("one");
+        await propose(workspace);
+        const card = workspace.state.draft!;
+        const fields = workspace.state.editorJson;
+        expect(await workspace.connectApp("two")).toBe(true);
+        expect(workspace.state.catalog?.apps.map((app) => app.id)).toEqual(["one", "two"]);
+        expect(workspace.state.draft?.id).toBe(card.id);
+        expect(workspace.state.activeCardApp?.id).toBe("one");
+        expect(workspace.state.editorJson).toBe(fields);
+        expect(workspace.selection()?.app.id).toBe("one");
+        expect(deps.deliver).not.toHaveBeenCalled();
+    });
+
+    it("persists disconnecting the last app without deleting setup storage or cards", async () => {
+        const storage: LocalAppSetupStorage = {
+            read: vi.fn(async () => undefined),
+            write: vi.fn(async () => {}),
+            remove: vi.fn(async () => {}),
+        };
+        const { workspace } = await fixture(false, storage);
+        await workspace.connectApp("one");
+        await propose(workspace);
+        const cardId = workspace.state.draft!.id;
+        await workspace.disconnectApp("one");
+        await vi.waitFor(() => {
+            const saved = vi.mocked(storage.write).mock.calls.at(-1)?.[1];
+            expect(saved?.catalog.apps).toEqual([]);
+            expect(saved?.appId).toBeUndefined();
+            expect(saved?.actionId).toBeUndefined();
+            expect(saved?.processors).toEqual([]);
+            expect(saved?.installations).toEqual([]);
+        });
+        expect(workspace.state.cards.map((card) => card.id)).toEqual([cardId]);
+        expect(storage.remove).not.toHaveBeenCalled();
+    });
+
+    it("reconnects an unchanged app without restoring a previous approval", async () => {
+        const { workspace, deps } = await fixture();
+        await workspace.connectApp("one");
+        await propose(workspace);
+        expect(workspace.review()).toBe(true);
+        const approvalId = workspace.state.draft!.approval!.approvalId;
+        await workspace.disconnectApp("one");
+        await workspace.connectApp("one");
+        expect(workspace.state.draft?.approval).toBeUndefined();
+        await workspace.confirm(approvalId);
+        expect(deps.deliver).not.toHaveBeenCalled();
+        expect(workspace.review()).toBe(true);
+    });
+
+    it("lists available apps while keeping retained card configurations pinned", async () => {
+        const { workspace, deps } = await fixture();
+        await workspace.connectApp("one");
+        await propose(workspace);
+        const cardId = workspace.state.draft!.id;
+        const loads = deps.loadDirectory.mock.calls.length;
+        await workspace.refreshDirectory();
+        expect(deps.loadDirectory).toHaveBeenCalledTimes(loads + 1);
+        expect(workspace.state.directory?.apps.map((app) => app.id)).toEqual(["one", "two"]);
+        expect(workspace.state.draft?.id).toBe(cardId);
+        expect(deps.deliver).not.toHaveBeenCalled();
+    });
+
+    it("retains a card's original fields and blocks sending after reconnecting changed setup", async () => {
+        const { workspace, deps, packages, connected, setDirectory } = await fixture();
+        await workspace.connectApp("one");
+        await propose(workspace);
+        const cardId = workspace.state.draft!.id;
+        const fields = workspace.state.editorJson;
+        expect(workspace.review()).toBe(true);
+        const approvalId = workspace.state.draft!.approval!.approvalId;
+        const update = await directoryFixture("one", "2");
+        packages.set("one", update.pkg);
+        connected.set("one", update.connectedJson);
+        setDirectory(update.directory);
+        await workspace.refreshDirectory();
+        expect(await workspace.connectApp("one")).toBe(true);
+        expect(workspace.state.catalog?.apps[0].revision).toBe("2");
+        expect(workspace.state.activeCardApp?.revision).toBe("1");
+        expect(workspace.state.draft?.id).toBe(cardId);
+        expect(workspace.state.editorJson).toBe(fields);
+        expect(workspace.state.draft?.approval).toBeUndefined();
+        expect(workspace.review()).toBe(false);
+        await workspace.confirm(approvalId);
+        expect(deps.deliver).not.toHaveBeenCalled();
+    });
+
+    it("does not open an empty card host when no connected action is selected", async () => {
+        const { workspace, deps } = await fixture();
+        expect(await propose(workspace)).toBe("retryable");
+        expect(workspace.state.open).toBe(false);
+        expect(deps.extract).not.toHaveBeenCalled();
+        expect(deps.deliver).not.toHaveBeenCalled();
+    });
+
+    it("cancels a stalled connection without discarding cards even if transport ignores abort", async () => {
+        const { workspace, deps, two } = await fixture();
+        await workspace.connectApp("one");
+        await propose(workspace);
+        const cardId = workspace.state.draft!.id;
+        let finish!: (json: string) => void;
+        deps.connectAppSetup.mockImplementationOnce(
+            () => new Promise((resolve) => (finish = resolve)),
+        );
+        const pending = workspace.connectApp("two");
+        expect(workspace.cancelConnection()).toBe(true);
+        expect(await pending).toBe(false);
+        expect(workspace.state.busy).toBe(false);
+        expect(workspace.state.message).toContain("Connection cancelled");
+        finish(two.connectedJson);
+        await Promise.resolve();
+        expect(workspace.state.catalog?.apps.map((app) => app.id)).toEqual(["one"]);
+        expect(workspace.state.cards.map((card) => card.id)).toEqual([cardId]);
+        expect(deps.deliver).not.toHaveBeenCalled();
+        expect(workspace.cancelConnection()).toBe(false);
+    });
+
     it("bounds the combined connection when private setup returns but its public download stalls", async () => {
         const { workspace, deps, two } = await fixture();
         await workspace.connectApp("one");
@@ -328,7 +473,7 @@ describe("automatic app setup atomicity and privacy", () => {
         setDirectory(update.directory);
         deps.loadDirectory.mockClear();
         expect(await workspace.refreshDirectory()).toBe(false);
-        expect(deps.loadDirectory).not.toHaveBeenCalled();
+        expect(deps.loadDirectory).toHaveBeenCalledTimes(1);
         expect(workspace.state.draft?.approval).toBe(approval);
         expect(workspace.state.catalog?.apps[0].revision).toBe("1");
         workspace.discard();

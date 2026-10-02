@@ -15,6 +15,7 @@
         android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round"
         android:label="@string/local_test_app_name" android:theme="@style/Theme.open_chat"
         android:usesCleartextTraffic="${usesCleartextTraffic}" android:allowBackup="false"
+        android:networkSecurityConfig="@xml/local_test_network_security_config"
         android:dataExtractionRules="@xml/data_extraction_rules" android:fullBackupContent="@xml/backup_rules"
         tools:ignore="MissingTvBanner">
         <!-- No official app links, push registration or OTA client. The original

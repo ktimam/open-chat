@@ -6,7 +6,8 @@ Source/test updates are not evidence that an existing server or APK is updated.
 
 ## User workflow
 
-1. Discover the app in Private apps and choose Connect. Normal setup needs no file uploads.
+1. Open Apps → AI Apps, open the app's card and choose Connect in its details.
+   Normal setup needs no file uploads or separate app-management page.
 2. Sign in to the app and select the intended account/sheet. The app recovers or creates
    the user's delivery keypair using its existing user-controlled key recovery.
 3. After explicit connection consent, the app provides its public delivery key and an
@@ -31,6 +32,16 @@ Source/test updates are not evidence that an existing server or APK is updated.
     proof of saving, and an app-reported acknowledgement is not independent attestation.
 12. Retry only on explicit user action, preserving destination, payload and request ID.
     Restoring a card never restores a sending approval or automatically sends anything.
+
+The existing Explore and connected-apps surfaces share this flow in both layouts.
+Directory listing is automatic; app connection still requires an explicit gesture.
+Saved cards open from **Saved cards (N)** into a card-only review panel. Setup,
+catalog uploads and account-wide Forget controls are not part of that panel.
+The directory can refresh while cards are retained, but automatic recipe changes
+wait so they cannot replace a card's frozen configuration. Explicit connection is
+allowed without deleting cards. This uses client-side publisher discovery and the
+app's own connection page, not custom OpenChat registry/card canister APIs; no
+OpenChat canister change or deployment is required.
 
 ## App-owned card presentation
 
@@ -133,10 +144,12 @@ pairing codes, original images or chat history.
 
 Panel close/navigation do not discard cards. Logout clears the live view but keeps
 the encrypted collection for the same account/backend. Discard removes only the
-selected card; an empty collection is retained until explicit Forget. Forget removes
-app setup and all cards/key. Neither operation recalls a delivery or undoes an entry
-saved in the receiving app. Cancelling new inference retains existing cards. Switching
-cards revokes approval tokens and resets explicit consent; pending unrepresentable
+selected card; an empty encrypted collection may remain. Disconnect removes only
+the selected app's connection and chat opt-ins, retaining its cards as inspect-only.
+A matching reconnect and fresh review are required before delivery; different
+configuration cannot silently retarget a retained card. Neither operation recalls
+a delivery or undoes an entry saved in the receiving app. Cancelling new inference
+retains existing cards. Switching cards revokes approval tokens and resets explicit consent; pending unrepresentable
 field edits block switching rather than hiding a stale payload.
 
 Version 2 is bound in both the outer record and authenticated data, so an older
@@ -145,8 +158,10 @@ without rewriting storage and migrates atomically on the next explicit write, ke
 its exact draft and request IDs. A legacy card lacking frozen app metadata uses matching
 current configuration only; unavailable or changed bindings remain inspect-only.
 Per-write revisions and atomic compare-and-swap prevent stale tabs from replacing a
-newer collection or erasing attempted-send state. Forget rotates the generation to
-prevent stale asynchronous or other-tab writes from resurrecting removed data.
+newer collection or erasing attempted-send state. The internal `forgetSetup()`
+operation removes setup and all cards/key and rotates the generation to prevent stale
+asynchronous or other-tab writes from resurrecting removed data. It remains covered
+by storage tests but is not exposed as a normal Apps button.
 Show storage failures honestly and block delivery if write-ahead persistence fails.
 
 Restore an unsent card as unreviewed. Restore an attempted card conservatively as
@@ -165,7 +180,8 @@ decryption, the receiving app frontend can read the fields and must itself be tr
 - No ledger write on receipt/decrypt/review; only second approval triggers encrypted save.
 - Same-ID equal-field re-encryption dedupes; changed-field replay fails; receipt is not saved.
 - Card reload/account/backend separation, local ciphertext tampering, interrupted send,
-  explicit discard/Forget, stale-write races and visible quota/storage failures.
+  explicit discard, internal Forget, disconnect/reconnect, stale-write races and
+  visible quota/storage failures.
 - Run scoped CI without waivers. Browser/native acceptance must be reported separately
   from unit tests; old plaintext-handoff acceptance does not prove this protocol.
 
@@ -278,8 +294,9 @@ Both optimized web layouts were rebuilt on 2026-10-01 from fork main `6249be2431
 plus the reviewed, uncommitted encryption/persistence changes. Independent checks
 verified official OpenChat service configuration, disabled OTA, CSP, included
 encryption/storage modules and unchanged pinned model/runtime assets. The local
-preview now serves the v2 build. IOU's existing local frontend serves its updated
-receiver; its production build also passed. No canister was deployed or reset.
+preview served the v2 build at that checkpoint. IOU's existing local frontend served
+its updated receiver; its production build also passed. No canister was deployed
+or reset.
 
 In the existing Edge profile, a synthetic text proposal completed the real workflow:
 
@@ -299,7 +316,7 @@ In the existing Edge profile, a synthetic text proposal completed the real workf
 The live delivery test used the desktop interface. It does not prove image extraction
 or APK handoff. Transport plaintext rejection is separately
 covered by the instrumented tests; this run was not a network packet capture.
-The saved card remains on the device. Its conservative uncertain status after
+The test left the saved card on the device. Its conservative uncertain status after
 restart is deliberate, even when the previous session received a saved acknowledgement.
 
 Separate Edge checks used a verified 390 by 844 viewport for both web layouts. Each
@@ -336,6 +353,13 @@ artifact checks passed for both layouts and architectures, and a read-only check
 matched the emulator's installed x86 APK to the verified artifact. These are
 packaging and installed-file identity results, not current multi-card UI,
 storage, provider or delivery runtime acceptance. See
-[the current artifact checkpoint](unofficial-local-client.md#october-2-multi-card-web-and-apk020-checkpoint)
+[the historical APK020 checkpoint](unofficial-local-client.md#october-2-multi-card-web-and-apk020-checkpoint)
 for exact identities, hosted CI results and remaining gates. The earlier browser
 acceptance above must not be relabeled as acceptance of these newer artifacts.
+
+The subsequent main Apps UI replacement removes the separate management page while
+retaining encrypted cards and app-owned presentation. See
+[the APK022 and web checkpoint](unofficial-local-client.md#october-2-main-apps-web-and-apk022-checkpoint)
+for current static artifact proofs and the limited emulator list/details/Connect
+interaction. Those checks do not establish completed connection, card delivery or
+current normal-browser acceptance.
