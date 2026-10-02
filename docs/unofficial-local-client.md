@@ -671,3 +671,72 @@ records this narrower successful native-opening sequence. IOU was signed out and
 displayed **Sign in to IOU**, so the observer stopped without credential actions.
 The native opening is verified; setup sharing, proposals, encrypted delivery and
 saved-entry readback remain unverified on this APK. No account or data was reset.
+
+### October 2 upstream integrated web and APK023 checkpoint
+
+This checkpoint uses committed fork `main`
+`064eda188571f9cfc962b98d48842d83c51bdbd2`, including upstream
+`5ca61b627809807b5c29300a46d539567249f1cd`, with feature fingerprint
+`7e72d8ee0dbb5bd42a8ee8546f4c21a6f992a8c10c4f83a7d5959198144774cd`.
+The builds use committed source with no working-tree overlays. Three pre-existing
+working-file changes were excluded, not packaged. No OpenChat canister was changed
+or deployed for this client flow.
+
+| Check | Completed evidence | Limit |
+| --- | --- | --- |
+| Merged source | 5,654/5,654 frontend tests; both typechecks reported zero errors; post-commit backend baseline and scoped format/wiring checks passed | Source checks do not establish runtime acceptance |
+| Optimized web v1 and v2 | Both layouts built sequentially and passed independent source/configuration/asset verification | Browser runtime is recorded separately below |
+| APK023 x86 and ARM | Both ABIs built and passed independent source, packaged-asset, native-binary, signer and network-policy checks | ARM has no new device-runtime result |
+| APK023 emulator | Existing account was remembered; normal Apps → AI Apps listed IOU; original app details and Connect were visible; the removed management page was absent | This check did not press Connect or test provider sign-in, proposals, models or saves |
+| Current Edge connection | Normal Apps → IOU → Reconnect, authenticated IOU account/sheet selection and Connect/share setup completed; OpenChat reported Connected and retained the existing saved card | Connection is not a proposal, delivery or saved-entry acceptance result |
+
+The browser connection initially failed because IOU's public catalog was internally
+hash-consistent but stale relative to its current private setup producer. The pinned
+card declaration and final currency schema differed. OpenChat correctly rejected
+that mismatch. Regenerating IOU's public catalog/directory repaired the connection
+without changing OpenChat, relaxing validation, rebuilding the client or changing
+model prompts/processor bytes. The repair passed 86 targeted IOU tests and 100
+cross-checkout integration tests. The added integration case binds an actual generated
+P256 recipient setup to the shipped public catalog and revalidates its persisted
+provenance; altered pinned fields still fail.
+The IOU repair is committed as `a46fcce`. Its hosted CI run
+[37033647731](https://github.com/ktimam/IOU/actions/runs/37033647731) failed at
+`audit:deps`, before hosted typecheck, tests or build; those later steps were skipped,
+not failed tests. The 186 local tests and both local typechecks passed independently.
+This checkpoint does not classify every advisory as previously deferred or introduce
+a dependency waiver.
+
+Developer-machine evidence is retained under `F:/Temp/OpenChat-IOU`, not supplied as
+portable repository fixtures:
+
+- [Web v1 proof](F:/Temp/OpenChat-IOU/upstream-5ca-web-20261002/web-v1-independent-verification.json)
+  and [web v2 proof](F:/Temp/OpenChat-IOU/upstream-5ca-web-20261002/web-v2-independent-verification.json).
+- [APK023 x86 proof](F:/Temp/OpenChat-IOU/upstream-main-apk-023/artifacts/independent-x86_64-verification.json)
+  and [ARM proof](F:/Temp/OpenChat-IOU/upstream-main-apk-023/artifacts/independent-aarch64-verification.json).
+- [Emulator main Apps result](F:/Temp/OpenChat-IOU/emulator-public-ui-20261002/runner-v13/observations/apk023-main-apps-ready-r5/result.json).
+- [Catalog-binding first-red observation](F:/Temp/OpenChat-IOU/iou-connect-catalog-20261002/first-red-observation.json)
+  and [100-test passing log](F:/Temp/OpenChat-IOU/iou-connect-catalog-20261002/green-run.log).
+- [Current browser reconnect observation](F:/Temp/OpenChat-IOU/iou-connect-catalog-20261002/browser-reconnect-observation.json)
+  records visible UI observations, not a captured network trace.
+
+Current-artifact card editing/recovery/source navigation, encrypted delivery followed
+by IOU review/save/readback and same-ID retry, and model inference remain separate
+runtime checks. Earlier passes are not relabelled as passes for these artifacts.
+The raw hosted scoped-security gate remains failed despite documented local-test
+advisory deferrals; those decisions do not produce a clean scan. Hosted Android also
+failed fetching its pinned Kotlin compiler before compilation, not compiling the
+application. Local APK build success does not erase that failure. Physical-phone
+testing remains explicitly deferred, rather than an outstanding local-test gate.
+Public branding, domain/provider qualification and publication remain deferred;
+this checkpoint does not claim public-release readiness.
+
+The retained legacy card also exposed a recovery-feedback defect: changed app setup
+correctly blocked its old request, but the review button appeared usable and gave no
+explanation. Separately, chat opt-in was incorrectly blocked while cards were retained.
+Five new regressions reproduced these cases. Narrow source fixes now pass 65 focused
+tests, preserving strict matching, the frozen request and import ID; their rebuilt
+artifact and runtime acceptance remain pending. No recovered request was sent or
+discarded to work around either defect.
+Final source verification passed 5,662/5,662 frontend tests and both typechecks with
+zero errors (572 existing Svelte warnings); this is not an APK024 or rebuilt-web
+runtime acceptance result.

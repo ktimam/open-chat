@@ -766,3 +766,31 @@ remaining exceptions retain identical source/edit proofs; the now fully
 formatted MainMenu no longer has a current exception. Historical formatter and
 PR inventories remain unchanged. This is source/inventory evidence only, not
 frontend, artifact, browser/device, advisory or release acceptance.
+
+## October 2 saved-card opt-in and recovery feedback
+
+This source-only checkpoint binds committed main
+`064eda188571f9cfc962b98d48842d83c51bdbd2` plus the three reviewed generic
+UI/controller changes. Its aggregate is
+`86b7835254837140bd452b4a0f722cbfd207d1ad15d5f6c7b9b66757e0e11dbc`.
+Counts remain **171 fingerprinted sources, 123 dedicated owners, 108 exact
+anchors and 26 dependency roots**; no path, selector or dependency is added.
+
+`LocalAppsChatSettings.svelte` permits per-chat app opt-in changes while a
+finished private card is retained, preserving loading and busy restrictions.
+`privateAppWorkspace.ts` permits the corresponding opt-in persistence path and
+publishes fixed host-authored feedback when the saved card's original app target
+does not match the connected setup. `LocalAppCards.svelte` shows this reason and
+disables editing, review, sending and retrying for that mismatch. Existing
+target matching, exact saved requests, encryption, approval and write-ahead
+persistence remain authoritative; no setup is rebound, card discarded or
+delivery initiated by this change.
+
+All 171 committed Git blobs independently reproduce the preceding `7e72d8ee`
+aggregate. The regression binds the three new LF hashes and substitutes only
+their independently verified pre-change hashes to retain that checkpoint and
+the older historical proofs. Test-only fixture edits do not enter the runtime
+fingerprint. Source ownership and advisory acceptance remain separate: no
+package/lock, auth, model/prompt, backend/canister, advisory rule or historical
+policy change is included, and this record does not claim artifact, live
+browser/device/provider, model-quality or release acceptance.

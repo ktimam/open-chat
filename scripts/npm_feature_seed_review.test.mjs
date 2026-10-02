@@ -205,6 +205,37 @@ const beforeReplicaPortMerge = new Map([
     "bd83d161f48f8930dba4c3f252495050fb101184d638cbeac0e85e146f104b28",
   ],
 ]);
+// Independently verified from all 171 committed 064eda1885 Git blobs. These
+// replacements preserve prior aggregates without accepting them as current bytes.
+const beforeSavedCardUiFix = new Map([
+  [
+    "frontend/app/src/components_shared/LocalAppCards.svelte",
+    "474ecb8bb82300593bae0b5b5d9444f14d40e9ebe1a1630ad0ffea5a72d9d6ae",
+  ],
+  [
+    "frontend/app/src/components_shared/LocalAppsChatSettings.svelte",
+    "4986e2570b8953ec4736347749f720295ae1731bf311d252fb641eb888cf6ad9",
+  ],
+  [
+    "frontend/app/src/utils/privateAppWorkspace.ts",
+    "41660e6c1437f3081891be63858011c451b50ac3102a5167d75f8bc00a8f134a",
+  ],
+]);
+function beforeSavedCardUiFixFingerprint(fingerprint) {
+  return {
+    ...fingerprint,
+    sha256: createHash("sha256")
+      .update(
+        JSON.stringify(
+          fingerprint.files.map((file) => [
+            file,
+            beforeSavedCardUiFix.get(file) ?? sourceHash(file),
+          ]),
+        ),
+      )
+      .digest("hex"),
+  };
+}
 function beforeReplicaPortMergeFingerprint(fingerprint) {
   return {
     ...fingerprint,
@@ -213,7 +244,9 @@ function beforeReplicaPortMergeFingerprint(fingerprint) {
         JSON.stringify(
           fingerprint.files.map((file) => [
             file,
-            beforeReplicaPortMerge.get(file) ?? sourceHash(file),
+            beforeReplicaPortMerge.get(file) ??
+              beforeSavedCardUiFix.get(file) ??
+              sourceHash(file),
           ]),
         ),
       )
@@ -755,9 +788,61 @@ test("current encryption, recovery and enum-label owners use existing selectors 
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   assert.equal(
     fingerprint.sha256,
-    "7e72d8ee0dbb5bd42a8ee8546f4c21a6f992a8c10c4f83a7d5959198144774cd",
+    "86b7835254837140bd452b4a0f722cbfd207d1ad15d5f6c7b9b66757e0e11dbc",
   );
   assertReviewedSourceFingerprint(fingerprint, config.sourceReview);
+});
+
+test("saved-card opt-in and recovery feedback preserve exact prior source identity and existing scope", () => {
+  const config = JSON.parse(
+    readFileSync(
+      resolve(root, "scripts/npm_feature_scope.current-client.json"),
+      "utf8",
+    ),
+  );
+  const actual = seedSourceFingerprint(root, config);
+  assert.equal(actual.files.length, 171);
+  assert.equal(featureOwnedFiles(root, config.scopeId).length, 123);
+  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
+  assert.equal(config.seeds.length, 26);
+  const expected = new Map([
+    [
+      "frontend/app/src/components_shared/LocalAppCards.svelte",
+      "2b0fd86f1e0c6930c34d5ea7ad39ee2aba3d320ef44c0f1fb79944e827ae2606",
+    ],
+    [
+      "frontend/app/src/components_shared/LocalAppsChatSettings.svelte",
+      "d2c0834e74682803303b97607dff109027367aadc6d1e1dc28c20b762c1f4e1d",
+    ],
+    [
+      "frontend/app/src/utils/privateAppWorkspace.ts",
+      "98b3be56091a624a6e2af76dfb9922290459db7d992d0f9171603ac4079b78eb",
+    ],
+  ]);
+  assert.deepEqual([...expected.keys()], [...beforeSavedCardUiFix.keys()]);
+  for (const [file, digest] of expected) {
+    assert(actual.files.includes(file), file);
+    assert.equal(sourceHash(file), digest, file);
+    assert.notEqual(digest, beforeSavedCardUiFix.get(file), file);
+  }
+  const prior = beforeSavedCardUiFixFingerprint(actual);
+  assert.equal(
+    prior.sha256,
+    "7e72d8ee0dbb5bd42a8ee8546f4c21a6f992a8c10c4f83a7d5959198144774cd",
+  );
+  assert.equal(
+    actual.sha256,
+    "86b7835254837140bd452b4a0f722cbfd207d1ad15d5f6c7b9b66757e0e11dbc",
+  );
+  assertReviewedSourceFingerprint(prior, config.sourceReview);
+  assertReviewedSourceFingerprint(actual, config.sourceReview);
+  for (const file of [
+    "frontend/app/src/components_shared/LocalAppCards.card.spec.ts",
+    "frontend/app/src/components_shared/PrivateAppsNavigation.spec.ts",
+    "frontend/app/src/utils/privateAppWorkspace.spec.ts",
+    "frontend/app/src/utils/privateAppWorkspace.discovery.spec.ts",
+  ])
+    assert(!actual.files.includes(file), file);
 });
 
 test("incoming replica-port support preserves exact main Apps source history and fork proxy policy", () => {
@@ -817,7 +902,7 @@ test("incoming replica-port support preserves exact main Apps source history and
     "83d70d96f0b74618f59ef52327f2d3bf104a2895231e686f9557cb9e068a5b14",
   );
   assert.equal(
-    fingerprint.sha256,
+    beforeSavedCardUiFixFingerprint(fingerprint).sha256,
     "7e72d8ee0dbb5bd42a8ee8546f4c21a6f992a8c10c4f83a7d5959198144774cd",
   );
   assertReviewedSourceFingerprint(previous, config.sourceReview);

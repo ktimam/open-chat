@@ -378,6 +378,34 @@ describe("local app card modal and authoritative review", () => {
         },
     );
 
+    it.each(["uncertain", "delivered"] as const)(
+        "shows an actionable connection block instead of an active no-op %s recovery button",
+        async (kind) => {
+            calls.deliver.mockResolvedValue({ kind });
+            await approveAndSend();
+            const prior = workspace.state.draft!;
+            const request = prior.approval!.request;
+            expect(await workspace.disconnectApp("synthetic")).toBe(true);
+            await settle();
+            const reason = target.querySelector('[aria-label="Saved card connection required"]');
+            expect(reason?.textContent).toContain("inspect-only");
+            expect(reason?.textContent).toContain("Check the receiving app");
+            expect(button("Review recovered request before retrying").disabled).toBe(true);
+            button("Review recovered request before retrying").click();
+            await settle();
+            expect(workspace.state.draft).toMatchObject({
+                id: prior.id,
+                status: kind,
+                target: prior.target,
+                payload: prior.payload,
+            });
+            expect(workspace.state.draft?.approval).toBeUndefined();
+            expect(calls.deliver).toHaveBeenCalledOnce();
+            expect(calls.deliver.mock.calls[0][0]).toEqual(request);
+            expect(calls.extract).toHaveBeenCalledOnce();
+        },
+    );
+
     it("uses the selected card's source and gives legacy cards an honest thread fallback", async () => {
         const captured = { kind: "text_content", text: "Synthetic" } as MessageContent;
         await workspace.propose(client, captured, {

@@ -24,6 +24,7 @@
     const fieldEditBlocked = $derived(
         blockedFieldDraft?.id === fieldDraftScope && blockedFieldDraft?.blocked === true,
     );
+    const connectionBlocked = $derived(!!workspaceView.cardReviewBlockedReason);
     const accountReady = $derived(
         $identityStateStore.kind === "logged_in" &&
             $currentUserIdStore !== ANON_USER_ID &&
@@ -34,7 +35,8 @@
         selected?.actions.find((action) => action.definition.name === workspaceView.actionId),
     );
     const editable = $derived(
-        workspaceView.draft?.status === "draft" || workspaceView.draft?.status === "reviewed",
+        !connectionBlocked &&
+            (workspaceView.draft?.status === "draft" || workspaceView.draft?.status === "reviewed"),
     );
     const selectedSource = $derived(
         localAppSourceNavigation(
@@ -271,6 +273,11 @@
                                 ></textarea>
                             </label>
                         </details>
+                        {#if workspaceView.cardReviewBlockedReason}
+                            <p role="status" aria-label="Saved card connection required">
+                                {workspaceView.cardReviewBlockedReason}
+                            </p>
+                        {/if}
                         {#if editable}<button
                                 type="button"
                                 disabled={workspaceView.busy || fieldEditBlocked}
@@ -281,9 +288,11 @@
                         {#if (workspaceView.draft.status === "uncertain" || workspaceView.draft.status === "delivered") && !workspaceView.draft.approval}
                             <button
                                 type="button"
-                                disabled={workspaceView.busy || fieldEditBlocked}
+                                disabled={workspaceView.busy ||
+                                    fieldEditBlocked ||
+                                    connectionBlocked}
                                 onclick={() => {
-                                    if (!fieldEditBlocked) workspace.review();
+                                    if (!fieldEditBlocked && !connectionBlocked) workspace.review();
                                 }}
                             >
                                 Review recovered request before retrying
@@ -309,10 +318,18 @@
                                     class="confirm"
                                     type="button"
                                     aria-label="Send reviewed request"
-                                    disabled={!confirmed || workspaceView.busy || fieldEditBlocked}
+                                    disabled={!confirmed ||
+                                        workspaceView.busy ||
+                                        fieldEditBlocked ||
+                                        connectionBlocked}
                                     onclick={() => {
                                         const id = workspaceView.draft?.approval?.approvalId;
-                                        if (confirmed && id && !fieldEditBlocked)
+                                        if (
+                                            confirmed &&
+                                            id &&
+                                            !fieldEditBlocked &&
+                                            !connectionBlocked
+                                        )
                                             void workspace.confirm(id);
                                     }}
                                     ><span
@@ -374,10 +391,18 @@
                             >
                             <button
                                 type="button"
-                                disabled={!retryConfirmed || workspaceView.busy || fieldEditBlocked}
+                                disabled={!retryConfirmed ||
+                                    workspaceView.busy ||
+                                    fieldEditBlocked ||
+                                    connectionBlocked}
                                 onclick={() => {
                                     const id = workspaceView.draft?.approval?.approvalId;
-                                    if (retryConfirmed && id && !fieldEditBlocked) {
+                                    if (
+                                        retryConfirmed &&
+                                        id &&
+                                        !fieldEditBlocked &&
+                                        !connectionBlocked
+                                    ) {
                                         retryConfirmed = false;
                                         void workspace.retryUncertain(id);
                                     }
@@ -399,13 +424,17 @@
                             >
                             <button
                                 type="button"
-                                disabled={!retryConfirmed || workspaceView.busy || fieldEditBlocked}
+                                disabled={!retryConfirmed ||
+                                    workspaceView.busy ||
+                                    fieldEditBlocked ||
+                                    connectionBlocked}
                                 onclick={() => {
                                     const id = workspaceView.draft?.approval?.approvalId;
                                     if (
                                         retryConfirmed &&
                                         id &&
                                         !fieldEditBlocked &&
+                                        !connectionBlocked &&
                                         delivery?.status !== "saved"
                                     ) {
                                         retryConfirmed = false;

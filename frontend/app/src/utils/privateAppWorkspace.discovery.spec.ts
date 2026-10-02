@@ -204,6 +204,131 @@ describe("automatic app setup atomicity and privacy", () => {
         expect(deps.deliver).not.toHaveBeenCalled();
     });
 
+    it.each(["uncertain", "delivered"] as const)(
+        "explains blocked %s recovery after changed setup without retargeting the original request",
+        async (kind) => {
+            const { workspace, deps, one, packages, connected, setDirectory } = await fixture();
+            const withRecipient = (json: string) => {
+                const catalog = JSON.parse(json);
+                catalog.apps[0].deliveryEncryption = {
+                    version: 1,
+                    scheme: "p256-hkdf-sha256-aes-256-gcm-v1",
+                    keyId: "a".repeat(64),
+                    publicKeySpki: btoa("\0".repeat(91)).replace(/=+$/, ""),
+                    recipientContext: "AQ",
+                };
+                return JSON.stringify(catalog);
+            };
+            const originalSetup = withRecipient(one.connectedJson);
+            connected.set("one", originalSetup);
+            await workspace.connectApp("one");
+            await propose(workspace);
+            expect(workspace.review()).toBe(true);
+            const approval = workspace.state.draft!.approval!;
+            deps.deliver.mockResolvedValue({ kind });
+            await workspace.confirm(approval.approvalId);
+            const originalDraft = workspace.state.draft!;
+            const originalFields = workspace.state.editorJson;
+            const update = await directoryFixture("one", "2");
+            packages.set("one", update.pkg);
+            connected.set("one", withRecipient(update.connectedJson));
+            setDirectory(update.directory);
+            await workspace.refreshDirectory();
+            expect(await workspace.connectApp("one")).toBe(true);
+            expect(workspace.state.cardReviewBlockedReason).toContain("inspect-only");
+            expect(workspace.review()).toBe(false);
+            expect(workspace.state.message).toBe(workspace.state.cardReviewBlockedReason);
+            expect(workspace.state.message).toContain("Check the receiving app");
+            expect(workspace.state.draft).toMatchObject({
+                id: originalDraft.id,
+                status: kind,
+                target: originalDraft.target,
+                payload: originalDraft.payload,
+            });
+            expect(workspace.state.editorJson).toBe(originalFields);
+            expect(workspace.state.draft?.approval).toBeUndefined();
+            await workspace.retryUncertain(approval.approvalId);
+            await workspace.reopenDelivered(approval.approvalId);
+            expect(deps.deliver).toHaveBeenCalledOnce();
+            expect(deps.extract).toHaveBeenCalledOnce();
+
+            packages.set("one", one.pkg);
+            connected.set("one", originalSetup);
+            setDirectory(one.directory);
+            await workspace.refreshDirectory();
+            expect(await workspace.connectApp("one")).toBe(true);
+            expect(workspace.state.cardReviewBlockedReason).toBeUndefined();
+            expect(workspace.review()).toBe(true);
+            expect(workspace.state.draft!.approval!.request).toEqual(approval.request);
+            expect(deps.deliver).toHaveBeenCalledOnce();
+            expect(deps.extract).toHaveBeenCalledOnce();
+        },
+    );
+
+    it("changes chat opt-ins with an attempted card without changing its request or bypassing setup guards", async () => {
+        const { workspace, deps, one, connected, setDirectory } = await fixture();
+        const setup = JSON.parse(one.connectedJson);
+        setup.apps[0].deliveryEncryption = {
+            version: 1,
+            scheme: "p256-hkdf-sha256-aes-256-gcm-v1",
+            keyId: "a".repeat(64),
+            publicKeySpki: btoa("\0".repeat(91)).replace(/=+$/, ""),
+            recipientContext: "AQ",
+        };
+        connected.set("one", JSON.stringify(setup));
+        await workspace.connectApp("one");
+        await workspace.connectApp("two");
+        setDirectory(one.directory);
+        await workspace.refreshDirectory();
+        expect(workspace.state.disabledAppIds).toContain("two");
+        workspace.selectForProposal("one", "add");
+        await propose(workspace);
+        expect(workspace.review()).toBe(true);
+        deps.deliver.mockResolvedValue({ kind: "uncertain" });
+        await workspace.confirm(workspace.state.draft!.approval!.approvalId);
+        const prior = workspace.state.draft!;
+        const fields = workspace.state.editorJson;
+        const catalog = workspace.state.catalog!;
+        const rows = [{ chatKey: "synthetic-chat", appIds: ["one"] }];
+        expect(workspace.replaceEnabledChats("synthetic-account", catalog, rows)).toBe(true);
+        expect(workspace.state.enabledChats).toEqual(rows);
+        expect(workspace.state.draft).toEqual(prior);
+        expect(workspace.state.draft!.approval!.request).toBe(prior.approval!.request);
+        expect(workspace.replaceEnabledChats("synthetic-account", catalog, [])).toBe(true);
+        expect(workspace.state.draft).toEqual(prior);
+        expect(workspace.state.draft!.approval!.request).toBe(prior.approval!.request);
+        expect(workspace.replaceEnabledChats("other-account", catalog, rows)).toBe(false);
+        expect(workspace.replaceEnabledChats("synthetic-account", { ...catalog }, rows)).toBe(
+            false,
+        );
+        expect(
+            workspace.replaceEnabledChats("synthetic-account", catalog, [
+                { chatKey: "synthetic-chat", appIds: ["two"] },
+            ]),
+        ).toBe(false);
+        workspace.setFieldEditBlocked(true);
+        expect(workspace.replaceEnabledChats("synthetic-account", catalog, rows)).toBe(false);
+        workspace.setFieldEditBlocked(false);
+        deps.connectAppSetup.mockImplementationOnce(() => new Promise(() => {}));
+        const pending = workspace.connectApp("one");
+        expect(workspace.state.busy).toBe(true);
+        expect(workspace.replaceEnabledChats("synthetic-account", catalog, rows)).toBe(false);
+        expect(workspace.cancelConnection()).toBe(true);
+        expect(await pending).toBe(false);
+        expect(workspace.state.draft).toMatchObject({
+            id: prior.id,
+            status: "uncertain",
+            target: prior.target,
+            payload: prior.payload,
+        });
+        expect(workspace.state.editorJson).toBe(fields);
+        expect(workspace.state.draft?.approval).toBeUndefined();
+        expect(workspace.review()).toBe(true);
+        expect(workspace.state.draft!.approval!.request).toEqual(prior.approval!.request);
+        expect(deps.deliver).toHaveBeenCalledOnce();
+        expect(deps.extract).toHaveBeenCalledOnce();
+    });
+
     it("does not open an empty card host when no connected action is selected", async () => {
         const { workspace, deps } = await fixture();
         expect(await propose(workspace)).toBe("retryable");

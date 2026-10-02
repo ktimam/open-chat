@@ -32,9 +32,7 @@
         <label
             ><input
                 type="checkbox"
-                disabled={$privateAppWorkspaceState.setupLoading ||
-                    $privateAppWorkspaceState.busy ||
-                    !!$privateAppWorkspaceState.draft}
+                disabled={$privateAppWorkspaceState.setupLoading || $privateAppWorkspaceState.busy}
                 checked={enabled(app.id)}
                 onchange={(event) =>
                     localAppChatConfiguration.setEnabled(

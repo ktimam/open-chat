@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { flushSync, mount, tick, unmount } from "svelte";
-import type { Writable } from "svelte/store";
+import { get, type Writable } from "svelte/store";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import MainMenu from "../components/home/nav/MainMenu.svelte";
 import AppSettings from "../components_mobile/home/user_profile/AppSettings.svelte";
@@ -185,6 +185,47 @@ describe("main apps navigation", () => {
             true,
         );
     });
+
+    it("allows chat opt-in while preserving an idle retained private card", async () => {
+        const draft = Object.freeze({
+            id: "retained-card",
+            attempted: true,
+            approval: undefined,
+        });
+        const cards = Object.freeze([{ id: draft.id }]);
+        privateAppWorkspaceState.update((state) => ({ ...state, draft, cards }) as never);
+        const target = renderChatSettings();
+        await tick();
+
+        const toggle = target.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+        expect(toggle.disabled).toBe(false);
+        toggle.checked = true;
+        toggle.dispatchEvent(new Event("change", { bubbles: true }));
+
+        expect(calls.setEnabled).toHaveBeenCalledExactlyOnceWith(
+            "synthetic-user",
+            "synthetic-chat",
+            "reservations",
+            true,
+        );
+        expect(get(privateAppWorkspaceState).draft).toBe(draft);
+        expect(get(privateAppWorkspaceState).cards).toBe(cards);
+        expect(draft).toEqual({ id: "retained-card", attempted: true, approval: undefined });
+    });
+
+    it.each(["setupLoading", "busy"] as const)(
+        "keeps chat opt-in disabled while the workspace is %s",
+        async (blockedBy) => {
+            privateAppWorkspaceState.update((state) => ({ ...state, [blockedBy]: true }) as never);
+            const target = renderChatSettings();
+            await tick();
+
+            expect(target.querySelector<HTMLInputElement>('input[type="checkbox"]')!.disabled).toBe(
+                true,
+            );
+            expect(calls.setEnabled).not.toHaveBeenCalled();
+        },
+    );
 
     it.each([MainMenu, AppSettings])(
         "does not expose Apps to anonymous users",

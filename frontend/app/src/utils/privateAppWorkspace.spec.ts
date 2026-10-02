@@ -1067,7 +1067,7 @@ describe("private app setup-only persistence", () => {
         expect(storage.write).not.toHaveBeenCalled();
     });
 
-    it("rejects chat opt-in changes during processing or a draft without persisting them", async () => {
+    it("blocks chat opt-in changes during processing but persists them afterward without discarding the card", async () => {
         const { storage, entries } = memorySetupStorage();
         entries.set(scopeKey({ account: "account-a", backend: "backend-a" }), savedSetup());
         const { workspace, deps } = fixture(false, storage);
@@ -1078,14 +1078,19 @@ describe("private app setup-only persistence", () => {
         const catalogRef = workspace.state.catalog!;
         expect(workspace.replaceEnabledChats("account-a", catalogRef, [])).toBe(false);
         expect(workspace.state.enabledChats).toEqual(savedSetup().enabledChats);
+        expect(storage.write).not.toHaveBeenCalled();
         pending.resolve({ kind: "extracted", candidates: [{ value: 42 }] });
         await proposal;
-        expect(workspace.replaceEnabledChats("account-a", catalogRef, [])).toBe(false);
         expect(storage.write).not.toHaveBeenCalled();
-        workspace.discard();
+        const retained = workspace.state.draft;
+        const fields = workspace.state.editorJson;
         expect(workspace.replaceEnabledChats("account-a", catalogRef, [])).toBe(true);
         await saved(workspace);
         expect(storage.write).toHaveBeenCalledOnce();
+        expect(storage.write.mock.calls[0][1].enabledChats).toEqual([]);
+        expect(workspace.state.draft).toEqual(retained);
+        expect(workspace.state.editorJson).toBe(fields);
+        expect(workspace.state.cards).toEqual([retained]);
     });
 
     it("keeps account/backend A-B-A restoration races isolated", async () => {

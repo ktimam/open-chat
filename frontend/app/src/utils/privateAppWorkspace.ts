@@ -96,6 +96,8 @@ export interface PrivateAppWorkspaceState {
     cards: readonly LocalDraftView[];
     cardSources: Readonly<Record<string, LocalAppDraftSourceReference | undefined>>;
     activeCardApp?: LocalAppCatalogEntry;
+    /** Host-authored feedback only; never persisted or supplied by an app. */
+    cardReviewBlockedReason?: string;
     editorJson: string;
     recipient: string;
     draftManualValues: boolean;
@@ -245,6 +247,9 @@ function privateExtractionFailureMessage(
     return `${message} No external handoff was requested.`;
 }
 
+const CARD_CONNECTION_REVIEW_BLOCKED =
+    "This saved card's app setup changed or is unavailable. It is inspect-only until the original matching connection is restored. The saved card and any previous request are unchanged. Check the receiving app before starting a new proposal or discarding this card.";
+
 const initial = (): PrivateAppWorkspaceState => ({
     open: false,
     processorReady: false,
@@ -354,6 +359,10 @@ export class PrivateAppWorkspace {
         this.#state.activeCardApp = this.#state.draft
             ? this.#cards.get(this.#state.draft.id)?.app
             : undefined;
+        this.#state.cardReviewBlockedReason =
+            this.#state.draft && !this.#restoredTargetMatches
+                ? CARD_CONNECTION_REVIEW_BLOCKED
+                : undefined;
         this.onChange(this.state);
     }
     #rememberActive(): void {
@@ -729,7 +738,11 @@ export class PrivateAppWorkspace {
         catalog: LocalAppCatalog,
         rows: LocalAppSetupSnapshot["enabledChats"],
     ): boolean {
-        if (account !== this.#account || catalog !== this.#state.catalog || !this.#setupAllowed())
+        if (
+            account !== this.#account ||
+            catalog !== this.#state.catalog ||
+            !this.#setupAllowed(true)
+        )
             return false;
         try {
             const enabledChats = validateLocalAppEnabledChats(rows, catalog);
@@ -1679,7 +1692,11 @@ export class PrivateAppWorkspace {
 
     review(): boolean {
         const draft = this.#state.draft;
-        if (!this.#restoredTargetMatches || this.#fieldEditBlocked) return false;
+        if (draft && !this.#restoredTargetMatches) {
+            this.#set({ message: CARD_CONNECTION_REVIEW_BLOCKED });
+            return false;
+        }
+        if (this.#fieldEditBlocked) return false;
         if (
             draft &&
             ["uncertain", "delivered"].includes(draft.status) &&
@@ -1748,6 +1765,10 @@ export class PrivateAppWorkspace {
         expectedStatus: "reviewed" | "uncertain" | "delivered",
     ): Promise<void> {
         const draft = this.#state.draft;
+        if (draft && !this.#restoredTargetMatches) {
+            this.#set({ message: CARD_CONNECTION_REVIEW_BLOCKED });
+            return;
+        }
         if (draft && (!draft.target.deliveryEncryption || !draft.target.appRevision)) {
             this.#set({
                 message:
