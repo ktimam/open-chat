@@ -78,11 +78,11 @@ test("current formatting follows the reviewed merged upstream without new exempt
       "utf8",
     ),
   );
-  assert.equal(CURRENT_FORMAT_BASE, "944efe4a7270d42f62dc3bfa5bad853b237d4b69");
+  assert.equal(CURRENT_FORMAT_BASE, "5ca61b627809807b5c29300a46d539567249f1cd");
   assert.equal(baseline.upstreamCommit, CURRENT_FORMAT_BASE);
   assert.equal(
     baseline.backendTree,
-    "385d46c61b9c6c50430d393955da17ec82a28ec0",
+    "02e38e2858b79cbcfaff623b5f2c9de76952f6be",
   );
   assert.equal(
     baseline.rootCargoManifest,
@@ -93,7 +93,7 @@ test("current formatting follows the reviewed merged upstream without new exempt
       (record) => record.baseCommit === CURRENT_FORMAT_BASE,
     ),
   );
-  assert.equal(readCurrentFormattingRegistry().records.length, 11);
+  assert.equal(readCurrentFormattingRegistry().records.length, 10);
 });
 
 test("current review regenerates exact edit proof after all identity checks", () => {
@@ -294,22 +294,28 @@ test("candidate filtering retains exactly the existing owned frontend rules", ()
   );
 });
 
-test("restored desktop onboarding is normally formatted and checked without an inherited exemption", () => {
+test("restored desktop onboarding and main Apps menu are normally formatted without inherited exemptions", () => {
   const root = fileURLToPath(new URL("../", import.meta.url));
-  const path = "frontend/app/src/components/onboard/OnboardModal.svelte";
   const registry = readCurrentFormattingRegistry();
-  assert.equal(
-    registry.records.some((record) => record.path === path),
-    false,
-  );
-  assert(
-    currentFormattingCandidates(root, CURRENT_FORMAT_BASE).paths.includes(path),
-  );
-  const source = readFileSync(resolve(root, path), "utf8");
-  assert.equal(
-    formatCurrentSource(resolve(root, "frontend"), path, source),
-    source.replaceAll("\r\n", "\n"),
-  );
+  for (const path of [
+    "frontend/app/src/components/onboard/OnboardModal.svelte",
+    "frontend/app/src/components/home/nav/MainMenu.svelte",
+  ]) {
+    assert.equal(
+      registry.records.some((record) => record.path === path),
+      false,
+    );
+    assert(
+      currentFormattingCandidates(root, CURRENT_FORMAT_BASE).paths.includes(
+        path,
+      ),
+    );
+    const source = readFileSync(resolve(root, path), "utf8");
+    assert.equal(
+      formatCurrentSource(resolve(root, "frontend"), path, source),
+      source.replaceAll("\r\n", "\n"),
+    );
+  }
 });
 
 test(
@@ -317,7 +323,7 @@ test(
   { timeout: 120000 },
   () => {
     const registry = readCurrentFormattingRegistry();
-    assert.equal(registry.records.length, 11);
+    assert.equal(registry.records.length, 10);
     const result = checkCurrentClientFormat({ report: () => {} });
     assert.deepEqual(result.failures, []);
     assert.equal(result.pass, true);

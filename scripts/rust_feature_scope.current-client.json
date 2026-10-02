@@ -4,9 +4,10 @@
   "feature": "unofficial-current-client-models-and-private-app-native-interface",
   "sourceRevision": {
     "base": "5f00758312735f2ddac9928e3aa60349964bf73a",
-    "head": "bb2a8d712bdac6f59c183951e453bc0e18bb64bb"
+    "head": "33888e4f58f6b9374c3b7250dd564138acb5ca0b",
+    "pendingMergeHead": "5ca61b627809807b5c29300a46d539567249f1cd"
   },
-  "cargoLockSha256": "838a61f0d25f13fa92fd1d118a139d2cd00c2dfbcf625949e45a8f589e5f3ae4",
+  "cargoLockSha256": "631c6c577bf4fa6fb4797c44f9d1f451027b37be3e351447ce3a587186165059",
   "completeness": {
     "status": "incomplete",
     "unresolved": [

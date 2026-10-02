@@ -744,7 +744,9 @@ export default defineConfig({
                   // configured local target keeps both authenticated bootstrap and canister calls
                   // routable without inventing a canister header.
                   "/api": {
-                      target: `http://${dfxJson.networks.local.bind}`,
+                      target: process.env.OC_REPLICA_PORT
+                          ? `http://127.0.0.1:${process.env.OC_REPLICA_PORT}`
+                          : `http://${dfxJson.networks.local.bind}`,
                       changeOrigin: true,
                       // Tailscale Serve supplies the original HTTPS hostname separately. The IC
                       // gateway gives X-Forwarded-Host precedence over the rewritten Host header,

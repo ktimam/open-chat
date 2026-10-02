@@ -739,3 +739,30 @@ the Svelte check reports zero errors (572 existing warnings across 211 files),
 and the OpenChat agent TypeScript check passes. These are local checks only.
 This checkpoint does not claim live browser, phone, APK/provider, hosted,
 deployment or release acceptance.
+
+## October 2 upstream replica-port integration
+
+The pending merge of pinned upstream `5ca61b627809807b5c29300a46d539567249f1cd`
+into committed main `33888e4f58f6b9374c3b7250dd564138acb5ca0b` has source aggregate
+`7e72d8ee0dbb5bd42a8ee8546f4c21a6f992a8c10c4f83a7d5959198144774cd`.
+All 171 committed Git blobs independently reproduce the preceding `83d70d96`
+checkpoint. Only Rollup config, Vite config and the OpenChat client's local
+metrics URL change within that source set. The optional replica port retains
+its 8080/default-network behavior; the fork model proxy, forwarded-header
+removal, original auth/startup, normal Apps UI, encrypted cards/delivery and
+official-backend profile remain intact. Exact three-file reversal tests retain
+the earlier aggregate and all historical checkpoint proofs.
+
+Counts remain 171 sources, 123 dedicated owners, 108 anchors and 26 roots.
+There is no selector, import-ownership or advisory-policy expansion. The
+upstream devalue 5.9.4 lock change requires separate installed-dependency and
+security evidence; this source checkpoint supplies neither. The guarded local
+canister deployment wrapper deliberately stays byte-identical with its trusted
+SHA requirement and fixed port 8080, rather than adopting the unguarded stock
+wrapper call. No deployment is performed or authorized by this review.
+
+The current formatter baseline advances to that same upstream commit. Its ten
+remaining exceptions retain identical source/edit proofs; the now fully
+formatted MainMenu no longer has a current exception. Historical formatter and
+PR inventories remain unchanged. This is source/inventory evidence only, not
+frontend, artifact, browser/device, advisory or release acceptance.

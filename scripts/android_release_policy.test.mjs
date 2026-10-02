@@ -662,7 +662,11 @@ test("workflow gates every build/upload behind the policy and verifies both arti
   assertBundletoolRunnerEnvironment(workflow);
   assert.match(
     workflow,
-    /- name: Setup Android SDK\s+uses: android-actions\/setup-android@v3\s+with:\s+packages: platform-tools\s/u,
+    /- name: Setup Android SDK\s+uses: android-actions\/setup-android@v4\s+with:\s+packages: platform-tools\s/u,
+  );
+  assert.equal(
+    (workflow.match(/uses: android-actions\/setup-android@/gu) ?? []).length,
+    1,
   );
   assert.match(
     workflow,

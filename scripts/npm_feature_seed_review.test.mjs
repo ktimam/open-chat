@@ -187,6 +187,39 @@ const beforeMainAppsFlow = new Map([
     "55adc1e7aba58313c1e4b01410cdbff4b2aa43f0873fe006afc08398d26e105d",
   ],
 ]);
+// Independently reconstructed all 171 Git blobs at committed 33888e4f.
+// Only these three existing mixed inputs change in the incoming 5ca61b merge.
+// Historical aggregates substitute their exact old hashes; the live gate still
+// binds every merged byte and the reversal test below checks each transformation.
+const beforeReplicaPortMerge = new Map([
+  [
+    "frontend/app/rollup.config.mjs",
+    "1ba665d8ddf6cf382b388cb178bc595e6cb18f99f7a5e9d18ca0292586bf8f74",
+  ],
+  [
+    "frontend/app/vite.config.ts",
+    "92eb81a62aad23c938d118b991da244d1a5194d1daeb5be885c5a78639329cec",
+  ],
+  [
+    "frontend/openchat-client/src/openchat.ts",
+    "bd83d161f48f8930dba4c3f252495050fb101184d638cbeac0e85e146f104b28",
+  ],
+]);
+function beforeReplicaPortMergeFingerprint(fingerprint) {
+  return {
+    ...fingerprint,
+    sha256: createHash("sha256")
+      .update(
+        JSON.stringify(
+          fingerprint.files.map((file) => [
+            file,
+            beforeReplicaPortMerge.get(file) ?? sourceHash(file),
+          ]),
+        ),
+      )
+      .digest("hex"),
+  };
+}
 function sourceHash(file) {
   return createHash("sha256")
     .update(readFileSync(resolve(root, file), "utf8").replaceAll("\r\n", "\n"))
@@ -214,7 +247,9 @@ function beforeMainAppsFlowFingerprint(fingerprint) {
         JSON.stringify(
           files.map((file) => [
             file,
-            beforeMainAppsFlow.get(file) ?? sourceHash(file),
+            beforeMainAppsFlow.get(file) ??
+              beforeReplicaPortMerge.get(file) ??
+              sourceHash(file),
           ]),
         ),
       )
@@ -246,6 +281,7 @@ function priorFingerprint(fingerprint, hashes, replacements = new Map()) {
             ? hash(replacements.get(file))
             : (hashes.get(file) ??
               beforeMainAppsFlow.get(file) ??
+              beforeReplicaPortMerge.get(file) ??
               sourceHash(file)),
         ]),
       ),
@@ -353,6 +389,7 @@ function septemberCheckpointEntries(fingerprint) {
       beforeExtension.get(path) ??
         beforeOctoberRefresh.get(path) ??
         beforeMainAppsFlow.get(path) ??
+        beforeReplicaPortMerge.get(path) ??
         sourceHash(path),
     ]);
   assert.equal(entries.length, 148);
@@ -620,7 +657,7 @@ test("main Apps flow, retained local cards and startup completion have an exact 
   assert.equal(config.seeds.length, 26);
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   assert.equal(
-    actual.sha256,
+    beforeReplicaPortMergeFingerprint(actual).sha256,
     "83d70d96f0b74618f59ef52327f2d3bf104a2895231e686f9557cb9e068a5b14",
   );
 
@@ -718,9 +755,83 @@ test("current encryption, recovery and enum-label owners use existing selectors 
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   assert.equal(
     fingerprint.sha256,
-    "83d70d96f0b74618f59ef52327f2d3bf104a2895231e686f9557cb9e068a5b14",
+    "7e72d8ee0dbb5bd42a8ee8546f4c21a6f992a8c10c4f83a7d5959198144774cd",
   );
   assertReviewedSourceFingerprint(fingerprint, config.sourceReview);
+});
+
+test("incoming replica-port support preserves exact main Apps source history and fork proxy policy", () => {
+  const config = JSON.parse(
+    readFileSync(
+      resolve(root, "scripts/npm_feature_scope.current-client.json"),
+      "utf8",
+    ),
+  );
+  const fingerprint = seedSourceFingerprint(root, config);
+  const read = (file) =>
+    readFileSync(resolve(root, file), "utf8").replaceAll("\r\n", "\n");
+  const reversals = [
+    [
+      "frontend/app/rollup.config.mjs",
+      (text) =>
+        text.replace(
+          '            "import.meta.env.OC_REPLICA_PORT": maybeStringify(process.env.OC_REPLICA_PORT),\n',
+          "",
+        ),
+    ],
+    [
+      "frontend/app/vite.config.ts",
+      (text) =>
+        text.replace(
+          "                      target: process.env.OC_REPLICA_PORT\n                          ? `http://127.0.0.1:${process.env.OC_REPLICA_PORT}`\n                          : `http://${dfxJson.networks.local.bind}`,",
+          "                      target: `http://${dfxJson.networks.local.bind}`,",
+        ),
+    ],
+    [
+      "frontend/openchat-client/src/openchat.ts",
+      (text) =>
+        text.replace(
+          '${this.config.userIndexCanister}.raw.localhost:${import.meta.env.OC_REPLICA_PORT ?? "8080"}/metrics',
+          "${this.config.userIndexCanister}.raw.localhost:8080/metrics",
+        ),
+    ],
+  ];
+  for (const [file, reverse] of reversals) {
+    assert(fingerprint.files.includes(file));
+    const current = read(file);
+    const previous = reverse(current);
+    assert.notEqual(previous, current, file);
+    assert.equal(
+      createHash("sha256").update(previous).digest("hex"),
+      beforeReplicaPortMerge.get(file),
+      file,
+    );
+    assert.deepEqual(
+      featureDependencySpecifiers(current),
+      featureDependencySpecifiers(previous),
+    );
+  }
+  const previous = beforeReplicaPortMergeFingerprint(fingerprint);
+  assert.equal(
+    previous.sha256,
+    "83d70d96f0b74618f59ef52327f2d3bf104a2895231e686f9557cb9e068a5b14",
+  );
+  assert.equal(
+    fingerprint.sha256,
+    "7e72d8ee0dbb5bd42a8ee8546f4c21a6f992a8c10c4f83a7d5959198144774cd",
+  );
+  assertReviewedSourceFingerprint(previous, config.sourceReview);
+  assertReviewedSourceFingerprint(fingerprint, config.sourceReview);
+  const vite = read("frontend/app/vite.config.ts");
+  for (const required of [
+    '"/hf-model"',
+    "changeOrigin: true",
+    'removeHeader("x-forwarded-host")',
+    'removeHeader("x-forwarded-port")',
+    'removeHeader("forwarded")',
+    "envDir: unofficialLocalClient ? false : undefined",
+  ])
+    assert(vite.includes(required), required);
 });
 
 test("cache hashing responsiveness preserves exact prior source identity and integrity boundaries", () => {
@@ -1178,6 +1289,7 @@ test("source navigation preserves the exact committed 153-file checkpoint", () =
           file,
           beforeSourceNavigation.get(file) ??
             beforeMainAppsFlow.get(file) ??
+            beforeReplicaPortMerge.get(file) ??
             sourceHash(file),
         ]),
       ),

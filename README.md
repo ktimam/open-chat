@@ -34,6 +34,8 @@ The final argument must be the exact 64-hex SHA-256 from an independently truste
 
 To start again with a fresh install, stop DFX, then run `rm -rf .dfx`, then start from the top of these instructions again.
 
+To run more than one checkout at once, give each its own ports: start DFX with `dfx start --clean --host 127.0.0.1:<port>` and set `OC_REPLICA_PORT=<port>` (default 8080) and `OC_DEV_PORT` (default 5001) when running the scripts above.
+
 ## Deterministic builds
 
 We need builds to be deterministic so that code running inside a canister can be verified by comparing the

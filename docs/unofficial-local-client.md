@@ -661,3 +661,13 @@ encrypted app review/save/retry, provider restoration and model inference remain
 separate current-artifact checks. ARM has static verification only; physical-phone
 testing remains deferred. Neither this UI check nor the packaging proofs waive the
 recorded CI/advisory gates or establish public-release readiness.
+
+A subsequent persistent observer resolved the Launcher ambiguity: before the
+instrumentation ended, the same APK022 opened the known Chrome package, displayed
+the native **Connect an app** page and its enabled **Continue to app** control,
+then reached **Connect IOU setup** after a normal tap. Receipt
+`emulator-public-ui-20261002/runner-v11/observations/apk022-native-setup-r1/result.json`
+records this narrower successful native-opening sequence. IOU was signed out and
+displayed **Sign in to IOU**, so the observer stopped without credential actions.
+The native opening is verified; setup sharing, proposals, encrypted delivery and
+saved-entry readback remain unverified on this APK. No account or data was reset.

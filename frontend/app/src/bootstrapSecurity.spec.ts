@@ -32,6 +32,22 @@ const rollupExtras = readAppFile("rollup.extras.mjs");
 const svelteConfig = readAppFile("svelte.config.js");
 const viteConfig = readAppFile("vite.config.ts");
 
+function assertReplicaProxyPolicy(source: string): string {
+    const proxy = /"\/api":\s*\{[\s\S]*?configure\(proxy\)\s*\{[\s\S]*?\n\s*\},/.exec(source)?.[0];
+    expect(proxy).toBeDefined();
+    const target =
+        /target:\s*(process\.env\.OC_REPLICA_PORT\s*\?\s*`http:\/\/127\.0\.0\.1:\$\{process\.env\.OC_REPLICA_PORT\}`\s*:\s*`http:\/\/\$\{dfxJson\.networks\.local\.bind\}`),\s*changeOrigin:\s*true\b/.exec(
+            proxy ?? "",
+        )?.[1];
+    expect(target).toBeDefined();
+    expect(proxy).toMatch(/proxy\.on\("proxyReq",\s*\(proxyRequest\)\s*=>\s*\{/);
+    for (const header of ["x-forwarded-host", "x-forwarded-port", "forwarded"]) {
+        expect(proxy).toContain(`proxyRequest.removeHeader("${header}")`);
+    }
+    if (target === undefined) throw new Error("Expected the exact guarded replica target");
+    return target;
+}
+
 // Execute the real entry point without importing either large Svelte tree. CJS
 // transpilation preserves import()'s asynchronous branch selection; only
 // import.meta is replaced so this isolated VM receives a controlled build flag.
@@ -401,11 +417,36 @@ describe("application bootstrap security", () => {
     });
 
     test("rewrites the external development host before proxying replica API calls", () => {
-        expect(viteConfig).toMatch(
-            /"\/api":\s*\{[\s\S]*?target:\s*`http:\/\/\$\{dfxJson\.networks\.local\.bind\}`,[\s\S]*?changeOrigin:\s*true/,
-        );
-        expect(viteConfig).toContain('proxyRequest.removeHeader("x-forwarded-host")');
-        expect(viteConfig).toContain('proxyRequest.removeHeader("x-forwarded-port")');
-        expect(viteConfig).toContain('proxyRequest.removeHeader("forwarded")');
+        const target = assertReplicaProxyPolicy(viteConfig);
+        for (const [port, expected] of [
+            [undefined, "http://127.0.0.1:9131"],
+            ["", "http://127.0.0.1:9131"],
+            ["9123", "http://127.0.0.1:9123"],
+        ]) {
+            // Evaluate the actual conditional, without importing Vite or starting a proxy.
+            const actual = new Script(`(${target})`).runInNewContext(
+                {
+                    process: { env: { OC_REPLICA_PORT: port } },
+                    dfxJson: { networks: { local: { bind: "127.0.0.1:9131" } } },
+                },
+                { timeout: 1000 },
+            );
+            expect(actual).toBe(expected);
+        }
+    });
+
+    test("replica proxy contract rejects either lost port branch or removed host protections", () => {
+        for (const [before, after] of [
+            ["http://127.0.0.1:${process.env.OC_REPLICA_PORT}", "http://127.0.0.1:8080"],
+            ["http://${dfxJson.networks.local.bind}", "http://127.0.0.1:8080"],
+            ["changeOrigin: true", "changeOrigin: false"],
+            ['proxyRequest.removeHeader("x-forwarded-host")', "void 0"],
+            ['proxyRequest.removeHeader("x-forwarded-port")', "void 0"],
+            ['proxyRequest.removeHeader("forwarded")', "void 0"],
+        ]) {
+            const changed = viteConfig.replaceAll(before, after);
+            expect(changed).not.toBe(viteConfig);
+            expect(() => assertReplicaProxyPolicy(changed)).toThrow();
+        }
     });
 });

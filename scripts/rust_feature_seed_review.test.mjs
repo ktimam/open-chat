@@ -7,6 +7,7 @@ import test from "node:test";
 import { localApkBuildPlan } from "./build-unofficial-local-apk.mjs";
 import { UNOFFICIAL_LOCAL_CANISTERS } from "../frontend/unofficialLocalProfile.mjs";
 import { localApkBundleMarker } from "../frontend/unofficialLocalApkProfile.mjs";
+import { lockIdentities } from "./rust_feature_scope.mjs";
 import {
   prepareRustFeatureInventory,
   verifyRustFeatureScopeReview,
@@ -155,7 +156,11 @@ test("current-client review binds the encrypted-only native handoff without addi
   const { config, review, sourceBytes } = currentClientFixture();
   assert.equal(
     config.sourceRevision.head,
-    "bb2a8d712bdac6f59c183951e453bc0e18bb64bb",
+    "33888e4f58f6b9374c3b7250dd564138acb5ca0b",
+  );
+  assert.equal(
+    config.sourceRevision.pendingMergeHead,
+    "5ca61b627809807b5c29300a46d539567249f1cd",
   );
   assert.equal(
     config.sourceRevision.base,
@@ -196,11 +201,112 @@ test("current-client review binds the encrypted-only native handoff without addi
     );
 });
 
-test("current-client merge lock refresh reverses only upstream backend edges and workspace registration", () => {
+function restoreLockBeforePendingBackendRemoval(cargoLock) {
+  const current = Buffer.from(cargoLock)
+    .toString("utf8")
+    .replaceAll("\r\n", "\n");
+  assert.equal(
+    hash(current),
+    "631c6c577bf4fa6fb4797c44f9d1f451027b37be3e351447ce3a587186165059",
+  );
+  const block = current.match(
+    /\[\[package\]\]\nname = "group_community_common"\n[\s\S]*?(?=\n\[\[package\]\]|$)/u,
+  )?.[0];
+  assert(block);
+  assert.doesNotMatch(block, /^ "msgpack",$/mu);
+  const anchor = ' "local_user_index_canister_c2c_client",\n';
+  assert.equal(block.split(anchor).length, 2);
+  const previous = current.replace(
+    block,
+    block.replace(anchor, `${anchor} "msgpack",\n`),
+  );
+  assert.equal(
+    hash(previous),
+    "838a61f0d25f13fa92fd1d118a139d2cd00c2dfbcf625949e45a8f589e5f3ae4",
+  );
+  return previous;
+}
+
+test("pending upstream lock-only merge preserves all conservative native package blocks and edges", () => {
+  const { config, cargoLock } = currentClientFixture();
+  const previous = restoreLockBeforePendingBackendRemoval(cargoLock);
+  const closure = (bytes) => {
+    const text = Buffer.from(bytes).toString("utf8").replaceAll("\r\n", "\n");
+    const identities = lockIdentities(text);
+    const blocks = new Map(
+      text
+        .split(/^\[\[package\]\]\n/mu)
+        .slice(1)
+        .map((raw) => {
+          const scalar = (key) =>
+            raw.match(new RegExp(`^${key} = "([^"\\n]+)"$`, "mu"))?.[1] ?? null;
+          const id = JSON.stringify([
+            scalar("name"),
+            scalar("version"),
+            scalar("source"),
+          ]);
+          assert(identities.has(id));
+          const dependencies =
+            raw
+              .match(/^dependencies = \[\n([\s\S]*?)^\]$/mu)?.[1]
+              .split("\n")
+              .filter(Boolean)
+              .map((line) => JSON.parse(line.trim().replace(/,$/u, ""))) ?? [];
+          return [id, { ...identities.get(id), raw, dependencies }];
+        }),
+    );
+    const pending = config.seeds.map(({ expected }) =>
+      JSON.stringify([expected.name, expected.version, expected.source]),
+    );
+    const reached = new Map();
+    while (pending.length) {
+      const id = pending.pop();
+      if (reached.has(id)) continue;
+      const block = blocks.get(id);
+      assert(block, `Missing root/dependency ${id}`);
+      reached.set(id, block.raw);
+      for (const dependency of block.dependencies) {
+        const match = /^([^ ]+)(?: ([^ ]+))?(?: \(([^)]+)\))?$/u.exec(
+          dependency,
+        );
+        assert(match, `Unsupported lock dependency ${dependency}`);
+        const matches = [...blocks.entries()].filter(
+          ([, entry]) =>
+            entry.name === match[1] &&
+            (!match[2] || entry.version === match[2]) &&
+            (!match[3] || entry.source === match[3]),
+        );
+        assert.equal(
+          matches.length,
+          1,
+          `Ambiguous lock dependency ${dependency}`,
+        );
+        pending.push(matches[0][0]);
+      }
+    }
+    return [...reached.entries()].sort(([a], [b]) => a.localeCompare(b));
+  };
+  const before = closure(previous),
+    after = closure(cargoLock);
+  assert.deepEqual(after, before);
+  assert.equal(after.length, 512);
+  assert.equal(
+    hash(JSON.stringify(after)),
+    "e0b6fa2f2b3f5f92774a6cae11c3c44e1428c64db3ff8a08974950163c718fc5",
+  );
+  assert.equal(
+    after.some(([id]) => id === '["group_community_common","0.1.0",null]'),
+    false,
+  );
+  assert.equal(config.seeds.length, 26);
+  assert.equal(config.profiles.length, 8);
+});
+
+test("historical bb2a merge lock refresh still reverses only backend edges and workspace registration", () => {
   const { config, cargoLock, sourceBytes } = currentClientFixture();
   const lf = (bytes) =>
     Buffer.from(bytes).toString("utf8").replaceAll("\r\n", "\n");
-  const current = lf(cargoLock);
+  const current = restoreLockBeforePendingBackendRemoval(cargoLock);
   assert.equal(
     hash(current),
     "838a61f0d25f13fa92fd1d118a139d2cd00c2dfbcf625949e45a8f589e5f3ae4",
