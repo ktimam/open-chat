@@ -94,6 +94,7 @@ export interface PrivateAppWorkspaceState {
     message: string;
     draft?: LocalDraftView;
     cards: readonly LocalDraftView[];
+    cardSources: Readonly<Record<string, LocalAppDraftSourceReference | undefined>>;
     activeCardApp?: LocalAppCatalogEntry;
     editorJson: string;
     recipient: string;
@@ -161,6 +162,41 @@ function sameCardConfiguration(left: unknown, right: unknown): boolean {
     );
 }
 
+/** Navigation metadata may be absent from legacy records; stable message identity stays unchanged. */
+function sameSourceMessage(
+    left: LocalAppDraftSourceReference,
+    right: LocalAppDraftSourceReference,
+): boolean {
+    return (
+        left.chatKey === right.chatKey &&
+        left.messageId === right.messageId &&
+        left.threadRootMessageIndex === right.threadRootMessageIndex &&
+        (left.chatKind === undefined ||
+            right.chatKind === undefined ||
+            left.chatKind === right.chatKind)
+    );
+}
+
+function backfillSourceLocation(
+    retained: LocalAppDraftSourceReference,
+    current: LocalAppDraftSourceReference,
+): LocalAppDraftSourceReference {
+    if (
+        (retained.messageIndex !== undefined || current.messageIndex === undefined) &&
+        (retained.chatKind !== undefined || current.chatKind === undefined)
+    )
+        return retained;
+    return snapshotLocalAppDraftSourceReference({
+        ...retained,
+        ...(retained.messageIndex === undefined && current.messageIndex !== undefined
+            ? { messageIndex: current.messageIndex }
+            : {}),
+        ...(retained.chatKind === undefined && current.chatKind !== undefined
+            ? { chatKind: current.chatKind }
+            : {}),
+    });
+}
+
 type PrivateProcessorOutcome = Awaited<ReturnType<typeof runIsolatedAppProcessor>>["kind"];
 
 /** Only fixed host diagnostics cross this boundary, never provider text or app/model data. */
@@ -219,6 +255,7 @@ const initial = (): PrivateAppWorkspaceState => ({
     draftLoading: false,
     draftStorageStatus: "",
     cards: Object.freeze([]),
+    cardSources: Object.freeze({}),
     enabledChats: Object.freeze([]),
     editorJson: "",
     recipient: "",
@@ -304,6 +341,13 @@ export class PrivateAppWorkspace {
                 const draft = this.#drafts.get(id);
                 return draft ? [draft] : [];
             }),
+        );
+        this.#state.cardSources = Object.freeze(
+            Object.fromEntries(
+                [...this.#cards].flatMap(([id, card]) =>
+                    card.source === undefined ? [] : [[id, card.source]],
+                ),
+            ),
         );
         this.#state.activeCardApp = this.#state.draft
             ? this.#cards.get(this.#state.draft.id)?.app
@@ -1266,10 +1310,17 @@ export class PrivateAppWorkspace {
                 return (
                     target?.appId === selectedAppId &&
                     target.actionId === selectedActionId &&
-                    JSON.stringify(card.source) === JSON.stringify(source)
+                    card.source !== undefined &&
+                    sameSourceMessage(card.source, source)
                 );
             });
-            if (existing && this.selectCard(existing[0])) return "drafted";
+            if (existing) {
+                const [id, card] = existing;
+                const previousSource = card.source;
+                if (previousSource) card.source = backfillSourceLocation(previousSource, source);
+                if (this.selectCard(id)) return "drafted";
+                card.source = previousSource;
+            }
         }
         if (this.#cards.size >= MAX_SAVED_LOCAL_APP_DRAFTS) {
             this.#set({
@@ -1475,6 +1526,20 @@ export class PrivateAppWorkspace {
     }
 
     invalidateReview(): void {
+        const draft = this.#state.draft;
+        if (
+            draft?.approval &&
+            (draft.status === "uncertain" || draft.status === "delivered") &&
+            !this.#state.busy
+        ) {
+            this.#set({
+                draft: this.#drafts.revokeApproval(draft.id),
+                message:
+                    "Review revoked. Review the exact recovered request again before retrying.",
+            });
+            this.#saveDraft();
+            return;
+        }
         this.#commitEdit(this.#state.editorJson, this.#state.recipient);
     }
 

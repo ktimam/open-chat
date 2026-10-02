@@ -10,6 +10,8 @@
     import { nativeAppDelivery, nativeAppPairing } from "../utils/nativeAppDelivery";
     import PrivateAppDraftFields from "./PrivateAppDraftFields.svelte";
     import { connectLocalAppSetup } from "../utils/localAppSetupConnection";
+    import { localAppSourceNavigation } from "../utils/localAppSourceNavigation";
+    import { navigate } from "@utils/navigation";
 
     let { client }: { client: OpenChat } = $props();
     let confirmed = $state(false);
@@ -44,6 +46,11 @@
     );
     const editable = $derived(
         workspaceView.draft?.status === "draft" || workspaceView.draft?.status === "reviewed",
+    );
+    const selectedSource = $derived(
+        localAppSourceNavigation(
+            workspaceView.draft ? workspaceView.cardSources[workspaceView.draft.id] : undefined,
+        ),
     );
     const delivery = $derived(
         $localAppDeliveryStatus?.importId === workspaceView.draft?.approval?.request.idempotencyKey
@@ -155,6 +162,22 @@
         confirmed = false;
         workspace.editRecipient((event.currentTarget as HTMLInputElement).value);
     }
+    function viewSource() {
+        if (
+            !accountReady ||
+            !selectedSource ||
+            workspaceView.busy ||
+            workspaceView.draftLoading ||
+            fieldEditBlocked
+        )
+            return;
+        const route = selectedSource.route;
+        confirmed = false;
+        retryConfirmed = false;
+        workspace.invalidateReview();
+        workspace.close();
+        navigate(route);
+    }
     onDestroy(() => workspace.clear());
 </script>
 
@@ -177,6 +200,7 @@
             <nav aria-label="Saved private cards on this device" class="card-selector">
                 <p class="small">Saved locally, not posted in chat. Select a card to review it.</p>
                 {#each workspaceView.cards as card, index (card.id)}
+                    {@const source = localAppSourceNavigation(workspaceView.cardSources[card.id])}
                     <button
                         type="button"
                         aria-pressed={workspaceView.draft?.id === card.id}
@@ -184,10 +208,28 @@
                             workspaceView.draftLoading ||
                             fieldEditBlocked}
                         onclick={() => workspace.selectCard(card.id)}
-                        >Card {index + 1} · {card.status}</button
                     >
+                        <span>Card {index + 1} · {card.status}</span>
+                        {#if source}<span class="small source-label">{source.label}</span
+                            >{:else if workspaceView.cardSources[card.id]}<span
+                                class="small source-label"
+                                >Propose again from the original message to restore its link</span
+                            >{:else}<span class="small source-label"
+                                >No source message available</span
+                            >{/if}
+                    </button>
                 {/each}
             </nav>
+        {/if}
+        {#if selectedSource}
+            <div class="card-source" aria-label="Selected card source">
+                <p class="small">{selectedSource.label}</p>
+                <button
+                    type="button"
+                    disabled={workspaceView.busy || workspaceView.draftLoading || fieldEditBlocked}
+                    onclick={viewSource}>{selectedSource.linkLabel}</button
+                >
+            </div>
         {/if}
         {#snippet secondarySetup()}
             <details class="privacy-disclosure">
@@ -651,6 +693,22 @@
     }
     .primary-card {
         min-width: 0;
+    }
+    .card-selector,
+    .card-source {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+        min-width: 0;
+    }
+    .card-selector button {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+        text-align: start;
+    }
+    .source-label {
+        overflow-wrap: anywhere;
     }
     .privacy-disclosure,
     .setup-disclosure {

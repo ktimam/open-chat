@@ -489,9 +489,11 @@
                 threadRootMessageIndex,
             };
             const capturedChatKey = chatIdentifierToString(chatId);
+            const capturedChatKind = chatId.kind;
             const capturedViewer = $currentUserIdStore;
             const capturedSessionEpoch = currentAutoProposeSessionEpoch();
             const capturedMessageId = msg.messageId;
+            const capturedMessageIndex = msg.messageIndex;
             const stillCurrent = () =>
                 componentMounted &&
                 $currentUserIdStore === capturedViewer &&
@@ -500,8 +502,10 @@
                 (privateSuggested === undefined ||
                     localAppChatConfiguration.current(privateSuggested)) &&
                 chatIdentifierToString(chatId) === capturedChatKey &&
+                chatId.kind === capturedChatKind &&
                 threadRootMessageIndex === capturedContext.threadRootMessageIndex &&
                 msg.messageId === capturedMessageId &&
+                msg.messageIndex === capturedMessageIndex &&
                 msg.content === capturedContent;
             const onPhase = (phase: ProposalPhase) => {
                 if (stillCurrent()) proposalPhase = phase;
@@ -531,7 +535,9 @@
                     sourceTimestamp: Number(timestamp),
                     source: {
                         chatKey: capturedChatKey,
+                        chatKind: capturedChatKind,
                         messageId: capturedMessageId.toString(),
+                        messageIndex: capturedMessageIndex,
                         ...(capturedContext.threadRootMessageIndex === undefined
                             ? {}
                             : {

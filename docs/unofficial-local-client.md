@@ -592,8 +592,17 @@ and targeted formatting also passed. Read-only preparation with the actual insta
 Linux Cargo and rustc passed all eight configured profiles, recorded in
 `card-collection-release-20261002/ci-repair/canonical-linux-binary-preflight.json`.
 That preparation did not execute either tool, collect metadata or query
-advisories. No hosted rerun result is recorded for the correction, and it does
-not resolve or waive the npm or Android failures in the earlier run.
+advisories. The correction was committed as
+`49450039825edaa2bade427e2525696a7c5d9d22`. Its
+[hosted frontend run](https://github.com/ktimam/open-chat/actions/runs/36947883175)
+passed. The [scoped-security run](https://github.com/ktimam/open-chat/actions/runs/36947883187)
+also passed model contracts, Linux/Windows native checks and actual small-model
+inference. All eight Rust collection profiles now completed with verified source
+bindings and SBOM schemas; the report's ten advisory records match the documented
+local-test deferrals. The raw security gate remains failed: the seven npm findings
+and deferred Rust findings are not waived or described as a clean scan. Android
+again failed fetching the pinned compiler before compilation, not in application
+code. No runtime/source-navigation acceptance follows from this CI-only commit.
 
 Current-artifact runtime checks remain open: familiar compact-card editing and
 responsive layout, multi-card recovery and source association, reviewed encrypted

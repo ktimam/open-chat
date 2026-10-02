@@ -17,6 +17,8 @@ export interface LocalAppDraftSourceReference {
     readonly chatKey: string;
     readonly messageId: string;
     readonly threadRootMessageIndex?: number;
+    readonly messageIndex?: number;
+    readonly chatKind?: "direct_chat" | "group_chat" | "channel";
 }
 export interface SavedLocalAppDraftCollection {
     readonly version: 2;
@@ -141,7 +143,11 @@ function plainFields(
 }
 /** Host-owned navigation identity only. Never carries source content or delivery authority. */
 export function snapshotLocalAppDraftSourceReference(value: unknown): LocalAppDraftSourceReference {
-    const fields = plainFields(value, ["chatKey", "messageId"], ["threadRootMessageIndex"]);
+    const fields = plainFields(
+        value,
+        ["chatKey", "messageId"],
+        ["threadRootMessageIndex", "messageIndex", "chatKind"],
+    );
     for (const [name, limit] of [
         ["chatKey", 2048],
         ["messageId", 128],
@@ -157,16 +163,32 @@ export function snapshotLocalAppDraftSourceReference(value: unknown): LocalAppDr
         )
             invalid();
     }
+    for (const name of ["threadRootMessageIndex", "messageIndex"] as const) {
+        const index = fields[name];
+        if (
+            Object.hasOwn(fields, name) &&
+            (typeof index !== "number" || !Number.isSafeInteger(index) || index < 0)
+        )
+            invalid();
+    }
     const thread = fields.threadRootMessageIndex;
+    const messageIndex = fields.messageIndex;
+    const chatKind = fields.chatKind;
     if (
-        Object.hasOwn(fields, "threadRootMessageIndex") &&
-        (typeof thread !== "number" || !Number.isSafeInteger(thread) || thread < 0)
+        Object.hasOwn(fields, "chatKind") &&
+        chatKind !== "direct_chat" &&
+        chatKind !== "group_chat" &&
+        chatKind !== "channel"
     )
         invalid();
     return Object.freeze({
         chatKey: fields.chatKey as string,
         messageId: fields.messageId as string,
         ...(thread === undefined ? {} : { threadRootMessageIndex: thread as number }),
+        ...(messageIndex === undefined ? {} : { messageIndex: messageIndex as number }),
+        ...(chatKind === undefined
+            ? {}
+            : { chatKind: chatKind as LocalAppDraftSourceReference["chatKind"] }),
     });
 }
 function snapshotSavedApp(value: unknown, saved: SavedLocalAppDraft): LocalAppCatalogEntry {

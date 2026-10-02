@@ -16,6 +16,7 @@ vi.mock("@client", async () => {
     };
 });
 vi.mock("@shared", () => ({ ANON_USER_ID: "anonymous" }));
+vi.mock("@utils/navigation", () => ({ navigate: vi.fn() }));
 vi.mock("./privateAppWorkspace", async () => {
     const { writable } = await import("svelte/store");
     return {
@@ -61,6 +62,7 @@ const view = (status = "sending") => ({
     appUpdates: {},
     disabledAppIds: [],
     cards: [],
+    cardSources: {},
     editorJson: '{"value":42}',
     recipient: "Review app account",
     draft: {

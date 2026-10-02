@@ -60,6 +60,39 @@ const mixedProposalFiles = [
   "frontend/app/src/components/home/ChatMessage.svelte",
   "frontend/app/src/components_mobile/home/ChatMessage.svelte",
 ];
+// Source navigation reaches only these four existing mixed helpers and one new
+// dedicated helper. They were absent from the preceding 153-file checkpoint.
+const sourceNavigationAdditions = [
+  "frontend/app/src/utils/localAppSourceNavigation.ts",
+  "frontend/app/src/utils/navigation.ts",
+  "frontend/openchat-shared/src/utils/chat.ts",
+  "frontend/openchat-shared/src/utils/routes.ts",
+  "frontend/openchat-shared/src/utils/string.ts",
+];
+// Independently read from all 153 Git blobs at 494500398 (runtime 94cb746).
+// Only these five old files change; unchanged inputs still come from live source.
+const beforeSourceNavigation = new Map([
+  [
+    "frontend/app/src/utils/localAppDraftPersistence.ts",
+    "ade5a9ee7f4bb3b248b7f0afaccc63cf67edcbdff152d00af37a635e20096da0",
+  ],
+  [
+    "frontend/app/src/utils/privateAppWorkspace.ts",
+    "ba62a0d28a45b3c23bebd185cc276bf173406945f54cfd66fe67e63e411486c4",
+  ],
+  [
+    "frontend/app/src/components_shared/PrivateAppsWorkspace.svelte",
+    "32524ff53ef0adada23529b74b8c14e337f8c878c70ff904e4188307910a1c35",
+  ],
+  [
+    "frontend/app/src/components/home/ChatMessage.svelte",
+    "069a83446ab9dda68da2cb46982d983aefd00c0caf8feec5b6bdb6855d09e89d",
+  ],
+  [
+    "frontend/app/src/components_mobile/home/ChatMessage.svelte",
+    "06736fcd0fca212211bab6dda9ab2c6490dd9a7646bcf838510ffb7cc0f6038b",
+  ],
+]);
 const beforeCardCollection = new Map([
   [
     "frontend/app/src/components_shared/PrivateAppDraftFields.svelte",
@@ -87,11 +120,13 @@ const beforeCardCollection = new Map([
   ],
 ]);
 function priorFingerprint(fingerprint, hashes, replacements = new Map()) {
-  for (const path of mixedProposalFiles)
+  for (const path of [...mixedProposalFiles, ...sourceNavigationAdditions])
     assert(fingerprint.files.includes(path));
   for (const path of hashes.keys()) assert(fingerprint.files.includes(path));
   const files = fingerprint.files.filter(
-    (file) => !mixedProposalFiles.includes(file),
+    (file) =>
+      !mixedProposalFiles.includes(file) &&
+      !sourceNavigationAdditions.includes(file),
   );
   assert.equal(files.length, 151);
   const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
@@ -129,10 +164,11 @@ function octoberPriorFingerprint(fingerprint, replacements = new Map()) {
 // Historical aggregate proofs retain the exact committed 07aa47ba inputs. Only
 // these independently read pre-extension identities, three new paths and the
 // separately reviewed immutable-asset routing pair differ. Every other input
-// remains live, and the separate current gate binds all 153.
+// remains live, and the separate current gate binds all current sources.
 function septemberCheckpointEntries(fingerprint) {
   const laterFiles = new Set([
     ...mixedProposalFiles,
+    ...sourceNavigationAdditions,
     "frontend/app/src/utils/localAppDraftPersistence.ts",
     "frontend/app/src/utils/localAppDraftPresentation.ts",
     "frontend/app/src/utils/localAppEncryption.ts",
@@ -487,13 +523,13 @@ test("current encryption, recovery and enum-label owners use existing selectors 
         `frontend/app/src/utils/localAppEncryption${suffix}`,
       ),
     );
-  assert.equal(owned.length, 122);
-  assert.equal(fingerprint.files.length, 153);
-  assert.equal(config.seeds.length, 25);
-  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 88);
+  assert.equal(owned.length, 123);
+  assert.equal(fingerprint.files.length, 158);
+  assert.equal(config.seeds.length, 26);
+  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 96);
   assert.equal(
     fingerprint.sha256,
-    "8cc7a0ec5387cc68d875eb71e10f54e60efdf07c4ac020cbf9e23650954554a9",
+    "a52d271ac945ba6ebd5971f10ca94d256db981fac53979542cbed8377025e4d9",
   );
   assertReviewedSourceFingerprint(fingerprint, config.sourceReview);
 });
@@ -527,10 +563,10 @@ test("cache hashing responsiveness preserves exact prior source identity and int
   );
   assertReviewedSourceFingerprint(previous, config.sourceReview);
   assertReviewedSourceFingerprint(actual, config.sourceReview);
-  assert.equal(actual.files.length, 153);
-  assert.equal(featureOwnedFiles(root, config.scopeId).length, 122);
-  assert.equal(config.seeds.length, 25);
-  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 88);
+  assert.equal(actual.files.length, 158);
+  assert.equal(featureOwnedFiles(root, config.scopeId).length, 123);
+  assert.equal(config.seeds.length, 26);
+  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 96);
   for (const unchanged of [
     "const CACHED_HASH_UPDATE_MAX_BYTES = 64 * 1024;",
     "const CACHED_HASH_TASK_MAX_BYTES = 4 * 1024 * 1024;",
@@ -596,9 +632,9 @@ test("unofficial immutable-asset routing preserves the exact prior source aggreg
   );
   assertReviewedSourceFingerprint(previous, config.sourceReview);
   assertReviewedSourceFingerprint(actual, config.sourceReview);
-  assert.equal(actual.files.length, 153);
-  assert.equal(config.seeds.length, 25);
-  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 88);
+  assert.equal(actual.files.length, 158);
+  assert.equal(config.seeds.length, 26);
+  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 96);
   assert(
     !actual.files.includes("frontend/app/transformersWebGpuFeatureFlag.d.mts"),
   );
@@ -688,12 +724,12 @@ test("current setup persistence is a dedicated builtin-API consumer with an exac
   const clientPath = "frontend/openchat-client/src/openchat.ts";
   const owned = featureOwnedFiles(root, config.scopeId);
   const fingerprint = seedSourceFingerprint(root, config);
-  assert.equal(owned.length, 122);
-  assert.equal(fingerprint.files.length, 153);
-  assert.equal(config.seeds.length, 25);
+  assert.equal(owned.length, 123);
+  assert.equal(fingerprint.files.length, 158);
+  assert.equal(config.seeds.length, 26);
   assert.equal(
     config.seeds.reduce((count, seed) => count + seed.evidence.length, 0),
-    88,
+    96,
   );
   assert(owned.includes(storePath));
   assert(
@@ -832,7 +868,9 @@ for (const file of mixedProposalFiles) {
           "                    sourceTimestamp: Number(timestamp),\n" +
           "                    source: {\n" +
           "                        chatKey: capturedChatKey,\n" +
+          "                        chatKind: capturedChatKind,\n" +
           "                        messageId: capturedMessageId.toString(),\n" +
+          "                        messageIndex: capturedMessageIndex,\n" +
           "                        ...(capturedContext.threadRootMessageIndex === undefined\n" +
           "                            ? {}\n" +
           "                            : {\n" +
@@ -843,6 +881,14 @@ for (const file of mixedProposalFiles) {
       ),
     );
     assert(source.includes("privateAppWorkspace.selectForProposal("));
+    for (const captured of [
+      "const capturedChatKey = chatIdentifierToString(chatId);",
+      "const capturedChatKind = chatId.kind;",
+      "const capturedMessageIndex = msg.messageIndex;",
+      "chatId.kind === capturedChatKind &&",
+      "msg.messageIndex === capturedMessageIndex &&",
+    ])
+      assert(source.includes(captured));
     const missing = structuredClone(config);
     missing.seeds.find((seed) => seed.name === "svelte").evidence =
       svelte.evidence.filter((entry) => entry.file !== file);
@@ -895,6 +941,217 @@ for (const file of mixedProposalFiles) {
         /source set changed/u,
       );
     }
+  });
+}
+
+test("source navigation preserves the exact committed 153-file checkpoint", () => {
+  const config = JSON.parse(
+    readFileSync(
+      resolve(root, "scripts/npm_feature_scope.current-client.json"),
+      "utf8",
+    ),
+  );
+  const actual = seedSourceFingerprint(root, config);
+  const files = actual.files.filter(
+    (file) => !sourceNavigationAdditions.includes(file),
+  );
+  assert.equal(files.length, 153);
+  const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
+  const previous = {
+    ...actual,
+    files,
+    sha256: hash(
+      JSON.stringify(
+        files.map((file) => [
+          file,
+          beforeSourceNavigation.get(file) ??
+            hash(
+              readFileSync(resolve(root, file), "utf8").replaceAll(
+                "\r\n",
+                "\n",
+              ),
+            ),
+        ]),
+      ),
+    ),
+  };
+  assert.equal(
+    previous.sha256,
+    "8cc7a0ec5387cc68d875eb71e10f54e60efdf07c4ac020cbf9e23650954554a9",
+  );
+  assertReviewedSourceFingerprint(previous, config.sourceReview);
+  assertReviewedSourceFingerprint(actual, config.sourceReview);
+});
+
+test("source navigation uses the real host codec and only the precisely reached router edge", () => {
+  const config = JSON.parse(
+    readFileSync(
+      resolve(root, "scripts/npm_feature_scope.current-client.json"),
+      "utf8",
+    ),
+  );
+  const owned = featureOwnedFiles(root, config.scopeId);
+  const actual = seedSourceFingerprint(root, config);
+  const helper = sourceNavigationAdditions[0];
+  assert(owned.includes(helper));
+  assert(!actual.files.includes(helper.replace(/\.ts$/u, ".spec.ts")));
+  for (const file of sourceNavigationAdditions.slice(1)) {
+    assert(actual.files.includes(file));
+    assert(
+      !owned.includes(file),
+      "Reached mixed helpers must not become core import owners",
+    );
+  }
+  for (const historical of ["pr1-model-npm", "pr2-app-card-ocr-npm"])
+    assert(!featureOwnedFiles(root, historical).includes(helper));
+  const source = readFileSync(resolve(root, helper), "utf8");
+  assert.deepEqual(featureDependencySpecifiers(source), [
+    "@shared/domain",
+    "@shared/utils/chat",
+    "@shared/utils/routes",
+    "@shared/utils/string",
+    "./localAppDraftPersistence",
+  ]);
+  assert.doesNotMatch(
+    source,
+    /@shared\/utils\/map|chatIdentifierFromKey|chatIdentifierToKey/u,
+  );
+  assert(source.includes("chatIdentifierToString(chatId) !== source.chatKey"));
+  assert(source.includes('source.chatKind === "direct_chat"'));
+  assert(source.includes('source.chatKind === "group_chat"'));
+  assert.doesNotMatch(
+    source,
+    /\b(?:fetch|WebSocket|XMLHttpRequest|Worker|indexedDB|localStorage|sessionStorage)\s*\(/u,
+  );
+  const ui = readFileSync(
+    resolve(
+      root,
+      "frontend/app/src/components_shared/PrivateAppsWorkspace.svelte",
+    ),
+    "utf8",
+  );
+  assert(ui.includes('import { navigate } from "@utils/navigation";'));
+  assert(ui.includes("navigate(route);"));
+  const expected = new Map([
+    [
+      "svelte",
+      [
+        {
+          file: "frontend/openchat-shared/src/utils/chat.ts",
+          contains:
+            "export function chatIdentifierToString(chatId: ChatIdentifier): string {",
+        },
+        {
+          file: "frontend/openchat-shared/src/utils/routes.ts",
+          contains: "export function routeForMessage(",
+        },
+        {
+          file: "frontend/openchat-shared/src/utils/routes.ts",
+          contains: "export function routeForMessageContext(",
+        },
+      ],
+    ],
+    [
+      "@icp-sdk/core",
+      [
+        {
+          file: "frontend/openchat-shared/src/utils/string.ts",
+          contains: "Principal.fromText(text);",
+        },
+      ],
+    ],
+    [
+      "page",
+      [
+        {
+          file: "frontend/app/src/utils/navigation.ts",
+          contains: 'import page from "page";',
+        },
+        {
+          file: "frontend/app/src/utils/navigation.ts",
+          contains:
+            'export function navigate(to: string, intent: NavigationIntent = "in-app") {',
+        },
+        { file: "frontend/app/src/utils/navigation.ts", contains: "page(to);" },
+        {
+          file: "frontend/app/src/utils/navigation.ts",
+          contains: "page.replace(to);",
+        },
+      ],
+    ],
+  ]);
+  for (const [name, anchors] of expected) {
+    const seed = config.seeds.find((entry) => entry.name === name);
+    assert(seed);
+    assert.deepEqual(
+      seed.evidence.filter((entry) =>
+        sourceNavigationAdditions.includes(entry.file),
+      ),
+      anchors,
+    );
+    for (const anchor of anchors) {
+      const wrong = structuredClone(config);
+      wrong.seeds
+        .find((entry) => entry.name === name)
+        .evidence.find(
+          (entry) =>
+            entry.file === anchor.file && entry.contains === anchor.contains,
+        ).contains = "unreviewed navigation ownership";
+      assert.throws(
+        () => reviewFeatureSeeds(root, wrong),
+        /source ownership anchor changed/u,
+      );
+    }
+  }
+  const manifest = JSON.parse(
+    readFileSync(resolve(root, "frontend/package.json"), "utf8"),
+  );
+  const lock = JSON.parse(
+    readFileSync(resolve(root, "frontend/package-lock.json"), "utf8"),
+  );
+  assert.equal(manifest.dependencies.page, "^1.3.7");
+  assert.equal(lock.packages["node_modules/page"].version, "1.11.6");
+  const missing = structuredClone(config);
+  missing.seeds = missing.seeds.filter((seed) => seed.name !== "page");
+  assert.throws(
+    () => reviewFeatureSeeds(root, missing),
+    /reviewed feature root set changed/u,
+  );
+});
+
+for (const file of sourceNavigationAdditions) {
+  test(`source navigation rejects removed or changed scoped input: ${file}`, () => {
+    const config = JSON.parse(
+      readFileSync(
+        resolve(root, "scripts/npm_feature_scope.current-client.json"),
+        "utf8",
+      ),
+    );
+    const actual = seedSourceFingerprint(root, config);
+    const entries = actual.files.map((path) => [
+      path,
+      readFileSync(resolve(root, path)),
+    ]);
+    for (const changed of [
+      entries.filter(([path]) => path !== file),
+      entries.map(([path, bytes]) => [
+        path,
+        path === file
+          ? Buffer.concat([
+              bytes,
+              Buffer.from("\n// unreviewed navigation change\n"),
+            ])
+          : bytes,
+      ]),
+    ])
+      assert.throws(
+        () =>
+          assertReviewedSourceFingerprint(
+            sourceReviewFingerprintFromBytes(changed),
+            config.sourceReview,
+          ),
+        /source set changed/u,
+      );
   });
 }
 
@@ -1337,10 +1594,10 @@ test("current upstream merge preserves scoped startup, model and private-app bou
     readFileSync(resolve(root, file), "utf8").replaceAll("\r\n", "\n");
   const hash = (text) => createHash("sha256").update(text).digest("hex");
   const fingerprint = seedSourceFingerprint(root, config);
-  assert.equal(fingerprint.files.length, 153);
-  assert.equal(featureOwnedFiles(root, config.scopeId).length, 122);
-  assert.equal(config.seeds.length, 25);
-  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 88);
+  assert.equal(fingerprint.files.length, 158);
+  assert.equal(featureOwnedFiles(root, config.scopeId).length, 123);
+  assert.equal(config.seeds.length, 26);
+  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 96);
   // Preserve the committed merge identity after the separately reviewed Windows
   // path-only repair and the independently bound later-extension identities.
   const mergeFingerprint = {
@@ -1833,7 +2090,7 @@ for (const scope of scopes) {
   );
   test(`${scope}: reviewed feature roots match source ownership and owning declarations`, () => {
     const result = reviewFeatureSeeds(root, config);
-    assert.equal(result.roots, 25);
+    assert.equal(result.roots, 26);
     assert.equal(result.advisoryAcceptance, false);
     assert.equal(result.sourceTextIdentity, "utf8-lf");
     for (const seed of config.seeds) {

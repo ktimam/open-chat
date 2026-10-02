@@ -115,13 +115,21 @@ choice semantics and delivery keys remain pinned to the card that used them; cha
 configuration cannot silently retarget a saved request. New proposals use the current
 connected configuration, not an old card's frozen configuration.
 
-Only host-captured chat/message identifiers and an optional thread index associate a
-card with its source. These references stay inside the encrypted local collection;
+Only host-captured chat/message identifiers, an optional chat kind and optional
+message/thread indices associate a card with its source. These references stay
+inside the encrypted local collection;
 they are not source content, chat messages or outgoing app DTO fields. Re-proposing
 the same source for the same app/action resumes its retained card without inference.
-The saved-card selector is device-local and does not imply posting cards to chat or
-provide remote source navigation. Do not persist approval tokens, transport pairing
-codes, original images or chat history.
+The saved-card selector shows host-owned source labels and offers a normal OpenChat
+source-message navigation action. Cards with a known chat kind but no message
+position honestly offer the source chat or thread instead. An old bare-principal
+reference does not distinguish a direct chat from a group, so it offers no guessed
+link. Re-proposing that same message fills in the missing kind/position without
+inference or creating another card. Navigation preserves
+the card and its edits, requires a new review, and sends nothing to the receiving app.
+Malformed references cannot become navigation URLs. None of this posts a card to
+chat or persists original message content. Do not persist approval tokens, transport
+pairing codes, original images or chat history.
 
 Panel close/navigation do not discard cards. Logout clears the live view but keeps
 the encrypted collection for the same account/backend. Discard removes only the
@@ -228,6 +236,41 @@ write-ahead delivery. Svelte checking reports zero errors with 572 existing warn
 targeted TypeScript lint passes. These are source checks, not browser, APK or native
 provider acceptance. Existing installed artifacts and the earlier single-card browser
 receipts must not be relabeled as multi-card verification.
+
+### October 2 source-navigation correction
+
+The source correction uses the actual host `chatIdentifierToString` format in
+both message layouts, adds optional chat kind/message position to encrypted local
+references, and uses the existing OpenChat route/navigation functions. Legacy
+references are not rewritten into a different key format. Re-proposing the same
+source backfills missing navigation metadata without inference or a duplicate card;
+an ambiguous old direct/group reference cannot invent a link.
+
+The complete frontend suite passes 5,606 tests with no failures or pending tests.
+The checks include real direct/group/channel key formats, index zero, thread
+navigation, immutable attempted requests, and invalidation of recovery review
+tokens when leaving both delivered and uncertain cards. The initial complete run
+failed nine native UI cases because their mocks omitted the added state/import;
+the final run includes those repaired fixtures without skipping tests. The recovery
+approval defect found by independent review was fixed in production code, not by
+relaxing the tests.
+
+Final-source Svelte checking reports zero errors and 572 warnings; the agent
+TypeScript check also passes. Changed-file ESLint reports zero errors, with three
+ignored-Svelte-file warnings from the existing lint configuration. Svelte source
+validation is covered by the separate Svelte check, not claimed as ESLint coverage.
+
+The approved source inventory binds 158 files, 123 dedicated owners, 96 exact
+anchors and 26 dependency roots under fingerprint
+`a52d271ac945ba6ebd5971f10ca94d256db981fac53979542cbed8377025e4d9`.
+All 816 offline scoped security contracts pass (166 npm and 650 remaining
+contracts), along with the CI wiring and 480-file scoped formatting checks. This
+adds only the already-installed router dependency reached by source navigation;
+no package upgrade, advisory waiver or whole-repository audit is included.
+
+These are source-test results only. They do not qualify the already-built APK020
+or prove current browser/native layout, navigation, account restoration or delivery.
+The new release inventory and rebuilt-artifact/runtime checks remain separate gates.
 
 ## Built artifacts and authenticated browser verification
 

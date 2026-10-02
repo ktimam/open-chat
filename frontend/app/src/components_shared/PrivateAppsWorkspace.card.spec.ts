@@ -6,7 +6,12 @@ import type { Writable } from "svelte/store";
 import PrivateAppsWorkspace from "./PrivateAppsWorkspace.svelte";
 import { privateAppWorkspace as workspace } from "../utils/privateAppWorkspace";
 
-const calls = vi.hoisted(() => ({ extract: vi.fn(), deliver: vi.fn(), cancel: vi.fn() }));
+const calls = vi.hoisted(() => ({
+    extract: vi.fn(),
+    deliver: vi.fn(),
+    cancel: vi.fn(),
+    navigate: vi.fn(),
+}));
 vi.mock("@client", async () => {
     const { writable } = await import("svelte/store");
     return {
@@ -15,6 +20,7 @@ vi.mock("@client", async () => {
     };
 });
 vi.mock("@shared", () => ({ ANON_USER_ID: "anonymous" }));
+vi.mock("@utils/navigation", () => ({ navigate: calls.navigate }));
 vi.mock("../utils/aiActionRunner", () => ({ extractPrivateAppAction: calls.extract }));
 vi.mock("../utils/localAppSetupConnection", () => ({ connectLocalAppSetup: vi.fn() }));
 vi.mock("../utils/isolatedAppProcessor", () => ({
@@ -238,6 +244,210 @@ afterEach(async () => {
 });
 
 describe("private workspace declarative card and authoritative review", () => {
+    it("returns to the exact source without losing edits, delivering, or rerunning inference", async () => {
+        await workspace.propose(
+            client,
+            { kind: "text_content", text: "Synthetic source with no app access" } as MessageContent,
+            {
+                stillCurrent: () => true,
+                source: {
+                    chatKey: "rrkah-fqaaa-aaaaa-aaaaq-cai",
+                    chatKind: "direct_chat",
+                    messageId: "18446744073709551615",
+                    messageIndex: 0,
+                },
+            },
+        );
+        await settle();
+        const draftId = workspace.state.draft!.id;
+        const inferenceCount = calls.extract.mock.calls.length;
+        await changeNumber("57");
+        button("Review full request").click();
+        await settle();
+        confirmation().click();
+        await settle();
+        expect(workspace.state.draft!.approval).toBeDefined();
+        expect(target.querySelector('[aria-label="Selected card source"]')?.textContent).toContain(
+            "rrkah-fqaaa-aaaaa-aaaaq-cai",
+        );
+        button("View source message").click();
+        await settle();
+        expect(calls.navigate).toHaveBeenCalledExactlyOnceWith(
+            "/chats/user/rrkah-fqaaa-aaaaa-aaaaq-cai/0",
+        );
+        expect(workspace.state.open).toBe(false);
+        expect(workspace.state.cards).toHaveLength(2);
+        expect(workspace.state.draft!.id).toBe(draftId);
+        expect(workspace.state.draft!.approval).toBeUndefined();
+        workspace.open();
+        await settle();
+        expect(numericFields()[0].value).toBe("57");
+        expect(calls.extract).toHaveBeenCalledTimes(inferenceCount);
+        expect(calls.deliver).not.toHaveBeenCalled();
+    });
+
+    it.each(["delivered", "uncertain"] as const)(
+        "requires a fresh recovery review after leaving a %s card for its source",
+        async (kind) => {
+            await workspace.propose(
+                client,
+                { kind: "text_content", text: "Synthetic recovery source" } as MessageContent,
+                {
+                    stillCurrent: () => true,
+                    source: {
+                        chatKey: "rrkah-fqaaa-aaaaa-aaaaq-cai",
+                        chatKind: "group_chat",
+                        messageId: "900",
+                        messageIndex: 4,
+                    },
+                },
+            );
+            await settle();
+            calls.deliver.mockResolvedValue({ kind });
+            await approveAndSend();
+            expect(workspace.state.draft!.status).toBe(kind);
+            const draftId = workspace.state.draft!.id;
+            const request = workspace.state.draft!.approval!.request;
+            const inferenceCount = calls.extract.mock.calls.length;
+            expect(workspace.selectCard(draftId)).toBe(true);
+            await settle();
+            button("Review recovered request before retrying").click();
+            await settle();
+            const oldApprovalId = workspace.state.draft!.approval!.approvalId;
+            expect(workspace.state.draft!.approval!.request).toEqual(request);
+            button("View source message").click();
+            await settle();
+            expect(calls.navigate).toHaveBeenCalledExactlyOnceWith(
+                "/chats/group/rrkah-fqaaa-aaaaa-aaaaq-cai/4",
+            );
+            expect(workspace.state.draft!.status).toBe(kind);
+            expect(workspace.state.draft!.approval).toBeUndefined();
+            expect(workspace.state.open).toBe(false);
+            workspace.open();
+            await settle();
+            expect(button("Review recovered request before retrying")).toBeDefined();
+            if (kind === "uncertain") await workspace.retryUncertain(oldApprovalId);
+            else await workspace.reopenDelivered(oldApprovalId);
+            expect(calls.deliver).toHaveBeenCalledOnce();
+            button("Review recovered request before retrying").click();
+            await settle();
+            expect(workspace.state.draft!.approval!.approvalId).not.toBe(oldApprovalId);
+            expect(workspace.state.draft!.approval!.request).toEqual(request);
+            expect(workspace.state.draft!.id).toBe(draftId);
+            expect(calls.extract).toHaveBeenCalledTimes(inferenceCount);
+            expect(calls.deliver).toHaveBeenCalledOnce();
+        },
+    );
+
+    it("uses the selected card's source and gives legacy cards an honest thread fallback", async () => {
+        const captured = { kind: "text_content", text: "Synthetic" } as MessageContent;
+        await workspace.propose(client, captured, {
+            stillCurrent: () => true,
+            source: {
+                chatKey: "rrkah-fqaaa-aaaaa-aaaaq-cai",
+                chatKind: "group_chat",
+                messageId: "99",
+                messageIndex: 3,
+            },
+        });
+        const groupCard = workspace.state.draft!.id;
+        await workspace.propose(client, captured, {
+            stillCurrent: () => true,
+            source: {
+                chatKey: "rrkah-fqaaa-aaaaa-aaaaq-cai_8",
+                chatKind: "channel",
+                messageId: "99",
+                threadRootMessageIndex: 4,
+            },
+        });
+        await settle();
+        expect(button("View source message")).toBeUndefined();
+        button("Open source thread").click();
+        await settle();
+        expect(calls.navigate).toHaveBeenLastCalledWith(
+            "/community/rrkah-fqaaa-aaaaa-aaaaq-cai/channel/8/4?open=true",
+        );
+        workspace.open();
+        workspace.selectCard(groupCard);
+        await settle();
+        expect(button("Open source thread")).toBeUndefined();
+        button("View source message").click();
+        await settle();
+        expect(calls.navigate).toHaveBeenLastCalledWith(
+            "/chats/group/rrkah-fqaaa-aaaaa-aaaaq-cai/3",
+        );
+        expect(workspace.state.cards).toHaveLength(3);
+        expect(calls.extract).toHaveBeenCalledTimes(3);
+        expect(calls.deliver).not.toHaveBeenCalled();
+    });
+
+    it("blocks source navigation while an unrepresentable edit would be hidden", async () => {
+        await workspace.propose(
+            client,
+            { kind: "text_content", text: "Synthetic" } as MessageContent,
+            {
+                stillCurrent: () => true,
+                source: {
+                    chatKey: "rrkah-fqaaa-aaaaa-aaaaq-cai",
+                    chatKind: "direct_chat",
+                    messageId: "8",
+                    messageIndex: 7,
+                },
+            },
+        );
+        await settle();
+        await changeExtra("x".repeat(70000));
+        const sourceButton = button("View source message");
+        expect(sourceButton.disabled).toBe(true);
+        sourceButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await settle();
+        expect(calls.navigate).not.toHaveBeenCalled();
+        expect(workspace.state.open).toBe(true);
+        expect(extraField().value).toHaveLength(70000);
+        expect(calls.deliver).not.toHaveBeenCalled();
+    });
+
+    it("never turns malformed stored source references or app payload fields into links", async () => {
+        calls.extract.mockResolvedValue({
+            kind: "extracted",
+            candidates: [{ value: 42, extra: "https://outside.example/source" }],
+        });
+        await workspace.propose(
+            client,
+            { kind: "text_content", text: "Synthetic" } as MessageContent,
+            {
+                stillCurrent: () => true,
+                source: { chatKey: "d|https://outside.example", messageId: "8", messageIndex: 7 },
+            },
+        );
+        await settle();
+        expect(target.querySelector('[aria-label="Selected card source"]')).toBeNull();
+        expect(button("View source message")).toBeUndefined();
+        expect(button("Open source chat")).toBeUndefined();
+        expect(calls.navigate).not.toHaveBeenCalled();
+        expect(calls.deliver).not.toHaveBeenCalled();
+    });
+
+    it("does not guess the chat kind for old bare-principal references", async () => {
+        await workspace.propose(
+            client,
+            { kind: "text_content", text: "Synthetic" } as MessageContent,
+            {
+                stillCurrent: () => true,
+                source: { chatKey: "rrkah-fqaaa-aaaaa-aaaaq-cai", messageId: "8" },
+            },
+        );
+        await settle();
+        expect(target.querySelector('[aria-label="Selected card source"]')).toBeNull();
+        expect(visibleText()).toContain(
+            "Propose again from the original message to restore its link",
+        );
+        expect(button("View source message")).toBeUndefined();
+        expect(button("Open source chat")).toBeUndefined();
+        expect(calls.navigate).not.toHaveBeenCalled();
+        expect(calls.deliver).not.toHaveBeenCalled();
+    });
+
     it("forgets all retained local cards only on the explicit all-card action", async () => {
         await propose();
         expect(workspace.state.cards).toHaveLength(2);

@@ -643,3 +643,45 @@ Verification with pinned Node 24.18.1: all **158/158** tests in the same five
 offline npm contract suites pass, with zero failures, skips or cancellations.
 The initial stale-source run failed ten of 65 seed-review tests; its source
 identity and selection-delegation failures were repaired rather than waived.
+
+## October 2 saved card source navigation
+
+This source review binds main
+`49450039825edaa2bade427e2525696a7c5d9d22` plus the source-navigation changes.
+The aggregate is
+`a52d271ac945ba6ebd5971f10ca94d256db981fac53979542cbed8377025e4d9`:
+**158 fingerprinted files, 123 dedicated owners, 96 exact anchors and 26 roots**.
+
+Five existing files change: both proposal entry points capture the host chat kind
+and message index; persistence validates these optional values; the workspace
+backfills missing location only for the same retained source; and the card UI
+shows host-owned labels and guarded source links. Navigation revokes approval,
+including approval of recovered uncertain or delivered requests. Source metadata
+does not enter the encrypted delivery payload.
+
+The new helper uses the actual `chatIdentifierToString` format and the existing
+route builders. It validates principals, chat kind, safe nonnegative indices and
+canonical roundtrip. A legacy channel key can identify its channel; a legacy bare
+principal cannot distinguish a direct chat from a group and produces no guessed
+link. Message IDs are never interpreted as message indices.
+
+The shared chat, routes and string helpers, and the existing app navigation
+module, receive exact function/import/call anchors. They remain mixed sources,
+not dedicated owners subject to unrelated core import scanning. The navigation
+call reaches the already declared `page` dependency through the normal router.
+Current-client therefore adds that exact root: manifest `^1.3.7`, locked version
+`1.11.6`. No package or lockfile changes, installation, historical PR root changes
+or advisory acceptance are included.
+
+All 153 committed source blobs independently reproduce the preceding `8cc7a0ec`
+aggregate. Historical tests omit only the five newly tracked paths and substitute
+the five independently verified pre-navigation hashes where needed. Earlier
+151-file and 148-file proofs retain their exact identities. Separate current
+checks cover drift, missing files, changed anchors and removal of the reached
+router root. The dedicated-source import denial remains unchanged.
+
+With pinned Node 24.18.1, the five offline npm contract suites pass **166/166**
+with no failures, skips or cancellations. The source gate reports the aggregate
+above with advisory acceptance explicitly false; all four changed review files
+pass the existing formatter. This checkpoint records source ownership only,
+not advisory, browser, APK, provider, model-quality or release acceptance.

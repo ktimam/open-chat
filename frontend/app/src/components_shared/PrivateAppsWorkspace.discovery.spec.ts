@@ -16,6 +16,7 @@ vi.mock("@client", async () => {
     };
 });
 vi.mock("@shared", () => ({ ANON_USER_ID: "anonymous" }));
+vi.mock("@utils/navigation", () => ({ navigate: vi.fn() }));
 vi.mock("../utils/aiActionRunner", () => ({ extractPrivateAppAction: calls.extract }));
 vi.mock("../utils/localAppSetupConnection", () => ({ connectLocalAppSetup: calls.connect }));
 vi.mock("../utils/localAppSetupStore", async (importOriginal) => ({

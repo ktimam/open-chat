@@ -59,6 +59,9 @@ reviewedRoots["current-client-npm"] = [
     // Direct native handoff build consumer, resolved at this existing locked
     // location; esbuild is not declared as an owner-manifest edge.
     "location|node_modules/esbuild",
+    // Saved private-card source links reach the existing application router.
+    // This does not select unrelated imports in the mixed navigation module.
+    "|page",
   ]),
 ];
 const selectors = {

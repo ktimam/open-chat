@@ -56,6 +56,7 @@ vi.mock("../utils/privateAppWorkspace", async () => {
         appUpdates: {},
         disabledAppIds: [],
         cards: [],
+        cardSources: {},
     });
     calls.open.mockImplementation(() => state.update((value) => ({ ...value, open: true })));
     calls.close.mockImplementation(() => state.update((value) => ({ ...value, open: false })));
@@ -175,6 +176,7 @@ beforeEach(() => {
         appUpdates: {},
         disabledAppIds: [],
         cards: [],
+        cardSources: {},
     } as never);
 });
 afterEach(async () => {

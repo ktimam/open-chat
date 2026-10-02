@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import { chatIdentifierToString, type ChatIdentifier } from "@shared";
 import { LocalAppDraftStore, type LocalDraftDelivery } from "./localAppDrafts";
 import { parseLocalAppCatalog } from "./localAppCatalog";
 import {
@@ -65,6 +66,8 @@ const sourceReference = {
     chatKey: "PRIVATE_CHAT_REFERENCE",
     messageId: "18446744073709551615",
     threadRootMessageIndex: 0,
+    messageIndex: 42,
+    chatKind: "direct_chat" as const,
 };
 function appFixture(saved: SavedLocalAppDraft) {
     const target = saved.draft.target;
@@ -521,11 +524,45 @@ describe("bounded private card collections", () => {
             { ...sourceReference, threadRootMessageIndex: 0.5 },
             { ...sourceReference, threadRootMessageIndex: Infinity },
             { ...sourceReference, threadRootMessageIndex: Number.MAX_SAFE_INTEGER + 1 },
+            { ...sourceReference, messageIndex: undefined },
+            { ...sourceReference, messageIndex: -1 },
+            { ...sourceReference, messageIndex: 0.5 },
+            { ...sourceReference, messageIndex: Infinity },
+            { ...sourceReference, messageIndex: Number.MAX_SAFE_INTEGER + 1 },
+            { ...sourceReference, chatKind: undefined },
+            { ...sourceReference, chatKind: "direct" },
+            { ...sourceReference, chatKind: 1 },
             accessor,
         ];
         for (const value of invalid)
             expect(() => snapshotLocalAppDraftSourceReference(value)).toThrow();
         expect(getter).not.toHaveBeenCalled();
+    });
+
+    it("snapshots actual shared direct, group and channel key formats with explicit kinds", () => {
+        const chats = [
+            { kind: "direct_chat", userId: "2vxsx-fae" },
+            { kind: "group_chat", groupId: "rrkah-fqaaa-aaaaa-aaaaq-cai" },
+            {
+                kind: "channel",
+                communityId: "ryjl3-tyaaa-aaaaa-aaaba-cai",
+                channelId: 7,
+            },
+        ] satisfies readonly ChatIdentifier[];
+        expect(chats.map(chatIdentifierToString)).toEqual([
+            "2vxsx-fae",
+            "rrkah-fqaaa-aaaaa-aaaaq-cai",
+            "ryjl3-tyaaa-aaaaa-aaaba-cai_7",
+        ]);
+        for (const [messageIndex, chat] of chats.entries()) {
+            const source = {
+                chatKey: chatIdentifierToString(chat),
+                chatKind: chat.kind,
+                messageId: String(messageIndex + 1),
+                messageIndex,
+            };
+            expect(snapshotLocalAppDraftSourceReference(source)).toEqual(source);
+        }
     });
 
     it("encrypts two cards and their source references in one scoped row with no source text", async () => {

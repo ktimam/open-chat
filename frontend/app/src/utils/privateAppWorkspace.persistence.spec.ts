@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
-import type { MessageContent, OpenChat } from "@client";
+import type { ChatIdentifier, MessageContent, OpenChat } from "@client";
 import { PrivateAppWorkspace } from "./privateAppWorkspace";
 import { parseLocalAppCatalog } from "./localAppCatalog";
 import {
@@ -349,8 +349,23 @@ describe("private workspace encrypted-card lifecycle", () => {
     it("retains two message-linked editors across reload and resumes without inference or sending", async () => {
         const first = fixture();
         await start(first.workspace);
-        const sourceA = { chatKey: "direct:synthetic", messageId: "10", threadRootMessageIndex: 4 };
-        const sourceB = { chatKey: "direct:synthetic", messageId: "11", threadRootMessageIndex: 4 };
+        const { chatIdentifierToString } =
+            await vi.importActual<typeof import("@shared")>("@shared");
+        const directChat = { kind: "direct_chat", userId: "2vxsx-fae" } satisfies ChatIdentifier;
+        const sourceA = {
+            chatKey: chatIdentifierToString(directChat),
+            chatKind: directChat.kind,
+            messageId: "10",
+            threadRootMessageIndex: 4,
+            messageIndex: 10,
+        };
+        const sourceB = {
+            chatKey: chatIdentifierToString(directChat),
+            chatKind: directChat.kind,
+            messageId: "11",
+            threadRootMessageIndex: 4,
+            messageIndex: 11,
+        };
         await first.workspace.propose(client, content, {
             stillCurrent: () => true,
             source: sourceA,
@@ -367,6 +382,9 @@ describe("private workspace encrypted-card lifecycle", () => {
         first.workspace.edit('{"value":44}', "recipient B");
         await saved(first.workspace);
         expect(first.workspace.state.cards.map((card) => card.id)).toEqual([idA, idB]);
+        expect(first.workspace.state.cardSources).toEqual({ [idA]: sourceA, [idB]: sourceB });
+        expect(Object.isFrozen(first.workspace.state.cardSources)).toBe(true);
+        expect(Object.isFrozen(first.workspace.state.cardSources[idA])).toBe(true);
         expect(first.workspace.selectCard(idA)).toBe(true);
         expect(first.workspace.state.editorJson).toBe('{"value":43}');
         expect(first.workspace.state.recipient).toBe("recipient A");
@@ -380,6 +398,7 @@ describe("private workspace encrypted-card lifecycle", () => {
         const next = fixture(first.shared);
         await start(next.workspace);
         expect(next.workspace.state.cards.map((card) => card.id)).toEqual([idA, idB]);
+        expect(next.workspace.state.cardSources).toEqual({ [idA]: sourceA, [idB]: sourceB });
         expect(next.workspace.selectCard(idB)).toBe(true);
         expect(next.workspace.state.editorJson).toBe('{"value":44}');
         expect(next.workspace.state.recipient).toBe("recipient B");
@@ -396,6 +415,96 @@ describe("private workspace encrypted-card lifecycle", () => {
             oldApproval.request.idempotencyKey,
         );
         expect(next.workspace.state.draft?.approval?.request).not.toHaveProperty("source");
+    });
+
+    it("backfills legacy source navigation metadata without inference or consent", async () => {
+        const first = fixture();
+        await start(first.workspace);
+        const { chatIdentifierToString } =
+            await vi.importActual<typeof import("@shared")>("@shared");
+        const directChat = { kind: "direct_chat", userId: "2vxsx-fae" } satisfies ChatIdentifier;
+        const legacySource = {
+            chatKey: chatIdentifierToString(directChat),
+            messageId: "20",
+            threadRootMessageIndex: 4,
+        };
+        await first.workspace.propose(client, content, {
+            stillCurrent: () => true,
+            source: legacySource,
+        });
+        const id = first.workspace.state.draft!.id;
+        await saved(first.workspace);
+        expect(first.workspace.state.cardSources[id]).toEqual(legacySource);
+
+        first.workspace.clear();
+        const next = fixture(first.shared);
+        await start(next.workspace);
+        expect(next.workspace.state.cardSources[id]).toEqual(legacySource);
+        expect(next.workspace.review()).toBe(true);
+        const priorApproval = next.workspace.state.draft!.approval!;
+
+        const indexedSource = {
+            ...legacySource,
+            messageIndex: 20,
+            chatKind: directChat.kind,
+        };
+        await expect(
+            next.workspace.propose(client, content, {
+                stillCurrent: () => true,
+                source: indexedSource,
+            }),
+        ).resolves.toBe("drafted");
+        expect(next.workspace.state.draft?.id).toBe(id);
+        expect(next.workspace.state.cards).toHaveLength(1);
+        expect(next.workspace.state.cardSources[id]).toEqual(indexedSource);
+        expect(Object.isFrozen(next.workspace.state.cardSources[id])).toBe(true);
+        expect(next.workspace.state.draft?.approval).toBeUndefined();
+        await next.workspace.confirm(priorApproval.approvalId);
+        expect(next.extract).not.toHaveBeenCalled();
+        expect(next.deliver).not.toHaveBeenCalled();
+
+        await saved(next.workspace);
+        expect((await next.storage.read(scope))?.cards[0].source).toEqual(indexedSource);
+        expect(next.workspace.review()).toBe(true);
+        expect(next.workspace.state.draft?.approval?.request).not.toHaveProperty("source");
+    });
+
+    it("does not merge known direct and group kinds that share the same stable key", async () => {
+        const current = fixture();
+        await start(current.workspace);
+        const { chatIdentifierToString } =
+            await vi.importActual<typeof import("@shared")>("@shared");
+        const principal = "rrkah-fqaaa-aaaaa-aaaaq-cai";
+        const directChat = { kind: "direct_chat", userId: principal } satisfies ChatIdentifier;
+        const groupChat = { kind: "group_chat", groupId: principal } satisfies ChatIdentifier;
+        expect(chatIdentifierToString(directChat)).toBe(chatIdentifierToString(groupChat));
+        const stable = { messageId: "30", messageIndex: 30 };
+
+        await current.workspace.propose(client, content, {
+            stillCurrent: () => true,
+            source: {
+                ...stable,
+                chatKey: chatIdentifierToString(directChat),
+                chatKind: directChat.kind,
+            },
+        });
+        const directId = current.workspace.state.draft!.id;
+        await current.workspace.propose(client, content, {
+            stillCurrent: () => true,
+            source: {
+                ...stable,
+                chatKey: chatIdentifierToString(groupChat),
+                chatKind: groupChat.kind,
+            },
+        });
+        const groupId = current.workspace.state.draft!.id;
+
+        expect(groupId).not.toBe(directId);
+        expect(current.workspace.state.cards).toHaveLength(2);
+        expect(current.workspace.state.cardSources[directId]?.chatKind).toBe("direct_chat");
+        expect(current.workspace.state.cardSources[groupId]?.chatKind).toBe("group_chat");
+        expect(current.extract).toHaveBeenCalledTimes(2);
+        expect(current.deliver).not.toHaveBeenCalled();
     });
 
     it("discards only the selected card and does not erase its sibling on reload", async () => {
@@ -589,6 +698,51 @@ describe("private workspace encrypted-card lifecycle", () => {
         expect(first.workspace.state.draft?.status).toBe("uncertain");
         expect(first.workspace.state.draftStorageStatus).not.toContain("private quota error");
     });
+
+    it.each(["uncertain", "delivered"] as const)(
+        "revokes %s recovery review without changing or dispatching the retained request",
+        async (status) => {
+            const first = fixture();
+            await start(first.workspace);
+            await propose(first.workspace);
+            first.workspace.edit('{"value":77}', "reviewed recipient");
+            expect(first.workspace.review()).toBe(true);
+            const original = first.workspace.state.draft!.approval!;
+            const originalView = first.workspace.state.draft!;
+            if (status === "uncertain") {
+                first.deliver.mockImplementationOnce(async (_request, _signal, beforeDelivery) => {
+                    await beforeDelivery;
+                    return { kind: "uncertain" };
+                });
+            }
+            await first.workspace.confirm(original.approvalId);
+            expect(first.workspace.state.draft?.status).toBe(status);
+            expect(first.workspace.state.draft?.approval?.request).toEqual(original.request);
+            const deliveryCalls = first.deliver.mock.calls.length;
+            const crossedCalls = first.crossed.mock.calls.length;
+
+            first.workspace.invalidateReview();
+            expect(first.workspace.state.draft).toMatchObject({
+                id: originalView.id,
+                revision: originalView.revision,
+                status,
+                payload: originalView.payload,
+            });
+            expect(first.workspace.state.draft?.approval).toBeUndefined();
+            if (status === "uncertain") await first.workspace.retryUncertain(original.approvalId);
+            else await first.workspace.reopenDelivered(original.approvalId);
+            expect(first.deliver).toHaveBeenCalledTimes(deliveryCalls);
+            expect(first.crossed).toHaveBeenCalledTimes(crossedCalls);
+
+            expect(first.workspace.review()).toBe(true);
+            const reviewed = first.workspace.state.draft!.approval!;
+            expect(reviewed.approvalId).not.toBe(original.approvalId);
+            expect(reviewed.request).toEqual(original.request);
+            expect(reviewed.request).not.toHaveProperty("source");
+            expect(first.deliver).toHaveBeenCalledTimes(deliveryCalls);
+            expect(first.crossed).toHaveBeenCalledTimes(crossedCalls);
+        },
+    );
 
     it("restores a dispatched card immutable and requires new review before retrying the exact original ID", async () => {
         const first = fixture();
