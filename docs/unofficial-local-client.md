@@ -740,3 +740,118 @@ discarded to work around either defect.
 Final source verification passed 5,662/5,662 frontend tests and both typechecks with
 zero errors (572 existing Svelte warnings); this is not an APK024 or rebuilt-web
 runtime acceptance result.
+
+### October 2 saved-card fixes, current web and APK024 checkpoint
+
+The rebuilt artifacts use committed source
+`d9b6d3e48a6a42d3dc411f41e892de2a9728341b` and feature fingerprint
+`86b7835254837140bd452b4a0f722cbfd207d1ad15d5f6c7b9b66757e0e11dbc`, with no
+working-tree overlays and the same three unrelated working edits excluded. All four
+artifacts passed independent source/configuration/asset verification:
+[web v1](F:/Temp/OpenChat-IOU/private-card-ui-web-024/web-v1-independent-verification.json),
+[web v2](F:/Temp/OpenChat-IOU/private-card-ui-web-024/web-v2-independent-verification.json),
+[APK024 x86](F:/Temp/OpenChat-IOU/private-card-ui-apk-024/artifacts/independent-x86_64-verification.json)
+and [APK024 ARM](F:/Temp/OpenChat-IOU/private-card-ui-apk-024/artifacts/independent-aarch64-verification.json).
+Original authentication, official OpenChat services, disabled OTA and the existing
+local-test package/signing and loopback-only network policy remain unchanged. No
+model, prompt or backend change is introduced by these fixes.
+
+The [browser UI observations](F:/Temp/OpenChat-IOU/private-card-ui-web-024/browser-ui-observations.json)
+confirm retained sign-in, IOU connection and saved cards; normal main Apps navigation;
+chat opt-in with an old card, retained after reload; and visible, disabled review for
+a card whose original setup no longer matches. Both web bundles were exercised at
+the observed 1454-pixel desktop width and mounted **v1**. Building and testing the
+v2-enabled bundle does not establish actual mobile-v2 runtime acceptance.
+
+The [delivery observations](F:/Temp/OpenChat-IOU/private-card-ui-web-024/browser-delivery-observations.json)
+record a new two-entry synthetic proposal while preserving the old card, edited
+dates/notes retained after reload, and source navigation back to the original chat.
+The reviewed encrypted-delivery flow required explicit sender confirmation and
+IOU's separate review before saving. Fresh sheet readback matched both entries,
+including the existing Type's 10% fee. Replaying the exact same payload/import ID
+required fresh review, reported the earlier save as already accepted, and left one
+row per unique test note. These are visible UI/readback observations, not a wire
+capture or model-inference result.
+
+The [model-settings observations](F:/Temp/OpenChat-IOU/private-card-ui-web-024/browser-model-settings-observations.json)
+show retained Gemma, downloaded Qwen and the optional voice add-on. Cached Qwen
+activation stopped at the existing background-cancellation guard; Gemma remained
+selected. No weights were removed. These settings observations alone establish
+neither inference nor a successful cached-model switch.
+
+Separate [four-case image observations](F:/Temp/OpenChat-IOU/image-worker-024/actual-image-observations.json)
+record actual Qwen and Gemma WebGPU runs using the unchanged compiled 024 worker,
+original IOU prompts and cached weights. Every run reverified the selected model's
+complete base cache by SHA-256 and confirmed cleanup. The authoritative output record
+has SHA-256 `2784c20f62a7106b7f98aa069c2c50b99a1497d8a94a651d3052f45df690d040`.
+The [direct normalization check](F:/Temp/OpenChat-IOU/image-worker-024/normalization-observations.json)
+fed those exact four outputs to the unchanged shipped IOU processor
+`bbf1aa6b1d50431f7280d0ee64b343443869abd7baf20e4a0fb0d95a2df0acaa`
+in an isolated VM without network access or private context. Only complete outer
+JSON fences were removed; all four candidates were accepted without field rewriting.
+
+| Fixture | Qwen and Gemma normalized result | Evidence limit |
+| --- | --- | --- |
+| Arabic transfer | 12,900 EGP; settlement; 2026-08-14; Arabic heading retained as the note | Gemma omitted the printed clock time; the app date field retains the calendar date |
+| Reservation | 1,912.15 USD; IOU; 2026-07-19; note retains both Jul 19 and Aug 6 endpoints | No year is printed; IOU derives 2026 from the explicit reference date |
+
+The reference timestamps were `2026-09-08T09:43:14.229Z` for the transfer and
+`2026-07-03T12:00:00Z` for the reservation. Gemma's unchanged hyphen-separated range
+was accepted by IOU's existing parser; its existing dollar-symbol rule supplied USD.
+Both results use the app's default `credit` direction without private Types. These
+checks establish raw-worker results and app normalization for these fixtures, not
+normal-app image proposals, native inference or private-Type matching. The temporary
+diagnostic route is off and the normal preview was restored (observed PID 77136).
+
+The [emulator installation receipt](F:/Temp/OpenChat-IOU/private-card-ui-apk-024/artifacts/emulator-install-receipt.json)
+records successful in-place x86 replacement with app data and the original install
+date preserved. Emulator phase A is not accepted: Chrome repeatedly stopped
+responding during the IOU connection. A data-preserving reboot completed. Its
+ten-second screen timeout was resolved by connecting virtual power under the
+existing stay-awake setting, and the original user storage unlocked with the
+existing PIN. Android System UI subsequently stopped responding during APK
+startup; post-reboot account restoration has not yet been observed.
+No native setup Share, send or save occurred, and phase B has not run. ARM remains
+statically verified only. The current
+commit's hosted [frontend checks](https://github.com/ktimam/open-chat/actions/runs/37037525607)
+passed; its [scoped security workflow](https://github.com/ktimam/open-chat/actions/runs/37037525477)
+failed. Its model contracts, small-fixture inference and both native hermetic jobs
+passed. The current Rust report validates all eight collection profiles and the
+435-component SBOM, but its advisory gate remains failed. All ten reported
+package/version/advisory tuples match the [existing local-test deferrals](releases/rust-feature-advisory-triage.md#october-2-local-test-deferral);
+none is newly uncovered. This is not a clean scan or release acceptance.
+
+The current Android job's direct log confirms that attempt 1 failed acquiring the
+pinned Kotlin 2.2.0 compiler from Maven Central before component compilation. It
+reports `pinned-tool-download-failed` after 99 ms, with no deadline expiry; the deeper
+transport cause remains unknown. The single Android-only rerun also failed before
+compilation: attempt 2 passed its 57 preliminary tests, then reported the same
+compiler-acquisition failure after 81 ms, again without a deadline expiry. Its deeper
+transport cause is likewise unknown. Attempt 1 remains recorded; the other model,
+native and Rust/npm results were carried forward, not rerun. No further retry was
+requested.
+The [hosted observation record](F:/Temp/OpenChat-IOU/private-card-ui-web-024/current-hosted-checks.json)
+records these classifications and the successful scoped npm query and license check. Earlier raw scoped
+security and IOU audit failures remain recorded: no advisory waiver, clean-scan claim or
+core audit follows from these builds. This is local-test evidence, not public-release
+readiness.
+
+### Current local-test completion checklist
+
+Use this finite checklist rather than treating each historical checkpoint above as a
+new requirement to rebuild or repeat all tests. Runtime evidence remains bound to its
+actual artifact; documentation-only changes do not change the packaged source identity.
+
+| Requirement | Current evidence | Remaining boundary |
+| --- | --- | --- |
+| One fork main; official OpenChat services and unchanged backend | Source `d9b6d3e48`, integrated upstream `5ca61b627`; reviewed backend baseline and independent web/APK checks | No OpenChat canister deployment is required |
+| Normal Apps UI; no technical setup/import page | Both web bundles verified; desktop Apps flow passes; APK024 reaches its normal mobile Apps entry | Complete the native connection and card flow below |
+| Automatic app discovery and explicit connection | Desktop IOU reconnect passes with the current generated public catalog; emulator directory and Connect navigation pass | Native connection hit repeated Chrome ANRs; setup sharing is not accepted |
+| Encrypted persistent private cards and confirmed app delivery | Desktop editing, reload, source navigation, second IOU review/save/readback and same-ID duplicate protection pass | APK prepare/restart/delivery/readback and same-ID retry remain unverified |
+| Preserved model features and accurate image proposals | Four actual Qwen/Gemma image runs and exact-output IOU normalization pass for the two fixtures; complete cache SHA and cleanup pass | Normal-app image proposals, native model inference, private-Type matching and a successful cached-model switch remain unverified |
+| Separate local APK and account preservation | Both ABIs independently verified; in-place x86 install retained the account and normal main UI before reboot | Post-reboot account restoration is not yet observed; ARM physical-phone testing and public provider qualification are deferred, not passed |
+| Scoped source/hosted verification | 5,662 frontend tests and both local typechecks pass; current hosted frontend checks pass; Rust collection and SBOM pass | Raw security gate remains failed: ten exactly deferred Rust tuples; Android compiler acquisition failed before compilation on both attempts; no waiver or clean scan |
+
+Optional synthetic-voice accuracy, physical-phone testing, public branding/domain,
+public provider qualification and public publication retain the user's explicit
+deferrals. They must not silently become passing tests or new local-test gates.
