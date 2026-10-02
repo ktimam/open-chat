@@ -794,3 +794,34 @@ fingerprint. Source ownership and advisory acceptance remain separate: no
 package/lock, auth, model/prompt, backend/canister, advisory rule or historical
 policy change is included, and this record does not claim artifact, live
 browser/device/provider, model-quality or release acceptance.
+
+## October 3 generic context framing
+
+Committed fix `e1effe5de434b02194b67c477702bf5676445395`, relative to parent
+`10b0c098ccfafbff99437c5d82ff812575eb078d`, changes only
+`frontend/app/src/utils/localAiCommand.ts` within the existing source inventory.
+Its UTF-8/LF identity is
+`b9932d3396f743f87e26ccc85d8686e9e205df3c20811f2e0651f61deac4bfb3`; the
+new aggregate is
+`69372966bb88cca0332f8d9750119d6efb627b419c195fa3267202d1c4641651`.
+Composition remains **171 sources, 123 dedicated owners, 108 anchors and 26
+dependency roots**.
+
+The generic context builder JSON-quotes retained historical lines and marks
+them as reference data rather than current instructions. It retains chronological
+order, the 24-message/8000-character bounds, and exact prompt passthrough when
+no context is supplied. Its sole existing `./onDeviceInference` import is
+unchanged. This does not change app-owned image prompts, model/worker limits,
+cache identity, private cards/encryption, authentication or official backend.
+Instruction framing is not an enforced model security boundary or a guarantee
+that every permitted history fits a model's token limit.
+
+Substituting only the parent file's independently verified LF hash
+`4dcca6ccc672a7dd6b0b32e246ea0a3fe789ed2c408eb449458694b279e1b930`
+reproduces the complete preceding `86b783` checkpoint. Historical reconstruction
+applies that exact substitution before the existing older transforms; current
+source is separately fingerprinted without substitutions. Prior snapshots,
+selectors, roots, package/lock identities and advisory rules remain unchanged.
+The associated spec and release documentation do not enter the runtime source
+fingerprint. This record is source identity evidence only, not model compliance,
+artifact, live browser/device/provider, advisory or release acceptance.

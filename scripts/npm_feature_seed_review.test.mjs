@@ -221,6 +221,33 @@ const beforeSavedCardUiFix = new Map([
     "41660e6c1437f3081891be63858011c451b50ac3102a5167d75f8bc00a8f134a",
   ],
 ]);
+// The sole scoped source change at e1effe5de is the generic context builder.
+// Its pre-change LF identity was independently read from parent 10b0c098c;
+// replacing only that file reproduces the entire 171-file 86b783 checkpoint.
+const beforeGenericContext = new Map([
+  [
+    "frontend/app/src/utils/localAiCommand.ts",
+    "4dcca6ccc672a7dd6b0b32e246ea0a3fe789ed2c408eb449458694b279e1b930",
+  ],
+]);
+function beforeGenericContextSourceHash(file) {
+  return beforeGenericContext.get(file) ?? sourceHash(file);
+}
+function beforeGenericContextFingerprint(fingerprint) {
+  return {
+    ...fingerprint,
+    sha256: createHash("sha256")
+      .update(
+        JSON.stringify(
+          fingerprint.files.map((file) => [
+            file,
+            beforeGenericContextSourceHash(file),
+          ]),
+        ),
+      )
+      .digest("hex"),
+  };
+}
 function beforeSavedCardUiFixFingerprint(fingerprint) {
   return {
     ...fingerprint,
@@ -229,7 +256,8 @@ function beforeSavedCardUiFixFingerprint(fingerprint) {
         JSON.stringify(
           fingerprint.files.map((file) => [
             file,
-            beforeSavedCardUiFix.get(file) ?? sourceHash(file),
+            beforeSavedCardUiFix.get(file) ??
+              beforeGenericContextSourceHash(file),
           ]),
         ),
       )
@@ -246,7 +274,7 @@ function beforeReplicaPortMergeFingerprint(fingerprint) {
             file,
             beforeReplicaPortMerge.get(file) ??
               beforeSavedCardUiFix.get(file) ??
-              sourceHash(file),
+              beforeGenericContextSourceHash(file),
           ]),
         ),
       )
@@ -282,7 +310,7 @@ function beforeMainAppsFlowFingerprint(fingerprint) {
             file,
             beforeMainAppsFlow.get(file) ??
               beforeReplicaPortMerge.get(file) ??
-              sourceHash(file),
+              beforeGenericContextSourceHash(file),
           ]),
         ),
       )
@@ -315,7 +343,7 @@ function priorFingerprint(fingerprint, hashes, replacements = new Map()) {
             : (hashes.get(file) ??
               beforeMainAppsFlow.get(file) ??
               beforeReplicaPortMerge.get(file) ??
-              sourceHash(file)),
+              beforeGenericContextSourceHash(file)),
         ]),
       ),
     ),
@@ -423,7 +451,7 @@ function septemberCheckpointEntries(fingerprint) {
         beforeOctoberRefresh.get(path) ??
         beforeMainAppsFlow.get(path) ??
         beforeReplicaPortMerge.get(path) ??
-        sourceHash(path),
+        beforeGenericContextSourceHash(path),
     ]);
   assert.equal(entries.length, 148);
   assert.equal(
@@ -788,9 +816,50 @@ test("current encryption, recovery and enum-label owners use existing selectors 
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   assert.equal(
     fingerprint.sha256,
-    "86b7835254837140bd452b4a0f722cbfd207d1ad15d5f6c7b9b66757e0e11dbc",
+    "69372966bb88cca0332f8d9750119d6efb627b419c195fa3267202d1c4641651",
   );
   assertReviewedSourceFingerprint(fingerprint, config.sourceReview);
+});
+
+test("generic context framing preserves exact prior source identity and existing scope", () => {
+  const config = JSON.parse(
+    readFileSync(
+      resolve(root, "scripts/npm_feature_scope.current-client.json"),
+      "utf8",
+    ),
+  );
+  const actual = seedSourceFingerprint(root, config);
+  const file = "frontend/app/src/utils/localAiCommand.ts";
+  assert.deepEqual([...beforeGenericContext.keys()], [file]);
+  assert(actual.files.includes(file));
+  assert.equal(
+    sourceHash(file),
+    "b9932d3396f743f87e26ccc85d8686e9e205df3c20811f2e0651f61deac4bfb3",
+  );
+  assert.notEqual(sourceHash(file), beforeGenericContext.get(file));
+  assert.deepEqual(
+    featureDependencySpecifiers(readFileSync(resolve(root, file), "utf8")),
+    ["./onDeviceInference"],
+  );
+  const prior = beforeGenericContextFingerprint(actual);
+  assert.equal(
+    prior.sha256,
+    "86b7835254837140bd452b4a0f722cbfd207d1ad15d5f6c7b9b66757e0e11dbc",
+  );
+  assert.equal(
+    actual.sha256,
+    "69372966bb88cca0332f8d9750119d6efb627b419c195fa3267202d1c4641651",
+  );
+  assertReviewedSourceFingerprint(prior, config.sourceReview);
+  assertReviewedSourceFingerprint(actual, config.sourceReview);
+  assert.equal(actual.files.length, 171);
+  assert.equal(featureOwnedFiles(root, config.scopeId).length, 123);
+  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
+  assert.equal(config.seeds.length, 26);
+  assert(
+    !actual.files.includes("frontend/app/src/utils/localAiCommand.spec.ts"),
+  );
+  assert(!actual.files.includes("docs/unofficial-local-client.md"));
 });
 
 test("saved-card opt-in and recovery feedback preserve exact prior source identity and existing scope", () => {
@@ -800,7 +869,9 @@ test("saved-card opt-in and recovery feedback preserve exact prior source identi
       "utf8",
     ),
   );
-  const actual = seedSourceFingerprint(root, config);
+  const actual = beforeGenericContextFingerprint(
+    seedSourceFingerprint(root, config),
+  );
   assert.equal(actual.files.length, 171);
   assert.equal(featureOwnedFiles(root, config.scopeId).length, 123);
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
@@ -1375,7 +1446,7 @@ test("source navigation preserves the exact committed 153-file checkpoint", () =
           beforeSourceNavigation.get(file) ??
             beforeMainAppsFlow.get(file) ??
             beforeReplicaPortMerge.get(file) ??
-            sourceHash(file),
+            beforeGenericContextSourceHash(file),
         ]),
       ),
     ),
