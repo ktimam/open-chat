@@ -331,49 +331,63 @@ test("transport rejection reports bounded causes, aborts and never requests the 
   assert.deepEqual(await readdir(output), []);
 });
 
-test("actual CLI sends sanitized download context only to stderr and leaves JSON stdout empty on failure", async () => {
-  const output = await directory();
-  const script = fileURLToPath(
-    new URL("./android_component_identity_tools.mjs", import.meta.url),
-  );
-  const child = spawnSync(
-    process.execPath,
-    [
-      "--input-type=module",
-      "--eval",
-      `globalThis.fetch = async () => {
-      const cause = Object.assign(new Error("secret proxy credentials"), {
-        code: "ENOTFOUND", name: "Error", headers: { authorization: "secret header" }
+for (const [message, reason] of [
+  ["secret proxy credentials", undefined],
+  ["unexpected redirect", "redirect-rejected"],
+  ["URL scheme must be a HTTP(S) scheme", "non-http-scheme"],
+  ["unknown scheme", "unknown-scheme"],
+  ["redirect count exceeded", "redirect-limit"],
+  ["bad port", "blocked-port"],
+  ["unexpected redirect secret proxy credentials", undefined],
+  ["Unexpected redirect", undefined],
+]) {
+  test(`actual CLI keeps stdout empty and reports only exact safe reason: ${message}`, async () => {
+    const output = await directory();
+    const script = fileURLToPath(
+      new URL("./android_component_identity_tools.mjs", import.meta.url),
+    );
+    const child = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `globalThis.fetch = async () => {
+      const cause = Object.assign(new Error(${JSON.stringify(message)}), {
+        code: ${reason === undefined ? '"ENOTFOUND"' : "undefined"}, name: "Error", headers: { authorization: "secret header" }
       });
       cause.cause = { name: "secret\\nname", code: "X".repeat(65), message: "secret nested message" };
       throw new TypeError("secret outer message", { cause });
     };
     process.argv = [process.execPath, ${JSON.stringify(script)}, "--output-directory", ${JSON.stringify(output)}];
     await import(${JSON.stringify(new URL("./android_component_identity_tools.mjs", import.meta.url).href)});`,
-    ],
-    { encoding: "utf8", timeout: 10_000 },
-  );
-  assert.equal(child.error, undefined);
-  assert.equal(child.status, 1);
-  assert.equal(child.stdout, "");
-  const diagnostic = JSON.parse(child.stderr);
-  assert.equal(
-    diagnostic.artifact,
-    "org.jetbrains.kotlin:kotlin-compiler-embeddable:2.2.0",
-  );
-  assert.equal(diagnostic.url, artifactUrl(reviewed.artifacts[0]));
-  assert.ok(
-    Number.isSafeInteger(diagnostic.elapsedMs) && diagnostic.elapsedMs >= 0,
-  );
-  assert.equal(diagnostic.deadlineExceeded, false);
-  assert.deepEqual(diagnostic.causes, [
-    { name: "TypeError" },
-    { name: "Error", code: "ENOTFOUND" },
-    {},
-  ]);
-  assert.doesNotMatch(child.stderr, /secret|authorization|headers|X{65}/u);
-  assert.deepEqual(await readdir(output), []);
-});
+      ],
+      { encoding: "utf8", timeout: 10_000 },
+    );
+    assert.equal(child.error, undefined);
+    assert.equal(child.status, 1);
+    assert.equal(child.stdout, "");
+    const diagnostic = JSON.parse(child.stderr);
+    assert.equal(
+      diagnostic.artifact,
+      "org.jetbrains.kotlin:kotlin-compiler-embeddable:2.2.0",
+    );
+    assert.equal(diagnostic.url, artifactUrl(reviewed.artifacts[0]));
+    assert.ok(
+      Number.isSafeInteger(diagnostic.elapsedMs) && diagnostic.elapsedMs >= 0,
+    );
+    assert.equal(diagnostic.deadlineExceeded, false);
+    assert.deepEqual(diagnostic.causes, [
+      { name: "TypeError" },
+      reason === undefined
+        ? { name: "Error", code: "ENOTFOUND" }
+        : { name: "Error", reason },
+      {},
+    ]);
+    assert.doesNotMatch(child.stderr, /secret|authorization|headers|X{65}/u);
+    assert.equal(child.stderr.includes(message), false);
+    assert.deepEqual(await readdir(output), []);
+  });
+}
 
 test("redirected output ancestors and non-absolute outputs are rejected before fetch", async () => {
   const actual = await mkdtemp(join(tmpdir(), "android-tools-target-"));

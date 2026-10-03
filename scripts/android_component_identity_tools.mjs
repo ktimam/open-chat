@@ -16,6 +16,15 @@ export const manifestPath = fileURLToPath(
 );
 const central = "https://repo.maven.apache.org/maven2/";
 const maxArtifactBytes = 60_000_000;
+// Exact static literals reviewed in Node 24.18.1's bundled Undici 7.29.0.
+// No substring matching or raw message logging; unknown messages stay omitted.
+const fetchReasons = new Map([
+  ["unexpected redirect", "redirect-rejected"],
+  ["URL scheme must be a HTTP(S) scheme", "non-http-scheme"],
+  ["unknown scheme", "unknown-scheme"],
+  ["redirect count exceeded", "redirect-limit"],
+  ["bad port", "blocked-port"],
+]);
 
 class ToolDownloadError extends Error {
   constructor(artifact, url, startedAt, error, deadlineExceeded) {
@@ -38,6 +47,8 @@ class ToolDownloadError extends Error {
         )
           entry[field] = value;
       }
+      const reason = fetchReasons.get(current.message);
+      if (reason !== undefined) entry.reason = reason;
       causes.push(entry);
       if (current.cause) pending.push(current.cause);
       if (current instanceof AggregateError)
