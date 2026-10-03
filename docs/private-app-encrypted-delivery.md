@@ -363,3 +363,8 @@ retaining encrypted cards and app-owned presentation. See
 for current static artifact proofs and the limited emulator list/details/Connect
 interaction. Those checks do not establish completed connection, card delivery or
 current normal-browser acceptance.
+
+For the later build026 desktop image-to-encrypted-delivery/save/readback result,
+and the still-unverified native connection/delivery boundary, use the
+[current local-test completion checklist](unofficial-local-client.md#current-local-test-completion-checklist).
+The newer desktop result does not retroactively qualify APK022 or native delivery.

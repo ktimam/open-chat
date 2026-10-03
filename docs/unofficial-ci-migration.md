@@ -408,9 +408,8 @@ Both hops share the original deadline; redirect bodies are cancelled, not read.
 Every response must match its exact requested URL, and the final response must
 still be 200 with the pinned byte count and SHA-256. The other eight artifacts
 retain redirect rejection. Errors retain only the original public Maven URL;
-downstream diagnostics omit Location-derived fields. This is an offline-tested
-acquisition correction, not yet a successful hosted component compilation or
-native runtime acceptance result. All 96 focused offline resolver tests pass,
+downstream diagnostics omit Location-derived fields. All 96 focused offline resolver
+tests pass,
 including complete synthetic chains, rejected destinations/stages, final size
 and hash failures, one shared deadline, cancelled bodies, and signed-query
 redaction in both exported errors and actual CLI output.
@@ -418,10 +417,15 @@ redaction in both exported errors and actual CLI output.
 After the redirect-chain correction, all 1,342 tests selected by the two
 workflows' 41 existing offline suites pass on pinned Node 24.18.1, with no
 failures or skips. Scoped formatting and workflow-wiring checks also pass.
-Hosted verification of the
-corrections, Android component compilation, and native app-delivery acceptance
-remain separate gates. No model, prompt, application runtime, account, or
-OpenChat backend was changed by these CI corrections.
+The correction was pushed as `23b99c25c5aa105d6bdfafa7ce8fc7e08ea79c7d` and
+hosted Android component compilation subsequently passed. The later exact-commit
+[frontend run for 6630ae711](https://github.com/ktimam/open-chat/actions/runs/37143795106)
+passed all four jobs, and its
+[scoped security run](https://github.com/ktimam/open-chat/actions/runs/37143795163)
+passed all five test/compilation jobs, including Android, Windows and Ubuntu.
+The remaining advisory failure below is not a compiler-acquisition failure.
+Native app-delivery runtime acceptance remains separate. No model, prompt,
+application runtime, account, or OpenChat backend was changed by these CI corrections.
 
 The completed scoped Rust collection, source binding, SBOM schema validation,
 and query transcript passed; the advisory gate still rejects the ten previously
