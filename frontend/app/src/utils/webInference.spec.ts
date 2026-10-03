@@ -1434,6 +1434,71 @@ describe("pinned all-WebGPU model integration", () => {
         }
     });
 
+    it("aborts backgrounded cached verification without downloading weights or replacing the selected model", async () => {
+        const gemma = {
+            id: "gemma-4-e2b-it-q4",
+            name: "Gemma 4 E2B (multimodal)",
+            files: [],
+            sizeBytes: 0,
+            modalities: ["text", "image", "audio"] as ModelModality[],
+        };
+        await useWebModelFromUrl(entry);
+        await useWebModelFromUrl(gemma);
+        const previous = get(webModelStatus);
+        const persistedSelection = localStorage.getItem(LS_URL_MODEL);
+        const preloads = transformers.preloadCalls;
+        const disposals = transformers.disposeCalls;
+        const artifactVerifier = vi.mocked(
+            (await import("./transformersWebGpuInference"))
+                .transformersWebGpuModelArtifactsDownloaded,
+        );
+        const hiddenDescriptor = Object.getOwnPropertyDescriptor(document, "hidden");
+        transformers.modelDownloadedSignals = [];
+        let verificationStarted!: () => void;
+        const started = new Promise<void>((resolve) => {
+            verificationStarted = resolve;
+        });
+        transformers.modelDownloadedImpl = async (_modelId, { signal }) =>
+            new Promise<boolean>((_resolve, reject) => {
+                verificationStarted();
+                signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+            });
+        const switching = useWebModelFromUrl(entry);
+        try {
+            await started;
+            expect(get(webModelStatus)).toMatchObject({ id: entry.id, status: "verifying" });
+            expect(transformers.modelDownloadedSignals).toHaveLength(1);
+            const signal = transformers.modelDownloadedSignals[0];
+            expect(signal.aborted).toBe(false);
+            expect(artifactVerifier).toHaveBeenLastCalledWith(entry.id, { signal });
+            expect(artifactVerifier.mock.calls.at(-1)?.[1]?.signal).toBe(signal);
+
+            Object.defineProperty(document, "hidden", { configurable: true, value: true });
+            document.dispatchEvent(new Event("visibilitychange"));
+
+            await expect(switching).resolves.toMatch(/background|Retry download/i);
+            expect(signal.aborted).toBe(true);
+            expect(signal.reason).toMatchObject({ name: "AbortError", message: "backgrounded" });
+            expect(transformers.preloadCalls).toBe(preloads);
+            expect(transformers.runtimeRefreshCalls).toBe(0);
+            expect(transformers.disposeCalls).toBe(disposals);
+            expect(transformers.deleteCalls).toBe(0);
+            expect(transformers.downloadedModelIds).toEqual(new Set([entry.id, gemma.id]));
+            expect(get(webModelInstallStatus)).toMatchObject({
+                [entry.id]: "downloaded",
+                [gemma.id]: "downloaded",
+            });
+            expect(get(webModelStatus)).toEqual(previous);
+            expect(localStorage.getItem(LS_URL_MODEL)).toBe(persistedSelection);
+        } finally {
+            if (hiddenDescriptor === undefined) Reflect.deleteProperty(document, "hidden");
+            else Object.defineProperty(document, "hidden", hiddenDescriptor);
+            cancelWebModelDownload();
+            await switching;
+            transformers.modelDownloadedImpl = undefined;
+        }
+    });
+
     it("keeps the selected model and downloaded status when explicit cache deletion fails", async () => {
         await useWebModelFromUrl(entry);
         const persisted = localStorage.getItem(LS_URL_MODEL);
