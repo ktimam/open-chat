@@ -372,18 +372,53 @@ shallow checkout. The production job now requests full history, with positive
 and mutation regressions; the provenance assertion is not skipped or weakened.
 
 The Android component job reported `redirect-rejected` for its pinned Kotlin
-compiler, before compilation. The downloader now inspects only the first HTTP
-response and reports a bounded status and fixed redirect classification. It
-never follows redirects or logs full Location values, paths, query strings,
+compiler, before compilation. The diagnostic-only revision inspected only the first HTTP
+response and reported a bounded status and fixed redirect classification. It
+never followed redirects or logged full Location values, paths, query strings,
 or credentials. To identify the public compiler's unexpected hosting destination,
-diagnostics include only its bounded HTTPS origin, path-equality and query-presence
-flags; this is not permission to request the destination. Status 200, exact URL,
-byte count, and SHA-256 remain required;
-all redirect responses fail before artifact creation. This improves diagnosis,
-not evidence that the hosted acquisition issue is fixed.
+diagnostics included only its bounded HTTPS origin, path-equality and query-presence
+flags; that did not authorize requesting the destination. Status 200, exact URL,
+byte count, and SHA-256 remained required;
+all redirect responses failed before artifact creation. That improved diagnosis,
+not evidence that the hosted acquisition issue was fixed.
 
-All 1,297 tests selected by the two workflows' 41 existing offline suites pass
-locally on pinned Node 24.18.1 after these changes. Hosted verification of the
+The next hosted run [37138513559](https://github.com/ktimam/open-chat/actions/runs/37138513559)
+at `d0d6c68ad4b2e920053f997fb7381bb491ff897a` confirmed HTTP 301 to a
+GitHub origin, not a download timeout. [Sonatype documents publisher-coordinated
+301 redirects](https://central.sonatype.org/faq/429-operational-dependencies/#artifact-redirects)
+for high-volume artifacts, although its example list does not name Kotlin.
+[JetBrains' official v2.2.0 release metadata](https://api.github.com/repos/JetBrains/kotlin/releases/tags/v2.2.0)
+independently lists asset `598661100`, `kotlin-compiler-embeddable-2.2.0.jar`,
+added September 29, 2026, with exactly the existing 56,255,947-byte size and
+SHA-256 `b2f743ea5ba12f69e0f35e5d8d46069d74c8e2861087548a7e0e14a784bc4cf1`.
+The hosted origin-only evidence did not establish its exact destination path.
+
+The resolver now permits only the matching compiler's Maven 301 to the exact
+`JetBrains/kotlin/releases/download/v2.2.0/kotlin-compiler-embeddable-2.2.0.jar`
+HTTPS URL. An October 3 header-only request to that verified publisher URL
+returned 302 to the exact CDN object
+`release-assets.githubusercontent.com/github-production-release-asset/3432266/e2a79dcf-39b6-4c79-b41f-130a3894fc1a`.
+The [official repository metadata](https://api.github.com/repos/JetBrains/kotlin)
+confirms repository ID `3432266`; [GitHub documents this release-asset host](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#communication-requirements-for-github-hosted-runners).
+Only that exact second hop is permitted, with a bounded, nonduplicated set of
+observed signed-query keys kept in memory only. No signature/query values were
+recorded. No wildcard repositories, CDN objects, mirrors, automatic redirects,
+userinfo, ports, fragments, retry loops, or third redirects are allowed.
+Both hops share the original deadline; redirect bodies are cancelled, not read.
+Every response must match its exact requested URL, and the final response must
+still be 200 with the pinned byte count and SHA-256. The other eight artifacts
+retain redirect rejection. Errors retain only the original public Maven URL;
+downstream diagnostics omit Location-derived fields. This is an offline-tested
+acquisition correction, not yet a successful hosted component compilation or
+native runtime acceptance result. All 96 focused offline resolver tests pass,
+including complete synthetic chains, rejected destinations/stages, final size
+and hash failures, one shared deadline, cancelled bodies, and signed-query
+redaction in both exported errors and actual CLI output.
+
+After the redirect-chain correction, all 1,342 tests selected by the two
+workflows' 41 existing offline suites pass on pinned Node 24.18.1, with no
+failures or skips. Scoped formatting and workflow-wiring checks also pass.
+Hosted verification of the
 corrections, Android component compilation, and native app-delivery acceptance
 remain separate gates. No model, prompt, application runtime, account, or
 OpenChat backend was changed by these CI corrections.

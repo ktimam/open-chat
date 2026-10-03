@@ -16,6 +16,73 @@ export const manifestPath = fileURLToPath(
 );
 const central = "https://repo.maven.apache.org/maven2/";
 const maxArtifactBytes = 60_000_000;
+// Exact publisher asset 598661100: its 56,255,947 bytes and SHA-256 match the
+// manifest. The CDN object was observed via a manual, header-only request to
+// this exact JetBrains release on 2026-10-03. No repository-wide wildcard.
+const compilerMavenUrl = `${central}org/jetbrains/kotlin/kotlin-compiler-embeddable/2.2.0/kotlin-compiler-embeddable-2.2.0.jar`;
+const compilerReleaseUrl =
+  "https://github.com/JetBrains/kotlin/releases/download/v2.2.0/kotlin-compiler-embeddable-2.2.0.jar";
+const compilerCdnUrl =
+  "https://release-assets.githubusercontent.com/github-production-release-asset/3432266/e2a79dcf-39b6-4c79-b41f-130a3894fc1a";
+const compilerCdnQueryKeys = new Set([
+  "sp",
+  "sv",
+  "sr",
+  "spr",
+  "se",
+  "rscd",
+  "rsct",
+  "skoid",
+  "sktid",
+  "skt",
+  "ske",
+  "sks",
+  "skv",
+  "sig",
+  "jwt",
+  "response-content-disposition",
+  "response-content-type",
+]);
+
+function compilerRedirect(initialUrl, currentUrl, response, hop) {
+  if (initialUrl !== compilerMavenUrl) return undefined;
+  const location = response.headers.get("location");
+  if (hop === 0 && currentUrl === compilerMavenUrl && response.status === 301)
+    return location === compilerReleaseUrl ? compilerReleaseUrl : undefined;
+  if (
+    hop !== 1 ||
+    currentUrl !== compilerReleaseUrl ||
+    response.status !== 302 ||
+    typeof location !== "string" ||
+    location.length > 8192 ||
+    !location.startsWith(`${compilerCdnUrl}?`) ||
+    location.includes("#")
+  )
+    return undefined;
+  try {
+    const target = new URL(location);
+    if (
+      target.href !== location ||
+      target.username ||
+      target.password ||
+      target.port ||
+      target.hash ||
+      `${target.origin}${target.pathname}` !== compilerCdnUrl
+    )
+      return undefined;
+    const keys = [...target.searchParams.keys()];
+    if (
+      new Set(keys).size !== keys.length ||
+      keys.some((key) => !compilerCdnQueryKeys.has(key)) ||
+      !target.searchParams.get("sig") ||
+      !target.searchParams.get("jwt")
+    )
+      return undefined;
+    return location; // Signed query stays in memory for this one request only.
+  } catch {
+    return undefined; // Never attach URL parser errors containing the query.
+  }
+}
 // Exact static literals reviewed in Node 24.18.1's bundled Undici 7.29.0.
 // No substring matching or raw message logging; unknown messages stay omitted.
 const fetchReasons = new Map([
@@ -77,8 +144,45 @@ function responseDiagnostic(response, requestedUrl) {
 }
 
 class ToolDownloadError extends Error {
-  constructor(artifact, url, startedAt, error, deadlineExceeded, response) {
-    super("Pinned tool download failed", { cause: error });
+  constructor(
+    artifact,
+    url,
+    startedAt,
+    error,
+    deadlineExceeded,
+    response,
+    hop,
+  ) {
+    // A downstream fetch error can itself contain the signed request URL.
+    // Preserve only our fixed validation messages, not the raw error object.
+    const fileName = `${artifact.artifact}-${artifact.version}.jar`;
+    const safeMessages = new Set([
+      "automatic tool redirect is forbidden",
+      "tool response origin/path changed",
+      `unexpected response for ${fileName}`,
+      "unexpected content length",
+      "tool response body missing",
+      "tool body exceeds pinned size",
+      "tool body truncated",
+      "tool SHA-256 mismatch",
+      `tool download deadline exceeded: ${fileName}`,
+    ]);
+    // Node assertions may append an actual/expected diff. Never copy that
+    // server-derived suffix; retain only an exact allowlisted first line.
+    const firstLine =
+      typeof error?.message === "string"
+        ? error.message.split("\n", 1)[0]
+        : undefined;
+    super("Pinned tool download failed", {
+      cause:
+        hop === 0
+          ? error
+          : new Error(
+              safeMessages.has(firstLine)
+                ? firstLine
+                : "Pinned publisher request failed",
+            ),
+    });
     const causes = [];
     const pending = [error];
     const seen = new Set();
@@ -111,7 +215,16 @@ class ToolDownloadError extends Error {
       elapsedMs: Math.max(0, Math.round(performance.now() - startedAt)),
       deadlineExceeded,
       causes,
-      ...responseDiagnostic(response, url),
+      redirectHops: hop,
+      // After leaving Maven, report only the status, never fields parsed from
+      // a signed CDN URL or downstream Location/error value.
+      ...(hop === 0
+        ? responseDiagnostic(response, url)
+        : Number.isInteger(response?.status) &&
+            response.status >= 100 &&
+            response.status <= 599
+          ? { httpStatus: response.status }
+          : {}),
     };
   }
 }
@@ -207,6 +320,8 @@ async function downloadArtifact(artifact, output, fetchImpl, timeoutMs) {
   let timer;
   let deadlineExceeded = false;
   let response;
+  let currentUrl = url;
+  let hop = 0;
   const deadline = new Promise((_, reject) => {
     timer = setTimeout(() => {
       deadlineExceeded = true;
@@ -216,18 +331,34 @@ async function downloadArtifact(artifact, output, fetchImpl, timeoutMs) {
   });
   const bounded = (operation) => Promise.race([operation, deadline]);
   try {
-    response = await bounded(
-      fetchImpl(url, {
-        // Manual exposes only the first response for bounded diagnostics;
-        // every redirect still fails the exact status/URL guards below.
-        redirect: "manual",
-        credentials: "omit",
-        signal: controller.signal,
-      }),
-    );
+    while (true) {
+      response = undefined;
+      response = await bounded(
+        fetchImpl(currentUrl, {
+          redirect: "manual",
+          credentials: "omit",
+          signal: controller.signal,
+        }),
+      );
+      assert.equal(
+        response.redirected,
+        false,
+        "automatic tool redirect is forbidden",
+      );
+      // Boolean assertion avoids retaining a signed URL in AssertionError.
+      assert.ok(
+        response.url === currentUrl,
+        "tool response origin/path changed",
+      );
+      const next = compilerRedirect(url, currentUrl, response, hop);
+      if (next === undefined) break;
+      // Cancel redirect bodies without reading them; a stalled cancellation
+      // cannot outlive the same total download deadline or start the next hop.
+      if (response.body) await bounded(response.body.cancel());
+      currentUrl = next;
+      hop++;
+    }
     assert.equal(response.status, 200, `unexpected response for ${fileName}`);
-    assert.equal(response.redirected, false, "tool redirect is forbidden");
-    assert.equal(response.url, url, "tool response origin/path changed");
     const length = response.headers.get("content-length");
     if (length !== null)
       assert.equal(length, String(artifact.bytes), "unexpected content length");
@@ -258,6 +389,7 @@ async function downloadArtifact(artifact, output, fetchImpl, timeoutMs) {
       error,
       deadlineExceeded,
       response,
+      hop,
     );
   } finally {
     clearTimeout(timer);

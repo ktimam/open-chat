@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { inspect } from "node:util";
 import {
   artifactUrl,
   manifestPath,
@@ -224,6 +225,387 @@ for (const [label, replacement, expected] of [
 }
 
 const pinnedUrl = artifactUrl(reviewed.artifacts[0]);
+const compilerReleaseUrl =
+  "https://github.com/JetBrains/kotlin/releases/download/v2.2.0/kotlin-compiler-embeddable-2.2.0.jar";
+const compilerCdnBase =
+  "https://release-assets.githubusercontent.com/github-production-release-asset/3432266/e2a79dcf-39b6-4c79-b41f-130a3894fc1a";
+const compilerCdnUrl = `${compilerCdnBase}?sig=SYNTHETIC_PRIVATE_SIGNATURE&jwt=SYNTHETIC_PRIVATE_JWT`;
+function redirectResponse(url, location, status, onCancel = () => {}) {
+  return response(url, {
+    status,
+    headers: new Headers({ location }),
+    body: new ReadableStream({ cancel: onCancel }),
+  });
+}
+
+for (const useCdn of [false, true]) {
+  test(`only the pinned compiler follows the reviewed publisher chain (CDN: ${useCdn})`, async () => {
+    const output = await directory();
+    const calls = [];
+    const cancelled = [];
+    const signals = [];
+    const result = await resolveTools({
+      directory: output,
+      manifest: fixtures(),
+      fetchImpl: async (url, options) => {
+        calls.push(url);
+        signals.push(options.signal);
+        assert.equal(options.redirect, "manual");
+        assert.equal(options.credentials, "omit");
+        assert.deepEqual(Object.keys(options).sort(), [
+          "credentials",
+          "redirect",
+          "signal",
+        ]);
+        if (url === pinnedUrl)
+          return redirectResponse(url, compilerReleaseUrl, 301, () =>
+            cancelled.push("maven"),
+          );
+        if (url === compilerReleaseUrl && useCdn)
+          return redirectResponse(url, compilerCdnUrl, 302, () =>
+            cancelled.push("github"),
+          );
+        return response(url);
+      },
+    });
+    assert.deepEqual(calls, [
+      pinnedUrl,
+      compilerReleaseUrl,
+      ...(useCdn ? [compilerCdnUrl] : []),
+      ...reviewed.artifacts.slice(1).map(artifactUrl),
+    ]);
+    assert.deepEqual(cancelled, useCdn ? ["maven", "github"] : ["maven"]);
+    assert.equal(signals[0], signals[1]);
+    if (useCdn) assert.equal(signals[1], signals[2]);
+    assert.ok(signals.every((signal) => signal.aborted));
+    assert.equal((await readdir(output)).length, 9);
+    assert.doesNotMatch(
+      JSON.stringify(result),
+      /PRIVATE|githubusercontent|sig=/u,
+    );
+  });
+}
+
+for (const [label, stage, location, status] of [
+  [
+    "wrong repository",
+    0,
+    compilerReleaseUrl.replace("JetBrains/kotlin", "other/kotlin"),
+    301,
+  ],
+  ["wrong version", 0, compilerReleaseUrl.replaceAll("2.2.0", "2.2.1"), 301],
+  ["wrong release path", 0, `${compilerReleaseUrl}/extra`, 301],
+  [
+    "release credentials",
+    0,
+    compilerReleaseUrl.replace("https://", "https://secret@"),
+    301,
+  ],
+  [
+    "release explicit port",
+    0,
+    compilerReleaseUrl.replace("github.com/", "github.com:443/"),
+    301,
+  ],
+  ["release query", 0, `${compilerReleaseUrl}?secret=value`, 301],
+  ["release fragment", 0, `${compilerReleaseUrl}#secret`, 301],
+  ["wrong first status", 0, compilerReleaseUrl, 302],
+  ["skipped publisher stage", 0, compilerCdnUrl, 301],
+  ["Maven loop", 0, pinnedUrl, 301],
+  [
+    "wrong CDN host",
+    1,
+    compilerCdnUrl.replace(
+      "release-assets.githubusercontent.com",
+      "evil.invalid",
+    ),
+    302,
+  ],
+  [
+    "wrong CDN repository",
+    1,
+    compilerCdnUrl.replace("3432266", "3432267"),
+    302,
+  ],
+  ["wrong CDN object", 1, compilerCdnUrl.replace("e2a79dcf", "e2a79dce"), 302],
+  ["CDN HTTP", 1, compilerCdnUrl.replace("https:", "http:"), 302],
+  [
+    "CDN credentials",
+    1,
+    compilerCdnUrl.replace("https://", "https://secret@"),
+    302,
+  ],
+  ["CDN explicit port", 1, compilerCdnUrl.replace(".com/", ".com:443/"), 302],
+  ["CDN fragment", 1, `${compilerCdnUrl}#secret`, 302],
+  ["CDN empty fragment", 1, `${compilerCdnUrl}#`, 302],
+  ["CDN missing signature", 1, `${compilerCdnBase}?jwt=secret`, 302],
+  ["CDN duplicate query", 1, `${compilerCdnUrl}&sig=secret`, 302],
+  ["CDN unknown query", 1, `${compilerCdnUrl}&redirect=secret`, 302],
+  ["CDN oversized query", 1, `${compilerCdnUrl}&se=${"x".repeat(8192)}`, 302],
+  ["wrong second status", 1, compilerCdnUrl, 301],
+  ["publisher loop", 1, compilerReleaseUrl, 302],
+  ["back to Maven", 1, pinnedUrl, 302],
+  ["third redirect", 2, compilerCdnUrl, 302],
+  ["CDN back to publisher", 2, compilerReleaseUrl, 301],
+]) {
+  test(`publisher chain rejects ${label} before an unapproved request`, async () => {
+    const output = await directory();
+    const calls = [];
+    let cancellations = 0;
+    await assert.rejects(
+      resolveTools({
+        directory: output,
+        manifest: fixtures(),
+        fetchImpl: async (url) => {
+          const at = calls.length;
+          calls.push(url);
+          if (at === stage)
+            return redirectResponse(url, location, status, () => {
+              cancellations++;
+            });
+          assert.ok(at < stage, "must not follow the rejected redirect");
+          return redirectResponse(
+            url,
+            at === 0 ? compilerReleaseUrl : compilerCdnUrl,
+            at === 0 ? 301 : 302,
+            () => {
+              cancellations++;
+            },
+          );
+        },
+      }),
+      (error) => {
+        downloadFailure(/unexpected response/u)(error);
+        assert.equal(error.diagnostic.redirectHops, stage);
+        assert.doesNotMatch(
+          JSON.stringify(error.diagnostic),
+          /PRIVATE|secret|sig=|jwt=|e2a79dcf/u,
+        );
+        return true;
+      },
+    );
+    assert.equal(calls.length, stage + 1);
+    assert.equal(cancellations, stage + 1);
+    assert.deepEqual(await readdir(output), []);
+  });
+}
+
+test("other artifacts cannot use the compiler's publisher exception", async () => {
+  const output = await directory();
+  const calls = [];
+  await assert.rejects(
+    resolveTools({
+      directory: output,
+      manifest: fixtures(),
+      fetchImpl: async (url) => {
+        calls.push(url);
+        return calls.length === 1
+          ? response(url)
+          : redirectResponse(url, compilerReleaseUrl, 301);
+      },
+    }),
+    (error) => {
+      assert.match(error.cause.message, /unexpected response/u);
+      assert.equal(error.diagnostic.redirectHops, 0);
+      assert.equal(error.diagnostic.url, artifactUrl(reviewed.artifacts[1]));
+      return true;
+    },
+  );
+  assert.deepEqual(calls, reviewed.artifacts.slice(0, 2).map(artifactUrl));
+  assert.deepEqual(await readdir(output), [
+    "kotlin-compiler-embeddable-2.2.0.jar",
+  ]);
+});
+
+for (const [label, change, expected] of [
+  ["changed URL", { url: `${compilerCdnUrl}&se=secret` }, /origin\/path/u],
+  ["auto-followed response", { redirected: true }, /redirect/u],
+  ["non-200 response", { status: 403 }, /unexpected response/u],
+  [
+    "declared size",
+    { headers: new Headers({ "content-length": "99999" }) },
+    /content length/u,
+  ],
+  ["missing body", { body: null }, /body missing/u],
+  ...[
+    ["oversized", new Uint8Array(payload.length + 1), /exceeds pinned size/u],
+    ["truncated", new Uint8Array(payload.length - 1), /truncated/u],
+    ["hash mismatch", new Uint8Array(payload.length), /SHA-256 mismatch/u],
+  ].map(([label, bytes, expected]) => [
+    label,
+    {
+      body: new ReadableStream({
+        start(c) {
+          c.enqueue(bytes);
+          c.close();
+        },
+      }),
+    },
+    expected,
+  ]),
+]) {
+  test(`publisher CDN final response still rejects ${label}`, async () => {
+    const output = await directory();
+    let calls = 0;
+    await assert.rejects(
+      resolveTools({
+        directory: output,
+        manifest: fixtures(),
+        fetchImpl: async (url) => {
+          calls++;
+          if (calls === 1)
+            return redirectResponse(url, compilerReleaseUrl, 301);
+          if (calls === 2) return redirectResponse(url, compilerCdnUrl, 302);
+          assert.equal(calls, 3);
+          return response(url, change);
+        },
+      }),
+      (error) => {
+        downloadFailure(expected)(error);
+        assert.equal(error.diagnostic.redirectHops, 2);
+        assert.doesNotMatch(
+          JSON.stringify(error.diagnostic),
+          /PRIVATE|secret|sig=|jwt=|e2a79dcf/u,
+        );
+        if (label === "changed URL")
+          assert.doesNotMatch(JSON.stringify(error), /PRIVATE|secret/u);
+        return true;
+      },
+    );
+    assert.equal(calls, 3);
+    assert.ok((await readdir(output)).every((name) => name.endsWith(".part")));
+  });
+}
+
+test("publisher requests share one deadline, including stalled redirect cancellation", async () => {
+  for (const stall of ["publisher", "cdn", "cancellation"]) {
+    const output = await directory();
+    let calls = 0;
+    let signal;
+    await assert.rejects(
+      resolveTools({
+        directory: output,
+        manifest: fixtures(),
+        timeoutMs: 30,
+        fetchImpl: async (url, options) => {
+          calls++;
+          signal = options.signal;
+          if (
+            (stall === "publisher" && calls === 2) ||
+            (stall === "cdn" && calls === 3)
+          )
+            return new Promise(() => {});
+          return redirectResponse(
+            url,
+            calls === 1 ? compilerReleaseUrl : compilerCdnUrl,
+            calls === 1 ? 301 : 302,
+            stall === "cancellation" ? () => new Promise(() => {}) : () => {},
+          );
+        },
+      }),
+      downloadFailure(/deadline/u, true),
+    );
+    assert.equal(calls, stall === "publisher" ? 2 : stall === "cdn" ? 3 : 1);
+    assert.equal(signal.aborted, true);
+    assert.deepEqual(await readdir(output), []);
+  }
+});
+
+test("elapsed time at the publisher hop cannot reset the original deadline", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const output = await directory();
+  let calls = 0;
+  await assert.rejects(
+    resolveTools({
+      directory: output,
+      manifest: fixtures(),
+      timeoutMs: 30,
+      fetchImpl: async (url, options) => {
+        calls++;
+        if (calls <= 2) t.mock.timers.tick(20);
+        if (options.signal.aborted) return new Promise(() => {});
+        return calls === 1
+          ? redirectResponse(url, compilerReleaseUrl, 301)
+          : response(url);
+      },
+    }),
+    downloadFailure(/deadline/u, true),
+  );
+  assert.equal(calls, 2);
+  assert.deepEqual(await readdir(output), []);
+});
+
+test("downstream error objects do not retain signed fetch causes", async () => {
+  const output = await directory();
+  let calls = 0;
+  await assert.rejects(
+    resolveTools({
+      directory: output,
+      manifest: fixtures(),
+      fetchImpl: async (url) => {
+        calls++;
+        if (calls === 1) return redirectResponse(url, compilerReleaseUrl, 301);
+        if (calls === 2) return redirectResponse(url, compilerCdnUrl, 302);
+        throw new TypeError(`private fetch ${url}`, {
+          cause: new Error(`private cause ${url}`),
+        });
+      },
+    }),
+    (error) => {
+      assert.equal(error.cause.message, "Pinned publisher request failed");
+      assert.doesNotMatch(
+        inspect(error, { depth: 10 }),
+        /PRIVATE|private|sig=|jwt=|e2a79dcf|githubusercontent/u,
+      );
+      return true;
+    },
+  );
+  assert.equal(calls, 3);
+});
+
+for (const failure of ["transport", "URL mismatch", "third redirect"]) {
+  test(`actual CLI never prints the signed CDN query on ${failure}`, async () => {
+    const output = await directory();
+    const script = fileURLToPath(
+      new URL("./android_component_identity_tools.mjs", import.meta.url),
+    );
+    const child = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `
+      let calls = 0;
+      globalThis.fetch = async (url) => {
+        calls++;
+        const make = (status, location) => ({status, url, redirected:false, headers:new Headers(location ? {location} : {}), body:null});
+        if (calls === 1) return make(301, ${JSON.stringify(compilerReleaseUrl)});
+        if (calls === 2) return make(302, ${JSON.stringify(compilerCdnUrl)});
+        if (${JSON.stringify(failure)} === "transport") throw new TypeError("private request " + url);
+        if (${JSON.stringify(failure)} === "URL mismatch") return {...make(200), url:url + "&se=private-value"};
+        return make(302, url + "&se=private-value");
+      };
+      process.argv = [process.execPath, ${JSON.stringify(script)}, "--output-directory", ${JSON.stringify(output)}];
+      await import(${JSON.stringify(new URL("./android_component_identity_tools.mjs", import.meta.url).href)});
+    `,
+      ],
+      { encoding: "utf8", timeout: 10_000 },
+    );
+    assert.equal(child.error, undefined);
+    assert.equal(child.status, 1);
+    assert.equal(child.stdout, "");
+    const diagnostic = JSON.parse(child.stderr);
+    assert.equal(diagnostic.url, pinnedUrl);
+    assert.equal(diagnostic.redirectHops, 2);
+    assert.equal(diagnostic.redirectOrigin, undefined);
+    assert.doesNotMatch(
+      child.stderr,
+      /PRIVATE|private|sig=|jwt=|e2a79dcf|githubusercontent/u,
+    );
+    assert.deepEqual(await readdir(output), []);
+  });
+}
+
 for (const [label, location, classification] of [
   ["missing", undefined, "missing"],
   ["same URL", pinnedUrl, "same-url"],
