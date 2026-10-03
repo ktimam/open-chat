@@ -111,6 +111,10 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The unchanged-backend guard resolves the reviewed upstream commit,
+          # not just HEAD. Keep that provenance evidence available in this job.
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: "24.18.1"

@@ -101,7 +101,7 @@ test("offline synthetic bodies produce only the pinned classpaths after all nine
         "signal",
       ]);
       assert.equal(options.credentials, "omit");
-      assert.equal(options.redirect, "error");
+      assert.equal(options.redirect, "manual");
       return response(url);
     },
   });
@@ -219,6 +219,107 @@ for (const [label, replacement, expected] of [
     );
     assert.equal(calls, 1);
     assert.equal(signal.aborted, true);
+    assert.deepEqual(await readdir(output), []);
+  });
+}
+
+const pinnedUrl = artifactUrl(reviewed.artifacts[0]);
+for (const [label, location, classification] of [
+  ["missing", undefined, "missing"],
+  ["same URL", pinnedUrl, "same-url"],
+  ["relative same URL", new URL(pinnedUrl).pathname, "same-url"],
+  [
+    "same origin",
+    "https://repo.maven.apache.org/elsewhere",
+    "same-origin-different-path",
+  ],
+  [
+    "known alias",
+    pinnedUrl.replace("repo.maven.apache.org", "repo1.maven.org"),
+    "maven-central-alias-same-path",
+  ],
+  ["alias other path", "https://repo1.maven.org/secret", "unreviewed"],
+  ["other host", "https://secret.invalid/private", "unreviewed"],
+  [
+    "credentials",
+    pinnedUrl.replace("https://", "https://secret:secret@"),
+    "unreviewed",
+  ],
+  ["query", `${pinnedUrl}?secret=value`, "unreviewed"],
+  ["fragment", `${pinnedUrl}#secret`, "unreviewed"],
+  ["HTTP", pinnedUrl.replace("https:", "http:"), "unreviewed"],
+  ["nonstandard port", pinnedUrl.replace(".org/", ".org:8443/"), "unreviewed"],
+  ["invalid URL", "https://[secret", "unreviewed"],
+]) {
+  test(`redirect diagnostics classify ${label} without following or logging the destination`, async () => {
+    const output = await directory();
+    let calls = 0;
+    let cancelled = false;
+    let signal;
+    await assert.rejects(
+      resolveTools({
+        directory: output,
+        manifest: fixtures(),
+        fetchImpl: async (url, options) => {
+          calls++;
+          signal = options.signal;
+          assert.equal(options.redirect, "manual");
+          return response(url, {
+            status: 302,
+            headers: new Headers(location === undefined ? {} : { location }),
+            body: new ReadableStream({
+              cancel() {
+                cancelled = true;
+              },
+            }),
+          });
+        },
+      }),
+      (error) => {
+        downloadFailure(/unexpected response/u)(error);
+        assert.equal(error.diagnostic.httpStatus, 302);
+        assert.equal(error.diagnostic.redirectTarget, classification);
+        assert.doesNotMatch(
+          JSON.stringify(error.diagnostic),
+          /secret|elsewhere|8443/u,
+        );
+        return true;
+      },
+    );
+    assert.equal(calls, 1);
+    assert.equal(signal.aborted, true);
+    assert.equal(cancelled, true);
+    assert.deepEqual(await readdir(output), []);
+  });
+}
+
+for (const status of [301, 303, 307, 308, 304, 401, 403, 429, 500]) {
+  test(`HTTP ${status} is rejected without creating a file or making another request`, async () => {
+    const output = await directory();
+    let calls = 0;
+    await assert.rejects(
+      resolveTools({
+        directory: output,
+        manifest: fixtures(),
+        fetchImpl: async (url) => {
+          calls++;
+          return response(url, {
+            status,
+            headers: new Headers({ location: pinnedUrl }),
+          });
+        },
+      }),
+      (error) => {
+        downloadFailure(/unexpected response/u)(error);
+        assert.equal(error.diagnostic.httpStatus, status);
+        assert.equal(
+          error.diagnostic.redirectTarget,
+          [301, 303, 307, 308].includes(status) ? "same-url" : undefined,
+        );
+        return true;
+      },
+    );
+    assert.equal(calls, 1);
     assert.deepEqual(await readdir(output), []);
   });
 }

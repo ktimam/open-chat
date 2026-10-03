@@ -266,6 +266,48 @@ test("an explicit source-view override cannot silently skip a missing or unrelat
   assert.throws(() => requireSameSourceView(path.join(root, "scripts"), root));
 });
 
+function requireBuildHistory(workflow) {
+  const build = workflow.split("\n  build:\n")[1]?.split(/\n {2}[\w-]+:/u)[0];
+  assert.ok(build, "the production build job must exist");
+  const steps = build.split(/\n {6}- /u).slice(1);
+  const checkouts = steps.filter((step) =>
+    /^uses: actions\/checkout@/u.test(step),
+  );
+  assert.equal(checkouts.length, 1, "exactly one build checkout is required");
+  assert.match(checkouts[0], /^ {8}with:\n/mu);
+  assert.match(
+    checkouts[0],
+    /^ {10}fetch-depth: 0$/mu,
+    "the upstream provenance guard requires full build checkout history",
+  );
+  const guard = steps.findIndex((step) =>
+    step.includes("node --test scripts/unofficial-client-ci.test.mjs "),
+  );
+  assert.ok(
+    guard > steps.indexOf(checkouts[0]),
+    "the provenance guard must run after its history checkout",
+  );
+}
+
+test("production CI supplies Git history to the real unchanged-upstream guard", () => {
+  const workflow = read(".github/workflows/frontend.yaml");
+  requireBuildHistory(workflow);
+  const buildStart = workflow.indexOf("\n  build:\n");
+  const prefix = workflow.slice(0, buildStart);
+  const buildAndFollowing = workflow.slice(buildStart);
+  for (const change of [
+    buildAndFollowing.replace("fetch-depth: 0", "fetch-depth: 1"),
+    buildAndFollowing.replace("          fetch-depth: 0\n", ""),
+    buildAndFollowing.replace(
+      "          fetch-depth: 0\n",
+      "      - name: unrelated step\n        with:\n          fetch-depth: 0\n",
+    ),
+  ]) {
+    assert.notEqual(change, buildAndFollowing);
+    assert.throws(() => requireBuildHistory(prefix + change));
+  }
+});
+
 const requiredVitestIncludes = [
   "app/src/**/*.{test,spec}.ts",
   "app/localAppRelayBuild.spec.ts",

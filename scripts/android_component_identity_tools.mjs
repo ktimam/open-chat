@@ -26,8 +26,45 @@ const fetchReasons = new Map([
   ["bad port", "blocked-port"],
 ]);
 
+function responseDiagnostic(response, requestedUrl) {
+  if (!response || !Number.isInteger(response.status)) return undefined;
+  const httpStatus = response.status;
+  if (httpStatus < 100 || httpStatus > 599) return undefined;
+  const result = { httpStatus };
+  if (![301, 302, 303, 307, 308].includes(httpStatus)) return result;
+  // Classify only. Never follow or log a Location, arbitrary host, query,
+  // credentials, response body, or other server-supplied text.
+  const location = response.headers.get("location");
+  result.redirectTarget = "missing";
+  if (location === null) return result;
+  result.redirectTarget = "unreviewed";
+  try {
+    const target = new URL(location, requestedUrl);
+    const requested = new URL(requestedUrl);
+    if (
+      target.protocol !== "https:" ||
+      target.username ||
+      target.password ||
+      target.search ||
+      target.hash
+    )
+      return result;
+    if (target.href === requested.href) result.redirectTarget = "same-url";
+    else if (target.origin === requested.origin)
+      result.redirectTarget = "same-origin-different-path";
+    else if (
+      target.origin === "https://repo1.maven.org" &&
+      target.pathname === requested.pathname
+    )
+      result.redirectTarget = "maven-central-alias-same-path";
+  } catch {
+    // Malformed locations remain unreviewed; URL parser messages are private.
+  }
+  return result;
+}
+
 class ToolDownloadError extends Error {
-  constructor(artifact, url, startedAt, error, deadlineExceeded) {
+  constructor(artifact, url, startedAt, error, deadlineExceeded, response) {
     super("Pinned tool download failed", { cause: error });
     const causes = [];
     const pending = [error];
@@ -61,6 +98,7 @@ class ToolDownloadError extends Error {
       elapsedMs: Math.max(0, Math.round(performance.now() - startedAt)),
       deadlineExceeded,
       causes,
+      ...responseDiagnostic(response, url),
     };
   }
 }
@@ -155,6 +193,7 @@ async function downloadArtifact(artifact, output, fetchImpl, timeoutMs) {
   let file;
   let timer;
   let deadlineExceeded = false;
+  let response;
   const deadline = new Promise((_, reject) => {
     timer = setTimeout(() => {
       deadlineExceeded = true;
@@ -164,9 +203,11 @@ async function downloadArtifact(artifact, output, fetchImpl, timeoutMs) {
   });
   const bounded = (operation) => Promise.race([operation, deadline]);
   try {
-    const response = await bounded(
+    response = await bounded(
       fetchImpl(url, {
-        redirect: "error",
+        // Manual exposes only the first response for bounded diagnostics;
+        // every redirect still fails the exact status/URL guards below.
+        redirect: "manual",
         credentials: "omit",
         signal: controller.signal,
       }),
@@ -203,12 +244,14 @@ async function downloadArtifact(artifact, output, fetchImpl, timeoutMs) {
       startedAt,
       error,
       deadlineExceeded,
+      response,
     );
   } finally {
     clearTimeout(timer);
     controller.abort();
     // Cancellation must not itself hang after a server/body deadline.
     if (reader) void reader.cancel().catch(() => {});
+    else if (response?.body) void response.body.cancel().catch(() => {});
     if (file) await file.close();
   }
 }

@@ -357,3 +357,43 @@ scoped query described above retained exactly these roots and source identities;
 only the approved adm-zip version changed in its dependency inventory. Its receipt
 is `scoped-advisories-20261001-post-adm061/receipt.json` under the project temporary
 root. No new deferral, scanner waiver or core OpenChat audit was applied.
+
+## October 3 hosted checkpoint and CI corrections
+
+Fork main at `ceb61f214846ea23c7eadd96edd443ad012830ed` includes official
+upstream `319fb436857f35f61e12a9d47bebf6ddb0a72307`. Hosted security run
+[37134381565](https://github.com/ktimam/open-chat/actions/runs/37134381565)
+passed frontend model contracts, both Linux/Windows native jobs, and the pinned
+small real-inference fixture. The separate frontend run
+[37134381560](https://github.com/ktimam/open-chat/actions/runs/37134381560)
+passed lint/type/unit checks but failed production-build policy checks: the
+new provenance assertion could not resolve the reviewed upstream commit in its
+shallow checkout. The production job now requests full history, with positive
+and mutation regressions; the provenance assertion is not skipped or weakened.
+
+The Android component job reported `redirect-rejected` for its pinned Kotlin
+compiler, before compilation. The downloader now inspects only the first HTTP
+response and reports a bounded status and fixed redirect classification. It
+never follows redirects or logs Location values, arbitrary hosts, query strings,
+or credentials. Status 200, exact URL, byte count, and SHA-256 remain required;
+all redirect responses fail before artifact creation. This improves diagnosis,
+not evidence that the hosted acquisition issue is fixed.
+
+All 1,297 tests selected by the two workflows' 41 existing offline suites pass
+locally on pinned Node 24.18.1 after these changes. Hosted verification of the
+corrections, Android component compilation, and native app-delivery acceptance
+remain separate gates. No model, prompt, application runtime, account, or
+OpenChat backend was changed by these CI corrections.
+
+The completed scoped Rust collection, source binding, SBOM schema validation,
+and query transcript passed; the advisory gate still rejects the ten previously
+documented findings. Existing exact-version local-test deferrals do not turn
+that scanner result green. The npm query returned a new finding for
+`braces@3.0.3`, [GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm).
+It is reached through the reviewed build-asset root `rollup-plugin-copy@3.5.0`,
+then `globby@10.0.1`, `fast-glob@3.3.3`, and `micromatch@4.0.8`. These versions
+and integrities match the pinned upstream baseline; inheritance is not proof
+of non-exploitability. The October 3 advisory page lists no patched version.
+This exact new finding is not covered by earlier deferrals and remains
+unresolved pending the user's local-test decision. No waiver or dependency
+change has been made.
