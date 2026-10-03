@@ -966,6 +966,7 @@
                                 ledger={externalWalletDraft.ledger}
                                 amount={externalWalletDraft.amount}
                                 fees={externalWalletDraft.fees}
+                                chatId={messageContext.chatId}
                             />
                         </div>
                     {/if}

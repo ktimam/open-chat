@@ -11,11 +11,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Top up MultiUser canisters by 5T cycles at a time, and when below 10T ([#9735](https://github.com/open-chat-labs/open-chat/pull/9735))
 - Top up a child canister which is out of cycles, then retry the call to it ([#9736](https://github.com/open-chat-labs/open-chat/pull/9736))
 - Never let topping up a canister take this canister's own balance below its minimum ([#9736](https://github.com/open-chat-labs/open-chat/pull/9736))
+- Use the same calculation as the child canisters themselves use when working out which canisters need top ups ([#9748](https://github.com/open-chat-labs/open-chat/pull/9748))
+- Don't top up a child canister which has no code ([#9748](https://github.com/open-chat-labs/open-chat/pull/9748))
+- Create child canisters with 1.2T cycles, the minimum a User, Group or Community canister keeps plus one top up ([#9748](https://github.com/open-chat-labs/open-chat/pull/9748))
+- Stop refilling the canister pool, and refund the cycles of the canisters in it, which are given cycles as they're used ([#9749](https://github.com/open-chat-labs/open-chat/pull/9749))
+- Top up a canister which the weekly check finds low by enough to bring it back to its minimum, plus the usual amount ([#9750](https://github.com/open-chat-labs/open-chat/pull/9750))
 
 ### Removed
 
 - Remove `c2c_user_principals`, replaced by `c2c_user_principals_v2` ([#9738](https://github.com/open-chat-labs/open-chat/pull/9738))
 - Remove the Registry id from the upgrade args now that every LocalUserIndex has it ([#9738](https://github.com/open-chat-labs/open-chat/pull/9738))
+- Remove the code kept for User canisters on 2.0.2015, including the hold on notices of migrated users' new ids ([#9743](https://github.com/open-chat-labs/open-chat/pull/9743))
+- Remove the one-off hold on the weekly cycles balance checks, so they run as soon as the LocalUserIndex is upgraded ([#9744](https://github.com/open-chat-labs/open-chat/pull/9744))
 
 ## [[2.0.2086](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2086-local_user_index)] - 2026-10-02
 

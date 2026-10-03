@@ -3,7 +3,6 @@ use crate::model::daily_puzzle_engine::{DailyPuzzleEngine, DailyPuzzleEngineMetr
 use crate::model::daily_puzzle_result_batch::DailyPuzzleResultBatch;
 use crate::model::game_chit_credit::{GameChitCreditRetryQueue, new_retry_queue};
 use crate::model::group_event_batch::GroupEventBatch;
-use crate::model::held_user_id_migrations::HeldUserIdMigrations;
 use crate::model::local_community_map::LocalCommunityMap;
 use crate::model::local_group_map::LocalGroupMap;
 use crate::model::local_multi_user_canister_map::LocalMultiUserCanisterMap;
@@ -21,7 +20,7 @@ use crate::model::web_push_subscriptions::WebPushSubscriptions;
 use candid::Principal;
 use canister_state_macros::canister_state;
 use community_canister::LocalIndexEvent as CommunityEvent;
-use constants::{CYCLES_REQUIRED_FOR_UPGRADE, MINUTE_IN_MS};
+use constants::MINUTE_IN_MS;
 use ct_codecs::{Base64UrlSafeNoPadding, Encoder};
 use event_store_producer::{EventStoreClient, EventStoreClientBuilder, EventStoreClientInfo};
 use event_store_producer_cdk_runtime::CdkRuntime;
@@ -79,7 +78,7 @@ mod no_inline_anchor;
 mod queries;
 mod updates;
 
-const CHILD_CANISTER_INITIAL_CYCLES_BALANCE: Cycles = CYCLES_REQUIRED_FOR_UPGRADE + CHILD_CANISTER_TOP_UP_AMOUNT; // 0.5T cycles
+const CHILD_CANISTER_INITIAL_CYCLES_BALANCE: Cycles = utils::cycles::MIN_CYCLES_BALANCE + CHILD_CANISTER_TOP_UP_AMOUNT; // 1.2T cycles
 const CHILD_CANISTER_TOP_UP_AMOUNT: Cycles = 200_000_000_000; // 0.2T cycles
 const MARK_ACTIVE_DURATION: Milliseconds = 10 * 60 * 1000; // 10 minutes
 const MULTI_USER_UPGRADE_CONCURRENCY: usize = 1;
@@ -323,11 +322,7 @@ impl RuntimeState {
         }
     }
 
-    // Tells the user of another user's new id. A canister on a wasm older than the current User wasm
-    // may not know `UserIdMigrated` (User 2.0.2015 doesn't), and an event a canister can't decode fails
-    // the whole batch it's in, holding up every later event to that canister until it's upgraded. So
-    // for such a canister the notice is held, and sent once the canister has been upgraded.
-    // TODO remove the hold once no User canister is on 2.0.2015, sending on any notices still held
+    // Tells the user of another user's new id
     pub fn notify_user_of_migrated_user_id(
         &mut self,
         user_id: UserId,
@@ -336,34 +331,22 @@ impl RuntimeState {
         now: TimestampMillis,
     ) {
         let latest_user_id = self.data.migrated_user_ids.latest(user_id);
-        let current_wasm_version = self.data.child_canister_wasms.get(ChildCanisterType::User).wasm.version;
-        let canister_is_behind = self.data.local_users.get(&latest_user_id).map(|user| {
-            user.wasm_version
-                .is_some_and(|wasm_version| wasm_version < current_wasm_version)
-        });
         let event = UserEvent::UserIdMigrated(Box::new(user_canister::UserIdMigrated {
             old_user_id,
             new_user_id,
         }));
 
-        match canister_is_behind {
-            Some(true) => self
-                .data
-                .held_user_id_migrations
-                .hold(latest_user_id, old_user_id, new_user_id),
-            Some(false) => {
-                self.push_event_to_user(latest_user_id, event, now);
-            }
+        if self.data.local_users.contains(&latest_user_id) {
+            self.push_event_to_user(latest_user_id, event, now);
+        } else {
             // The user isn't held here. If they've been migrated to a canister on another
             // LocalUserIndex, the notice is sent on to them there
-            None => {
-                let envelope = IdempotentEnvelope {
-                    created_at: now,
-                    idempotency_id: self.env.rng().next_u64(),
-                    value: (latest_user_id, event),
-                };
-                self.push_events_queued_for_migrated_user(user_id, vec![envelope]);
-            }
+            let envelope = IdempotentEnvelope {
+                created_at: now,
+                idempotency_id: self.env.rng().next_u64(),
+                value: (latest_user_id, event),
+            };
+            self.push_events_queued_for_migrated_user(user_id, vec![envelope]);
         }
     }
 
@@ -883,10 +866,10 @@ impl RuntimeState {
             users_to_close_out_pending: self.data.users_to_close_out.pending(),
             users_to_close_out_in_progress: self.data.users_to_close_out.in_progress(),
             recent_joins: self.data.recent_joins.len(),
-            held_user_id_migrations: self.data.held_user_id_migrations.len(),
             chunk_store: crate::jobs::refresh_chunk_store::metrics(),
             cycles_refund_queue_length: self.data.cycles_refund_queue.len(),
             cycles_refunded_from_deleted_users: self.data.cycles_refunded_from_deleted_users,
+            cycles_refunded_from_pool_canisters: self.data.cycles_refunded_from_pool_canisters,
             cycles_topped_up_for_refunds: self.data.cycles_topped_up_for_refunds,
             registry_tokens: self.data.registry_tokens.len(),
             referral_codes: self.data.referral_codes.metrics(now),
@@ -995,6 +978,8 @@ struct Data {
     #[serde(default)]
     pub cycles_refunded_from_deleted_users: Cycles,
     #[serde(default)]
+    pub cycles_refunded_from_pool_canisters: Cycles,
+    #[serde(default)]
     pub cycles_topped_up_for_refunds: Cycles,
     pub events_for_remote_users: Vec<(UserId, UserEvent)>,
     pub cycles_balance_check_queue: VecDeque<CanisterId>,
@@ -1051,10 +1036,6 @@ struct Data {
     // of a user's new id if they turn out to have been being migrated
     #[serde(default)]
     pub recent_joins: RecentJoins,
-    // Notices of migrated users' new ids for users whose canisters are yet to be upgraded to the
-    // current User wasm (see `notify_user_of_migrated_user_id`)
-    #[serde(default)]
-    pub held_user_id_migrations: HeldUserIdMigrations,
     // The ledgers from which migrated users' funds can be moved, refreshed from the Registry daily
     #[serde(default)]
     pub registry_tokens: RegistryTokens,
@@ -1088,6 +1069,10 @@ pub struct CanisterToRefund {
     // been refunded
     #[serde(default)]
     pub delete_canister: bool,
+    // Set for a canister from the canister pool, which goes back into the pool once its cycles have
+    // been refunded
+    #[serde(default)]
+    pub return_to_pool: bool,
 }
 
 impl Data {
@@ -1163,6 +1148,7 @@ impl Data {
             users_to_delete_queue: VecDeque::new(),
             cycles_refund_queue: VecDeque::new(),
             cycles_refunded_from_deleted_users: 0,
+            cycles_refunded_from_pool_canisters: 0,
             cycles_topped_up_for_refunds: 0,
             events_for_remote_users: Vec::new(),
             cycles_balance_check_queue: VecDeque::new(),
@@ -1191,10 +1177,36 @@ impl Data {
             users_to_import: UsersToMigrate::default(),
             users_to_close_out: UsersToMigrate::default(),
             recent_joins: RecentJoins::default(),
-            held_user_id_migrations: HeldUserIdMigrations::default(),
             registry_tokens: RegistryTokens::default(),
             top_up_leaderboards: TopUpLeaderboards::default(),
         }
+    }
+
+    // Queues every canister in the pool to have its cycles refunded, after which it goes back into
+    // the pool. A pool canister is given its cycles when it is used, so until then it needn't hold
+    // any, and an empty canister still pays the IC's base fee. Returns how many were queued.
+    pub fn refund_pool_canisters(&mut self) -> usize {
+        let mut queued: HashSet<CanisterId> = self.cycles_refund_queue.iter().map(|c| c.canister_id).collect();
+        let mut count = 0;
+        for canister_id in self.canister_pool.take_all() {
+            // Belt and braces, a live canister should never be in the pool
+            let is_live = self.local_users.contains(&canister_id.into())
+                || self.local_groups.contains(&canister_id.into())
+                || self.local_communities.contains(&canister_id.into())
+                || self.local_multi_user_canisters.contains(&canister_id);
+
+            if !is_live && queued.insert(canister_id) {
+                self.cycles_refund_queue.push_back(CanisterToRefund {
+                    canister_id,
+                    attempt: 0,
+                    retry_after: 0,
+                    delete_canister: false,
+                    return_to_pool: true,
+                });
+                count += 1;
+            }
+        }
+        count
     }
 }
 
@@ -1256,10 +1268,10 @@ pub struct Metrics {
     pub users_to_close_out_pending: usize,
     pub users_to_close_out_in_progress: usize,
     pub recent_joins: usize,
-    pub held_user_id_migrations: usize,
     pub chunk_store: crate::jobs::refresh_chunk_store::ChunkStoreMetrics,
     pub cycles_refund_queue_length: usize,
     pub cycles_refunded_from_deleted_users: Cycles,
+    pub cycles_refunded_from_pool_canisters: Cycles,
     pub cycles_topped_up_for_refunds: Cycles,
     pub registry_tokens: usize,
     pub referral_codes: HashMap<ReferralType, ReferralTypeMetrics>,

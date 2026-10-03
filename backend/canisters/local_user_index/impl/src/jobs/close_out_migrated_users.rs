@@ -62,17 +62,12 @@ async fn process_user(user: UserToCloseOut) {
             Ok(()) => {
                 // The canister has been uninstalled but still holds its cycles
                 if state.data.local_users.remove(&user_id) {
-                    // Normally none are held, since a user's canister is upgraded to the current wasm
-                    // before they are migrated, which sends those held. Any which are go to their new id,
-                    // wherever it's held
-                    for (old_user_id, new_user_id) in state.data.held_user_id_migrations.take(&user_id) {
-                        state.notify_user_of_migrated_user_id(user_id, old_user_id, new_user_id, now);
-                    }
                     state.data.cycles_refund_queue.push_back(CanisterToRefund {
                         canister_id: user_id.canister_id(),
                         attempt: 0,
                         retry_after: 0,
                         delete_canister: false,
+                        return_to_pool: false,
                     });
                     jobs::refund_cycles::start_job_if_required(state, None);
                 }

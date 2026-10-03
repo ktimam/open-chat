@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [unreleased]
 
+### Changed
+
+- Check the cycles balance as background jobs run, not only as updates are handled ([#9747](https://github.com/open-chat-labs/open-chat/pull/9747))
+- Ask for a top up once the cycles above the freezing threshold fall below 1T, or below twice the threshold ([#9748](https://github.com/open-chat-labs/open-chat/pull/9748))
+
+### Removed
+
+- Remove the one-off migrations run by the upgrade to 2.0.2090, and the code which read the state and args of 2.0.2015 ([#9743](https://github.com/open-chat-labs/open-chat/pull/9743))
+
 ## [[2.0.2090](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2090-user)] - 2026-10-02
 
 ### Added
