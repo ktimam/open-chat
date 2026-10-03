@@ -221,6 +221,58 @@ const beforeSavedCardUiFix = new Map([
     "41660e6c1437f3081891be63858011c451b50ac3102a5167d75f8bc00a8f134a",
   ],
 ]);
+// Independently reconstructed all 171 Git blobs at committed 4be9f67c.
+// The sole subsequent scoped delta is upstream's wallet spender hunk in this
+// mixed client file. The live gate retains every current byte; these exact
+// substitutions are used only to reconstruct prior source-review checkpoints.
+const beforeWalletSpenderMerge = new Map([
+  [
+    "frontend/openchat-client/src/openchat.ts",
+    "d39b2b1c35d435c79561e40367f5d8d7be6efb88425689d3a2b2088b28a0bdcb",
+  ],
+]);
+function beforeWalletSpenderSourceHash(file) {
+  return beforeWalletSpenderMerge.get(file) ?? sourceHash(file);
+}
+function beforeWalletSpenderFingerprint(fingerprint) {
+  return {
+    ...fingerprint,
+    sha256: createHash("sha256")
+      .update(
+        JSON.stringify(
+          fingerprint.files.map((file) => [
+            file,
+            beforeWalletSpenderSourceHash(file),
+          ]),
+        ),
+      )
+      .digest("hex"),
+  };
+}
+function beforeWalletSpenderSourceText(file) {
+  let text = readFileSync(resolve(root, file), "utf8").replaceAll("\r\n", "\n");
+  if (!beforeWalletSpenderMerge.has(file)) return text;
+  for (const [current, previous] of [
+    ["    paymentSpenderAccount,\n", "    userCanisterSpenderAccount,\n"],
+    [
+      "    // of the amount moved. `chatId` is the chat a payment in a message or a tip is made in, which\n    // decides what pulls it, so what the wallet approves (see `paymentSpenderAccount`).\n",
+      "    // of the amount moved.\n",
+    ],
+    [
+      "        amount: bigint,\n        chatId: ChatIdentifier | undefined,\n        chooseAccount:",
+      "        amount: bigint,\n        chooseAccount:",
+    ],
+    [
+      "                spender: paymentSpenderAccount(\n                    currentUserIdStore.value,\n                    chatId,\n",
+      "                // The user's canister pulls the funds, so the wallet has to name the account it\n                // spends as for this user as the spender\n                spender: userCanisterSpenderAccount(\n                    currentUserIdStore.value,\n",
+    ],
+  ]) {
+    assert.equal(text.split(current).length, 2, "exact upstream hunk required");
+    text = text.replace(current, previous);
+  }
+  return text;
+}
+
 // The sole scoped source change at e1effe5de is the generic context builder.
 // Its pre-change LF identity was independently read from parent 10b0c098c;
 // replacing only that file reproduces the entire 171-file 86b783 checkpoint.
@@ -231,7 +283,7 @@ const beforeGenericContext = new Map([
   ],
 ]);
 function beforeGenericContextSourceHash(file) {
-  return beforeGenericContext.get(file) ?? sourceHash(file);
+  return beforeGenericContext.get(file) ?? beforeWalletSpenderSourceHash(file);
 }
 function beforeGenericContextFingerprint(fingerprint) {
   return {
@@ -816,9 +868,56 @@ test("current encryption, recovery and enum-label owners use existing selectors 
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   assert.equal(
     fingerprint.sha256,
-    "69372966bb88cca0332f8d9750119d6efb627b419c195fa3267202d1c4641651",
+    "92eed8d75292ff2bed66b4b91e12b9b9688bc1c4d3968e558b3990393bf740df",
   );
   assertReviewedSourceFingerprint(fingerprint, config.sourceReview);
+});
+
+test("upstream wallet spender merge preserves the reviewed mixed-file boundary and exact prior aggregate", () => {
+  const config = JSON.parse(
+    readFileSync(
+      resolve(root, "scripts/npm_feature_scope.current-client.json"),
+      "utf8",
+    ),
+  );
+  const actual = seedSourceFingerprint(root, config);
+  const file = "frontend/openchat-client/src/openchat.ts";
+  assert.deepEqual([...beforeWalletSpenderMerge.keys()], [file]);
+  assert(actual.files.includes(file));
+  assert(!featureOwnedFiles(root, config.scopeId).includes(file));
+  const current = readFileSync(resolve(root, file), "utf8").replaceAll(
+    "\r\n",
+    "\n",
+  );
+  const previous = beforeWalletSpenderSourceText(file);
+  assert.equal(
+    sourceHash(file),
+    "98202fa119b548407a0b34a648654c0978444ce86670015b52588963c06fd3dc",
+  );
+  assert.equal(
+    createHash("sha256").update(previous).digest("hex"),
+    beforeWalletSpenderMerge.get(file),
+  );
+  assert.notEqual(previous, current);
+  assert.deepEqual(
+    featureDependencySpecifiers(current),
+    featureDependencySpecifiers(previous),
+  );
+  const prior = beforeWalletSpenderFingerprint(actual);
+  assert.equal(
+    prior.sha256,
+    "69372966bb88cca0332f8d9750119d6efb627b419c195fa3267202d1c4641651",
+  );
+  assert.equal(
+    actual.sha256,
+    "92eed8d75292ff2bed66b4b91e12b9b9688bc1c4d3968e558b3990393bf740df",
+  );
+  assertReviewedSourceFingerprint(prior, config.sourceReview);
+  assertReviewedSourceFingerprint(actual, config.sourceReview);
+  assert.equal(actual.files.length, 171);
+  assert.equal(featureOwnedFiles(root, config.scopeId).length, 123);
+  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
+  assert.equal(config.seeds.length, 26);
 });
 
 test("generic context framing preserves exact prior source identity and existing scope", () => {
@@ -828,7 +927,9 @@ test("generic context framing preserves exact prior source identity and existing
       "utf8",
     ),
   );
-  const actual = seedSourceFingerprint(root, config);
+  const actual = beforeWalletSpenderFingerprint(
+    seedSourceFingerprint(root, config),
+  );
   const file = "frontend/app/src/utils/localAiCommand.ts";
   assert.deepEqual([...beforeGenericContext.keys()], [file]);
   assert(actual.files.includes(file));
@@ -924,8 +1025,7 @@ test("incoming replica-port support preserves exact main Apps source history and
     ),
   );
   const fingerprint = seedSourceFingerprint(root, config);
-  const read = (file) =>
-    readFileSync(resolve(root, file), "utf8").replaceAll("\r\n", "\n");
+  const read = beforeWalletSpenderSourceText;
   const reversals = [
     [
       "frontend/app/rollup.config.mjs",

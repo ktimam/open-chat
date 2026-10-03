@@ -4,8 +4,8 @@
   "feature": "unofficial-current-client-models-and-private-app-native-interface",
   "sourceRevision": {
     "base": "5f00758312735f2ddac9928e3aa60349964bf73a",
-    "head": "33888e4f58f6b9374c3b7250dd564138acb5ca0b",
-    "pendingMergeHead": "5ca61b627809807b5c29300a46d539567249f1cd"
+    "head": "3b259b2f53c4d7b6bad30d9747bf3554281ca72f",
+    "pendingMergeHead": "319fb436857f35f61e12a9d47bebf6ddb0a72307"
   },
   "cargoLockSha256": "631c6c577bf4fa6fb4797c44f9d1f451027b37be3e351447ce3a587186165059",
   "completeness": {

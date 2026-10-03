@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { ownedSecurityRules } from "./security_owned_rules.mjs";
 import {
@@ -8,10 +9,17 @@ import {
   parseCurrentClientLicenseArgs,
   validateCurrentClientLicenses,
 } from "./check_current_client_licenses.mjs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const source = "registry+https://github.com/rust-lang/crates.io-index";
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
+const normalizedHash = (bytes) =>
+  hash(
+    new TextDecoder("utf-8", { fatal: true, ignoreBOM: true })
+      .decode(bytes)
+      .replaceAll("\r\n", "\n"),
+  );
 const id = (value) => `${value.source}#${value.name}@${value.version}`;
 const modelResolution = () => ({
   name: "llama-cpp-sys-2",
@@ -102,6 +110,22 @@ test("current licenses cover exact app owner roots plus all retained model licen
   assert.equal(result.wholeRepositoryCoverage, false);
   assert.equal(result.advisoryChecksPerformed, false);
   assert.equal(result.releaseAcceptance, false);
+});
+test("live current-client license policy binds normalized source and lock identities", () => {
+  const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  const configBytes = readFileSync(
+    resolve(root, "scripts/rust_feature_scope.current-client.json"),
+  );
+  const config = JSON.parse(configBytes);
+  const policy = JSON.parse(
+    readFileSync(
+      resolve(root, "scripts/rust_feature_licenses.current-client.json"),
+    ),
+  );
+  const cargoLock = readFileSync(resolve(root, "Cargo.lock"));
+  assert.equal(policy.sourceScopeSha256, normalizedHash(configBytes));
+  assert.equal(policy.cargoLockSha256, normalizedHash(cargoLock));
+  assert.equal(config.cargoLockSha256, policy.cargoLockSha256);
 });
 test("the exact ABI pair preserves historical licenses and still requires its actual parent edge", () => {
   const historical = ownedSecurityRules("pr1").introducedRustPackages;

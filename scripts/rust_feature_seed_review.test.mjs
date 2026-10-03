@@ -152,21 +152,33 @@ test("current-client live source review binds native model/auth/handoff/setup wi
   }
 });
 
-test("current-client review binds the encrypted-only native handoff without adding dependency owners or changing auth", () => {
+test("current-client review binds the exact merge parents without changing native dependency owners or auth", () => {
   const { config, review, sourceBytes } = currentClientFixture();
   assert.equal(
     config.sourceRevision.head,
-    "33888e4f58f6b9374c3b7250dd564138acb5ca0b",
+    "3b259b2f53c4d7b6bad30d9747bf3554281ca72f",
   );
   assert.equal(
     config.sourceRevision.pendingMergeHead,
-    "5ca61b627809807b5c29300a46d539567249f1cd",
+    "319fb436857f35f61e12a9d47bebf6ddb0a72307",
   );
   assert.equal(
     config.sourceRevision.base,
     "5f00758312735f2ddac9928e3aa60349964bf73a",
   );
   assert.match(review.boundary, /working-tree encrypted-only handoff/u);
+  assert.match(
+    review.boundary,
+    /prior 2026-10-02 lock-only refresh bound fork parent 33888e4f58f6b9374c3b7250dd564138acb5ca0b with the then-pending upstream second parent 5ca61b627809807b5c29300a46d539567249f1cd before merge 064eda188571f9cfc962b98d48842d83c51bdbd2 was committed/u,
+  );
+  assert.match(
+    review.boundary,
+    /merge 8ac17d9e63d19b7388fa9df914a1e93ed6c8c40c binds fork parent 3b259b2f53c4d7b6bad30d9747bf3554281ca72f and upstream parent 319fb436857f35f61e12a9d47bebf6ddb0a72307/u,
+  );
+  assert.match(
+    review.boundary,
+    /legacy pendingMergeHead field records the completed merge's second parent; it does not claim that 8ac17d9e63d19b7388fa9df914a1e93ed6c8c40c remains pending/u,
+  );
   assert.match(
     review.boundary,
     /no advisory waiver, crate upgrade or profile expansion/u,
@@ -227,7 +239,7 @@ function restoreLockBeforePendingBackendRemoval(cargoLock) {
   return previous;
 }
 
-test("pending upstream lock-only merge preserves all conservative native package blocks and edges", () => {
+test("historical 5ca upstream lock-only merge preserves all conservative native package blocks and edges", () => {
   const { config, cargoLock } = currentClientFixture();
   const previous = restoreLockBeforePendingBackendRemoval(cargoLock);
   const closure = (bytes) => {

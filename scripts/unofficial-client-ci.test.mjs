@@ -211,6 +211,16 @@ test("backend, manifest and base deployment script match reviewed upstream; hist
     ...Object.keys(baseline.upstreamDeploymentScripts),
     ...Object.keys(baseline.historicalDeploymentWrappers),
   ];
+  assert.equal(
+    git("rev-parse", `${baseline.upstreamCommit}:backend`),
+    baseline.backendTree,
+    "reviewed backend tree must belong to the pinned official upstream commit",
+  );
+  assert.equal(
+    git("rev-parse", `${baseline.upstreamCommit}:Cargo.toml`),
+    baseline.rootCargoManifest,
+    "reviewed workspace manifest must belong to the pinned upstream commit",
+  );
   requireBackendIdentity({
     backendTree: git("rev-parse", "HEAD:backend"),
     rootCargoManifest: git("rev-parse", "HEAD:Cargo.toml"),

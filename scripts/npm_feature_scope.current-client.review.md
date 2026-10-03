@@ -1,6 +1,6 @@
 # Current unofficial-client npm source ownership
 
-Latest disposition: see **October 2 upstream merge and card presentation**
+Latest disposition: see **October 3 upstream wallet source identity**
 below. Earlier sections and their hashes remain historical evidence; they do not
 describe the now-removed active browser-auth transport.
 
@@ -825,3 +825,35 @@ selectors, roots, package/lock identities and advisory rules remain unchanged.
 The associated spec and release documentation do not enter the runtime source
 fingerprint. This record is source identity evidence only, not model compliance,
 artifact, live browser/device/provider, advisory or release acceptance.
+
+## October 3 upstream wallet source identity
+
+This bounded review binds merged fork main
+`8ac17d9e63d19b7388fa9df914a1e93ed6c8c40c`, with integrated upstream
+`319fb436857f35f61e12a9d47bebf6ddb0a72307`. Independently reading all 171
+predecessor Git blobs at `4be9f67c0b543dfd9ae996ec046abb0264426306` reproduces
+the prior `69372966` aggregate above. Exactly one fingerprinted file changes:
+`frontend/openchat-client/src/openchat.ts`, from UTF-8/LF SHA256
+`d39b2b1c35d435c79561e40367f5d8d7be6efb88425689d3a2b2088b28a0bdcb` to
+`98202fa119b548407a0b34a648654c0978444ce86670015b52588963c06fd3dc`.
+The current aggregate is
+`92eed8d75292ff2bed66b4b91e12b9b9688bc1c4d3968e558b3990393bf740df`.
+
+The changed lines exactly match upstream's `5ca61b` to `319fb` wallet delta:
+the existing shared import becomes `paymentSpenderAccount`, and wallet approval
+receives and forwards `chatId` with its explanation. The existing `@shared`
+package specifier and all exact fork ownership anchors remain unchanged. This
+mixed file is not added to the dedicated import scan, and its unrelated core
+dependencies are not brought into scope. The file is not byte-identical to
+upstream: the fork's existing private-app and Android authentication integrations
+remain in it. The regression reverses only the four exact upstream hunks,
+reproduces the predecessor fork-file hash and full prior aggregate, and preserves
+all older source-review reconstructions. The live gate separately binds the
+complete current file and every other current source.
+
+Composition remains **171 sources, 123 dedicated owners, 108 exact anchors and
+26 roots**. No selector, root, manifest, lockfile, source-ownership anchor,
+advisory rule or historical snapshot is changed. No model/prompt, authentication,
+private-card or backend implementation is edited by this source review. This is
+not an advisory waiver, core audit, artifact build, browser/native runtime test
+or release acceptance.
