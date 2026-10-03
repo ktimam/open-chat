@@ -374,8 +374,11 @@ and mutation regressions; the provenance assertion is not skipped or weakened.
 The Android component job reported `redirect-rejected` for its pinned Kotlin
 compiler, before compilation. The downloader now inspects only the first HTTP
 response and reports a bounded status and fixed redirect classification. It
-never follows redirects or logs Location values, arbitrary hosts, query strings,
-or credentials. Status 200, exact URL, byte count, and SHA-256 remain required;
+never follows redirects or logs full Location values, paths, query strings,
+or credentials. To identify the public compiler's unexpected hosting destination,
+diagnostics include only its bounded HTTPS origin, path-equality and query-presence
+flags; this is not permission to request the destination. Status 200, exact URL,
+byte count, and SHA-256 remain required;
 all redirect responses fail before artifact creation. This improves diagnosis,
 not evidence that the hosted acquisition issue is fixed.
 

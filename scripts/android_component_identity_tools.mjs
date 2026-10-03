@@ -32,8 +32,10 @@ function responseDiagnostic(response, requestedUrl) {
   if (httpStatus < 100 || httpStatus > 599) return undefined;
   const result = { httpStatus };
   if (![301, 302, 303, 307, 308].includes(httpStatus)) return result;
-  // Classify only. Never follow or log a Location, arbitrary host, query,
-  // credentials, response body, or other server-supplied text.
+  // The source request is a fixed public Maven URL with credentials omitted.
+  // Report only a bounded HTTPS origin and fixed classifications, never a
+  // Location value, path, query, credentials, body, or other response headers.
+  // Observing the destination does not authorize requesting it.
   const location = response.headers.get("location");
   result.redirectTarget = "missing";
   if (location === null) return result;
@@ -41,6 +43,17 @@ function responseDiagnostic(response, requestedUrl) {
   try {
     const target = new URL(location, requestedUrl);
     const requested = new URL(requestedUrl);
+    if (
+      target.protocol === "https:" &&
+      !target.username &&
+      !target.password &&
+      /^[a-z0-9.-]+$/u.test(target.hostname) &&
+      target.hostname.length <= 253 &&
+      target.origin.length <= 300
+    )
+      result.redirectOrigin = target.origin;
+    result.redirectSameArtifactPath = target.pathname === requested.pathname;
+    result.redirectHasQuery = Boolean(target.search);
     if (
       target.protocol !== "https:" ||
       target.username ||

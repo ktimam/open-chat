@@ -239,7 +239,7 @@ for (const [label, location, classification] of [
     "maven-central-alias-same-path",
   ],
   ["alias other path", "https://repo1.maven.org/secret", "unreviewed"],
-  ["other host", "https://secret.invalid/private", "unreviewed"],
+  ["other host", "https://unreviewed.invalid/private-secret", "unreviewed"],
   [
     "credentials",
     pinnedUrl.replace("https://", "https://secret:secret@"),
@@ -251,7 +251,7 @@ for (const [label, location, classification] of [
   ["nonstandard port", pinnedUrl.replace(".org/", ".org:8443/"), "unreviewed"],
   ["invalid URL", "https://[secret", "unreviewed"],
 ]) {
-  test(`redirect diagnostics classify ${label} without following or logging the destination`, async () => {
+  test(`redirect diagnostics classify ${label} without following or logging private URL components`, async () => {
     const output = await directory();
     let calls = 0;
     let cancelled = false;
@@ -281,8 +281,23 @@ for (const [label, location, classification] of [
         assert.equal(error.diagnostic.redirectTarget, classification);
         assert.doesNotMatch(
           JSON.stringify(error.diagnostic),
-          /secret|elsewhere|8443/u,
+          /secret|elsewhere/u,
         );
+        if (label === "other host")
+          assert.equal(
+            error.diagnostic.redirectOrigin,
+            "https://unreviewed.invalid",
+          );
+        if (["credentials", "HTTP", "invalid URL", "missing"].includes(label))
+          assert.equal(error.diagnostic.redirectOrigin, undefined);
+        if (label === "query") {
+          assert.equal(
+            error.diagnostic.redirectOrigin,
+            "https://repo.maven.apache.org",
+          );
+          assert.equal(error.diagnostic.redirectHasQuery, true);
+          assert.equal(error.diagnostic.redirectSameArtifactPath, true);
+        }
         return true;
       },
     );
@@ -292,6 +307,31 @@ for (const [label, location, classification] of [
     assert.deepEqual(await readdir(output), []);
   });
 }
+
+test("redirect origins are bounded and cannot echo an oversized hostname", async () => {
+  const output = await directory();
+  await assert.rejects(
+    resolveTools({
+      directory: output,
+      manifest: fixtures(),
+      fetchImpl: async (url) =>
+        response(url, {
+          status: 301,
+          headers: new Headers({
+            location: `https://${"a".repeat(254)}.invalid/private-secret?secret=value`,
+          }),
+        }),
+    }),
+    (error) => {
+      downloadFailure(/unexpected response/u)(error);
+      assert.equal(error.diagnostic.redirectOrigin, undefined);
+      assert.equal(error.diagnostic.redirectTarget, "unreviewed");
+      assert.doesNotMatch(JSON.stringify(error.diagnostic), /secret|a{254}/u);
+      return true;
+    },
+  );
+  assert.deepEqual(await readdir(output), []);
+});
 
 for (const status of [301, 303, 307, 308, 304, 401, 403, 429, 500]) {
   test(`HTTP ${status} is rejected without creating a file or making another request`, async () => {
