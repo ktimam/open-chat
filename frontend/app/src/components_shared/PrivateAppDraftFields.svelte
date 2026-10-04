@@ -20,6 +20,7 @@
         editorJson,
         disabled = false,
         showTitle = true,
+        compact = false,
         onchange,
         onblocked,
         onfieldedit,
@@ -29,6 +30,7 @@
         editorJson: string;
         disabled?: boolean;
         showTitle?: boolean;
+        compact?: boolean;
         onchange: (nextJson: string) => void;
         onblocked: (blocked: boolean) => void;
         onfieldedit?: (
@@ -156,6 +158,23 @@
         return disabled || !!(pending && (pending.item !== item || pending.key !== field.key));
     }
 
+    function fieldAction(field: LocalAppDraftField, item: number): "remove" | "empty" | undefined {
+        if (companionOwner(field)) return undefined;
+        if (
+            !field.required &&
+            (field.present || (pending?.key === field.key && pending.item === item))
+        )
+            return "remove";
+        if (
+            !namedChoice(field) &&
+            !field.present &&
+            field.schema.type === "string" &&
+            !field.schema.enum
+        )
+            return "empty";
+        return undefined;
+    }
+
     function change(
         field: LocalAppDraftField,
         item: number,
@@ -210,7 +229,33 @@
     }
 </script>
 
-<section class="draft-fields" aria-label="Edit private app draft fields">
+{#snippet companionValue(field: LocalAppDraftField, index: number)}
+    <output aria-label={`Item ${index + 1} — ${field.label}`}>
+        {field.present ? formatLocalDraftJson(field.value) : "Not supplied"}
+    </output>
+    <small
+        >Controlled by {companionOwner(field)?.label}. Its exact value remains part of the outgoing
+        payload.</small
+    >
+{/snippet}
+
+{#snippet fieldActions(field: LocalAppDraftField, index: number)}
+    {#if fieldAction(field, index) === "remove"}
+        <button
+            type="button"
+            disabled={fieldDisabled(field, index)}
+            onclick={() => change(field, index, undefined)}>Remove {fieldLabel(field)}</button
+        >
+    {:else if fieldAction(field, index) === "empty"}
+        <button
+            type="button"
+            disabled={fieldDisabled(field, index)}
+            onclick={() => change(field, index, "")}>Set {field.label} to empty text</button
+        >
+    {/if}
+{/snippet}
+
+<section class="draft-fields" class:compact aria-label="Edit private app draft fields">
     {#if showTitle}<h3>{action.definition.card.title}</h3>{/if}
     {#if action.definition.card.disclosure}<p class="disclosure">
             {action.definition.card.disclosure}
@@ -218,167 +263,178 @@
     {#if fields}
         {#each fields.items as item, index}
             <fieldset {disabled} aria-label={`Draft fields for item ${index + 1}`}>
-                <legend>{fields.items.length > 1 ? `Item ${index + 1}` : "Draft fields"}</legend>
+                <legend class:single-item={fields.items.length === 1}
+                    >{fields.items.length > 1 ? `Item ${index + 1}` : "Draft fields"}</legend
+                >
                 {#each item as field (field.key)}
                     <div class="field" class:full-width={controlHint(field)?.fullWidth}>
-                        <label>
-                            <span
-                                >{fieldLabel(field)}
-                                {#if field.required}<span class="required">Required</span
-                                    >{/if}</span
+                        {#if compact && companionOwner(field)}
+                            <details
+                                class="field-details"
+                                aria-label={`Item ${index + 1} — ${fieldLabel(field)} exact value`}
                             >
-                            {#if companionOwner(field)}
-                                <output aria-label={`Item ${index + 1} — ${field.label}`}>
-                                    {field.present
-                                        ? formatLocalDraftJson(field.value)
-                                        : "Not supplied"}
-                                </output>
-                                <small
-                                    >Controlled by {companionOwner(field)?.label}. Its exact value
-                                    remains part of the outgoing payload.</small
+                                <summary
+                                    >{fieldLabel(field)}{#if field.required}
+                                        <span class="required">Required</span>{/if}</summary
                                 >
-                            {:else if namedChoice(field)}
-                                <select
-                                    aria-label={`Item ${index + 1} — ${fieldLabel(field)}`}
-                                    aria-invalid={!field.valid ||
-                                        namedSelection(field) === "invalid" ||
-                                        (pending?.item === index && pending.key === field.key)}
-                                    disabled={fieldDisabled(field, index)}
-                                    value={namedSelection(field)}
-                                    onchange={(event) =>
-                                        selectNamed(field, index, event.currentTarget.value)}
+                                {@render companionValue(field, index)}
+                            </details>
+                        {:else}
+                            <label>
+                                <span
+                                    >{fieldLabel(field)}
+                                    {#if field.required}<span class="required">Required</span
+                                        >{/if}</span
                                 >
-                                    <option value="absent">{namedChoice(field)?.noneLabel}</option>
-                                    {#if namedSelection(field) === "invalid"}<option
-                                            value="invalid"
-                                            disabled>Unknown supplied choice</option
-                                        >{/if}
-                                    {#each namedChoice(field)?.options ?? [] as option, optionIndex}
-                                        <option value={`option-${optionIndex}`}
-                                            >{option.label}</option
-                                        >
-                                    {/each}
-                                </select>
-                            {:else if choices(field)}
-                                <select
-                                    aria-label={`Item ${index + 1} — ${field.label}`}
-                                    aria-invalid={!field.valid}
-                                    disabled={fieldDisabled(field, index)}
-                                    value={selection(field)}
-                                    onchange={(event) =>
-                                        select(field, index, event.currentTarget.value)}
-                                >
-                                    <option value="absent"
-                                        >Not supplied{field.required ? " (required)" : ""}</option
+                                {#if companionOwner(field)}
+                                    {@render companionValue(field, index)}
+                                {:else if namedChoice(field)}
+                                    <select
+                                        aria-label={`Item ${index + 1} — ${fieldLabel(field)}`}
+                                        aria-invalid={!field.valid ||
+                                            namedSelection(field) === "invalid" ||
+                                            (pending?.item === index && pending.key === field.key)}
+                                        disabled={fieldDisabled(field, index)}
+                                        value={namedSelection(field)}
+                                        onchange={(event) =>
+                                            selectNamed(field, index, event.currentTarget.value)}
                                     >
-                                    {#if selection(field) === "invalid"}<option
-                                            value="invalid"
-                                            disabled>Invalid supplied value</option
-                                        >{/if}
-                                    {#each choices(field) ?? [] as option, optionIndex}
-                                        <option value={`option-${optionIndex}`}
-                                            >{enumLabel(field, option)}</option
+                                        <option value="absent"
+                                            >{namedChoice(field)?.noneLabel}</option
                                         >
-                                    {/each}
-                                </select>
-                            {:else if field.schema.type === "string" && controlHint(field)?.kind === "select" && (!field.present || typeof field.value === "string")}
-                                <select
-                                    aria-label={`Item ${index + 1} — ${field.label}`}
-                                    aria-invalid={!field.valid}
-                                    disabled={fieldDisabled(field, index)}
-                                    value={field.present ? field.value : ""}
-                                    onchange={(event) =>
-                                        change(
-                                            field,
-                                            index,
-                                            event.currentTarget.value,
-                                            event.currentTarget.value,
-                                        )}
-                                >
-                                    {#if !field.present}<option value="" disabled
-                                            >{field.required
-                                                ? "Not supplied (required)"
-                                                : "Not supplied"}</option
-                                        >{/if}
-                                    {#if field.present && !controlHint(field)?.suggestions?.includes(String(field.value))}
-                                        <option value={String(field.value)}
-                                            >{String(field.value)} (supplied value)</option
+                                        {#if namedSelection(field) === "invalid"}<option
+                                                value="invalid"
+                                                disabled>Unknown supplied choice</option
+                                            >{/if}
+                                        {#each namedChoice(field)?.options ?? [] as option, optionIndex}
+                                            <option value={`option-${optionIndex}`}
+                                                >{option.label}</option
+                                            >
+                                        {/each}
+                                    </select>
+                                {:else if choices(field)}
+                                    <select
+                                        aria-label={`Item ${index + 1} — ${field.label}`}
+                                        aria-invalid={!field.valid}
+                                        disabled={fieldDisabled(field, index)}
+                                        value={selection(field)}
+                                        onchange={(event) =>
+                                            select(field, index, event.currentTarget.value)}
+                                    >
+                                        <option value="absent"
+                                            >Not supplied{field.required
+                                                ? " (required)"
+                                                : ""}</option
                                         >
+                                        {#if selection(field) === "invalid"}<option
+                                                value="invalid"
+                                                disabled>Invalid supplied value</option
+                                            >{/if}
+                                        {#each choices(field) ?? [] as option, optionIndex}
+                                            <option value={`option-${optionIndex}`}
+                                                >{enumLabel(field, option)}</option
+                                            >
+                                        {/each}
+                                    </select>
+                                {:else if field.schema.type === "string" && controlHint(field)?.kind === "select" && (!field.present || typeof field.value === "string")}
+                                    <select
+                                        aria-label={`Item ${index + 1} — ${field.label}`}
+                                        aria-invalid={!field.valid}
+                                        disabled={fieldDisabled(field, index)}
+                                        value={field.present ? field.value : ""}
+                                        onchange={(event) =>
+                                            change(
+                                                field,
+                                                index,
+                                                event.currentTarget.value,
+                                                event.currentTarget.value,
+                                            )}
+                                    >
+                                        {#if !field.present}<option value="" disabled
+                                                >{field.required
+                                                    ? "Not supplied (required)"
+                                                    : "Not supplied"}</option
+                                            >{/if}
+                                        {#if field.present && !controlHint(field)?.suggestions?.includes(String(field.value))}
+                                            <option value={String(field.value)}
+                                                >{String(field.value)} (supplied value)</option
+                                            >
+                                        {/if}
+                                        {#each controlHint(field)?.suggestions ?? [] as suggestion}
+                                            <option value={suggestion}>{suggestion}</option>
+                                        {/each}
+                                    </select>
+                                {:else if field.schema.type === "string" && controlHint(field)?.kind !== "multiline" && controlHint(field)}
+                                    <input
+                                        type={controlHint(field)?.kind === "date"
+                                            ? dateInputType(field, index)
+                                            : "text"}
+                                        aria-label={`Item ${index + 1} — ${field.label}`}
+                                        aria-invalid={!field.valid ||
+                                            dateInvalid(field) ||
+                                            (pending?.item === index && pending.key === field.key)}
+                                        autocomplete="off"
+                                        spellcheck={false}
+                                        disabled={fieldDisabled(field, index)}
+                                        list={controlHint(field)?.suggestions?.length
+                                            ? `${controlId}-${index}-${field.key}`
+                                            : undefined}
+                                        value={inputValue(field, index)}
+                                        oninput={(event) =>
+                                            change(
+                                                field,
+                                                index,
+                                                event.currentTarget.value,
+                                                event.currentTarget.value,
+                                            )}
+                                    />
+                                    {#if controlHint(field)?.suggestions?.length}
+                                        <datalist id={`${controlId}-${index}-${field.key}`}>
+                                            {#each controlHint(field)?.suggestions ?? [] as suggestion}<option
+                                                    value={suggestion}
+                                                ></option>{/each}
+                                        </datalist>
                                     {/if}
-                                    {#each controlHint(field)?.suggestions ?? [] as suggestion}
-                                        <option value={suggestion}>{suggestion}</option>
-                                    {/each}
-                                </select>
-                            {:else if field.schema.type === "string" && controlHint(field)?.kind !== "multiline" && controlHint(field)}
-                                <input
-                                    type={controlHint(field)?.kind === "date"
-                                        ? dateInputType(field, index)
-                                        : "text"}
-                                    aria-label={`Item ${index + 1} — ${field.label}`}
-                                    aria-invalid={!field.valid ||
-                                        dateInvalid(field) ||
-                                        (pending?.item === index && pending.key === field.key)}
-                                    autocomplete="off"
-                                    spellcheck={false}
-                                    disabled={fieldDisabled(field, index)}
-                                    list={controlHint(field)?.suggestions?.length
-                                        ? `${controlId}-${index}-${field.key}`
-                                        : undefined}
-                                    value={inputValue(field, index)}
-                                    oninput={(event) =>
-                                        change(
-                                            field,
-                                            index,
-                                            event.currentTarget.value,
-                                            event.currentTarget.value,
-                                        )}
-                                />
-                                {#if controlHint(field)?.suggestions?.length}
-                                    <datalist id={`${controlId}-${index}-${field.key}`}>
-                                        {#each controlHint(field)?.suggestions ?? [] as suggestion}<option
-                                                value={suggestion}
-                                            ></option>{/each}
-                                    </datalist>
+                                {:else if field.schema.type === "string"}
+                                    <textarea
+                                        aria-label={`Item ${index + 1} — ${field.label}`}
+                                        aria-invalid={!field.valid ||
+                                            (pending?.item === index && pending.key === field.key)}
+                                        autocomplete="off"
+                                        spellcheck={false}
+                                        disabled={fieldDisabled(field, index)}
+                                        rows="2"
+                                        value={inputValue(field, index)}
+                                        oninput={(event) =>
+                                            change(
+                                                field,
+                                                index,
+                                                event.currentTarget.value,
+                                                event.currentTarget.value,
+                                            )}
+                                    ></textarea>
+                                {:else}
+                                    <input
+                                        type="text"
+                                        inputmode="decimal"
+                                        aria-label={`Item ${index + 1} — ${field.label}`}
+                                        aria-invalid={!field.valid ||
+                                            (pending?.item === index && pending.key === field.key)}
+                                        autocomplete="off"
+                                        spellcheck={false}
+                                        disabled={fieldDisabled(field, index)}
+                                        value={inputValue(field, index)}
+                                        oninput={(event) =>
+                                            change(
+                                                field,
+                                                index,
+                                                localDraftNumericInput(event.currentTarget.value),
+                                                event.currentTarget.value,
+                                            )}
+                                    />
                                 {/if}
-                            {:else if field.schema.type === "string"}
-                                <textarea
-                                    aria-label={`Item ${index + 1} — ${field.label}`}
-                                    aria-invalid={!field.valid ||
-                                        (pending?.item === index && pending.key === field.key)}
-                                    autocomplete="off"
-                                    spellcheck={false}
-                                    disabled={fieldDisabled(field, index)}
-                                    rows="2"
-                                    value={inputValue(field, index)}
-                                    oninput={(event) =>
-                                        change(
-                                            field,
-                                            index,
-                                            event.currentTarget.value,
-                                            event.currentTarget.value,
-                                        )}
-                                ></textarea>
-                            {:else}
-                                <input
-                                    type="text"
-                                    inputmode="decimal"
-                                    aria-label={`Item ${index + 1} — ${field.label}`}
-                                    aria-invalid={!field.valid ||
-                                        (pending?.item === index && pending.key === field.key)}
-                                    autocomplete="off"
-                                    spellcheck={false}
-                                    disabled={fieldDisabled(field, index)}
-                                    value={inputValue(field, index)}
-                                    oninput={(event) =>
-                                        change(
-                                            field,
-                                            index,
-                                            localDraftNumericInput(event.currentTarget.value),
-                                            event.currentTarget.value,
-                                        )}
-                                />
-                            {/if}
-                        </label>
+                            </label>
+                        {/if}
                         {#if pending?.item === index && pending.key === field.key}
                             <small class="invalid">
                                 This edit exceeds the draft limit. Shorten it or remove this field
@@ -408,20 +464,16 @@
                                     ? "This value does not match the app's field schema."
                                     : "A value is required."}</small
                             >{/if}
-                        {#if !companionOwner(field) && !field.required && (field.present || (pending?.key === field.key && pending.item === index))}
-                            <button
-                                type="button"
-                                disabled={fieldDisabled(field, index)}
-                                onclick={() => change(field, index, undefined)}
-                                >Remove {fieldLabel(field)}</button
+                        {#if compact && fieldAction(field, index)}
+                            <details
+                                class="field-details"
+                                aria-label={`Item ${index + 1} — ${fieldLabel(field)} options`}
                             >
-                        {:else if !companionOwner(field) && !namedChoice(field) && !field.present && field.schema.type === "string" && !field.schema.enum}
-                            <button
-                                type="button"
-                                disabled={fieldDisabled(field, index)}
-                                onclick={() => change(field, index, "")}
-                                >Set {field.label} to empty text</button
-                            >
+                                <summary>Field options</summary>
+                                {@render fieldActions(field, index)}
+                            </details>
+                        {:else}
+                            {@render fieldActions(field, index)}
                         {/if}
                     </div>
                 {/each}
@@ -470,6 +522,48 @@
     }
     .full-width {
         grid-column: 1 / -1;
+    }
+    .compact {
+        gap: 8px;
+    }
+    .compact fieldset {
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 120px), 1fr));
+        min-width: 0;
+        margin: 0;
+        padding: 0;
+        border: 0;
+        gap: 8px;
+    }
+    .compact legend.single-item {
+        display: none;
+    }
+    .compact .field,
+    .compact label {
+        gap: 4px;
+    }
+    .compact label > span,
+    .compact summary {
+        font-size: 11px;
+        line-height: 1.4;
+    }
+    .compact input,
+    .compact select,
+    .compact textarea {
+        min-height: 44px;
+        padding: 8px;
+        font-size: 14px;
+    }
+    .field-details {
+        min-width: 0;
+    }
+    .field-details summary {
+        cursor: pointer;
+        padding: 4px 0;
+        overflow-wrap: anywhere;
+    }
+    .field-details[open] > :not(summary) {
+        display: block;
+        margin-top: 4px;
     }
     .required {
         font-size: 0.75em;

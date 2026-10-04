@@ -120,7 +120,7 @@ selectors["current-client-npm"] = [
   ],
   [
     "frontend/app/src/components_shared",
-    /^(?:PrivateApp.*|LocalAppsChatSettings)\.svelte$/,
+    /^(?:PrivateApp.*|LocalAppsChatSettings|LocalAppCardAnchor|LocalAppCardSurface|LocalAppSourceCardLink)\.svelte$/,
   ],
   ["frontend/openchat-service-worker/src", /^local_app_relay\.ts$/],
   [

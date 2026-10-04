@@ -143,6 +143,45 @@ async function propose(workspace: PrivateAppWorkspace) {
 }
 
 describe("private workspace encrypted-card lifecycle", () => {
+    it("does not persist failed source-presentation intent or restore it with saved cards", async () => {
+        const first = fixture();
+        await start(first.workspace);
+        const originalSource = { chatKey: "synthetic-chat", messageId: "1" };
+        const failedSource = { chatKey: "synthetic-chat", messageId: "2" };
+        await first.workspace.propose(client, content, {
+            stillCurrent: () => true,
+            source: originalSource,
+        });
+        await saved(first.workspace);
+        const cardId = first.workspace.state.draft!.id;
+        const persistedBefore = await first.storage.read(scope);
+        first.extract.mockResolvedValueOnce({ kind: "no_extraction", raw: "" });
+
+        await expect(
+            first.workspace.propose(client, content, {
+                stillCurrent: () => true,
+                source: failedSource,
+            }),
+        ).resolves.toBe("retryable");
+        expect(first.workspace.state.presentationSource).toEqual(failedSource);
+        expect(first.workspace.state.cardSources[cardId]).toEqual(originalSource);
+        expect(await first.storage.read(scope)).toEqual(persistedBefore);
+        expect(persistedBefore).not.toHaveProperty("presentationSource");
+        expect(persistedBefore).not.toHaveProperty("cardPresentation");
+        expect(persistedBefore).not.toHaveProperty("presentationDraftId");
+
+        const restored = fixture(first.shared);
+        await start(restored.workspace);
+        expect(restored.workspace.state.cardPresentation).toBe("saved");
+        expect(restored.workspace.state.presentationSource).toBeUndefined();
+        expect(restored.workspace.state.presentationDraftId).toBeUndefined();
+        expect(restored.workspace.state.open).toBe(false);
+        expect(restored.workspace.state.draft?.id).toBe(cardId);
+        expect(restored.workspace.state.cardSources[cardId]).toEqual(originalSource);
+        expect(restored.extract).not.toHaveBeenCalled();
+        expect(restored.deliver).not.toHaveBeenCalled();
+    });
+
     it("uses current connected configuration for new sources without retargeting the retained old card", async () => {
         const first = fixture();
         await start(first.workspace);

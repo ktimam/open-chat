@@ -35,8 +35,26 @@ Source/test updates are not evidence that an existing server or APK is updated.
 
 The existing Explore and connected-apps surfaces share this flow in both layouts.
 Directory listing is automatic; app connection still requires an explicit gesture.
-Saved cards open from **Saved cards (N)** into a card-only review panel. Setup,
-catalog uploads and account-wide Forget controls are not part of that panel.
+New proposals use a compact private card beside their source message in both layouts.
+The original app-declared field order, labels and controls remain app-owned; encrypted
+local storage does not require a separate generic draft-editor page. A source message's
+**View private card** control reopens its saved card without running inference again.
+**Saved cards (N)** remains a separate card-only navigation/review view, including for
+older saved cards without a complete source link. Setup, catalog uploads and account-wide
+Forget controls are not part of either card view.
+
+One host editor moves between the active source-message anchor and the saved-card view;
+virtualized messages do not create their own editors or clear the workspace. Anchors are
+bound to account, backend, chat kind, chat key, message ID and thread. If a source leaves
+the rendered chat, its editor is retained hidden until that source returns. Pending or
+failed extraction never displays a retained card as its result. Closing or changing views
+does not count as approval, and reopening a card never sends it. A pending invalid field
+edit must be corrected before switching cards or approving a request.
+
+Compact cards keep invalid-value warnings and app disclosure visible. Optional field
+actions and app-controlled companion values are available in per-field details; the
+complete payload and exact reviewed request remain inspectable. No field is omitted from
+the approval or encrypted delivery because its presentation is collapsed.
 The directory can refresh while cards are retained, but automatic recipe changes
 wait so they cannot replace a card's frozen configuration. Explicit connection is
 allowed without deleting cards. This uses client-side publisher discovery and the

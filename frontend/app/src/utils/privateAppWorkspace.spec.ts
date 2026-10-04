@@ -112,6 +112,237 @@ function fixture(
 const propose = (workspace: PrivateAppWorkspace) =>
     workspace.propose(client, text, { stillCurrent: () => true });
 
+describe("private card presentation intent", () => {
+    const source = (messageId: string) => ({ chatKey: "synthetic-chat", messageId });
+
+    it("publishes a validated source snapshot before extraction and never includes it in delivery", async () => {
+        const { workspace, deps } = fixture();
+        const requested = source("1");
+        deps.extract.mockImplementationOnce(async () => {
+            expect(workspace.state).toMatchObject({
+                open: true,
+                cardPresentation: "source",
+                presentationSource: source("1"),
+                busy: true,
+            });
+            expect(Object.isFrozen(workspace.state.presentationSource)).toBe(true);
+            requested.messageId = "changed after snapshot";
+            return { kind: "extracted", candidates: [{ value: 42 }] };
+        });
+
+        await expect(
+            workspace.propose(client, text, { stillCurrent: () => true, source: requested }),
+        ).resolves.toBe("drafted");
+        expect(workspace.state.presentationSource).toEqual(source("1"));
+        expect(workspace.state.cardSources[workspace.state.draft!.id]).toEqual(source("1"));
+        expect(workspace.review()).toBe(true);
+        const approval = workspace.state.draft!.approval!;
+        expect(approval.request).not.toHaveProperty("presentationSource");
+        expect(approval.request).not.toHaveProperty("cardPresentation");
+        expect(JSON.stringify(approval.request)).not.toContain("synthetic-chat");
+        await workspace.confirm(approval.approvalId);
+        expect(JSON.stringify(deps.deliver.mock.calls)).not.toContain("synthetic-chat");
+    });
+
+    it("retains old cards but keeps a failed new proposal anchored to its requested message", async () => {
+        const { workspace, deps } = fixture();
+        await workspace.propose(client, text, { stillCurrent: () => true, source: source("1") });
+        const existing = workspace.state.draft!;
+        deps.extract.mockResolvedValueOnce({ kind: "no_extraction", raw: "" });
+
+        await expect(
+            workspace.propose(client, text, { stillCurrent: () => true, source: source("2") }),
+        ).resolves.toBe("retryable");
+
+        expect(workspace.state).toMatchObject({
+            open: true,
+            cardPresentation: "source",
+            presentationSource: source("2"),
+            busy: false,
+            draft: { id: existing.id },
+        });
+        expect(workspace.state.cards).toHaveLength(1);
+        expect(workspace.state.cardSources[existing.id]).toEqual(source("1"));
+        expect(workspace.state.message).toContain("MODEL_NO_ACTION");
+        expect(deps.deliver).not.toHaveBeenCalled();
+    });
+
+    it("retains the requested source after cancellation without presenting or replacing an old card", async () => {
+        const { workspace, deps } = fixture();
+        await workspace.propose(client, text, { stillCurrent: () => true, source: source("1") });
+        const existingId = workspace.state.draft!.id;
+        let finish!: (result: PrivateAppExtractionResult) => void;
+        deps.extract.mockImplementationOnce(() => new Promise((resolve) => (finish = resolve)));
+        const pending = workspace.propose(client, text, {
+            stillCurrent: () => true,
+            source: source("2"),
+        });
+        expect(workspace.state.busy).toBe(true);
+        workspace.discard();
+        finish({ kind: "extracted", candidates: [{ value: 99 }] });
+        await expect(pending).resolves.toBe("retryable");
+
+        expect(workspace.state.presentationSource).toEqual(source("2"));
+        expect(workspace.state.cardPresentation).toBe("source");
+        expect(workspace.state.cards.map((card) => card.id)).toEqual([existingId]);
+        expect(workspace.state.draft?.payload).toEqual({ value: 42 });
+        expect(deps.deliver).not.toHaveBeenCalled();
+    });
+
+    it("clears result presentation for a failed source-less proposal while retaining saved cards", async () => {
+        const { workspace, deps } = fixture();
+        await propose(workspace);
+        const existingId = workspace.state.draft!.id;
+        expect(workspace.state.presentationDraftId).toBe(existingId);
+        deps.extract.mockResolvedValueOnce({ kind: "no_extraction", raw: "" });
+        await expect(propose(workspace)).resolves.toBe("retryable");
+
+        expect(workspace.state.cardPresentation).toBe("source");
+        expect(workspace.state.presentationSource).toBeUndefined();
+        expect(workspace.state.presentationDraftId).toBeUndefined();
+        expect(workspace.state.draft!.id).toBe(existingId);
+        expect(workspace.state.cards.map((card) => card.id)).toEqual([existingId]);
+        workspace.open("saved");
+        expect(workspace.state.presentationDraftId).toBeUndefined();
+        expect(workspace.state.draft!.id).toBe(existingId);
+        expect(deps.deliver).not.toHaveBeenCalled();
+    });
+
+    it("opens saved cards explicitly and clears only transient source placement", async () => {
+        const { workspace } = fixture();
+        expect(workspace.state.cardPresentation).toBe("saved");
+        expect(workspace.state.presentationSource).toBeUndefined();
+        await workspace.propose(client, text, { stillCurrent: () => true, source: source("1") });
+        const cardId = workspace.state.draft!.id;
+        workspace.close();
+        workspace.open();
+
+        expect(workspace.state).toMatchObject({ open: true, cardPresentation: "saved" });
+        expect(workspace.state.presentationSource).toBeUndefined();
+        expect(workspace.state.draft?.id).toBe(cardId);
+        expect(workspace.state.cardSources[cardId]).toEqual(source("1"));
+        workspace.open("source");
+        expect(workspace.selectCard(cardId)).toBe(true);
+        expect(workspace.state.presentationSource).toEqual(source("1"));
+        workspace.open("saved");
+        expect(workspace.selectCard(cardId)).toBe(true);
+        expect(workspace.state.presentationSource).toBeUndefined();
+    });
+
+    it("does not override explicit saved-card navigation when pending extraction completes", async () => {
+        const { workspace, deps } = fixture();
+        await workspace.propose(client, text, { stillCurrent: () => true, source: source("1") });
+        const existingId = workspace.state.draft!.id;
+        let finish!: (result: PrivateAppExtractionResult) => void;
+        deps.extract.mockImplementationOnce(() => new Promise((resolve) => (finish = resolve)));
+        const pending = workspace.propose(client, text, {
+            stillCurrent: () => true,
+            source: source("2"),
+        });
+        expect(workspace.selectCard(existingId)).toBe(false);
+        expect(workspace.state.presentationSource).toEqual(source("2"));
+        workspace.open("saved");
+        finish({ kind: "extracted", candidates: [{ value: 99 }] });
+        await expect(pending).resolves.toBe("drafted");
+
+        expect(workspace.state.cardPresentation).toBe("saved");
+        expect(workspace.state.presentationSource).toBeUndefined();
+        expect(workspace.state.draft?.payload).toEqual({ value: 99 });
+        expect(workspace.state.cardSources[workspace.state.draft!.id]).toEqual(source("2"));
+        expect(workspace.state.cards).toHaveLength(2);
+        expect(deps.deliver).not.toHaveBeenCalled();
+    });
+
+    it("does not reopen a source card when extraction completes after closing its surface", async () => {
+        const { workspace, deps } = fixture();
+        let finish!: (result: PrivateAppExtractionResult) => void;
+        deps.extract.mockImplementationOnce(() => new Promise((resolve) => (finish = resolve)));
+        const pending = workspace.propose(client, text, {
+            stillCurrent: () => true,
+            source: source("1"),
+        });
+        workspace.close();
+        finish({ kind: "extracted", candidates: [{ value: 42 }] });
+        await expect(pending).resolves.toBe("drafted");
+
+        expect(workspace.state.open).toBe(false);
+        expect(workspace.state.presentationSource).toEqual(source("1"));
+        expect(workspace.state.cards).toHaveLength(1);
+        expect(workspace.state.draft?.approval).toBeUndefined();
+        expect(deps.deliver).not.toHaveBeenCalled();
+    });
+
+    it("reuses a message's saved card in source mode without restoring approval or rerunning inference", async () => {
+        const { workspace, deps } = fixture();
+        await workspace.propose(client, text, { stillCurrent: () => true, source: source("1") });
+        const cardId = workspace.state.draft!.id;
+        workspace.review();
+        const priorApproval = workspace.state.draft!.approval!.approvalId;
+        workspace.open("saved");
+
+        await expect(
+            workspace.propose(client, text, { stillCurrent: () => true, source: source("1") }),
+        ).resolves.toBe("drafted");
+        expect(workspace.state.cardPresentation).toBe("source");
+        expect(workspace.state.presentationSource).toEqual(source("1"));
+        expect(workspace.state.draft?.id).toBe(cardId);
+        expect(workspace.state.draft?.approval).toBeUndefined();
+        expect(deps.extract).toHaveBeenCalledOnce();
+        await workspace.confirm(priorApproval);
+        expect(deps.deliver).not.toHaveBeenCalled();
+    });
+
+    it("changes the source when selecting another card and revokes its old approval", async () => {
+        const { workspace, deps } = fixture();
+        await workspace.propose(client, text, { stillCurrent: () => true, source: source("1") });
+        const firstId = workspace.state.draft!.id;
+        workspace.review();
+        const firstApproval = workspace.state.draft!.approval!.approvalId;
+        await workspace.propose(client, text, { stillCurrent: () => true, source: source("2") });
+        const secondId = workspace.state.draft!.id;
+        workspace.review();
+        const secondApproval = workspace.state.draft!.approval!.approvalId;
+
+        expect(workspace.selectCard(firstId)).toBe(true);
+        expect(workspace.state.presentationSource).toEqual(source("1"));
+        expect(workspace.state.draft?.approval).toBeUndefined();
+        await workspace.confirm(firstApproval);
+        expect(workspace.selectCard(secondId)).toBe(true);
+        expect(workspace.state.presentationSource).toEqual(source("2"));
+        expect(workspace.state.draft?.approval).toBeUndefined();
+        await workspace.confirm(secondApproval);
+        expect(deps.deliver).not.toHaveBeenCalled();
+    });
+
+    it("clears rejected source references instead of keeping the previous placement", async () => {
+        const { workspace, deps } = fixture();
+        await workspace.propose(client, text, { stillCurrent: () => true, source: source("1") });
+        const cardId = workspace.state.draft!.id;
+        await expect(
+            workspace.propose(client, text, { stillCurrent: () => true, source: source("") }),
+        ).resolves.toBe("retryable");
+        expect(workspace.state.cardPresentation).toBe("source");
+        expect(workspace.state.presentationSource).toBeUndefined();
+        expect(workspace.state.cards.map((card) => card.id)).toEqual([cardId]);
+        expect(deps.extract).toHaveBeenCalledOnce();
+        expect(deps.deliver).not.toHaveBeenCalled();
+    });
+
+    it("resets source presentation when the account is cleared or changed", async () => {
+        const { workspace } = fixture();
+        await workspace.propose(client, text, { stillCurrent: () => true, source: source("1") });
+        workspace.clear();
+        expect(workspace.state.cardPresentation).toBe("saved");
+        expect(workspace.state.presentationSource).toBeUndefined();
+        expect(workspace.state.open).toBe(false);
+        workspace.open("source");
+        workspace.setAccount("another-account");
+        expect(workspace.state.cardPresentation).toBe("saved");
+        expect(workspace.state.presentationSource).toBeUndefined();
+        expect(workspace.state.open).toBe(false);
+    });
+});
+
 describe("private app workspace boundaries", () => {
     it("imports and extracts locally with no delivery until a separate review and confirmation", async () => {
         const { workspace, deps } = fixture();

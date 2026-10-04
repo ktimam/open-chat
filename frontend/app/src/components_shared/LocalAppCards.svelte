@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { onDestroy } from "svelte";
+    import { onDestroy, tick } from "svelte";
     import { currentUserIdStore, identityStateStore, type OpenChat } from "@client";
     import { ANON_USER_ID } from "@shared";
     import {
@@ -12,7 +12,8 @@
     import { connectLocalAppSetup } from "../utils/localAppSetupConnection";
     import { localAppSourceNavigation } from "../utils/localAppSourceNavigation";
     import { navigate } from "@utils/navigation";
-    import OverlayWrapper from "../components/portal/OverlayWrapper.svelte";
+    import LocalAppCardSurface from "./LocalAppCardSurface.svelte";
+    import { localAppCardAnchorKey, localAppCardAnchors } from "../utils/localAppCardAnchors";
 
     let { client }: { client: OpenChat } = $props();
     let confirmed = $state(false);
@@ -20,6 +21,46 @@
     let blockedFieldDraft = $state<{ id: string | undefined; blocked: boolean }>();
     let fieldEditorGeneration = $state(0);
     const workspaceView = $derived($privateAppWorkspaceState);
+    // A new extraction retains saved cards, but none of those cards is its result.
+    // Do not display the previous draft/source beneath the new proposal's progress.
+    const proposing = $derived(workspaceView.busy && workspaceView.phase !== undefined);
+    const cardSource = $derived(
+        workspaceView.draft ? workspaceView.cardSources[workspaceView.draft.id] : undefined,
+    );
+    const namespace = $derived(
+        workspaceView.account && workspaceView.backend
+            ? { account: workspaceView.account, backend: workspaceView.backend }
+            : undefined,
+    );
+    const presentationKey = $derived(
+        workspaceView.cardPresentation === "source"
+            ? localAppCardAnchorKey(namespace, workspaceView.presentationSource)
+            : undefined,
+    );
+    const inline = $derived(presentationKey !== undefined);
+    const anchor = $derived(
+        $localAppCardAnchors.find((entry) => entry.key === presentationKey)?.node,
+    );
+    // Failed or cancelled extraction can retain a different saved card. It is not
+    // the result for this message. Message indices are navigation metadata only.
+    const sourceMatches = $derived(
+        workspaceView.cardPresentation === "saved" ||
+            (cardSource?.chatKey === workspaceView.presentationSource?.chatKey &&
+                cardSource?.chatKind === workspaceView.presentationSource?.chatKind &&
+                cardSource?.messageId === workspaceView.presentationSource?.messageId &&
+                cardSource?.threadRootMessageIndex ===
+                    workspaceView.presentationSource?.threadRootMessageIndex),
+    );
+    const showDraft = $derived(
+        !!workspaceView.draft &&
+            !proposing &&
+            sourceMatches &&
+            (workspaceView.cardPresentation === "saved" ||
+                workspaceView.presentationDraftId === workspaceView.draft.id),
+    );
+    const revealScope = $derived(
+        JSON.stringify([workspaceView.open, presentationKey, workspaceView.presentationDraftId]),
+    );
     const fieldDraftScope = $derived(workspaceView.draft?.id);
     const fieldEditBlocked = $derived(
         blockedFieldDraft?.id === fieldDraftScope && blockedFieldDraft?.blocked === true,
@@ -59,6 +100,8 @@
         JSON.stringify([
             accountReady,
             workspaceView.open,
+            workspaceView.cardPresentation,
+            presentationKey,
             workspaceView.draft?.id,
             workspaceView.draft?.approval?.approvalId,
             workspaceView.draft?.status,
@@ -67,9 +110,31 @@
     );
 
     $effect(() => {
+        // Opening a source card or completing extraction should reveal its heading,
+        // including in the reverse-scrolling message list. Anchor virtualization alone
+        // must not pull the user back while they scroll elsewhere.
+        const scope = revealScope;
+        let current = true;
+        void tick().then(() => {
+            if (
+                current &&
+                scope === revealScope &&
+                workspaceView.open &&
+                inline &&
+                anchor?.isConnected
+            )
+                anchor.scrollIntoView({ block: "start", inline: "nearest" });
+        });
+        return () => {
+            current = false;
+        };
+    });
+    $effect(() => {
         workspaceView.draft?.id;
         workspaceView.draft?.revision;
         workspaceView.open;
+        workspaceView.cardPresentation;
+        presentationKey;
         confirmed = false;
     });
     $effect(() => {
@@ -143,113 +208,105 @@
 
 {#if client.clientOnlyApps() && accountReady && (workspaceView.open || fieldEditBlocked)}
     <!-- Keep invalid pending editor text mounted while closed; it must not revert to a stale payload. -->
-    <div hidden={!workspaceView.open} aria-label="Local app cards">
-        <OverlayWrapper dismissible={workspaceView.open} onClose={closeCard}>
-            <div
-                class="local-app-card"
-                role="dialog"
-                tabindex="-1"
-                aria-modal="true"
-                aria-label="Local app card"
-                aria-busy={workspaceView.busy || workspaceView.draftLoading}
-            >
-                <header>
-                    <h2>
-                        {workspaceView.draft
-                            ? (selectedAction?.definition.card.title ?? "Review app draft")
-                            : "App action"}
-                    </h2>
-                    <button type="button" onclick={closeCard}>Close</button>
-                </header>
-                {#if workspaceView.draft && workspaceView.cards.length > 1}
-                    <nav aria-label="Saved private cards on this device" class="card-selector">
-                        <p class="small">
-                            Saved locally, not posted in chat. Select a card to review it.
-                        </p>
-                        {#each workspaceView.cards as card, index (card.id)}
-                            {@const source = localAppSourceNavigation(
-                                workspaceView.cardSources[card.id],
-                            )}
-                            <button
-                                type="button"
-                                aria-pressed={workspaceView.draft?.id === card.id}
-                                disabled={workspaceView.busy ||
-                                    workspaceView.draftLoading ||
-                                    fieldEditBlocked}
-                                onclick={() => workspace.selectCard(card.id)}
-                            >
-                                <span>Card {index + 1} · {card.status}</span>
-                                {#if source}<span class="small source-label">{source.label}</span
-                                    >{:else if workspaceView.cardSources[card.id]}<span
-                                        class="small source-label"
-                                        >Propose again from the original message to restore its link</span
-                                    >{:else}<span class="small source-label"
-                                        >No source message available</span
-                                    >{/if}
-                            </button>
-                        {/each}
-                    </nav>
-                {/if}
-                {#if selectedSource}
-                    <div class="card-source" aria-label="Selected card source">
-                        <p class="small">{selectedSource.label}</p>
+    <LocalAppCardSurface target={anchor} {inline} open={workspaceView.open} onClose={closeCard}>
+        <div
+            class="local-app-card"
+            class:inline-card={inline}
+            role={inline ? "region" : "dialog"}
+            tabindex="-1"
+            aria-modal={inline ? undefined : true}
+            aria-label="Local app card"
+            aria-busy={workspaceView.busy || workspaceView.draftLoading}
+        >
+            <header>
+                <h2>
+                    {showDraft
+                        ? (selectedAction?.definition.card.title ?? "Review app draft")
+                        : "App action"}
+                </h2>
+                <button type="button" onclick={closeCard}>Close</button>
+            </header>
+            {#if !inline && !proposing && workspaceView.draft && workspaceView.cards.length > 1}
+                <nav aria-label="Saved private cards on this device" class="card-selector">
+                    <p class="small">
+                        Saved locally, not posted in chat. Select a card to review it.
+                    </p>
+                    {#each workspaceView.cards as card, index (card.id)}
+                        {@const source = localAppSourceNavigation(
+                            workspaceView.cardSources[card.id],
+                        )}
                         <button
                             type="button"
+                            aria-pressed={workspaceView.draft?.id === card.id}
                             disabled={workspaceView.busy ||
                                 workspaceView.draftLoading ||
                                 fieldEditBlocked}
-                            onclick={viewSource}>{selectedSource.linkLabel}</button
+                            onclick={() => workspace.selectCard(card.id)}
                         >
-                    </div>
-                {/if}
-                <p role="status">{workspaceView.message}</p>
-                {#if workspaceView.phase}<p>
-                        Local processing: {workspaceView.phase.replaceAll("_", " ")}
-                    </p>{/if}
-                {#if workspaceView.draft}
-                    <div class="draft">
-                        {#if selectedAction}
-                            <section
-                                aria-label={fieldEditBlocked
-                                    ? undefined
-                                    : "App-declared draft preview"}
-                                class="primary-card"
-                            >
-                                {#key `${workspaceView.draft.id}:${fieldEditorGeneration}`}
-                                    <PrivateAppDraftFields
-                                        showTitle={false}
-                                        action={selectedAction}
-                                        editorJson={workspaceView.editorJson}
-                                        disabled={!editable || workspaceView.busy}
-                                        onchange={updateFields}
-                                        onblocked={blockFieldEdit}
-                                        onfieldedit={(item, field, value) =>
-                                            workspace.editDraftField(item, field, value)}
-                                        onchoiceedit={(item, field, value) =>
-                                            workspace.selectDraftChoice(item, field, value)}
-                                    />
-                                {/key}
-                            </section>
-                            {#if selectedAction.draftEditor && workspaceView.draftManualValues}
-                                <p class="small">
-                                    Advanced JSON keeps your explicit field values. Selecting a
-                                    named choice updates its controlled fields, but does not reapply
-                                    automatic defaults.
-                                </p>
-                            {/if}
-                            {#if fieldEditBlocked}
-                                <p role="status">
-                                    A field edit is incomplete or invalid. Correct it before review;
-                                    no previous payload can be approved or sent.
-                                </p>
-                            {/if}
+                            <span>Card {index + 1} · {card.status}</span>
+                            {#if source}<span class="small source-label">{source.label}</span
+                                >{:else if workspaceView.cardSources[card.id]}<span
+                                    class="small source-label"
+                                    >Propose again from the original message to restore its link</span
+                                >{:else}<span class="small source-label"
+                                    >No source message available</span
+                                >{/if}
+                        </button>
+                    {/each}
+                </nav>
+            {/if}
+            {#if !inline && showDraft && selectedSource}
+                <div class="card-source" aria-label="Selected card source">
+                    <p class="small">{selectedSource.label}</p>
+                    <button
+                        type="button"
+                        disabled={workspaceView.busy ||
+                            workspaceView.draftLoading ||
+                            fieldEditBlocked}
+                        onclick={viewSource}>{selectedSource.linkLabel}</button
+                    >
+                </div>
+            {/if}
+            <p class="small" role="status">{workspaceView.message}</p>
+            {#if workspaceView.phase}<p>
+                    Local processing: {workspaceView.phase.replaceAll("_", " ")}
+                </p>{/if}
+            {#if showDraft && workspaceView.draft}
+                <div class="draft">
+                    {#if selectedAction}
+                        <section
+                            aria-label={fieldEditBlocked ? undefined : "App-declared draft preview"}
+                            class="primary-card"
+                        >
+                            {#key `${workspaceView.draft.id}:${fieldEditorGeneration}`}
+                                <PrivateAppDraftFields
+                                    showTitle={false}
+                                    compact
+                                    action={selectedAction}
+                                    editorJson={workspaceView.editorJson}
+                                    disabled={!editable || workspaceView.busy}
+                                    onchange={updateFields}
+                                    onblocked={blockFieldEdit}
+                                    onfieldedit={(item, field, value) =>
+                                        workspace.editDraftField(item, field, value)}
+                                    onchoiceedit={(item, field, value) =>
+                                        workspace.selectDraftChoice(item, field, value)}
+                                />
+                            {/key}
+                        </section>
+                        {#if fieldEditBlocked}
+                            <p role="status">
+                                A field edit is incomplete or invalid. Correct it before review; no
+                                previous payload can be approved or sent.
+                            </p>
                         {/if}
-                        <h3>Review destination and recipient</h3>
-                        <p>
-                            <strong>Exact destination:</strong>
-                            <span class="destination">{workspaceView.draft.target.destination}</span
-                            >
-                        </p>
+                    {/if}
+                    <p class="small">
+                        <strong>Destination:</strong>
+                        <span class="destination">{workspaceView.draft.target.destination}</span>
+                    </p>
+                    <details class="recipient-details">
+                        <summary>Recipient</summary>
                         <label
                             >Recipient review label (confirm the actual account in the receiving
                             app)
@@ -260,218 +317,233 @@
                                 oninput={updateRecipient}
                             />
                         </label>
-                        <details class="advanced-editor">
-                            <summary>Advanced: complete payload (JSON)</summary>
-                            <label
-                                >Complete payload (JSON)
-                                <textarea
-                                    aria-label="Complete payload (JSON)"
-                                    spellcheck={false}
-                                    value={workspaceView.editorJson}
-                                    disabled={!editable || workspaceView.busy}
-                                    oninput={updateJson}
-                                ></textarea>
-                            </label>
-                        </details>
-                        {#if workspaceView.cardReviewBlockedReason}
-                            <p role="status" aria-label="Saved card connection required">
-                                {workspaceView.cardReviewBlockedReason}
+                    </details>
+                    <details class="advanced-editor">
+                        <summary>Advanced: complete payload (JSON)</summary>
+                        {#if selectedAction?.draftEditor && workspaceView.draftManualValues}
+                            <p class="small">
+                                Advanced JSON keeps your explicit field values. Selecting a named
+                                choice updates its controlled fields, but does not reapply automatic
+                                defaults.
                             </p>
                         {/if}
-                        {#if editable}<button
-                                type="button"
-                                disabled={workspaceView.busy || fieldEditBlocked}
-                                onclick={() => {
-                                    if (!fieldEditBlocked) workspace.review();
-                                }}>Review full request</button
-                            >{/if}
-                        {#if (workspaceView.draft.status === "uncertain" || workspaceView.draft.status === "delivered") && !workspaceView.draft.approval}
+                        <label
+                            >Complete payload (JSON)
+                            <textarea
+                                aria-label="Complete payload (JSON)"
+                                spellcheck={false}
+                                value={workspaceView.editorJson}
+                                disabled={!editable || workspaceView.busy}
+                                oninput={updateJson}
+                            ></textarea>
+                        </label>
+                    </details>
+                    {#if workspaceView.cardReviewBlockedReason}
+                        <p role="status" aria-label="Saved card connection required">
+                            {workspaceView.cardReviewBlockedReason}
+                        </p>
+                    {/if}
+                    {#if editable}<button
+                            type="button"
+                            disabled={workspaceView.busy || fieldEditBlocked}
+                            onclick={() => {
+                                if (!fieldEditBlocked) workspace.review();
+                            }}>Review full request</button
+                        >{/if}
+                    {#if (workspaceView.draft.status === "uncertain" || workspaceView.draft.status === "delivered") && !workspaceView.draft.approval}
+                        <button
+                            type="button"
+                            disabled={workspaceView.busy || fieldEditBlocked || connectionBlocked}
+                            onclick={() => {
+                                if (!fieldEditBlocked && !connectionBlocked) workspace.review();
+                            }}
+                        >
+                            Review recovered request before retrying
+                        </button>
+                    {/if}
+                    {#if workspaceView.draft.approval}
+                        <details class="request-details">
+                            <summary>Advanced: exact reviewed request</summary>
+                            <pre>{workspaceView.draft.approval.summary}</pre>
+                        </details>
+                        {#if workspaceView.draft.status === "reviewed"}
+                            <label class="confirmation"
+                                ><input
+                                    type="checkbox"
+                                    bind:checked={confirmed}
+                                    disabled={workspaceView.busy}
+                                /><span
+                                    >I reviewed every field and the destination. Send exactly this
+                                    request outside OpenChat.</span
+                                ></label
+                            >
                             <button
+                                class="confirm"
                                 type="button"
-                                disabled={workspaceView.busy ||
+                                aria-label="Send reviewed request"
+                                disabled={!confirmed ||
+                                    workspaceView.busy ||
                                     fieldEditBlocked ||
                                     connectionBlocked}
                                 onclick={() => {
-                                    if (!fieldEditBlocked && !connectionBlocked) workspace.review();
+                                    const id = workspaceView.draft?.approval?.approvalId;
+                                    if (confirmed && id && !fieldEditBlocked && !connectionBlocked)
+                                        void workspace.confirm(id);
                                 }}
+                                ><span
+                                    >{selectedAction?.definition.card.confirmLabel ??
+                                        "Send reviewed request"}</span
+                                ><small>Send reviewed request</small></button
                             >
-                                Review recovered request before retrying
-                            </button>
                         {/if}
-                        {#if workspaceView.draft.approval}
-                            <details class="request-details">
-                                <summary>Advanced: exact reviewed request</summary>
-                                <pre>{workspaceView.draft.approval.summary}</pre>
-                            </details>
-                            {#if workspaceView.draft.status === "reviewed"}
-                                <label class="confirmation"
-                                    ><input
-                                        type="checkbox"
-                                        bind:checked={confirmed}
-                                        disabled={workspaceView.busy}
-                                    /><span
-                                        >I reviewed every field and the destination. Send exactly
-                                        this request outside OpenChat.</span
-                                    ></label
+                    {/if}
+                    {#if pairing && client.isNativeApp() && client.clientOnlyApps()}
+                        <section class="pairing" aria-label="Pair local browser handoff">
+                            <h3>Open the reviewed draft in your browser</h3>
+                            <p>
+                                This one-use code unlocks only the request you approved above. Enter
+                                it only on this exact local browser page, then review the
+                                destination there.
+                            </p>
+                            <p>
+                                <strong>Local browser page:</strong>
+                                <span class="destination">{pairing.url}</span>
+                            </p>
+                            <p>
+                                <strong>One-use pairing code:</strong>
+                                <code class="pairing-code">{pairing.pairingCode}</code>
+                            </p>
+                            <p class="small">
+                                Expires at {new Date(pairing.expiresAtMs).toLocaleTimeString()}. The
+                                code is not included in the browser URL. Copying puts it on your
+                                device clipboard.
+                            </p>
+                            <div class="pairing-actions">
+                                <button
+                                    type="button"
+                                    onclick={() =>
+                                        void nativeAppDelivery.copyCode(pairing.importId)}
+                                    >Copy pairing code</button
                                 >
                                 <button
-                                    class="confirm"
                                     type="button"
-                                    aria-label="Send reviewed request"
-                                    disabled={!confirmed ||
-                                        workspaceView.busy ||
-                                        fieldEditBlocked ||
-                                        connectionBlocked}
-                                    onclick={() => {
-                                        const id = workspaceView.draft?.approval?.approvalId;
-                                        if (
-                                            confirmed &&
-                                            id &&
-                                            !fieldEditBlocked &&
-                                            !connectionBlocked
-                                        )
-                                            void workspace.confirm(id);
-                                    }}
-                                    ><span
-                                        >{selectedAction?.definition.card.confirmLabel ??
-                                            "Send reviewed request"}</span
-                                    ><small>Send reviewed request</small></button
+                                    onclick={() =>
+                                        void nativeAppDelivery.openBrowser(pairing.importId)}
+                                    >Open local browser</button
                                 >
-                            {/if}
-                        {/if}
-                        {#if pairing && client.isNativeApp() && client.clientOnlyApps()}
-                            <section class="pairing" aria-label="Pair local browser handoff">
-                                <h3>Open the reviewed draft in your browser</h3>
-                                <p>
-                                    This one-use code unlocks only the request you approved above.
-                                    Enter it only on this exact local browser page, then review the
-                                    destination there.
-                                </p>
-                                <p>
-                                    <strong>Local browser page:</strong>
-                                    <span class="destination">{pairing.url}</span>
-                                </p>
-                                <p>
-                                    <strong>One-use pairing code:</strong>
-                                    <code class="pairing-code">{pairing.pairingCode}</code>
-                                </p>
-                                <p class="small">
-                                    Expires at {new Date(pairing.expiresAtMs).toLocaleTimeString()}.
-                                    The code is not included in the browser URL. Copying puts it on
-                                    your device clipboard.
-                                </p>
-                                <div class="pairing-actions">
-                                    <button
-                                        type="button"
-                                        onclick={() =>
-                                            void nativeAppDelivery.copyCode(pairing.importId)}
-                                        >Copy pairing code</button
-                                    >
-                                    <button
-                                        type="button"
-                                        onclick={() =>
-                                            void nativeAppDelivery.openBrowser(pairing.importId)}
-                                        >Open local browser</button
-                                    >
-                                </div>
-                                {#if pairing.message}<p role="status">{pairing.message}</p>{/if}
-                            </section>
-                        {/if}
-                        {#if workspaceView.draft.status === "uncertain" && workspaceView.draft.approval}
-                            <label class="confirmation"
-                                ><input
-                                    type="checkbox"
-                                    bind:checked={retryConfirmed}
-                                    disabled={workspaceView.busy}
-                                /><span
-                                    >I checked the receiving app. Retry exactly this reviewed
-                                    request with the same import ID; a prior delivery may already
-                                    have occurred.</span
-                                ></label
-                            >
-                            <button
-                                type="button"
-                                disabled={!retryConfirmed ||
-                                    workspaceView.busy ||
-                                    fieldEditBlocked ||
-                                    connectionBlocked}
-                                onclick={() => {
-                                    const id = workspaceView.draft?.approval?.approvalId;
-                                    if (
-                                        retryConfirmed &&
-                                        id &&
-                                        !fieldEditBlocked &&
-                                        !connectionBlocked
-                                    ) {
-                                        retryConfirmed = false;
-                                        void workspace.retryUncertain(id);
-                                    }
-                                }}>Retry the same reviewed request</button
-                            >
-                        {/if}
-                        {#if workspaceView.draft.status === "delivered" && workspaceView.draft.approval && delivery?.status !== "saved"}
-                            <label class="confirmation"
-                                ><input
-                                    type="checkbox"
-                                    bind:checked={retryConfirmed}
-                                    disabled={workspaceView.busy}
-                                /><span
-                                    >I checked the receiving app; this request may already have been
-                                    saved. Reopen the same reviewed request and import ID, using the
-                                    same receiving account and destination. Choosing another account
-                                    or destination may create a duplicate.</span
-                                ></label
-                            >
-                            <button
-                                type="button"
-                                disabled={!retryConfirmed ||
-                                    workspaceView.busy ||
-                                    fieldEditBlocked ||
-                                    connectionBlocked}
-                                onclick={() => {
-                                    const id = workspaceView.draft?.approval?.approvalId;
-                                    if (
-                                        retryConfirmed &&
-                                        id &&
-                                        !fieldEditBlocked &&
-                                        !connectionBlocked &&
-                                        delivery?.status !== "saved"
-                                    ) {
-                                        retryConfirmed = false;
-                                        void workspace.reopenDelivered(id);
-                                    }
-                                }}>Reopen the same reviewed request</button
-                            >
-                        {/if}
-                        <p class="small">
-                            Receiving an app handoff does not save an entry. Finish review and save
-                            in the app. Uncertain deliveries are never retried automatically.
+                            </div>
+                            {#if pairing.message}<p role="status">{pairing.message}</p>{/if}
+                        </section>
+                    {/if}
+                    {#if workspaceView.draft.status === "uncertain" && workspaceView.draft.approval}
+                        <label class="confirmation"
+                            ><input
+                                type="checkbox"
+                                bind:checked={retryConfirmed}
+                                disabled={workspaceView.busy}
+                            /><span
+                                >I checked the receiving app. Retry exactly this reviewed request
+                                with the same import ID; a prior delivery may already have occurred.</span
+                            ></label
+                        >
+                        <button
+                            type="button"
+                            disabled={!retryConfirmed ||
+                                workspaceView.busy ||
+                                fieldEditBlocked ||
+                                connectionBlocked}
+                            onclick={() => {
+                                const id = workspaceView.draft?.approval?.approvalId;
+                                if (
+                                    retryConfirmed &&
+                                    id &&
+                                    !fieldEditBlocked &&
+                                    !connectionBlocked
+                                ) {
+                                    retryConfirmed = false;
+                                    void workspace.retryUncertain(id);
+                                }
+                            }}>Retry the same reviewed request</button
+                        >
+                    {/if}
+                    {#if workspaceView.draft.status === "delivered" && workspaceView.draft.approval && delivery?.status !== "saved"}
+                        <label class="confirmation"
+                            ><input
+                                type="checkbox"
+                                bind:checked={retryConfirmed}
+                                disabled={workspaceView.busy}
+                            /><span
+                                >I checked the receiving app; this request may already have been
+                                saved. Reopen the same reviewed request and import ID, using the
+                                same receiving account and destination. Choosing another account or
+                                destination may create a duplicate.</span
+                            ></label
+                        >
+                        <button
+                            type="button"
+                            disabled={!retryConfirmed ||
+                                workspaceView.busy ||
+                                fieldEditBlocked ||
+                                connectionBlocked}
+                            onclick={() => {
+                                const id = workspaceView.draft?.approval?.approvalId;
+                                if (
+                                    retryConfirmed &&
+                                    id &&
+                                    !fieldEditBlocked &&
+                                    !connectionBlocked &&
+                                    delivery?.status !== "saved"
+                                ) {
+                                    retryConfirmed = false;
+                                    void workspace.reopenDelivered(id);
+                                }
+                            }}>Reopen the same reviewed request</button
+                        >
+                    {/if}
+                    <p class="small">
+                        Receiving an app handoff does not save an entry. Finish review and save in
+                        the app. Uncertain deliveries are never retried automatically.
+                    </p>
+                    {#if delivery}
+                        <p role="status">
+                            {delivery.status === "saved"
+                                ? "The receiving app reports that this request was saved."
+                                : delivery.status === "rejected"
+                                  ? "The receiving app rejected or cancelled this request."
+                                  : delivery.status === "received"
+                                    ? "The receiving app has the request; finish its review before saving."
+                                    : delivery.status === "opening"
+                                      ? "Opening the approved handoff…"
+                                      : "The handoff outcome is unknown; check the receiving app."}
                         </p>
-                        {#if delivery}
-                            <p role="status">
-                                {delivery.status === "saved"
-                                    ? "The receiving app reports that this request was saved."
-                                    : delivery.status === "rejected"
-                                      ? "The receiving app rejected or cancelled this request."
-                                      : delivery.status === "received"
-                                        ? "The receiving app has the request; finish its review before saving."
-                                        : delivery.status === "opening"
-                                          ? "Opening the approved handoff…"
-                                          : "The handoff outcome is unknown; check the receiving app."}
-                            </p>
-                        {/if}
-                    </div>
-                {/if}
-                {#if workspaceView.draft || workspaceView.busy}<button
+                    {/if}
+                </div>
+            {/if}
+            <footer>
+                {#if (showDraft && workspaceView.draft) || workspaceView.busy}<button
                         type="button"
                         onclick={() => workspace.discard()}
                         >{workspaceView.busy
                             ? "Cancel / discard local draft"
                             : "Discard local draft"}</button
                     >{/if}
-            </div>
-        </OverlayWrapper>
-    </div>
+                {#if inline && !proposing && workspaceView.cards.length > 0}
+                    <button
+                        type="button"
+                        disabled={workspaceView.busy ||
+                            workspaceView.draftLoading ||
+                            fieldEditBlocked}
+                        onclick={() => {
+                            confirmed = false;
+                            retryConfirmed = false;
+                            workspace.invalidateReview();
+                            workspace.open("saved");
+                        }}>Saved cards</button
+                    >
+                {/if}
+            </footer>
+        </div>
+    </LocalAppCardSurface>
 {/if}
 
 <style>
@@ -489,6 +561,34 @@
         display: flex;
         flex-direction: column;
         gap: 1rem;
+    }
+    .local-app-card.inline-card {
+        width: 100%;
+        max-height: none;
+        overflow: visible;
+        border-radius: 12px;
+        padding: 12px;
+        gap: 8px;
+        box-shadow: none;
+        font-size: 13px;
+    }
+    .inline-card h2 {
+        font-size: 15px;
+        font-weight: 600;
+    }
+    .inline-card .draft {
+        gap: 8px;
+    }
+    .inline-card .small {
+        font-size: 11px;
+    }
+    footer {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+    footer:empty {
+        display: none;
     }
     @media (max-width: 600px) {
         .local-app-card {

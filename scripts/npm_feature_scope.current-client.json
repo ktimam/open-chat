@@ -91,7 +91,7 @@
         },
         {
           "file": "frontend/app/src/components_shared/LocalAppCards.svelte",
-          "contains": "import { onDestroy } from \"svelte\";"
+          "contains": "import { onDestroy, tick } from \"svelte\";"
         },
         {
           "file": "frontend/app/src/components/App.svelte",
@@ -760,6 +760,11 @@
         "sha256": "92eed8d75292ff2bed66b4b91e12b9b9688bc1c4d3968e558b3990393bf740df",
         "reviewRecord": "npm_feature_scope.current-client.review.md",
         "workingTreeReview": "2026-10-03: bounded source-identity review of merged main 8ac17d9e63d19b7388fa9df914a1e93ed6c8c40c against the last reviewed fork 4be9f67c0b543dfd9ae996ec046abb0264426306. All 171 committed predecessor blobs independently reproduce the 69372966 aggregate. Exactly one already anchored mixed source changes: frontend/openchat-client/src/openchat.ts, UTF-8/LF SHA256 98202fa119b548407a0b34a648654c0978444ce86670015b52588963c06fd3dc. Its wallet spender import, comment, chatId argument and forwarded value exactly match the upstream 5ca61b-to-319fb diff; no new package specifier or feature anchor is introduced. Exact hunk reversal reproduces this fork file's prior d39b2b1c identity, not an upstream-only file, and restores the full prior aggregate before all earlier historical transforms. Composition remains 171 sources, 123 dedicated owners, 108 anchors and 26 roots. No source selector, import ownership, dependency root, manifest/lock identity, advisory rule, historical review, runtime model/prompt, authentication or private-card behavior is changed by this review. This records source ownership only, not a core audit, advisory waiver, build, browser/device/provider or release acceptance."
+      },
+      {
+        "sha256": "274cc344469da04f63e1959dea1508030e54ecc2187355f1798e787ef3314164",
+        "reviewRecord": "npm_feature_scope.current-client.review.md",
+        "workingTreeReview": "2026-10-05: bounded uncommitted working-tree review for generic source-inline private cards against committed main 8f22866e3823e559e108123b5e4ec529514b7f62. Independently reading all 171 predecessor Git blobs reproduces the 92eed8d7 aggregate. Four dedicated runtime files are added: localAppCardAnchors.ts uses the existing localApp utility selector; LocalAppCardAnchor.svelte, LocalAppCardSurface.svelte and LocalAppSourceCardLink.svelte receive exact current-only component selectors. Five previously owned or anchored files change: desktop/mobile ChatMessage, LocalAppCards, PrivateAppDraftFields and privateAppWorkspace. The change places one retained editor at a strictly account/backend/source-keyed connected message anchor, keeps saved-card rediscovery, hides stale proposals while extracting, and presents generic app-authored controls compactly. Source-open/completion reveal scrolls that card without remounting its editor. Encryption/delivery modules, approval/request identity checks, app fields, models/prompts, authentication, canisters and official-backend policy are not added or replaced. The four additions and exact five predecessor identities reconstruct 92eed8d7 before all existing historical proofs. Current composition is 175 sources, 127 dedicated owners, 108 exact anchors and 26 roots. No dependency, manifest/lock, advisory-policy, historical selector or prior snapshot change is included. The one current LocalAppCards Svelte import anchor is updated exactly for onDestroy plus tick; its mixed ownership does not expand. Test shells and specifications are excluded. This binds source ownership in an uncommitted working tree only, not a committed revision, built artifact, runtime/emulator/browser acceptance, advisory waiver, core audit, deployment or release acceptance."
       }
     ]
   }

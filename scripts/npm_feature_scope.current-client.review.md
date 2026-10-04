@@ -857,3 +857,59 @@ advisory rule or historical snapshot is changed. No model/prompt, authentication
 private-card or backend implementation is edited by this source review. This is
 not an advisory waiver, core audit, artifact build, browser/native runtime test
 or release acceptance.
+
+## October 5 source-inline private-card working-tree checkpoint
+
+This append-only source review binds the **uncommitted working tree**, based on
+committed main `8f22866e3823e559e108123b5e4ec529514b7f62`, to aggregate
+`274cc344469da04f63e1959dea1508030e54ecc2187355f1798e787ef3314164`.
+Independently reading all **171 predecessor Git blobs** reproduces
+`92eed8d75292ff2bed66b4b91e12b9b9688bc1c4d3968e558b3990393bf740df`.
+Only the following nine runtime inputs differ: four additions and five existing
+owned or anchored files. The identities below are SHA256 of UTF-8/LF source.
+
+| Runtime path under `frontend/app/src/`            | Previous identity                                                  | Current identity                                                   |
+| ------------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| `utils/localAppCardAnchors.ts`                    | Added                                                              | `713a1feb86f36929ed8ddd61017d7a27e6ff75fdfddd16fecedee9b223fe33ef` |
+| `components_shared/LocalAppCardAnchor.svelte`     | Added                                                              | `0915dd99e3c6374cf7fa5ea68e4604a71514be741adbf301308a223b4c3bd0bf` |
+| `components_shared/LocalAppCardSurface.svelte`    | Added                                                              | `a8e3fb4493e39b8fbe4e31182ffd675d14455bb9bbb7bafcaddc5030dab71036` |
+| `components_shared/LocalAppSourceCardLink.svelte` | Added                                                              | `06b0f32d7e6185a02d9683ec5bdcf4818321c7329118d97c817cc5b501967090` |
+| `components/home/ChatMessage.svelte`              | `90d378464c85546a111f9e46e51007955a8baca055bc6932f07ae797d039d945` | `88f1dda0b9966747bcc93698116fe5eededc98cb4527c9f37d60d3e1eb7154bf` |
+| `components_mobile/home/ChatMessage.svelte`       | `b7e04449634f0338a41d3ec3f7723b481e40d95e2dd85f5a98618d7f0810bae9` | `54eb464be34aedbf2f688844665122841b2989d6aca8a1424527a16278734cdc` |
+| `components_shared/LocalAppCards.svelte`          | `2b0fd86f1e0c6930c34d5ea7ad39ee2aba3d320ef44c0f1fb79944e827ae2606` | `ba1d846994b4d3a3b2abc9a3895a4cab2db4d10756f27995f61e24d649bde83e` |
+| `components_shared/PrivateAppDraftFields.svelte`  | `e97ebf9756a19c5297b875d6a085402034ddadac25a1626b9f09ca82ed7e4ff6` | `d96e2057200a574753662533636a41f95c36dbbd6d1d1cfb856871db5fcdef75` |
+| `utils/privateAppWorkspace.ts`                    | `98b3be56091a624a6e2af76dfb9922290459db7d992d0f9171603ac4079b78eb` | `c15bf3528376d5a48de3f001a68eabb674fe41732419a5261eba8092f5e63334` |
+
+The generic anchor registry is bounded to connected host-owned elements and keys
+account, backend, chat, message and thread coordinates. The shared surface moves
+one retained editor, not one workspace per virtualized message. Source links
+rediscover saved cards without exposing their payload and retain busy/loading/
+invalid-edit protections. Presentation source and draft bindings prevent a prior
+card from appearing as a new extraction result. The host reveals the card header
+on source opening/completion (`scrollIntoView` with `block: "start"`), not on
+anchor virtualization. Compact fields use app-authored order/control metadata;
+no app-specific field identifiers or semantic rules are added to the host.
+
+The new utility is covered by the existing `localApp` selector. The current-only
+component selector adds exactly `LocalAppCardAnchor`, `LocalAppCardSurface` and
+`LocalAppSourceCardLink`. `LocalAppCards` and both `ChatMessage` files remain
+mixed-source inputs, not dedicated core import owners. The existing exact
+`LocalAppCards` Svelte anchor changes from `onDestroy` to `onDestroy, tick`; this
+adds no dependency root. New runtime imports use existing Svelte/local modules.
+Test/spec/shell files are excluded from this runtime fingerprint. Historical PR
+selectors, source-review records and all earlier aggregate proofs are retained.
+
+Composition is **175 sources, 127 dedicated owners, 108 exact anchors and
+26 roots**. Removing only the four added paths and substituting the five exact
+predecessor identities restores `92eed8d7` before the existing historical
+transforms. The transition regression separately binds every current changed
+file and rejects removal, source drift and unreviewed dedicated imports. The
+normal live gate still verifies all current bytes, both LF and CRLF encodings,
+all exact anchors and the unchanged root set.
+
+This does not change encryption/delivery modules, authentication, model weights
+or prompts, backend/canister implementations, package manifests/locks or advisory
+policy. Existing approval and request checks remain required. This is **source
+identity evidence only**: it does not attest a committed revision, a built APK
+or web artifact, browser/emulator/provider behavior, an advisory waiver, a core
+audit, deployment or release acceptance.

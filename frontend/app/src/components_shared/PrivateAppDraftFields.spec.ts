@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { flushSync, mount, tick, unmount } from "svelte";
 import { fromStore, writable } from "svelte/store";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LocalAppAction } from "../utils/localAppCatalog";
 import type { LocalDraftSchema } from "../utils/localAppDrafts";
 import { snapshotLocalDraftPayload } from "../utils/localAppDrafts";
@@ -64,6 +64,7 @@ const initial = () => ({
     nested: { value: "retained" },
 });
 let instances: ReturnType<typeof mount>[] = [];
+let compactMode = false;
 
 function render(
     definition = action(),
@@ -91,6 +92,7 @@ function render(
             target,
             props: {
                 action: definition,
+                compact: compactMode,
                 get editorJson() {
                     return editor.current;
                 },
@@ -248,7 +250,118 @@ afterEach(async () => {
     vi.unstubAllGlobals();
 });
 
-describe("mounted generic private draft fields", () => {
+describe.each([false, true])("mounted generic private draft fields (compact=%s)", (compact) => {
+    beforeEach(() => {
+        compactMode = compact;
+    });
+
+    it("collapses optional actions only in compact mode without hiding values or changing omission semantics", async () => {
+        const definition = action();
+        definition.definition.card.disclosure = "Review the supplied app context before sending.";
+        const view = render(definition);
+        expect(view.target.querySelector(".draft-fields")?.classList.contains("compact")).toBe(
+            compact,
+        );
+        const disclosure = view.target.querySelector(".disclosure")!;
+        expect(disclosure.textContent).toBe(definition.definition.card.disclosure);
+        expect(disclosure.closest("details")).toBeNull();
+        expect(control(view.target, "Item 1 — empty").closest("details")).toBeNull();
+        const remove = button(view.target, "Remove empty");
+        const removeDetails = remove.closest("details");
+        if (compact) {
+            expect(removeDetails?.open).toBe(false);
+            expect(removeDetails?.getAttribute("aria-label")).toBe("Item 1 — empty options");
+            expect(removeDetails?.querySelector("summary")?.textContent).toBe("Field options");
+            removeDetails!.open = true;
+        } else expect(removeDetails).toBeNull();
+        expect(view.payload()).toEqual(initial());
+        expect(view.onchange).not.toHaveBeenCalled();
+        remove.click();
+        await tick();
+        const { empty: _removed, ...withoutEmpty } = initial();
+        expect(view.payload()).toEqual(withoutEmpty);
+        button(view.target, "Set empty to empty text").click();
+        await tick();
+        expect(view.payload()).toEqual(initial());
+        expect(control(view.target, "Item 1 — App text").value).toBe("original");
+        expect(
+            view.target.querySelector('[aria-label="Additional outgoing fields"]')?.textContent,
+        ).toContain("retained");
+    });
+
+    it("keeps controlled companion values inspectable and schema warnings outside compact details", async () => {
+        const payload = { ...initial(), category: "unrecognized-id", categoryLabel: 123 };
+        const view = renderNamed({ ...payload, categoryLabel: "Original companion" });
+        // Invalid advanced-JSON edits remain inspectable without becoming a valid choice session.
+        await view.update(JSON.stringify(payload));
+        const companion = view.target.querySelector<HTMLOutputElement>(
+            'output[aria-label="Item 1 — categoryLabel"]',
+        )!;
+        expect(companion.textContent).toContain("123");
+        const details = companion.closest("details");
+        if (compact) {
+            expect(details?.open).toBe(false);
+            expect(details?.getAttribute("aria-label")).toBe("Item 1 — categoryLabel exact value");
+            expect(details?.querySelector("summary")?.textContent).toBe("categoryLabel");
+            details!.open = true;
+        } else expect(details).toBeNull();
+        const warning = companion.closest(".field")!.querySelector(".invalid")!;
+        expect(warning.textContent).toContain("does not match the app's field schema");
+        expect(warning.closest("details")).toBeNull();
+        expect(control(view.target, "Item 1 — Saved category").closest("details")).toBeNull();
+        expect(view.payload()).toEqual(payload);
+        expect(view.onchange).not.toHaveBeenCalled();
+        expect(view.onchoiceedit).not.toHaveBeenCalled();
+        await input(view.target, "Item 1 — Saved category", "option-1");
+        expect(view.payload()).toEqual({
+            ...initial(),
+            count: 11,
+            category: "raw-beta",
+            categoryLabel: "Assigned Beta",
+        });
+        expect(companion.textContent).toContain('"Assigned Beta"');
+        expect(companion.closest(".field")!.querySelector(".invalid")).toBeNull();
+        expect(view.onchange).not.toHaveBeenCalled();
+    });
+
+    it("keeps accessible item groups and app-owned full-width metadata in the compact layout", () => {
+        const view = render(hintedAction(), {
+            ...initial(),
+            notesValue: "Wide field supplied by app metadata",
+        });
+        expect(view.target.querySelector("fieldset")?.getAttribute("aria-label")).toBe(
+            "Draft fields for item 1",
+        );
+        expect(view.target.querySelector("legend")?.classList.contains("single-item")).toBe(true);
+        expect(
+            control(view.target, "Item 1 — Details")
+                .closest(".field")
+                ?.classList.contains("full-width"),
+        ).toBe(true);
+        expect(
+            control(view.target, "Item 1 — App count")
+                .closest(".field")
+                ?.classList.contains("full-width"),
+        ).toBe(false);
+        const definition: LocalAppAction = {
+            ...action(),
+            handoff: { kind: "list" },
+            draftSchema: { type: "array", items: schema },
+        };
+        const multi = render(definition, [initial(), initial()]);
+        const legends = [...multi.target.querySelectorAll("legend")];
+        expect(legends.map((legend) => legend.textContent)).toEqual(["Item 1", "Item 2"]);
+        expect(legends.every((legend) => !legend.classList.contains("single-item"))).toBe(true);
+        const source = readFileSync(resolve(__dirname, "PrivateAppDraftFields.svelte"), "utf8");
+        expect(source).toMatch(/compact = false/);
+        expect(source).toMatch(
+            /\.compact fieldset\s*\{[^}]*minmax\(min\(100%, 120px\), 1fr\)[^}]*padding:\s*0;[^}]*border:\s*0;[^}]*gap:\s*8px;/,
+        );
+        expect(source).toMatch(/\.compact legend\.single-item\s*\{\s*display:\s*none;/);
+        expect(source).toMatch(/\.compact label > span,[\s\S]*?font-size:\s*11px;/);
+        expect(source).toMatch(/\.compact input,[\s\S]*?min-height:\s*44px;/);
+    });
+
     it("shows app-owned labels for required enums while preserving scalar identities and raw review", async () => {
         const definition: LocalAppAction = {
             ...action(),

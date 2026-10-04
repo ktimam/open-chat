@@ -5,12 +5,19 @@ import { currentUserIdStore, type OpenChat, type MessageContent } from "@client"
 import type { Writable } from "svelte/store";
 import LocalAppCards from "./LocalAppCards.svelte";
 import { privateAppWorkspace as workspace } from "../utils/privateAppWorkspace";
+import { localAppCardAnchors, type LocalAppCardAnchorSource } from "../utils/localAppCardAnchors";
+import type {
+    extractPrivateAppAction,
+    PrivateAppExtractionResult,
+    ProposalPhase,
+} from "../utils/aiActionRunner";
 
 const calls = vi.hoisted(() => ({
     extract: vi.fn(),
     deliver: vi.fn(),
     cancel: vi.fn(),
     navigate: vi.fn(),
+    scrollIntoView: vi.fn<(options?: ScrollIntoViewOptions) => void>(),
 }));
 vi.mock("@client", async () => {
     const { writable } = await import("svelte/store");
@@ -100,6 +107,26 @@ const catalog = JSON.stringify({
 let mounted: ReturnType<typeof mount> | undefined;
 let target: HTMLDivElement;
 let client: OpenChat;
+const originalScrollIntoView = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "scrollIntoView",
+);
+const anchorCleanup: (() => void)[] = [];
+const source = (messageId: string): LocalAppCardAnchorSource => ({
+    chatKey: "rrkah-fqaaa-aaaaa-aaaaq-cai",
+    chatKind: "direct_chat",
+    messageId,
+    messageIndex: Number(messageId),
+});
+const registerAnchor = (
+    coordinate: LocalAppCardAnchorSource,
+    namespace = { account: "synthetic-account", backend: "synthetic-backend" },
+) => {
+    const node = document.createElement("div");
+    target.append(node);
+    anchorCleanup.push(localAppCardAnchors.register(namespace, coordinate, node));
+    return node;
+};
 const settle = async () => {
     await tick();
     flushSync();
@@ -137,6 +164,43 @@ const propose = async () => {
         { stillCurrent: () => true },
     );
     await settle();
+};
+const deferExtraction = () => {
+    let options: Parameters<typeof extractPrivateAppAction>[3] | undefined;
+    let finish!: (result: PrivateAppExtractionResult) => void;
+    const result = new Promise<PrivateAppExtractionResult>((resolve) => {
+        finish = resolve;
+    });
+    calls.extract.mockImplementationOnce((...args: Parameters<typeof extractPrivateAppAction>) => {
+        options = args[3];
+        return result;
+    });
+    return {
+        finish,
+        phase: (phase: ProposalPhase) => {
+            expect(options).toBeDefined();
+            options!.onPhase?.(phase);
+        },
+    };
+};
+const expectProcessingOnly = () => {
+    expect(target.querySelector('[role="dialog"]')?.getAttribute("aria-busy")).toBe("true");
+    expect(target.querySelector("h2")?.textContent).toBe("App action");
+    expect(target.querySelector('[role="status"]')?.textContent).toContain(
+        "Preparing a private draft locally",
+    );
+    expect(preview()).toBeNull();
+    expect(target.querySelector("input, select, textarea")).toBeNull();
+    expect(target.querySelector('[aria-label="Selected card source"]')).toBeNull();
+    expect(target.querySelector('[aria-label="Saved private cards on this device"]')).toBeNull();
+    expect(button("View source message")).toBeUndefined();
+    expect(button("Review full request")).toBeUndefined();
+    expect(button("Send reviewed request")).toBeUndefined();
+    expect(button("Review recovered request before retrying")).toBeUndefined();
+    expect([...target.querySelectorAll("button")].map((node) => node.textContent)).toEqual([
+        "Close",
+        "Cancel / discard local draft",
+    ]);
 };
 const approveAndSend = async () => {
     button("Review full request").click();
@@ -212,6 +276,11 @@ const proposeNamed = async (
 
 beforeEach(async () => {
     vi.clearAllMocks();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+        configurable: true,
+        writable: true,
+        value: calls.scrollIntoView,
+    });
     (currentUserIdStore as unknown as Writable<string>).set("synthetic-account");
     workspace.clear();
     workspace.setAccount("synthetic-account", "synthetic-backend");
@@ -240,10 +309,466 @@ beforeEach(async () => {
 afterEach(async () => {
     if (mounted) await unmount(mounted);
     mounted = undefined;
+    for (const unregister of anchorCleanup.splice(0)) unregister();
     document.body.replaceChildren();
+    if (originalScrollIntoView)
+        Object.defineProperty(HTMLElement.prototype, "scrollIntoView", originalScrollIntoView);
+    else Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
+});
+
+describe("source-anchored private card presentation", () => {
+    const proposeSource = async (coordinate: LocalAppCardAnchorSource) => {
+        await workspace.propose(
+            client,
+            { kind: "text_content", text: "Synthetic selected message" } as MessageContent,
+            { stillCurrent: () => true, source: coordinate },
+        );
+        await settle();
+    };
+    const settleReveal = async () => {
+        await settle();
+        await tick();
+    };
+
+    it("reveals an opened source and its completed result without scrolling on phase or status updates", async () => {
+        const coordinate = source("61");
+        const anchor = registerAnchor(coordinate);
+        const extraction = deferExtraction();
+        const pending = workspace.propose(client, { kind: "image_content" } as MessageContent, {
+            stillCurrent: () => true,
+            source: coordinate,
+        });
+        await settleReveal();
+        expect(calls.scrollIntoView).toHaveBeenCalledExactlyOnceWith({
+            block: "start",
+            inline: "nearest",
+        });
+        expect(calls.scrollIntoView.mock.contexts).toEqual([anchor]);
+        for (const phase of ["reading_image", "generating", "validating"] as const) {
+            extraction.phase(phase);
+            workspace.reportImportFailure();
+            await settleReveal();
+            expect(calls.scrollIntoView).toHaveBeenCalledOnce();
+        }
+
+        extraction.finish({ kind: "extracted", candidates: [{ value: 84 }] });
+        await expect(pending).resolves.toBe("drafted");
+        await settleReveal();
+        expect(calls.scrollIntoView.mock.calls).toEqual([
+            [{ block: "start", inline: "nearest" }],
+            [{ block: "start", inline: "nearest" }],
+        ]);
+        expect(calls.scrollIntoView.mock.contexts).toEqual([anchor, anchor]);
+        workspace.reportImportFailure();
+        workspace.editRecipient("Synthetic recipient");
+        await settleReveal();
+        expect(calls.scrollIntoView).toHaveBeenCalledTimes(2);
+        workspace.close();
+        await settleReveal();
+        expect(calls.scrollIntoView).toHaveBeenCalledTimes(2);
+        workspace.open("source");
+        await settleReveal();
+        expect(calls.scrollIntoView).toHaveBeenCalledTimes(3);
+        expect(calls.scrollIntoView.mock.contexts[2]).toBe(anchor);
+        expect(calls.deliver).not.toHaveBeenCalled();
+    });
+
+    it("reveals only the newly selected source and does not scroll for selecting the same card again", async () => {
+        const firstSource = source("62");
+        const secondSource = source("63");
+        const firstAnchor = registerAnchor(firstSource);
+        const secondAnchor = registerAnchor(secondSource);
+        await proposeSource(firstSource);
+        const firstId = workspace.state.draft!.id;
+        await proposeSource(secondSource);
+        const secondId = workspace.state.draft!.id;
+        await settleReveal();
+        calls.scrollIntoView.mockClear();
+
+        expect(workspace.selectCard(firstId)).toBe(true);
+        await settleReveal();
+        expect(calls.scrollIntoView.mock.contexts).toEqual([firstAnchor]);
+        expect(workspace.selectCard(firstId)).toBe(true);
+        await settleReveal();
+        expect(calls.scrollIntoView).toHaveBeenCalledOnce();
+        expect(workspace.selectCard(secondId)).toBe(true);
+        await settleReveal();
+        expect(calls.scrollIntoView.mock.contexts).toEqual([firstAnchor, secondAnchor]);
+        workspace.open("saved");
+        await settleReveal();
+        expect(calls.scrollIntoView).toHaveBeenCalledTimes(2);
+        expect(calls.deliver).not.toHaveBeenCalled();
+    });
+
+    it("cancels a scheduled source reveal when the card closes before the rendering tick", async () => {
+        const coordinate = source("64");
+        registerAnchor(coordinate);
+        await proposeSource(coordinate);
+        workspace.close();
+        await settleReveal();
+        calls.scrollIntoView.mockClear();
+
+        workspace.open("source");
+        flushSync();
+        expect(calls.scrollIntoView).not.toHaveBeenCalled();
+        workspace.close();
+        await settleReveal();
+        expect(calls.scrollIntoView).not.toHaveBeenCalled();
+        expect(workspace.state.open).toBe(false);
+    });
+
+    it.each([false, true])(
+        "never reveals a detached anchor while a source reveal is pending (replacement: %s)",
+        async (replace) => {
+            const coordinate = source("65");
+            const originalAnchor = registerAnchor(coordinate);
+            await proposeSource(coordinate);
+            workspace.close();
+            await settleReveal();
+            calls.scrollIntoView.mockClear();
+
+            workspace.open("source");
+            flushSync();
+            expect(calls.scrollIntoView).not.toHaveBeenCalled();
+            originalAnchor.remove();
+            anchorCleanup.pop()!();
+            const replacement = replace ? registerAnchor(coordinate) : undefined;
+            await settleReveal();
+            expect(calls.scrollIntoView.mock.contexts).not.toContain(originalAnchor);
+            if (replacement) {
+                expect(calls.scrollIntoView).toHaveBeenCalledExactlyOnceWith({
+                    block: "start",
+                    inline: "nearest",
+                });
+                expect(calls.scrollIntoView.mock.contexts).toEqual([replacement]);
+            } else expect(calls.scrollIntoView).not.toHaveBeenCalled();
+        },
+    );
+
+    it("does not yank the viewport when virtualization replaces an anchor after its reveal completed", async () => {
+        const coordinate = source("66");
+        const originalAnchor = registerAnchor(coordinate);
+        await proposeSource(coordinate);
+        await settleReveal();
+        calls.scrollIntoView.mockClear();
+        originalAnchor.remove();
+        anchorCleanup.pop()!();
+        await settleReveal();
+        const replacement = registerAnchor(coordinate);
+        await settleReveal();
+
+        expect(replacement.querySelector('[role="region"]')).not.toBeNull();
+        expect(calls.scrollIntoView).not.toHaveBeenCalled();
+        expect(calls.deliver).not.toHaveBeenCalled();
+    });
+
+    it("places one editor only under the exact account, backend, chat, thread and message anchor", async () => {
+        const coordinate = source("21");
+        const wrongAnchors = [
+            registerAnchor(coordinate, { account: "other-account", backend: "synthetic-backend" }),
+            registerAnchor(coordinate, { account: "synthetic-account", backend: "other-backend" }),
+            registerAnchor({ ...coordinate, chatKind: "group_chat" }),
+            registerAnchor({ ...coordinate, threadRootMessageIndex: 0 }),
+            registerAnchor(source("22")),
+        ];
+        const anchor = registerAnchor(coordinate);
+        await proposeSource(coordinate);
+
+        expect(anchor.querySelector('[role="region"][aria-label="Local app card"]')).not.toBeNull();
+        expect(anchor.querySelector('[aria-label="App-declared draft preview"]')).toBe(preview());
+        expect(target.querySelectorAll('[aria-label="Local app card"]')).toHaveLength(1);
+        expect(target.querySelector('[role="dialog"]')).toBeNull();
+        expect(target.querySelector(".card-surface.modal")).toBeNull();
+        expect(
+            target.querySelector('[aria-label="Saved private cards on this device"]'),
+        ).toBeNull();
+        expect(target.querySelector('[aria-label="Selected card source"]')).toBeNull();
+        expect(anchor.querySelector<HTMLElement>(".card-surface")!.hidden).toBe(false);
+        expect(numericFields()[0].value).toBe("42");
+        for (const other of wrongAnchors) expect(other.children).toHaveLength(0);
+        expect(calls.deliver).not.toHaveBeenCalled();
+    });
+
+    it.each(["failed", "cancelled"] as const)(
+        "never shows or discards a retained card as the result of a %s new source proposal",
+        async (outcome) => {
+            const originalSource = source("31");
+            const requestedSource = source("32");
+            const originalAnchor = registerAnchor(originalSource);
+            const requestedAnchor = registerAnchor(requestedSource);
+            await proposeSource(originalSource);
+            await changeNumber("57");
+            button("Review full request").click();
+            await settle();
+            confirmation().click();
+            await settle();
+            const priorId = workspace.state.draft!.id;
+            const retainedIds = workspace.state.cards.map((card) => card.id);
+            const extraction = deferExtraction();
+            const pending = workspace.propose(client, { kind: "image_content" } as MessageContent, {
+                stillCurrent: () => true,
+                source: requestedSource,
+            });
+            await settle();
+            expect(originalAnchor.children).toHaveLength(0);
+            expect(requestedAnchor.querySelector('[role="region"]')).not.toBeNull();
+            expect(preview()).toBeNull();
+            if (outcome === "cancelled") button("Cancel / discard local draft").click();
+            extraction.finish({ kind: "no_extraction", raw: "" });
+            expect(await pending).toBe("retryable");
+            await settle();
+
+            expect(preview()).toBeNull();
+            expect(target.querySelector("input, select, textarea")).toBeNull();
+            expect(button("Review full request")).toBeUndefined();
+            expect(button("Send reviewed request")).toBeUndefined();
+            expect(button("Cancel / discard local draft")).toBeUndefined();
+            expect(workspace.state.cards.map((card) => card.id)).toEqual(retainedIds);
+            expect(workspace.state.draft!.id).toBe(priorId);
+            expect(workspace.state.presentationSource).toEqual(requestedSource);
+            button("Close").click();
+            await settle();
+            expect(workspace.state.cards.map((card) => card.id)).toEqual(retainedIds);
+            workspace.open("saved");
+            await settle();
+            expect(numericFields()[0].value).toBe("57");
+            expect(confirmation().checked).toBe(false);
+            expect(button("Send reviewed request").disabled).toBe(true);
+            expect(calls.deliver).not.toHaveBeenCalled();
+        },
+    );
+
+    it("never substitutes an old source-less card after a source-less extraction fails", async () => {
+        const retainedIds = workspace.state.cards.map((card) => card.id);
+        calls.extract.mockResolvedValueOnce({ kind: "no_extraction", raw: "" });
+        await propose();
+        expect(preview()).toBeNull();
+        expect(target.querySelector("input, select, textarea")).toBeNull();
+        expect(button("Review full request")).toBeUndefined();
+        expect(button("Cancel / discard local draft")).toBeUndefined();
+        expect(workspace.state.cards.map((card) => card.id)).toEqual(retainedIds);
+        workspace.open("saved");
+        await settle();
+        expect(numericFields()[0].value).toBe("42");
+        expect(calls.deliver).not.toHaveBeenCalled();
+    });
+
+    it("moves the same pending editor through anchor removal and replacement without losing invalid input", async () => {
+        const coordinate = source("41");
+        const originalAnchor = registerAnchor(coordinate);
+        await proposeSource(coordinate);
+        await changeExtra("x".repeat(70000));
+        const pendingInput = extraField();
+        const originalSurface = originalAnchor.querySelector(".card-surface")!;
+        expect(button("Review full request").disabled).toBe(true);
+        originalAnchor.remove();
+        anchorCleanup.pop()!();
+        await settle();
+        expect(target.querySelector<HTMLElement>(".card-surface")!.hidden).toBe(true);
+        expect(extraField()).toBe(pendingInput);
+        expect(pendingInput.value).toHaveLength(70000);
+
+        const replacementAnchor = registerAnchor(coordinate);
+        await settle();
+        expect(replacementAnchor.querySelector(".card-surface")).toBe(originalSurface);
+        expect(extraField()).toBe(pendingInput);
+        expect(pendingInput.value).toHaveLength(70000);
+        expect(button("Review full request").disabled).toBe(true);
+        expect(workspace.state.draft!.approval).toBeUndefined();
+        expect(calls.extract).toHaveBeenCalledTimes(2);
+        expect(calls.deliver).not.toHaveBeenCalled();
+    });
+
+    it("revokes visible sharing consent when switching between inline and saved-card presentation", async () => {
+        const coordinate = source("51");
+        const anchor = registerAnchor(coordinate);
+        await proposeSource(coordinate);
+        const id = workspace.state.draft!.id;
+        button("Review full request").click();
+        await settle();
+        confirmation().click();
+        await settle();
+        expect(button("Send reviewed request").disabled).toBe(false);
+        const field = numericFields()[0];
+        workspace.open("saved");
+        await settle();
+        expect(anchor.children).toHaveLength(0);
+        expect(target.querySelector('[role="dialog"]')).not.toBeNull();
+        expect(confirmation().checked).toBe(false);
+        expect(button("Send reviewed request").disabled).toBe(true);
+        expect(numericFields()[0]).toBe(field);
+        confirmation().click();
+        await settle();
+        workspace.open("source");
+        expect(workspace.selectCard(id)).toBe(true);
+        await settle();
+        expect(anchor.querySelector('[role="region"]')).not.toBeNull();
+        expect(numericFields()[0]).toBe(field);
+        expect(workspace.state.draft!.approval).toBeUndefined();
+        expect(button("Send reviewed request")).toBeUndefined();
+        button("Review full request").click();
+        await settle();
+        expect(confirmation().checked).toBe(false);
+        expect(button("Send reviewed request").disabled).toBe(true);
+        expect(calls.deliver).not.toHaveBeenCalled();
+    });
 });
 
 describe("local app card modal and authoritative review", () => {
+    it("hides every retained card field and source while a new proposal is processing, then reveals only its new result", async () => {
+        calls.extract.mockResolvedValue({
+            kind: "extracted",
+            candidates: [{ value: 84, extra: "Previous selected result" }],
+        });
+        await workspace.propose(
+            client,
+            { kind: "text_content", text: "Previous selected message" } as MessageContent,
+            {
+                stillCurrent: () => true,
+                source: {
+                    chatKey: "rrkah-fqaaa-aaaaa-aaaaq-cai",
+                    chatKind: "direct_chat",
+                    messageId: "101",
+                    messageIndex: 1,
+                },
+            },
+        );
+        workspace.open("saved");
+        await settle();
+        button("Review full request").click();
+        await settle();
+        confirmation().click();
+        await settle();
+        expect(button("Send reviewed request").disabled).toBe(false);
+        expect(target.querySelector('[aria-label="Selected card source"]')).not.toBeNull();
+        expect(
+            target.querySelector('[aria-label="Saved private cards on this device"]'),
+        ).not.toBeNull();
+        const retainedIds = workspace.state.cards.map((card) => card.id);
+        const previousId = workspace.state.draft!.id;
+        const extraction = deferExtraction();
+        const nextSource = {
+            chatKey: "rrkah-fqaaa-aaaaa-aaaaq-cai",
+            chatKind: "direct_chat" as const,
+            messageId: "102",
+            messageIndex: 2,
+        };
+        const pending = workspace.propose(client, { kind: "image_content" } as MessageContent, {
+            stillCurrent: () => true,
+            source: nextSource,
+        });
+        workspace.open("saved");
+        await settle();
+        expect(workspace.state.phase).toBe("preparing");
+        expectProcessingOnly();
+        for (const phase of ["reading_image", "generating", "validating"] as const) {
+            extraction.phase(phase);
+            await settle();
+            expectProcessingOnly();
+            expect(visibleText()).toContain(`Local processing: ${phase.replaceAll("_", " ")}`);
+            expect(visibleText()).not.toContain("Previous selected result");
+            expect(visibleText()).not.toContain("Also sent");
+            expect(workspace.state.draft!.id).toBe(previousId);
+            expect(workspace.state.cards.map((card) => card.id)).toEqual(retainedIds);
+        }
+        extraction.finish({
+            kind: "extracted",
+            candidates: [{ value: 129, extra: "New selected image result" }],
+        });
+        expect(await pending).toBe("drafted");
+        await settle();
+        expect(workspace.state.busy).toBe(false);
+        expect(workspace.state.phase).toBeUndefined();
+        expect(workspace.state.draft!.id).not.toBe(previousId);
+        expect(workspace.state.cards.map((card) => card.id)).toEqual([
+            ...retainedIds,
+            workspace.state.draft!.id,
+        ]);
+        expect(workspace.state.cardSources[workspace.state.draft!.id]).toEqual(nextSource);
+        expect(numericFields()[0].value).toBe("129");
+        expect(cardText()).toContain("New selected image result");
+        expect(cardText()).not.toContain("Previous selected result");
+        expect(cardText()).not.toContain("Also sent");
+        expect(target.querySelector('[aria-label="Selected card source"]')).not.toBeNull();
+        expect(button("Review full request").disabled).toBe(false);
+        expect(button("Send reviewed request")).toBeUndefined();
+        expect(workspace.state.draft!.approval).toBeUndefined();
+        expect(calls.extract).toHaveBeenCalledTimes(3);
+        expect(calls.deliver).not.toHaveBeenCalled();
+    });
+
+    it("retains the old card without showing it as a cancelled proposal result, and reopens it only from saved cards", async () => {
+        await workspace.propose(
+            client,
+            { kind: "text_content", text: "Retained source" } as MessageContent,
+            {
+                stillCurrent: () => true,
+                source: {
+                    chatKey: "rrkah-fqaaa-aaaaa-aaaaq-cai",
+                    chatKind: "group_chat",
+                    messageId: "201",
+                    messageIndex: 4,
+                },
+            },
+        );
+        workspace.open("saved");
+        await settle();
+        await changeNumber("57");
+        const previous = workspace.state.draft!;
+        const retainedIds = workspace.state.cards.map((card) => card.id);
+        const priorCancellationCount = calls.cancel.mock.calls.length;
+        const extraction = deferExtraction();
+        const pending = workspace.propose(client, { kind: "image_content" } as MessageContent, {
+            stillCurrent: () => true,
+        });
+        extraction.phase("reading_image");
+        await settle();
+        expectProcessingOnly();
+        button("Cancel / discard local draft").click();
+        await settle();
+        expect(workspace.state.busy).toBe(false);
+        expect(workspace.state.phase).toBeUndefined();
+        expect(workspace.state.cards.map((card) => card.id)).toEqual(retainedIds);
+        expect(workspace.state.draft).toEqual(previous);
+        expect(visibleText()).toContain("Processing cancelled");
+        expect(preview()).toBeNull();
+        expect(numericFields()).toHaveLength(0);
+        expect(button("Review full request")).toBeUndefined();
+        expect(button("Cancel / discard local draft")).toBeUndefined();
+        extraction.phase("validating");
+        extraction.finish({
+            kind: "extracted",
+            candidates: [{ value: 999, extra: "Cancelled extraction must never appear" }],
+        });
+        expect(await pending).toBe("retryable");
+        await settle();
+        expect(workspace.state.phase).toBeUndefined();
+        expect(workspace.state.cards.map((card) => card.id)).toEqual(retainedIds);
+        expect(workspace.state.draft).toEqual(previous);
+        expect(preview()).toBeNull();
+        expect(visibleText()).not.toContain("Cancelled extraction must never appear");
+        workspace.open("saved");
+        await settle();
+        expect(numericFields()[0].value).toBe("57");
+        expect(cardText()).toContain("Also sent");
+        expect(cardText()).not.toContain("Cancelled extraction must never appear");
+        expect(target.querySelector('[aria-label="Selected card source"]')).not.toBeNull();
+        expect(
+            target.querySelector('[aria-label="Saved private cards on this device"]'),
+        ).not.toBeNull();
+        button("Review full request").click();
+        await settle();
+        expect(workspace.state.draft!.approval!.request.payload).toEqual({
+            value: 57,
+            extra: "Also sent",
+        });
+        expect(confirmation().checked).toBe(false);
+        expect(button("Send reviewed request").disabled).toBe(true);
+        expect(calls.extract).toHaveBeenCalledTimes(3);
+        expect(calls.deliver).not.toHaveBeenCalled();
+        expect(calls.cancel).toHaveBeenCalledTimes(priorCancellationCount);
+    });
+
     it("stays headless without an opened card and renders only status for an empty opened action", async () => {
         workspace.discard();
         workspace.close();
@@ -297,6 +822,7 @@ describe("local app card modal and authoritative review", () => {
                 },
             },
         );
+        workspace.open("saved");
         await settle();
         const draftId = workspace.state.draft!.id;
         const inferenceCount = calls.extract.mock.calls.length;
@@ -341,6 +867,7 @@ describe("local app card modal and authoritative review", () => {
                     },
                 },
             );
+            workspace.open("saved");
             await settle();
             calls.deliver.mockResolvedValue({ kind });
             await approveAndSend();
@@ -427,6 +954,7 @@ describe("local app card modal and authoritative review", () => {
                 threadRootMessageIndex: 4,
             },
         });
+        workspace.open("saved");
         await settle();
         expect(button("View source message")).toBeUndefined();
         button("Open source thread").click();
@@ -462,6 +990,7 @@ describe("local app card modal and authoritative review", () => {
                 },
             },
         );
+        workspace.open("saved");
         await settle();
         await changeExtra("x".repeat(70000));
         const sourceButton = button("View source message");
@@ -1020,6 +1549,15 @@ describe("local app card modal and authoritative review", () => {
         await approveAndSend();
         expect(workspace.state.draft!.status).toBe("sending");
         expect(workspace.state.busy).toBe(true);
+        expect(workspace.state.phase).toBeUndefined();
+        expect(preview()).not.toBeNull();
+        expect(target.querySelector("h2")?.textContent).toBe("App-defined title");
+        expect(numericFields()[0].value).toBe("42");
+        expect(cardText()).toContain("Also sent");
+        expect(workspace.state.draft!.approval!.request.payload).toEqual({
+            value: 42,
+            extra: "Also sent",
+        });
         expect(numericFields()[0].disabled).toBe(true);
         expect(editor().disabled).toBe(true);
         const unchanged = workspace.state.editorJson;
@@ -1095,18 +1633,14 @@ describe("local app card modal and authoritative review", () => {
         button("Close").click();
         await settle();
         expect(workspace.state.open).toBe(false);
-        expect(target.querySelector<HTMLElement>('[aria-label="Local app cards"]')!.hidden).toBe(
-            true,
-        );
+        expect(target.querySelector<HTMLElement>(".card-surface")!.hidden).toBe(true);
         expect(extraField().value).toBe(oversized);
         expect(workspace.state.draft!.approval).toBeUndefined();
         await workspace.confirm(firstApproval);
         expect(calls.deliver).not.toHaveBeenCalled();
         workspace.open();
         await settle();
-        expect(target.querySelector<HTMLElement>('[aria-label="Local app cards"]')!.hidden).toBe(
-            false,
-        );
+        expect(target.querySelector<HTMLElement>(".card-surface")!.hidden).toBe(false);
         expect(extraField().value).toBe(oversized);
         expect(button("Review full request").disabled).toBe(true);
         expect(preview()).toBeNull();

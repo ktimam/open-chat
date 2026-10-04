@@ -221,6 +221,60 @@ const beforeSavedCardUiFix = new Map([
     "41660e6c1437f3081891be63858011c451b50ac3102a5167d75f8bc00a8f134a",
   ],
 ]);
+// All 171 Git blobs at committed 8f22866e independently reproduce 92eed8d7.
+// The inline-card working tree adds only these four dedicated files and changes
+// only these five existing inputs. Reconstructing earlier checkpoints substitutes
+// these exact predecessor identities; the live gate still binds every new byte.
+const inlineCardAdditions = [
+  "frontend/app/src/utils/localAppCardAnchors.ts",
+  "frontend/app/src/components_shared/LocalAppCardAnchor.svelte",
+  "frontend/app/src/components_shared/LocalAppCardSurface.svelte",
+  "frontend/app/src/components_shared/LocalAppSourceCardLink.svelte",
+];
+const beforeInlineCards = new Map([
+  [
+    "frontend/app/src/components/home/ChatMessage.svelte",
+    "90d378464c85546a111f9e46e51007955a8baca055bc6932f07ae797d039d945",
+  ],
+  [
+    "frontend/app/src/components_mobile/home/ChatMessage.svelte",
+    "b7e04449634f0338a41d3ec3f7723b481e40d95e2dd85f5a98618d7f0810bae9",
+  ],
+  [
+    "frontend/app/src/components_shared/LocalAppCards.svelte",
+    "2b0fd86f1e0c6930c34d5ea7ad39ee2aba3d320ef44c0f1fb79944e827ae2606",
+  ],
+  [
+    "frontend/app/src/components_shared/PrivateAppDraftFields.svelte",
+    "e97ebf9756a19c5297b875d6a085402034ddadac25a1626b9f09ca82ed7e4ff6",
+  ],
+  [
+    "frontend/app/src/utils/privateAppWorkspace.ts",
+    "98b3be56091a624a6e2af76dfb9922290459db7d992d0f9171603ac4079b78eb",
+  ],
+]);
+const inlineCardSourceSha256 =
+  "274cc344469da04f63e1959dea1508030e54ecc2187355f1798e787ef3314164";
+function beforeInlineCardSourceHash(file) {
+  return beforeInlineCards.get(file) ?? sourceHash(file);
+}
+function beforeInlineCardFingerprint(fingerprint) {
+  const files = fingerprint.files.filter(
+    (file) => !inlineCardAdditions.includes(file),
+  );
+  return {
+    ...fingerprint,
+    files,
+    sha256: createHash("sha256")
+      .update(
+        JSON.stringify(
+          files.map((file) => [file, beforeInlineCardSourceHash(file)]),
+        ),
+      )
+      .digest("hex"),
+  };
+}
+
 // Independently reconstructed all 171 Git blobs at committed 4be9f67c.
 // The sole subsequent scoped delta is upstream's wallet spender hunk in this
 // mixed client file. The live gate retains every current byte; these exact
@@ -232,9 +286,10 @@ const beforeWalletSpenderMerge = new Map([
   ],
 ]);
 function beforeWalletSpenderSourceHash(file) {
-  return beforeWalletSpenderMerge.get(file) ?? sourceHash(file);
+  return beforeWalletSpenderMerge.get(file) ?? beforeInlineCardSourceHash(file);
 }
 function beforeWalletSpenderFingerprint(fingerprint) {
+  fingerprint = beforeInlineCardFingerprint(fingerprint);
   return {
     ...fingerprint,
     sha256: createHash("sha256")
@@ -286,6 +341,7 @@ function beforeGenericContextSourceHash(file) {
   return beforeGenericContext.get(file) ?? beforeWalletSpenderSourceHash(file);
 }
 function beforeGenericContextFingerprint(fingerprint) {
+  fingerprint = beforeInlineCardFingerprint(fingerprint);
   return {
     ...fingerprint,
     sha256: createHash("sha256")
@@ -301,6 +357,7 @@ function beforeGenericContextFingerprint(fingerprint) {
   };
 }
 function beforeSavedCardUiFixFingerprint(fingerprint) {
+  fingerprint = beforeInlineCardFingerprint(fingerprint);
   return {
     ...fingerprint,
     sha256: createHash("sha256")
@@ -317,6 +374,7 @@ function beforeSavedCardUiFixFingerprint(fingerprint) {
   };
 }
 function beforeReplicaPortMergeFingerprint(fingerprint) {
+  fingerprint = beforeInlineCardFingerprint(fingerprint);
   return {
     ...fingerprint,
     sha256: createHash("sha256")
@@ -339,6 +397,7 @@ function sourceHash(file) {
     .digest("hex");
 }
 function beforeMainAppsFlowFingerprint(fingerprint) {
+  fingerprint = beforeInlineCardFingerprint(fingerprint);
   for (const path of mainAppsFlowAdditions)
     assert(fingerprint.files.includes(path), path);
   assert(!fingerprint.files.includes(priorPrivateAppsWorkspace));
@@ -683,6 +742,166 @@ test("historical PR inventories retain their original identities and reviewed sn
   }
 });
 
+test("current inline local-card rendering has exact runtime ownership without test-shell leakage", () => {
+  const config = JSON.parse(
+    readFileSync(
+      resolve(root, "scripts/npm_feature_scope.current-client.json"),
+      "utf8",
+    ),
+  );
+  const owned = featureOwnedFiles(root, config.scopeId);
+  const fingerprint = seedSourceFingerprint(root, config);
+  for (const file of inlineCardAdditions) {
+    assert(owned.includes(file), `missing current runtime owner: ${file}`);
+    assert(
+      fingerprint.files.includes(file),
+      `missing current runtime fingerprint: ${file}`,
+    );
+    for (const historical of ["pr1-model-npm", "pr2-app-card-ocr-npm"])
+      assert(
+        !featureOwnedFiles(root, historical).includes(file),
+        `historical scope broadened: ${file}`,
+      );
+  }
+  const host = "frontend/app/src/components_shared/LocalAppCards.svelte";
+  assert(
+    !owned.includes(host),
+    "the existing mixed host is not a new dedicated owner",
+  );
+  assert(
+    fingerprint.files.includes(host),
+    "the existing mixed host keeps exact anchored coverage",
+  );
+  for (const file of [
+    "frontend/app/src/utils/localAppCardAnchors.spec.ts",
+    "frontend/app/src/components_shared/LocalAppSourceCardLink.spec.ts",
+    "frontend/app/src/components_shared/LocalAppCardSurface.spec.ts",
+    "frontend/app/src/components_shared/LocalAppCardSurface.spec.shell.svelte",
+  ]) {
+    assert(
+      !owned.includes(file),
+      `tests are not runtime import owners: ${file}`,
+    );
+    assert(
+      !fingerprint.files.includes(file),
+      `test shell leaked into runtime source review: ${file}`,
+    );
+  }
+});
+
+test("inline-card source checkpoint preserves the exact committed predecessor and rejects each changed source drifting", () => {
+  const config = JSON.parse(
+    readFileSync(
+      resolve(root, "scripts/npm_feature_scope.current-client.json"),
+      "utf8",
+    ),
+  );
+  const actual = seedSourceFingerprint(root, config);
+  const previous = beforeInlineCardFingerprint(actual);
+  assert.equal(actual.files.length, 175);
+  assert.equal(featureOwnedFiles(root, config.scopeId).length, 127);
+  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
+  assert.equal(config.seeds.length, 26);
+  assert.equal(previous.files.length, 171);
+  assert.equal(
+    previous.sha256,
+    "92eed8d75292ff2bed66b4b91e12b9b9688bc1c4d3968e558b3990393bf740df",
+  );
+  assert.equal(actual.sha256, inlineCardSourceSha256);
+  assertReviewedSourceFingerprint(previous, config.sourceReview);
+  assertReviewedSourceFingerprint(actual, config.sourceReview);
+  const expected = new Map([
+    [
+      "frontend/app/src/utils/localAppCardAnchors.ts",
+      "713a1feb86f36929ed8ddd61017d7a27e6ff75fdfddd16fecedee9b223fe33ef",
+    ],
+    [
+      "frontend/app/src/components_shared/LocalAppCardAnchor.svelte",
+      "0915dd99e3c6374cf7fa5ea68e4604a71514be741adbf301308a223b4c3bd0bf",
+    ],
+    [
+      "frontend/app/src/components_shared/LocalAppCardSurface.svelte",
+      "a8e3fb4493e39b8fbe4e31182ffd675d14455bb9bbb7bafcaddc5030dab71036",
+    ],
+    [
+      "frontend/app/src/components_shared/LocalAppSourceCardLink.svelte",
+      "06b0f32d7e6185a02d9683ec5bdcf4818321c7329118d97c817cc5b501967090",
+    ],
+    [
+      "frontend/app/src/components/home/ChatMessage.svelte",
+      "88f1dda0b9966747bcc93698116fe5eededc98cb4527c9f37d60d3e1eb7154bf",
+    ],
+    [
+      "frontend/app/src/components_mobile/home/ChatMessage.svelte",
+      "54eb464be34aedbf2f688844665122841b2989d6aca8a1424527a16278734cdc",
+    ],
+    [
+      "frontend/app/src/components_shared/LocalAppCards.svelte",
+      "ba1d846994b4d3a3b2abc9a3895a4cab2db4d10756f27995f61e24d649bde83e",
+    ],
+    [
+      "frontend/app/src/components_shared/PrivateAppDraftFields.svelte",
+      "d96e2057200a574753662533636a41f95c36dbbd6d1d1cfb856871db5fcdef75",
+    ],
+    [
+      "frontend/app/src/utils/privateAppWorkspace.ts",
+      "c15bf3528376d5a48de3f001a68eabb674fe41732419a5261eba8092f5e63334",
+    ],
+  ]);
+  assert.deepEqual(
+    [...expected.keys()].sort(),
+    [...inlineCardAdditions, ...beforeInlineCards.keys()].sort(),
+  );
+  const entries = actual.files.map((file) => [
+    file,
+    readFileSync(resolve(root, file)),
+  ]);
+  const names = new Set(
+    config.seeds.map(
+      (seed) => seed.name ?? seed.location.replace(/^node_modules\//u, ""),
+    ),
+  );
+  const owned = featureOwnedFiles(root, config.scopeId);
+  for (const [file, digest] of expected) {
+    assert(actual.files.includes(file), file);
+    assert.equal(sourceHash(file), digest, file);
+    if (beforeInlineCards.has(file))
+      assert.notEqual(digest, beforeInlineCards.get(file), file);
+    if (owned.includes(file)) {
+      const source = readFileSync(resolve(root, file), "utf8");
+      assertReviewedFeatureImports(source, names);
+      assert.throws(
+        () =>
+          assertReviewedFeatureImports(
+            `${source}\nimport "unreviewed-inline-card-package";\n`,
+            names,
+          ),
+        /no reviewed root/u,
+      );
+    }
+    for (const changed of [
+      entries.filter(([path]) => path !== file),
+      entries.map(([path, bytes]) => [
+        path,
+        path === file
+          ? Buffer.concat([
+              bytes,
+              Buffer.from("\n// unreviewed inline card drift\n"),
+            ])
+          : bytes,
+      ]),
+    ])
+      assert.throws(
+        () =>
+          assertReviewedSourceFingerprint(
+            sourceReviewFingerprintFromBytes(changed),
+            config.sourceReview,
+          ),
+        /source set changed/u,
+      );
+  }
+});
+
 test("current private-app, field-review and browser/native relay families are fingerprinted", () => {
   const config = JSON.parse(
     readFileSync(
@@ -765,8 +984,8 @@ test("main Apps flow, retained local cards and startup completion have an exact 
   );
   assertReviewedSourceFingerprint(previous, config.sourceReview);
   assertReviewedSourceFingerprint(actual, config.sourceReview);
-  assert.equal(featureOwnedFiles(root, config.scopeId).length, 123);
-  assert.equal(actual.files.length, 171);
+  assert.equal(featureOwnedFiles(root, config.scopeId).length, 127);
+  assert.equal(actual.files.length, 175);
   assert.equal(config.seeds.length, 26);
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   assert.equal(
@@ -862,14 +1081,11 @@ test("current encryption, recovery and enum-label owners use existing selectors 
         `frontend/app/src/utils/localAppEncryption${suffix}`,
       ),
     );
-  assert.equal(owned.length, 123);
-  assert.equal(fingerprint.files.length, 171);
+  assert.equal(owned.length, 127);
+  assert.equal(fingerprint.files.length, 175);
   assert.equal(config.seeds.length, 26);
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
-  assert.equal(
-    fingerprint.sha256,
-    "92eed8d75292ff2bed66b4b91e12b9b9688bc1c4d3968e558b3990393bf740df",
-  );
+  assert.equal(fingerprint.sha256, inlineCardSourceSha256);
   assertReviewedSourceFingerprint(fingerprint, config.sourceReview);
 });
 
@@ -880,7 +1096,9 @@ test("upstream wallet spender merge preserves the reviewed mixed-file boundary a
       "utf8",
     ),
   );
-  const actual = seedSourceFingerprint(root, config);
+  const actual = beforeInlineCardFingerprint(
+    seedSourceFingerprint(root, config),
+  );
   const file = "frontend/openchat-client/src/openchat.ts";
   assert.deepEqual([...beforeWalletSpenderMerge.keys()], [file]);
   assert(actual.files.includes(file));
@@ -915,7 +1133,7 @@ test("upstream wallet spender merge preserves the reviewed mixed-file boundary a
   assertReviewedSourceFingerprint(prior, config.sourceReview);
   assertReviewedSourceFingerprint(actual, config.sourceReview);
   assert.equal(actual.files.length, 171);
-  assert.equal(featureOwnedFiles(root, config.scopeId).length, 123);
+  assert.equal(featureOwnedFiles(root, config.scopeId).length, 127);
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   assert.equal(config.seeds.length, 26);
 });
@@ -954,7 +1172,7 @@ test("generic context framing preserves exact prior source identity and existing
   assertReviewedSourceFingerprint(prior, config.sourceReview);
   assertReviewedSourceFingerprint(actual, config.sourceReview);
   assert.equal(actual.files.length, 171);
-  assert.equal(featureOwnedFiles(root, config.scopeId).length, 123);
+  assert.equal(featureOwnedFiles(root, config.scopeId).length, 127);
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   assert.equal(config.seeds.length, 26);
   assert(
@@ -974,7 +1192,7 @@ test("saved-card opt-in and recovery feedback preserve exact prior source identi
     seedSourceFingerprint(root, config),
   );
   assert.equal(actual.files.length, 171);
-  assert.equal(featureOwnedFiles(root, config.scopeId).length, 123);
+  assert.equal(featureOwnedFiles(root, config.scopeId).length, 127);
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   assert.equal(config.seeds.length, 26);
   const expected = new Map([
@@ -994,7 +1212,7 @@ test("saved-card opt-in and recovery feedback preserve exact prior source identi
   assert.deepEqual([...expected.keys()], [...beforeSavedCardUiFix.keys()]);
   for (const [file, digest] of expected) {
     assert(actual.files.includes(file), file);
-    assert.equal(sourceHash(file), digest, file);
+    assert.equal(beforeInlineCardSourceHash(file), digest, file);
     assert.notEqual(digest, beforeSavedCardUiFix.get(file), file);
   }
   const prior = beforeSavedCardUiFixFingerprint(actual);
@@ -1119,8 +1337,8 @@ test("cache hashing responsiveness preserves exact prior source identity and int
   );
   assertReviewedSourceFingerprint(previous, config.sourceReview);
   assertReviewedSourceFingerprint(actual, config.sourceReview);
-  assert.equal(actual.files.length, 171);
-  assert.equal(featureOwnedFiles(root, config.scopeId).length, 123);
+  assert.equal(actual.files.length, 175);
+  assert.equal(featureOwnedFiles(root, config.scopeId).length, 127);
   assert.equal(config.seeds.length, 26);
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   for (const unchanged of [
@@ -1188,7 +1406,7 @@ test("unofficial immutable-asset routing preserves the exact prior source aggreg
   );
   assertReviewedSourceFingerprint(previous, config.sourceReview);
   assertReviewedSourceFingerprint(actual, config.sourceReview);
-  assert.equal(actual.files.length, 171);
+  assert.equal(actual.files.length, 175);
   assert.equal(config.seeds.length, 26);
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   assert(
@@ -1289,8 +1507,8 @@ test("current setup persistence is a dedicated builtin-API consumer with an exac
   const clientPath = "frontend/openchat-client/src/openchat.ts";
   const owned = featureOwnedFiles(root, config.scopeId);
   const fingerprint = seedSourceFingerprint(root, config);
-  assert.equal(owned.length, 123);
-  assert.equal(fingerprint.files.length, 171);
+  assert.equal(owned.length, 127);
+  assert.equal(fingerprint.files.length, 175);
   assert.equal(config.seeds.length, 26);
   assert.equal(
     config.seeds.reduce((count, seed) => count + seed.evidence.length, 0),
@@ -2167,8 +2385,8 @@ test("current upstream merge preserves scoped startup, model and private-app bou
     readFileSync(resolve(root, file), "utf8").replaceAll("\r\n", "\n");
   const hash = (text) => createHash("sha256").update(text).digest("hex");
   const fingerprint = seedSourceFingerprint(root, config);
-  assert.equal(fingerprint.files.length, 171);
-  assert.equal(featureOwnedFiles(root, config.scopeId).length, 123);
+  assert.equal(fingerprint.files.length, 175);
+  assert.equal(featureOwnedFiles(root, config.scopeId).length, 127);
   assert.equal(config.seeds.length, 26);
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   // Preserve the committed merge identity after the separately reviewed Windows

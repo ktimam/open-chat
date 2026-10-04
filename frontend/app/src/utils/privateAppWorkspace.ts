@@ -77,6 +77,11 @@ export type ConnectLocalAppSetup = (
 
 export interface PrivateAppWorkspaceState {
     open: boolean;
+    cardPresentation: "saved" | "source";
+    /** Transient host-only placement intent; never persisted or included in an app handoff. */
+    presentationSource?: LocalAppDraftSourceReference;
+    /** Binds a completed source presentation, including a source-less fallback, to its result. */
+    presentationDraftId?: string;
     account?: string;
     backend?: string;
     setupLoading: boolean;
@@ -90,6 +95,8 @@ export interface PrivateAppWorkspaceState {
     actionId?: string;
     processorReady: boolean;
     busy: boolean;
+    /** Transient editor guard, published so source-card navigation cannot hide an invalid edit. */
+    readonly fieldEditBlocked: boolean;
     phase?: ProposalPhase;
     message: string;
     draft?: LocalDraftView;
@@ -252,8 +259,10 @@ const CARD_CONNECTION_REVIEW_BLOCKED =
 
 const initial = (): PrivateAppWorkspaceState => ({
     open: false,
+    cardPresentation: "saved",
     processorReady: false,
     busy: false,
+    fieldEditBlocked: false,
     setupLoading: false,
     setupStatus: "Setup stays in memory for this session.",
     setupGeneration: 0,
@@ -341,7 +350,7 @@ export class PrivateAppWorkspace {
         this.#nativeDelivery = client.isNativeApp?.() === true;
     }
     #set(patch: Partial<PrivateAppWorkspaceState>) {
-        this.#state = { ...this.#state, ...patch };
+        this.#state = { ...this.#state, ...patch, fieldEditBlocked: this.#fieldEditBlocked };
         this.#rememberActive();
         this.#state.cards = Object.freeze(
             [...this.#cards.keys()].flatMap((id) => {
@@ -394,6 +403,8 @@ export class PrivateAppWorkspace {
         this.#processor = this.#processors.get(draft.target.appId);
         this.#set({
             draft: this.#drafts.get(id),
+            presentationSource: this.#state.cardPresentation === "source" ? card.source : undefined,
+            presentationDraftId: this.#state.cardPresentation === "source" ? id : undefined,
             appId: draft.target.appId,
             actionId: draft.target.actionId,
             editorJson: card.editorJson,
@@ -413,9 +424,11 @@ export class PrivateAppWorkspace {
         return true;
     }
     setFieldEditBlocked(blocked: boolean): void {
+        const changed = this.#fieldEditBlocked !== blocked;
         this.#fieldEditBlocked = blocked;
         if (blocked) this.invalidateReview();
         this.#rememberActive();
+        if (changed) this.#set({});
     }
     setAccount(account: string | undefined, backend?: string): void {
         if (account === this.#account && backend === this.#backend && !this.#setupNeedsRestore)
@@ -804,8 +817,15 @@ export class PrivateAppWorkspace {
             return false;
         }
     }
-    open(): void {
-        this.#set({ open: true });
+    open(cardPresentation: "saved" | "source" = "saved"): void {
+        this.#set({
+            open: true,
+            cardPresentation,
+            presentationSource:
+                cardPresentation === "source" ? this.#state.presentationSource : undefined,
+            presentationDraftId:
+                cardPresentation === "source" ? this.#state.presentationDraftId : undefined,
+        });
     }
     close(): void {
         this.#set({ open: false });
@@ -1397,7 +1417,7 @@ export class PrivateAppWorkspace {
             });
             return "retryable";
         }
-        this.open();
+        this.open("source");
         const selectedAppId = selection.app.id;
         const selectedActionId = selection.action.definition.name;
         let source: LocalAppDraftSourceReference | undefined;
@@ -1407,9 +1427,16 @@ export class PrivateAppWorkspace {
                     ? undefined
                     : snapshotLocalAppDraftSourceReference(options.source);
         } catch {
-            this.#set({ message: "The message reference is invalid. No draft was created." });
+            this.#set({
+                presentationSource: undefined,
+                presentationDraftId: undefined,
+                message: "The message reference is invalid. No draft was created.",
+            });
             return "retryable";
         }
+        // A failed or cancelled new extraction must not present the previously selected card
+        // as the result for this message. Keep the requested source until explicit navigation.
+        this.#set({ presentationSource: source, presentationDraftId: undefined });
         if (source) {
             const existing = [...this.#cards].find(([id, card]) => {
                 const target = this.#drafts.get(id)?.target;
@@ -1567,6 +1594,8 @@ export class PrivateAppWorkspace {
             this.#nativeDelivery = client.isNativeApp?.() === true;
             this.#set({
                 draft,
+                presentationDraftId:
+                    this.#state.cardPresentation === "source" ? draft.id : undefined,
                 editorJson: choiceSession.editorJson,
                 draftManualValues: false,
                 recipient: draft.target.recipient,

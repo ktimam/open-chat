@@ -21,6 +21,9 @@
         dismissLocalAutoProposeSuggestion,
     } from "@utils/localAppChatState";
     import type { LocalAppSuggestion } from "@utils/localAppChatConfiguration";
+    import type { LocalAppCardAnchorSource } from "@utils/localAppCardAnchors";
+    import LocalAppCardAnchor from "@shared_components/LocalAppCardAnchor.svelte";
+    import LocalAppSourceCardLink from "@shared_components/LocalAppSourceCardLink.svelte";
     import {
         PROCESS_WITH_AI_AUDIO_PROMPT,
         PROCESS_WITH_AI_IMAGE_PROMPT,
@@ -88,7 +91,7 @@
         undeletingMessagesStore,
         type UserSummary,
     } from "@client";
-    import { chatIdentifierToString } from "@shared";
+    import { ANON_USER_ID, chatIdentifierToString } from "@shared";
     import { getContext, onDestroy, onMount, tick } from "svelte";
     import { _, locale } from "svelte-i18n";
     import Close from "svelte-material-icons/Close.svelte";
@@ -1032,6 +1035,20 @@
     );
     let isProposal = $derived(msg.content.kind === "proposal_content");
     let isActionCard = $derived(msg.content.kind === "action_card_content");
+    const localCardNamespace = $derived.by(() => {
+        const account = $currentUserIdStore;
+        const backend = client.privateAppStorageBackend?.();
+        return client.clientOnlyApps() && account !== ANON_USER_ID && backend
+            ? { account, backend }
+            : undefined;
+    });
+    const localCardSource = $derived<LocalAppCardAnchorSource>({
+        chatKey: chatIdentifierToString(chatId),
+        chatKind: chatId.kind,
+        messageId: msg.messageId.toString(),
+        messageIndex: msg.messageIndex,
+        ...(threadRootMessageIndex === undefined ? {} : { threadRootMessageIndex }),
+    });
     let isPrize = $derived(msg.content.kind === "prize_content");
     let isP2PSwap = $derived(msg.content.kind === "p2p_swap_content");
     let canEdit = $derived(
@@ -1542,6 +1559,14 @@
                             <TipThumbnail onClick={tipMessage} {canTip} {ledger} {userTips} />
                         {/each}
                     </div>
+                {/if}
+
+                {#if localCardNamespace && !inert && !failed}
+                    <LocalAppCardAnchor namespace={localCardNamespace} source={localCardSource} />
+                    <LocalAppSourceCardLink
+                        namespace={localCardNamespace}
+                        source={localCardSource}
+                    />
                 {/if}
 
                 {#each privateSuggestionList as suggestion (privateSuggestionKey(suggestion))}
