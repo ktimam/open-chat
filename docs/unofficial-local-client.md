@@ -968,14 +968,14 @@ actual artifact; documentation-only changes do not change the packaged source id
 
 | Requirement | Current evidence | Remaining boundary |
 | --- | --- | --- |
-| One fork main; official OpenChat services and unchanged OpenChat backend | Implementation/test checkpoint `6630ae711201983919245aa471100e4f4f857044` is pushed on fork `main`; later documentation-only commits do not change that runtime checkpoint. Integrated official upstream is `319fb436857f35f61e12a9d47bebf6ddb0a72307`; the backend tree exactly matches its `74b32ad8a9f39a5dc60e56461db767f85026039c` tree | No custom canister or OpenChat backend deployment is required. Build026 remains bound to its actual `3b259b2f53c4d7b6bad30d9747bf3554281ca72f` source; it is not relabelled as HEAD |
+| One fork main; official OpenChat services and unchanged OpenChat backend | APK028 is bound to pushed fork-main source `d5674086e08070e96e4955db86f143f2ab424bae`. Integrated official upstream is `319fb436857f35f61e12a9d47bebf6ddb0a72307`; the backend tree still matches its `74b32ad8a9f39a5dc60e56461db767f85026039c` tree | No custom canister or OpenChat backend deployment is required. Later documentation commits do not change APK028's source identity. Build026 web and its earlier runtime results retain their own `3b259b2f53c4d7b6bad30d9747bf3554281ca72f` source identity |
 | Normal Apps UI; no technical setup/import page | Both build026 web layouts passed independent verification. The same profile retained the connected IOU app and three private cards; actual 393-by-851 v1 and mobile-v2 smoke checks passed, and the reopened card fit the phone width and required fresh review | This is startup, restoration and responsive-layout evidence, not model inference or native delivery |
 | Automatic app discovery and explicit connection | Desktop IOU reconnect remains passed, and build026 web retained the connected app. October 4 installed APK normal Apps → IOU Connect → existing IOU sign-in → approved synthetic sheet → one setup share passed. IOU reported setup sent; the APK independently reported Connected. The account and enabled IOU setting in the approved chat survived a normal APK restart | Connection acceptance is not entry delivery, image inference or public provider qualification. No new identity, passkey, canister or entry was created during connection |
-| Encrypted persistent private cards | Both build026 layouts retain their earlier restoration checks. Five desktop local cards restored without approval or automatic resend. October 4 APK normal text Send → IOU Propose produced the synthetic 123.45 USD / 2026-09-27 / You owe card with its Synthetic acceptance Type. After Close, force-stop and normal launch, Apps → Saved cards reopened the same fields and Type with fresh review required. A subsequent post-save restart retained the original import ID, payload and encryption descriptor; recovery again required explicit review and confirmation | The native text test used the app-owned local text processor, not a model or OCR; its expected empty note does not qualify note extraction. UI restoration does not independently inspect at-rest ciphertext |
-| Confirmed encrypted app delivery | Earlier desktop v2 Gemma exact-request review, encrypted handoff, IOU review/save and post-reload sheet readback remain passed. October 4 APK explicit review/confirmation, native pairing, sender-bound IOU consent, local decryption, second review and one Save passed. IOU applied the synthetic Type's 10% fee: 123.45 USD gross, 12.35 fee and 111.10 net. Independent normal sheet readback found exactly one new matching entry. Foregrounding the existing relay without resubmission completed its saved receipt; the APK then showed Saved with send/retry/reopen controls absent | Post-save same-ID deduplication is not yet qualified: its separate restart/retry passed pairing and IOU consent but did not expose a received draft, and the APK later reported an unknown handoff. No second IOU Save occurred; callback diagnosis remains open. Natural Back is unverified, and the exact background scheduling cause is not established. Recipient decryption and the approved account/sheet were checked, but full principal/backend context was not independently pinned |
+| Encrypted persistent private cards | Both build026 layouts retain their earlier restoration checks. Five desktop local cards restored without approval or automatic resend. October 4 native text Send → IOU Propose and restart checks retained the synthetic 123.45 USD / 2026-09-27 / You owe card, its Synthetic acceptance Type, original import ID, payload and encryption descriptor. The in-place APK028 upgrade preserved that card; recovery again required fresh review and explicit confirmation | The native text test used the app-owned local text processor, not a model or OCR; its expected empty note does not qualify note extraction. UI restoration does not independently inspect at-rest ciphertext |
+| Confirmed encrypted app delivery | Earlier desktop delivery and the first native Save retain their artifact-bound evidence. APK028's separately approved same-ID retry passed sender-bound consent, encrypted delivery, IOU decryption and second review: 123.45 USD gross, 2026-09-27, You owe, IOU kind and Synthetic acceptance Type; the Type's 10% fee produced 12.35 fee and 111.10 net. One normal Save returned the earlier-save-accepted replay status. A fresh normal sheet reload remained at 14 visible rows and exactly one matching synthetic entry. Natural Back through IOU → relay Saved → APK Saved completed, and the foreground service then cleaned up | The receiver account/principal/backend-context digest was independently compared with the sender after Save, not independently asserted before sending. The two earlier expired harness attempts remain failed/unqualified; they are not relabelled as passes. This synthetic text delivery test is not model-image, physical-phone or public-provider acceptance |
 | Preserved model features and accurate image proposals | Earlier actual Qwen/Gemma image runs and exact-output IOU normalization remain valid for their tested artifacts. Fresh build026 desktop v2 Gemma proposals passed core fields; a matching heading also selected the existing private Type and its You owe default. Prompts, weights and all-WebGPU settings are unchanged | Fresh normal-UI Qwen acceptance remains pending, with Edge control unavailable. October 4 emulator APK preflight exposed navigator.gpu but default requestAdapter returned null before model loading; its existing host-GPU configuration was not changed. Android Vulkan profile checks also failed, but the exact WebView rejection is not established. No model weights were downloaded, no inference was run, and no CPU/OCR fallback was used. This is not evidence of a phone or model-accuracy regression. Qwen's 1,024-position context limit still applies; inactive expanded-image experiments remain inactive |
-| Separate local APK and account preservation | Both APK026 ABIs passed independent package-aware verification. The x86_64 APK was installed in place without clearing data, and its guarded cold reopen restored the remembered account, normal Chats UI and Kiko row without sign-in, browser or provider UI | Startup restoration does not independently prove principal/provider identity; native delivery has the separate evidence and limits above. ARM physical-phone testing and public provider qualification are deferred, not passed |
-| Scoped source and hosted verification | Exact pushed commit `6630ae711` passed all four frontend jobs and all five scoped security test/compilation jobs, including hosted Android, Windows and Ubuntu. The targeted cache-cancellation suite passed 71 tests. At the later documentation commit `87a9b605d`, scoped run [37188618758](https://github.com/ktimam/open-chat/actions/runs/37188618758) passed its model contracts, Android compilation, Windows/Ubuntu native tests and pinned real-inference test; frontend workflow [37188618749](https://github.com/ktimam/open-chat/actions/runs/37188618749) reported overall success. Build026 retains its separate artifact-bound proofs | Security CI is not clean: the later scoped run failed its npm/Rust advisory gates. IOU commit `577f059` run [37188618011](https://github.com/ktimam/IOU/actions/runs/37188618011) failed dependency audit; its downstream typecheck, coverage, card UI, build and Rust jobs were skipped, not fresh passes. Complete later failure logs were unavailable, so their full finding sets have not been reconciled to prior deferrals. The exact documented Rust findings and [braces local-test-only deferral](releases/npm-feature-advisory-triage.md#october-4-local-test-braces-deferral) remain open/disclosed without scanner suppression. Earlier passes and documentation-only commits do not relabel build026 or qualify an untested later runtime |
+| Separate local APK and account preservation | Both APK028 ABIs passed independent package/source, embedded-asset, native-library, signer, manifest and DEX verification. The x86_64 APK was installed in place without clearing data and retained the existing signed-in account, normal Chats UI, Kiko chat and private card | Account restoration is not a new public passkey-provider qualification. ARM was built and statically verified, not installed on a phone. Physical-phone testing and public provider qualification remain deferred |
+| Scoped source and hosted verification | Exact APK028 source `d5674086e` passed the complete 829-test offline workflow command. Hosted [frontend run 37200327918](https://github.com/ktimam/open-chat/actions/runs/37200327918) passed all four jobs; [scoped run 37200327915](https://github.com/ktimam/open-chat/actions/runs/37200327915) passed all six functional test/compilation jobs. Source-only lifecycle evidence also includes 42 native tests and five Kotlin policy tests with actual Android SDK/AndroidX compilation | Security CI is not clean: the advisory job remains failed, with the existing exact Rust deferrals and [braces local-test-only deferral](releases/npm-feature-advisory-triage.md#october-4-local-test-braces-deferral) disclosed and unsuppressed. Recovered IOU run [37188618011](https://github.com/ktimam/IOU/actions/runs/37188618011) includes additional findings still needing scoped disposition; its downstream typecheck, coverage, card UI, build and Rust jobs were skipped, not fresh passes. Earlier results and later documentation commits do not relabel another artifact or create public-release acceptance |
 
 Optional synthetic-voice accuracy, physical-phone testing, public branding/domain,
 public provider qualification and public publication retain the user's explicit
@@ -1008,8 +1008,9 @@ passed, and the actual Android service compiled against SDK 36 and pinned real
 AndroidX core 1.18.0; only generated R was a fixture. The scoped CI contracts
 passed 340/340. CI now explicitly tests the feature-enabled Rust listeners on
 Windows/Linux and compiles the service rather than relying on unrelated Android
-component tests. Full APK compilation and emulator regression are still separate
-pending gates. No second IOU Save occurred during these source tests.
+component tests. At that source-only checkpoint, full APK compilation and emulator
+regression remained separate pending gates; the APK028 checkpoint below records
+their later outcome. No second IOU Save occurred during those source tests.
 
 The first hosted checkpoint, `a9ddd2ed1`, exposed two incomplete CI inventory
 updates: the collector still capped profiles at eight after the two listener-test
@@ -1020,6 +1021,44 @@ The bounded collector accepts ten profiles and tests rejection at eleven; the
 license binding is refreshed only after confirming all 26 dependency owners,
 39 license package entries, model identity resolutions and lock identity are
 unchanged. No advisory, license obligation or completeness check is waived.
+
+#### October 4: APK028 build and emulator lifecycle acceptance
+
+Both APK028 ABIs use source `d5674086e08070e96e4955db86f143f2ab424bae`,
+tree `4738098e9feaacd91b1284cb1c9f232c7ac7eb7e` and build ID
+`c70f4acd75095751078cac6a3b7fc7e1`. Independent verification covered 6,662 source
+files, 1,795 frozen frontend files, 39 compiled feature-source proofs, exact native
+library packaging and the original package/signing identity. The new nonexported
+dataSync service and its defined lifecycle/command DEX signatures were verified.
+The first verifier rejected an R8 inline frame as ambiguous; its failure and source
+were preserved. The corrected outer-frame parser passed positive/negative fixtures
+before both final artifact checks passed.
+
+| Artifact | SHA-256 | Independent report |
+| --- | --- | --- |
+| [APK028 x86_64](F:/Temp/OpenChat-IOU/native-transport-apk-028/artifacts/openchat-fork-local-test-x86_64.apk) | `44a06e3717870a83f199fbe91430b05533a7ce0db1c7a10a6316ac93762ada7a` | [Report](F:/Temp/OpenChat-IOU/native-transport-apk-028/artifacts/APK028-VERIFIED-x86_64.json), SHA-256 `90c522fbc23fa73468187d1ceb950fdb1a17d48ae0f6317ea6450993401e2d60` |
+| [APK028 ARM](F:/Temp/OpenChat-IOU/native-transport-apk-028/artifacts/openchat-fork-local-test-aarch64.apk) | `173ee712eeabde42ee7949d6e6a39729c0e00ebcc256c86bdada4c0d216c38ad` | [Report](F:/Temp/OpenChat-IOU/native-transport-apk-028/artifacts/APK028-VERIFIED-aarch64.json), SHA-256 `bdeb747907e99dd934188413043076877558fb035e569778ed5780346ca7a9cc` |
+
+The [sanitized emulator acceptance receipt](F:/Temp/OpenChat-IOU/native-auth-callback-20261004/native-post-fix-lifecycle-acceptance.json),
+SHA-256 `d00e4b23bdec178f3bad5dcfca50202a42d807690d99d8b659824a7d7394b69a`,
+records the in-place update, retained account/chat/card, same-ID recovery with fresh
+approval, encrypted IOU delivery, one replayed Save, unchanged bounded visible
+ledger and natural IOU → relay → APK return described in the checklist. Android
+kept the APK at process state 4, unfrozen, with its foreground service active for
+more than 45 seconds while Chrome was foreground; the service count returned to
+zero after completion. This closes those APK028 native lifecycle/delivery gates,
+not model-image accuracy or physical-phone acceptance.
+
+The IOU identity/sheet and public backend context were independently pinned before
+Save; their digest was compared with the sender's descriptor only **after** Save.
+No independent pre-send identity proof is claimed. The accepted attempt used an
+already-authenticated receiver. The earlier background-Chrome diagnostic timeout
+and authentication-return consent expiry remain failed/unqualified observations;
+the latter's reload/return cause is not established. No total-ledger count or
+ledger-row-to-import-ID link is inferred from the bounded readback. Fresh normal-UI
+Qwen acceptance remains pending while Edge control is unresponsive; the emulator's
+null WebGPU adapter supplies no inference result. ARM remains static-only, and
+later documentation commits are not relabelled as APK028's packaged source.
 
 #### October 4: existing hosted advisory evidence recovered
 
@@ -1130,6 +1169,8 @@ The fresh Qwen attempt reached downloaded-cache SHA-256 verification but was
 cancelled when Edge reported the page as backgrounded; Gemma remained selected.
 Qwen inference did not start, so that attempt supplies no new reading-accuracy
 result. The remaining Qwen check must use the normal UI after successful selection,
-without deleting the cache or changing the tested prompt. The native IOU login
-return separately remains unresolved, with narrow diagnostics permission-bound.
-Desktop login success does not prove that native return is fixed.
+without deleting the cache or changing the tested prompt. At that October 3
+checkpoint the native IOU login return remained unresolved. The later APK028
+checkpoint proves post-save native return using an already-authenticated IOU
+receiver; it does not establish the cause of the earlier authentication-return
+timeout or convert desktop login into public-provider proof.
