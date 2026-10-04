@@ -7,6 +7,8 @@ import { nativeAppDelivery, nativeAppPairing } from "./nativeAppDelivery";
 import { localAppDeliveryStatus } from "./localAppRelayDelivery";
 import { identityStateStore, currentUserIdStore } from "@client";
 import LocalAppCards from "../components_shared/LocalAppCards.svelte";
+import { localAppCardAnchors, type LocalAppCardAnchorSource } from "./localAppCardAnchors";
+import type { PrivateAppWorkspaceState } from "./privateAppWorkspace";
 
 vi.mock("@client", async () => {
     const { writable } = await import("svelte/store");
@@ -51,9 +53,21 @@ vi.mock("./localAppRelayDelivery", async () => {
 
 const importId = "s".repeat(43);
 const approvalId = "reviewed-approval";
+let cardPresentation: PrivateAppWorkspaceState["cardPresentation"] = "saved";
+const source: LocalAppCardAnchorSource = {
+    chatKey: "rrkah-fqaaa-aaaaa-aaaaq-cai",
+    chatKind: "direct_chat",
+    messageId: "1",
+    messageIndex: 1,
+};
 const view = (status = "sending") => ({
     open: true,
+    cardPresentation,
+    fieldEditBlocked: false,
+    presentationSource: cardPresentation === "source" ? source : undefined,
+    presentationDraftId: cardPresentation === "source" ? "draft" : undefined,
     account: "synthetic-account",
+    backend: "synthetic-backend",
     processorReady: true,
     busy: status === "sending",
     message: "Synthetic status",
@@ -62,7 +76,7 @@ const view = (status = "sending") => ({
     appUpdates: {},
     disabledAppIds: [],
     cards: [],
-    cardSources: {},
+    cardSources: { draft: source },
     editorJson: '{"value":42}',
     recipient: "Review app account",
     draft: {
@@ -92,11 +106,25 @@ const pairing = {
 };
 let component: ReturnType<typeof mount> | undefined;
 let target: HTMLDivElement;
+let releaseAnchor: (() => void) | undefined;
+const originalScrollIntoView = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "scrollIntoView",
+);
 const state = privateAppWorkspaceState as unknown as { set(value: unknown): void };
 const pair = nativeAppPairing as unknown as { set(value: unknown): void };
 const identity = identityStateStore as unknown as { set(value: unknown): void };
 const account = currentUserIdStore as unknown as { set(value: unknown): void };
 async function render(native = true, privateApps = true) {
+    if (cardPresentation === "source") {
+        const anchor = document.createElement("div");
+        target.append(anchor);
+        releaseAnchor = localAppCardAnchors.register(
+            { account: "synthetic-account", backend: "synthetic-backend" },
+            source,
+            anchor,
+        );
+    }
     component = mount(LocalAppCards, {
         target,
         props: {
@@ -113,6 +141,10 @@ const button = (text: string) =>
     [...target.querySelectorAll("button")].find((node) => node.textContent === text)!;
 beforeEach(() => {
     vi.clearAllMocks();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+        configurable: true,
+        value: vi.fn(),
+    });
     state.set(view());
     pair.set(undefined);
     localAppDeliveryStatus.set(undefined);
@@ -124,10 +156,19 @@ beforeEach(() => {
 afterEach(async () => {
     if (component) await unmount(component);
     component = undefined;
+    releaseAnchor?.();
+    releaseAnchor = undefined;
+    if (originalScrollIntoView)
+        Object.defineProperty(HTMLElement.prototype, "scrollIntoView", originalScrollIntoView);
+    else Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
     target.remove();
 });
 
-describe("native pairing and retry UI", () => {
+describe.each(["saved", "source"] as const)("native pairing and retry UI (%s)", (presentation) => {
+    beforeEach(() => {
+        cardPresentation = presentation;
+        state.set(view());
+    });
     it("shows the exact transient local URL/code only after pairing and requires separate Copy/Open clicks", async () => {
         await render();
         expect(target.textContent).not.toContain(pairing.pairingCode);
