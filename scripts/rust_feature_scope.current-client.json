@@ -13,7 +13,7 @@
     "unresolved": [
       {
         "id": "current-native-owner-review",
-        "description": "Explicit review must cover current model IPC/runtime, original Credential Manager build selection with the browser-auth listener unselected, retained dormant auth protocols, private handoff and app-setup transports, shared schemas/errors, the exact optional native ABI pair, profile features and native build/asset selection before advisory collection can claim complete roots."
+        "description": "Explicit review must cover current model IPC/runtime, original Credential Manager build selection with the browser-auth listener unselected, retained dormant auth protocols, private handoff and app-setup transports with bounded platform retention, shared schemas/errors, the exact optional native ABI pair, profile features including the two nonshipping host listener-test profiles and native build/asset selection before advisory collection can claim complete roots."
       }
     ]
   },
@@ -46,6 +46,13 @@
       "purpose": "Nonshipping host default plugin-library unit tests: cargo test --locked -p tauri-plugin-oc --lib. Protocol tests compile, optional listener and inference features do not."
     },
     {
+      "id": "linux-local-app-handoff-tests",
+      "target": "x86_64-unknown-linux-gnu",
+      "features": ["tauri-plugin-oc/local-app-handoff"],
+      "metadataSha256": null,
+      "purpose": "Nonshipping host listener-library tests: cargo test --locked -p tauri-plugin-oc --lib --features local-app-handoff. Compiles handoff/setup loopback listeners and the generic retention lease with test backends; does not compile Android mobile retention dispatch or qualify the Android foreground service, model inference, installed APK, or public release."
+    },
+    {
       "id": "linux-inference-check",
       "target": "x86_64-unknown-linux-gnu",
       "features": ["open-chat/inference"],
@@ -65,6 +72,13 @@
       "features": [],
       "metadataSha256": null,
       "purpose": "Nonshipping host default plugin-library unit tests: cargo test --locked -p tauri-plugin-oc --lib. Protocol tests compile, optional listener and inference features do not."
+    },
+    {
+      "id": "windows-local-app-handoff-tests",
+      "target": "x86_64-pc-windows-msvc",
+      "features": ["tauri-plugin-oc/local-app-handoff"],
+      "metadataSha256": null,
+      "purpose": "Nonshipping host listener-library tests: cargo test --locked -p tauri-plugin-oc --lib --features local-app-handoff. Compiles handoff/setup loopback listeners and the generic retention lease with test backends; does not compile Android mobile retention dispatch or qualify the Android foreground service, model inference, installed APK, or public release."
     },
     {
       "id": "windows-inference-check",
@@ -91,25 +105,26 @@
     "frontend/tauri-plugin-oc/src/inference.rs": "f7e13738502cd2e35de0afd878f5467a624cb2195565cc612a09b48498aa095f",
     "frontend/tauri-plugin-oc/src/models.rs": "ff0e90d4cc0f5629379967fe6e3fa085c1663432492ab84f08b9998d9bd74a07",
     "frontend/tauri-plugin-oc/src/commands.rs": "008597e87af8234c020a88493ef3e66340da5784e1f5966eaa64f0958fa8afa6",
-    "frontend/tauri-plugin-oc/src/lib.rs": "9e498e0e3c660dc53f30979ca77334225761f9f4b0cc3b21d8dd687f263c0eab",
+    "frontend/tauri-plugin-oc/src/lib.rs": "9d8d096fa79ab4a0b68a3e130c311a1087cfb6be21baddc8bcf7bc412f4383b7",
     "frontend/tauri-plugin-oc/src/error.rs": "4c2471f227f3b47954dcfab294c5e7c1a0a6da4ac7714c02b648f340f44e6b4e",
     "frontend/tauri-plugin-oc/src/desktop.rs": "994fc056e823f943f905b77efb9544cfce737e7bde6fdad06db1aa0d165163b1",
-    "frontend/tauri-plugin-oc/src/mobile.rs": "6490d63cd39c43918338e0dd010d59da27c3ec46f35ca64c97bf8514da2f2877",
+    "frontend/tauri-plugin-oc/src/mobile.rs": "879401578ab6f8bb046be2c9cf481525d348c8553c81961901ce8de087299d46",
     "frontend/tauri-plugin-oc/src/bundle_manager.rs": "d6d534e5a2daec09af940d91a408666361f4ad45e5bfd7f8cc5d7e6d7503446f",
     "frontend/tauri-plugin-oc/src/update_manager.rs": "44072afcb06efca06e4527140b9eba84868f17c9cfba54dc139967c2ef865cac",
     "frontend/tauri-plugin-oc/src/local_browser_auth_protocol.rs": "92369a69e68e2c04cfb0a877d2bef47957863c83a1e3759ad83f36f328d9ef19",
     "frontend/tauri-plugin-oc/src/local_app_handoff_protocol.rs": "c4e85a73d9307178ec7a8c12def42bcba966a8a7099d2e3fb38dca35db6c1aa2",
     "frontend/tauri-plugin-oc/src/local_browser_auth.rs": "6c78debd919b12665553c298f7e70670435a3f2040c31d53b022d2172f64d475",
-    "frontend/tauri-plugin-oc/src/local_app_handoff.rs": "6c8f4f7ecc303bb73b257726871c94d87a9480d0bb4eea940ee86020c668ff52",
+    "frontend/tauri-plugin-oc/src/local_app_handoff.rs": "fc4e9de161f282e1d855cc3de501e0a9433f7b1ff5d16be810715bef6f18f906",
     "frontend/src-tauri/src/lib.rs": "f2b3c4d29956531cfd2f55eb8397a9d0be7ee749a9c5df37fa11dbd8422bfa7d",
     "frontend/src-tauri/src/main.rs": "e5dfab54c7a9843285d54ff5a783c00813cd3f28d1bb2f6982aa348697cbb1c4",
     "frontend/src-tauri/src/navigation.rs": "0ddee2abb8f0eb2fbcf094fcb293d4b28423aab744a6b20319831f2fba9ee4b3",
     "frontend/src-tauri/tauri.localtest.conf.json": "c7a4d7815d48df337d0cecdd1238b7ce8b9e5239bc0b7be43cd80ef3622ba397",
     "scripts/build-unofficial-local-apk.mjs": "0b8e68a771047aa5d9108e46d6f3a1e4a4b20c8ca18591a74d7ba4ed8062b1f6",
     "frontend/tauri-plugin-oc/src/local_app_setup_protocol.rs": "8bdef87fd52e33c5e6670a5057ad687551d3d6c91c16bec902efeaf69c6328a5",
-    "frontend/tauri-plugin-oc/src/local_app_setup.rs": "64aa4438d7766d4b1206ae70e908e889760c7334c9a59ea2a4b6279ae3030ad5",
+    "frontend/tauri-plugin-oc/src/local_app_setup.rs": "7ec5e36c1ac4631a9e62ea43ca25c2eab84a9fe8819f816b0814ad6f953ffb79",
     "frontend/tauri-plugin-oc/permissions/local-app-setup.toml": "e9400500332f244a4ebe35b564aa6fb8308682c882ed3e0d3535f5852b23b5f5",
-    "frontend/unofficialLocalApkProfile.mjs": "8d4bbe828183eab8a5122a7c8af3c6a713f80f510c84691a469fc703679b5676"
+    "frontend/unofficialLocalApkProfile.mjs": "8d4bbe828183eab8a5122a7c8af3c6a713f80f510c84691a469fc703679b5676",
+    "frontend/tauri-plugin-oc/src/local_app_retention.rs": "0caf4b07e4dd87116c4e3a75ff219a10980179e88cc68e8dab1e86d466d02c41"
   },
   "seeds": [
     {
@@ -130,9 +145,11 @@
         "android-arm64-local-webgpu",
         "android-x86_64-local-webgpu",
         "linux-default-tests",
+        "linux-local-app-handoff-tests",
         "linux-inference-check",
         "linux-inference-store-check",
         "windows-default-tests",
+        "windows-local-app-handoff-tests",
         "windows-inference-check",
         "windows-inference-store-check"
       ],
@@ -166,9 +183,11 @@
         "android-arm64-local-webgpu",
         "android-x86_64-local-webgpu",
         "linux-default-tests",
+        "linux-local-app-handoff-tests",
         "linux-inference-check",
         "linux-inference-store-check",
         "windows-default-tests",
+        "windows-local-app-handoff-tests",
         "windows-inference-check",
         "windows-inference-store-check"
       ],
@@ -206,9 +225,11 @@
         "android-arm64-local-webgpu",
         "android-x86_64-local-webgpu",
         "linux-default-tests",
+        "linux-local-app-handoff-tests",
         "linux-inference-check",
         "linux-inference-store-check",
         "windows-default-tests",
+        "windows-local-app-handoff-tests",
         "windows-inference-check",
         "windows-inference-store-check"
       ],
@@ -246,9 +267,11 @@
         "android-arm64-local-webgpu",
         "android-x86_64-local-webgpu",
         "linux-default-tests",
+        "linux-local-app-handoff-tests",
         "linux-inference-check",
         "linux-inference-store-check",
         "windows-default-tests",
+        "windows-local-app-handoff-tests",
         "windows-inference-check",
         "windows-inference-store-check"
       ],
@@ -286,9 +309,11 @@
         "android-arm64-local-webgpu",
         "android-x86_64-local-webgpu",
         "linux-default-tests",
+        "linux-local-app-handoff-tests",
         "linux-inference-check",
         "linux-inference-store-check",
         "windows-default-tests",
+        "windows-local-app-handoff-tests",
         "windows-inference-check",
         "windows-inference-store-check"
       ],
@@ -326,9 +351,11 @@
         "android-arm64-local-webgpu",
         "android-x86_64-local-webgpu",
         "linux-default-tests",
+        "linux-local-app-handoff-tests",
         "linux-inference-check",
         "linux-inference-store-check",
         "windows-default-tests",
+        "windows-local-app-handoff-tests",
         "windows-inference-check",
         "windows-inference-store-check"
       ],
@@ -344,7 +371,7 @@
         },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_setup.rs",
-          "lines": [85]
+          "lines": [105]
         }
       ]
     },
@@ -366,9 +393,11 @@
         "android-arm64-local-webgpu",
         "android-x86_64-local-webgpu",
         "linux-default-tests",
+        "linux-local-app-handoff-tests",
         "linux-inference-check",
         "linux-inference-store-check",
         "windows-default-tests",
+        "windows-local-app-handoff-tests",
         "windows-inference-check",
         "windows-inference-store-check"
       ],
@@ -402,9 +431,11 @@
         "android-arm64-local-webgpu",
         "android-x86_64-local-webgpu",
         "linux-default-tests",
+        "linux-local-app-handoff-tests",
         "linux-inference-check",
         "linux-inference-store-check",
         "windows-default-tests",
+        "windows-local-app-handoff-tests",
         "windows-inference-check",
         "windows-inference-store-check"
       ],
@@ -420,7 +451,7 @@
         },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_setup.rs",
-          "lines": [19]
+          "lines": [20]
         }
       ]
     },
@@ -442,9 +473,11 @@
         "android-arm64-local-webgpu",
         "android-x86_64-local-webgpu",
         "linux-default-tests",
+        "linux-local-app-handoff-tests",
         "linux-inference-check",
         "linux-inference-store-check",
         "windows-default-tests",
+        "windows-local-app-handoff-tests",
         "windows-inference-check",
         "windows-inference-store-check"
       ],
@@ -518,7 +551,10 @@
         "notes": "The exact optional sys 0.1.150 constraint preserves the wrapper 0.1.150 native ABI. It adds no sys default features and is activated only by the four existing host inference profiles, not Android or default tests. This is a manifest compatibility edge, not a new direct FFI call."
       },
       "evidence": [
-        { "path": "frontend/tauri-plugin-oc/Cargo.toml", "lines": [17, 20, 53] }
+        {
+          "path": "frontend/tauri-plugin-oc/Cargo.toml",
+          "lines": [17, 20, 53]
+        }
       ]
     },
     {
@@ -547,7 +583,10 @@
         "notes": "Optional native inference renders model-supplied Jinja templates; this runtime is not in the local Android all-WebGPU builds."
       },
       "evidence": [
-        { "path": "frontend/tauri-plugin-oc/src/inference.rs", "lines": [262] }
+        {
+          "path": "frontend/tauri-plugin-oc/src/inference.rs",
+          "lines": [262]
+        }
       ]
     },
     {
@@ -576,7 +615,10 @@
         "notes": "Optional host model-template compatibility; preserve its exact direct owner, separate from Android WebGPU."
       },
       "evidence": [
-        { "path": "frontend/tauri-plugin-oc/src/inference.rs", "lines": [264] }
+        {
+          "path": "frontend/tauri-plugin-oc/src/inference.rs",
+          "lines": [264]
+        }
       ]
     },
     {
@@ -593,20 +635,25 @@
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "checksum": "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
       },
-      "profiles": ["android-arm64-local-webgpu", "android-x86_64-local-webgpu"],
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu",
+        "linux-local-app-handoff-tests",
+        "windows-local-app-handoff-tests"
+      ],
       "review": {
         "status": "source-traced",
         "basis": "source-call-or-schema",
-        "notes": "The selected handoff/setup listeners use bytes through the existing local-app-handoff feature gate in both APK profiles. The browser-auth listener remains as dormant reviewed source but local-browser-auth is not enabled by any reviewed profile. Default/inference host checks enable none of these listeners; removing the browser feature adds or removes no dependency root because handoff/setup retain this owner."
+        "notes": "The selected handoff/setup listeners use bytes through the existing local-app-handoff feature gate in both APK profiles. The browser-auth listener remains as dormant reviewed source but local-browser-auth is not enabled by any reviewed profile. Default/inference host checks enable none of these listeners; removing the browser feature adds or removes no dependency root because handoff/setup retain this owner. The two explicit nonshipping host listener-test profiles enable this existing feature owner; default and inference host profiles still do not."
       },
       "evidence": [
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff.rs",
-          "lines": [4]
+          "lines": [5]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_setup.rs",
-          "lines": [5]
+          "lines": [6]
         }
       ]
     },
@@ -624,20 +671,25 @@
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "checksum": "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd"
       },
-      "profiles": ["android-arm64-local-webgpu", "android-x86_64-local-webgpu"],
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu",
+        "linux-local-app-handoff-tests",
+        "windows-local-app-handoff-tests"
+      ],
       "review": {
         "status": "source-traced",
         "basis": "source-call-or-schema",
-        "notes": "The selected handoff/setup listeners use getrandom through the existing local-app-handoff feature gate in both APK profiles. The browser-auth listener remains as dormant reviewed source but local-browser-auth is not enabled by any reviewed profile. Default/inference host checks enable none of these listeners; removing the browser feature adds or removes no dependency root because handoff/setup retain this owner."
+        "notes": "The selected handoff/setup listeners use getrandom through the existing local-app-handoff feature gate in both APK profiles. The browser-auth listener remains as dormant reviewed source but local-browser-auth is not enabled by any reviewed profile. Default/inference host checks enable none of these listeners; removing the browser feature adds or removes no dependency root because handoff/setup retain this owner. The two explicit nonshipping host listener-test profiles enable this existing feature owner; default and inference host profiles still do not."
       },
       "evidence": [
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff.rs",
-          "lines": [46]
+          "lines": [66]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_setup.rs",
-          "lines": [84]
+          "lines": [104]
         }
       ]
     },
@@ -655,20 +707,25 @@
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "checksum": "e9f41fd6a08e4d4ec69df65976da761afd5ad5e58a9d4acb46bd1c953a9e3ff2"
       },
-      "profiles": ["android-arm64-local-webgpu", "android-x86_64-local-webgpu"],
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu",
+        "linux-local-app-handoff-tests",
+        "windows-local-app-handoff-tests"
+      ],
       "review": {
         "status": "source-traced",
         "basis": "source-call-or-schema",
-        "notes": "The selected handoff/setup listeners use http-body-util through the existing local-app-handoff feature gate in both APK profiles. The browser-auth listener remains as dormant reviewed source but local-browser-auth is not enabled by any reviewed profile. Default/inference host checks enable none of these listeners; removing the browser feature adds or removes no dependency root because handoff/setup retain this owner."
+        "notes": "The selected handoff/setup listeners use http-body-util through the existing local-app-handoff feature gate in both APK profiles. The browser-auth listener remains as dormant reviewed source but local-browser-auth is not enabled by any reviewed profile. Default/inference host checks enable none of these listeners; removing the browser feature adds or removes no dependency root because handoff/setup retain this owner. The two explicit nonshipping host listener-test profiles enable this existing feature owner; default and inference host profiles still do not."
       },
       "evidence": [
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff.rs",
-          "lines": [5]
+          "lines": [6]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_setup.rs",
-          "lines": [6]
+          "lines": [7]
         }
       ]
     },
@@ -686,20 +743,25 @@
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "checksum": "d22053281f852e11534f5198498373cbb59295120a20771d90f7ed1897490a72"
       },
-      "profiles": ["android-arm64-local-webgpu", "android-x86_64-local-webgpu"],
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu",
+        "linux-local-app-handoff-tests",
+        "windows-local-app-handoff-tests"
+      ],
       "review": {
         "status": "source-traced",
         "basis": "source-call-or-schema",
-        "notes": "The selected handoff/setup listeners use hyper through the existing local-app-handoff feature gate in both APK profiles. The browser-auth listener remains as dormant reviewed source but local-browser-auth is not enabled by any reviewed profile. Default/inference host checks enable none of these listeners; removing the browser feature adds or removes no dependency root because handoff/setup retain this owner."
+        "notes": "The selected handoff/setup listeners use hyper through the existing local-app-handoff feature gate in both APK profiles. The browser-auth listener remains as dormant reviewed source but local-browser-auth is not enabled by any reviewed profile. Default/inference host checks enable none of these listeners; removing the browser feature adds or removes no dependency root because handoff/setup retain this owner. The two explicit nonshipping host listener-test profiles enable this existing feature owner; default and inference host profiles still do not."
       },
       "evidence": [
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff.rs",
-          "lines": [6]
+          "lines": [7]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_setup.rs",
-          "lines": [7]
+          "lines": [8]
         }
       ]
     },
@@ -717,20 +779,25 @@
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "checksum": "96547c2556ec9d12fb1578c4eaf448b04993e7fb79cbaad930a656880a6bdfa0"
       },
-      "profiles": ["android-arm64-local-webgpu", "android-x86_64-local-webgpu"],
+      "profiles": [
+        "android-arm64-local-webgpu",
+        "android-x86_64-local-webgpu",
+        "linux-local-app-handoff-tests",
+        "windows-local-app-handoff-tests"
+      ],
       "review": {
         "status": "source-traced",
         "basis": "source-call-or-schema",
-        "notes": "The selected handoff/setup listeners use hyper-util through the existing local-app-handoff feature gate in both APK profiles. The browser-auth listener remains as dormant reviewed source but local-browser-auth is not enabled by any reviewed profile. Default/inference host checks enable none of these listeners; removing the browser feature adds or removes no dependency root because handoff/setup retain this owner."
+        "notes": "The selected handoff/setup listeners use hyper-util through the existing local-app-handoff feature gate in both APK profiles. The browser-auth listener remains as dormant reviewed source but local-browser-auth is not enabled by any reviewed profile. Default/inference host checks enable none of these listeners; removing the browser feature adds or removes no dependency root because handoff/setup retain this owner. The two explicit nonshipping host listener-test profiles enable this existing feature owner; default and inference host profiles still do not."
       },
       "evidence": [
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff.rs",
-          "lines": [7]
+          "lines": [8]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_setup.rs",
-          "lines": [11]
+          "lines": [12]
         }
       ]
     },
@@ -750,9 +817,11 @@
       },
       "profiles": [
         "linux-default-tests",
+        "linux-local-app-handoff-tests",
         "linux-inference-check",
         "linux-inference-store-check",
         "windows-default-tests",
+        "windows-local-app-handoff-tests",
         "windows-inference-check",
         "windows-inference-store-check"
       ],
@@ -762,7 +831,10 @@
         "notes": "Existing native URL opener is reached by the generic app/browser handoff bridge on hosts. Android uses Tauri mobile dispatch instead."
       },
       "evidence": [
-        { "path": "frontend/tauri-plugin-oc/src/desktop.rs", "lines": [29] }
+        {
+          "path": "frontend/tauri-plugin-oc/src/desktop.rs",
+          "lines": [29]
+        }
       ]
     },
     {
@@ -783,9 +855,11 @@
         "android-arm64-local-webgpu",
         "android-x86_64-local-webgpu",
         "linux-default-tests",
+        "linux-local-app-handoff-tests",
         "linux-inference-check",
         "linux-inference-store-check",
         "windows-default-tests",
+        "windows-local-app-handoff-tests",
         "windows-inference-check",
         "windows-inference-store-check"
       ],
@@ -795,7 +869,10 @@
         "notes": "The shared Result returned by the native URL/IPC bridge contains this derived error schema; all nested external error types are retained."
       },
       "evidence": [
-        { "path": "frontend/tauri-plugin-oc/src/error.rs", "lines": [5] }
+        {
+          "path": "frontend/tauri-plugin-oc/src/error.rs",
+          "lines": [5]
+        }
       ]
     },
     {
@@ -816,9 +893,11 @@
         "android-arm64-local-webgpu",
         "android-x86_64-local-webgpu",
         "linux-default-tests",
+        "linux-local-app-handoff-tests",
         "linux-inference-check",
         "linux-inference-store-check",
         "windows-default-tests",
+        "windows-local-app-handoff-tests",
         "windows-inference-check",
         "windows-inference-store-check"
       ],
@@ -828,7 +907,10 @@
         "notes": "Nested shared native error variant is part of the bridge Result even on hosts; it is not omitted because its media call sites are outside the feature boundary."
       },
       "evidence": [
-        { "path": "frontend/tauri-plugin-oc/src/error.rs", "lines": [14] }
+        {
+          "path": "frontend/tauri-plugin-oc/src/error.rs",
+          "lines": [14]
+        }
       ]
     },
     {
@@ -849,9 +931,11 @@
         "android-arm64-local-webgpu",
         "android-x86_64-local-webgpu",
         "linux-default-tests",
+        "linux-local-app-handoff-tests",
         "linux-inference-check",
         "linux-inference-store-check",
         "windows-default-tests",
+        "windows-local-app-handoff-tests",
         "windows-inference-check",
         "windows-inference-store-check"
       ],
@@ -885,9 +969,11 @@
         "android-arm64-local-webgpu",
         "android-x86_64-local-webgpu",
         "linux-default-tests",
+        "linux-local-app-handoff-tests",
         "linux-inference-check",
         "linux-inference-store-check",
         "windows-default-tests",
+        "windows-local-app-handoff-tests",
         "windows-inference-check",
         "windows-inference-store-check"
       ],
@@ -921,9 +1007,11 @@
         "android-arm64-local-webgpu",
         "android-x86_64-local-webgpu",
         "linux-default-tests",
+        "linux-local-app-handoff-tests",
         "linux-inference-check",
         "linux-inference-store-check",
         "windows-default-tests",
+        "windows-local-app-handoff-tests",
         "windows-inference-check",
         "windows-inference-store-check"
       ],
@@ -967,7 +1055,10 @@
         "notes": "The selected open-chat shell instantiates the native plugin and bundled-window navigation. Core notification/deep-link behavior is not a new feature-owned root."
       },
       "evidence": [
-        { "path": "frontend/src-tauri/src/lib.rs", "lines": [9, 74] }
+        {
+          "path": "frontend/src-tauri/src/lib.rs",
+          "lines": [9, 74]
+        }
       ]
     },
     {
@@ -997,7 +1088,12 @@
         "basis": "source-call-or-schema",
         "notes": "Builds the current shell assets and local-test capabilities; not executed by plugin-only default host library tests."
       },
-      "evidence": [{ "path": "frontend/src-tauri/build.rs", "lines": [5] }]
+      "evidence": [
+        {
+          "path": "frontend/src-tauri/build.rs",
+          "lines": [5]
+        }
+      ]
     }
   ]
 }

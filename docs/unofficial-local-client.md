@@ -981,6 +981,52 @@ Optional synthetic-voice accuracy, physical-phone testing, public branding/domai
 public provider qualification and public publication retain the user's explicit
 deferrals. They must not silently become passing tests or new local-test gates.
 
+#### October 4: native handoff lifecycle diagnosis
+
+A separate, explicitly confirmed same-ID retry reached the already-authenticated
+IOU receiver and its normal connection consent, but no draft arrived. A bounded
+45-second, metadata-only observation saw one `/dispatch` request start with no
+response or failure. Android independently reported the APK as cached and frozen
+(`curProcState=16`, `isFrozen=true`) while Chrome was foreground. Bringing the APK
+to the foreground changed those to `curProcState=2`, `isFrozen=false`, without
+resending or saving. The loopback server is hosted in that APK process and had no
+active Android lifecycle component keeping it runnable during the browser handoff.
+This is a concrete native lifecycle defect, not a model, prompt or OCR failure.
+
+A bounded, local-test-only foreground-service fix has been implemented. Android
+must acknowledge foreground retention before a transfer URL is returned. Setup
+and handoff have independent owners and retain their existing deadlines; terminal
+responses drain before the service is released. Cancellation and service loss
+invalidate native authority without treating a previously dispatched request as
+assuredly recalled. Consent, encryption, recipient and proof checks are unchanged.
+Expired transfers do not restart, and notifications contain no private app data.
+
+The actual-source native harness passed 42/42 tests, including startup refusal,
+pre/post-dispatch service loss, Received-to-Saved cleanup, independent owners,
+expiry and consumed-setup response draining. The five pure Kotlin policy tests
+passed, and the actual Android service compiled against SDK 36 and pinned real
+AndroidX core 1.18.0; only generated R was a fixture. The scoped CI contracts
+passed 340/340. CI now explicitly tests the feature-enabled Rust listeners on
+Windows/Linux and compiles the service rather than relying on unrelated Android
+component tests. Full APK compilation and emulator regression are still separate
+pending gates. No second IOU Save occurred during these source tests.
+
+#### October 4: existing hosted advisory evidence recovered
+
+Subsequent retrieval of the existing scoped run 37188618758 recovered its complete
+report; no new advisory query was run. Its npm finding is exactly braces 3.0.3,
+GHSA-vfj7-8cjw-p6xm, covered by the explicit local-test deferral. Its ten Rust rows
+match the previously documented exact identities: two glib advisory IDs, h2,
+proc-macro-error, rustls, and the five unic packages. The original failed results
+and the report's completeness/freshness limitations remain intact; this is not a
+clean security scan or public-release acceptance.
+
+The existing IOU run 37188618011 also reports ip-address, fast-uri,
+brace-expansion and additional Hono findings. The braces decision does not
+automatically defer the different brace-expansion package or new advisory IDs.
+Those findings still need a scoped disposition; no dependency was upgraded and
+the functional jobs skipped behind that failed audit remain skipped.
+
 ### October 3: build026 and HEAD8ac checkpoint
 
 Build026 is frozen to merged-main source

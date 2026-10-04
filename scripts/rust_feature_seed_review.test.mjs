@@ -85,10 +85,10 @@ test("current-client live source review binds native model/auth/handoff/setup wi
   const { config } = value;
   const result = verifyRustFeatureScopeReview(value);
   assert.equal(config.seeds.length, 26);
-  assert.equal(config.profiles.length, 8);
-  assert.equal(result.reviewedSourceCount, 28);
-  assert.equal(result.reviewedSeedProfileCount, 156);
-  assert.equal(result.reviewedUnitCount, 30);
+  assert.equal(config.profiles.length, 10);
+  assert.equal(result.reviewedSourceCount, 29);
+  assert.equal(result.reviewedSeedProfileCount, 196);
+  assert.equal(result.reviewedUnitCount, 31);
   assert.equal(result.rootCompletenessVerified, true);
   assert.deepEqual(result.completeness, { status: "complete", unresolved: [] });
   for (const field of [
@@ -114,6 +114,7 @@ test("current-client live source review binds native model/auth/handoff/setup wi
     "composition-manifests",
     "plugin-module-and-schema-closure",
     "local-listener-closure",
+    "local-transport-retention",
     "shell-asset-selection",
     "plugin.loopback.hyper",
     "plugin.native.inference",
@@ -131,6 +132,9 @@ test("current-client live source review binds native model/auth/handoff/setup wi
     "frontend/tauri-plugin-oc/src/local_browser_auth.rs",
     "frontend/tauri-plugin-oc/src/local_app_setup_protocol.rs",
     "frontend/tauri-plugin-oc/src/local_app_setup.rs",
+    "frontend/tauri-plugin-oc/src/local_app_retention.rs",
+    "frontend/tauri-plugin-oc/src/mobile.rs",
+    "frontend/tauri-plugin-oc/src/lib.rs",
     "frontend/tauri-plugin-oc/permissions/local-app-setup.toml",
     "scripts/build-unofficial-local-apk.mjs",
     "frontend/unofficialLocalApkProfile.mjs",
@@ -152,7 +156,7 @@ test("current-client live source review binds native model/auth/handoff/setup wi
   }
 });
 
-test("current-client review binds the exact merge parents without changing native dependency owners or auth", () => {
+test("current-client review preserves historical merge provenance without changing native dependency owners or auth", () => {
   const { config, review, sourceBytes } = currentClientFixture();
   assert.equal(
     config.sourceRevision.head,
@@ -184,7 +188,7 @@ test("current-client review binds the exact merge parents without changing nativ
     /no advisory waiver, crate upgrade or profile expansion/u,
   );
   assert.equal(config.seeds.length, 26);
-  assert.equal(config.profiles.length, 8);
+  assert.equal(config.profiles.length, 10);
   const protocol = sourceBytes[
     "frontend/tauri-plugin-oc/src/local_app_handoff_protocol.rs"
   ]
@@ -207,10 +211,90 @@ test("current-client review binds the exact merge parents without changing nativ
     /validate_approved_request\(&request\.approved_request_json\)/u,
   );
   for (const profile of config.profiles)
-    assert.equal(
-      profile.features.includes("open-chat/local-browser-auth"),
-      false,
-    );
+    for (const feature of [
+      "open-chat/local-browser-auth",
+      "tauri-plugin-oc/local-browser-auth",
+    ])
+      assert.equal(profile.features.includes(feature), false);
+});
+
+test("current-client listener host profiles add only default-plugin and existing loopback owners", () => {
+  const { config, review, sourceBytes } = currentClientFixture();
+  const expectedOwners = config.seeds
+    .filter(
+      (seed) =>
+        seed.profiles.includes("linux-default-tests") ||
+        seed.id.startsWith("plugin.loopback."),
+    )
+    .map((seed) => seed.id)
+    .sort();
+  assert.equal(expectedOwners.length, 20);
+  const profiles = [
+    ["linux-local-app-handoff-tests", "x86_64-unknown-linux-gnu"],
+    ["windows-local-app-handoff-tests", "x86_64-pc-windows-msvc"],
+  ];
+  function assertBoundary(value) {
+    for (const [id, target] of profiles) {
+      const profile = value.profiles.find((candidate) => candidate.id === id);
+      assert.equal(profile?.target, target);
+      assert.deepEqual(profile.features, ["tauri-plugin-oc/local-app-handoff"]);
+      assert.equal(profile.metadataSha256, null);
+      assert.deepEqual(
+        value.seeds
+          .filter((seed) => seed.profiles.includes(id))
+          .map((seed) => seed.id)
+          .sort(),
+        expectedOwners,
+      );
+    }
+  }
+  assertBoundary(config);
+  for (const mutate of [
+    (value) =>
+      value.profiles.splice(
+        value.profiles.findIndex((profile) => profile.id === profiles[0][0]),
+        1,
+      ),
+    (value) =>
+      value.profiles
+        .find((profile) => profile.id === profiles[0][0])
+        .features.push("open-chat/inference"),
+    (value) =>
+      value.seeds
+        .find((seed) => seed.id === "app.shell")
+        .profiles.push(profiles[0][0]),
+    (value) =>
+      value.seeds
+        .find((seed) => seed.id === "plugin.loopback.hyper")
+        .profiles.splice(2, 1),
+  ]) {
+    const changed = structuredClone(config);
+    mutate(changed);
+    assert.throws(() => assertBoundary(changed));
+  }
+  const retention = review.units.find(
+    (unit) => unit.id === "local-transport-retention",
+  );
+  assert.equal(retention.disposition, "no-additional-external-owner-edge");
+  assert.deepEqual(retention.seeds, []);
+  assert.deepEqual(retention.profiles, [
+    "android-arm64-local-webgpu",
+    "android-x86_64-local-webgpu",
+    ...profiles.map(([id]) => id),
+  ]);
+  assert.ok(
+    retention.sources.some((source) =>
+      source.path.endsWith("/local_app_retention.rs"),
+    ),
+  );
+  assert.match(
+    sourceBytes["frontend/tauri-plugin-oc/src/lib.rs"].toString("utf8"),
+    /#\[cfg\(feature = "local-app-handoff"\)\]\r?\nmod local_app_retention;/u,
+  );
+  assert.match(
+    sourceBytes["frontend/tauri-plugin-oc/src/mobile.rs"].toString("utf8"),
+    /#\[cfg\(all\(target_os = "android", feature = "local-app-handoff"\)\)\]/u,
+  );
 });
 
 function restoreLockBeforePendingBackendRemoval(cargoLock) {
@@ -311,7 +395,8 @@ test("historical 5ca upstream lock-only merge preserves all conservative native 
     false,
   );
   assert.equal(config.seeds.length, 26);
-  assert.equal(config.profiles.length, 8);
+  // The historical lock closure is unchanged; the current scope adds two host listener profiles.
+  assert.equal(config.profiles.length, 10);
 });
 
 test("historical bb2a merge lock refresh still reverses only backend edges and workspace registration", () => {
@@ -365,8 +450,9 @@ test("historical bb2a merge lock refresh still reverses only backend edges and w
     "97b50c6823b10cee51b418bd3ac1249ea4433a1133a8f2850b5d9e53275f3b45",
   );
   assert.equal(config.seeds.length, 26);
-  assert.equal(config.profiles.length, 8);
-  assert.equal(Object.keys(config.sourceFiles).length, 28);
+  // Retention adds one std-only module, not a dependency or historical lock change.
+  assert.equal(config.profiles.length, 10);
+  assert.equal(Object.keys(config.sourceFiles).length, 29);
   assert(
     config.seeds.every((seed) => !seed.ownerManifest.startsWith("backend/")),
   );

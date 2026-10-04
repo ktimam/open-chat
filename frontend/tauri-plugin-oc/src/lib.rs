@@ -19,6 +19,8 @@ mod local_browser_auth_protocol;
 mod local_app_handoff_protocol;
 mod local_app_setup_protocol;
 #[cfg(feature = "local-app-handoff")]
+mod local_app_retention;
+#[cfg(feature = "local-app-handoff")]
 mod local_app_handoff;
 #[cfg(feature = "local-app-handoff")]
 mod local_app_setup;
@@ -104,9 +106,14 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             #[cfg(feature = "local-browser-auth")]
             app.manage(local_browser_auth::BrowserAuthBridge::default());
             #[cfg(feature = "local-app-handoff")]
-            app.manage(local_app_handoff::LocalAppHandoffBridge::default());
-            #[cfg(feature = "local-app-handoff")]
-            app.manage(local_app_setup::LocalAppSetupBridge::default());
+            {
+                #[cfg(target_os = "android")]
+                let retention = Some(mobile::local_app_retention(app));
+                #[cfg(not(target_os = "android"))]
+                let retention = None;
+                app.manage(local_app_handoff::LocalAppHandoffBridge::with_retention(retention.clone()));
+                app.manage(local_app_setup::LocalAppSetupBridge::with_retention(retention));
+            }
             #[cfg(mobile)]
             let oc = mobile::init(app, api)?;
             #[cfg(desktop)]

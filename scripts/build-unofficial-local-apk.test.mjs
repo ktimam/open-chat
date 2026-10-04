@@ -139,6 +139,122 @@ test("separate manifest keeps original RP metadata but no official App Links or 
     assert.match(manifest, /@string\/local_test_app_name/);
 });
 
+function assertLocalAppServiceBoundary({
+  overlay,
+  pluginManifest,
+  officialManifest,
+  gradle,
+}) {
+  const xml = overlay.replace(/<!--[\s\S]*?-->/g, "");
+  const services = [...xml.matchAll(/<service\s+([^>]+)\/>/g)];
+  assert.equal(services.length, 1);
+  const attributes = Object.fromEntries(
+    [...services[0][1].matchAll(/([\w:]+)="([^"]*)"/g)].map((match) => [
+      match[1],
+      match[2],
+    ]),
+  );
+  assert.equal([...services[0][1].matchAll(/([\w:]+)="([^"]*)"/g)].length, 3);
+  assert.deepEqual(attributes, {
+    "android:name": "com.ocplugin.app.privateapps.LocalAppTransferService",
+    "android:exported": "false",
+    "android:foregroundServiceType": "dataSync",
+  });
+  assert.equal((xml.match(/<service\b/g) ?? []).length, 1);
+  assert.doesNotMatch(
+    xml,
+    /<intent-filter|<receiver|<activity|android:process=|android:permission=/,
+  );
+  assert.deepEqual(
+    [...xml.matchAll(/<uses-permission\s+android:name="([^"]+)"\s*\/>/g)].map(
+      (match) => match[1],
+    ),
+    ["android.permission.FOREGROUND_SERVICE_DATA_SYNC"],
+  );
+  assert.equal((xml.match(/<uses-permission\b/g) ?? []).length, 1);
+  assert.match(
+    pluginManifest,
+    /<uses-permission android:name="android.permission.FOREGROUND_SERVICE"\s*\/>/,
+  );
+  for (const manifest of [pluginManifest, officialManifest]) {
+    assert.doesNotMatch(
+      manifest,
+      /LocalAppTransferService|FOREGROUND_SERVICE_DATA_SYNC|localAppTransport/,
+    );
+  }
+  assert.match(
+    gradle,
+    /if \(System.getenv\("OC_UNOFFICIAL_LOCAL_APK"\) == "true"\) \{\s*sourceSets.getByName\("debug"\).manifest.srcFile\("src\/localAppTransport\/AndroidManifest.xml"\)\s*sourceSets.getByName\("release"\).manifest.srcFile\("src\/localAppTransport\/AndroidManifest.xml"\)\s*\}/,
+  );
+  assert.equal(
+    (gradle.match(/src\/localAppTransport\/AndroidManifest.xml/g) ?? []).length,
+    2,
+  );
+}
+
+function localAppServiceBoundaryFixture() {
+  return {
+    overlay: read(
+      "frontend/tauri-plugin-oc/android/src/localAppTransport/AndroidManifest.xml",
+    ),
+    pluginManifest: read(
+      "frontend/tauri-plugin-oc/android/src/main/AndroidManifest.xml",
+    ),
+    officialManifest: read(
+      "frontend/src-tauri/gen/android/app/src/main/AndroidManifest.xml",
+    ),
+    gradle: read("frontend/tauri-plugin-oc/android/build.gradle.kts"),
+  };
+}
+
+test("private-app dataSync service is nonexported and registered only by the local APK overlay", () => {
+  assertLocalAppServiceBoundary(localAppServiceBoundaryFixture());
+  const officialTauri = read("frontend/src-tauri/tauri.conf.json");
+  assert.doesNotMatch(
+    officialTauri,
+    /local-app-handoff|local-app-setup|localAppTransport/,
+  );
+});
+
+test("local service boundary rejects export, authority expansion and official-build registration", () => {
+  const fixture = localAppServiceBoundaryFixture();
+  for (const [field, before, after] of [
+    ["overlay", 'android:exported="false"', 'android:exported="true"'],
+    [
+      "overlay",
+      'android:foregroundServiceType="dataSync"',
+      'android:foregroundServiceType="dataSync|phoneCall"',
+    ],
+    [
+      "overlay",
+      "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
+      "android.permission.FOREGROUND_SERVICE_SPECIAL_USE",
+    ],
+    [
+      "overlay",
+      "</application>",
+      '<receiver android:name="SyntheticReceiver" /></application>',
+    ],
+    [
+      "gradle",
+      'if (System.getenv("OC_UNOFFICIAL_LOCAL_APK") == "true")',
+      "if (true)",
+    ],
+    [
+      "officialManifest",
+      "</application>",
+      '<service android:name="com.ocplugin.app.privateapps.LocalAppTransferService" /></application>',
+    ],
+  ]) {
+    const changed = {
+      ...fixture,
+      [field]: fixture[field].replace(before, after),
+    };
+    assert.notEqual(changed[field], fixture[field]);
+    assert.throws(() => assertLocalAppServiceBoundary(changed));
+  }
+});
+
 test("Gradle identity is separate; JNI namespace remains stable", () => {
     const gradle = read("frontend/src-tauri/gen/android/app/build.gradle.kts");
     assert.match(gradle, /applicationId = if \(unofficialLocalTest\) localTestApplicationId/);

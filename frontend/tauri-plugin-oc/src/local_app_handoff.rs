@@ -1,12 +1,13 @@
 //! Separate from authentication: a bounded loopback server for one already encrypted, approved draft.
 //! No request logging, outbound requests, cookies, filesystem routes or unauthenticated data GET.
 use crate::local_app_handoff_protocol::*;
+use crate::local_app_retention::{RetentionBackend, RetentionLease};
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full, Limited};
 use hyper::{body::Incoming, header, server::conn::http1, service::service_fn, Method, Request, Response, StatusCode};
 use hyper_util::rt::{TokioIo, TokioTimer};
 use serde::Deserialize;
-use std::{convert::Infallible, net::Ipv4Addr, sync::{Arc, Mutex}, time::{Duration, Instant, SystemTime, UNIX_EPOCH}};
+use std::{convert::Infallible, net::Ipv4Addr, sync::{Arc, Mutex, atomic::{AtomicUsize, Ordering}}, time::{Duration, Instant, SystemTime, UNIX_EPOCH}};
 use tokio::{net::TcpListener, sync::{watch, Mutex as AsyncMutex, Semaphore}};
 
 pub const HTML_ASSET: &str = "local-native-app-handoff.html";
@@ -29,17 +30,36 @@ pub struct BrowserAssets { pub html: Vec<u8>, pub script: Vec<u8> }
 struct Shared {
     attempt: Mutex<Attempt>, host: String, origin: String, html: Bytes, script: Bytes,
     epoch_ms: u64, started: Instant,
+    retention: Arc<RetentionLease>, connections: AtomicUsize,
 }
-impl Shared { fn now(&self) -> u64 { self.epoch_ms.saturating_add(self.started.elapsed().as_millis() as u64) } }
+impl Shared {
+    fn now(&self) -> u64 { self.epoch_ms.saturating_add(self.started.elapsed().as_millis() as u64) }
+    fn retained(&self) -> bool {
+        let active = self.attempt.lock().map(|mut a| a.active(self.now())).unwrap_or(false);
+        if !active || self.retention.active() { return true; }
+        if let Ok(mut attempt) = self.attempt.lock() { if attempt.active(self.now()) { attempt.cancel(); } }
+        false
+    }
+}
+struct ConnectionGuard(Arc<Shared>);
+impl Drop for ConnectionGuard { fn drop(&mut self) { self.0.connections.fetch_sub(1, Ordering::SeqCst); } }
+struct ServerGuard(Arc<Shared>);
+impl Drop for ServerGuard {
+    fn drop(&mut self) {
+        if let Ok(mut attempt) = self.0.attempt.lock() { if attempt.active(self.0.now()) { attempt.cancel(); } }
+        self.0.retention.release();
+    }
+}
 struct Session { id: String, shared: Arc<Shared>, shutdown: watch::Sender<bool> }
 impl Drop for Session {
     fn drop(&mut self) {
         if let Ok(mut attempt) = self.shared.attempt.lock() { attempt.cancel(); }
         let _ = self.shutdown.send(true);
+        self.shared.retention.release();
     }
 }
 #[derive(Default)]
-pub struct LocalAppHandoffBridge { session: AsyncMutex<Option<Session>> }
+pub struct LocalAppHandoffBridge { session: AsyncMutex<Option<Session>>, retention: Option<Arc<dyn RetentionBackend>> }
 
 fn random_hex(bytes: usize) -> Result<String, String> {
     let mut value = vec![0u8; bytes];
@@ -59,6 +79,7 @@ fn pairing_code() -> Result<String, String> {
 }
 
 impl LocalAppHandoffBridge {
+    pub fn with_retention(retention: Option<Arc<dyn RetentionBackend>>) -> Self { Self { session: AsyncMutex::new(None), retention } }
     pub async fn begin(&self, request: BeginRequest, _profile: BundledProfile, assets: BrowserAssets) -> Result<BeginResponse, String> {
         validate_approved_request(&request.approved_request_json)?;
         if assets.html.is_empty() || assets.html.len() > 64 * 1024 || assets.script.is_empty() || assets.script.len() > 1024 * 1024 {
@@ -77,13 +98,20 @@ impl LocalAppHandoffBridge {
         let origin = format!("http://{host}");
         let id = random_hex(16)?;
         let code = pairing_code()?;
+        let started = Instant::now();
         let epoch_ms = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_| "System time is unavailable")?.as_millis() as u64;
         let attempt = Attempt::new(request, id.clone(), &code, epoch_ms)?;
+        // No URL or pairing authority leaves begin until Android acknowledges foreground retention.
+        let retention = RetentionLease::start(self.retention.clone(), "handoff", &id, CLAIM_LIFETIME_MS)?;
+        if !retention.active() || started.elapsed().as_millis() >= CLAIM_LIFETIME_MS as u128 {
+            return Err("Private handoff retention ended before startup".into());
+        }
         let response = BeginResponse { handoff_id: id.clone(), url: format!("{origin}/handoff"), pairing_code: code, claim_expires_at_ms: attempt.claim_expires_at_ms };
-        let shared = Arc::new(Shared { attempt: Mutex::new(attempt), host, origin, html: assets.html.into(), script: assets.script.into(), epoch_ms, started: Instant::now() });
+        let shared = Arc::new(Shared { attempt: Mutex::new(attempt), host, origin, html: assets.html.into(), script: assets.script.into(), epoch_ms, started, retention, connections: AtomicUsize::new(0) });
         let (shutdown, mut cancelled) = watch::channel(false);
         let transport = shared.clone();
         tokio::spawn(async move {
+            let _server = ServerGuard(transport.clone());
             let slots = Arc::new(Semaphore::new(4));
             let mut expiry = tokio::time::interval(Duration::from_millis(250));
             loop {
@@ -91,7 +119,7 @@ impl LocalAppHandoffBridge {
                     _ = cancelled.changed() => break,
                     _ = expiry.tick() => {
                         let now = transport.now();
-                        if transport.attempt.lock().map(|mut a| now >= a.status(now).expires_at_ms).unwrap_or(true) { break; }
+                        if !transport.retained() || transport.attempt.lock().map(|mut a| !a.active(now)).unwrap_or(true) { break; }
                     }
                     accepted = listener.accept() => {
                         let Ok((stream, peer)) = accepted else { break };
@@ -99,7 +127,9 @@ impl LocalAppHandoffBridge {
                         let Ok(permit) = slots.clone().try_acquire_owned() else { continue };
                         let transport = transport.clone();
                         let mut connection_cancelled = cancelled.clone();
+                        transport.connections.fetch_add(1, Ordering::SeqCst);
                         tokio::spawn(async move {
+                            let _connection = ConnectionGuard(transport.clone());
                             let _permit = permit;
                             let service = service_fn(move |request| handle(request, transport.clone()));
                             let mut builder = http1::Builder::new();
@@ -114,6 +144,12 @@ impl LocalAppHandoffBridge {
                     }
                 }
             }
+            // Keep Android retained until terminal HTTP acknowledgments have actually drained.
+            // Each connection is already bounded to five seconds; no new socket is accepted here.
+            let drain_until = Instant::now() + Duration::from_secs(5);
+            while transport.connections.load(Ordering::SeqCst) != 0 && Instant::now() < drain_until {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
         });
         *current = Some(Session { id, shared, shutdown });
         Ok(response)
@@ -121,6 +157,7 @@ impl LocalAppHandoffBridge {
     pub async fn poll(&self, id: &str) -> Result<Status, String> {
         let current = self.session.lock().await;
         let session = current.as_ref().filter(|s| s.id == id).ok_or("Unknown private handoff")?;
+        session.shared.retained();
         let status = session.shared.attempt.lock().map_err(|_| "Private handoff state is unavailable")?.status(session.shared.now());
         Ok(status)
     }
@@ -129,6 +166,7 @@ impl LocalAppHandoffBridge {
         let session = current.as_ref().filter(|s| s.id == id).ok_or("Unknown private handoff")?;
         let result = session.shared.attempt.lock().map_err(|_| "Private handoff state is unavailable")?.cancel();
         let _ = session.shutdown.send(true);
+        session.shared.retention.release();
         Ok(result)
     }
 }
@@ -160,6 +198,7 @@ fn allows_fetch_metadata(method: &Method, path: &str, headers: &hyper::HeaderMap
     }
 }
 async fn handle(request: Request<Incoming>, shared: Arc<Shared>) -> Result<BrowserResponse, Infallible> {
+    if !shared.retained() { return Ok(error(StatusCode::GONE)); }
     let headers = request.headers();
     if request.uri().authority().is_some() || request.uri().query().is_some() ||
         headers.get_all(header::HOST).iter().count() != 1 || headers.get(header::HOST).and_then(|h| h.to_str().ok()) != Some(&shared.host) {
@@ -192,12 +231,21 @@ async fn handle(request: Request<Incoming>, shared: Arc<Shared>) -> Result<Brows
     }
     let Ok(body) = Limited::new(request.into_body(), MAX_POST_BYTES).collect().await else { return Ok(error(StatusCode::PAYLOAD_TOO_LARGE)); };
     let bytes = body.to_bytes();
+    if !shared.retained() { return Ok(error(StatusCode::GONE)); }
     let Ok(mut attempt) = shared.attempt.lock() else { return Ok(error(StatusCode::SERVICE_UNAVAILABLE)); };
     let now = shared.now();
     let result = match path.as_str() {
-        "/claim" => attempt.claim(&bytes, now).and_then(|v| serde_json::to_vec(&v).map_err(|_| "Private response unavailable")),
+        "/claim" => attempt.claim(&bytes, now).and_then(|v| {
+            if !shared.retention.extend(v.expires_at_ms.saturating_sub(shared.now())) {
+                attempt.cancel(); return Err("Private handoff retention ended");
+            }
+            serde_json::to_vec(&v).map_err(|_| "Private response unavailable")
+        }),
         "/status" => parse_strict(&bytes, MAX_POST_BYTES).and_then(|v| attempt.authenticated_status(v, now)).and_then(|v| serde_json::to_vec(&v).map_err(|_| "Private response unavailable")),
-        "/dispatch" => parse_strict(&bytes, MAX_POST_BYTES).and_then(|v| attempt.dispatch(v, now)).and_then(|v| serde_json::to_vec(&v).map_err(|_| "Private response unavailable")),
+        "/dispatch" => parse_strict(&bytes, MAX_POST_BYTES).and_then(|v| attempt.dispatch(v, now)).and_then(|v| {
+            if !shared.retention.active() { attempt.cancel(); return Err("Private handoff retention ended"); }
+            serde_json::to_vec(&v).map_err(|_| "Private response unavailable")
+        }),
         "/result" => parse_strict(&bytes, MAX_POST_BYTES).and_then(|v| attempt.result(v, now)).and_then(|v| serde_json::to_vec(&v).map_err(|_| "Private response unavailable")),
         _ => unreachable!(),
     };
@@ -241,6 +289,99 @@ mod tests {
     fn proof(start: &BeginResponse) -> Value { json!({"version":1,"handoffId":start.handoff_id,"browserProofHex":"11".repeat(32)}) }
     async fn claim(start: &BeginResponse) -> String {
         post(start, "/claim", json!({"version":1,"code":start.pairing_code,"browserProofHex":"11".repeat(32)})).await
+    }
+
+    async fn retained_fixture() -> (LocalAppHandoffBridge, BeginResponse, Arc<crate::local_app_retention::test_support::Platform>) {
+        let platform = Arc::new(crate::local_app_retention::test_support::Platform::default());
+        let bridge = LocalAppHandoffBridge::with_retention(Some(platform.clone()));
+        let start = bridge.begin(BeginRequest { approved_request_json: raw_approved() }, profile(), BrowserAssets { html: vec![1], script: vec![1] }).await.unwrap();
+        (bridge, start, platform)
+    }
+    #[tokio::test]
+    async fn foreground_refusal_never_publishes_a_session() {
+        let platform = Arc::new(crate::local_app_retention::test_support::Platform::default());
+        platform.refuse.store(true, Ordering::SeqCst);
+        let bridge = LocalAppHandoffBridge::with_retention(Some(platform.clone()));
+        assert!(bridge.begin(BeginRequest { approved_request_json: raw_approved() }, profile(), BrowserAssets { html: vec![1], script: vec![1] }).await.is_err());
+        assert!(bridge.session.lock().await.is_none()); assert!(platform.owners.lock().unwrap().is_empty());
+    }
+    #[tokio::test]
+    async fn native_lifecycle_retains_received_and_releases_after_saved_response_without_ui_poll() {
+        let (bridge, start, platform) = retained_fixture().await;
+        assert_eq!(status(&post(&start, "/claim", json!({"version":1,"code":"WRONG","browserProofHex":"11".repeat(32)})).await), 403);
+        assert_eq!(platform.extensions.load(Ordering::SeqCst), 0);
+        assert_eq!(status(&claim(&start).await), 200);
+        assert_eq!(status(&claim(&start).await), 403);
+        assert_eq!(platform.extensions.load(Ordering::SeqCst), 1);
+        let mut request = proof(&start); request["importId"] = json!("A".repeat(43));
+        assert_eq!(status(&post(&start, "/dispatch", request.clone()).await), 200);
+        request["outcome"] = json!("received"); assert_eq!(status(&post(&start, "/result", request.clone()).await), 200);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(platform.owners.lock().unwrap().len(), 1);
+        request["outcome"] = json!("saved");
+        let response = post(&start, "/result", request).await;
+        assert_eq!(status(&response), 200); assert_eq!(body(&response)["phase"], "saved");
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(platform.owners.lock().unwrap().is_empty());
+        assert_eq!(bridge.poll(&start.handoff_id).await.unwrap().phase, Phase::Saved);
+    }
+    #[tokio::test]
+    async fn lost_platform_lease_cancels_native_authority_and_server_exit_releases_owner() {
+        let (bridge, start, platform) = retained_fixture().await;
+        claim(&start).await;
+        platform.owners.lock().unwrap().clear();
+        let result = bridge.poll(&start.handoff_id).await.unwrap();
+        assert_eq!(result.phase, Phase::Cancelled); assert!(!result.delivery_may_have_occurred);
+        let (bridge, start, platform) = retained_fixture().await;
+        claim(&start).await;
+        let mut dispatch = proof(&start); dispatch["importId"] = json!("A".repeat(43));
+        assert_eq!(status(&post(&start, "/dispatch", dispatch.clone()).await), 200);
+        platform.owners.lock().unwrap().clear();
+        let result = bridge.poll(&start.handoff_id).await.unwrap();
+        assert_eq!(result.phase, Phase::Cancelled);
+        assert!(result.delivery_may_have_occurred); // Loss after dispatch is not assured recall.
+        let shared = bridge.session.lock().await.as_ref().unwrap().shared.clone();
+        assert!(shared.attempt.lock().unwrap().dispatch(serde_json::from_value(dispatch).unwrap(), shared.now()).is_err());
+        assert!(!shared.retention.extend(600_000));
+        assert_eq!(platform.extensions.load(Ordering::SeqCst), 1);
+        let (bridge, start, platform) = retained_fixture().await;
+        let shared = bridge.session.lock().await.as_ref().unwrap().shared.clone();
+        drop(ServerGuard(shared));
+        assert!(platform.owners.lock().unwrap().is_empty());
+        assert_eq!(bridge.poll(&start.handoff_id).await.unwrap().phase, Phase::Cancelled);
+    }
+    #[tokio::test]
+    async fn expiry_without_ui_poll_releases_and_stale_owner_drop_preserves_replacement() {
+        let (bridge, start, platform) = retained_fixture().await;
+        let old = bridge.session.lock().await.as_ref().unwrap().shared.clone();
+        old.attempt.lock().unwrap().status(u64::MAX);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(platform.owners.lock().unwrap().is_empty());
+        let next = bridge.begin(BeginRequest { approved_request_json: raw_approved() }, profile(), BrowserAssets { html: vec![1], script: vec![1] }).await.unwrap();
+        drop(ServerGuard(old));
+        assert_ne!(next.handoff_id, start.handoff_id);
+        assert_eq!(platform.owners.lock().unwrap().len(), 1);
+        assert_eq!(bridge.poll(&next.handoff_id).await.unwrap().phase, Phase::AwaitingClaim);
+    }
+    #[tokio::test]
+    async fn rejected_uncertain_and_bad_claim_terminal_paths_release_without_ui_poll() {
+        for (outcome, expected) in [("rejected", Phase::Rejected), ("uncertain", Phase::Uncertain)] {
+            let (bridge, start, platform) = retained_fixture().await;
+            claim(&start).await;
+            let mut request = proof(&start); request["importId"] = json!("A".repeat(43));
+            if outcome == "rejected" { assert_eq!(status(&post(&start, "/dispatch", request.clone()).await), 200); }
+            request["outcome"] = json!(outcome);
+            assert_eq!(status(&post(&start, "/result", request).await), 200);
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            assert!(platform.owners.lock().unwrap().is_empty());
+            assert_eq!(bridge.poll(&start.handoff_id).await.unwrap().phase, expected);
+        }
+        let (bridge, start, platform) = retained_fixture().await;
+        for _ in 0..5 { assert_eq!(status(&post(&start, "/claim", json!({"version":1,"code":"WRONG","browserProofHex":"11".repeat(32)})).await), 403); }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(platform.owners.lock().unwrap().is_empty());
+        assert_eq!(platform.extensions.load(Ordering::SeqCst), 0);
+        assert_eq!(bridge.poll(&start.handoff_id).await.unwrap().phase, Phase::Expired);
     }
 
     #[tokio::test]

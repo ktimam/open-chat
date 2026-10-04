@@ -1474,3 +1474,152 @@ test("Android component identity compiles actual sources against host fixtures a
     assert.ok(triggers(path), `component CI not triggered by ${path}`);
   }
 });
+
+function assertLocalAppLifecycleCoverage(text, runner) {
+  const events = mappingBlock(text, "on", 0);
+  for (const event of ["pull_request", "push", "merge_group"]) {
+    assert.match(
+      mappingBlock(events, event, 2),
+      /^ {4}branches: \[main\]\r?$/mu,
+    );
+  }
+  assert.doesNotMatch(events, /^ {4}(?:paths|paths-ignore|types):/mu);
+  const jobs = mappingBlock(text, "jobs", 0);
+  const job = mappingBlock(jobs, "android-local-app-lifecycle", 2);
+  assert.match(job, /^ {4}runs-on: ubuntu-24\.04\r?$/mu);
+  assert.match(job, /^ {4}timeout-minutes: 15\r?$/mu);
+  assert.match(job, /java-version: "21"/u);
+  assert.match(job, /node-version: "24\.18\.1"/u);
+  assert.match(job, /^ {10}packages: platform-tools\r?$/mu);
+  assert.match(job, /^ {8}run: sdkmanager "platforms;android-36"\r?$/mu);
+  assert.doesNotMatch(
+    job,
+    /^\s*(?:if|needs|continue-on-error):|\|\|\s*true|secrets\./mu,
+  );
+  for (const command of [
+    "node --test scripts/android_component_identity_tools.test.mjs scripts/model_ci_coverage.test.mjs",
+    'node scripts/android_component_identity_tools.mjs --output-directory "$env:RUNNER_TEMP/openchat-lifecycle-tools"',
+    "& ./frontend/tauri-plugin-oc/android/local-app-lifecycle-tests/run.ps1",
+    "-JavaHome $env:JAVA_HOME",
+    "-KotlinCompilerClasspath $tools.compilerClasspath",
+    "-KotlinRuntimeClasspath $tools.runtimeClasspath",
+    "-JUnitClasspath $tools.junitClasspath",
+    '-AndroidJar "$env:ANDROID_HOME/platforms/android-36/android.jar"',
+    "-DownloadAndroidXCore",
+    '-OutputDirectory "$env:RUNNER_TEMP/openchat-lifecycle-classes"',
+  ])
+    assert.ok(job.includes(command), command);
+  assert.match(job, /^ {12}-DownloadAndroidXCore `\r?$/mu);
+  assert.equal(
+    [...job.matchAll(/if \(\$LASTEXITCODE -ne 0\) \{ throw /gu)].length,
+    2,
+  );
+  assert.match(runner, /^\$ErrorActionPreference = 'Stop'\r?$/mu);
+  assert.match(runner, /if \(Test-Path -LiteralPath \$output\) \{ throw/u);
+  for (const source of [
+    "../src/main/java/privateapps/LocalAppLeasePolicy.kt",
+    "../src/main/java/privateapps/LocalAppTransferService.kt",
+    "../src/main/java/LocalTestPolicy.kt",
+    "../src/test/java/privateapps/LocalAppLeasePolicyTest.kt",
+  ])
+    assert.ok(runner.includes(source), source);
+  assert.match(
+    runner,
+    /^& \$java [^\r\n]+K2JVMCompiler [^\r\n]+-d \$hostOutput \$policy \$policyTest\r?$/mu,
+  );
+  assert.match(
+    runner,
+    /^& \$java [^\r\n]+org\.junit\.runner\.JUnitCore com\.ocplugin\.app\.privateapps\.LocalAppLeasePolicyTest\r?$/mu,
+  );
+  assert.match(
+    runner,
+    /^& \$java [^\r\n]+K2JVMCompiler [^\r\n]+\$AndroidJar\$separator\$coreClasses" -d \$sdkOutput \$policy \$service \$localTestPolicy \$generatedResource\r?$/mu,
+  );
+  assert.equal(
+    [...runner.matchAll(/^if \(\$LASTEXITCODE -ne 0\) \{ throw /gmu)].length,
+    3,
+  );
+  assert.match(runner, /-MaximumRedirection 0/u);
+  assert.match(
+    runner,
+    /311d83ac67d394076ec21d12ed2d10a44b59cb2929b7dce00e5a90a93842e37d/u,
+  );
+  assert.match(
+    runner,
+    /d1f5a319a77555df7e23858ffb5ed45a95ebb4263fa1ab7a993510ceb53555a0/u,
+  );
+  assert.match(runner, /\$coreBytes = 1364590/u);
+  assert.match(runner, /\$entries\[0\]\.Length -ne 1383395/u);
+  assert.doesNotMatch(
+    runner,
+    /Expand-Archive|androidx[\\/]core[\\/]app|android[\\/]app[\\/]Service\.kt/u,
+  );
+  const native = mappingBlock(jobs, "native-hermetic", 2);
+  assert.match(native, /^ {8}os: \[ubuntu-24\.04, windows-2022\]\r?$/mu);
+  assert.match(
+    native,
+    /^ {8}run: cargo test --locked -p tauri-plugin-oc --lib --features local-app-handoff\r?$/mu,
+  );
+  const nativeSteps = mappingBlock(native, "steps", 4)
+    .split(/^ {6}- /mu)
+    .slice(1);
+  const localTests = nativeSteps.filter((step) =>
+    step.includes("--features local-app-handoff"),
+  );
+  assert.equal(localTests.length, 1);
+  assert.doesNotMatch(localTests[0], /^ {8}(?:if|continue-on-error):/mu);
+}
+
+test("current-client CI executes private-app lease tests, actual SDK service compilation and feature-gated Rust listeners", () => {
+  const current = read(".github/workflows/unofficial_client_security.yaml");
+  const runner = read(
+    "frontend/tauri-plugin-oc/android/local-app-lifecycle-tests/run.ps1",
+  );
+  assertLocalAppLifecycleCoverage(current, runner);
+  const fixtures = sourceFiles(
+    "tauri-plugin-oc/android/local-app-lifecycle-tests/src",
+  );
+  assert.deepEqual(
+    fixtures.map((path) => path.replaceAll("\\", "/").split("/src/").at(-1)),
+    ["com/ocplugin/app/R.kt"],
+  );
+});
+
+test("lifecycle coverage rejects omitted tests, fake service compilation and ignored failures", () => {
+  const current = read(".github/workflows/unofficial_client_security.yaml");
+  const runner = read(
+    "frontend/tauri-plugin-oc/android/local-app-lifecycle-tests/run.ps1",
+  );
+  for (const mutant of [
+    current.replace("-DownloadAndroidXCore", "# -DownloadAndroidXCore omitted"),
+    current.replace(
+      "run: cargo test --locked -p tauri-plugin-oc --lib --features local-app-handoff",
+      "run: cargo test --locked -p tauri-plugin-oc --lib",
+    ),
+    current.replace(
+      "name: Android private-app lease tests and real service SDK compilation",
+      "name: Android private-app lease tests and real service SDK compilation\n    continue-on-error: true",
+    ),
+  ]) {
+    assert.notEqual(mutant, current);
+    assert.throws(() => assertLocalAppLifecycleCoverage(mutant, runner));
+  }
+  for (const mutant of [
+    runner.replace(
+      "org.junit.runner.JUnitCore com.ocplugin.app.privateapps.LocalAppLeasePolicyTest",
+      "org.junit.runner.JUnitCore fixtures.UnrelatedTest",
+    ),
+    runner.replace(
+      "-d $sdkOutput $policy $service $localTestPolicy $generatedResource",
+      "-d $sdkOutput $policy $localTestPolicy $generatedResource",
+    ),
+    runner.replace(
+      "if ($LASTEXITCODE -ne 0) { throw 'Private-app lease policy tests failed.' }",
+      "# ignored test failure",
+    ),
+    runner.replace("-MaximumRedirection 0", "-MaximumRedirection 5"),
+  ]) {
+    assert.notEqual(mutant, runner);
+    assert.throws(() => assertLocalAppLifecycleCoverage(current, mutant));
+  }
+});

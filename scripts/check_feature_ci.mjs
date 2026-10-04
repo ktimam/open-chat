@@ -1146,6 +1146,50 @@ export const CURRENT_CLIENT_LICENSE_COMMAND = [
 export const CURRENT_CLIENT_FORMAT_BASE_EXPRESSION =
   "319fb436857f35f61e12a9d47bebf6ddb0a72307";
 
+const CURRENT_LOCAL_APP_LIFECYCLE_JOB = [
+  "    name: Android private-app lease tests and real service SDK compilation",
+  "    runs-on: ubuntu-24.04",
+  "    timeout-minutes: 15",
+  "    steps:",
+  "      - name: Check out source",
+  "        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4",
+  "      - name: Set up Node",
+  "        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4",
+  "        with:",
+  '          node-version: "24.18.1"',
+  "      - name: Check lifecycle runner coverage offline",
+  "        run: node --test scripts/android_component_identity_tools.test.mjs scripts/model_ci_coverage.test.mjs",
+  "      - name: Set up Java",
+  "        uses: actions/setup-java@v4",
+  "        with:",
+  "          distribution: temurin",
+  '          java-version: "21"',
+  "      - name: Set up Android SDK",
+  "        uses: android-actions/setup-android@v3",
+  "        with:",
+  "          packages: platform-tools",
+  "      - name: Install the Android API used by the service",
+  '        run: sdkmanager "platforms;android-36"',
+  "      - name: Run lease policy tests and compile the actual service with real AndroidX",
+  "        shell: pwsh",
+  "        run: |",
+  "          $ErrorActionPreference = 'Stop'",
+  '          $toolsJson = & node scripts/android_component_identity_tools.mjs --output-directory "$env:RUNNER_TEMP/openchat-lifecycle-tools"',
+  "          if ($LASTEXITCODE -ne 0) { throw 'Pinned lifecycle test tool resolution failed.' }",
+  "          $tools = $toolsJson | ConvertFrom-Json",
+  "          & ./frontend/tauri-plugin-oc/android/local-app-lifecycle-tests/run.ps1 `",
+  "            -JavaHome $env:JAVA_HOME `",
+  "            -KotlinCompilerClasspath $tools.compilerClasspath `",
+  "            -KotlinRuntimeClasspath $tools.runtimeClasspath `",
+  "            -JUnitClasspath $tools.junitClasspath `",
+  '            -AndroidJar "$env:ANDROID_HOME/platforms/android-36/android.jar" `',
+  "            -DownloadAndroidXCore `",
+  '            -OutputDirectory "$env:RUNNER_TEMP/openchat-lifecycle-classes"',
+  "          if ($LASTEXITCODE -ne 0) { throw 'Private-app lifecycle contracts failed.' }",
+  "        # Actual policy tests and service compilation; only generated R is a fixture.",
+  "        # This is not Android runtime, notification, background-freeze or APK evidence.",
+].join("\n");
+
 /** Offline wiring only: this does not collect dependencies, query advisories, or accept a release. */
 export function checkCurrentClientSecurityCi({
   securityText,
@@ -1182,6 +1226,7 @@ export function checkCurrentClientSecurityCi({
     [
       "dependency-security",
       "android-component-contracts",
+      "android-local-app-lifecycle",
       "frontend-contracts",
     ],
     ["dependency-security", "frontend-contracts"],
@@ -1194,8 +1239,17 @@ export function checkCurrentClientSecurityCi({
   ];
   assert.deepEqual(
     [...inventory.keys()].sort(),
-    ["dependency-security", ...preservedJobs].sort(),
+    [
+      "dependency-security",
+      "android-local-app-lifecycle",
+      ...preservedJobs,
+    ].sort(),
     "Current security workflow must retain every reviewed model job",
+  );
+  assert.equal(
+    inventory.get("android-local-app-lifecycle").trim(),
+    CURRENT_LOCAL_APP_LIFECYCLE_JOB.trim(),
+    "Require the exact reviewed native private-app lifecycle job",
   );
   const historicalJobs = jobs(legacy);
   for (const name of preservedJobs) {
@@ -1218,6 +1272,16 @@ export function checkCurrentClientSecurityCi({
           "\n          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }",
       );
       expectedJob = expectedJob.replace(windowsSteps[0], guardedStep);
+      const defaultTestStep =
+        "      - name: Run downloader, store and boundary unit tests\n" +
+        "        run: cargo test --locked -p tauri-plugin-oc --lib\n";
+      assert.equal(expectedJob.split(defaultTestStep).length, 2);
+      expectedJob = expectedJob.replace(
+        defaultTestStep,
+        defaultTestStep +
+          "      - name: Run approved local app listener and retention lifecycle tests\n" +
+          "        run: cargo test --locked -p tauri-plugin-oc --lib --features local-app-handoff\n",
+      );
     }
     assert.equal(
       inventory.get(name).trim(),
@@ -1387,7 +1451,11 @@ export function checkCurrentClientSecurityCi({
     runtimeChecked: ci,
     nodeVersion: FEATURE_CI_NODE_VERSION,
     preservedModelJobs: preservedJobs,
-    modelJobStrengthenings: ["native-hermetic-windows-per-command-exit-checks"],
+    modelJobStrengthenings: [
+      "native-hermetic-windows-per-command-exit-checks",
+      "native-hermetic-local-app-handoff-feature-tests",
+    ],
+    addedFeatureJobs: ["android-local-app-lifecycle"],
     advisoryQueriesExecuted: false,
     advisoryAcceptance: false,
     dependencyCollectionExecuted: false,

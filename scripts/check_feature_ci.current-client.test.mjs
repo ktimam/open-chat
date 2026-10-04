@@ -34,7 +34,9 @@ test("current main workflow preserves complete model jobs and remains structural
   ]);
   assert.deepEqual(result.modelJobStrengthenings, [
     "native-hermetic-windows-per-command-exit-checks",
+    "native-hermetic-local-app-handoff-feature-tests",
   ]);
+  assert.deepEqual(result.addedFeatureJobs, ["android-local-app-lifecycle"]);
   for (const key of [
     "advisoryQueriesExecuted",
     "advisoryAcceptance",
@@ -53,6 +55,39 @@ test("current main workflow preserves complete model jobs and remains structural
     () => check(undefined, { ci: true, runtime: "24.14.1" }),
     /runtime pin/,
   );
+});
+
+test("current lifecycle policy rejects missing, conditional or substituted native coverage", () => {
+  const lifecycleStart = original.indexOf("  android-local-app-lifecycle:");
+  const nativeStart = original.indexOf("  native-hermetic:", lifecycleStart);
+  assert.ok(lifecycleStart > 0 && nativeStart > lifecycleStart);
+  for (const mutant of [
+    original.slice(0, lifecycleStart) + original.slice(nativeStart),
+    original.replace(
+      "  android-local-app-lifecycle:\n",
+      "  android-local-app-lifecycle:\n    if: false\n",
+    ),
+    original.replace("-DownloadAndroidXCore", "-UseAndroidXStubs"),
+    original.replace(
+      "local-app-lifecycle-tests/run.ps1",
+      "component-identity-tests/run.ps1",
+    ),
+    original.replace(
+      "$env:RUNNER_TEMP/openchat-lifecycle-classes",
+      "$env:RUNNER_TEMP/openchat-component-classes",
+    ),
+    original.replace(
+      "run: cargo test --locked -p tauri-plugin-oc --lib --features local-app-handoff",
+      "run: cargo test --locked -p tauri-plugin-oc --lib",
+    ),
+    original.replace(
+      "      - name: Run approved local app listener and retention lifecycle tests\n",
+      "      - name: Run approved local app listener and retention lifecycle tests\n        if: false\n",
+    ),
+  ]) {
+    assert.notEqual(mutant, original);
+    assert.throws(() => check(mutant));
+  }
 });
 
 test("current-client collectors remain explicit, scoped and ordered behind offline validation", () => {

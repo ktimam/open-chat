@@ -2,6 +2,7 @@
 //! file routes or persistence. Only the bundled local-test main window may own a session.
 use crate::local_app_handoff_protocol::parse_strict;
 use crate::local_app_setup_protocol::*;
+use crate::local_app_retention::{RetentionBackend, RetentionLease};
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full, Limited};
 use hyper::{
@@ -13,7 +14,7 @@ use serde::Deserialize;
 use std::{
     convert::Infallible,
     net::Ipv4Addr,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, atomic::{AtomicUsize, Ordering}},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
@@ -55,11 +56,28 @@ struct Shared {
     script: Bytes,
     epoch_ms: u64,
     started: Instant,
+    retention: Arc<RetentionLease>,
+    connections: AtomicUsize,
 }
 impl Shared {
     fn now(&self) -> u64 {
         self.epoch_ms
             .saturating_add(self.started.elapsed().as_millis() as u64)
+    }
+    fn retained(&self) -> bool {
+        let active = self.attempt.lock().map(|mut a| a.active(self.now())).unwrap_or(false);
+        if !active || self.retention.active() { return true; }
+        if let Ok(mut attempt) = self.attempt.lock() { if attempt.active(self.now()) { attempt.cancel(); } }
+        false
+    }
+}
+struct ConnectionGuard(Arc<Shared>);
+impl Drop for ConnectionGuard { fn drop(&mut self) { self.0.connections.fetch_sub(1, Ordering::SeqCst); } }
+struct ServerGuard(Arc<Shared>);
+impl Drop for ServerGuard {
+    fn drop(&mut self) {
+        if let Ok(mut attempt) = self.0.attempt.lock() { if attempt.active(self.0.now()) { attempt.cancel(); } }
+        self.0.retention.release();
     }
 }
 struct Session {
@@ -73,11 +91,13 @@ impl Drop for Session {
             attempt.cancel();
         }
         let _ = self.shutdown.send(true);
+        self.shared.retention.release();
     }
 }
 #[derive(Default)]
 pub struct LocalAppSetupBridge {
     session: AsyncMutex<Option<Session>>,
+    retention: Option<Arc<dyn RetentionBackend>>,
 }
 fn random_hex(bytes: usize) -> Result<String, String> {
     let mut value = vec![0u8; bytes];
@@ -85,6 +105,7 @@ fn random_hex(bytes: usize) -> Result<String, String> {
     Ok(hex::encode(value))
 }
 impl LocalAppSetupBridge {
+    pub fn with_retention(retention: Option<Arc<dyn RetentionBackend>>) -> Self { Self { session: AsyncMutex::new(None), retention } }
     pub async fn begin(
         &self,
         request: BeginRequest,
@@ -128,11 +149,16 @@ impl LocalAppSetupBridge {
         let id = random_hex(16)?;
         let bootstrap = random_hex(32)?;
         let proof = random_hex(32)?;
+        let started = Instant::now();
         let epoch_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|_| "System time is unavailable")?
             .as_millis() as u64;
         let attempt = Attempt::new(request, id.clone(), &bootstrap, proof, epoch_ms)?;
+        let retention = RetentionLease::start(self.retention.clone(), "setup", &id, SETUP_LIFETIME_MS)?;
+        if !retention.active() || started.elapsed().as_millis() >= SETUP_LIFETIME_MS as u128 {
+            return Err("App setup retention ended before startup".into());
+        }
         let response = BeginResponse {
             setup_id: id.clone(),
             // Fragment only: never an HTTP request/query/referrer. The bundled page removes it
@@ -147,25 +173,30 @@ impl LocalAppSetupBridge {
             html: assets.html.into(),
             script: assets.script.into(),
             epoch_ms,
-            started: Instant::now(),
+            started,
+            retention,
+            connections: AtomicUsize::new(0),
         });
         let (shutdown, mut cancelled) = watch::channel(false);
         let transport = shared.clone();
         tokio::spawn(async move {
+            let _server = ServerGuard(transport.clone());
             let slots = Arc::new(Semaphore::new(4));
             let mut expiry = tokio::time::interval(Duration::from_millis(250));
             loop {
                 tokio::select! {
                     _ = cancelled.changed() => break,
                     _ = expiry.tick() => {
-                        if transport.attempt.lock().map(|mut a| matches!(a.phase(transport.now()), Phase::Expired | Phase::Cancelled)).unwrap_or(true) { break; }
+                        if !transport.retained() || transport.attempt.lock().map(|mut a| !a.active(transport.now())).unwrap_or(true) { break; }
                     }
                     accepted = listener.accept() => {
                         let Ok((stream, peer)) = accepted else { break };
                         if !peer.ip().is_loopback() { continue; }
                         let Ok(permit) = slots.clone().try_acquire_owned() else { continue };
                         let transport = transport.clone(); let mut connection_cancelled = cancelled.clone();
+                        transport.connections.fetch_add(1, Ordering::SeqCst);
                         tokio::spawn(async move {
+                            let _connection = ConnectionGuard(transport.clone());
                             let _permit = permit;
                             let service = service_fn(move |request| handle(request, transport.clone()));
                             let mut builder = http1::Builder::new();
@@ -179,6 +210,10 @@ impl LocalAppSetupBridge {
                         });
                     }
                 }
+            }
+            let drain_until = Instant::now() + Duration::from_secs(5);
+            while transport.connections.load(Ordering::SeqCst) != 0 && Instant::now() < drain_until {
+                tokio::time::sleep(Duration::from_millis(10)).await;
             }
         });
         *current = Some(Session {
@@ -194,15 +229,16 @@ impl LocalAppSetupBridge {
             .as_ref()
             .filter(|s| s.id == id)
             .ok_or("Unknown app setup connection")?;
+        session.shared.retained();
         let result = session
             .shared
             .attempt
             .lock()
             .map_err(|_| "App setup state is unavailable")?
             .poll(session.shared.now());
-        if result.phase != Phase::Waiting {
-            let _ = session.shutdown.send(true);
-        }
+        // Consuming a successful setup ends native activity. The server task observes that
+        // state and drains its final HTTP response before releasing foreground retention.
+        // Do not signal connection cancellation here: /result may still be flushing.
         Ok(result)
     }
     pub async fn cancel(&self, id: &str) -> Result<(), String> {
@@ -218,6 +254,7 @@ impl LocalAppSetupBridge {
             .map_err(|_| "App setup state is unavailable")?
             .cancel();
         let _ = session.shutdown.send(true);
+        session.shared.retention.release();
         Ok(())
     }
 }
@@ -280,6 +317,7 @@ async fn handle(
     request: Request<Incoming>,
     shared: Arc<Shared>,
 ) -> Result<BrowserResponse, Infallible> {
+    if !shared.retained() { return Ok(error(StatusCode::GONE)); }
     let headers = request.headers();
     if request.uri().authority().is_some()
         || request.uri().query().is_some()
@@ -369,11 +407,13 @@ async fn handle(
     else {
         return Ok(error(StatusCode::PAYLOAD_TOO_LARGE));
     };
+    if !shared.retained() { return Ok(error(StatusCode::GONE)); }
     let Ok(mut attempt) = shared.attempt.lock() else {
         return Ok(error(StatusCode::SERVICE_UNAVAILABLE));
     };
     Ok(match attempt.accept(&body.to_bytes(), shared.now()) {
-        Ok(()) => response(StatusCode::OK, "application/json", r#"{"accepted":true}"#),
+        Ok(()) if shared.retention.active() => response(StatusCode::OK, "application/json", r#"{"accepted":true}"#),
+        Ok(()) => { attempt.cancel(); error(StatusCode::GONE) },
         Err(_) => error(StatusCode::FORBIDDEN),
     })
 }
@@ -461,6 +501,40 @@ mod tests {
     }
     fn result(challenge: &Value) -> Value {
         json!({"version":1,"setupId":challenge["setupId"],"browserProofHex":challenge["browserProofHex"],"catalogJson":"{ \"version\":1, \"apps\":[{\"id\":\"fixture\"}] }"})
+    }
+    #[tokio::test]
+    async fn retained_setup_start_refusal_and_native_lease_loss_fail_closed() {
+        let platform = Arc::new(crate::local_app_retention::test_support::Platform::default());
+        platform.refuse.store(true, Ordering::SeqCst);
+        let bridge = LocalAppSetupBridge::with_retention(Some(platform.clone()));
+        assert!(bridge.begin(begin(), profile(), assets()).await.is_err());
+        assert!(bridge.session.lock().await.is_none());
+        platform.refuse.store(false, Ordering::SeqCst);
+        let start = bridge.begin(begin(), profile(), assets()).await.unwrap();
+        platform.owners.lock().unwrap().clear();
+        assert_eq!(bridge.poll(&start.setup_id).await.unwrap().phase, Phase::Cancelled);
+    }
+    #[tokio::test]
+    async fn consuming_accepted_setup_does_not_cancel_response_and_releases_without_further_ui_poll() {
+        let platform = Arc::new(crate::local_app_retention::test_support::Platform::default());
+        let bridge = LocalAppSetupBridge::with_retention(Some(platform.clone()));
+        let start = bridge.begin(begin(), profile(), assets()).await.unwrap();
+        let challenge = challenge(&start).await;
+        let payload = result(&challenge);
+        let shared = bridge.session.lock().await.as_ref().unwrap().shared.clone();
+        // Model an accepted result whose bounded connection has not yet drained.
+        shared.connections.fetch_add(1, Ordering::SeqCst);
+        let draining = ConnectionGuard(shared.clone());
+        shared.attempt.lock().unwrap().accept(payload.to_string().as_bytes(), shared.now()).unwrap();
+        assert_eq!(bridge.poll(&start.setup_id).await.unwrap().catalog_json.as_deref(), payload["catalogJson"].as_str());
+        assert!(!*bridge.session.lock().await.as_ref().unwrap().shutdown.borrow());
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(platform.owners.lock().unwrap().len(), 1);
+        assert_eq!(shared.attempt.lock().unwrap().phase(shared.now()), Phase::Received);
+        drop(draining);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(platform.owners.lock().unwrap().is_empty());
+        assert_eq!(bridge.poll(&start.setup_id).await.unwrap().phase, Phase::Received);
     }
     #[tokio::test]
     async fn static_navigation_has_no_proof_or_setup_and_no_cors() {

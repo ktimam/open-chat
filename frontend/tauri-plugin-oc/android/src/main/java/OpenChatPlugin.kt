@@ -26,11 +26,47 @@ import com.ocplugin.app.calls.CallRinger
 import com.ocplugin.app.calls.CallTelecom
 import com.ocplugin.app.calls.IncomingCallNotifications
 import com.ocplugin.app.commands.*
+import com.ocplugin.app.privateapps.LocalAppTransferService
+
+@InvokeArg
+class LocalAppRetentionArgs {
+    var owner: String = ""
+    var remainingMs: Long? = null
+}
 
 @Suppress("UNUSED")
 @TauriPlugin
 class OpenChatPlugin(private val activity: Activity) : Plugin(activity) {
     private val passkeyAuth = PasskeyAuth(activity)
+
+    // Native relay lifecycle only; no WebView heartbeat is required.
+    @Command
+    fun startLocalAppRetention(invoke: Invoke) {
+        val args = invoke.parseArgs(LocalAppRetentionArgs::class.java)
+        LocalAppTransferService.start(activity, args.owner, args.remainingMs ?: 0) {
+            invoke.resolve(JSObject().put("retained", it))
+        }
+    }
+    @Command
+    fun extendLocalAppRetention(invoke: Invoke) {
+        val args = invoke.parseArgs(LocalAppRetentionArgs::class.java)
+        activity.runOnUiThread { invoke.resolve(JSObject().put("retained", isUnofficialLocalTest(activity) &&
+            LocalAppTransferService.extend(args.owner, args.remainingMs ?: 0))) }
+    }
+    @Command
+    fun checkLocalAppRetention(invoke: Invoke) {
+        val args = invoke.parseArgs(LocalAppRetentionArgs::class.java)
+        activity.runOnUiThread { invoke.resolve(JSObject().put("retained", isUnofficialLocalTest(activity) &&
+            LocalAppTransferService.active(args.owner))) }
+    }
+    @Command
+    fun releaseLocalAppRetention(invoke: Invoke) {
+        val args = invoke.parseArgs(LocalAppRetentionArgs::class.java)
+        activity.runOnUiThread {
+            if (isUnofficialLocalTest(activity)) LocalAppTransferService.release(args.owner)
+            invoke.resolve(JSObject().put("retained", false))
+        }
+    }
 
     // Called when the plugin is loaded.
     //

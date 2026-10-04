@@ -10,6 +10,12 @@ android {
     namespace = "com.ocplugin.app"
     compileSdk = 36
 
+    // Official builds do not register this service or request its data-sync permission.
+    if (System.getenv("OC_UNOFFICIAL_LOCAL_APK") == "true") {
+        sourceSets.getByName("debug").manifest.srcFile("src/localAppTransport/AndroidManifest.xml")
+        sourceSets.getByName("release").manifest.srcFile("src/localAppTransport/AndroidManifest.xml")
+    }
+
     buildFeatures {
         buildConfig = true
     }

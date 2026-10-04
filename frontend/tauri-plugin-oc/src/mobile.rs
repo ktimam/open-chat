@@ -24,6 +24,32 @@ pub fn init<R: Runtime, C: DeserializeOwned>(
 /// Access to the oc APIs.
 pub struct Oc<R: Runtime>(PluginHandle<R>);
 
+#[cfg(all(target_os = "android", feature = "local-app-handoff"))]
+pub fn local_app_retention<R: Runtime>(app: &AppHandle<R>) -> std::sync::Arc<dyn crate::local_app_retention::RetentionBackend> {
+    struct AndroidRetention<R: Runtime>(AppHandle<R>);
+    #[derive(serde::Deserialize)]
+    struct RetentionResult { retained: bool }
+    impl<R: Runtime> AndroidRetention<R> {
+        fn call(&self, command: &str, owner: &str, remaining_ms: Option<u64>) -> bool {
+            use crate::OcExt;
+            let result: Result<RetentionResult, _> = self.0.oc().0.run_mobile_plugin(command,
+                serde_json::json!({ "owner": owner, "remainingMs": remaining_ms }));
+            result.is_ok_and(|value| value.retained)
+        }
+    }
+    impl<R: Runtime> crate::local_app_retention::RetentionBackend for AndroidRetention<R> {
+        fn start(&self, owner: &str, remaining_ms: u64) -> Result<(), ()> {
+            self.call("startLocalAppRetention", owner, Some(remaining_ms)).then_some(()).ok_or(())
+        }
+        fn extend(&self, owner: &str, remaining_ms: u64) -> Result<(), ()> {
+            self.call("extendLocalAppRetention", owner, Some(remaining_ms)).then_some(()).ok_or(())
+        }
+        fn active(&self, owner: &str) -> bool { self.call("checkLocalAppRetention", owner, None) }
+        fn release(&self, owner: &str) { self.call("releaseLocalAppRetention", owner, None); }
+    }
+    std::sync::Arc::new(AndroidRetention(app.clone()))
+}
+
 impl<R: Runtime> Oc<R> {
     pub fn open_url(&self, payload: OpenUrlRequest) -> crate::Result<OpenUrlResponse> {
         self.0
