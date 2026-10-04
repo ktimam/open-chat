@@ -968,14 +968,15 @@ actual artifact; documentation-only changes do not change the packaged source id
 
 | Requirement | Current evidence | Remaining boundary |
 | --- | --- | --- |
-| One fork main; official OpenChat services and unchanged OpenChat backend | APK028 is bound to pushed fork-main source `d5674086e08070e96e4955db86f143f2ab424bae`. Integrated official upstream is `319fb436857f35f61e12a9d47bebf6ddb0a72307`; the backend tree still matches its `74b32ad8a9f39a5dc60e56461db767f85026039c` tree | No custom canister or OpenChat backend deployment is required. Later documentation commits do not change APK028's source identity. Build026 web and its earlier runtime results retain their own `3b259b2f53c4d7b6bad30d9747bf3554281ca72f` source identity |
-| Normal Apps UI; no technical setup/import page | Both build026 web layouts passed independent verification. The same profile retained the connected IOU app and three private cards; actual 393-by-851 v1 and mobile-v2 smoke checks passed, and the reopened card fit the phone width and required fresh review | This is startup, restoration and responsive-layout evidence, not model inference or native delivery |
+| One fork main; official OpenChat services and unchanged OpenChat backend | Pushed fork-main checkpoint `4f4f23c6f022b4051ae86c49f0f8e7c3f7a13ef4` integrates official upstream `98a178bef2d67efb6b85a5772a6164fe7134074c`. Web029 and both APK029 ABIs are bound to that source. The backend tree remains exactly `74b32ad8a9f39a5dc60e56461db767f85026039c`; root Cargo and deployment-script identities are unchanged | No custom OpenChat canister or backend deployment is required. Earlier build026/APK028 runtime evidence retains its original artifact identity and is not relabelled as a new final-build runtime test |
+| Normal Apps UI; no technical setup/import page | Both web029 layouts passed independent static/source verification; v2 is served at the unchanged localhost:5190 origin with HTTP 200 checks. APK029 normal Profile → App settings → Apps → Saved cards opened the retained synthetic card. Earlier build026 v1/mobile-v2 responsive-layout checks remain bound to build026 | HTTP/static checks do not establish fresh browser UI, authentication or inference acceptance. The APK029 card smoke is restoration evidence, not new entry delivery or a model-image test |
 | Automatic app discovery and explicit connection | Desktop IOU reconnect remains passed, and build026 web retained the connected app. October 4 installed APK normal Apps → IOU Connect → existing IOU sign-in → approved synthetic sheet → one setup share passed. IOU reported setup sent; the APK independently reported Connected. The account and enabled IOU setting in the approved chat survived a normal APK restart | Connection acceptance is not entry delivery, image inference or public provider qualification. No new identity, passkey, canister or entry was created during connection |
-| Encrypted persistent private cards | Both build026 layouts retain their earlier restoration checks. Five desktop local cards restored without approval or automatic resend. October 4 native text Send → IOU Propose and restart checks retained the synthetic 123.45 USD / 2026-09-27 / You owe card, its Synthetic acceptance Type, original import ID, payload and encryption descriptor. The in-place APK028 upgrade preserved that card; recovery again required fresh review and explicit confirmation | The native text test used the app-owned local text processor, not a model or OCR; its expected empty note does not qualify note extraction. UI restoration does not independently inspect at-rest ciphertext |
+| Encrypted persistent private cards | Earlier build026 desktop and APK028 restart checks retain their artifact-bound evidence. The in-place APK029 upgrade preserved the synthetic 123.45 USD / 2026-09-27 / You owe card, IOU kind, Synthetic acceptance Type and empty note through the normal Saved cards UI. Recovered-request review was required; no approval, send, retry or pairing controls were active | The previous Saved receipt was not restored; delivery receipts are session-only and an attempted persisted request restores as uncertain. No new review, delivery, save, import-ID inspection or ciphertext inspection occurred during this smoke. The source text proposal used the app-owned local processor, not model/OCR inference |
 | Confirmed encrypted app delivery | Earlier desktop delivery and the first native Save retain their artifact-bound evidence. APK028's separately approved same-ID retry passed sender-bound consent, encrypted delivery, IOU decryption and second review: 123.45 USD gross, 2026-09-27, You owe, IOU kind and Synthetic acceptance Type; the Type's 10% fee produced 12.35 fee and 111.10 net. One normal Save returned the earlier-save-accepted replay status. A fresh normal sheet reload remained at 14 visible rows and exactly one matching synthetic entry. Natural Back through IOU → relay Saved → APK Saved completed, and the foreground service then cleaned up | The receiver account/principal/backend-context digest was independently compared with the sender after Save, not independently asserted before sending. The two earlier expired harness attempts remain failed/unqualified; they are not relabelled as passes. This synthetic text delivery test is not model-image, physical-phone or public-provider acceptance |
 | Preserved model features and accurate image proposals | Earlier actual Qwen/Gemma image runs and exact-output IOU normalization remain valid for their tested artifacts. Fresh build026 desktop v2 Gemma proposals passed core fields; a matching heading also selected the existing private Type and its You owe default. Prompts, weights and all-WebGPU settings are unchanged | Fresh normal-UI Qwen acceptance remains pending, with Edge control unavailable. October 4 emulator APK preflight exposed navigator.gpu but default requestAdapter returned null before model loading; its existing host-GPU configuration was not changed. Android Vulkan profile checks also failed, but the exact WebView rejection is not established. No model weights were downloaded, no inference was run, and no CPU/OCR fallback was used. This is not evidence of a phone or model-accuracy regression. Qwen's 1,024-position context limit still applies; inactive expanded-image experiments remain inactive |
-| Separate local APK and account preservation | Both APK028 ABIs passed independent package/source, embedded-asset, native-library, signer, manifest and DEX verification. The x86_64 APK was installed in place without clearing data and retained the existing signed-in account, normal Chats UI, Kiko chat and private card | Account restoration is not a new public passkey-provider qualification. ARM was built and statically verified, not installed on a phone. Physical-phone testing and public provider qualification remain deferred |
-| Scoped source and hosted verification | Exact APK028 source `d5674086e` passed the complete 829-test offline workflow command. Hosted [frontend run 37200327918](https://github.com/ktimam/open-chat/actions/runs/37200327918) passed all four jobs; [scoped run 37200327915](https://github.com/ktimam/open-chat/actions/runs/37200327915) passed all six functional test/compilation jobs. Source-only lifecycle evidence also includes 42 native tests and five Kotlin policy tests with actual Android SDK/AndroidX compilation | Security CI is not clean: the advisory job remains failed, with the existing exact Rust deferrals and [braces local-test-only deferral](releases/npm-feature-advisory-triage.md#october-4-local-test-braces-deferral) disclosed and unsuppressed. Recovered IOU run [37188618011](https://github.com/ktimam/IOU/actions/runs/37188618011) includes additional findings still needing scoped disposition; its downstream typecheck, coverage, card UI, build and Rust jobs were skipped, not fresh passes. Earlier results and later documentation commits do not relabel another artifact or create public-release acceptance |
+| Separate local APK and account preservation | Both APK029 ABIs passed independent package/source, embedded-asset, native-library, signer, manifest and DEX verification. The x86_64 APK was installed in place without clearing data; installed bytes matched the verified artifact and the existing account, normal Chats UI, Kiko chat and private-card fields were retained | This is upgrade/account/card-restoration evidence, not new native delivery, model inference or public passkey-provider qualification. ARM was built and statically verified, not installed on a phone. Physical-phone testing and public provider qualification remain deferred |
+| Scoped OpenChat source and hosted verification | The final merged source passed 5,694 frontend tests in 354 files, both frontend typechecks, and all 829 offline security-contract tests without skips. Svelte checking reported zero errors and 573 warnings. Exact-commit [frontend run 37205581383](https://github.com/ktimam/open-chat/actions/runs/37205581383) passed all four jobs; [scoped run 37205581382](https://github.com/ktimam/open-chat/actions/runs/37205581382) passed all six functional test/compilation jobs | The dependency/advisory job remains failed. Its npm finding matches the existing [braces 3.0.3 local-test deferral](releases/npm-feature-advisory-triage.md#october-4-local-test-braces-deferral). The latest Rust advisory gate also failed, but its exact finding set was not retrieved and must not be declared unchanged. Existing Rust deferrals remain limited to their recorded findings; this is not a clean scan |
+| IOU functional verification and advisory disposition | An isolated archive of exact IOU main `577f05938d27de0169bb86a1b3a1871a064295c4` passed 1,980 scoped unit tests, 100 integration tests, and a scoped no-emit typecheck without changing canonical source or dependencies. Integration used OpenChat `ed3587edf17647645722bc9eeb89c6e90309e5c1`, not the later merged checkpoint | Mocked authentication/backend/model/transport boundaries do not prove live persistence, UI or model accuracy. Newer ip-address, fast-uri, brace-expansion and additional Hono findings still need scoped disposition. Hosted jobs skipped behind the failed IOU audit remain skipped; these separate local passes do not relabel them |
 
 Optional synthetic-voice accuracy, physical-phone testing, public branding/domain,
 public provider qualification and public publication retain the user's explicit
@@ -1075,6 +1076,74 @@ brace-expansion and additional Hono findings. The braces decision does not
 automatically defer the different brace-expansion package or new advisory IDs.
 Those findings still need a scoped disposition; no dependency was upgraded and
 the functional jobs skipped behind that failed audit remain skipped.
+
+#### October 4: final merged-source web029 and APK029 checkpoint
+
+Pushed main `4f4f23c6f022b4051ae86c49f0f8e7c3f7a13ef4`, tree
+`1fd2efead0028bab6c5e45adb0789a373976b55f`, integrates fixed upstream
+`98a178bef2d67efb6b85a5772a6164fe7134074c`. Its one incoming commit restores
+draft text when the desktop/mobile composer editor is recreated; five files
+change with 195 insertions. No backend, dependency, model, prompt or native
+transport implementation changed. Both build families materialize the same
+6,664-file committed source inventory, SHA-256
+`d43f68809f78f6ee7ea6063fdf5c2a22d2dc1c49eaa553a622e50dcb1633df30`.
+
+The [web029 result](F:/Temp/OpenChat-IOU/merged-main-web-029/WEB029-RESULT.json),
+SHA-256 `6fea12847c229d0c8bfaee4e916d9651ad816deffb65cb73b032f3d8ea94a893`,
+records independent verification of both layouts: 1,793 files and 50 source-map
+proofs per layout, including both composer implementations. The v1 version is
+`2.0.0-localtest.e405e008996d975e5889e95931a0603a`; v2 is
+`2.0.0-localtest.54759ae4ad5b3f6f795a0baa89629d25`. The
+[served-v2 receipt](F:/Temp/OpenChat-IOU/merged-main-web-029/SERVED029-RESULT.json),
+SHA-256 `fad9ed19137ec72a97cf78f1f87c7025106039a2d2cd7a28c7cc5b6fdf03bf81`,
+confirms the unchanged localhost:5190 origin, manifest/communities HTTP 200,
+expected isolation headers and available IOU directory. Browser profile/storage
+were not changed. V1 was verified but not served; these checks do not prove a
+fresh browser sign-in or image proposal.
+
+Both APK029 architectures use build ID `c00b49dc0224d3d85c06ae78fc481b4f`,
+1,796 frozen frontend files and 39 compiled feature proofs. The separate
+`dev.openchatfork.localtest` package and signer are retained. Original native
+authentication and OTA-disabled configuration remain unchanged.
+
+| Artifact | APK SHA-256 | Independent verification |
+| --- | --- | --- |
+| [APK029 x86_64](F:/Temp/OpenChat-IOU/native-transport-apk-029/artifacts/openchat-fork-local-test-x86_64.apk) | `7e56e4d35f12cffeb427fd895d385a7b367f361e512986cc4d137bb1f05db14f` | [Report](F:/Temp/OpenChat-IOU/native-transport-apk-029/artifacts/APK029-VERIFIED-x86_64.json), SHA-256 `c67170ee0c2f98141a200f4ad7a8f36985261785829eac0557c705dd32703149` |
+| [APK029 ARM](F:/Temp/OpenChat-IOU/native-transport-apk-029/artifacts/openchat-fork-local-test-aarch64.apk) | `906d673ba5c76a224b615a906c26c338c226b1c7dd83437661fa8976896d2633` | [Report](F:/Temp/OpenChat-IOU/native-transport-apk-029/artifacts/APK029-VERIFIED-aarch64.json), SHA-256 `2714e31cec5193bf4666b3b5eb9419c1fe5f5d599fdc056a70f40a01485b52ce` |
+
+The x86_64 in-place install matched the verified APK hash and retained the
+existing account/Chats/Kiko state. The
+[normal Apps saved-card smoke](F:/Temp/OpenChat-IOU/native-auth-callback-20261004/apk029-saved-card-smoke.json),
+SHA-256 `8420384a72bf414b690f3136f31a6c45dfed81411c5d719af62d61c3512a07ec`,
+restored the known 123.45 USD / 2026-09-27 / You owe fields, IOU kind,
+Synthetic acceptance Type and empty note. It required recovered-request review,
+with no restored approval or active send/retry/pairing controls. The previous
+Saved receipt was not displayed: delivery receipts are session-only, and an
+attempted request restores as uncertain. No new review, transmission, IOU save,
+ledger readback, model operation or authentication action was performed.
+APK028 retains the earlier encrypted-delivery/dedup/lifecycle acceptance; it is
+not relabelled as an APK029 delivery test. ARM phone runtime remains untested.
+
+A separate manual daemon-stop command used the wrong Gradle home and
+unexpectedly downloaded/unpacked 289,481,711 bytes across 320 duplicate files.
+The exact duplicate home was removed after validation; the approved cache was
+retained. The [incident receipt](F:/Temp/OpenChat-IOU/native-transport-apk-029/artifacts/GRADLE-WRAPPER-STOP-INCIDENT.json),
+SHA-256 `1cdfd6f23c59c147c17f605641adfbcc798626415301031a1a33ab922f08f479`,
+preserves that interruption and the uncertainty about execution before it.
+The x86 verification predates the incident; ARM used the unchanged reviewed
+builder and correct cache. This checkpoint does not claim that every surrounding
+command was download-free.
+
+The [final hosted CI observation](F:/Temp/OpenChat-IOU/upstream-98a178b-verification/hosted-ci-4f4f23c6.json),
+SHA-256 `c132ed491dc3708da16229e2dac6898930da96d68dff827037e95a5753be133f`,
+and [offline 829-contract receipt](F:/Temp/OpenChat-IOU/upstream-98a178b-verification/current-client-security-offline-merged.json)
+support the current checklist. The
+[isolated IOU functional receipt](F:/Temp/OpenChat-IOU/iou-main-577f059-functional-20261004/results/functional-verification.json),
+SHA-256 `046b53a05c0a79915384186da7729d62ae0311a24097760dc3994a4a4ebead6f`,
+binds its 1,980 unit and 100 integration tests to the source identities stated
+above, not to new browser/emulator behavior. Fresh normal-UI Qwen image acceptance
+and the scoped advisory dispositions remain open. Optional voice, phone and
+public-release deferrals are unchanged.
 
 ### October 3: build026 and HEAD8ac checkpoint
 

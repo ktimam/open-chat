@@ -442,3 +442,54 @@ It remains open and disclosed, but no longer awaits a local-test decision. The
 raw advisory failure and scanner policy remain unchanged; no dependency change,
 suppression, clean-scan claim or public-release approval is implied. All functional
 release gates remain separate and unchanged.
+
+## October 4: final upstream and hosted verification checkpoint
+
+Pushed main `4f4f23c6f022b4051ae86c49f0f8e7c3f7a13ef4` integrates fixed official
+upstream `98a178bef2d67efb6b85a5772a6164fe7134074c`. The incoming commit changes
+desktop/mobile editor-restoration behavior, its regression tests and Vitest
+aliases: five files, 195 insertions. No backend, dependency, model, prompt or
+native transport source changes are included.
+
+Six current baseline/format bindings advance to that upstream commit. All ten
+inherited-format source blobs and edit proofs are unchanged; no exemption is
+added. The reviewed 171-file npm source fingerprint remains
+`92eed8d75292ff2bed66b4b91e12b9b9688bc1c4d3968e558b3990393bf740df`.
+Historical provenance, Rust inventories, license decisions and advisory gates
+are not relabelled or waived.
+
+The merged source passes 5,694 frontend tests in 354 files, both frontend
+typechecks and the complete 829-test offline security-contract command without
+skips. Svelte checking reports zero errors and 573 warnings. Exact-commit
+[frontend run 37205581383](https://github.com/ktimam/open-chat/actions/runs/37205581383)
+passes all four jobs;
+[scoped run 37205581382](https://github.com/ktimam/open-chat/actions/runs/37205581382)
+passes all six functional jobs, including both native platforms, actual Android
+compilation and the pinned real-inference fixture.
+
+The scoped dependency job remains failed. Its npm report contains the previously
+deferred braces 3.0.3 finding, GHSA-vfj7-8cjw-p6xm. The latest Rust gate also failed;
+exact findings remain unreconciled after a local summary-size guard and a
+separately authorized bounded retrieval timeout. This does not establish new
+findings, unchanged findings, or clean security status. No new scan was initiated
+to read the existing hosted evidence. The
+[observation receipt](F:/Temp/OpenChat-IOU/upstream-98a178b-verification/hosted-ci-4f4f23c6.json),
+SHA-256 `c132ed491dc3708da16229e2dac6898930da96d68dff827037e95a5753be133f`,
+preserves both retrieval limitations and the failed gates.
+
+Separately, exact IOU main `577f05938d27de0169bb86a1b3a1871a064295c4` passes
+1,980 scoped unit tests, 100 isolated integration tests and a scoped no-emit
+typecheck. Its integration receipt is explicitly bound to OpenChat
+`ed3587edf17647645722bc9eeb89c6e90309e5c1`, not the later merged checkpoint.
+Mocked authentication/backend/model/transport boundaries remain disclosed.
+These local results do not turn the IOU hosted audit-blocked jobs into passes
+or dispose of its newer ip-address, fast-uri, brace-expansion and additional
+Hono findings.
+
+Web029 and both APK029 ABIs are independently verified against the final source;
+the installed x86_64 APK preserves the existing account and private-card fields
+through normal UI. Artifact-specific receipts and limitations are recorded in
+[the local-client checkpoint](unofficial-local-client.md#october-4-final-merged-source-web029-and-apk029-checkpoint).
+Fresh normal-UI Qwen image acceptance remains open. Source/hosted/static checks
+do not replace browser, APK delivery, physical-phone or public-provider
+acceptance; APK028's earlier native delivery evidence retains its actual source.
