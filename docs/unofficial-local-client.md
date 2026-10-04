@@ -976,7 +976,7 @@ actual artifact; documentation-only changes do not change the packaged source id
 | Preserved model features and accurate image proposals | Earlier actual Qwen/Gemma image runs and exact-output IOU normalization remain valid for their tested artifacts. Fresh build026 desktop v2 Gemma proposals passed core fields; a matching heading also selected the existing private Type and its You owe default. Prompts, weights and all-WebGPU settings are unchanged | Fresh normal-UI Qwen acceptance remains pending, with Edge control unavailable. October 4 emulator APK preflight exposed navigator.gpu but default requestAdapter returned null before model loading; its existing host-GPU configuration was not changed. Android Vulkan profile checks also failed, but the exact WebView rejection is not established. No model weights were downloaded, no inference was run, and no CPU/OCR fallback was used. This is not evidence of a phone or model-accuracy regression. Qwen's 1,024-position context limit still applies; inactive expanded-image experiments remain inactive |
 | Separate local APK and account preservation | Both APK029 ABIs passed independent package/source, embedded-asset, native-library, signer, manifest and DEX verification. The x86_64 APK was installed in place without clearing data; installed bytes matched the verified artifact and the existing account, normal Chats UI, Kiko chat and private-card fields were retained | This is upgrade/account/card-restoration evidence, not new native delivery, model inference or public passkey-provider qualification. ARM was built and statically verified, not installed on a phone. Physical-phone testing and public provider qualification remain deferred |
 | Scoped OpenChat source and hosted verification | The final merged source passed 5,694 frontend tests in 354 files, both frontend typechecks, and all 829 offline security-contract tests without skips. Svelte checking reported zero errors and 573 warnings. Exact-commit [frontend run 37205581383](https://github.com/ktimam/open-chat/actions/runs/37205581383) passed all four jobs; [scoped run 37205581382](https://github.com/ktimam/open-chat/actions/runs/37205581382) passed all six functional test/compilation jobs | The dependency/advisory job remains failed. Its npm finding matches the existing [braces 3.0.3 local-test deferral](releases/npm-feature-advisory-triage.md#october-4-local-test-braces-deferral). The recovered Rust report contains exactly the ten package/version/advisory tuples already covered by the [recorded local-test deferrals](releases/rust-feature-advisory-triage.md#october-2-local-test-deferral); its 29 source bindings match the tested commit. The Rust gate remains failed and advisory-database freshness remains unverified. These exact deferrals do not cover future findings or establish a clean scan |
-| IOU functional verification and advisory disposition | An isolated archive of exact IOU main `577f05938d27de0169bb86a1b3a1871a064295c4` passed 1,980 scoped unit tests, 100 integration tests, and a scoped no-emit typecheck without changing canonical source or dependencies. Integration used OpenChat `ed3587edf17647645722bc9eeb89c6e90309e5c1`, not the later merged checkpoint | Mocked authentication/backend/model/transport boundaries do not prove live persistence, UI or model accuracy. Newer ip-address, fast-uri, brace-expansion and additional Hono findings still need scoped disposition. Hosted jobs skipped behind the failed IOU audit remain skipped; these separate local passes do not relabel them |
+| IOU functional verification and advisory disposition | An isolated archive of exact IOU main `577f05938d27de0169bb86a1b3a1871a064295c4` passed 1,980 scoped unit tests, 100 integration tests, and a scoped no-emit typecheck without changing canonical source or dependencies. Integration used OpenChat `ed3587edf17647645722bc9eeb89c6e90309e5c1`, not the later merged checkpoint | Mocked authentication/backend/model/transport boundaries do not prove live persistence, UI or model accuracy. The user explicitly deferred the recorded newer ip-address, fast-uri, brace-expansion and Hono findings for local testing on October 4; [IOU's exact decision](https://github.com/ktimam/IOU/blob/main/docs/unofficial-openchat-client-release-plan.md#october-4-local-test-iou-advisory-deferral) does not establish reachability or a clean scan. Hosted jobs skipped behind the failed IOU audit remain skipped; these separate local passes do not relabel them |
 
 Optional synthetic-voice accuracy, physical-phone testing, public branding/domain,
 public provider qualification and public publication retain the user's explicit
@@ -1074,8 +1074,10 @@ clean security scan or public-release acceptance.
 The existing IOU run 37188618011 also reports ip-address, fast-uri,
 brace-expansion and additional Hono findings. The braces decision does not
 automatically defer the different brace-expansion package or new advisory IDs.
-Those findings still need a scoped disposition; no dependency was upgraded and
-the functional jobs skipped behind that failed audit remain skipped.
+The user subsequently deferred that recorded newer IOU finding set for local
+testing on October 4; see [the exact decision](https://github.com/ktimam/IOU/blob/main/docs/unofficial-openchat-client-release-plan.md#october-4-local-test-iou-advisory-deferral).
+Reachability remains unestablished. No dependency was upgraded, the audit remains
+failed, and the functional jobs skipped behind it remain skipped.
 
 #### October 4: final merged-source web029 and APK029 checkpoint
 
@@ -1150,8 +1152,9 @@ supports the functional checklist. The
 SHA-256 `046b53a05c0a79915384186da7729d62ae0311a24097760dc3994a4a4ebead6f`,
 binds its 1,980 unit and 100 integration tests to the source identities stated
 above, not to new browser/emulator behavior. Fresh normal-UI Qwen image acceptance
-and the newer IOU advisory dispositions remain open. Optional voice, phone and
-public-release deferrals are unchanged.
+remains open. The newer IOU advisory decision is now deferred for local testing,
+not fixed or suppressed. Optional voice, phone and public-release deferrals are
+unchanged.
 
 ### October 3: build026 and HEAD8ac checkpoint
 

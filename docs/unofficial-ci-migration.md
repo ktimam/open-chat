@@ -487,9 +487,13 @@ Separately, exact IOU main `577f05938d27de0169bb86a1b3a1871a064295c4` passes
 typecheck. Its integration receipt is explicitly bound to OpenChat
 `ed3587edf17647645722bc9eeb89c6e90309e5c1`, not the later merged checkpoint.
 Mocked authentication/backend/model/transport boundaries remain disclosed.
-These local results do not turn the IOU hosted audit-blocked jobs into passes
-or dispose of its newer ip-address, fast-uri, brace-expansion and additional
-Hono findings.
+These local results do not turn the IOU hosted audit-blocked jobs into passes.
+The user separately deferred the recorded newer ip-address, fast-uri,
+brace-expansion and Hono findings for local testing on October 4; see
+[IOU's exact decision](https://github.com/ktimam/IOU/blob/main/docs/unofficial-openchat-client-release-plan.md#october-4-local-test-iou-advisory-deferral).
+Reachability is not established; the audit remains failed and its downstream
+skipped jobs remain skipped. No dependency, scanner gate or CI policy changed;
+this is not public-release acceptance or a deferral of future findings.
 
 Web029 and both APK029 ABIs are independently verified against the final source;
 the installed x86_64 APK preserves the existing account and private-card fields
