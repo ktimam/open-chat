@@ -469,13 +469,18 @@ compilation and the pinned real-inference fixture.
 
 The scoped dependency job remains failed. Its npm report contains the previously
 deferred braces 3.0.3 finding, GHSA-vfj7-8cjw-p6xm. The latest Rust gate also failed;
-exact findings remain unreconciled after a local summary-size guard and a
-separately authorized bounded retrieval timeout. This does not establish new
-findings, unchanged findings, or clean security status. No new scan was initiated
-to read the existing hosted evidence. The
+its recovered report contains exactly the ten package/version/advisory tuples
+already covered by the recorded local-test deferrals. All 29 source hashes,
+Cargo lock and scope configuration match the tested commit; ten collection
+profiles report complete roots. The advisory report still has acceptance and
+database-freshness flags false, and the parent gate still fails. No new scan,
+suppression, dependency change or clean-scan claim is implied. The original
 [observation receipt](F:/Temp/OpenChat-IOU/upstream-98a178b-verification/hosted-ci-4f4f23c6.json),
 SHA-256 `c132ed491dc3708da16229e2dac6898930da96d68dff827037e95a5753be133f`,
-preserves both retrieval limitations and the failed gates.
+preserves the earlier size-guard/timeout history and failed gates. The separate
+[reconciliation receipt](F:/Temp/OpenChat-IOU/upstream-98a178b-verification/rust-report-recovery-20261004/reconciled-rust-findings.json),
+SHA-256 `564e88bd32c6e603eda47d98df0a118fe7212e6009e1705d4879d0935ed298d7`,
+records the later hash-verified local read within explicitly approved size bounds.
 
 Separately, exact IOU main `577f05938d27de0169bb86a1b3a1871a064295c4` passes
 1,980 scoped unit tests, 100 isolated integration tests and a scoped no-emit
