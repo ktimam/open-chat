@@ -78,7 +78,7 @@ test("current formatting follows the reviewed merged upstream without new exempt
       "utf8",
     ),
   );
-  assert.equal(CURRENT_FORMAT_BASE, "319fb436857f35f61e12a9d47bebf6ddb0a72307");
+  assert.equal(CURRENT_FORMAT_BASE, "98a178bef2d67efb6b85a5772a6164fe7134074c");
   assert.equal(baseline.upstreamCommit, CURRENT_FORMAT_BASE);
   assert.equal(
     baseline.backendTree,

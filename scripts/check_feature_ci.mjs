@@ -1144,7 +1144,7 @@ export const CURRENT_CLIENT_LICENSE_COMMAND = [
 ].join("\n");
 
 export const CURRENT_CLIENT_FORMAT_BASE_EXPRESSION =
-  "319fb436857f35f61e12a9d47bebf6ddb0a72307";
+  "98a178bef2d67efb6b85a5772a6164fe7134074c";
 
 const CURRENT_LOCAL_APP_LIFECYCLE_JOB = [
   "    name: Android private-app lease tests and real service SDK compilation",
