@@ -127,6 +127,67 @@ test("live current-client license policy binds normalized source and lock identi
   assert.equal(policy.cargoLockSha256, normalizedHash(cargoLock));
   assert.equal(config.cargoLockSha256, policy.cargoLockSha256);
 });
+test("lifecycle test profiles reuse existing owner roots and exact license identities", () => {
+  const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  const config = JSON.parse(
+    readFileSync(
+      resolve(root, "scripts/rust_feature_scope.current-client.json"),
+    ),
+  );
+  const policy = JSON.parse(
+    readFileSync(
+      resolve(root, "scripts/rust_feature_licenses.current-client.json"),
+    ),
+  );
+  const lifecycle = [
+    "linux-local-app-handoff-tests",
+    "windows-local-app-handoff-tests",
+  ];
+  const check = (value) => {
+    for (const profileId of lifecycle) {
+      const profiles = value.profiles.filter(({ id }) => id === profileId);
+      assert.equal(profiles.length, 1);
+      assert.deepEqual(profiles[0].features, [
+        "tauri-plugin-oc/local-app-handoff",
+      ]);
+      const seeds = value.seeds.filter((seed) =>
+        seed.profiles.includes(profileId),
+      );
+      assert.equal(seeds.length, 20);
+      for (const seed of seeds) {
+        assert.ok(
+          seed.profiles.some(
+            (id) =>
+              !lifecycle.includes(id) &&
+              value.profiles.some((p) => p.id === id),
+          ),
+          "Lifecycle tests cannot introduce an exclusive license owner",
+        );
+        assert.equal(
+          policy.packages.filter((entry) => id(entry) === id(seed.expected))
+            .length,
+          1,
+          "Lifecycle owner must retain an exact reviewed license identity",
+        );
+      }
+    }
+  };
+  check(config);
+  const exclusive = structuredClone(config);
+  exclusive.seeds.find((seed) =>
+    seed.profiles.includes(lifecycle[0]),
+  ).profiles = [...lifecycle];
+  assert.throws(() => check(exclusive), /exclusive license owner/);
+  const changedIdentity = structuredClone(config);
+  changedIdentity.seeds.find((seed) =>
+    seed.profiles.includes(lifecycle[0]),
+  ).expected.version = "unreviewed";
+  assert.throws(
+    () => check(changedIdentity),
+    /exact reviewed license identity/,
+  );
+});
+
 test("the exact ABI pair preserves historical licenses and still requires its actual parent edge", () => {
   const historical = ownedSecurityRules("pr1").introducedRustPackages;
   assert.equal(historical.length, 19);

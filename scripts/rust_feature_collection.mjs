@@ -30,7 +30,8 @@ import { exportRustFeatureSbom } from "./rust_feature_sbom.mjs";
 import { validateRustFeatureSbom } from "./rust_feature_sbom_validate.mjs";
 
 export const RUST_COLLECTION_LIMITS = Object.freeze({
-  profiles: 8,
+  // Eight existing profiles plus the two explicit local-app lifecycle test profiles.
+  profiles: 10,
   sourceFiles: 4096,
   fileBytes: 32 * 1024 * 1024,
   toolBinaryBytes: 64 * 1024 * 1024,

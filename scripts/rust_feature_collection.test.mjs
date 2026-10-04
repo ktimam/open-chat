@@ -662,6 +662,28 @@ test("source or tool mutation during the process invalidates collection before t
   }
 });
 
+for (const scope of ["pr1", "pr2", "current-client"]) {
+  test(
+    scope + ": rejects eleven profiles before Cargo or evidence creation",
+    (t) => {
+      const f = fixture(t, scope);
+      assert.equal(RUST_COLLECTION_LIMITS.profiles, 10);
+      f.config.profiles = Array.from({ length: 11 }, (_, index) => ({
+        ...f.config.profiles[0],
+        id: "bounded-profile-" + index,
+      }));
+      f.config.seeds[0].profiles = f.config.profiles.map(({ id }) => id);
+      f.saveConfig();
+      assert.throws(
+        () => collectRustFeatureMetadataFixture(f.args, f.spawn),
+        /Bounded configured profiles required/,
+      );
+      assert.equal(f.calls.length, 0);
+      assert.deepEqual(readdirSync(f.output), []);
+    },
+  );
+}
+
 test("current-client preparation validates all existing native profiles without invoking Cargo", (t) => {
   const scope = "current-client";
   const f = fixture(t);
@@ -683,9 +705,11 @@ test("current-client preparation validates all existing native profiles without 
       "linux-default-tests",
       "linux-inference-check",
       "linux-inference-store-check",
+      "linux-local-app-handoff-tests",
       "windows-default-tests",
       "windows-inference-check",
       "windows-inference-store-check",
+      "windows-local-app-handoff-tests",
     ].sort(),
     "Every declared feature/host profile must have a real offline metadata command",
   );

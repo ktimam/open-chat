@@ -1011,6 +1011,16 @@ Windows/Linux and compiles the service rather than relying on unrelated Android
 component tests. Full APK compilation and emulator regression are still separate
 pending gates. No second IOU Save occurred during these source tests.
 
+The first hosted checkpoint, `a9ddd2ed1`, exposed two incomplete CI inventory
+updates: the collector still capped profiles at eight after the two listener-test
+profiles were added, and the license policy still bound the previous source-scope
+hash. The selected local suites had not included these collection/license checks.
+The complete offline workflow command is now required before packaging this fix.
+The bounded collector accepts ten profiles and tests rejection at eleven; the
+license binding is refreshed only after confirming all 26 dependency owners,
+39 license package entries, model identity resolutions and lock identity are
+unchanged. No advisory, license obligation or completeness check is waived.
+
 #### October 4: existing hosted advisory evidence recovered
 
 Subsequent retrieval of the existing scoped run 37188618758 recovered its complete
