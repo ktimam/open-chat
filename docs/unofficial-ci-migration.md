@@ -436,6 +436,9 @@ It is reached through the reviewed build-asset root `rollup-plugin-copy@3.5.0`,
 then `globby@10.0.1`, `fast-glob@3.3.3`, and `micromatch@4.0.8`. These versions
 and integrities match the pinned upstream baseline; inheritance is not proof
 of non-exploitability. The October 3 advisory page lists no patched version.
-This exact new finding is not covered by earlier deferrals and remains
-unresolved pending the user's local-test decision. No waiver or dependency
-change has been made.
+This exact new finding was not covered by earlier deferrals. The user subsequently
+approved its [October 4 local-test-only deferral](releases/npm-feature-advisory-triage.md#october-4-local-test-braces-deferral).
+It remains open and disclosed, but no longer awaits a local-test decision. The
+raw advisory failure and scanner policy remain unchanged; no dependency change,
+suppression, clean-scan claim or public-release approval is implied. All functional
+release gates remain separate and unchanged.

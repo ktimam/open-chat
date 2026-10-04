@@ -231,3 +231,32 @@ this decision is not a clean scan, dependency fix, scanner suppression or a
 public-release approval. It does not cover other versions or future findings,
 and does not authorize a broad OpenChat core audit or shared dependency upgrade.
 The separate approved `adm-zip@0.6.1` fix remains unchanged.
+
+## October 4 local test braces deferral
+
+The user explicitly chose to defer the newly reported finding for the exact
+selected package `braces@3.0.3`:
+[GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm),
+also identified as `CVE-2026-93687`. This decision applies only to the unofficial
+local-test release, not public publication or other package versions/findings.
+
+The reviewed build-asset dependency path is
+`rollup-plugin-copy@3.5.0 -> globby@10.0.1 -> fast-glob@3.3.3 -> micromatch@4.0.8 -> braces@3.0.3`.
+Its versions and integrities match the pinned upstream baseline. The advisory
+describes stack-exhaustion denial of service from deeply nested brace patterns;
+build-time ownership and inherited versions do not establish that attacker input
+cannot reach the affected functions or that the finding is harmless.
+
+The October 4 primary-source recheck still lists affected versions `<=3.0.3`
+and no patched version. The [upstream fix proposal](https://github.com/micromatch/braces/pull/72)
+remains open, not a released dependency. No dependency, override, installation,
+model prompt or model weight was changed by this decision.
+
+Keep this exact finding open and disclosed, but its disposition is no longer a
+remaining local-test approval blocker. Preserve raw failed advisory results and
+existing strict scanner behavior: this is not a clean scan, suppression, broad
+allowlist, mitigation claim or public-release approval. All earlier exact-version
+deferrals remain intact; no other finding is waived. The fresh Qwen normal-UI
+acceptance and native IOU connection, encrypted delivery, recovery and readback
+checks remain required. No core OpenChat audit or shared dependency upgrade is
+authorized by this deferral.

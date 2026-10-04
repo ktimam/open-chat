@@ -6,6 +6,32 @@ impersonate the official website. Public branding, hosting and native APK identi
 separate decisions. Private app cards are saved locally; delivery requires explicit review
 and client-side recipient encryption. See [the required workflow](private-app-encrypted-delivery.md).
 
+## Reuse an existing local-test build after a reboot
+
+Do not rebuild or reinstall the client just to restore local services. Reuse healthy
+processes and the selected, verified frozen artifact at its existing origin. For
+IOU integration, restore the strict existing recovered replica first, then the
+IOU-only frontend, then this preview. IOU's `docs/openchat-private-import.md`
+documents that sequence and the exact browser sender environment. Preserve its
+existing state directory, canisters and accounts, including historical OpenChat
+names; the unofficial client itself continues to use official OpenChat services.
+
+IOU's general `scripts/live/start-environment.ps1` is a different, legacy
+local-OpenChat-canister launcher. Do not run it as this fork's startup command or
+merely repoint its checkout: it still applies local backend and registered-app
+settings. From this fork checkout, start only the selected existing preview:
+
+```sh
+node scripts/preview-unofficial-local-web.mjs --directory /absolute/project-temp/existing-web-build
+```
+
+Use the artifact's `http://localhost:5190` origin, not `127.0.0.1`. A health request
+to `/communities` must include `Accept: text/html` for the normal SPA fallback;
+an IP-host rejection or a non-HTML route probe is not evidence the server stopped.
+Do not stop an unrelated listener or clear browser/model caches to resolve a probe.
+
+## Build a new local-test artifact
+
 Install the reviewed frontend dependencies once using the repository's normal process.
 The commands below never run a package installer. First create an **empty, project-specific
 temporary directory** outside the checkout, then pass its absolute path:
