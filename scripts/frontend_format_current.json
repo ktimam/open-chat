@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "reviewedOn": "2026-10-03",
+  "reviewedOn": "2026-10-05",
   "normalization": "CRLF-to-LF-only",
   "editAlgorithm": "unique-common-line-anchors-v1",
   "proofMethod": "Actual installed CLI with root config, LF-normalized source and pinned current upstream Git blobs. Unique common lines anchor edit blocks; only byte-equal block prefix/suffix lines are removed. SHA-256(JSON.stringify([removedLines, addedLines])); every candidate edit and multiplicity must occur upstream. Recomputed live for each current-mode inherited mismatch.",
@@ -8,7 +8,7 @@
     {
       "scope": "current-client",
       "path": "frontend/app/src/components/home/groupdetails/DirectChatDetails.svelte",
-      "baseCommit": "98a178bef2d67efb6b85a5772a6164fe7134074c",
+      "baseCommit": "65e265f027cc50a1ea333dd94acbb7816992b54c",
       "baseSha256": "2d532bf88e342f1e9e464be2be0a7933a727aa001467684a08d1d7152c0cffd2",
       "candidateSha256": "e513ee0b9093d37dc7ba0ce3182dd2b1bc3b435980741dd09d9f7f12c16a6d2d",
       "justification": "Every remaining formatter edit, including repeated edits, is byte-identical to an edit in the pinned current upstream file. Fork-owned formatting is not exempted; source, formatter, config and live edit proof must all still match.",
@@ -32,7 +32,7 @@
     {
       "scope": "current-client",
       "path": "frontend/app/src/components_mobile/home/AnonFooter.svelte",
-      "baseCommit": "98a178bef2d67efb6b85a5772a6164fe7134074c",
+      "baseCommit": "65e265f027cc50a1ea333dd94acbb7816992b54c",
       "baseSha256": "cc49579c7170db7b1ca13cae81c326dd864cbe400ed0cb60a292212db4816f04",
       "candidateSha256": "648dddf83859f0fef4451b0033fa7c8cd2c3e259d1a61c9c372db586e73b429e",
       "justification": "Every remaining formatter edit, including repeated edits, is byte-identical to an edit in the pinned current upstream file. Fork-owned formatting is not exempted; source, formatter, config and live edit proof must all still match.",
@@ -55,7 +55,7 @@
     {
       "scope": "current-client",
       "path": "frontend/app/src/components_mobile/home/SlidingModals.svelte",
-      "baseCommit": "98a178bef2d67efb6b85a5772a6164fe7134074c",
+      "baseCommit": "65e265f027cc50a1ea333dd94acbb7816992b54c",
       "baseSha256": "3716ad25bcd81922d0b38316659d3e4cf852f6b8481f77f4f8cf1b70a86a6b31",
       "candidateSha256": "cf3d0ae73592b284ee848c7afc0de886547ed8c0bf2666f9b90af6e018196e74",
       "justification": "Every remaining formatter edit, including repeated edits, is byte-identical to an edit in the pinned current upstream file. Fork-owned formatting is not exempted; source, formatter, config and live edit proof must all still match.",
@@ -83,7 +83,7 @@
     {
       "scope": "current-client",
       "path": "frontend/app/src/components_mobile/home/groupdetails/DirectChatDetails.svelte",
-      "baseCommit": "98a178bef2d67efb6b85a5772a6164fe7134074c",
+      "baseCommit": "65e265f027cc50a1ea333dd94acbb7816992b54c",
       "baseSha256": "2fa406677f2c8f3c7270fe9ff8575b2a766d9b7627372df6957db8335ffc7298",
       "candidateSha256": "9f40573499317b17d97007415facc3ba1eccdd86fb9557e4482ff26c3c6bd074",
       "justification": "Every remaining formatter edit, including repeated edits, is byte-identical to an edit in the pinned current upstream file. Fork-owned formatting is not exempted; source, formatter, config and live edit proof must all still match.",
@@ -107,7 +107,7 @@
     {
       "scope": "current-client",
       "path": "frontend/app/src/components_mobile/home/groupdetails/GroupDetails.svelte",
-      "baseCommit": "98a178bef2d67efb6b85a5772a6164fe7134074c",
+      "baseCommit": "65e265f027cc50a1ea333dd94acbb7816992b54c",
       "baseSha256": "18860a2f9227231b0ed4d62633695e391c4294502be9d4394c0a07119a6650ef",
       "candidateSha256": "8b609a4936974f1548a2360b83529993215695430a9887cfde7fa3790084a3c8",
       "justification": "Every remaining formatter edit, including repeated edits, is byte-identical to an edit in the pinned current upstream file. Fork-owned formatting is not exempted; source, formatter, config and live edit proof must all still match.",
@@ -142,7 +142,7 @@
     {
       "scope": "current-client",
       "path": "frontend/app/src/stores/settings.ts",
-      "baseCommit": "98a178bef2d67efb6b85a5772a6164fe7134074c",
+      "baseCommit": "65e265f027cc50a1ea333dd94acbb7816992b54c",
       "baseSha256": "a8df69a7540e272044caef6d11ace0d66bd415c29dd8dce80b6929451dbdef7b",
       "candidateSha256": "b2fa51210f3d3c7d5badaf745fb4837180a3292c6769284937c4b53a8f520e61",
       "justification": "Every remaining formatter edit, including repeated edits, is byte-identical to an edit in the pinned current upstream file. Fork-owned formatting is not exempted; source, formatter, config and live edit proof must all still match.",
@@ -164,7 +164,7 @@
     {
       "scope": "current-client",
       "path": "frontend/openchat-agent/src/services/identity/identity.client.ts",
-      "baseCommit": "98a178bef2d67efb6b85a5772a6164fe7134074c",
+      "baseCommit": "65e265f027cc50a1ea333dd94acbb7816992b54c",
       "baseSha256": "213b10c2e1bdd8ad97dd2406cb535a58ce8e89cbc0b1cb5aacf8539267910a32",
       "candidateSha256": "6343cc7868aac7d65ca6cdf4c9dc30248515f752bb269590a110dd4ff6697f0d",
       "justification": "Every remaining formatter edit, including repeated edits, is byte-identical to an edit in the pinned current upstream file. Fork-owned formatting is not exempted; source, formatter, config and live edit proof must all still match.",
@@ -185,7 +185,7 @@
     {
       "scope": "current-client",
       "path": "frontend/openchat-agent/src/services/identityAgent.ts",
-      "baseCommit": "98a178bef2d67efb6b85a5772a6164fe7134074c",
+      "baseCommit": "65e265f027cc50a1ea333dd94acbb7816992b54c",
       "baseSha256": "27e187a538bf1e4324affc76fb56e855fc48029d0dc4b72364a92bc79b344d9c",
       "candidateSha256": "603121ecd5eee021a0334b6a5d85ac5fac3551ede2fff6b598fb179d73252691",
       "justification": "Every remaining formatter edit, including repeated edits, is byte-identical to an edit in the pinned current upstream file. Fork-owned formatting is not exempted; source, formatter, config and live edit proof must all still match.",
@@ -210,7 +210,7 @@
     {
       "scope": "current-client",
       "path": "frontend/openchat-client/src/state/app/stores.ts",
-      "baseCommit": "98a178bef2d67efb6b85a5772a6164fe7134074c",
+      "baseCommit": "65e265f027cc50a1ea333dd94acbb7816992b54c",
       "baseSha256": "575c7a1f8f627f03c9b322505f26e1724c130f2a5d4f61c9268b9b7b9b3e07bf",
       "candidateSha256": "44cf5734c0ec317014f458b57ffc17e265a7d839513632a34d7f6ae525999c8d",
       "justification": "Every remaining formatter edit, including repeated edits, is byte-identical to an edit in the pinned current upstream file. Fork-owned formatting is not exempted; source, formatter, config and live edit proof must all still match.",
@@ -231,7 +231,7 @@
     {
       "scope": "current-client",
       "path": "frontend/openchat-service-worker/src/service_worker.ts",
-      "baseCommit": "98a178bef2d67efb6b85a5772a6164fe7134074c",
+      "baseCommit": "65e265f027cc50a1ea333dd94acbb7816992b54c",
       "baseSha256": "740c474f7229ed6fe16c7e70e3475dc3d7cf7c37fea899bae5165efceeb2f277",
       "candidateSha256": "f3b0d2e52037a98f5e215fd9282ae49125374082d8c9ce1821987fce2316c36d",
       "justification": "Every remaining formatter edit, including repeated edits, is byte-identical to an edit in the pinned current upstream file. Fork-owned formatting is not exempted; source, formatter, config and live edit proof must all still match.",
