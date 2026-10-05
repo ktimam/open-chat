@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [unreleased]
 
+### Added
+
+- Reclaim the canisters which only the old LocalGroupIndex still controls and put them into the pool, then move its ICP to the CyclesDispenser and refund its own cycles ([#9773](https://github.com/open-chat-labs/open-chat/pull/9773))
+
+### Changed
+
+- Run the repeating jobs on `PerRoundTimer` rather than `set_timer_interval` ([#9772](https://github.com/open-chat-labs/open-chat/pull/9772))
+
+### Removed
+
+- Remove the one-off refund of the pool canisters' cycles, which ran on the last upgrade ([#9770](https://github.com/open-chat-labs/open-chat/pull/9770))
+
+## [[2.0.2094](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2094-local_user_index)] - 2026-10-05
+
 ### Changed
 
 - Top up MultiUser canisters by 5T cycles at a time, and when below 10T ([#9735](https://github.com/open-chat-labs/open-chat/pull/9735))

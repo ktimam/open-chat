@@ -10,6 +10,37 @@ Public branding, hosting and native Android authentication are separate release 
 end-to-end acceptance is not complete.** Earlier dated checkpoints below remain
 historical evidence, not a claim that their artifacts were rebuilt from current main.
 
+### October 5: upstream integration and recovered local environment
+
+Official upstream `0519aa39964a34d165173587b4d63e572c89670d` is integrated
+with the output-budget fix at `08f8cf846fccddaa7f4ea7cdcd064616beee41a7`.
+The only manual merge resolutions combine the existing `onDestroy` imports with
+upstream's `untrack` imports in both message composers. The backend tree is
+exactly upstream's `5dd2d8447467dde7b3eb59a25bf0a06bc2af0e2a`; no custom
+OpenChat backend was deployed. The combined frontend passed 6,207/6,207 tests,
+Svelte checking reported zero errors and 573 existing warnings, and the existing
+214 scoped CI-policy tests passed. The full test report is
+`F:/Temp/OpenChat-IOU/merge-verification-20261005/frontend-full-tests.json`,
+SHA-256 `b731bc121b1bc059a7ce4a5ada6682dbf7bf6ac5c2c557aa9f46d95a287c954c`.
+The byte-identical dirty snapshot anomaly was left unstaged.
+
+The approved IOU recovery first made and byte-verified a backup of 1,220 files
+(5,998,945,219 bytes), then checkpointed and strictly reopened the existing
+state. Gateway 8080 is healthy; no reset, deployment or new canister occurred.
+See `F:/Temp/OpenChat-IOU/recovery-20261005/result.json` (SHA-256
+`0f905a97262bf01f81ce98a6d20f8935f21893d3ef6d619034f5890a44544893`).
+
+APK031's approved cold-reopen observation passed: two complete normal Chats
+snapshots showed the existing account and Kiko chat without sign-in or provider
+UI. No authentication, model, card or delivery interaction was performed.
+See `F:/Temp/OpenChat-IOU/emulator-public-ui-20261002/apk031-cold-reopen-observe-r1/result.json`,
+SHA-256 `63619ce6cb3f2859ddfa15f42c8a711d70196b7d9c2a4ffc1e91dc38323c26e7`.
+This supersedes only the pending home/session observation below, not card or
+delivery acceptance. Served web031 and installed APK031 still contain their
+original source, not this merge or the later output-budget fix. Fresh Connect,
+model regressions, encrypted end-to-end delivery and rebuilt artifacts remain
+release gates.
+
 ### Current build031 source, artifacts and normal-browser checks
 
 APK031 (x86_64 and aarch64) and web031 (v1 and v2) were independently verified
