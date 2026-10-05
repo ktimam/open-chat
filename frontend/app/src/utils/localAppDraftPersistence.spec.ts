@@ -885,7 +885,7 @@ describe("frozen encrypted per-card app metadata", () => {
         expect(result.cards[0].app!.actions[0].draftSchema).toEqual(saved.draft.schema);
     });
 
-    it("roundtrips original action, presentation and choices without rebinding or plaintext metadata", async () => {
+    it("roundtrips original action, presentation, view and choices without rebinding or plaintext metadata", async () => {
         const original = fixture();
         const saved = snapshotSavedLocalAppDraft({
             ...original,
@@ -918,12 +918,21 @@ describe("frozen encrypted per-card app metadata", () => {
                 },
             ],
         };
+        app.actions[0].draftView = {
+            version: 1,
+            nodes: [
+                { kind: "text", text: "Original app view" },
+                { kind: "row", children: [{ kind: "field", field: "note" }] },
+            ],
+            theme: { light: { surface: "#ffffff" } },
+        };
         const snapshot = snapshotSavedLocalAppDraftCollection({
             version: 2,
             cards: [{ saved, app, source: sourceReference }],
         });
         app.actions[0].definition.card.rows[0].label = "Changed label";
         app.actions[0].draftEditor.choices[0].options[0].label = "Changed choice";
+        app.actions[0].draftView.nodes[0].text = "Changed view";
         expect(snapshot.cards[0].app!.actions[0].definition.card.rows[0].label).toBe(
             "Original note",
         );
@@ -932,6 +941,11 @@ describe("frozen encrypted per-card app metadata", () => {
         );
         expect(Object.isFrozen(snapshot.cards[0].app!.actions[0].draftPresentation)).toBe(true);
         expect(Object.isFrozen(snapshot.cards[0].app!.actions[0].draftEditor)).toBe(true);
+        expect(snapshot.cards[0].app!.actions[0].draftView?.nodes[0]).toEqual({
+            kind: "text",
+            text: "Original app view",
+        });
+        expect(Object.isFrozen(snapshot.cards[0].app!.actions[0].draftView?.nodes)).toBe(true);
         const db = backend();
         await createLocalAppDraftStorage(db.store).write(scope, snapshot);
         const row = db.records.get(scopeKey())!;
@@ -939,6 +953,21 @@ describe("frozen encrypted per-card app metadata", () => {
             /Original|Frozen|private-category-id|PRIVATE_CHAT_REFERENCE/,
         );
         expect(await createLocalAppDraftStorage(db.store).read(scope)).toEqual(snapshot);
+    });
+
+    it("rejects saved app views that refer outside the persisted canonical row", () => {
+        const saved = fixture();
+        const app = JSON.parse(JSON.stringify(appFixture(saved)));
+        app.actions[0].draftView = {
+            version: 1,
+            nodes: [{ kind: "field", field: "notInSavedSchema" }],
+        };
+        expect(() =>
+            snapshotSavedLocalAppDraftCollection({
+                version: 2,
+                cards: [{ saved, app }],
+            }),
+        ).toThrow();
     });
 
     it.each(["id", "revision", "destination", "action", "schema"] as const)(

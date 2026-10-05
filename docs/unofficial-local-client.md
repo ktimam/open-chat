@@ -4,6 +4,192 @@ This is an experimental frontend profile, not an official OpenChat release. It u
 the checked-in official canister IDs without deploying modified OpenChat canisters.
 Public branding, hosting and native Android authentication are separate release gates.
 
+## Current checkpoint — October 5, 2026
+
+**Compact inline cards and build030 artifacts are verified; final model/IOU
+end-to-end acceptance is not complete.** Earlier dated checkpoints below remain
+historical evidence, not a claim that their artifacts were rebuilt from current main.
+
+### Source and artifacts
+
+APK030 and web030 v1/v2 were independently verified against fork main commit
+`9b203c76e0c49b68f16def97aff462c7d974e32d`, tree
+`0f9a35a46da95a10237e486349c41637bd1cae43`. This includes upstream
+`65e265f027cc50a1ea333dd94acbb7816992b54c` through merge `b76e411fe`.
+The OpenChat backend tree is exactly upstream's
+`57820102df62dcfbb50fc934cf7d41171228d81c`; no modified OpenChat canister is
+required or deployed for these client changes. The frozen source inventory covers
+6,672 selected committed files, SHA-256
+`f8b6ecabb391489d98886ad94a438e2509ba8e35e8e520a08c65f3479c32a9d5`.
+The pre-existing snapshot status anomaly was recorded, preserved and excluded as
+a working-tree input; its committed and working bytes matched. This is not a
+claim that the checkout was clean. Later documentation edits do not relabel builds.
+
+Both APKs use package `dev.openchatfork.localtest`, version `0.0.1`/code `1`,
+build ID `93196addd14106dc1e3455224a46f2bc`, and the same local-test signer as
+APK029. The frozen frontend and embedded APK assets were checked independently.
+
+| APK030 target | Bytes | APK SHA-256 |
+| --- | ---: | --- |
+| x86_64 | 72,400,315 | `f1688e0afd36c8617e2632136e3c03a6249ce087a471f6ac11a8b08be1c55881` |
+| aarch64 | 79,675,705 | `acd4dbaaa5ae57d8c89c7fe0569bab519ba5086e39dfbf2f1584470dd780e8c9` |
+
+Retained reports under `F:/Temp/OpenChat-IOU/native-transport-apk-030/artifacts/`
+are `APK030-VERIFIED-x86_64.json` (SHA-256
+`da15ab16aa16290c393f5b11ff4ce644cdff2d64062eac34b7d912b7af1579be`)
+and `APK030-VERIFIED-aarch64.json` (SHA-256
+`06d5820d600b38c1f1dcdae49efafe1efdce7e3bd3fe30bd7e5d0d3ff19c6769`).
+Their static artifact passes expressly do not grant device/provider, model,
+delivery, CI or release acceptance.
+
+Web030 v1 is `2.0.0-localtest.c13dcd443fb3d40c7a52a0283981f687`; v2 is
+`2.0.0-localtest.67c940418b9778d2c3ff7d01192fe0b9`. Both retain official
+backend configuration, local-only app support and disabled official OTA. Reports
+under `F:/Temp/OpenChat-IOU/web-qualification-030/artifacts/` are
+`WEB030-VERIFIED-v1.json` (SHA-256
+`56229d931cd628b12a58457fd3c6da5a281ee174680d6c7ed15d48c2cb05ab2e`)
+and `WEB030-VERIFIED-v2.json` (SHA-256
+`6d3fa39734222fdd92295a984a62aff357888704eb9acd6123bbe049b5f512a0`).
+These verify exact tracked source, emitted card sources and output bytes/config;
+they are distinct from the normal-UI observations below.
+
+The APK build was **not fully offline**. The Gradle wrapper downloaded its
+8.14.4 binary distribution before the dependency-resolution offline policy took
+effect. `GRADLE-WRAPPER-BOOTSTRAP-OBSERVATION.json` records that the ZIP matched
+the committed and published SHA-256 and all 317 unpacked files matched that ZIP.
+The preflight had checked the launcher, not every wrapper cache-readiness condition.
+This verified toolchain bootstrap was not a model download; offline dependency
+resolution does not imply an offline wrapper bootstrap.
+
+### UI and CI evidence, with limits
+
+Normal browser checks on web030 v1 desktop and v2 at 390 CSS pixels restored the
+existing synthetic saved card at its source message as a non-modal inline region.
+The amount/date/Type fields were retained, with two-column controls, a full-width
+note and no horizontal overflow. The respective UI receipts are
+`web-v1-inline-card-ui.json` and `web-v2-mobile-inline-card-ui.json` beside the web
+reports. No new model proposal, send or IOU save was established by those checks.
+
+On the persistent emulator, APK030 x86_64 was installed over APK029 with
+`adb install -r`; package signature and installed APK hash matched the reports.
+No uninstall, data clearing, new passkey or account creation was used. Normal
+launch restored the existing account/chat and enabled app setting. The existing
+device-local synthetic card retained all seven fields and was attached to its
+original message row, not shown in a modal. At 411 CSS pixels, the card and all
+controls fit the viewport. Restoring it required fresh review; no approval or
+send was restored. The receipt is
+`F:/Temp/OpenChat-IOU/card-ui-restoration-20261005/apk030-emulator-inline-card.json`.
+This proves upgrade/restoration/layout, not fresh inference, delivery, receiver
+persistence or ARM/physical-phone runtime. Screenshots and private fixtures remain
+outside the repository.
+
+Presentation fidelity means the compact source-attached card flow is restored.
+It does **not** mean pixel-identical reproduction of the former backend-authored
+arbitrary-HTML card. The current host renders generic schema fields and keeps
+the card private to this device; app-owned interpretation and encrypted, explicitly
+approved delivery remain separate from presentation.
+
+**The original app-authored card presentation is still a release requirement.**
+Inline placement alone did not restore it: the current generic form differs in row
+grouping, control style, note control, review chrome and consumed/read-only behavior.
+The original app's pure card UI remains available in its own repository. Restoring
+that presentation must not restore a remote app iframe receiving unapproved draft
+values, per-draft backend attestation or application-specific fields in OpenChat.
+The working tree now supports optional action-level `draftView` metadata: the
+verified public catalog binds a bounded, inert layout, palette and canonical field
+references. Private connection setup must contain exactly that public view. No
+new iframe, executable DOM code, network endpoint or app-specific host field is
+introduced. Existing choice/default callbacks, date validation and pending-edit
+guards remain authoritative. The main card uses the app layout while editing,
+then displays the complete canonical outgoing values outside app paint after
+Review, before the existing explicit confirmation and encrypted send. Any edit
+revokes that review. Delivered cards use host-owned read-only mode and labels.
+The original IOU row groups/palette and single-line note are supplied by IOU;
+its staged catalog-only export retains the exact published processor bytes and
+prompts. The normal-flow mounted web/native suite passes 79 tests, including seven
+new view-flow cases. This source integration is not present in build030, and unit
+tests are not proof of rendered browser/APK fidelity or final delivery acceptance.
+Subsequent working-tree verification passed all 5,995 frontend tests in 359 files;
+Svelte checking remained at zero errors and 573 existing warnings. The later
+modal-only keyboard fix brings the full passing suite to 6,020 tests in 359 files.
+It adds initial focus, Tab containment and safe focus restoration only for the
+saved-card modal, without trapping inline cards or replacing the live editor.
+Its targeted surface/parent suite passes 91 tests; real-browser keyboard checking
+and installed-APK verification of these final changes remain pending. A separate
+synthetic Edge component harness exercised the actual IOU package producer and
+OpenChat renderer at 390 and 720 pixels, in both themes, with one/two entries.
+It confirmed 44-pixel controls, no horizontal overflow, visible dark-mode native
+date controls, Type defaults/manual overrides, optional-date removal, a None-only
+empty Type roster and wrapping of an unbroken 630-character read-only note.
+The harness has no account, persistence, model or delivery capability. Its source
+receipt and screenshot are under
+`F:/Temp/OpenChat-IOU/card-view-visual-final-20261005/`; these observations do not
+qualify the normal browser flow or emulator, and do not relabel build030.
+Arbitrary app JavaScript must not run in a DOM frame with the draft; an opaque
+sandbox and network CSP alone are not a complete self-navigation/leakage boundary.
+
+At the exact source commit, the [frontend workflow](https://github.com/ktimam/open-chat/actions/runs/37244560682)
+passed. All six functional jobs in the [scoped feature workflow](https://github.com/ktimam/open-chat/actions/runs/37244560738)
+passed, including both native platforms, Android compilation/lifecycle contracts,
+frontend model contracts and the small pinned real-inference fixture. That fixture
+does not qualify the production image models. The retained local final frontend
+log reports 5,849 tests in 357 files passing; Svelte checking reports zero errors
+and 573 warnings, not a warning-free check.
+
+The scoped workflow remains **red** at its dependency/advisory job. The npm result
+is the already deferred `braces@3.0.3` / `GHSA-vfj7-8cjw-p6xm`; the ten Rust
+advisory rows match the recorded exact-version deferrals. See the
+[npm disposition](releases/npm-feature-advisory-triage.md#october-4-local-test-braces-deferral)
+and [Rust disposition](releases/rust-feature-advisory-triage.md#october-2-local-test-deferral).
+Collection/schema checks and scoped licenses passed; findings and conservative
+scope/freshness limits remain disclosed. Deferral is local-test-only, not a clean
+scan, suppression, broader waiver or public-release approval.
+
+### Remaining acceptance work
+
+- **Restored app presentation:** package the current app-layout implementation in
+  the next verified web/APK build, then repeat normal Apps/Connect, inline editing,
+  saved-card restoration and encrypted delivery on the emulator. The saved-card
+  modal's implemented keyboard focus entry/containment/restoration still needs a
+  real-browser accessibility check; unit coverage and the earlier isolated
+  component harness do not establish that result.
+- **App-owned image contract:** the expanded direction/multi-entry candidates are
+  inactive; shipped prompts, weights and configuration have not been replaced.
+  The later R3 compact six-slot Gemma candidate returned both synthetic invoices
+  within the unchanged 96-token cap and passed the Arabic and missing-date cases.
+  A fourth case repeated the printed currency inside the amount slot: the original
+  strict format failure remains recorded. A separately versioned inactive adapter
+  accepts only the exact repeated currency token and passes retained-output replay;
+  this is not a fresh end-to-end inference pass. Qwen's R3 grouping candidate still
+  truncated the two-entry output. A synthetic-only instrumented trace proved both
+  96-token exhaustion and an already-complete first entry omitting printed direction;
+  raising the limit alone would not fix it. Single-entry Arabic/missing-date cases
+  passed their prospectively declared output policy. Structured-output replay alone
+  is not image accuracy. Qualify the chosen contract on the retained corpus, conflicting/missing
+  evidence and repeated use before activation; keep resource and complete-output
+  guards intact.
+- **Footer-only user Type matching:** factual matching remains unqualified.
+  Private Type data must reach an app-owned prompt through an allowed, verified
+  contract without weakening publisher binding or introducing IOU logic into
+  OpenChat. The inactive template-mutating approach fails current binding;
+  existing generic rule guidance is a possible route to investigate, not yet a
+  qualified solution or proof that a new host API is required.
+- **Local IOU readiness:** the strict existing-state restart rejected an incomplete
+  saved NNS checkpoint and port 8080 was unavailable. No reset, new canister,
+  deployment or repair was performed by that check. A separately authorized,
+  fresh-backup-verified recovery and readiness check are still required; prior
+  backups must be retained and uncheckpointed writes may be unrecoverable.
+- **Final normal flows:** after recipe qualification and IOU recovery, verify fresh
+  web/APK proposals, local persistence, exact-request approval, encrypted handoff,
+  receiving-app review/save/readback and repeat/recovery behavior on the intended
+  configuration. Earlier successful delivery receipts remain labelled to their
+  original builds; APK030's saved-card check does not replace these steps.
+
+Physical-phone testing, public branding/domain, public provider qualification and
+public publication remain deferred. Optional voice retains its documented
+synthetic-recording limitation. Neither those choices nor exact advisory deferrals
+waive the image/Type/IOU acceptance work above.
+
 ## Start and sign in
 
 From the repository root, with the frontend dependencies installed:

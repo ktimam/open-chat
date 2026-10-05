@@ -77,6 +77,41 @@ function fixture() {
 }
 
 describe("imported declarative local app catalog", () => {
+    it("validates and freezes an optional app view against the canonical handoff row", () => {
+        const input = fixture();
+        const draftView = {
+            version: 1,
+            theme: { light: { surface: "#ffffff" } },
+            nodes: [
+                { kind: "text", text: "App-owned layout" },
+                { kind: "row", children: [{ kind: "field", field: "label" }] },
+            ],
+        };
+        Object.assign(input.apps[0].actions[0], { draftView });
+        const action = parseLocalAppCatalog(JSON.stringify(input)).apps[0].actions[0];
+        expect(action.draftView).toEqual(draftView);
+        expect(Object.isFrozen(action.draftView?.nodes)).toBe(true);
+        expect(Object.isFrozen(action.draftView?.theme?.light)).toBe(true);
+        expect(action.draftView).not.toHaveProperty("requiresCompleteHostReview");
+        expect(projectLocalAppPayload(action, [{ label: "source value" }])).toEqual({
+            items: [{ label: "source value" }],
+        });
+        draftView.theme.light.surface = "#000000";
+        expect(action.draftView?.theme?.light?.surface).toBe("#ffffff");
+    });
+    it.each([
+        null,
+        { version: 2, nodes: [{ kind: "field", field: "label" }] },
+        { version: 1, nodes: [{ kind: "field", field: "items" }] },
+        { version: 1, nodes: [{ kind: "field", field: "missing" }] },
+        { version: 1, nodes: [{ kind: "field", field: "label", value: "replacement" }] },
+        { version: 1, nodes: [{ kind: "text", text: "Review", onclick: "send()" }] },
+        { version: 1, nodes: [{ kind: "iframe", src: "https://example.invalid" }] },
+    ])("rejects invalid, schema-mismatched or executable draftView metadata %#", (draftView) => {
+        const input = fixture();
+        Object.assign(input.apps[0].actions[0], { draftView });
+        expect(() => parseLocalAppCatalog(JSON.stringify(input))).toThrow();
+    });
     it("validates and freezes named choices without copying editor setup into payload", () => {
         const input = fixture();
         Object.assign(input.apps[0].actions[0].draftSchema.properties.items.items.properties, {

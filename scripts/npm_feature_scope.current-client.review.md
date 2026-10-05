@@ -913,3 +913,116 @@ policy. Existing approval and request checks remain required. This is **source
 identity evidence only**: it does not attest a committed revision, a built APK
 or web artifact, browser/emulator/provider behavior, an advisory waiver, a core
 audit, deployment or release acceptance.
+
+## October 5 inert app-owned view working-tree checkpoint
+
+This append-only review binds the uncommitted working tree based on main
+`9b203c76e0c49b68f16def97aff462c7d974e32d` to
+`e120dafdc8eea5def22b8e2aef60b5f6790b31692c53027e343eea5914b42b26`.
+Independently reading all 175 predecessor Git blobs reproduces
+`274cc344469da04f63e1959dea1508030e54ecc2187355f1798e787ef3314164`.
+Only five runtime paths differ (identities are UTF-8/LF SHA256):
+
+| Runtime path under `frontend/app/src/` | Previous identity | Current identity |
+| --- | --- | --- |
+| `utils/localAppView.ts` | Added | `67825c6d9a2c00a57031d7a22bb363ef0a94dbe17dd843f1d4c54d5c0951ce65` |
+| `components_shared/LocalAppCards.svelte` | `ba1d846994b4d3a3b2abc9a3895a4cab2db4d10756f27995f61e24d649bde83e` | `c70d3c3575e75ba4e1fee76bd2a90a925da48bdde0f5e9e103db317d21036f1a` |
+| `components_shared/PrivateAppDraftFields.svelte` | `d96e2057200a574753662533636a41f95c36dbbd6d1d1cfb856871db5fcdef75` | `53d7336c24532532e41b2ed354f15e2eb72fcc66d20821439dab6025101292ab` |
+| `utils/localAppCatalog.ts` | `76968c6a2f96247dce636bc5b34d671cb4b5e1866c97fe0deadd6c487c11e4e4` | `5f0565e2ea1980f32a33d76b041d43b65ae2dd9b7b5742e4141fafefeef65c98` |
+| `utils/localAppDirectory.ts` | `f0e444625be5dc8f8207189ec7fb9827ba429c5901c0a895dd5365251f30da22` | `384c2e42159bf35856f8020cc9eae36cb6a68363c77315d71bcb54d9acea6ade` |
+
+The new validator belongs to the existing current-only `localApp` selector.
+No selector or package root is broadened. Optional `draftView` is inert bounded
+metadata, validated against the current action schema/handoff and exactly bound
+to the public publisher catalog during private Connect. Existing whole-catalog
+and encrypted whole-card persistence already preserve and revalidate it.
+Rendering reuses the existing edit callbacks. App-owned palette/layout metadata
+is confined to its presentation subtree; the host's complete canonical values,
+approval lifecycle, invalid-edit blocking and delivery controls remain outside
+that styling and app control. No app-specific fields or meaning enter OpenChat.
+
+Composition is **176 sources, 128 dedicated owners, 108 exact anchors and
+26 roots**. The transition test removes only the added validator and substitutes
+the four exact predecessor identities, preserving the complete 175-source
+checkpoint and every older historical proof. Separate live assertions bind each
+new/changed source, reject removals and drift, and reject unreviewed imports.
+The new validator/view tests and extended catalog, directory, persistence, card
+and native-workspace tests are explicitly checked as non-runtime owners. The
+existing Git-derived formatting inventory discovers them without exceptions.
+
+No manifest, lockfile, advisory rule, historical snapshot, native/backend code,
+model/prompt, authentication or delivery-encryption change is made by this review.
+This is source-identity evidence only, not a frozen commit, build, browser/native
+runtime acceptance, model qualification, security waiver, audit or release claim.
+
+### Host-controlled native field color-scheme correction
+
+Actual browser inspection of the first diagnostic build found an invisible native
+date icon in dark mode. The only subsequent runtime change is one
+`style:color-scheme` line on the validated presentation subtree in
+`PrivateAppDraftFields.svelte`, choosing only `dark` or `light` from the existing
+host-owned theme. App metadata cannot supply that property, and host review and
+delivery remain outside the subtree. Its UTF-8/LF SHA256 changes from
+`53d7336c24532532e41b2ed354f15e2eb72fcc66d20821439dab6025101292ab` to
+`90a3ca61b154cf947b99b123b79d411846924b521ee119b7d121fa7a93ecec72`.
+
+The current aggregate is
+`6cbcfdf5bc8a0035f90191d2b725eda29ac293a13ad387e8253497943e76662c`.
+The regression reverses exactly that one line to reproduce the complete
+`e120dafd` checkpoint, preserving all older historical hashes and counts. The
+live gate and changed-source tests bind the corrected bytes. Counts remain
+176 sources,128 owners,108 anchors and26 roots; imports and package policy do
+not change. Earlier e120 artifact evidence is superseded for current-source
+matching, not retroactively relabeled. This is not release/runtime acceptance.
+
+### Final optional-field and read-only layout corrections
+
+The final source aggregate is
+`a2fc3d5561fbfa3d360c083cf9b77dd0c91f6ae5305aad68873c021fecb54cfe`.
+Compared with the `6cbcfdf5` checkpoint, only two existing owners change:
+
+- `PrivateAppDraftFields.svelte`: `90a3ca61b154cf947b99b123b79d411846924b521ee119b7d121fa7a93ecec72`
+  becomes `ccd84296b3ba15b41b62b75b2602ac78ddb6585deb665df908cfadcf97cf2066`.
+- `localAppDraftChoices.ts`: the independently verified committed predecessor
+  `4e72cf0063dd7917d0a106b876fe53f63beb026d4b4cbbd429f811b7fe782a5d`
+  becomes `94e9c295b2b80507c0f19f3094c5b7439783e11a48208fbf131c1a572707945d`.
+
+An intentionally cleared optional native date now uses the existing omission
+callback; incomplete native input and required dates remain blocked. Read-only
+values wrap without overflow. Generic None-only choices require explicit bounded
+companion ownership, validate optional scalar schema fields, and remove only
+those fields without inventing values/defaults. Nonempty declarations preserve
+their existing semantics; unknown, overlapping or required companions fail.
+No app-specific names or meanings are added to OpenChat.
+
+The history regression reverses exactly six renderer hunks, substitutes the one
+verified helper predecessor identity, and reproduces both `6cbcfdf5` and
+`e120dafd` before all older histories. Current six changed/added runtime inputs
+remain individually pinned against removal/drift. Counts remain **176 sources,
+128 owners, 108 anchors and 26 roots**, with no selector, dependency, policy,
+backend, model/prompt, authentication or encryption changes. Prior artifacts
+remain intermediate; this source review is not runtime or release acceptance.
+
+### Modal keyboard lifecycle checkpoint
+
+The final scoped aggregate is
+`f8f5e475b47d80028579edb7133385b91a870ae97e836c24554ff62143553217`.
+Only the existing dedicated `LocalAppCardSurface.svelte` changes from the
+previous `a2fc3d55` checkpoint: UTF-8/LF SHA256
+`a8e3fb4493e39b8fbe4e31182ffd675d14455bb9bbb7bafcaddc5030dab71036`
+becomes `35e3f4abca8de9ca54683c5a025368fe20d6b7b91550ad8afbff7b79feef16b5`.
+
+This host-only modal focus lifecycle contains Tab navigation among available
+controls and restores focus safely on close. It is disabled for inline placement
+and keeps the same live editor, including pending input/caret state. The sole
+external import remains Svelte; no app-owned execution or data semantics are
+introduced. Tests and the existing test shell remain non-runtime sources.
+
+The regression substitutes exactly the independently read predecessor surface
+identity and reproduces the complete `a2fc3d55` aggregate. It also preserves
+`6cbcfdf5`, `e120dafd` and every older checkpoint. Live source drift/removal and
+unreviewed imports remain rejected. Composition stays **176 sources, 128 owners,
+108 anchors and 26 roots**, with no selector, dependency, advisory or backend
+policy changes. Existing web artifact reports remain evidence of their earlier
+actual source, not this final checkpoint. This is not build/runtime/release
+acceptance.

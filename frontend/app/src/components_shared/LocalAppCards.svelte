@@ -14,6 +14,7 @@
     import { navigate } from "@utils/navigation";
     import LocalAppCardSurface from "./LocalAppCardSurface.svelte";
     import { localAppCardAnchorKey, localAppCardAnchors } from "../utils/localAppCardAnchors";
+    import { currentTheme } from "../theme/themes";
 
     let { client }: { client: OpenChat } = $props();
     let confirmed = $state(false);
@@ -284,6 +285,12 @@
                                     compact
                                     action={selectedAction}
                                     editorJson={workspaceView.editorJson}
+                                    view={selectedAction.draftView}
+                                    viewTheme={$currentTheme.mode}
+                                    reviewing={!!workspaceView.draft.approval}
+                                    readOnly={selectedAction.draftView !== undefined &&
+                                        workspaceView.draft.status !== "draft" &&
+                                        workspaceView.draft.status !== "reviewed"}
                                     disabled={!editable || workspaceView.busy}
                                     onchange={updateFields}
                                     onblocked={blockFieldEdit}

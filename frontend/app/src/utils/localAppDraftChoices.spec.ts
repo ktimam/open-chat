@@ -9,8 +9,12 @@ import {
     resetLocalAppDraftChoices as reset,
     selectLocalAppDraftChoice as select,
     validateLocalAppDraftEditor as validate,
+    localAppDraftChoiceCompanionFields,
     type DraftEditorV1,
 } from "./localAppDraftChoices";
+import { parseLocalAppCatalog } from "./localAppCatalog";
+import { bindConnectedLocalApp } from "./localAppDirectory";
+import { directoryFixture } from "./localAppDirectory.testFixtures";
 
 function fixture(kind: LocalAppAction["handoff"]["kind"] = "single"): LocalAppAction {
     const schema: LocalDraftSchema = {
@@ -345,5 +349,210 @@ describe("strict named choice declarations", () => {
             change(value);
             expect(() => validate(value, action.draftSchema, action.handoff)).toThrow();
         }
+    });
+});
+
+describe("explicit None-only named choices", () => {
+    function empty(kind: LocalAppAction["handoff"]["kind"] = "single"): LocalAppAction {
+        const action = fixture(kind);
+        return {
+            ...action,
+            draftEditor: {
+                version: 1,
+                choices: [
+                    {
+                        field: "presetId",
+                        label: "Preset",
+                        noneLabel: "None",
+                        options: [],
+                        companionFields: ["presetLabel"],
+                    },
+                ],
+            },
+        };
+    }
+    it("snapshots and serializes explicit ownership without any value or default", () => {
+        const action = empty();
+        const result = validate(action.draftEditor, action.draftSchema, action.handoff);
+        expect(result).toEqual(action.draftEditor);
+        expect(Object.isFrozen(result.choices[0].companionFields)).toBe(true);
+        expect(localAppDraftChoiceCompanionFields(result.choices[0])).toEqual(["presetLabel"]);
+        expect(validate(JSON.parse(json(result)), action.draftSchema, action.handoff)).toEqual(
+            result,
+        );
+        expect(data(initialize(action, json({ side: "keep", count: 42 })))).toEqual({
+            side: "keep",
+            count: 42,
+        });
+    });
+    it("allows explicit empty ownership without relaxing legacy nonempty choices", () => {
+        const action = empty();
+        const editor = {
+            version: 1,
+            choices: [{ ...action.draftEditor!.choices[0], companionFields: [] }],
+        };
+        expect(validate(editor, action.draftSchema, action.handoff)).toEqual(editor);
+        const legacy = fixture();
+        expect(localAppDraftChoiceCompanionFields(legacy.draftEditor!.choices[0])).toEqual([
+            "presetLabel",
+        ]);
+        expect(validate(legacy.draftEditor, legacy.draftSchema, legacy.handoff)).toEqual(
+            legacy.draftEditor,
+        );
+        expect(() =>
+            validate(
+                {
+                    ...legacy.draftEditor,
+                    choices: [{ ...legacy.draftEditor!.choices[0], companionFields: [] }],
+                },
+                legacy.draftSchema,
+                legacy.handoff,
+            ),
+        ).toThrow();
+    });
+    it.each([
+        { presetId: "stale", presetLabel: "Stale label", side: "keep" },
+        { presetId: "stale", side: "keep" },
+        { presetLabel: "Orphan label", side: "keep" },
+    ])("preserves stale evidence visibly and blocks it until explicit None: %j", (payload) => {
+        const action = empty(),
+            state = initialize(action, json(payload));
+        expect(data(state)).toEqual(payload);
+        expect(() => consistent(action, state.editorJson)).toThrow();
+        for (const value of ["stale", "None", "", "anything"])
+            expect(() => select(state, 0, "presetId", value)).toThrow();
+        const cleared = select(state, 0, "presetId", undefined);
+        expect(data(cleared)).toEqual({ side: "keep" });
+        expect(() => consistent(action, cleared.editorJson)).not.toThrow();
+    });
+    it("forbids direct selector/companion edits, preserving explicit unrelated values", () => {
+        const action = empty(),
+            state = initialize(action, json({ side: "keep" }));
+        for (const field of ["presetId", "presetLabel"])
+            expect(() => edit(state, 0, field, "fake")).toThrow();
+        const edited = edit(state, 0, "side", "manual");
+        expect(data(select(edited, 0, "presetId", undefined))).toEqual({ side: "manual" });
+        const restored = reset(state, json({ presetLabel: "orphan", side: "restored" }));
+        expect(data(select(restored, 0, "presetId", undefined))).toEqual({ side: "restored" });
+    });
+    it.each(["list", "wrapped-list"] as const)(
+        "clears exactly one %s row and preserves the envelope",
+        (kind) => {
+            const action = empty(kind),
+                records = [
+                    { side: "first" },
+                    { presetId: "stale", presetLabel: "old", side: "second" },
+                ];
+            const initial = kind === "list" ? records : { records, envelope: "preserved" };
+            const cleared = data(
+                select(initialize(action, json(initial)), 1, "presetId", undefined),
+            );
+            expect(cleared).toEqual(
+                kind === "list"
+                    ? [{ side: "first" }, { side: "second" }]
+                    : { records: [{ side: "first" }, { side: "second" }], envelope: "preserved" },
+            );
+            expect(initial).toEqual(kind === "list" ? records : { records, envelope: "preserved" });
+        },
+    );
+    it.each([
+        undefined,
+        null,
+        false,
+        "presetLabel",
+        ["unknown"],
+        ["nested"],
+        ["presetId"],
+        ["presetLabel", "presetLabel"],
+        ["__proto__"],
+        ["constructor"],
+        ["hidden\u202e"],
+        Array(9).fill("presetLabel"),
+    ])("rejects invalid explicit ownership %j", (companions) => {
+        const action = empty();
+        const value = {
+            version: 1,
+            choices: [{ ...action.draftEditor!.choices[0], companionFields: companions }],
+        };
+        expect(() => validate(value, action.draftSchema, action.handoff)).toThrow();
+    });
+    it("rejects missing ownership, required companions, and cross-selector conflicts in either order", () => {
+        const action = empty();
+        const choice = { ...action.draftEditor!.choices[0] };
+        delete choice.companionFields;
+        expect(() =>
+            validate({ version: 1, choices: [choice] }, action.draftSchema, action.handoff),
+        ).toThrow();
+        expect(() =>
+            validate(
+                action.draftEditor,
+                { ...action.draftSchema, required: ["presetLabel"] } as LocalDraftSchema,
+                action.handoff,
+            ),
+        ).toThrow();
+        const other = {
+            field: "side",
+            label: "Other",
+            noneLabel: "None",
+            options: [],
+            companionFields: ["presetLabel"],
+        };
+        for (const choices of [
+            [action.draftEditor!.choices[0], other],
+            [other, action.draftEditor!.choices[0]],
+        ])
+            expect(() =>
+                validate({ version: 1, choices }, action.draftSchema, action.handoff),
+            ).toThrow();
+    });
+    it("rejects prototype/accessor ownership without invoking code", () => {
+        const action = empty();
+        let accessed = 0;
+        const choice = { ...action.draftEditor!.choices[0] };
+        Object.defineProperty(choice, "companionFields", {
+            enumerable: true,
+            get() {
+                accessed++;
+                return ["presetLabel"];
+            },
+        });
+        expect(() =>
+            validate({ version: 1, choices: [choice] }, action.draftSchema, action.handoff),
+        ).toThrow();
+        expect(accessed).toBe(0);
+        const inherited = Object.assign(Object.create({ companionFields: ["presetLabel"] }), {
+            field: "presetId",
+            label: "Preset",
+            noneLabel: "None",
+            options: [],
+        });
+        expect(() =>
+            validate({ version: 1, choices: [inherited] }, action.draftSchema, action.handoff),
+        ).toThrow();
+    });
+    it("survives catalog/private binding serialization without changing public schema or view", async () => {
+        const source = await directoryFixture("sample", "1", true);
+        const advertised = JSON.parse(source.catalogJson),
+            connected = JSON.parse(source.connectedJson);
+        for (const catalog of [advertised, connected]) {
+            const action = catalog.apps[0].actions[0];
+            action.draftSchema.properties.presetId = { type: "string" };
+            action.draftSchema.properties.presetLabel = { type: "string" };
+        }
+        connected.apps[0].actions[0].draftEditor = empty().draftEditor;
+        const publicBytes = json(advertised),
+            publicCatalog = parseLocalAppCatalog(publicBytes);
+        const bound = bindConnectedLocalApp(json(connected), publicCatalog);
+        expect(bound.actions[0].draftEditor).toEqual(empty().draftEditor);
+        expect(Object.isFrozen(bound.actions[0].draftEditor!.choices[0].companionFields)).toBe(
+            true,
+        );
+        expect(
+            parseLocalAppCatalog(json({ version: 1, apps: [bound] })).apps[0].actions[0]
+                .draftEditor,
+        ).toEqual(empty().draftEditor);
+        expect(json(advertised)).toBe(publicBytes);
+        connected.apps[0].actions[0].draftSchema.properties.presetLabel = { type: "number" };
+        expect(() => bindConnectedLocalApp(json(connected), publicCatalog)).toThrow();
     });
 });

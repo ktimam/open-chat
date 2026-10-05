@@ -18,6 +18,9 @@ vi.mock("@client", async () => {
     };
 });
 vi.mock("@shared", () => ({ ANON_USER_ID: "anonymous" }));
+vi.mock("../theme/themes", async () => ({
+    currentTheme: (await import("svelte/store")).writable({ mode: "light" }),
+}));
 vi.mock("@utils/navigation", () => ({ navigate: vi.fn() }));
 vi.mock("./privateAppWorkspace", async () => {
     const { writable } = await import("svelte/store");

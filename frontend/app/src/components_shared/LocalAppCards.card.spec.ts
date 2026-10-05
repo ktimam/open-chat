@@ -5,6 +5,7 @@ import { currentUserIdStore, type OpenChat, type MessageContent } from "@client"
 import type { Writable } from "svelte/store";
 import LocalAppCards from "./LocalAppCards.svelte";
 import { privateAppWorkspace as workspace } from "../utils/privateAppWorkspace";
+import { currentTheme } from "../theme/themes";
 import { localAppCardAnchors, type LocalAppCardAnchorSource } from "../utils/localAppCardAnchors";
 import type {
     extractPrivateAppAction,
@@ -27,6 +28,9 @@ vi.mock("@client", async () => {
     };
 });
 vi.mock("@shared", () => ({ ANON_USER_ID: "anonymous" }));
+vi.mock("../theme/themes", async () => ({
+    currentTheme: (await import("svelte/store")).writable({ mode: "light" }),
+}));
 vi.mock("@utils/navigation", () => ({ navigate: calls.navigate }));
 vi.mock("../utils/aiActionRunner", () => ({ extractPrivateAppAction: calls.extract }));
 vi.mock("../utils/localAppSetupConnection", () => ({ connectLocalAppSetup: vi.fn() }));
@@ -276,6 +280,7 @@ const proposeNamed = async (
 
 beforeEach(async () => {
     vi.clearAllMocks();
+    (currentTheme as unknown as Writable<{ mode: "light" | "dark" }>).set({ mode: "light" });
     Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
         configurable: true,
         writable: true,
@@ -314,6 +319,142 @@ afterEach(async () => {
     if (originalScrollIntoView)
         Object.defineProperty(HTMLElement.prototype, "scrollIntoView", originalScrollIntoView);
     else Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
+});
+
+describe("app-owned view in the normal private-card flow", () => {
+    const themedCard = () => target.querySelector<HTMLElement>(".app-owned-view")!;
+    const fullReview = () =>
+        target.querySelector('[aria-label="Complete canonical outgoing values"]');
+    const proposeView = async (includeExtra = true) => {
+        const declaration = JSON.parse(catalog);
+        declaration.apps[0].actions[0].draftView = {
+            version: 1,
+            theme: {
+                light: { background: "#ffffff", text: "#101010" },
+                dark: { background: "#101010", text: "#ffffff" },
+            },
+            nodes: [
+                {
+                    kind: "row",
+                    children: [
+                        { kind: "field", field: "value", minWidth: 96 },
+                        ...(includeExtra
+                            ? [{ kind: "field", field: "extra", control: "single-line" }]
+                            : []),
+                    ],
+                },
+            ],
+        };
+        workspace.discard();
+        expect(workspace.importCatalog(JSON.stringify(declaration))).toBe(true);
+        expect(workspace.select("synthetic", "capture")).toBe(true);
+        await propose();
+    };
+
+    it("uses the app's compact layout during editing without a duplicate full review", async () => {
+        await proposeView();
+        expect(themedCard()).not.toBeNull();
+        expect(themedCard().querySelectorAll(".view-row > .view-field")).toHaveLength(2);
+        expect(
+            themedCard().querySelector<HTMLInputElement>('input[aria-label="Item 1 — extra"]')!
+                .value,
+        ).toBe("Also sent");
+        expect(fullReview()).toBeNull();
+        expect(button("Send reviewed request")).toBeUndefined();
+        expect(button("Review full request").disabled).toBe(false);
+        expect(target.querySelector(".destination")?.closest(".app-owned-view")).toBeNull();
+        expect(calls.deliver).not.toHaveBeenCalled();
+    });
+
+    it("keeps omitted canonical fields visible outside app paint before review", async () => {
+        await proposeView(false);
+        const other = target.querySelector(
+            '[aria-label="Additional canonical fields for item 1"]',
+        )!;
+        expect(other.querySelector<HTMLTextAreaElement>("textarea")!.value).toBe("Also sent");
+        expect(other.closest(".app-owned-view")).toBeNull();
+        expect(fullReview()).toBeNull();
+    });
+
+    it("shows every exact outgoing value outside app paint before enabling explicit send", async () => {
+        await proposeView();
+        button("Review full request").click();
+        await settle();
+        expect(JSON.parse(fullReview()!.querySelector("pre")!.textContent!)).toEqual({
+            value: 42,
+            extra: "Also sent",
+        });
+        expect(fullReview()!.closest(".app-owned-view")).toBeNull();
+        expect(button("Send reviewed request").disabled).toBe(true);
+        expect(confirmation().checked).toBe(false);
+        expect(calls.deliver).not.toHaveBeenCalled();
+        confirmation().click();
+        await settle();
+        expect(button("Send reviewed request").disabled).toBe(false);
+    });
+
+    it("revokes full review and consent when the app-shaped field changes", async () => {
+        await proposeView();
+        button("Review full request").click();
+        await settle();
+        const oldApproval = workspace.state.draft!.approval!.approvalId;
+        confirmation().click();
+        await settle();
+        await changeNumber("84");
+        expect(workspace.state.draft!.approval).toBeUndefined();
+        expect(fullReview()).toBeNull();
+        expect(button("Send reviewed request")).toBeUndefined();
+        await workspace.confirm(oldApproval);
+        expect(calls.deliver).not.toHaveBeenCalled();
+        button("Review full request").click();
+        await settle();
+        expect(confirmation().checked).toBe(false);
+        expect(JSON.parse(fullReview()!.querySelector("pre")!.textContent!).value).toBe(84);
+    });
+
+    it("does not approve stale values when an app-shaped field has an oversized pending edit", async () => {
+        await proposeView();
+        button("Review full request").click();
+        await settle();
+        const oldApproval = workspace.state.draft!.approval!.approvalId;
+        const field = themedCard().querySelector<HTMLInputElement>(
+            'input[aria-label="Item 1 — extra"]',
+        )!;
+        field.value = "x".repeat(65536);
+        field.dispatchEvent(new Event("input", { bubbles: true }));
+        await settle();
+        expect(field.value.length).toBe(65536);
+        expect(button("Review full request").disabled).toBe(true);
+        expect(fullReview()).toBeNull();
+        expect(workspace.state.draft!.approval).toBeUndefined();
+        await workspace.confirm(oldApproval);
+        expect(calls.deliver).not.toHaveBeenCalled();
+    });
+
+    it("renders delivered card values read-only with no new extraction or send", async () => {
+        await proposeView();
+        const extractionCount = calls.extract.mock.calls.length;
+        await approveAndSend();
+        expect(workspace.state.draft!.status).toBe("delivered");
+        expect(themedCard().querySelector("input,select,textarea")).toBeNull();
+        expect(
+            [...themedCard().querySelectorAll("output")].map((field) => field.textContent),
+        ).toEqual(["42", "Also sent"]);
+        expect(fullReview()).not.toBeNull();
+        expect(calls.deliver).toHaveBeenCalledOnce();
+        expect(calls.extract).toHaveBeenCalledTimes(extractionCount);
+    });
+
+    it("tracks the actual OpenChat theme without changing the payload", async () => {
+        await proposeView();
+        const original = workspace.state.editorJson;
+        expect(themedCard().style.getPropertyValue("--app-view-background")).toBe("#ffffff");
+        (currentTheme as unknown as Writable<{ mode: "light" | "dark" }>).set({ mode: "dark" });
+        await settle();
+        expect(themedCard().style.getPropertyValue("--app-view-background")).toBe("#101010");
+        expect(workspace.state.editorJson).toBe(original);
+        expect(calls.deliver).not.toHaveBeenCalled();
+    });
 });
 
 describe("source-anchored private card presentation", () => {

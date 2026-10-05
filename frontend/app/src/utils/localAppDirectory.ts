@@ -289,6 +289,7 @@ export function bindConnectedLocalApp(
         if (
             !sameJson(definition, publicDefinition) ||
             !sameJson(action.draftSchema, original.draftSchema) ||
+            !sameJson(action.draftView, original.draftView) ||
             !sameJson(action.handoff, original.handoff)
         )
             invalid();

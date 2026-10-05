@@ -255,10 +255,61 @@ const beforeInlineCards = new Map([
 ]);
 const inlineCardSourceSha256 =
   "274cc344469da04f63e1959dea1508030e54ecc2187355f1798e787ef3314164";
+// All 175 Git blobs at committed 9b203c76 independently reproduce 274cc344.
+// Only one dedicated inert-view validator is added and these six existing
+// sources change. This reconstruction is historical only; the live gate below
+// separately binds every current byte and rejects removal or source drift.
+const appViewAddition = "frontend/app/src/utils/localAppView.ts";
+const beforeAppViews = new Map([
+  [
+    "frontend/app/src/components_shared/LocalAppCardSurface.svelte",
+    "a8e3fb4493e39b8fbe4e31182ffd675d14455bb9bbb7bafcaddc5030dab71036",
+  ],
+  [
+    "frontend/app/src/utils/localAppDraftChoices.ts",
+    "4e72cf0063dd7917d0a106b876fe53f63beb026d4b4cbbd429f811b7fe782a5d",
+  ],
+  [
+    "frontend/app/src/components_shared/LocalAppCards.svelte",
+    "ba1d846994b4d3a3b2abc9a3895a4cab2db4d10756f27995f61e24d649bde83e",
+  ],
+  [
+    "frontend/app/src/components_shared/PrivateAppDraftFields.svelte",
+    "d96e2057200a574753662533636a41f95c36dbbd6d1d1cfb856871db5fcdef75",
+  ],
+  [
+    "frontend/app/src/utils/localAppCatalog.ts",
+    "76968c6a2f96247dce636bc5b34d671cb4b5e1866c97fe0deadd6c487c11e4e4",
+  ],
+  [
+    "frontend/app/src/utils/localAppDirectory.ts",
+    "f0e444625be5dc8f8207189ec7fb9827ba429c5901c0a895dd5365251f30da22",
+  ],
+]);
+const appViewSourceSha256 =
+  "f8f5e475b47d80028579edb7133385b91a870ae97e836c24554ff62143553217";
+function beforeAppViewSourceHash(file) {
+  return beforeAppViews.get(file) ?? sourceHash(file);
+}
+function beforeAppViewFingerprint(fingerprint) {
+  const files = fingerprint.files.filter((file) => file !== appViewAddition);
+  return {
+    ...fingerprint,
+    files,
+    sha256: createHash("sha256")
+      .update(
+        JSON.stringify(
+          files.map((file) => [file, beforeAppViewSourceHash(file)]),
+        ),
+      )
+      .digest("hex"),
+  };
+}
 function beforeInlineCardSourceHash(file) {
-  return beforeInlineCards.get(file) ?? sourceHash(file);
+  return beforeInlineCards.get(file) ?? beforeAppViewSourceHash(file);
 }
 function beforeInlineCardFingerprint(fingerprint) {
+  fingerprint = beforeAppViewFingerprint(fingerprint);
   const files = fingerprint.files.filter(
     (file) => !inlineCardAdditions.includes(file),
   );
@@ -798,8 +849,8 @@ test("inline-card source checkpoint preserves the exact committed predecessor an
   );
   const actual = seedSourceFingerprint(root, config);
   const previous = beforeInlineCardFingerprint(actual);
-  assert.equal(actual.files.length, 175);
-  assert.equal(featureOwnedFiles(root, config.scopeId).length, 127);
+  assert.equal(actual.files.length, 176);
+  assert.equal(featureOwnedFiles(root, config.scopeId).length, 128);
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   assert.equal(config.seeds.length, 26);
   assert.equal(previous.files.length, 171);
@@ -807,7 +858,7 @@ test("inline-card source checkpoint preserves the exact committed predecessor an
     previous.sha256,
     "92eed8d75292ff2bed66b4b91e12b9b9688bc1c4d3968e558b3990393bf740df",
   );
-  assert.equal(actual.sha256, inlineCardSourceSha256);
+  assert.equal(beforeAppViewFingerprint(actual).sha256, inlineCardSourceSha256);
   assertReviewedSourceFingerprint(previous, config.sourceReview);
   assertReviewedSourceFingerprint(actual, config.sourceReview);
   const expected = new Map([
@@ -864,7 +915,7 @@ test("inline-card source checkpoint preserves the exact committed predecessor an
   const owned = featureOwnedFiles(root, config.scopeId);
   for (const [file, digest] of expected) {
     assert(actual.files.includes(file), file);
-    assert.equal(sourceHash(file), digest, file);
+    assert.equal(beforeAppViewSourceHash(file), digest, file);
     if (beforeInlineCards.has(file))
       assert.notEqual(digest, beforeInlineCards.get(file), file);
     if (owned.includes(file)) {
@@ -900,6 +951,313 @@ test("inline-card source checkpoint preserves the exact committed predecessor an
         /source set changed/u,
       );
   }
+});
+
+test("inert app views bind every current source and preserve the exact 175-source predecessor", () => {
+  const config = JSON.parse(
+    readFileSync(
+      resolve(root, "scripts/npm_feature_scope.current-client.json"),
+      "utf8",
+    ),
+  );
+  const actual = seedSourceFingerprint(root, config);
+  const previous = beforeAppViewFingerprint(actual);
+  assert.equal(actual.sha256, appViewSourceSha256);
+  assert.equal(actual.files.length, 176);
+  assert.equal(previous.sha256, inlineCardSourceSha256);
+  assert.equal(previous.files.length, 175);
+  assertReviewedSourceFingerprint(previous, config.sourceReview);
+  assertReviewedSourceFingerprint(actual, config.sourceReview);
+  const owned = featureOwnedFiles(root, config.scopeId);
+  assert.equal(owned.length, 128);
+  assert(owned.includes(appViewAddition));
+  for (const historical of ["pr1-model-npm", "pr2-app-card-ocr-npm"])
+    assert(!featureOwnedFiles(root, historical).includes(appViewAddition));
+  const expected = new Map([
+    [
+      "frontend/app/src/components_shared/LocalAppCardSurface.svelte",
+      "35e3f4abca8de9ca54683c5a025368fe20d6b7b91550ad8afbff7b79feef16b5",
+    ],
+    [
+      "frontend/app/src/utils/localAppDraftChoices.ts",
+      "94e9c295b2b80507c0f19f3094c5b7439783e11a48208fbf131c1a572707945d",
+    ],
+    [
+      appViewAddition,
+      "67825c6d9a2c00a57031d7a22bb363ef0a94dbe17dd843f1d4c54d5c0951ce65",
+    ],
+    [
+      "frontend/app/src/components_shared/LocalAppCards.svelte",
+      "c70d3c3575e75ba4e1fee76bd2a90a925da48bdde0f5e9e103db317d21036f1a",
+    ],
+    [
+      "frontend/app/src/components_shared/PrivateAppDraftFields.svelte",
+      "ccd84296b3ba15b41b62b75b2602ac78ddb6585deb665df908cfadcf97cf2066",
+    ],
+    [
+      "frontend/app/src/utils/localAppCatalog.ts",
+      "5f0565e2ea1980f32a33d76b041d43b65ae2dd9b7b5742e4141fafefeef65c98",
+    ],
+    [
+      "frontend/app/src/utils/localAppDirectory.ts",
+      "384c2e42159bf35856f8020cc9eae36cb6a68363c77315d71bcb54d9acea6ade",
+    ],
+  ]);
+  assert.deepEqual(
+    [...expected.keys()].sort(),
+    [appViewAddition, ...beforeAppViews.keys()].sort(),
+  );
+  const entries = actual.files.map((file) => [
+    file,
+    readFileSync(resolve(root, file)),
+  ]);
+  const names = new Set(
+    config.seeds.map(
+      (seed) => seed.name ?? seed.location.replace(/^node_modules\//u, ""),
+    ),
+  );
+  for (const [file, digest] of expected) {
+    assert(actual.files.includes(file), file);
+    assert.equal(sourceHash(file), digest, file);
+    if (beforeAppViews.has(file))
+      assert.notEqual(digest, beforeAppViews.get(file), file);
+    if (owned.includes(file)) {
+      const source = readFileSync(resolve(root, file), "utf8");
+      assertReviewedFeatureImports(source, names);
+      assert.throws(
+        () =>
+          assertReviewedFeatureImports(
+            `${source}\nimport "unreviewed-app-view-package";\n`,
+            names,
+          ),
+        /no reviewed root/u,
+      );
+    }
+    for (const changed of [
+      entries.filter(([path]) => path !== file),
+      entries.map(([path, bytes]) => [
+        path,
+        path === file
+          ? Buffer.concat([bytes, Buffer.from("\n// unreviewed view drift\n")])
+          : bytes,
+      ]),
+    ])
+      assert.throws(
+        () =>
+          assertReviewedSourceFingerprint(
+            sourceReviewFingerprintFromBytes(changed),
+            config.sourceReview,
+          ),
+        /source set changed/u,
+      );
+  }
+  for (const file of [
+    "frontend/app/src/utils/localAppView.spec.ts",
+    "frontend/app/src/components_shared/PrivateAppDraftFields.view.spec.ts",
+    "frontend/app/src/components_shared/LocalAppCards.card.spec.ts",
+    "frontend/app/src/utils/nativeAppWorkspaceUi.spec.ts",
+    "frontend/app/src/utils/localAppCatalog.spec.ts",
+    "frontend/app/src/utils/localAppDirectory.spec.ts",
+    "frontend/app/src/utils/localAppSetupStore.spec.ts",
+    "frontend/app/src/utils/localAppDraftPersistence.spec.ts",
+    "frontend/app/src/utils/localAppDraftChoices.spec.ts",
+  ]) {
+    assert(existsSync(resolve(root, file)), file);
+    assert(!owned.includes(file), file);
+    assert(!actual.files.includes(file), file);
+  }
+});
+
+function beforeOptionalFieldCorrections(source) {
+  const replacements = [
+    [
+      '    import { localAppDraftChoiceCompanionFields } from "../utils/localAppDraftChoices";\n',
+      "",
+    ],
+    [
+      [
+        "    function changeTextInput(field: LocalAppDraftField, item: number, input: HTMLInputElement) {",
+        "        const text = input.value;",
+        "        // An optional date's empty control means omission, through the same host removal",
+        "        // callback as Field options. Incomplete native input is not an intentional clear.",
+        "        // Required dates and unrelated text retain their explicit empty-string semantics.",
+        "        const remove =",
+        '            controlHint(field)?.kind === "date" &&',
+        "            !field.required &&",
+        '            text === "" &&',
+        "            !input.validity.badInput;",
+        "        change(field, item, remove ? undefined : text, text);",
+        "    }",
+        "",
+        "",
+      ].join("\n"),
+      "",
+    ],
+    [
+      [
+        "            localAppDraftChoiceCompanionFields(choice).includes(field.key),",
+        "        );",
+        "    }",
+        "",
+        "    function hasChoiceCompanion(field: LocalAppDraftField, item: number): boolean {",
+        "        const choice = namedChoice(field);",
+        "        if (!choice) return false;",
+        "        const companions = localAppDraftChoiceCompanionFields(choice);",
+        "        return (",
+        "            fields?.items[item]?.some(",
+        "                (candidate) => candidate.present && companions.includes(candidate.key),",
+        "            ) ?? false",
+        "",
+      ].join("\n"),
+      "            choice.options[0]?.assign.some((assignment) => assignment.field === field.key),\n",
+    ],
+    [
+      [
+        "            (field.present ||",
+        "                hasChoiceCompanion(field, item) ||",
+        "                (pending?.key === field.key && pending.item === item))",
+        "",
+      ].join("\n"),
+      "            (field.present || (pending?.key === field.key && pending.item === item))\n",
+    ],
+    [
+      "                        oninput={(event) => changeTextInput(field, index, event.currentTarget)}\n",
+      [
+        "                        oninput={(event) =>",
+        "                            change(",
+        "                                field,",
+        "                                index,",
+        "                                event.currentTarget.value,",
+        "                                event.currentTarget.value,",
+        "                            )}",
+        "",
+      ].join("\n"),
+    ],
+    [
+      [
+        "    output {",
+        "        display: block;",
+        "        min-width: 0;",
+        "        max-width: 100%;",
+        "        overflow-wrap: anywhere;",
+        "        white-space: pre-wrap;",
+        "    }",
+        "",
+      ].join("\n"),
+      "",
+    ],
+  ];
+  for (const [current, previous] of replacements) {
+    assert.equal(
+      source.split(current).length,
+      2,
+      "exact optional-field reversal changed",
+    );
+    source = source.replace(current, previous);
+  }
+  return source;
+}
+
+test("host-only native field color scheme preserves the first inert-view checkpoint", () => {
+  const config = JSON.parse(
+    readFileSync(
+      resolve(root, "scripts/npm_feature_scope.current-client.json"),
+      "utf8",
+    ),
+  );
+  const actual = seedSourceFingerprint(root, config);
+  const file =
+    "frontend/app/src/components_shared/PrivateAppDraftFields.svelte";
+  const live = readFileSync(resolve(root, file), "utf8").replaceAll(
+    "\r\n",
+    "\n",
+  );
+  const current = beforeOptionalFieldCorrections(live);
+  assert.equal(
+    createHash("sha256").update(current).digest("hex"),
+    "90a3ca61b154cf947b99b123b79d411846924b521ee119b7d121fa7a93ecec72",
+  );
+  const checkpoint = (renderer) => ({
+    ...actual,
+    sha256: createHash("sha256")
+      .update(
+        JSON.stringify(
+          actual.files.map((path) => [
+            path,
+            path === file
+              ? createHash("sha256").update(renderer).digest("hex")
+              : path.endsWith("/localAppDraftChoices.ts") ||
+                  path.endsWith("/LocalAppCardSurface.svelte")
+                ? beforeAppViews.get(path)
+                : sourceHash(path),
+          ]),
+        ),
+      )
+      .digest("hex"),
+  });
+  const corrected = checkpoint(current);
+  assert.equal(
+    corrected.sha256,
+    "6cbcfdf5bc8a0035f90191d2b725eda29ac293a13ad387e8253497943e76662c",
+  );
+  assertReviewedSourceFingerprint(corrected, config.sourceReview);
+  const added =
+    '                        style:color-scheme={viewTheme === "dark" ? "dark" : "light"}\n';
+  assert.equal(current.split(added).length, 2);
+  const previous = current.replace(added, "");
+  assert.equal(
+    createHash("sha256").update(previous).digest("hex"),
+    "53d7336c24532532e41b2ed354f15e2eb72fcc66d20821439dab6025101292ab",
+  );
+  const prior = checkpoint(previous);
+  assert.equal(prior.files.length, 176);
+  assert.equal(
+    prior.sha256,
+    "e120dafdc8eea5def22b8e2aef60b5f6790b31692c53027e343eea5914b42b26",
+  );
+  assertReviewedSourceFingerprint(prior, config.sourceReview);
+  assert.equal(actual.sha256, appViewSourceSha256);
+  assertReviewedSourceFingerprint(actual, config.sourceReview);
+});
+
+test("modal-only card focus preserves the exact prior inert-view source checkpoint", () => {
+  const config = JSON.parse(
+    readFileSync(
+      resolve(root, "scripts/npm_feature_scope.current-client.json"),
+      "utf8",
+    ),
+  );
+  const actual = seedSourceFingerprint(root, config);
+  const file = "frontend/app/src/components_shared/LocalAppCardSurface.svelte";
+  assert.equal(
+    sourceHash(file),
+    "35e3f4abca8de9ca54683c5a025368fe20d6b7b91550ad8afbff7b79feef16b5",
+  );
+  const previous = {
+    ...actual,
+    sha256: createHash("sha256")
+      .update(
+        JSON.stringify(
+          actual.files.map((path) => [
+            path,
+            path === file ? beforeAppViews.get(file) : sourceHash(path),
+          ]),
+        ),
+      )
+      .digest("hex"),
+  };
+  assert.equal(previous.files.length, 176);
+  assert.equal(
+    previous.sha256,
+    "a2fc3d5561fbfa3d360c083cf9b77dd0c91f6ae5305aad68873c021fecb54cfe",
+  );
+  assertReviewedSourceFingerprint(previous, config.sourceReview);
+  assert.equal(actual.sha256, appViewSourceSha256);
+  assertReviewedSourceFingerprint(actual, config.sourceReview);
+  assert.deepEqual(
+    featureDependencySpecifiers(readFileSync(resolve(root, file), "utf8")),
+    ["svelte"],
+  );
 });
 
 test("current private-app, field-review and browser/native relay families are fingerprinted", () => {
@@ -984,8 +1342,8 @@ test("main Apps flow, retained local cards and startup completion have an exact 
   );
   assertReviewedSourceFingerprint(previous, config.sourceReview);
   assertReviewedSourceFingerprint(actual, config.sourceReview);
-  assert.equal(featureOwnedFiles(root, config.scopeId).length, 127);
-  assert.equal(actual.files.length, 175);
+  assert.equal(featureOwnedFiles(root, config.scopeId).length, 128);
+  assert.equal(actual.files.length, 176);
   assert.equal(config.seeds.length, 26);
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   assert.equal(
@@ -1081,11 +1439,11 @@ test("current encryption, recovery and enum-label owners use existing selectors 
         `frontend/app/src/utils/localAppEncryption${suffix}`,
       ),
     );
-  assert.equal(owned.length, 127);
-  assert.equal(fingerprint.files.length, 175);
+  assert.equal(owned.length, 128);
+  assert.equal(fingerprint.files.length, 176);
   assert.equal(config.seeds.length, 26);
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
-  assert.equal(fingerprint.sha256, inlineCardSourceSha256);
+  assert.equal(fingerprint.sha256, appViewSourceSha256);
   assertReviewedSourceFingerprint(fingerprint, config.sourceReview);
 });
 
@@ -1133,7 +1491,8 @@ test("upstream wallet spender merge preserves the reviewed mixed-file boundary a
   assertReviewedSourceFingerprint(prior, config.sourceReview);
   assertReviewedSourceFingerprint(actual, config.sourceReview);
   assert.equal(actual.files.length, 171);
-  assert.equal(featureOwnedFiles(root, config.scopeId).length, 127);
+  // Ownership discovery is live; the reconstructed historical source count above is unchanged.
+  assert.equal(featureOwnedFiles(root, config.scopeId).length, 128);
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   assert.equal(config.seeds.length, 26);
 });
@@ -1172,7 +1531,8 @@ test("generic context framing preserves exact prior source identity and existing
   assertReviewedSourceFingerprint(prior, config.sourceReview);
   assertReviewedSourceFingerprint(actual, config.sourceReview);
   assert.equal(actual.files.length, 171);
-  assert.equal(featureOwnedFiles(root, config.scopeId).length, 127);
+  // Ownership discovery is live; the reconstructed historical source count above is unchanged.
+  assert.equal(featureOwnedFiles(root, config.scopeId).length, 128);
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   assert.equal(config.seeds.length, 26);
   assert(
@@ -1192,7 +1552,8 @@ test("saved-card opt-in and recovery feedback preserve exact prior source identi
     seedSourceFingerprint(root, config),
   );
   assert.equal(actual.files.length, 171);
-  assert.equal(featureOwnedFiles(root, config.scopeId).length, 127);
+  // Ownership discovery is live; the reconstructed historical source count above is unchanged.
+  assert.equal(featureOwnedFiles(root, config.scopeId).length, 128);
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   assert.equal(config.seeds.length, 26);
   const expected = new Map([
@@ -1337,8 +1698,8 @@ test("cache hashing responsiveness preserves exact prior source identity and int
   );
   assertReviewedSourceFingerprint(previous, config.sourceReview);
   assertReviewedSourceFingerprint(actual, config.sourceReview);
-  assert.equal(actual.files.length, 175);
-  assert.equal(featureOwnedFiles(root, config.scopeId).length, 127);
+  assert.equal(actual.files.length, 176);
+  assert.equal(featureOwnedFiles(root, config.scopeId).length, 128);
   assert.equal(config.seeds.length, 26);
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   for (const unchanged of [
@@ -1406,7 +1767,7 @@ test("unofficial immutable-asset routing preserves the exact prior source aggreg
   );
   assertReviewedSourceFingerprint(previous, config.sourceReview);
   assertReviewedSourceFingerprint(actual, config.sourceReview);
-  assert.equal(actual.files.length, 175);
+  assert.equal(actual.files.length, 176);
   assert.equal(config.seeds.length, 26);
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   assert(
@@ -1507,8 +1868,8 @@ test("current setup persistence is a dedicated builtin-API consumer with an exac
   const clientPath = "frontend/openchat-client/src/openchat.ts";
   const owned = featureOwnedFiles(root, config.scopeId);
   const fingerprint = seedSourceFingerprint(root, config);
-  assert.equal(owned.length, 127);
-  assert.equal(fingerprint.files.length, 175);
+  assert.equal(owned.length, 128);
+  assert.equal(fingerprint.files.length, 176);
   assert.equal(config.seeds.length, 26);
   assert.equal(
     config.seeds.reduce((count, seed) => count + seed.evidence.length, 0),
@@ -2385,8 +2746,8 @@ test("current upstream merge preserves scoped startup, model and private-app bou
     readFileSync(resolve(root, file), "utf8").replaceAll("\r\n", "\n");
   const hash = (text) => createHash("sha256").update(text).digest("hex");
   const fingerprint = seedSourceFingerprint(root, config);
-  assert.equal(fingerprint.files.length, 175);
-  assert.equal(featureOwnedFiles(root, config.scopeId).length, 127);
+  assert.equal(fingerprint.files.length, 176);
+  assert.equal(featureOwnedFiles(root, config.scopeId).length, 128);
   assert.equal(config.seeds.length, 26);
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   // Preserve the committed merge identity after the separately reviewed Windows

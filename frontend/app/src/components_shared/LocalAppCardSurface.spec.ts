@@ -76,6 +76,258 @@ afterEach(async () => {
 });
 
 describe("single-editor local app card surface", () => {
+    const trigger = () => {
+        const button = document.createElement("button");
+        button.textContent = "Open saved card";
+        document.body.append(button);
+        button.focus();
+        return button;
+    };
+    const tab = (shiftKey = false, target: EventTarget = document.activeElement ?? document) => {
+        const event = new KeyboardEvent("keydown", {
+            key: "Tab",
+            shiftKey,
+            bubbles: true,
+            cancelable: true,
+        });
+        target.dispatchEvent(event);
+        return event;
+    };
+
+    it("focuses the modal dialog initially and contains forward/backward Tab at current boundaries", async () => {
+        trigger();
+        await render({ inline: false, open: true });
+        expect(document.activeElement).toBe(editor());
+        expect(surface().getAttribute("tabindex")).toBe("-1");
+        expect(tab().defaultPrevented).toBe(true);
+        expect(document.activeElement).toBe(input());
+        expect(tab().defaultPrevented).toBe(false);
+        const last = editor().querySelectorAll("button")[1];
+        last.focus();
+        expect(tab().defaultPrevented).toBe(true);
+        expect(document.activeElement).toBe(input());
+        expect(tab(true).defaultPrevented).toBe(true);
+        expect(document.activeElement).toBe(last);
+    });
+
+    it.each([
+        "disabled",
+        "hidden",
+        "css-hidden",
+        "css-invisible",
+        "inert",
+        "aria-hidden",
+        "negative",
+        "disabled-fieldset",
+        "closed-details",
+    ])("skips %s controls in modal Tab order", async (kind) => {
+        await render({ inline: false, open: true });
+        const extra = document.createElement("button");
+        extra.textContent = "Must be skipped";
+        const wrapper = document.createElement(
+            kind === "disabled-fieldset"
+                ? "fieldset"
+                : kind === "closed-details"
+                  ? "details"
+                  : "div",
+        );
+        wrapper.append(extra);
+        editor().prepend(wrapper);
+        if (kind === "disabled") extra.disabled = true;
+        if (kind === "hidden") wrapper.hidden = true;
+        if (kind === "css-hidden") wrapper.style.display = "none";
+        if (kind === "css-invisible") wrapper.style.visibility = "hidden";
+        if (kind === "inert") wrapper.setAttribute("inert", "");
+        if (kind === "aria-hidden") wrapper.setAttribute("aria-hidden", "true");
+        if (kind === "negative") extra.tabIndex = -1;
+        if (kind === "disabled-fieldset") (wrapper as HTMLFieldSetElement).disabled = true;
+        editor().focus();
+        tab();
+        expect(document.activeElement).toBe(input());
+    });
+
+    it("recomputes controls and holds focus on the dialog when all controls become disabled", async () => {
+        await render({ inline: false, open: true });
+        input().focus();
+        input().disabled = true;
+        editor()
+            .querySelectorAll("button")
+            .forEach((button) => (button.disabled = true));
+        expect(tab().defaultPrevented).toBe(true);
+        expect(document.activeElement).toBe(editor());
+        expect(tab(true).defaultPrevented).toBe(true);
+        expect(document.activeElement).toBe(editor());
+        input().disabled = false;
+        expect(tab().defaultPrevented).toBe(true);
+        expect(document.activeElement).toBe(input());
+    });
+
+    it("keeps a closed details summary tabbable while excluding its hidden controls", async () => {
+        await render({ inline: false, open: true });
+        const details = document.createElement("details");
+        const summary = document.createElement("summary");
+        summary.textContent = "Field options";
+        const hidden = document.createElement("button");
+        hidden.textContent = "Hidden option";
+        details.append(summary, hidden);
+        editor().prepend(details);
+        editor().focus();
+        tab();
+        expect(document.activeElement).toBe(summary);
+        hidden.focus();
+        tab();
+        expect(document.activeElement).toBe(summary);
+    });
+
+    it("uses positive tabindex order and respects an editor-handled Tab event", async () => {
+        await render({ inline: false, open: true });
+        const first = document.createElement("button");
+        first.tabIndex = 1;
+        const second = document.createElement("button");
+        second.tabIndex = 2;
+        editor().append(second, first);
+        const close = [...editor().querySelectorAll("button")].find(
+            (button) => button.textContent === "Close card",
+        )!;
+        close.focus();
+        tab();
+        expect(document.activeElement).toBe(first);
+        first.focus();
+        tab(true);
+        expect(document.activeElement).toBe(close);
+        close.addEventListener("keydown", (event) => event.preventDefault(), { once: true });
+        tab();
+        expect(document.activeElement).toBe(close);
+    });
+
+    it("falls back safely when a connected opener is no longer programmatically focusable", async () => {
+        const opener = document.createElement("div");
+        opener.tabIndex = 0;
+        document.body.append(opener);
+        opener.focus();
+        await render({ inline: false, open: true });
+        input().focus();
+        opener.removeAttribute("tabindex");
+        state.update((value) => ({ ...value, open: false }));
+        await settle();
+        expect(document.activeElement).toBe(document.body);
+        expect(document.body.hasAttribute("tabindex")).toBe(false);
+    });
+
+    it("restores the opener when the modal closes and preserves the same pending editor", async () => {
+        const opener = trigger();
+        await render({ inline: false, open: true });
+        const original = input();
+        await changeInput("Pending invalid input: 1e");
+        original.focus();
+        state.update((value) => ({ ...value, open: false }));
+        await settle();
+        expect(document.activeElement).toBe(opener);
+        expect(input()).toBe(original);
+        expect(input().value).toBe("Pending invalid input: 1e");
+        expect(surface().hidden).toBe(true);
+        expect(tab(false, opener).defaultPrevented).toBe(false);
+        expect(calls.editorMount).toHaveBeenCalledOnce();
+        expect(calls.editorDestroy).not.toHaveBeenCalled();
+    });
+
+    it("restores focus on unmount and removes the modal Tab listener", async () => {
+        const opener = trigger();
+        await render({ inline: false, open: true });
+        input().focus();
+        await unmount(mounted!);
+        mounted = undefined;
+        expect(document.activeElement).toBe(opener);
+        expect(tab(false, opener).defaultPrevented).toBe(false);
+        expect(calls.editorDestroy).toHaveBeenCalledOnce();
+    });
+
+    it.each(["missing", "removed", "disabled", "hidden"])(
+        "handles a %s modal origin without focusing a dead control",
+        async (kind) => {
+            const opener = kind === "missing" ? undefined : trigger();
+            await render({ inline: false, open: true });
+            input().focus();
+            if (kind === "removed") opener!.remove();
+            if (kind === "disabled") opener!.disabled = true;
+            if (kind === "hidden") opener!.hidden = true;
+            const originalTabindex = document.body.getAttribute("tabindex");
+            state.update((value) => ({ ...value, open: false }));
+            await settle();
+            expect(document.activeElement).toBe(document.body);
+            expect(document.body.getAttribute("tabindex")).toBe(originalTabindex);
+        },
+    );
+
+    it("does not steal a new external focus target during modal closure", async () => {
+        trigger();
+        await render({ inline: false, open: true });
+        const newer = trigger();
+        state.update((value) => ({ ...value, open: false }));
+        await settle();
+        expect(document.activeElement).toBe(newer);
+    });
+
+    it("releases modal focus on transition to inline without remounting or trapping inline Tab", async () => {
+        const opener = trigger();
+        const messageAnchor = anchor();
+        await render({ inline: false, open: true });
+        const original = input();
+        await changeInput("Still pending");
+        original.focus();
+        state.set({ inline: true, open: true, target: messageAnchor });
+        await settle();
+        expect(document.activeElement).toBe(opener);
+        expect(input()).toBe(original);
+        expect(input().value).toBe("Still pending");
+        expect(surface().parentElement).toBe(messageAnchor);
+        const last = editor().querySelectorAll("button")[1];
+        last.focus();
+        expect(tab().defaultPrevented).toBe(false);
+        expect(calls.editorMount).toHaveBeenCalledOnce();
+        expect(calls.editorDestroy).not.toHaveBeenCalled();
+    });
+
+    it("never takes or traps focus when initially inline", async () => {
+        const opener = trigger();
+        await render({ inline: true, open: true, target: anchor() });
+        expect(document.activeElement).toBe(opener);
+        expect(surface().hasAttribute("tabindex")).toBe(false);
+        input().focus();
+        expect(tab(true).defaultPrevented).toBe(false);
+    });
+
+    it("cancels deferred focus when a modal is closed before the next tick", async () => {
+        const opener = trigger();
+        await render({ inline: true, open: true, target: anchor() });
+        state.update((value) => ({ ...value, inline: false }));
+        flushSync();
+        state.update((value) => ({ ...value, open: false }));
+        flushSync();
+        await settle();
+        expect(document.activeElement).toBe(opener);
+        expect(surface().hidden).toBe(true);
+    });
+
+    it("keeps existing Escape dismissal and restores focus through the resulting close", async () => {
+        const opener = trigger();
+        await render({ inline: false, open: true });
+        state.update((value) => ({
+            ...value,
+            onClose: () => {
+                calls.close();
+                state.update((current) => ({ ...current, open: false }));
+            },
+        }));
+        await settle();
+        input().focus();
+        input().dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+        await settle();
+        expect(calls.close).toHaveBeenCalledOnce();
+        expect(document.activeElement).toBe(opener);
+        window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+        expect(calls.close).toHaveBeenCalledOnce();
+    });
     it("returns the same live editor to its hidden home when an anchor disappears and moves it to a replacement", async () => {
         const firstAnchor = anchor();
         await render({ target: firstAnchor, inline: true, open: true });

@@ -109,6 +109,40 @@ initialized as manual values: choosing an option still updates companions, but c
 reapply defaults or restore the pre-choice baseline on clearing. Reload/logout recovery
 therefore preserves the saved values until the user explicitly edits them.
 
+## Optional app-owned card layout
+
+An action may additionally include `draftView: { version: 1, nodes, theme? }`.
+This is inert public catalog data, not HTML, CSS, JavaScript, an iframe URL or a
+model prompt. The public catalog digest covers it; connected private setup must
+match the published view exactly, including presence/absence. Setup and encrypted
+card snapshots preserve and revalidate it. Existing catalogs remain compatible.
+
+The generic `localAppView.ts` validator accepts nested `group`/wrapping `row`
+containers, scalar `field` references and escaped `text`. A tree describes one
+entry; only the host decides entry count/order. Fields cannot override canonical
+values, labels, choices, validity, default behavior, disabled state or delivery.
+Optional field controls are single-line/multiline strings; existing date/select
+and named-choice semantics take priority. Paint uses seven named color roles with
+exact hex colors. Spacing/radius use finite tokens, not arbitrary style strings.
+Trees are limited to six levels, 128 nodes, 32 siblings and 4,096 total text
+characters; field references must be unique and in the current row schema.
+
+`LocalAppCards` supplies the current host theme, edit/read-only state and review
+phase to `PrivateAppDraftFields`. While editing, the app layout shows canonical
+controls and unrepresented fields remain outside app paint. After Review, the
+complete outgoing values are displayed separately in host-owned unthemed UI
+before the existing explicit confirmation. View coverage or attractive pixels
+are never proof of complete review: app text/colors can be misleading. Invalid
+views, invalid dates and unrepresentable pending edits block approval. Edits revoke
+the previous review; rendering, changing theme or restoring a card never sends.
+
+Layout changes do not require a new host build when they stay within this versioned
+contract. They still use normal publisher verification and connection/update rules:
+opaque private setup or changed destinations require reconnection, and retained
+cards keep their original configuration rather than being silently reinterpreted.
+A new widget/contract capability requires a deliberate host implementation; this
+is not support for arbitrary app-authored executable interfaces.
+
 ## Relay trust boundary
 
 The cross-origin-isolated model client opens a fixed same-origin nonisolated relay

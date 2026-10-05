@@ -21,6 +21,8 @@ export interface DraftEditorV1 {
         field: string;
         label: string;
         noneLabel: string;
+        /** Explicit ownership for a None-only selector; forbidden when options are nonempty. */
+        companionFields?: readonly string[];
         options: readonly Readonly<{
             value: string;
             label: string;
@@ -45,12 +47,17 @@ function fail(): never {
 }
 // eslint-disable-next-line no-control-regex -- Imported labels must not contain hidden controls.
 const HIDDEN = /[\p{Cf}\u0000-\u001f\u007f]/u;
-function exact(value: unknown, keys: readonly string[]): asserts value is Record<string, unknown> {
+function exact(
+    value: unknown,
+    keys: readonly string[],
+    optional: readonly string[] = [],
+): asserts value is Record<string, unknown> {
     if (
         !value ||
         typeof value !== "object" ||
         Array.isArray(value) ||
-        Object.keys(value).sort().join(",") !== [...keys].sort().join(",")
+        keys.some((key) => !Object.hasOwn(value, key)) ||
+        Object.keys(value).some((key) => !keys.includes(key) && !optional.includes(key))
     )
         fail();
 }
@@ -103,12 +110,31 @@ export function validateLocalAppDraftEditor(
         return property;
     };
     for (const choice of copied.choices) {
-        exact(choice, ["field", "label", "noneLabel", "options"]);
+        exact(choice, ["field", "label", "noneLabel", "options"], ["companionFields"]);
         if (target(choice.field, true).type !== "string") fail();
         field(choice.field);
         text(choice.label);
         text(choice.noneLabel);
-        list(choice.options, 64, 1);
+        list(choice.options, 64);
+        if (choice.options.length === 0) {
+            if (!Object.hasOwn(choice, "companionFields")) fail();
+            list(choice.companionFields, 8);
+            const owned = new Set([choice.field]);
+            for (const companion of choice.companionFields) {
+                target(companion, true);
+                field(companion);
+                if (owned.has(companion)) fail();
+                owned.add(companion);
+            }
+            for (const name of owned) {
+                if (targets.has(name)) fail();
+                targets.add(name);
+            }
+            continue;
+        }
+        // Keep every pre-existing nonempty declaration byte-for-byte compatible;
+        // there is exactly one source of companion ownership in either form.
+        if (Object.hasOwn(choice, "companionFields")) fail();
         const values = new Set<string>(),
             labels = new Set<string>();
         let expected: string | undefined;
@@ -161,6 +187,12 @@ function declarations(action: LocalAppAction): readonly Choice[] {
         : validateLocalAppDraftEditor(action.draftEditor, action.draftSchema, action.handoff)
               .choices;
 }
+/** Validated declarations only; no values/defaults are synthesized for an empty roster. */
+export function localAppDraftChoiceCompanionFields(choice: Choice): readonly string[] {
+    return choice.options.length
+        ? choice.options[0].assign.map((assignment) => assignment.field)
+        : (choice.companionFields ?? []);
+}
 function binding(action: LocalAppAction, editorJson: string): string {
     return JSON.stringify([action.handoff, action.draftSchema, action.draftEditor, editorJson]);
 }
@@ -201,8 +233,8 @@ function apply(
                 result[assignment.field] = assignment.value;
     } else {
         delete result[choice.field];
-        for (const assignment of choice.options[0].assign) delete result[assignment.field];
-        for (const assignment of choice.options[0].defaults) {
+        for (const field of localAppDraftChoiceCompanionFields(choice)) delete result[field];
+        for (const assignment of choice.options[0]?.defaults ?? []) {
             if (manual || state.edited.includes(assignment.field)) continue;
             const previous = state.baseline.find((item) => item.field === assignment.field);
             if (!previous) fail();
@@ -225,7 +257,7 @@ export function initializeLocalAppDraftChoices(
         (record): RowState => ({
             edited: [],
             baseline: choices.flatMap((choice) =>
-                choice.options[0].defaults.map(
+                (choice.options[0]?.defaults ?? []).map(
                     ({ field }): Baseline => ({
                         field,
                         present: Object.hasOwn(record, field),
@@ -287,7 +319,7 @@ export function editLocalAppDraftScalar(
         choices.some(
             (choice) =>
                 choice.field === field ||
-                choice.options[0].assign.some((item) => item.field === field),
+                localAppDraftChoiceCompanionFields(choice).includes(field),
         )
     )
         fail();
@@ -328,14 +360,16 @@ export function assertLocalAppDraftChoiceConsistency(
                 ? choice.options.find((item) => item.value === record[choice.field])
                 : undefined;
             if (present && !option) fail();
-            for (const assignment of option?.assign ?? choice.options[0].assign) {
-                if (
-                    option
-                        ? !Object.hasOwn(record, assignment.field) ||
-                          record[assignment.field] !== assignment.value
-                        : Object.hasOwn(record, assignment.field)
-                )
-                    fail();
+            if (option) {
+                for (const assignment of option.assign)
+                    if (
+                        !Object.hasOwn(record, assignment.field) ||
+                        record[assignment.field] !== assignment.value
+                    )
+                        fail();
+            } else {
+                for (const field of localAppDraftChoiceCompanionFields(choice))
+                    if (Object.hasOwn(record, field)) fail();
             }
         }
 }

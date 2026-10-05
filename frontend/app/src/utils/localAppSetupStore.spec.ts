@@ -223,6 +223,37 @@ function expectTombstone(db: ReturnType<typeof fakeIndexedDb>) {
 }
 
 describe("strict device-local setup codec", () => {
+    it("remembers and revalidates app views and binds chat opt-ins to their exact catalog", async () => {
+        const snapshot = await fixture();
+        const app = snapshot.catalog.apps[0];
+        const draftView = {
+            version: 1,
+            nodes: [{ kind: "field", field: "value", control: "multiline" }],
+            theme: { dark: { surface: "#112233" } },
+        };
+        const catalog = parseLocalAppCatalog(
+            JSON.stringify({
+                version: 1,
+                apps: [{ ...app, actions: [{ ...app.actions[0], draftView }] }],
+            }),
+        );
+        const serialized = await encodeLocalAppSetup(scope, { ...snapshot, catalog });
+        const restored = await decodeLocalAppSetup(scope, serialized);
+        expect(restored.catalog.apps[0].actions[0].draftView).toEqual(draftView);
+        expect(Object.isFrozen(restored.catalog.apps[0].actions[0].draftView?.nodes)).toBe(true);
+        const envelope = JSON.parse(serialized);
+        const changed = JSON.parse(envelope.catalogJson);
+        changed.apps[0].actions[0].draftView.theme.dark.surface = "#332211";
+        envelope.catalogJson = JSON.stringify(changed);
+        await expect(decodeLocalAppSetup(scope, JSON.stringify(envelope))).rejects.toThrow();
+        envelope.catalogSha256 = await digest(envelope.catalogJson);
+        await expect(decodeLocalAppSetup(scope, JSON.stringify(envelope))).rejects.toThrow();
+        changed.apps[0].actions[0].draftView.nodes[0].field = "undeclared";
+        envelope.catalogJson = JSON.stringify(changed);
+        envelope.catalogSha256 = await digest(envelope.catalogJson);
+        envelope.enabledChats.catalogSha256 = envelope.catalogSha256;
+        await expect(decodeLocalAppSetup(scope, JSON.stringify(envelope))).rejects.toThrow();
+    });
     it("remembers the app's named-choice declaration but not an initialized draft session", async () => {
         const snapshot = await fixture();
         const app = snapshot.catalog.apps[0];

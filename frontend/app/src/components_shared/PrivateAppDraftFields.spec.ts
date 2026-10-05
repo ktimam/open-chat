@@ -201,6 +201,23 @@ function hintedAction(): LocalAppAction {
         },
     };
 }
+
+function emptyNamedAction(): LocalAppAction {
+    const original = namedAction();
+    return {
+        ...original,
+        draftEditor: {
+            version: 1,
+            choices: original.draftEditor!.choices.map((choice) => ({
+                field: choice.field,
+                label: choice.label,
+                noneLabel: choice.noneLabel,
+                options: [],
+                companionFields: ["categoryLabel"],
+            })),
+        },
+    };
+}
 function renderNamed(payload: unknown = initial(), disabled = false, definition = namedAction()) {
     let session = initializeLocalAppDraftChoices(definition, JSON.stringify(payload));
     const onfieldedit = vi.fn(
@@ -578,6 +595,60 @@ describe.each([false, true])("mounted generic private draft fields (compact=%s)"
         ).toContain("Not supplied");
     });
 
+    it("renders an empty named-choice roster as None without inventing a value or emitting on mount", () => {
+        const view = renderNamed(initial(), false, emptyNamedAction());
+        const select = control(view.target, "Item 1 — Saved category") as HTMLSelectElement;
+        expect(select.value).toBe("absent");
+        expect([...select.options].map((option) => [option.value, option.textContent])).toEqual([
+            ["absent", "None — restore extracted values"],
+        ]);
+        expect(view.payload()).toEqual(initial());
+        expect(view.onchoiceedit).not.toHaveBeenCalled();
+        expect(view.onchange).not.toHaveBeenCalled();
+        expect(
+            view.target.querySelector(
+                'input[aria-label="Item 1 — categoryLabel"], textarea[aria-label="Item 1 — categoryLabel"]',
+            ),
+        ).toBeNull();
+    });
+
+    it("keeps stale empty-roster IDs visible until the user explicitly chooses None", async () => {
+        const view = renderNamed(
+            { ...initial(), category: "stale-id", categoryLabel: "Stale label" },
+            false,
+            emptyNamedAction(),
+        );
+        const select = control(view.target, "Item 1 — Saved category") as HTMLSelectElement;
+        expect(select.value).toBe("invalid");
+        expect(view.target.textContent).toContain('"stale-id"');
+        expect(view.onchoiceedit).not.toHaveBeenCalled();
+        await input(view.target, "Item 1 — Saved category", "absent");
+        expect(view.onchoiceedit).toHaveBeenCalledExactlyOnceWith(0, "category", undefined);
+        expect(view.payload()).toEqual(initial());
+    });
+
+    it("offers explicit selector removal for an orphan read-only companion even while None is selected", async () => {
+        const view = renderNamed(
+            { ...initial(), categoryLabel: "Orphan companion" },
+            false,
+            emptyNamedAction(),
+        );
+        expect(control(view.target, "Item 1 — Saved category").value).toBe("absent");
+        expect(
+            view.target.querySelector('output[aria-label="Item 1 — categoryLabel"]')?.textContent,
+        ).toContain("Orphan companion");
+        expect(
+            view.target.querySelector(
+                'input[aria-label="Item 1 — categoryLabel"], textarea[aria-label="Item 1 — categoryLabel"]',
+            ),
+        ).toBeNull();
+        button(view.target, "Remove Saved category").click();
+        await tick();
+        expect(view.onchoiceedit).toHaveBeenCalledExactlyOnceWith(0, "category", undefined);
+        expect(view.onchange).not.toHaveBeenCalled();
+        expect(view.payload()).toEqual(initial());
+    });
+
     it("routes manual field edits without losing their values on later named choices or None", async () => {
         const view = renderNamed({ ...initial(), category: "raw-alpha" });
         await input(view.target, "Item 1 — App count", "99");
@@ -787,7 +858,7 @@ describe.each([false, true])("mounted generic private draft fields (compact=%s)"
         },
     );
 
-    it("removes an invalid optional date explicitly, but keeps a cleared date as invalid supplied text", async () => {
+    it("removes an optional date through either the explicit remove button or an empty date control", async () => {
         const view = render(hintedAction(), { ...initial(), whenValue: "2023-02-29" });
         button(view.target, "Remove Recorded date").click();
         await tick();
@@ -795,9 +866,53 @@ describe.each([false, true])("mounted generic private draft fields (compact=%s)"
         expect(view.onblocked).toHaveBeenLastCalledWith(false);
         await input(view.target, "Item 1 — Recorded date", "2024-02-29");
         await input(view.target, "Item 1 — Recorded date", "");
+        expect(view.payload()).toEqual(initial());
+        expect(Object.hasOwn(view.payload(), "whenValue")).toBe(false);
+        expect(view.onblocked).toHaveBeenLastCalledWith(false);
+        expect(control(view.target, "Item 1 — Recorded date").value).toBe("");
+    });
+
+    it("keeps a cleared required date present and invalid instead of removing it", async () => {
+        const original = hintedAction();
+        if (original.draftSchema.type !== "object") throw new Error("Expected object schema");
+        const definition: LocalAppAction = {
+            ...original,
+            draftSchema: {
+                ...original.draftSchema,
+                required: [...(original.draftSchema.required ?? []), "whenValue"],
+            },
+        };
+        const view = render(definition, { ...initial(), whenValue: "2024-02-29" });
+        await input(view.target, "Item 1 — Recorded date", "");
+        expect(view.payload()).toEqual({ ...initial(), whenValue: "" });
+        expect(Object.hasOwn(view.payload(), "whenValue")).toBe(true);
+        expect(view.onblocked).toHaveBeenLastCalledWith(true);
+        expect(control(view.target, "Item 1 — Recorded date").getAttribute("aria-invalid")).toBe(
+            "true",
+        );
+    });
+
+    it("does not interpret incomplete native date input as intentional removal", async () => {
+        const view = render(hintedAction(), { ...initial(), whenValue: "2024-02-29" });
+        const date = control(view.target, "Item 1 — Recorded date") as HTMLInputElement;
+        Object.defineProperty(date, "validity", { value: { badInput: true }, configurable: true });
+        await input(view.target, "Item 1 — Recorded date", "");
         expect(view.payload()).toEqual({ ...initial(), whenValue: "" });
         expect(view.onblocked).toHaveBeenLastCalledWith(true);
-        expect(control(view.target, "Item 1 — Recorded date").value).toBe("");
+    });
+
+    it("preserves explicit empty strings in unrelated optional hinted and multiline text fields", async () => {
+        const view = render(hintedAction(), {
+            ...initial(),
+            currencyValue: "USD",
+            notesValue: "text",
+        });
+        await input(view.target, "Item 1 — Currency", "");
+        await input(view.target, "Item 1 — Details", "");
+        expect(view.payload()).toEqual({ ...initial(), currencyValue: "", notesValue: "" });
+        expect(Object.hasOwn(view.payload(), "currencyValue")).toBe(true);
+        expect(Object.hasOwn(view.payload(), "notesValue")).toBe(true);
+        expect(view.onblocked).toHaveBeenLastCalledWith(false);
     });
 
     it("does not infer calendar or currency controls from a field name or its existing value", () => {

@@ -10,6 +10,7 @@ import {
     localAppHasPrivateSetup,
 } from "./localAppDirectory";
 import { directoryFixture, directorySource } from "./localAppDirectory.testFixtures";
+import { parseLocalAppCatalog } from "./localAppCatalog";
 
 type DirectoryJson = {
     version: number;
@@ -24,6 +25,73 @@ type CatalogJson = {
 };
 
 describe("generic public app directory", () => {
+    it("binds the inert draft view to its public publisher recipe, including absence", async () => {
+        const fixture = await directoryFixture("sample", "1", true);
+        const draftView = {
+            version: 1,
+            nodes: [{ kind: "field", field: "value" }],
+            theme: { light: { accent: "#335577" } },
+        };
+        const publicValue = JSON.parse(fixture.catalogJson);
+        publicValue.apps[0].actions[0].draftView = draftView;
+        const publicCatalog = parseLocalAppCatalog(JSON.stringify(publicValue));
+        const connected = JSON.parse(fixture.connectedJson);
+        connected.apps[0].actions[0].draftView = {
+            theme: draftView.theme,
+            nodes: [{ field: "value", kind: "field" }],
+            version: 1,
+        };
+        expect(
+            bindConnectedLocalApp(JSON.stringify(connected), publicCatalog).actions[0].draftView,
+        ).toEqual(draftView);
+        for (const replacement of [
+            undefined,
+            { ...draftView, nodes: [{ kind: "text", text: "Different view" }] },
+            { ...draftView, theme: { light: { accent: "#775533" } } },
+        ]) {
+            const changed = JSON.parse(JSON.stringify(connected));
+            changed.apps[0].actions[0].draftView = replacement;
+            expect(() => bindConnectedLocalApp(JSON.stringify(changed), publicCatalog)).toThrow();
+        }
+        expect(() =>
+            bindConnectedLocalApp(JSON.stringify(connected), fixture.pkg.catalog),
+        ).toThrow();
+        expect(() =>
+            bindConnectedLocalApp(fixture.connectedJson, fixture.pkg.catalog),
+        ).not.toThrow();
+    });
+    it("checks the publisher view again when restoring installed private setup", async () => {
+        const fixture = await directoryFixture();
+        const value = JSON.parse(fixture.catalogJson);
+        value.apps[0].actions[0].draftView = {
+            version: 1,
+            nodes: [{ kind: "field", field: "value" }],
+        };
+        const publicCatalogJson = JSON.stringify(value);
+        const bytes = new TextEncoder().encode(publicCatalogJson);
+        const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+        const descriptor = {
+            ...fixture.descriptor,
+            catalog: {
+                ...fixture.descriptor.catalog,
+                byteLength: bytes.byteLength,
+                sha256: Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join(""),
+            },
+        };
+        const installation = {
+            appId: value.apps[0].id,
+            sourceUrl: directorySource,
+            descriptor,
+            publicCatalogJson,
+        };
+        const original = parseLocalAppCatalog(publicCatalogJson).apps[0];
+        await expect(validateLocalAppInstallation(installation, original)).resolves.toEqual(
+            installation,
+        );
+        value.apps[0].actions[0].draftView.nodes = [{ kind: "text", text: "Substituted view" }];
+        const changed = parseLocalAppCatalog(JSON.stringify(value)).apps[0];
+        await expect(validateLocalAppInstallation(installation, changed)).rejects.toThrow();
+    });
     it("never provisions a user delivery key from a public discovery catalog", async () => {
         const fixture = await directoryFixture();
         const value = JSON.parse(fixture.catalogJson);

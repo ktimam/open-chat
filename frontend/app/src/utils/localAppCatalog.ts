@@ -8,6 +8,7 @@ import {
     validateLocalAppDraftPresentation,
     type DraftPresentationV1,
 } from "./localAppDraftPresentation";
+import { validateLocalAppView, type LocalAppViewV1 } from "./localAppView";
 import {
     snapshotLocalDraftJson,
     snapshotLocalDraftPayload,
@@ -26,6 +27,7 @@ export interface LocalAppAction {
     readonly draftSchema: LocalDraftSchema;
     readonly draftEditor?: DraftEditorV1;
     readonly draftPresentation?: DraftPresentationV1;
+    readonly draftView?: LocalAppViewV1;
     // Private app-owned setup data imported explicitly; never copied into the handoff by default.
     readonly processorContext?: LocalDraftJson;
     readonly handoff:
@@ -263,7 +265,7 @@ export function parseLocalAppCatalog(json: string): LocalAppCatalog {
             exact(
                 action,
                 ["definition", "draftSchema", "handoff"],
-                ["processorContext", "draftEditor", "draftPresentation"],
+                ["processorContext", "draftEditor", "draftPresentation", "draftView"],
             );
             validateDefinition(action.definition);
             const definition = action.definition as Record<string, unknown>;
@@ -292,6 +294,12 @@ export function parseLocalAppCatalog(json: string): LocalAppCatalog {
                     action.draftSchema as LocalDraftSchema,
                     action.handoff as LocalAppAction["handoff"],
                 );
+            if (action.draftView !== undefined)
+                action.draftView = validateLocalAppView(
+                    action.draftView,
+                    action.draftSchema as LocalDraftSchema,
+                    action.handoff as LocalAppAction["handoff"],
+                ).view;
             // Keep declarations that need a processor visible for setup, but never run one without
             // the pinned descriptor. Unknown extensions remain opaque; the existing runner owns them.
             const schema = definition.responseSchema as Record<string, unknown>;
