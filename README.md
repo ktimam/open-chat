@@ -1,5 +1,14 @@
 # OpenChat
 
+> **Unofficial local-test client:** this fork's client uses official OpenChat
+> services without deploying modified OpenChat canisters. Start with the
+> [current client checkpoint and limitations](docs/unofficial-local-client.md#current-checkpoint--october-5-2026)
+> and [reuse an existing verified local preview](docs/unofficial-local-web.md#reuse-an-existing-local-test-build-after-a-reboot).
+> The upstream development instructions below are a separate canister-development
+> workflow. Do not run their clean/reset/deployment commands to start this client
+> or recover existing IOU state. These local-test artifacts are not an official
+> OpenChat or approved public release.
+
 https://oc.app
 
 OpenChat is a fully featured chat application running end-to-end on the Internet Computer blockchain.

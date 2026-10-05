@@ -63,7 +63,7 @@ OpenChat canister change or deployment is required.
 
 ## App-owned card presentation
 
-The app's `definition.card.rows` supplies the order and labels of its review fields.
+The app's `definition.card.rows` supplies the default order and labels of its review fields.
 Fields omitted from those rows remain visible; presentation never removes payload
 fields. Existing schema enums and `draftEditor` named choices remain authoritative.
 
@@ -98,6 +98,93 @@ for example, `^[A-Z]{3}$`. Bounds must be ordered nonnegative integers no greate
 never compiles or executes an app-supplied regular expression. Other pattern syntax
 is rejected. A pattern does not trim, normalize or replace values: invalid edits remain
 visible but fail final draft validation before review or delivery.
+
+### Optional inert layout: `draftView` version 1
+
+An action may also include `draftView: { version: 1, nodes, theme? }`. This is
+app-owned presentation data, not HTML, JavaScript, arbitrary CSS or an iframe.
+The authoritative contract is
+[`LocalAppViewV1` and its validator](../frontend/app/src/utils/localAppView.ts);
+the host renders it in
+[`PrivateAppDraftFields`](../frontend/app/src/components_shared/PrivateAppDraftFields.svelte).
+One tree describes one canonical item selected by the action's `single`, `list`
+or `wrapped-list` handoff. The host owns item count/order and edit/read-only mode.
+
+The supported nodes are:
+
+- `group` and `row`: nonempty `children`, with optional `gap` and `padding`
+  (`none`, `small`, `medium`), `surface` (`plain`, `card`) and `radius`
+  (`none`, `small`, `medium`). Rows wrap at the available width.
+- `field`: a unique reference to a declared scalar field in that item's schema.
+  Its name must match `^[A-Za-z][A-Za-z0-9_]{0,63}$`; unknown, duplicate,
+  object and array references are rejected. Optional `minWidth` is an integer
+  from 80 to 320; `fullWidth` is a boolean. Optional `control` is `single-line`
+  or `multiline`, permitted only for non-enum strings. Existing named choices,
+  date/select hints, suggestions, defaults and validation remain authoritative;
+  a layout hint cannot replace those semantics.
+- `text`: nonblank inert text, with optional `tone` (`normal`, `muted`, `accent`)
+  and `size` (`small`, `normal`, `heading`). The host renders text, never markup.
+
+The tree allows at most six node levels, 128 nodes and 32 entries in each child
+list, including the top-level `nodes`. Each text node is limited to 512 UTF-16
+code units, with 4,096 total across text nodes; control/format characters,
+line/paragraph separators and unpaired surrogates are rejected. The existing
+64 KiB safe-JSON snapshot bounds also apply; accessors and executable values
+are not accepted or invoked. Unknown keys and unsupported tokens are rejected.
+
+Optional `theme` contains nonempty `light` and/or `dark` palettes. A palette
+may contain only `background`, `surface`, `field`, `text`, `muted`, `border`
+and `accent`, each an exact `#RRGGBB` value. The host chooses its current theme
+and maps these roles inside the app-presentation subtree only. Host review,
+destination and delivery controls remain outside that subtree. Controls retain
+a minimum 44-pixel height; the host also controls native date color scheme.
+Validated colors are not a contrast or accessibility guarantee: app text/paint
+can still mislead, so it must never substitute for complete host review.
+
+For example, an action whose item schema declares numeric `reading` and plain
+string `annotation` may use this view; the schema, labels and actual values
+remain in their existing action/draft declarations:
+
+```json
+{
+  "version": 1,
+  "nodes": [
+    {
+      "kind": "row",
+      "gap": "small",
+      "children": [
+        { "kind": "field", "field": "reading", "minWidth": 96 },
+        { "kind": "field", "field": "annotation", "control": "single-line" }
+      ]
+    }
+  ]
+}
+```
+
+Catalog import validates the view against `draftSchema` and `handoff`, retains
+only the frozen raw view, and rejects invalid metadata. The validator's coverage
+fields and `requiresCompleteHostReview` result are host diagnostics, not catalog
+properties. Public-directory verification binds the view to the published
+action; private Connect setup cannot add, remove or alter it. JSON object-key
+ordering does not change that equality. A view contains no field values,
+replacement labels, destinations, approval or send instructions.
+
+The normal card revalidates the view and uses the existing field-edit callbacks.
+Absent metadata uses the compact generic renderer. If supplied metadata is
+invalid at rendering time, canonical fields remain visible but review is blocked;
+invalid metadata is not silently treated as an acceptable fallback. Unrepresented
+scalar fields appear outside app paint, while complex/envelope values remain in
+the canonical preview and advanced JSON. After **Review**, every outgoing value
+is shown in host-owned review outside app paint before explicit confirmation.
+Edits revoke approval; incomplete edits block review/send. Delivered app-view
+cards are read-only. Layout does not project the payload or change encryption,
+request identity, recipient binding or retry rules.
+
+Saved cards retain their frozen app/view setup. Connecting a newer published
+view enables it for new proposals; it does not rewrite existing cards, restore
+approval or send anything. This contract is packaged in build031, but fresh
+connection/new-view adoption and final APK delivery still need the separate
+[current acceptance checks](unofficial-local-client.md#current-local-test-completion-checklist).
 
 ## Cryptographic and transport contract
 
@@ -375,14 +462,26 @@ storage, provider or delivery runtime acceptance. See
 for exact identities, hosted CI results and remaining gates. The earlier browser
 acceptance above must not be relabeled as acceptance of these newer artifacts.
 
-The subsequent main Apps UI replacement removes the separate management page while
-retaining encrypted cards and app-owned presentation. See
-[the APK022 and web checkpoint](unofficial-local-client.md#october-2-main-apps-web-and-apk022-checkpoint)
-for current static artifact proofs and the limited emulator list/details/Connect
-interaction. Those checks do not establish completed connection, card delivery or
-current normal-browser acceptance.
+The October 2 main Apps UI replacement removed the separate management page while
+retaining encrypted cards and app-owned presentation. The
+[historical APK022 and web checkpoint](unofficial-local-client.md#october-2-main-apps-web-and-apk022-checkpoint)
+records its static artifact proofs and limited emulator list/details/Connect
+interaction, not completed connection or card delivery for that build.
 
-For the later build026 desktop image-to-encrypted-delivery/save/readback result,
-and the still-unverified native connection/delivery boundary, use the
-[current local-test completion checklist](unofficial-local-client.md#current-local-test-completion-checklist).
-The newer desktop result does not retroactively qualify APK022 or native delivery.
+The later build026 desktop image-to-encrypted-delivery/save/readback result and
+the [October 4 APK028 native lifecycle acceptance](unofficial-local-client.md#october-4-apk028-build-and-emulator-lifecycle-acceptance)
+remain evidence for their exact artifacts. APK028's approved same-ID retry
+reached encrypted IOU delivery, receiving-app review, replayed Save/readback
+and natural return, with foreground-service cleanup. That result is not a fresh
+build031 delivery test or evidence that APK022 passed those checks.
+
+For the October 5 build031 checkpoint, both web layouts and APK ABIs have static
+artifact proofs. Normal-browser checks retained old saved cards and their frozen
+setup; the new compact fallback renderer was observed, not fresh adoption of the
+app-owned view. The x86 APK was installed in place with matching bytes, but its
+post-install UI/session/card restoration remains unverified. Fresh Connect/new
+`draftView` proposals, model accuracy and final encrypted receiver save/readback
+remain separate pending gates. Use the
+[current local-test completion checklist](unofficial-local-client.md#current-local-test-completion-checklist)
+for their status; neither historical delivery nor static packaging grants public
+release acceptance.
