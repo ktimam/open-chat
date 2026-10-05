@@ -2,8 +2,9 @@
 
 > Historical PR-stack record. For the current single-main unofficial client,
 > use the [October 5, 2026 checkpoint](../unofficial-local-client.md#current-checkpoint--october-5-2026).
-> It separates verified APK030/web030 artifacts and restored inline UI from
-> unfinished image/Type/IOU acceptance and the still-red, deferred advisory gates.
+> It separates verified APK031/web031 artifacts and normal-browser saved-card checks
+> from pending fresh app-view connection, APK UI and image/Type/IOU acceptance,
+> plus the still-red, deferred advisory gates.
 > The dated PR results below have not been relabelled as current-client evidence.
 
 Assessment: 2026-09-15. **Hosted functional checks passed; local dependency follow-ups and final publication remain.**

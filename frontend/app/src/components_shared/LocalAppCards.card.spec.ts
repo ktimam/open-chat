@@ -6,6 +6,8 @@ import type { Writable } from "svelte/store";
 import LocalAppCards from "./LocalAppCards.svelte";
 import { privateAppWorkspace as workspace } from "../utils/privateAppWorkspace";
 import { currentTheme } from "../theme/themes";
+import { nativeAppPairing } from "../utils/nativeAppDelivery";
+import type { LocalDraftDelivery } from "../utils/localAppDrafts";
 import { localAppCardAnchors, type LocalAppCardAnchorSource } from "../utils/localAppCardAnchors";
 import type {
     extractPrivateAppAction,
@@ -17,6 +19,10 @@ const calls = vi.hoisted(() => ({
     extract: vi.fn(),
     deliver: vi.fn(),
     cancel: vi.fn(),
+    nativeDeliver: vi.fn<LocalDraftDelivery>(),
+    nativeAllowed: vi.fn(() => false),
+    nativeCopyCode: vi.fn(),
+    nativeOpenBrowser: vi.fn(),
     navigate: vi.fn(),
     scrollIntoView: vi.fn<(options?: ScrollIntoViewOptions) => void>(),
 }));
@@ -60,8 +66,13 @@ vi.mock("../utils/localAppRelayDelivery", async () => ({
 }));
 vi.mock("../utils/nativeAppDelivery", async () => ({
     nativeAppPairing: (await import("svelte/store")).writable(undefined),
-    nativeAppDelivery: { deliver: vi.fn(), cancelAll: vi.fn() },
-    nativeDeliveryAllowed: () => false,
+    nativeAppDelivery: {
+        deliver: calls.nativeDeliver,
+        cancelAll: vi.fn(),
+        copyCode: calls.nativeCopyCode,
+        openBrowser: calls.nativeOpenBrowser,
+    },
+    nativeDeliveryAllowed: calls.nativeAllowed,
 }));
 
 const catalog = JSON.stringify({
@@ -161,11 +172,11 @@ const changeJson = async (json: string) => {
     editor().dispatchEvent(new Event("input", { bubbles: true }));
     await settle();
 };
-const propose = async () => {
+const propose = async (coordinate?: LocalAppCardAnchorSource) => {
     await workspace.propose(
         client,
         { kind: "text_content", text: "synthetic source" } as MessageContent,
-        { stillCurrent: () => true },
+        { stillCurrent: () => true, ...(coordinate ? { source: coordinate } : {}) },
     );
     await settle();
 };
@@ -280,6 +291,9 @@ const proposeNamed = async (
 
 beforeEach(async () => {
     vi.clearAllMocks();
+    calls.nativeAllowed.mockReturnValue(false);
+    calls.nativeDeliver.mockResolvedValue({ kind: "delivered" });
+    (nativeAppPairing as unknown as Writable<unknown>).set(undefined);
     (currentTheme as unknown as Writable<{ mode: "light" | "dark" }>).set({ mode: "light" });
     Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
         configurable: true,
@@ -325,7 +339,7 @@ describe("app-owned view in the normal private-card flow", () => {
     const themedCard = () => target.querySelector<HTMLElement>(".app-owned-view")!;
     const fullReview = () =>
         target.querySelector('[aria-label="Complete canonical outgoing values"]');
-    const proposeView = async (includeExtra = true) => {
+    const proposeView = async (includeExtra = true, coordinate?: LocalAppCardAnchorSource) => {
         const declaration = JSON.parse(catalog);
         declaration.apps[0].actions[0].draftView = {
             version: 1,
@@ -348,7 +362,7 @@ describe("app-owned view in the normal private-card flow", () => {
         workspace.discard();
         expect(workspace.importCatalog(JSON.stringify(declaration))).toBe(true);
         expect(workspace.select("synthetic", "capture")).toBe(true);
-        await propose();
+        await propose(coordinate);
     };
 
     it("uses the app's compact layout during editing without a duplicate full review", async () => {
@@ -455,6 +469,160 @@ describe("app-owned view in the normal private-card flow", () => {
         expect(workspace.state.editorJson).toBe(original);
         expect(calls.deliver).not.toHaveBeenCalled();
     });
+
+    describe.each(["saved", "source"] as const)(
+        "app-owned view with native delivery (%s)",
+        (presentation) => {
+            const pairing = (importId: string) => ({
+                importId,
+                handoffId: "a".repeat(32),
+                url: "http://localhost:41000/handoff",
+                pairingCode: "A".repeat(20),
+                expiresAtMs: Date.now() + 120_000,
+            });
+            const showPairing = (value: unknown) =>
+                (nativeAppPairing as unknown as Writable<unknown>).set(value);
+
+            beforeEach(async () => {
+                if (mounted) await unmount(mounted);
+                client = { ...client, isNativeApp: () => true } as OpenChat;
+                calls.nativeAllowed.mockReturnValue(true);
+                mounted = mount(LocalAppCards, { target, props: { client } });
+                // Unmount clears the singleton. Complete the new mount's account
+                // restoration before importing this synthetic app configuration.
+                await settle();
+                await vi.waitFor(() => expect(workspace.state.setupLoading).toBe(false));
+                const coordinate = source("73");
+                registerAnchor(coordinate);
+                // Keep one canonical field outside the app's view to exercise full review.
+                await proposeView(false, coordinate);
+                if (presentation === "saved") workspace.open("saved");
+                await settle();
+                expect(workspace.state.cardPresentation).toBe(presentation);
+                expect(themedCard()).not.toBeNull();
+            });
+
+            it("requires canonical review and revokes native approval after an app-view edit", async () => {
+                expect(fullReview()).toBeNull();
+                expect(calls.nativeDeliver).not.toHaveBeenCalled();
+                button("Review full request").click();
+                await settle();
+                const prior = workspace.state.draft!.approval!;
+                expect(JSON.parse(fullReview()!.querySelector("pre")!.textContent!)).toEqual({
+                    value: 42,
+                    extra: "Also sent",
+                });
+                expect(fullReview()!.closest(".app-owned-view")).toBeNull();
+                expect(button("Send reviewed request").disabled).toBe(true);
+                confirmation().click();
+                await settle();
+                expect(button("Send reviewed request").disabled).toBe(false);
+                await changeNumber("84");
+                expect(workspace.state.draft!.approval).toBeUndefined();
+                expect(fullReview()).toBeNull();
+                await workspace.confirm(prior.approvalId);
+                expect(calls.nativeDeliver).not.toHaveBeenCalled();
+                expect(calls.deliver).not.toHaveBeenCalled();
+                button("Review full request").click();
+                await settle();
+                expect(confirmation().checked).toBe(false);
+                expect(workspace.state.draft!.approval!.request.payload).toEqual({
+                    value: 84,
+                    extra: "Also sent",
+                });
+            });
+
+            it("routes only the explicit exact request to native pairing with separate Copy and Open", async () => {
+                let finish!: (outcome: { kind: "delivered" }) => void;
+                calls.nativeDeliver.mockImplementation(
+                    (request) =>
+                        new Promise<{ kind: "delivered" }>((resolve) => {
+                            finish = resolve;
+                            showPairing(pairing(request.idempotencyKey));
+                        }),
+                );
+                const extractionCount = calls.extract.mock.calls.length;
+                button("Review full request").click();
+                await settle();
+                const reviewed = workspace.state.draft!.approval!.request;
+                expect(reviewed.payload).toEqual({ value: 42, extra: "Also sent" });
+                expect(calls.nativeDeliver).not.toHaveBeenCalled();
+                expect(button("Copy pairing code")).toBeUndefined();
+                confirmation().click();
+                await settle();
+                expect(calls.nativeDeliver).not.toHaveBeenCalled();
+                button("Send reviewed request").click();
+                await settle();
+                expect(calls.nativeDeliver).toHaveBeenCalledExactlyOnceWith(
+                    reviewed,
+                    expect.any(AbortSignal),
+                );
+                expect(calls.deliver).not.toHaveBeenCalled();
+                expect(workspace.state.draft!.status).toBe("sending");
+                expect(target.textContent).toContain(pairing(reviewed.idempotencyKey).pairingCode);
+                expect(calls.nativeCopyCode).not.toHaveBeenCalled();
+                expect(calls.nativeOpenBrowser).not.toHaveBeenCalled();
+                showPairing(pairing("another-import"));
+                await settle();
+                expect(button("Copy pairing code")).toBeUndefined();
+                showPairing(pairing(reviewed.idempotencyKey));
+                await settle();
+                button("Copy pairing code").click();
+                button("Open local browser").click();
+                await settle();
+                expect(calls.nativeCopyCode).toHaveBeenCalledExactlyOnceWith(
+                    reviewed.idempotencyKey,
+                );
+                expect(calls.nativeOpenBrowser).toHaveBeenCalledExactlyOnceWith(
+                    reviewed.idempotencyKey,
+                );
+                showPairing(undefined);
+                finish({ kind: "delivered" });
+                await settle();
+                expect(workspace.state.draft!.status).toBe("delivered");
+                expect(themedCard().querySelector("input,select,textarea")).toBeNull();
+                expect(button("Copy pairing code")).toBeUndefined();
+                expect(calls.nativeDeliver).toHaveBeenCalledOnce();
+                expect(calls.deliver).not.toHaveBeenCalled();
+                expect(calls.extract).toHaveBeenCalledTimes(extractionCount);
+            });
+
+            it("retains an uncertain native request but never retries on reopening or review", async () => {
+                calls.nativeDeliver.mockResolvedValue({ kind: "uncertain" });
+                await approveAndSend();
+                expect(workspace.state.draft!.status).toBe("uncertain");
+                const draftId = workspace.state.draft!.id;
+                const reviewed = workspace.state.draft!.approval!.request;
+                const extractionCount = calls.extract.mock.calls.length;
+                workspace.close();
+                expect(workspace.selectCard(draftId)).toBe(true);
+                workspace.open(presentation);
+                await settle();
+                expect(themedCard()).not.toBeNull();
+                expect(workspace.state.draft!.approval).toBeUndefined();
+                expect(calls.nativeDeliver).toHaveBeenCalledOnce();
+                button("Review recovered request before retrying").click();
+                await settle();
+                expect(workspace.state.draft!.approval!.request).toEqual(reviewed);
+                expect(button("Retry the same reviewed request").disabled).toBe(true);
+                button("Retry the same reviewed request").click();
+                await settle();
+                expect(calls.nativeDeliver).toHaveBeenCalledOnce();
+                expect(calls.deliver).not.toHaveBeenCalled();
+                expect(calls.extract).toHaveBeenCalledTimes(extractionCount);
+            });
+
+            it("fails closed instead of falling back to browser delivery when native is unavailable", async () => {
+                calls.nativeAllowed.mockReturnValue(false);
+                await approveAndSend();
+                expect(workspace.state.draft!.status).toBe("uncertain");
+                expect(calls.nativeDeliver).not.toHaveBeenCalled();
+                expect(calls.deliver).not.toHaveBeenCalled();
+                expect(button("Copy pairing code")).toBeUndefined();
+                expect(button("Retry the same reviewed request").disabled).toBe(true);
+            });
+        },
+    );
 });
 
 describe("source-anchored private card presentation", () => {
