@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 import { extname, resolve } from "node:path";
 import {
   CURRENT_FORMAT_BASE,
+  CURRENT_FORMAT_MERGED_BASES,
   CURRENT_FORMAT_EDIT_ALGORITHM,
   createCurrentFormattingReview,
   formattingEditSha256s,
@@ -90,10 +92,43 @@ test("current formatting follows the reviewed merged upstream without new exempt
   );
   assert(
     readCurrentFormattingRegistry().records.every(
-      (record) => record.baseCommit === CURRENT_FORMAT_BASE,
+      (record) => record.baseCommit ===
+        (CURRENT_FORMAT_MERGED_BASES[record.path] ?? CURRENT_FORMAT_BASE),
     ),
   );
-  assert.equal(readCurrentFormattingRegistry().records.length, 10);
+  assert.equal(readCurrentFormattingRegistry().records.length, 14);
+});
+
+test("0519 merge adds only four exact upstream identities and retains all older reviews", () => {
+  const root = fileURLToPath(new URL("../", import.meta.url));
+  const git = (object) => execFileSync("git", ["show", object], {
+    cwd: root, encoding: "utf8", maxBuffer: 16 * 1024 * 1024,
+  });
+  const before = JSON.parse(git("08f8cf846fccddaa7f4ea7cdcd064616beee41a7:scripts/frontend_format_current.json"));
+  const current = readCurrentFormattingRegistry();
+  assert.deepEqual(current.records.slice(0, 10), before.records);
+  assert.deepEqual(Object.keys(CURRENT_FORMAT_MERGED_BASES).sort(), [
+    "frontend/app/src/components/home/Home.svelte",
+    "frontend/app/src/components/home/MessageEntry.spec.harness.svelte",
+    "frontend/app/src/components_shared/RichTextEditor.svelte",
+    "frontend/openchat-agent/src/services/localUserIndex/localUserIndex.client.ts",
+  ].sort());
+  assert.equal(current.records.slice(10).length, 4);
+  for (const record of current.records.slice(10)) {
+    assert.equal(record.baseCommit, "0519aa39964a34d165173587b4d63e572c89670d");
+    assert.equal(CURRENT_FORMAT_MERGED_BASES[record.path], record.baseCommit);
+    assert.equal(digest(git(`${record.baseCommit}:${record.path}`)), record.baseSha256);
+    assert.equal(record.candidateSha256, record.baseSha256);
+    assert.equal(digest(readFileSync(resolve(root, record.path), "utf8")), record.baseSha256);
+    assert.equal(record.proof.baseEditSha256s.length, 1);
+    assert.deepEqual(record.proof.candidateEditSha256s, record.proof.baseEditSha256s);
+    const wrongPath = structuredClone(current);
+    wrongPath.records.find((r) => r.path === record.path).path += ".unreviewed";
+    assert.throws(() => createCurrentFormattingReview(wrongPath, () => ""), /current upstream/);
+    const wrongBase = structuredClone(current);
+    wrongBase.records.find((r) => r.path === record.path).baseCommit = CURRENT_FORMAT_BASE;
+    assert.throws(() => createCurrentFormattingReview(wrongBase, () => ""), /current upstream/);
+  }
 });
 
 test("current review regenerates exact edit proof after all identity checks", () => {
@@ -323,7 +358,7 @@ test(
   { timeout: 120000 },
   () => {
     const registry = readCurrentFormattingRegistry();
-    assert.equal(registry.records.length, 10);
+    assert.equal(registry.records.length, 14);
     const result = checkCurrentClientFormat({ report: () => {} });
     assert.deepEqual(result.failures, []);
     assert.equal(result.pass, true);

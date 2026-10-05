@@ -1,6 +1,6 @@
 # Current unofficial-client npm source ownership
 
-Latest disposition: see **October 3 upstream wallet source identity**
+Latest disposition: see **October 5 bounded output budgets and 0519 merge**
 below. Earlier sections and their hashes remain historical evidence; they do not
 describe the now-removed active browser-auth transport.
 
@@ -1026,3 +1026,84 @@ unreviewed imports remain rejected. Composition stays **176 sources, 128 owners,
 policy changes. Existing web artifact reports remain evidence of their earlier
 actual source, not this final checkpoint. This is not build/runtime/release
 acceptance.
+
+## October 5 bounded output budgets and 0519 merge
+
+Approved current-client source review of merge
+`2384b716c2ce2d4fada522b6c926818ff84cfeaa`, combining output-budget fix
+`08f8cf846fccddaa7f4ea7cdcd064616beee41a7` and upstream
+`0519aa39964a34d165173587b4d63e572c89670d`.
+All **176** independently read predecessor Git blobs at
+`c2a8ca44ea10fabf51c64be8e7cd5134254944e8` reproduce the prior
+`f8f5e475b47d80028579edb7133385b91a870ae97e836c24554ff62143553217`
+aggregate. Current source is **177 files, 129 dedicated owners, 108 ownership
+anchors and 26 unchanged dependency roots**, with aggregate
+`6ae14948ee5e532a901797b86790df515d397eca046290501f78b098b9f23d97`.
+
+Exactly one runtime owner is added through the existing model selector:
+`transformersWebGpuOutputLimits.ts` (LF SHA256
+`358af7690e0bcf75e7a944b4f9c4efc3ac59fafbe3d772082120c215e17288f8`).
+It imports nothing. Five existing dedicated consumers change:
+`WebInferenceRuntimeSettings.svelte`, `transformersWebGpuSettings.ts`,
+`transformersWebGpuInference.ts`, `webGpuModelCatalog.ts`, and `webInference.ts`.
+Their only new import edges reach that local helper. Qwen's build ceiling stays
+96; Gemma's ceiling is 192; saved legacy user caps stay intact. Catalog, user and
+request ceilings intersect with adapter safety, and whole-completion checks
+remain in force. No model weights, prompt, artifact/cache identities or package
+dependencies change in this ownership update.
+
+Four already anchored mixed sources change with the upstream merge:
+`chatsDb.ts`, `openchat.ts`, shared `domain/worker.ts`, and worker `worker.ts`.
+Their external package specifiers are unchanged; the mixed client adds only
+the upstream internal migration/wallet helpers. This records whole-file drift
+identity for existing feature anchors, not new ownership or a core/wallet audit.
+The separately reviewed composer merge retains lifecycle cleanup and stale
+account/chat/thread guards, and the worker retains its pre-dispatch client-only
+API rejection and redaction. These observations do not authorize financial
+actions or constitute authenticated-wallet/runtime acceptance.
+
+All 129 dedicated modules pass the unchanged direct-import gate. Regression
+tests pin every added/changed source, reject individual removal or byte drift,
+and reject unreviewed package imports. Nine independently verified predecessor
+identities plus removal of the one new helper reconstruct the entire 176-file
+checkpoint before every older historical transform. Exact inference-hunk
+reversal retains the existing cache responsiveness and immutable-routing proofs.
+Older wallet/replica hunk reversals remain exact in the new mixed-file context;
+those synthetic reversals are explicitly not mislabeled as historical full
+files. The historical full-file identities and aggregate hashes remain intact.
+
+No source selectors, root declarations, manifests/locks, historical PR
+inventories, advisory decisions, fail-closed policy, authentication, encryption,
+backend or deployment configuration were altered. This update is offline source
+ownership evidence only, not build, model accuracy, device, runtime or release
+acceptance. Prior artifacts remain identified by their actual source revision.
+
+### Paired native-lock and inherited-format checkpoints (2026-10-05)
+
+The same reviewed merge `2384b716c2ce2d4fada522b6c926818ff84cfeaa`
+changes normalized `Cargo.lock` SHA-256 from
+`631c6c577bf4fa6fb4797c44f9d1f451027b37be3e351447ce3a587186165059` to
+`cc7cd15531376a0f560e4626682a43deca6373bf01df1e7a064f7a4bdcb6493f`.
+All 1,235 package name/version/source/checksum identities remain equal. Only
+the backend-local `cycles_dispenser_client` and `utils` dependency stanzas
+change; both complete new stanzas exactly match upstream
+`0519aa39964a34d165173587b4d63e572c89670d`. The former replaces the
+`ic-cdk-timers` edge with existing `per_round_timer`; the latter adds that timer
+edge. Neither is reachable in the conservative lock traversal from the same
+26 native roots: all 512 reachable package stanzas and edges retain the prior
+exact hash. No native manifest, package/license list, optional wrapper/sys ABI,
+source inventory, profile or advisory decision changes. Current scope/license
+lock pins and their linked configuration hashes are refreshed; tests reverse
+only those two exact edges before every historical checkpoint. This offline
+comparison is not a fresh Cargo target/feature-filtered metadata collection.
+
+The formatting review retains all ten prior records unchanged. Four additional
+files are byte-identical to that exact upstream revision: desktop `Home.svelte`,
+`MessageEntry.spec.harness.svelte`, shared `RichTextEditor.svelte`, and agent
+`localUserIndex.client.ts`. Each has exactly one inherited formatter edit.
+Only these four canonical paths select the separately pinned upstream base;
+the original comparison base, historical records and source filters remain
+unchanged. Exact source/formatter/config identities and regenerated live edit
+proofs remain mandatory; unknown paths, changed bases or candidate bytes fail
+closed. No upstream source is reformatted and no blanket exemption is added.
+These are scoped CI checkpoint updates, not new audit or release acceptance.

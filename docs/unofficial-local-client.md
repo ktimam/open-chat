@@ -41,6 +41,48 @@ original source, not this merge or the later output-budget fix. Fresh Connect,
 model regressions, encrypted end-to-end delivery and rebuilt artifacts remain
 release gates.
 
+#### Fresh web031 card and two-entry delivery observations
+
+After recovery, normal Edge Apps → Refresh apps → IOU Reconnect → existing IOU
+identity → existing synthetic sheet → Share setup completed without imported
+files. An initial stale-directory hash mismatch was resolved by Refresh apps;
+validation was not weakened. A new proposal on the existing synthetic Kiko text
+message used IOU's compact app-authored `draftView`. Editing revoked approval;
+reload/reopen retained the edited fields and presentation, but not approval.
+The [fresh-card receipt](F:/Temp/OpenChat-IOU/card-view-release-20261005/fresh-connect/result.json)
+has SHA-256 `482272eff7b607913be24d52742fde6b97f18044092504035378906f696c8618`.
+
+The separate delivery check used the supported payload editor for two explicitly
+synthetic rows: 11.11 USD / You owe / October 5, and 22.22 USD / Owed to you /
+October 6. These were edited test inputs, **not model extraction**. Complete
+OpenChat review, encrypted handoff, recipient-bound IOU decryption, second review
+and one Save action completed. Both exact rows appeared once in the normal
+ledger. After refreshing the same existing IOU sign-in, a direct sheet reload
+retained each row once. No new identity was created. OpenChat reload retained
+the card without restored approval or resend. The
+[delivery/readback receipt](F:/Temp/OpenChat-IOU/card-view-release-20261005/fresh-connect/two-entry-delivery-result.json)
+has SHA-256 `34e740725352e77a9975b0a21a4590e746065e728d59b73d4b3765f8916a3475`.
+This qualifies the observed web031 flow, not a network capture, cryptographic
+audit, APK delivery or the newly merged build.
+
+An inactive four-key Qwen grouping candidate completed in 44.2 seconds but still
+returned only Invoice A from the two-invoice fixture. All 14 cached artifacts
+were SHA-verified; cleanup was acknowledged. Valid complete JSON did not pass
+the unchanged two-row factual oracle. The active prompt, weights and processor
+were not changed. Evidence is
+`F:/Temp/OpenChat-IOU/qwen-four-key-grouping-reviewed-20261005/visible-result.txt`.
+The one-shot diagnostic was closed and the normal preview restored.
+
+A separate title-only probe returned both document titles using the same image,
+worker and cache. The next inactive candidate scoped all four existing fields to
+their own document and required an array. It returned both exact totals and their
+own dates in 45.4 seconds, with complete output and acknowledged cleanup at the
+unchanged 96-token ceiling. Evidence is
+`F:/Temp/OpenChat-IOU/qwen-document-scoped-array-20261005/visible-result.txt`.
+This isolates a useful app-prompt correction, not a general accuracy claim:
+original-image, absence and repeated-use checks are required before activation.
+No production prompt or OpenChat app-specific logic was changed by these tests.
+
 ### Current build031 source, artifacts and normal-browser checks
 
 APK031 (x86_64 and aarch64) and web031 (v1 and v2) were independently verified

@@ -9,6 +9,14 @@ import {
 } from "./frontend_format_inherited.mjs";
 
 export const CURRENT_FORMAT_BASE = "65e265f027cc50a1ea333dd94acbb7816992b54c";
+// Only these exact files were inherited byte-for-byte by merge 2384b716.
+// Older reviewed records retain their original base and live proof.
+export const CURRENT_FORMAT_MERGED_BASES = Object.freeze({
+  "frontend/app/src/components/home/Home.svelte": "0519aa39964a34d165173587b4d63e572c89670d",
+  "frontend/app/src/components/home/MessageEntry.spec.harness.svelte": "0519aa39964a34d165173587b4d63e572c89670d",
+  "frontend/app/src/components_shared/RichTextEditor.svelte": "0519aa39964a34d165173587b4d63e572c89670d",
+  "frontend/openchat-agent/src/services/localUserIndex/localUserIndex.client.ts": "0519aa39964a34d165173587b4d63e572c89670d",
+});
 export const CURRENT_FORMAT_EDIT_ALGORITHM = "unique-common-line-anchors-v1";
 
 // Same edit identity as the historical review: exact removed/added lines,
@@ -117,7 +125,7 @@ export function createCurrentFormattingReview(registry, formatSource) {
   for (const record of registry.records)
     assert.equal(
       record.baseCommit,
-      CURRENT_FORMAT_BASE,
+      CURRENT_FORMAT_MERGED_BASES[record.path] ?? CURRENT_FORMAT_BASE,
       "Current review must pin current upstream",
     );
   const records = new Map(

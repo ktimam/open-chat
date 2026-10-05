@@ -8,6 +8,7 @@ import {
 } from "./frontend_format_check.mjs";
 import {
   CURRENT_FORMAT_BASE,
+  CURRENT_FORMAT_MERGED_BASES,
   createCurrentFormattingReview,
   formatCurrentSource,
   readCurrentFormattingRegistry,
@@ -58,21 +59,29 @@ export function checkCurrentClientFormat({
   const classify = createCurrentFormattingReview(registry, (path, source) =>
     formatCurrentSource(frontend, path, source),
   );
-  const failures = checkFrontendFormatting(
-    frontend,
-    paths.map((path) =>
-      relative(frontend, resolve(repositoryRoot, path)).replaceAll("\\", "/"),
-    ),
-    undefined,
-    {
-      inheritedBase: CURRENT_FORMAT_BASE,
-      currentInheritedReview: (input) => {
-        const result = classify(input);
-        if (result.accepted) reviewed.push(input.path);
-        return result;
+  const groups = new Map();
+  for (const path of paths) {
+    const base = CURRENT_FORMAT_MERGED_BASES[path] ?? CURRENT_FORMAT_BASE;
+    if (!groups.has(base)) groups.set(base, []);
+    groups.get(base).push(path);
+  }
+  const failures = [...groups].flatMap(([inheritedBase, group]) =>
+    checkFrontendFormatting(
+      frontend,
+      group.map((path) =>
+        relative(frontend, resolve(repositoryRoot, path)).replaceAll("\\", "/"),
+      ),
+      undefined,
+      {
+        inheritedBase,
+        currentInheritedReview: (input) => {
+          const result = classify(input);
+          if (result.accepted) reviewed.push(input.path);
+          return result;
+        },
+        report,
       },
-      report,
-    },
+    ),
   );
   return {
     pass: failures.length === 0,

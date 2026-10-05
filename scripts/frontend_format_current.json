@@ -248,6 +248,90 @@
           "254ecb9b9a801e812bd0f7922a7a86573aebcb24f715f61a1420ce97fdb404ee"
         ]
       }
+    },
+    {
+      "scope": "current-client",
+      "path": "frontend/app/src/components/home/Home.svelte",
+      "baseCommit": "0519aa39964a34d165173587b4d63e572c89670d",
+      "baseSha256": "f629adbaffdadeb8a71cbb0f7eb243e5a47416dbdd9c1b3da51327f6fe405ace",
+      "candidateSha256": "f629adbaffdadeb8a71cbb0f7eb243e5a47416dbdd9c1b3da51327f6fe405ace",
+      "justification": "Merge 2384b716 retains this exact upstream file byte-for-byte. Its one formatter edit is inherited; source, path/base binding, formatter/config and live edit proof must all match. No fork-owned formatting exemption.",
+      "formatter": {
+        "prettierVersion": "3.8.4",
+        "sveltePluginVersion": "3.5.2",
+        "configSha256": "6a608fe0bd06378aa252d9bc4bf291eea44b90d15657b5e95dc02cde509a44aa"
+      },
+      "proof": {
+        "baseEditSha256s": [
+          "ad4637e344b0f79e9d2a6eb93a449b5ade85f183c0a0e0958b27cb427a849231"
+        ],
+        "candidateEditSha256s": [
+          "ad4637e344b0f79e9d2a6eb93a449b5ade85f183c0a0e0958b27cb427a849231"
+        ]
+      }
+    },
+    {
+      "scope": "current-client",
+      "path": "frontend/app/src/components/home/MessageEntry.spec.harness.svelte",
+      "baseCommit": "0519aa39964a34d165173587b4d63e572c89670d",
+      "baseSha256": "c3903128d814b443c424ff871813cf2d63d2ed8e2a650bb737be14017efdab6b",
+      "candidateSha256": "c3903128d814b443c424ff871813cf2d63d2ed8e2a650bb737be14017efdab6b",
+      "justification": "Merge 2384b716 retains this exact upstream file byte-for-byte. Its one formatter edit is inherited; source, path/base binding, formatter/config and live edit proof must all match. No fork-owned formatting exemption.",
+      "formatter": {
+        "prettierVersion": "3.8.4",
+        "sveltePluginVersion": "3.5.2",
+        "configSha256": "6a608fe0bd06378aa252d9bc4bf291eea44b90d15657b5e95dc02cde509a44aa"
+      },
+      "proof": {
+        "baseEditSha256s": [
+          "b78bd940b11d7b1d6befebfc357f2545c89374d209c5034a5feb7d6ded53fdf3"
+        ],
+        "candidateEditSha256s": [
+          "b78bd940b11d7b1d6befebfc357f2545c89374d209c5034a5feb7d6ded53fdf3"
+        ]
+      }
+    },
+    {
+      "scope": "current-client",
+      "path": "frontend/app/src/components_shared/RichTextEditor.svelte",
+      "baseCommit": "0519aa39964a34d165173587b4d63e572c89670d",
+      "baseSha256": "eefc79a3afad06764f4a9a43d50f26bde270f506021a35671474af84c271e05a",
+      "candidateSha256": "eefc79a3afad06764f4a9a43d50f26bde270f506021a35671474af84c271e05a",
+      "justification": "Merge 2384b716 retains this exact upstream file byte-for-byte. Its one formatter edit is inherited; source, path/base binding, formatter/config and live edit proof must all match. No fork-owned formatting exemption.",
+      "formatter": {
+        "prettierVersion": "3.8.4",
+        "sveltePluginVersion": "3.5.2",
+        "configSha256": "6a608fe0bd06378aa252d9bc4bf291eea44b90d15657b5e95dc02cde509a44aa"
+      },
+      "proof": {
+        "baseEditSha256s": [
+          "cba83ef96baac63a8c2ae79d6dc404cbb4403bebe0cf6f873d95f24c9a3a25fc"
+        ],
+        "candidateEditSha256s": [
+          "cba83ef96baac63a8c2ae79d6dc404cbb4403bebe0cf6f873d95f24c9a3a25fc"
+        ]
+      }
+    },
+    {
+      "scope": "current-client",
+      "path": "frontend/openchat-agent/src/services/localUserIndex/localUserIndex.client.ts",
+      "baseCommit": "0519aa39964a34d165173587b4d63e572c89670d",
+      "baseSha256": "003b81016d657d6f60d5737bbd827f0d4fe0f100bd4ce3b414c9c7d8646ccdc7",
+      "candidateSha256": "003b81016d657d6f60d5737bbd827f0d4fe0f100bd4ce3b414c9c7d8646ccdc7",
+      "justification": "Merge 2384b716 retains this exact upstream file byte-for-byte. Its one formatter edit is inherited; source, path/base binding, formatter/config and live edit proof must all match. No fork-owned formatting exemption.",
+      "formatter": {
+        "prettierVersion": "3.8.4",
+        "sveltePluginVersion": "3.5.2",
+        "configSha256": "6a608fe0bd06378aa252d9bc4bf291eea44b90d15657b5e95dc02cde509a44aa"
+      },
+      "proof": {
+        "baseEditSha256s": [
+          "03f6938aff73ca894cd98789376e06ee45bf0434440f15c25a84517e4daf6a1a"
+        ],
+        "candidateEditSha256s": [
+          "03f6938aff73ca894cd98789376e06ee45bf0434440f15c25a84517e4daf6a1a"
+        ]
+      }
     }
   ]
 }

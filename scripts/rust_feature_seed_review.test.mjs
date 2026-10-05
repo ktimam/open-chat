@@ -297,10 +297,32 @@ test("current-client listener host profiles add only default-plugin and existing
   );
 });
 
+function restoreLockBefore0519Merge(cargoLock) {
+  let current = Buffer.from(cargoLock).toString("utf8").replaceAll("\r\n", "\n");
+  assert.equal(hash(current), "cc7cd15531376a0f560e4626682a43deca6373bf01df1e7a064f7a4bdcb6493f");
+  for (const [name, replacement] of [
+    ["cycles_dispenser_client", ' "ic-cdk-timers",\n'],
+    ["utils", ""],
+  ]) {
+    const block = current.match(new RegExp(`\\[\\[package\\]\\]\\nname = "${name}"\\n[\\s\\S]*?(?=\\n\\[\\[package\\]\\]|$)`, "u"))?.[0];
+    assert(block, name);
+    const line = ' "per_round_timer",\n';
+    assert.equal(block.split(line).length, 2);
+    current = current.replace(block, block.replace(line, replacement));
+  }
+  assert.equal(hash(current), "631c6c577bf4fa6fb4797c44f9d1f451027b37be3e351447ce3a587186165059");
+  return current;
+}
+
+test("0519 merge changes only two upstream backend edges, not any package identity", () => {
+  const { cargoLock } = currentClientFixture();
+  const previous = restoreLockBefore0519Merge(cargoLock);
+  assert.deepEqual(lockIdentities(cargoLock), lockIdentities(previous));
+  assert.equal(lockIdentities(cargoLock).size, 1235);
+});
+
 function restoreLockBeforePendingBackendRemoval(cargoLock) {
-  const current = Buffer.from(cargoLock)
-    .toString("utf8")
-    .replaceAll("\r\n", "\n");
+  const current = restoreLockBefore0519Merge(cargoLock);
   assert.equal(
     hash(current),
     "631c6c577bf4fa6fb4797c44f9d1f451027b37be3e351447ce3a587186165059",

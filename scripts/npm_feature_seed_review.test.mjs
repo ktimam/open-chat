@@ -288,10 +288,62 @@ const beforeAppViews = new Map([
 ]);
 const appViewSourceSha256 =
   "f8f5e475b47d80028579edb7133385b91a870ae97e836c24554ff62143553217";
+// All 176 committed c2a8ca44 blobs independently reproduce the checkpoint above.
+// Only these nine old inputs and the import-free output-limit helper differ in
+// 2384b716 (08f8cf846 plus upstream 0519aa399). Historical substitutions never
+// participate in the live source gate or its drift/removal tests.
+const outputBudgetAddition =
+  "frontend/app/src/utils/transformersWebGpuOutputLimits.ts";
+const beforeOutputBudgetMerge = new Map([
+  ["frontend/app/src/components_shared/WebInferenceRuntimeSettings.svelte", "7b96f608f1f5ab4e2bd36b8eb276d71245475e047ce1d22060674ab4cdf53692"],
+  ["frontend/app/src/stores/transformersWebGpuSettings.ts", "0ba84809aef37c75acfe7448853ef4c06e990942f397dcd4ddaf55bb6b9dc4b7"],
+  ["frontend/app/src/utils/transformersWebGpuInference.ts", "e797afe96025f79b8b0b9ebfc64aeee86aa1a9fa14a83d394d32dbe23b0693a2"],
+  ["frontend/app/src/utils/webGpuModelCatalog.ts", "a345e1096e51913b2ba2ea7f9db803604443282d2a9d4b8a228bac3ad6d95ae1"],
+  ["frontend/app/src/utils/webInference.ts", "31172e06b768969269790eaa91dc9d0234300d5af085b88cffea464f19955ff8"],
+  ["frontend/openchat-agent/src/utils/chatsDb.ts", "379b342b02d8464c5b2840efc5b9315d4caf258a6b1a2b5b477687e6b0da651e"],
+  ["frontend/openchat-client/src/openchat.ts", "98202fa119b548407a0b34a648654c0978444ce86670015b52588963c06fd3dc"],
+  ["frontend/openchat-shared/src/domain/worker.ts", "49812cfcffde3e569e23be89bc1e33b6af4a4569926ce933dc11bf194d553e5e"],
+  ["frontend/openchat-worker/src/worker.ts", "91593aa7b006b7c12847c0afe4cba74ce029dd2466c540a90daf1373bf9791d7"],
+]);
+const currentSourceSha256 =
+  "6ae14948ee5e532a901797b86790df515d397eca046290501f78b098b9f23d97";
+function beforeOutputBudgetSourceHash(file) {
+  return beforeOutputBudgetMerge.get(file) ?? sourceHash(file);
+}
+function beforeOutputBudgetFingerprint(fingerprint) {
+  const files = fingerprint.files.filter((file) => file !== outputBudgetAddition);
+  return {
+    ...fingerprint,
+    files,
+    sha256: createHash("sha256")
+      .update(JSON.stringify(files.map((file) => [file, beforeOutputBudgetSourceHash(file)])))
+      .digest("hex"),
+  };
+}
+// Preserve the existing exact cache-verifier and immutable-routing textual
+// proofs by reversing only the reviewed 08f8 output-budget inference hunks.
+function beforeOutputBudgetInference(source) {
+  let previous = source;
+  for (const [current, prior] of [
+    ['import {\n    TRANSFORMERS_WEBGPU_MAX_OUTPUT_TOKENS,\n    transformersWebGpuAdapterOutputLimit,\n} from "./transformersWebGpuOutputLimits";\n', ""],
+    ["const MAX_IMAGE_BYTES = 20 * 1024 * 1024;\n", "const MAX_IMAGE_BYTES = 20 * 1024 * 1024;\nconst MAX_OUTPUT_TOKENS = 96;\n"],
+    ["request.maxTokens > TRANSFORMERS_WEBGPU_MAX_OUTPUT_TOKENS", "request.maxTokens > MAX_OUTPUT_TOKENS"],
+    ['        if (\n            request.maxTokens !== undefined &&\n            request.maxTokens > transformersWebGpuAdapterOutputLimit(spec.adapter)\n        ) {\n            return {\n                kind: "error",\n                error: "all-WebGPU browser request exceeds safety limits",\n            };\n        }\n', ""],
+  ]) {
+    assert.equal(previous.split(current).length, 2, "exact output-budget hunk required");
+    previous = previous.replace(current, prior);
+  }
+  assert.equal(
+    createHash("sha256").update(previous).digest("hex"),
+    beforeOutputBudgetMerge.get("frontend/app/src/utils/transformersWebGpuInference.ts"),
+  );
+  return previous;
+}
 function beforeAppViewSourceHash(file) {
-  return beforeAppViews.get(file) ?? sourceHash(file);
+  return beforeAppViews.get(file) ?? beforeOutputBudgetSourceHash(file);
 }
 function beforeAppViewFingerprint(fingerprint) {
+  fingerprint = beforeOutputBudgetFingerprint(fingerprint);
   const files = fingerprint.files.filter((file) => file !== appViewAddition);
   return {
     ...fingerprint,
@@ -840,6 +892,53 @@ test("current inline local-card rendering has exact runtime ownership without te
   }
 });
 
+test("bounded model budgets and 0519 merge retain the exact predecessor without expanding roots", () => {
+  const config = JSON.parse(readFileSync(resolve(root, "scripts/npm_feature_scope.current-client.json"), "utf8"));
+  const actual = seedSourceFingerprint(root, config);
+  const previous = beforeOutputBudgetFingerprint(actual);
+  assert.equal(actual.sha256, currentSourceSha256);
+  assert.equal(actual.files.length, 177);
+  assert.equal(previous.sha256, appViewSourceSha256);
+  assert.equal(previous.files.length, 176);
+  assertReviewedSourceFingerprint(actual, config.sourceReview);
+  assertReviewedSourceFingerprint(previous, config.sourceReview);
+  const owned = featureOwnedFiles(root, config.scopeId);
+  assert.equal(owned.length, 129);
+  assert.equal(config.seeds.length, 26);
+  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
+  assert(owned.includes(outputBudgetAddition));
+  assert(!actual.files.includes(outputBudgetAddition.replace(/\.ts$/u, ".spec.ts")));
+  const expected = new Map([
+    [outputBudgetAddition, "358af7690e0bcf75e7a944b4f9c4efc3ac59fafbe3d772082120c215e17288f8"],
+    ["frontend/app/src/components_shared/WebInferenceRuntimeSettings.svelte", "393c18bd4cd94a9a4e68837df9483d64cff74c4afbff30b6df4c023cffe60eef"],
+    ["frontend/app/src/stores/transformersWebGpuSettings.ts", "c2e5c178ecfadfaa41ae8bc9aca80677af27fd63c9542ee99b3537ed448af94d"],
+    ["frontend/app/src/utils/transformersWebGpuInference.ts", "ffcb87c9ea6203da53ce257256b20ef3fa6aad2a47b3c13a572c6a8be69d4178"],
+    ["frontend/app/src/utils/webGpuModelCatalog.ts", "ea74ab64a9499efc9d9f22265d2f65051117d4d588d19181d8c4dec985eee948"],
+    ["frontend/app/src/utils/webInference.ts", "17bcfe6f52529856a2e80cd4607af5eb34afdefe8d5f7f5c9f79bc534082a3c8"],
+    ["frontend/openchat-agent/src/utils/chatsDb.ts", "437a973f1b8ac3f4b254581a100f6dc8cad879bb6bfb0130dc4a29e5276cf82b"],
+    ["frontend/openchat-client/src/openchat.ts", "660efff628392c713417dc24a62dbbbc74c2588f4da74366fabd05fa7264071d"],
+    ["frontend/openchat-shared/src/domain/worker.ts", "630fbd153a0276fa494e6d301d6c5d7551ea0b1672ec6868c30c59f6a57e30ff"],
+    ["frontend/openchat-worker/src/worker.ts", "85cc7c4986c9dd0fd16034854a6c77fdb45b13f5ca03e3ed85d3fce96d8681e6"],
+  ]);
+  assert.deepEqual([...expected.keys()].sort(), [outputBudgetAddition, ...beforeOutputBudgetMerge.keys()].sort());
+  assert.deepEqual(featureDependencySpecifiers(readFileSync(resolve(root, outputBudgetAddition), "utf8")), []);
+  const names = new Set(config.seeds.map((seed) => seed.name ?? seed.location.replace(/^node_modules\//u, "")));
+  const entries = actual.files.map((file) => [file, readFileSync(resolve(root, file))]);
+  for (const [file, digest] of expected) {
+    assert.equal(sourceHash(file), digest, file);
+    if (beforeOutputBudgetMerge.has(file)) assert.notEqual(digest, beforeOutputBudgetMerge.get(file), file);
+    if (owned.includes(file)) {
+      const source = readFileSync(resolve(root, file), "utf8");
+      assertReviewedFeatureImports(source, names);
+      assert.throws(() => assertReviewedFeatureImports(`${source}\nimport "unreviewed-budget-package";\n`, names), /no reviewed root/u);
+    }
+    for (const changed of [
+      entries.filter(([path]) => path !== file),
+      entries.map(([path, bytes]) => [path, path === file ? Buffer.concat([bytes, Buffer.from("\n// unreviewed budget drift\n")]) : bytes]),
+    ]) assert.throws(() => assertReviewedSourceFingerprint(sourceReviewFingerprintFromBytes(changed), config.sourceReview), /source set changed/u);
+  }
+});
+
 test("inline-card source checkpoint preserves the exact committed predecessor and rejects each changed source drifting", () => {
   const config = JSON.parse(
     readFileSync(
@@ -849,8 +948,8 @@ test("inline-card source checkpoint preserves the exact committed predecessor an
   );
   const actual = seedSourceFingerprint(root, config);
   const previous = beforeInlineCardFingerprint(actual);
-  assert.equal(actual.files.length, 176);
-  assert.equal(featureOwnedFiles(root, config.scopeId).length, 128);
+  assert.equal(actual.files.length, 177);
+  assert.equal(featureOwnedFiles(root, config.scopeId).length, 129);
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   assert.equal(config.seeds.length, 26);
   assert.equal(previous.files.length, 171);
@@ -962,14 +1061,14 @@ test("inert app views bind every current source and preserve the exact 175-sourc
   );
   const actual = seedSourceFingerprint(root, config);
   const previous = beforeAppViewFingerprint(actual);
-  assert.equal(actual.sha256, appViewSourceSha256);
-  assert.equal(actual.files.length, 176);
+  assert.equal(actual.sha256, currentSourceSha256);
+  assert.equal(actual.files.length, 177);
   assert.equal(previous.sha256, inlineCardSourceSha256);
   assert.equal(previous.files.length, 175);
   assertReviewedSourceFingerprint(previous, config.sourceReview);
   assertReviewedSourceFingerprint(actual, config.sourceReview);
   const owned = featureOwnedFiles(root, config.scopeId);
-  assert.equal(owned.length, 128);
+  assert.equal(owned.length, 129);
   assert(owned.includes(appViewAddition));
   for (const historical of ["pr1-model-npm", "pr2-app-card-ocr-npm"])
     assert(!featureOwnedFiles(root, historical).includes(appViewAddition));
@@ -1177,19 +1276,20 @@ test("host-only native field color scheme preserves the first inert-view checkpo
     createHash("sha256").update(current).digest("hex"),
     "90a3ca61b154cf947b99b123b79d411846924b521ee119b7d121fa7a93ecec72",
   );
+  const historical = beforeOutputBudgetFingerprint(actual);
   const checkpoint = (renderer) => ({
-    ...actual,
+    ...historical,
     sha256: createHash("sha256")
       .update(
         JSON.stringify(
-          actual.files.map((path) => [
+          historical.files.map((path) => [
             path,
             path === file
               ? createHash("sha256").update(renderer).digest("hex")
               : path.endsWith("/localAppDraftChoices.ts") ||
                   path.endsWith("/LocalAppCardSurface.svelte")
                 ? beforeAppViews.get(path)
-                : sourceHash(path),
+                : beforeOutputBudgetSourceHash(path),
           ]),
         ),
       )
@@ -1216,7 +1316,7 @@ test("host-only native field color scheme preserves the first inert-view checkpo
     "e120dafdc8eea5def22b8e2aef60b5f6790b31692c53027e343eea5914b42b26",
   );
   assertReviewedSourceFingerprint(prior, config.sourceReview);
-  assert.equal(actual.sha256, appViewSourceSha256);
+  assert.equal(actual.sha256, currentSourceSha256);
   assertReviewedSourceFingerprint(actual, config.sourceReview);
 });
 
@@ -1233,14 +1333,15 @@ test("modal-only card focus preserves the exact prior inert-view source checkpoi
     sourceHash(file),
     "35e3f4abca8de9ca54683c5a025368fe20d6b7b91550ad8afbff7b79feef16b5",
   );
+  const historical = beforeOutputBudgetFingerprint(actual);
   const previous = {
-    ...actual,
+    ...historical,
     sha256: createHash("sha256")
       .update(
         JSON.stringify(
-          actual.files.map((path) => [
+          historical.files.map((path) => [
             path,
-            path === file ? beforeAppViews.get(file) : sourceHash(path),
+            path === file ? beforeAppViews.get(file) : beforeOutputBudgetSourceHash(path),
           ]),
         ),
       )
@@ -1252,7 +1353,7 @@ test("modal-only card focus preserves the exact prior inert-view source checkpoi
     "a2fc3d5561fbfa3d360c083cf9b77dd0c91f6ae5305aad68873c021fecb54cfe",
   );
   assertReviewedSourceFingerprint(previous, config.sourceReview);
-  assert.equal(actual.sha256, appViewSourceSha256);
+  assert.equal(actual.sha256, currentSourceSha256);
   assertReviewedSourceFingerprint(actual, config.sourceReview);
   assert.deepEqual(
     featureDependencySpecifiers(readFileSync(resolve(root, file), "utf8")),
@@ -1342,8 +1443,8 @@ test("main Apps flow, retained local cards and startup completion have an exact 
   );
   assertReviewedSourceFingerprint(previous, config.sourceReview);
   assertReviewedSourceFingerprint(actual, config.sourceReview);
-  assert.equal(featureOwnedFiles(root, config.scopeId).length, 128);
-  assert.equal(actual.files.length, 176);
+  assert.equal(featureOwnedFiles(root, config.scopeId).length, 129);
+  assert.equal(actual.files.length, 177);
   assert.equal(config.seeds.length, 26);
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   assert.equal(
@@ -1439,11 +1540,11 @@ test("current encryption, recovery and enum-label owners use existing selectors 
         `frontend/app/src/utils/localAppEncryption${suffix}`,
       ),
     );
-  assert.equal(owned.length, 128);
-  assert.equal(fingerprint.files.length, 176);
+  assert.equal(owned.length, 129);
+  assert.equal(fingerprint.files.length, 177);
   assert.equal(config.seeds.length, 26);
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
-  assert.equal(fingerprint.sha256, appViewSourceSha256);
+  assert.equal(fingerprint.sha256, currentSourceSha256);
   assertReviewedSourceFingerprint(fingerprint, config.sourceReview);
 });
 
@@ -1468,11 +1569,14 @@ test("upstream wallet spender merge preserves the reviewed mixed-file boundary a
   const previous = beforeWalletSpenderSourceText(file);
   assert.equal(
     sourceHash(file),
-    "98202fa119b548407a0b34a648654c0978444ce86670015b52588963c06fd3dc",
+    "660efff628392c713417dc24a62dbbbc74c2588f4da74366fabd05fa7264071d",
   );
+  // The same four wallet hunks remain exactly reversible in the new upstream
+  // context. This synthetic reversal is not the old full file; its historical
+  // identity is independently retained by beforeOutputBudgetMerge above.
   assert.equal(
     createHash("sha256").update(previous).digest("hex"),
-    beforeWalletSpenderMerge.get(file),
+    "2a0f965cc7dd12feeed16d0ad92e5f259d6b486ef614c533684908b7c8600283",
   );
   assert.notEqual(previous, current);
   assert.deepEqual(
@@ -1492,7 +1596,7 @@ test("upstream wallet spender merge preserves the reviewed mixed-file boundary a
   assertReviewedSourceFingerprint(actual, config.sourceReview);
   assert.equal(actual.files.length, 171);
   // Ownership discovery is live; the reconstructed historical source count above is unchanged.
-  assert.equal(featureOwnedFiles(root, config.scopeId).length, 128);
+  assert.equal(featureOwnedFiles(root, config.scopeId).length, 129);
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   assert.equal(config.seeds.length, 26);
 });
@@ -1532,7 +1636,7 @@ test("generic context framing preserves exact prior source identity and existing
   assertReviewedSourceFingerprint(actual, config.sourceReview);
   assert.equal(actual.files.length, 171);
   // Ownership discovery is live; the reconstructed historical source count above is unchanged.
-  assert.equal(featureOwnedFiles(root, config.scopeId).length, 128);
+  assert.equal(featureOwnedFiles(root, config.scopeId).length, 129);
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   assert.equal(config.seeds.length, 26);
   assert(
@@ -1553,7 +1657,7 @@ test("saved-card opt-in and recovery feedback preserve exact prior source identi
   );
   assert.equal(actual.files.length, 171);
   // Ownership discovery is live; the reconstructed historical source count above is unchanged.
-  assert.equal(featureOwnedFiles(root, config.scopeId).length, 128);
+  assert.equal(featureOwnedFiles(root, config.scopeId).length, 129);
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   assert.equal(config.seeds.length, 26);
   const expected = new Map([
@@ -1636,9 +1740,13 @@ test("incoming replica-port support preserves exact main Apps source history and
     const current = read(file);
     const previous = reverse(current);
     assert.notEqual(previous, current, file);
+    // The wallet/client reversal now retains the later 0519 context. Its exact
+    // old full-file identity remains pinned in the historical aggregate below.
     assert.equal(
       createHash("sha256").update(previous).digest("hex"),
-      beforeReplicaPortMerge.get(file),
+      file === "frontend/openchat-client/src/openchat.ts"
+        ? "125d04c7f350611011882fb1567e5b03653c4bff5e9440fcd5ce1e604de2e5d4"
+        : beforeReplicaPortMerge.get(file),
       file,
     );
     assert.deepEqual(
@@ -1678,10 +1786,10 @@ test("cache hashing responsiveness preserves exact prior source identity and int
   );
   const actual = seedSourceFingerprint(root, config);
   const file = "frontend/app/src/utils/transformersWebGpuInference.ts";
-  const source = readFileSync(resolve(root, file), "utf8").replaceAll(
+  const source = beforeOutputBudgetInference(readFileSync(resolve(root, file), "utf8").replaceAll(
     "\r\n",
     "\n",
-  );
+  ));
   assert.equal(
     createHash("sha256").update(source).digest("hex"),
     "e797afe96025f79b8b0b9ebfc64aeee86aa1a9fa14a83d394d32dbe23b0693a2",
@@ -1698,8 +1806,8 @@ test("cache hashing responsiveness preserves exact prior source identity and int
   );
   assertReviewedSourceFingerprint(previous, config.sourceReview);
   assertReviewedSourceFingerprint(actual, config.sourceReview);
-  assert.equal(actual.files.length, 176);
-  assert.equal(featureOwnedFiles(root, config.scopeId).length, 128);
+  assert.equal(actual.files.length, 177);
+  assert.equal(featureOwnedFiles(root, config.scopeId).length, 129);
   assert.equal(config.seeds.length, 26);
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   for (const unchanged of [
@@ -1735,7 +1843,7 @@ test("unofficial immutable-asset routing preserves the exact prior source aggreg
     ],
     [
       inference,
-      beforeCachedHashResponsiveness(text(inference))
+      beforeCachedHashResponsiveness(beforeOutputBudgetInference(text(inference)))
         .replaceAll(
           "transformersWebGpuImmutableAssetsEnabled",
           "transformersWebGpuProductionAssetsEnabled",
@@ -1767,7 +1875,7 @@ test("unofficial immutable-asset routing preserves the exact prior source aggreg
   );
   assertReviewedSourceFingerprint(previous, config.sourceReview);
   assertReviewedSourceFingerprint(actual, config.sourceReview);
-  assert.equal(actual.files.length, 176);
+  assert.equal(actual.files.length, 177);
   assert.equal(config.seeds.length, 26);
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   assert(
@@ -1868,8 +1976,8 @@ test("current setup persistence is a dedicated builtin-API consumer with an exac
   const clientPath = "frontend/openchat-client/src/openchat.ts";
   const owned = featureOwnedFiles(root, config.scopeId);
   const fingerprint = seedSourceFingerprint(root, config);
-  assert.equal(owned.length, 128);
-  assert.equal(fingerprint.files.length, 176);
+  assert.equal(owned.length, 129);
+  assert.equal(fingerprint.files.length, 177);
   assert.equal(config.seeds.length, 26);
   assert.equal(
     config.seeds.reduce((count, seed) => count + seed.evidence.length, 0),
@@ -2746,8 +2854,8 @@ test("current upstream merge preserves scoped startup, model and private-app bou
     readFileSync(resolve(root, file), "utf8").replaceAll("\r\n", "\n");
   const hash = (text) => createHash("sha256").update(text).digest("hex");
   const fingerprint = seedSourceFingerprint(root, config);
-  assert.equal(fingerprint.files.length, 176);
-  assert.equal(featureOwnedFiles(root, config.scopeId).length, 128);
+  assert.equal(fingerprint.files.length, 177);
+  assert.equal(featureOwnedFiles(root, config.scopeId).length, 129);
   assert.equal(config.seeds.length, 26);
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   // Preserve the committed merge identity after the separately reviewed Windows
