@@ -19,6 +19,70 @@ export interface LocalAppViewPalette {
     readonly accent?: string;
 }
 
+const HOST_PALETTES: Readonly<Record<"light" | "dark", Readonly<Required<LocalAppViewPalette>>>> =
+    Object.freeze({
+        light: Object.freeze({
+            background: "#ffffff",
+            surface: "#ffffff",
+            field: "#ffffff",
+            text: "#111111",
+            muted: "#4b5563",
+            border: "#6b7280",
+            accent: "#1d4ed8",
+        }),
+        dark: Object.freeze({
+            background: "#121212",
+            surface: "#1c1c1c",
+            field: "#161616",
+            text: "#f5f5f5",
+            muted: "#c4c4c4",
+            border: "#737373",
+            accent: "#93c5fd",
+        }),
+    });
+
+function luminance(hex: string): number {
+    const channels = [1, 3, 5].map((offset) => {
+        const value = parseInt(hex.slice(offset, offset + 2), 16) / 255;
+        return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+    });
+    return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+}
+
+/**
+ * Resolve a validated inert palette to complete, opaque host-owned paint values. Canonical
+ * controls use text and muted (labels), never accent. Both must retain >=4.5:1 contrast on
+ * every possible view background, including nested card surfaces. Missing roles cannot
+ * inherit unknown app/page paint. A failed combination falls back as a whole, not just the
+ * offending role. This guards readability only; it never substitutes for complete host review.
+ */
+export function resolveLocalAppViewPalette(
+    palette: LocalAppViewPalette | undefined,
+    mode: "light" | "dark",
+): Readonly<Required<LocalAppViewPalette>> {
+    const fallback = HOST_PALETTES[mode];
+    const resolved = { ...fallback, ...palette };
+    if (
+        Object.values(resolved).some(
+            (color) => typeof color !== "string" || !/^#[0-9a-fA-F]{6}$/.test(color),
+        )
+    )
+        return fallback;
+    const backgrounds = [resolved.background, resolved.surface, resolved.field].map(luminance);
+    for (const foreground of [resolved.text, resolved.muted]) {
+        const light = luminance(foreground);
+        if (
+            backgrounds.some(
+                (background) =>
+                    (Math.max(light, background) + 0.05) / (Math.min(light, background) + 0.05) <
+                    4.5,
+            )
+        )
+            return fallback;
+    }
+    return Object.freeze(resolved);
+}
+
 export type LocalAppViewNode =
     | {
           readonly kind: "group" | "row";

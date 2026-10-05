@@ -1,9 +1,10 @@
 <script lang="ts">
-    import { untrack } from "svelte";
+    import { untrack, type Snippet } from "svelte";
     import type { LocalAppAction } from "../utils/localAppCatalog";
     import { localAppDraftChoiceCompanionFields } from "../utils/localAppDraftChoices";
     import { formatLocalDraftJson } from "../utils/localAppDrafts";
     import {
+        resolveLocalAppViewPalette,
         validateLocalAppView,
         type LocalAppViewNode,
         type LocalAppViewPalette,
@@ -27,7 +28,10 @@
         editorJson,
         disabled = false,
         showTitle = true,
+        showDisclosure = true,
         compact = false,
+        compactDetails = false,
+        detailsActions,
         view,
         readOnly = false,
         reviewing = true,
@@ -41,7 +45,12 @@
         editorJson: string;
         disabled?: boolean;
         showTitle?: boolean;
+        showDisclosure?: boolean;
         compact?: boolean;
+        /** Host-only presentation: consolidate secondary controls without changing field edits. */
+        compactDetails?: boolean;
+        /** Host-owned actions only; never supplied through app view metadata. */
+        detailsActions?: Snippet;
         /** Optional app-owned presentation; always revalidated against the current action. */
         view?: unknown;
         /** Host-owned mode, never accepted from app view metadata. */
@@ -70,7 +79,7 @@
     });
     const invalidView = $derived(view !== undefined && !validatedView);
     const exactViewPayload = $derived.by(() => {
-        if (!validatedView) return undefined;
+        if (!validatedView && !compactDetails) return undefined;
         try {
             return formatLocalDraftJson(localAppDraftSource(action, editorJson).payload);
         } catch {
@@ -141,9 +150,9 @@
     }
 
     function paletteStyle(palette: LocalAppViewPalette | undefined): string {
-        if (!palette) return "";
-        // Keys and exact hex values came from the strict validator, not arbitrary CSS.
-        return Object.entries(palette)
+        // Validation bounds paint syntax; host resolution additionally keeps canonical values
+        // and labels readable across every supported surface, even before expanded review.
+        return Object.entries(resolveLocalAppViewPalette(palette, viewTheme))
             .map(([key, value]) => `--app-view-${key}:${value}`)
             .join(";");
     }
@@ -225,6 +234,16 @@
     function companionOwner(field: LocalAppDraftField) {
         return action.draftEditor?.choices.find((choice) =>
             localAppDraftChoiceCompanionFields(choice).includes(field.key),
+        );
+    }
+
+    function primaryField(field: LocalAppDraftField): boolean {
+        return !compactDetails || !companionOwner(field);
+    }
+
+    function additionalPrimaryField(field: LocalAppDraftField): boolean {
+        return (
+            primaryField(field) && !viewFields.has(field.key) && (field.present || field.required)
         );
     }
 
@@ -380,7 +399,7 @@
             <output aria-label={`Item ${index + 1} — ${fieldLabel(field)}`}>
                 {readOnlyValue(field)}
             </output>
-        {:else if compact && companionOwner(field)}
+        {:else if compact && !compactDetails && companionOwner(field)}
             <details
                 class="field-details"
                 aria-label={`Item ${index + 1} — ${fieldLabel(field)} exact value`}
@@ -395,7 +414,9 @@
             <label>
                 <span
                     >{fieldLabel(field)}
-                    {#if field.required}<span class="required">Required</span>{/if}</span
+                    {#if field.required && !(compact && validatedView)}<span class="required"
+                            >Required</span
+                        >{/if}</span
                 >
                 {#if companionOwner(field)}
                     {@render companionValue(field, index)}
@@ -557,7 +578,7 @@
                     ? "This value does not match the app's field schema."
                     : "A value is required."}</small
             >{/if}
-        {#if compact && fieldAction(field, index)}
+        {#if !compactDetails && compact && fieldAction(field, index)}
             <details
                 class="field-details"
                 aria-label={`Item ${index + 1} — ${fieldLabel(field)} options`}
@@ -565,7 +586,7 @@
                 <summary>Field options</summary>
                 {@render fieldActions(field, index)}
             </details>
-        {:else}
+        {:else if !compactDetails}
             {@render fieldActions(field, index)}
         {/if}
     </div>
@@ -579,7 +600,7 @@
     {#each nodes as node}
         {#if node.kind === "field"}
             {@const field = item.find((candidate) => candidate.key === node.field)}
-            {#if field}
+            {#if field && primaryField(field)}
                 <div
                     class="view-field"
                     class:view-full-width={node.fullWidth}
@@ -613,7 +634,7 @@
 
 <section class="draft-fields" class:compact aria-label="Edit private app draft fields">
     {#if showTitle}<h3>{action.definition.card.title}</h3>{/if}
-    {#if action.definition.card.disclosure}<p class="disclosure">
+    {#if showDisclosure && action.definition.card.disclosure}<p class="disclosure">
             {action.definition.card.disclosure}
         </p>{/if}
     {#if invalidView}<p role="alert">
@@ -624,7 +645,9 @@
         {#each fields.items as item, index}
             <fieldset {disabled} aria-label={`Draft fields for item ${index + 1}`}>
                 <legend class:single-item={fields.items.length === 1}
-                    >{fields.items.length > 1 ? `Item ${index + 1}` : "Draft fields"}</legend
+                    >{fields.items.length > 1
+                        ? `Entry ${index + 1} of ${fields.items.length}`
+                        : "Draft fields"}</legend
                 >
                 {#if validatedView}
                     <div
@@ -635,19 +658,19 @@
                     >
                         {@render renderViewNodes(validatedView.view.nodes, item, index)}
                     </div>
-                    {#if item.some((field) => !viewFields.has(field.key))}
+                    {#if item.some(additionalPrimaryField)}
                         <div
                             class="host-additional-fields"
                             aria-label={`Additional canonical fields for item ${index + 1}`}
                         >
                             <p>Additional fields for complete review</p>
-                            {#each item.filter((field) => !viewFields.has(field.key)) as field (field.key)}
+                            {#each item.filter(additionalPrimaryField) as field (field.key)}
                                 {@render renderField(field, index)}
                             {/each}
                         </div>
                     {/if}
                 {:else}
-                    {#each item as field (field.key)}
+                    {#each item.filter(primaryField) as field (field.key)}
                         {@render renderField(field, index)}
                     {/each}
                 {/if}
@@ -667,16 +690,16 @@
             </p>
         {/if}
         {#if !pending}
-            {#if validatedView && reviewing}<p class="host-review-notice">
+            {#if !compactDetails && validatedView && reviewing}<p class="host-review-notice">
                     Review every canonical value below before approving. App presentation is not a
                     substitute for complete host review.
                 </p>{/if}
             <PrivateAppCardPreview
                 {action}
                 {editorJson}
-                additionalOnly={!validatedView || !reviewing}
+                additionalOnly={compactDetails || !validatedView || !reviewing}
             />
-            {#if validatedView && reviewing && exactViewPayload !== undefined}
+            {#if !compactDetails && validatedView && reviewing && exactViewPayload !== undefined}
                 <section class="host-exact-review" aria-label="Complete canonical outgoing values">
                     <h4>Exact outgoing values</h4>
                     <pre>{exactViewPayload}</pre>
@@ -688,6 +711,36 @@
             Field editing is unavailable for this JSON structure. Correct the complete payload in
             advanced JSON. No previous values are shown.
         </p>
+    {/if}
+    {#if compactDetails}
+        <details class="payload-details">
+            <summary>Details</summary>
+            {#if !pending && exactViewPayload !== undefined}
+                <pre aria-label="Complete canonical outgoing values">{exactViewPayload}</pre>
+            {:else}
+                <p role="status">
+                    Exact outgoing values are unavailable until the current edit is corrected.
+                </p>
+            {/if}
+            {#each fields?.items ?? [] as item, index}
+                {#if item.some((field) => companionOwner(field) || fieldAction(field, index))}
+                    <section
+                        class="secondary-fields"
+                        aria-label={`Field details for item ${index + 1}`}
+                    >
+                        {#if (fields?.items.length ?? 0) > 1}<h4>Entry {index + 1}</h4>{/if}
+                        {#each item as field (field.key)}
+                            {#if companionOwner(field)}
+                                {@render renderField(field, index)}
+                            {:else}
+                                {@render fieldActions(field, index)}
+                            {/if}
+                        {/each}
+                    </section>
+                {/if}
+            {/each}
+            {@render detailsActions?.()}
+        </details>
     {/if}
 </section>
 
@@ -732,12 +785,13 @@
     .view-full-width {
         width: 100%;
     }
-    .app-owned-view .field,
-    .app-owned-view label {
-        gap: 4px;
+    .compact .app-owned-view .field,
+    .compact .app-owned-view label {
+        gap: 2px;
     }
     .app-owned-view label > span {
         font-size: 11px;
+        color: var(--app-view-muted, inherit);
     }
     .app-owned-view .field input,
     .app-owned-view .field select,
@@ -763,10 +817,30 @@
         font-size: 18px;
         font-weight: 600;
     }
-    .host-exact-review pre {
+    .host-exact-review pre,
+    .payload-details pre {
         margin: 0;
         white-space: pre-wrap;
         overflow-wrap: anywhere;
+    }
+    .payload-details {
+        min-width: 0;
+        color: var(--txt, #1b1b1b);
+        background: var(--bg, #ffffff);
+    }
+    .payload-details > summary {
+        cursor: pointer;
+        padding: 4px 0;
+        font-size: 12px;
+    }
+    .payload-details[open] > :not(summary) {
+        margin-top: 8px;
+    }
+    .secondary-fields {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        min-width: 0;
     }
     .draft-fields,
     .field,

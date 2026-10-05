@@ -35,7 +35,10 @@ describe("mobile action-card layout", () => {
     });
 
     it("bounds the shared card and iframe by their message bubble", () => {
-        const card = component("../components/home/ActionCardContent.svelte");
+        const controller = component("../components/home/ActionCardContent.svelte");
+        const card = component("../styles/actionCard.scss");
+
+        expect(controller).toContain("@include actionCard.actionCardStyles();");
 
         expect(card).toContain("box-sizing: border-box;");
         expect(card).toContain("width: min(360px, 100%);");

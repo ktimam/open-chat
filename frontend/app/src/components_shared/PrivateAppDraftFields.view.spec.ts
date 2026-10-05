@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { flushSync, mount, tick, unmount } from "svelte";
+import { createRawSnippet, flushSync, mount, tick, unmount, type Snippet } from "svelte";
 import { fromStore, writable } from "svelte/store";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LocalAppAction } from "../utils/localAppCatalog";
@@ -119,6 +119,9 @@ function render(
         readOnly?: boolean;
         viewTheme?: "light" | "dark";
         reviewing?: boolean;
+        compactDetails?: boolean;
+        detailsActions?: Snippet;
+        disabled?: boolean;
         onfieldedit?: (
             item: number,
             field: string,
@@ -162,6 +165,9 @@ function render(
                 },
                 viewTheme: options.viewTheme ?? "dark",
                 compact: true,
+                compactDetails: options.compactDetails,
+                detailsActions: options.detailsActions,
+                disabled: options.disabled,
                 onchange,
                 onblocked,
                 onfieldedit: options.onfieldedit,
@@ -213,6 +219,170 @@ afterEach(async () => {
 });
 
 describe("opt-in app-owned view rendering", () => {
+    it.each([true, false])(
+        "consolidates secondary controls and exact values with app view=%s",
+        async (withView) => {
+            const supplied = { ...payload(), memo: "visible\u202eexact" };
+            const result = render({
+                compactDetails: true,
+                view: withView ? view() : undefined,
+                payload: supplied,
+            });
+            const details = result.target.querySelector<HTMLDetailsElement>(".payload-details")!;
+            expect(result.target.querySelectorAll("details")).toHaveLength(1);
+            expect(details.querySelector("summary")?.textContent).toBe("Details");
+            expect(details.closest(".app-owned-view")).toBeNull();
+            expect(
+                details.querySelector('pre[aria-label="Complete canonical outgoing values"]')
+                    ?.textContent,
+            ).toBe(formatLocalDraftJson(supplied));
+            expect(
+                result.target.querySelector(
+                    ".host-exact-review,.host-review-notice,.field-details",
+                ),
+            ).toBeNull();
+            expect(result.target.textContent).not.toContain("Field options");
+            const quantity = input(result.target, "Quantity");
+            expect(quantity.closest("details")).toBeNull();
+            expect(
+                result.target
+                    .querySelector('textarea[aria-label="Item 1 — extra"]')
+                    ?.closest("details"),
+            ).toBeNull();
+            expect(
+                result.target.querySelector('[aria-label="Additional outgoing fields"]')
+                    ?.textContent,
+            ).toContain("preserved");
+            details.open = true;
+            details.dispatchEvent(new Event("toggle"));
+            await tick();
+            details.open = false;
+            await tick();
+            expect(input(result.target, "Quantity")).toBe(quantity);
+            expect(result.onchange).not.toHaveBeenCalled();
+            expect(result.onblocked).toHaveBeenLastCalledWith(false);
+        },
+    );
+    it("retains optional numeric removal and explicit empty text inside Details", async () => {
+        const base = action();
+        if (base.draftSchema.type !== "object") throw new Error("schema");
+        const definition: LocalAppAction = {
+            ...base,
+            draftSchema: { ...base.draftSchema, required: ["memo"] },
+        };
+        const result = render({ action: definition, compactDetails: true });
+        const button = (text: string) =>
+            [...result.target.querySelectorAll<HTMLButtonElement>(".payload-details button")].find(
+                (candidate) => candidate.textContent === text,
+            )!;
+        button("Remove Quantity").click();
+        await tick();
+        expect(result.payload()).not.toHaveProperty("quantity");
+        expect(input(result.target, "Quantity").value).toBe("");
+        button("Remove extra").click();
+        await tick();
+        expect(result.payload()).not.toHaveProperty("extra");
+        button("Set extra to empty text").click();
+        await tick();
+        expect(result.payload().extra).toBe("");
+    });
+    it("keeps a rejected edit blocked and repairable without displaying stale exact values", async () => {
+        const base = action();
+        if (base.draftSchema.type !== "object") throw new Error("schema");
+        const definition: LocalAppAction = {
+            ...base,
+            draftSchema: { ...base.draftSchema, required: ["memo"] },
+        };
+        const onfieldedit = vi.fn(
+            (item: number, field: string, value: LocalAppDraftScalar | undefined) => {
+                if (value !== undefined) throw new Error("Synthetic rejected edit");
+                const next = editLocalAppDraftField(
+                    definition,
+                    JSON.stringify(result.payload()),
+                    item,
+                    field,
+                    value,
+                );
+                void result.update(next);
+                return next;
+            },
+        );
+        const result = render({ action: definition, compactDetails: true, onfieldedit });
+        await type(input(result.target, "Quantity"), "999");
+        expect(input(result.target, "Quantity").value).toBe("999");
+        expect(result.payload().quantity).toBe(7.25);
+        expect(result.onblocked).toHaveBeenLastCalledWith(true);
+        expect(
+            result.target.querySelector('[aria-label="Complete canonical outgoing values"]'),
+        ).toBeNull();
+        const buttons = [
+            ...result.target.querySelectorAll<HTMLButtonElement>(".payload-details button"),
+        ];
+        expect(buttons.find((button) => button.textContent === "Remove extra")?.disabled).toBe(
+            true,
+        );
+        const repair = buttons.find((button) => button.textContent === "Remove Quantity")!;
+        expect(repair.disabled).toBe(false);
+        repair.click();
+        await tick();
+        expect(result.payload()).not.toHaveProperty("quantity");
+        expect(result.onblocked).toHaveBeenLastCalledWith(false);
+        expect(
+            result.target.querySelector('[aria-label="Complete canonical outgoing values"]')
+                ?.textContent,
+        ).toBe(formatLocalDraftJson(result.payload()));
+        expect(result.onchange).not.toHaveBeenCalled();
+    });
+    it("keeps host Details actions last and inert until explicitly clicked in read-only mode", async () => {
+        const hostAction = vi.fn();
+        const detailsActions = createRawSnippet(() => ({
+            render: () => '<button type="button">Remove local copy</button>',
+            setup(element) {
+                element.addEventListener("click", hostAction);
+                return () => element.removeEventListener("click", hostAction);
+            },
+        }));
+        const result = render({ compactDetails: true, readOnly: true, detailsActions });
+        const details = result.target.querySelector<HTMLDetailsElement>(".payload-details")!;
+        expect(details.querySelectorAll("button")).toHaveLength(1);
+        expect(details.lastElementChild?.textContent).toBe("Remove local copy");
+        expect(result.target.querySelector("input,select,textarea")).toBeNull();
+        details.open = true;
+        await tick();
+        expect(hostAction).not.toHaveBeenCalled();
+        expect(result.onchange).not.toHaveBeenCalled();
+        (details.lastElementChild as HTMLButtonElement).click();
+        expect(hostAction).toHaveBeenCalledTimes(1);
+    });
+    it("keeps host cleanup available for malformed JSON without showing previous values", async () => {
+        const detailsActions = createRawSnippet(() => ({
+            render: () => '<button type="button">Remove local copy</button>',
+        }));
+        const result = render({ compactDetails: true, readOnly: true, detailsActions });
+        await result.update("{");
+        const details = result.target.querySelector(".payload-details")!;
+        expect(
+            details.querySelector('[aria-label="Complete canonical outgoing values"]'),
+        ).toBeNull();
+        expect(details.textContent).not.toContain("exact original");
+        expect(details.lastElementChild?.textContent).toBe("Remove local copy");
+    });
+    it("keeps omitted required noncompanion values in the primary form and all controls disabled", () => {
+        const result = render({
+            compactDetails: true,
+            disabled: true,
+            view: { version: 1, nodes: [{ kind: "field", field: "state" }] },
+        });
+        const required = input(result.target, "Quantity");
+        expect(required.closest(".host-additional-fields")).not.toBeNull();
+        expect(required.closest("details")).toBeNull();
+        expect(required.disabled).toBe(true);
+        expect(
+            [...result.target.querySelectorAll<HTMLButtonElement>(".payload-details button")].every(
+                (button) => button.disabled,
+            ),
+        ).toBe(true);
+    });
     it.each(["first\nsecond", "first\tsecond", "first\u202esecond", "first\u2028second"])(
         "read-only display escapes control characters in canonical strings",
         (memo) => {
@@ -297,6 +467,39 @@ describe("opt-in app-owned view rendering", () => {
             "every canonical value",
         );
     });
+    it.each(["light", "dark"] as const)(
+        "also replaces unreadable app paint in %s editing mode without changing canonical data",
+        (viewTheme) => {
+            const custom = {
+                ...view(),
+                theme: {
+                    [viewTheme]: {
+                        background: "#ffffff",
+                        surface: "#ffffff",
+                        field: "#ffffff",
+                        text: "#ffffff",
+                        muted: "#ffffff",
+                    },
+                },
+            };
+            const result = render({ view: custom, viewTheme, reviewing: false });
+            const app = result.target.querySelector<HTMLElement>(".app-owned-view")!;
+            expect(app.style.getPropertyValue("--app-view-text")).toBe(
+                viewTheme === "light" ? "#111111" : "#f5f5f5",
+            );
+            expect(app.style.getPropertyValue("--app-view-field")).toBe(
+                viewTheme === "light" ? "#ffffff" : "#161616",
+            );
+            expect(app.style.getPropertyValue("--app-view-muted")).toBe(
+                viewTheme === "light" ? "#4b5563" : "#c4c4c4",
+            );
+            expect(input(result.target, "Quantity").value).toBe("7.25");
+            expect(input(result.target, "Memo").value).toBe("exact original");
+            expect(result.payload()).toEqual(payload());
+            expect(result.onchange).not.toHaveBeenCalled();
+            expect(result.onblocked).toHaveBeenLastCalledWith(false);
+        },
+    );
     it("uses the existing edit callback once, preserving host approval revocation", async () => {
         let approved = true;
         const onfieldedit = vi.fn((item, field, value) => {
@@ -455,121 +658,163 @@ describe("opt-in app-owned view rendering", () => {
         await result.setView(undefined);
         expect(result.onblocked).toHaveBeenLastCalledWith(false);
     });
-    it("repeats the tree for canonical rows and reviews the complete envelope", () => {
-        const base = action();
-        const definition: LocalAppAction = {
-            ...base,
-            draftSchema: {
-                type: "object",
-                additionalProperties: false,
-                properties: {
-                    rows: { type: "array", items: base.draftSchema },
-                    routingHint: { type: "string" },
+    it.each([false, true])(
+        "repeats canonical rows and reviews the envelope with compact Details=%s",
+        (compactDetails) => {
+            const base = action();
+            const definition: LocalAppAction = {
+                ...base,
+                draftSchema: {
+                    type: "object",
+                    additionalProperties: false,
+                    properties: {
+                        rows: { type: "array", items: base.draftSchema },
+                        routingHint: { type: "string" },
+                    },
                 },
-            },
-            handoff: { kind: "wrapped-list", field: "rows" },
-        };
-        const result = render({
-            action: definition,
-            payload: {
-                rows: [payload(), { ...payload(), quantity: 19 }],
-                routingHint: "retained envelope",
-            },
-        });
-        expect(result.target.querySelectorAll(".app-owned-view")).toHaveLength(2);
-        expect(
-            result.target.querySelector<HTMLInputElement>('input[aria-label="Item 2 — Quantity"]')
-                ?.value,
-        ).toBe("19");
-        expect(result.target.querySelector(".host-exact-review")?.textContent).toContain(
-            "retained envelope",
-        );
-    });
-    it("keeps named choices, companion assignment and manual default protection", async () => {
-        const base = action();
-        if (base.draftSchema.type !== "object") throw new Error("schema");
-        const definition: LocalAppAction = {
-            ...base,
-            draftSchema: {
-                ...base.draftSchema,
-                properties: {
-                    ...base.draftSchema.properties,
-                    category: { type: "string" },
-                    categoryName: { type: "string" },
+                handoff: { kind: "wrapped-list", field: "rows" },
+            };
+            const result = render({
+                action: definition,
+                compactDetails,
+                payload: {
+                    rows: [payload(), { ...payload(), quantity: 19 }],
+                    routingHint: "retained envelope",
                 },
-            },
-            draftEditor: {
+            });
+            expect(result.target.querySelectorAll(".app-owned-view")).toHaveLength(2);
+            expect(
+                result.target.querySelector<HTMLInputElement>(
+                    'input[aria-label="Item 2 — Quantity"]',
+                )?.value,
+            ).toBe("19");
+            expect(
+                result.target.querySelector(
+                    compactDetails ? ".payload-details" : ".host-exact-review",
+                )?.textContent,
+            ).toContain("retained envelope");
+            if (compactDetails) {
+                expect(result.target.querySelectorAll(".payload-details")).toHaveLength(1);
+                expect(result.target.querySelectorAll(".secondary-fields")).toHaveLength(2);
+                expect(
+                    result.target.querySelector('[aria-label="Additional outgoing fields"]')
+                        ?.textContent,
+                ).toContain("retained envelope");
+            }
+        },
+    );
+    it.each([false, true])(
+        "keeps choices, companion assignment and manual defaults with compact Details=%s",
+        async (compactDetails) => {
+            const base = action();
+            if (base.draftSchema.type !== "object") throw new Error("schema");
+            const definition: LocalAppAction = {
+                ...base,
+                draftSchema: {
+                    ...base.draftSchema,
+                    properties: {
+                        ...base.draftSchema.properties,
+                        category: { type: "string" },
+                        categoryName: { type: "string" },
+                    },
+                },
+                draftEditor: {
+                    version: 1,
+                    choices: [
+                        {
+                            field: "category",
+                            label: "Saved category",
+                            noneLabel: "None",
+                            options: [
+                                {
+                                    value: "one",
+                                    label: "First choice",
+                                    assign: [{ field: "categoryName", value: "First" }],
+                                    defaults: [{ field: "quantity", value: 11 }],
+                                },
+                                {
+                                    value: "two",
+                                    label: "Second choice",
+                                    assign: [{ field: "categoryName", value: "Second" }],
+                                    defaults: [{ field: "quantity", value: 22 }],
+                                },
+                            ],
+                        },
+                    ],
+                },
+            };
+            const custom: LocalAppViewV1 = {
                 version: 1,
-                choices: [
+                nodes: [
                     {
-                        field: "category",
-                        label: "Saved category",
-                        noneLabel: "None",
-                        options: [
-                            {
-                                value: "one",
-                                label: "First choice",
-                                assign: [{ field: "categoryName", value: "First" }],
-                                defaults: [{ field: "quantity", value: 11 }],
-                            },
-                            {
-                                value: "two",
-                                label: "Second choice",
-                                assign: [{ field: "categoryName", value: "Second" }],
-                                defaults: [{ field: "quantity", value: 22 }],
-                            },
+                        kind: "row",
+                        children: [
+                            { kind: "field", field: "category" },
+                            { kind: "field", field: "quantity" },
+                            ...(compactDetails
+                                ? [{ kind: "field" as const, field: "categoryName" }]
+                                : []),
                         ],
                     },
                 ],
-            },
-        };
-        const custom: LocalAppViewV1 = {
-            version: 1,
-            nodes: [
-                {
-                    kind: "row",
-                    children: [
-                        { kind: "field", field: "category" },
-                        { kind: "field", field: "quantity" },
-                    ],
-                },
-            ],
-        };
-        let session = initializeLocalAppDraftChoices(definition, JSON.stringify(payload()));
-        const onfieldedit = vi.fn((item, field, value) => {
-            session = editLocalAppDraftScalar(session, item, field, value);
-            void result.update(session.editorJson);
-            return session.editorJson;
-        });
-        const onchoiceedit = vi.fn((item, field, value) => {
-            session = selectLocalAppDraftChoice(session, item, field, value);
-            void result.update(session.editorJson);
-            return session.editorJson;
-        });
-        const result = render({ view: custom, action: definition, onfieldedit, onchoiceedit });
-        const select = result.target.querySelector<HTMLSelectElement>(
-            'select[aria-label="Item 1 — Saved category"]',
-        )!;
-        select.value = "option-0";
-        select.dispatchEvent(new Event("change", { bubbles: true }));
-        await tick();
-        expect(result.payload()).toMatchObject({
-            category: "one",
-            categoryName: "First",
-            quantity: 11,
-        });
-        await type(input(result.target, "Quantity"), "31");
-        select.value = "option-1";
-        select.dispatchEvent(new Event("change", { bubbles: true }));
-        await tick();
-        expect(result.payload()).toMatchObject({
-            category: "two",
-            categoryName: "Second",
-            quantity: 31,
-        });
-        expect(result.onchange).not.toHaveBeenCalled();
-        expect(onchoiceedit).toHaveBeenCalledTimes(2);
-    });
+            };
+            let session = initializeLocalAppDraftChoices(definition, JSON.stringify(payload()));
+            const onfieldedit = vi.fn((item, field, value) => {
+                session = editLocalAppDraftScalar(session, item, field, value);
+                void result.update(session.editorJson);
+                return session.editorJson;
+            });
+            const onchoiceedit = vi.fn((item, field, value) => {
+                session = selectLocalAppDraftChoice(session, item, field, value);
+                void result.update(session.editorJson);
+                return session.editorJson;
+            });
+            const result = render({
+                view: custom,
+                action: definition,
+                onfieldedit,
+                onchoiceedit,
+                compactDetails,
+            });
+            const select = result.target.querySelector<HTMLSelectElement>(
+                'select[aria-label="Item 1 — Saved category"]',
+            )!;
+            select.value = "option-0";
+            select.dispatchEvent(new Event("change", { bubbles: true }));
+            await tick();
+            expect(result.payload()).toMatchObject({
+                category: "one",
+                categoryName: "First",
+                quantity: 11,
+            });
+            await type(input(result.target, "Quantity"), "31");
+            select.value = "option-1";
+            select.dispatchEvent(new Event("change", { bubbles: true }));
+            await tick();
+            expect(result.payload()).toMatchObject({
+                category: "two",
+                categoryName: "Second",
+                quantity: 31,
+            });
+            expect(result.onchange).not.toHaveBeenCalled();
+            expect(onchoiceedit).toHaveBeenCalledTimes(2);
+            if (compactDetails) {
+                const companion = result.target.querySelector(
+                    'output[aria-label="Item 1 — categoryName"]',
+                )!;
+                expect(companion.textContent).toContain("Second");
+                expect(companion.closest(".payload-details")).not.toBeNull();
+                expect(companion.closest(".app-owned-view")).toBeNull();
+                expect(
+                    result.target.querySelectorAll('output[aria-label="Item 1 — categoryName"]'),
+                ).toHaveLength(1);
+                expect(result.target.querySelectorAll("details")).toHaveLength(1);
+                expect(
+                    result.target.querySelector(".host-additional-fields")?.textContent,
+                ).not.toContain("categoryName");
+            }
+        },
+    );
     it("keeps generic controls at a 44px minimum without app CSS or executable markup", () => {
         const source = readFileSync(
             resolve("app/src/components_shared/PrivateAppDraftFields.svelte"),

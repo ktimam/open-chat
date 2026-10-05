@@ -314,6 +314,39 @@ describe("private card presentation intent", () => {
         expect(deps.deliver).not.toHaveBeenCalled();
     });
 
+    it("discards one source card without opening another and reopens the sibling only from its source", async () => {
+        const { workspace, deps } = fixture();
+        await workspace.propose(client, text, { stillCurrent: () => true, source: source("1") });
+        const firstId = workspace.state.draft!.id;
+        workspace.review();
+        const firstApproval = workspace.state.draft!.approval!.approvalId;
+        await workspace.propose(client, text, { stillCurrent: () => true, source: source("2") });
+        const sibling = workspace.state.draft!;
+        workspace.selectCard(firstId);
+
+        workspace.discard();
+
+        expect(workspace.state.draft).toBeUndefined();
+        expect(workspace.state.editorJson).toBe("");
+        expect(workspace.state.recipient).toBe("");
+        expect(workspace.state.cards).toEqual([sibling]);
+        expect(workspace.state.cardSources).toEqual({ [sibling.id]: source("2") });
+        expect(workspace.state.presentationSource).toEqual(source("1"));
+        expect(workspace.review()).toBe(false);
+        await workspace.confirm(firstApproval);
+        expect(deps.extract).toHaveBeenCalledTimes(2);
+        expect(deps.deliver).not.toHaveBeenCalled();
+
+        await expect(
+            workspace.propose(client, text, { stillCurrent: () => true, source: source("2") }),
+        ).resolves.toBe("drafted");
+        expect(workspace.state.draft?.id).toBe(sibling.id);
+        expect(workspace.state.draft?.approval).toBeUndefined();
+        expect(workspace.state.presentationSource).toEqual(source("2"));
+        expect(deps.extract).toHaveBeenCalledTimes(2);
+        expect(deps.deliver).not.toHaveBeenCalled();
+    });
+
     it("clears rejected source references instead of keeping the previous placement", async () => {
         const { workspace, deps } = fixture();
         await workspace.propose(client, text, { stillCurrent: () => true, source: source("1") });

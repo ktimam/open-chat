@@ -1876,8 +1876,8 @@ export class PrivateAppWorkspace {
                 ? "Local draft discarded. A remote handoff may already have occurred; check the app before sending again."
                 : "Local draft or processing discarded. Nothing was sent to the app.",
         });
-        const next = this.#cards.keys().next().value;
-        if (next) this.selectCard(next, false);
+        // Cancelling one source card must not open a different message's card.
+        // Other encrypted cards remain available from their original messages.
         if (this.#setupScope() && this.deps.draftStorage) {
             const epoch = this.#setupEpoch;
             this.#set({

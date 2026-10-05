@@ -541,7 +541,7 @@ describe("private workspace encrypted-card lifecycle", () => {
         expect(current.deliver).not.toHaveBeenCalled();
     });
 
-    it("discards only the selected card and does not erase its sibling on reload", async () => {
+    it("discards only the selected card without opening or erasing its saved sibling", async () => {
         const first = fixture();
         await start(first.workspace);
         await propose(first.workspace);
@@ -551,7 +551,14 @@ describe("private workspace encrypted-card lifecycle", () => {
         first.workspace.selectCard(idA);
         first.workspace.discard();
         await vi.waitFor(() => expect(first.workspace.state.draftLoading).toBe(false));
-        expect(first.workspace.state.draft?.id).toBe(idB);
+        expect(first.workspace.state.draft).toBeUndefined();
+        expect(first.workspace.state.editorJson).toBe("");
+        expect(first.workspace.state.cards.map((card) => card.id)).toEqual([idB]);
+        expect((await first.storage.read(scope))?.cards.map((card) => card.saved.draft.id)).toEqual(
+            [idB],
+        );
+        expect(first.extract).toHaveBeenCalledTimes(2);
+        expect(first.deliver).not.toHaveBeenCalled();
         const next = fixture(first.shared);
         await start(next.workspace);
         expect(next.workspace.state.cards.map((card) => card.id)).toEqual([idB]);

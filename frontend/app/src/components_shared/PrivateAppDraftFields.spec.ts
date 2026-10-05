@@ -367,7 +367,10 @@ describe.each([false, true])("mounted generic private draft fields (compact=%s)"
         };
         const multi = render(definition, [initial(), initial()]);
         const legends = [...multi.target.querySelectorAll("legend")];
-        expect(legends.map((legend) => legend.textContent)).toEqual(["Item 1", "Item 2"]);
+        expect(legends.map((legend) => legend.textContent)).toEqual([
+            "Entry 1 of 2",
+            "Entry 2 of 2",
+        ]);
         expect(legends.every((legend) => !legend.classList.contains("single-item"))).toBe(true);
         const source = readFileSync(resolve(__dirname, "PrivateAppDraftFields.svelte"), "utf8");
         expect(source).toMatch(/compact = false/);

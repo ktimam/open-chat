@@ -4,7 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { currentUserIdStore, type OpenChat, type MessageContent } from "@client";
 import type { Writable } from "svelte/store";
 import LocalAppCards from "./LocalAppCards.svelte";
-import { privateAppWorkspace as workspace } from "../utils/privateAppWorkspace";
+import {
+    privateAppWorkspace as workspace,
+    privateAppWorkspaceState,
+} from "../utils/privateAppWorkspace";
 import { currentTheme } from "../theme/themes";
 import { nativeAppPairing } from "../utils/nativeAppDelivery";
 import type { LocalDraftDelivery } from "../utils/localAppDrafts";
@@ -161,15 +164,29 @@ const cardText = () =>
         .map((value) => (typeof value === "string" || value === null ? value : value.value))
         .join(" ");
 const visibleText = () => target.textContent?.replace(/\s+/g, " ");
-const editor = () =>
-    target.querySelector<HTMLTextAreaElement>('textarea[aria-label="Complete payload (JSON)"]')!;
+const confirmButton = () => button("Preview only");
 const confirmation = () =>
     [...target.querySelectorAll("label")]
-        .find((node) => node.textContent?.includes("I reviewed every field and the destination"))!
+        .find((node) => node.textContent?.includes("App-defined explanation"))!
         .querySelector<HTMLInputElement>('input[type="checkbox"]')!;
-const changeJson = async (json: string) => {
-    editor().value = json;
-    editor().dispatchEvent(new Event("input", { bubbles: true }));
+// Seed malformed/restored fixtures or stale approvals without inventing hidden UI.
+// Normal user-edit tests below use the mounted field and choice controls.
+const fixtureJson = async (json: string) => {
+    workspace.edit(json, workspace.state.recipient);
+    await settle();
+};
+const seedApproval = () => workspace.review();
+const acknowledge = async () => {
+    if (!confirmation().checked) confirmation().click();
+    await settle();
+};
+const expandDelivered = async () => {
+    const header = target.querySelector<HTMLElement>(".action-card.collapsed .header");
+    if (header) header.click();
+    await settle();
+};
+const closeCard = async () => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
     await settle();
 };
 const propose = async (coordinate?: LocalAppCardAnchorSource) => {
@@ -200,7 +217,7 @@ const deferExtraction = () => {
 };
 const expectProcessingOnly = () => {
     expect(target.querySelector('[role="dialog"]')?.getAttribute("aria-busy")).toBe("true");
-    expect(target.querySelector("h2")?.textContent).toBe("App action");
+    expect(target.querySelector(".title")?.textContent).toBe("App action");
     expect(target.querySelector('[role="status"]')?.textContent).toContain(
         "Preparing a private draft locally",
     );
@@ -213,17 +230,14 @@ const expectProcessingOnly = () => {
     expect(button("Send reviewed request")).toBeUndefined();
     expect(button("Review recovered request before retrying")).toBeUndefined();
     expect([...target.querySelectorAll("button")].map((node) => node.textContent)).toEqual([
-        "Close",
-        "Cancel / discard local draft",
+        "Cancel",
     ]);
 };
 const approveAndSend = async () => {
-    button("Review full request").click();
+    await acknowledge();
+    confirmButton().click();
     await settle();
-    confirmation().click();
-    await settle();
-    button("Send reviewed request").click();
-    await settle();
+    await expandDelivered();
 };
 const numericFields = () =>
     [...target.querySelectorAll<HTMLInputElement>("input[aria-label]")].filter((node) =>
@@ -373,10 +387,12 @@ describe("app-owned view in the normal private-card flow", () => {
             themedCard().querySelector<HTMLInputElement>('input[aria-label="Item 1 — extra"]')!
                 .value,
         ).toBe("Also sent");
-        expect(fullReview()).toBeNull();
+        expect(fullReview()?.textContent).toBe(workspace.state.editorJson);
+        expect(fullReview()!.closest(".app-owned-view")).toBeNull();
         expect(button("Send reviewed request")).toBeUndefined();
-        expect(button("Review full request").disabled).toBe(false);
-        expect(target.querySelector(".destination")?.closest(".app-owned-view")).toBeNull();
+        await acknowledge();
+        expect(confirmButton().disabled).toBe(false);
+        expect(target.querySelector(".card-url")?.closest(".app-owned-view")).toBeNull();
         expect(calls.deliver).not.toHaveBeenCalled();
     });
 
@@ -387,48 +403,137 @@ describe("app-owned view in the normal private-card flow", () => {
         )!;
         expect(other.querySelector<HTMLTextAreaElement>("textarea")!.value).toBe("Also sent");
         expect(other.closest(".app-owned-view")).toBeNull();
-        expect(fullReview()).toBeNull();
-    });
-
-    it("shows every exact outgoing value outside app paint before enabling explicit send", async () => {
-        await proposeView();
-        button("Review full request").click();
-        await settle();
-        expect(JSON.parse(fullReview()!.querySelector("pre")!.textContent!)).toEqual({
-            value: 42,
-            extra: "Also sent",
-        });
+        expect(fullReview()?.textContent).toBe(workspace.state.editorJson);
         expect(fullReview()!.closest(".app-owned-view")).toBeNull();
-        expect(button("Send reviewed request").disabled).toBe(true);
-        expect(confirmation().checked).toBe(false);
-        expect(calls.deliver).not.toHaveBeenCalled();
-        confirmation().click();
-        await settle();
-        expect(button("Send reviewed request").disabled).toBe(false);
     });
 
-    it("revokes full review and consent when the app-shaped field changes", async () => {
+    it("shows exact outgoing values in host Details without approving or sending on expansion", async () => {
         await proposeView();
-        button("Review full request").click();
+        const details = fullReview()!.closest("details")!;
+        expect(details.classList.contains("payload-details")).toBe(true);
+        expect(details.open).toBe(false);
+        expect(fullReview()!.tagName).toBe("PRE");
+        expect(fullReview()!.closest(".app-owned-view")).toBeNull();
+        expect(JSON.parse(fullReview()!.textContent!)).toEqual({ value: 42, extra: "Also sent" });
+        details.querySelector("summary")!.click();
+        await settle();
+        expect(details.open).toBe(true);
+        expect(workspace.state.draft!.approval).toBeUndefined();
+        expect(confirmButton().disabled).toBe(true);
+        expect(calls.deliver).not.toHaveBeenCalled();
+        await acknowledge();
+        expect(workspace.state.draft!.approval).toBeUndefined();
+        expect(confirmButton().disabled).toBe(false);
+        expect(calls.deliver).not.toHaveBeenCalled();
+        confirmButton().click();
+        await settle();
+        expect(calls.deliver).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({
+                payload: { value: 42, extra: "Also sent" },
+                destination: "https://example.test/import",
+            }),
+            expect.any(AbortSignal),
+        );
+    });
+
+    it("exposes bidi and invisible controls in host Details while retaining the exact outgoing value", async () => {
+        const extra = "Before\u202ehidden\u2066\u200bAfter";
+        calls.extract.mockResolvedValue({
+            kind: "extracted",
+            candidates: [{ value: 42, extra }],
+        });
+        await proposeView();
+        const raw = fullReview()!.textContent!;
+        expect(fullReview()!.closest(".app-owned-view")).toBeNull();
+        expect(raw).toContain("\\u202e");
+        expect(raw).toContain("\\u2066");
+        expect(raw).toContain("\\u200b");
+        expect(raw).not.toContain("\u202e");
+        expect(raw).not.toContain("\u2066");
+        expect(raw).not.toContain("\u200b");
+        expect(JSON.parse(raw)).toEqual({ value: 42, extra });
+        fullReview()!.closest("details")!.querySelector("summary")!.click();
+        await settle();
+        expect(workspace.state.draft!.approval).toBeUndefined();
+        expect(calls.deliver).not.toHaveBeenCalled();
+        await approveAndSend();
+        expect(calls.deliver).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({ payload: { value: 42, extra } }),
+            expect.any(AbortSignal),
+        );
+    });
+
+    it("keeps an unavailable legacy action inspectable and removable without offering delivery", async () => {
+        const payload = { value: 42, extra: "<img src=x onerror=alert(1)>\u202eHidden" };
+        await fixtureJson(JSON.stringify(payload));
+        const savedId = workspace.state.draft!.id;
+        const extractionCount = calls.extract.mock.calls.length;
+        const reason = "This saved card is inspect-only because its app connection is unavailable.";
+        privateAppWorkspaceState.set({
+            ...workspace.state,
+            activeCardApp: undefined,
+            cardReviewBlockedReason: reason,
+        });
+        await settle();
+
+        expect(preview()).toBeNull();
+        expect(themedCard()).toBeNull();
+        expect(target.querySelector("input, select, textarea, .confirm")).toBeNull();
+        expect(button("Reopen in app")).toBeUndefined();
+        expect(
+            target.querySelector('[aria-label="Saved card connection required"]')?.textContent,
+        ).toContain(reason);
+        const exact = fullReview()!;
+        expect(exact.tagName).toBe("PRE");
+        expect(JSON.parse(exact.textContent!)).toEqual(payload);
+        expect(exact.textContent).toContain("\\u202e");
+        expect(exact.textContent).not.toContain("\u202e");
+        expect(exact.querySelector("img, script, iframe")).toBeNull();
+        const details = exact.closest("details")!;
+        expect(details.open).toBe(false);
+        details.querySelector("summary")!.click();
+        await settle();
+        expect(details.open).toBe(true);
+        expect(workspace.state.draft?.id).toBe(savedId);
+        expect(workspace.state.draft?.approval).toBeUndefined();
+        expect(calls.deliver).not.toHaveBeenCalled();
+        expect(calls.nativeDeliver).not.toHaveBeenCalled();
+
+        expect(button("Remove from this device").disabled).toBe(false);
+        button("Remove from this device").click();
+        await settle();
+        expect(workspace.state.draft).toBeUndefined();
+        expect(workspace.state.cards.some((card) => card.id === savedId)).toBe(false);
+        expect(workspace.state.open).toBe(false);
+        expect(target.querySelector('[aria-label="Local app card"]')).toBeNull();
+        expect(calls.extract).toHaveBeenCalledTimes(extractionCount);
+        expect(calls.deliver).not.toHaveBeenCalled();
+        expect(calls.nativeDeliver).not.toHaveBeenCalled();
+    });
+
+    it("revokes stale approval and disclosure acknowledgement when the app-shaped field changes", async () => {
+        await proposeView();
+        seedApproval();
         await settle();
         const oldApproval = workspace.state.draft!.approval!.approvalId;
         confirmation().click();
         await settle();
         await changeNumber("84");
         expect(workspace.state.draft!.approval).toBeUndefined();
-        expect(fullReview()).toBeNull();
+        expect(fullReview()?.textContent).toBe(workspace.state.editorJson);
+        expect(fullReview()!.closest(".app-owned-view")).toBeNull();
         expect(button("Send reviewed request")).toBeUndefined();
         await workspace.confirm(oldApproval);
         expect(calls.deliver).not.toHaveBeenCalled();
-        button("Review full request").click();
+        seedApproval();
         await settle();
         expect(confirmation().checked).toBe(false);
-        expect(JSON.parse(fullReview()!.querySelector("pre")!.textContent!).value).toBe(84);
+        expect(workspace.state.draft!.approval!.request.payload).toMatchObject({ value: 84 });
     });
 
     it("does not approve stale values when an app-shaped field has an oversized pending edit", async () => {
         await proposeView();
-        button("Review full request").click();
+        seedApproval();
         await settle();
         const oldApproval = workspace.state.draft!.approval!.approvalId;
         const field = themedCard().querySelector<HTMLInputElement>(
@@ -438,11 +543,16 @@ describe("app-owned view in the normal private-card flow", () => {
         field.dispatchEvent(new Event("input", { bubbles: true }));
         await settle();
         expect(field.value.length).toBe(65536);
-        expect(button("Review full request").disabled).toBe(true);
+        await acknowledge();
+        expect(confirmButton().disabled).toBe(true);
         expect(fullReview()).toBeNull();
+        expect(target.querySelector('.payload-details [role="status"]')?.textContent).toContain(
+            "Exact outgoing values are unavailable until the current edit is corrected.",
+        );
         expect(workspace.state.draft!.approval).toBeUndefined();
         await workspace.confirm(oldApproval);
         expect(calls.deliver).not.toHaveBeenCalled();
+        expect(calls.nativeDeliver).not.toHaveBeenCalled();
     });
 
     it("renders delivered card values read-only with no new extraction or send", async () => {
@@ -454,7 +564,8 @@ describe("app-owned view in the normal private-card flow", () => {
         expect(
             [...themedCard().querySelectorAll("output")].map((field) => field.textContent),
         ).toEqual(["42", "Also sent"]);
-        expect(fullReview()).not.toBeNull();
+        expect(fullReview()?.textContent).toBe(workspace.state.editorJson);
+        expect(fullReview()!.closest(".app-owned-view")).toBeNull();
         expect(calls.deliver).toHaveBeenCalledOnce();
         expect(calls.extract).toHaveBeenCalledTimes(extractionCount);
     });
@@ -503,27 +614,30 @@ describe("app-owned view in the normal private-card flow", () => {
             });
 
             it("requires canonical review and revokes native approval after an app-view edit", async () => {
-                expect(fullReview()).toBeNull();
+                expect(fullReview()?.textContent).toBe(workspace.state.editorJson);
+                expect(fullReview()!.closest(".app-owned-view")).toBeNull();
                 expect(calls.nativeDeliver).not.toHaveBeenCalled();
-                button("Review full request").click();
+                seedApproval();
                 await settle();
                 const prior = workspace.state.draft!.approval!;
-                expect(JSON.parse(fullReview()!.querySelector("pre")!.textContent!)).toEqual({
+                expect(workspace.state.draft!.approval!.request.payload).toEqual({
                     value: 42,
                     extra: "Also sent",
                 });
+                expect(fullReview()?.textContent).toBe(workspace.state.editorJson);
                 expect(fullReview()!.closest(".app-owned-view")).toBeNull();
-                expect(button("Send reviewed request").disabled).toBe(true);
+                expect(confirmButton().disabled).toBe(true);
                 confirmation().click();
                 await settle();
-                expect(button("Send reviewed request").disabled).toBe(false);
+                expect(confirmButton().disabled).toBe(false);
                 await changeNumber("84");
                 expect(workspace.state.draft!.approval).toBeUndefined();
-                expect(fullReview()).toBeNull();
+                expect(fullReview()?.textContent).toBe(workspace.state.editorJson);
+                expect(fullReview()!.closest(".app-owned-view")).toBeNull();
                 await workspace.confirm(prior.approvalId);
                 expect(calls.nativeDeliver).not.toHaveBeenCalled();
                 expect(calls.deliver).not.toHaveBeenCalled();
-                button("Review full request").click();
+                seedApproval();
                 await settle();
                 expect(confirmation().checked).toBe(false);
                 expect(workspace.state.draft!.approval!.request.payload).toEqual({
@@ -542,7 +656,7 @@ describe("app-owned view in the normal private-card flow", () => {
                         }),
                 );
                 const extractionCount = calls.extract.mock.calls.length;
-                button("Review full request").click();
+                seedApproval();
                 await settle();
                 const reviewed = workspace.state.draft!.approval!.request;
                 expect(reviewed.payload).toEqual({ value: 42, extra: "Also sent" });
@@ -551,7 +665,7 @@ describe("app-owned view in the normal private-card flow", () => {
                 confirmation().click();
                 await settle();
                 expect(calls.nativeDeliver).not.toHaveBeenCalled();
-                button("Send reviewed request").click();
+                confirmButton().click();
                 await settle();
                 expect(calls.nativeDeliver).toHaveBeenCalledExactlyOnceWith(
                     reviewed,
@@ -580,6 +694,7 @@ describe("app-owned view in the normal private-card flow", () => {
                 finish({ kind: "delivered" });
                 await settle();
                 expect(workspace.state.draft!.status).toBe("delivered");
+                await expandDelivered();
                 expect(themedCard().querySelector("input,select,textarea")).toBeNull();
                 expect(button("Copy pairing code")).toBeUndefined();
                 expect(calls.nativeDeliver).toHaveBeenCalledOnce();
@@ -601,11 +716,11 @@ describe("app-owned view in the normal private-card flow", () => {
                 expect(themedCard()).not.toBeNull();
                 expect(workspace.state.draft!.approval).toBeUndefined();
                 expect(calls.nativeDeliver).toHaveBeenCalledOnce();
-                button("Review recovered request before retrying").click();
+                seedApproval();
                 await settle();
                 expect(workspace.state.draft!.approval!.request).toEqual(reviewed);
-                expect(button("Retry the same reviewed request").disabled).toBe(true);
-                button("Retry the same reviewed request").click();
+                expect(button("Reopen in app").disabled).toBe(true);
+                button("Reopen in app").click();
                 await settle();
                 expect(calls.nativeDeliver).toHaveBeenCalledOnce();
                 expect(calls.deliver).not.toHaveBeenCalled();
@@ -619,7 +734,7 @@ describe("app-owned view in the normal private-card flow", () => {
                 expect(calls.nativeDeliver).not.toHaveBeenCalled();
                 expect(calls.deliver).not.toHaveBeenCalled();
                 expect(button("Copy pairing code")).toBeUndefined();
-                expect(button("Retry the same reviewed request").disabled).toBe(true);
+                expect(button("Reopen in app").disabled).toBe(true);
             });
         },
     );
@@ -807,7 +922,7 @@ describe("source-anchored private card presentation", () => {
             const requestedAnchor = registerAnchor(requestedSource);
             await proposeSource(originalSource);
             await changeNumber("57");
-            button("Review full request").click();
+            seedApproval();
             await settle();
             confirmation().click();
             await settle();
@@ -822,7 +937,7 @@ describe("source-anchored private card presentation", () => {
             expect(originalAnchor.children).toHaveLength(0);
             expect(requestedAnchor.querySelector('[role="region"]')).not.toBeNull();
             expect(preview()).toBeNull();
-            if (outcome === "cancelled") button("Cancel / discard local draft").click();
+            if (outcome === "cancelled") button("Cancel").click();
             extraction.finish({ kind: "no_extraction", raw: "" });
             expect(await pending).toBe("retryable");
             await settle();
@@ -831,18 +946,18 @@ describe("source-anchored private card presentation", () => {
             expect(target.querySelector("input, select, textarea")).toBeNull();
             expect(button("Review full request")).toBeUndefined();
             expect(button("Send reviewed request")).toBeUndefined();
-            expect(button("Cancel / discard local draft")).toBeUndefined();
+            expect(button("Cancel")).toBeUndefined();
             expect(workspace.state.cards.map((card) => card.id)).toEqual(retainedIds);
             expect(workspace.state.draft!.id).toBe(priorId);
             expect(workspace.state.presentationSource).toEqual(requestedSource);
-            button("Close").click();
+            await closeCard();
             await settle();
             expect(workspace.state.cards.map((card) => card.id)).toEqual(retainedIds);
             workspace.open("saved");
             await settle();
             expect(numericFields()[0].value).toBe("57");
             expect(confirmation().checked).toBe(false);
-            expect(button("Send reviewed request").disabled).toBe(true);
+            expect(confirmButton().disabled).toBe(true);
             expect(calls.deliver).not.toHaveBeenCalled();
         },
     );
@@ -854,7 +969,7 @@ describe("source-anchored private card presentation", () => {
         expect(preview()).toBeNull();
         expect(target.querySelector("input, select, textarea")).toBeNull();
         expect(button("Review full request")).toBeUndefined();
-        expect(button("Cancel / discard local draft")).toBeUndefined();
+        expect(button("Cancel")).toBeUndefined();
         expect(workspace.state.cards.map((card) => card.id)).toEqual(retainedIds);
         workspace.open("saved");
         await settle();
@@ -869,7 +984,8 @@ describe("source-anchored private card presentation", () => {
         await changeExtra("x".repeat(70000));
         const pendingInput = extraField();
         const originalSurface = originalAnchor.querySelector(".card-surface")!;
-        expect(button("Review full request").disabled).toBe(true);
+        await acknowledge();
+        expect(confirmButton().disabled).toBe(true);
         originalAnchor.remove();
         anchorCleanup.pop()!();
         await settle();
@@ -882,7 +998,8 @@ describe("source-anchored private card presentation", () => {
         expect(replacementAnchor.querySelector(".card-surface")).toBe(originalSurface);
         expect(extraField()).toBe(pendingInput);
         expect(pendingInput.value).toHaveLength(70000);
-        expect(button("Review full request").disabled).toBe(true);
+        await acknowledge();
+        expect(confirmButton().disabled).toBe(true);
         expect(workspace.state.draft!.approval).toBeUndefined();
         expect(calls.extract).toHaveBeenCalledTimes(2);
         expect(calls.deliver).not.toHaveBeenCalled();
@@ -893,18 +1010,18 @@ describe("source-anchored private card presentation", () => {
         const anchor = registerAnchor(coordinate);
         await proposeSource(coordinate);
         const id = workspace.state.draft!.id;
-        button("Review full request").click();
+        seedApproval();
         await settle();
         confirmation().click();
         await settle();
-        expect(button("Send reviewed request").disabled).toBe(false);
+        expect(confirmButton().disabled).toBe(false);
         const field = numericFields()[0];
         workspace.open("saved");
         await settle();
         expect(anchor.children).toHaveLength(0);
         expect(target.querySelector('[role="dialog"]')).not.toBeNull();
         expect(confirmation().checked).toBe(false);
-        expect(button("Send reviewed request").disabled).toBe(true);
+        expect(confirmButton().disabled).toBe(true);
         expect(numericFields()[0]).toBe(field);
         confirmation().click();
         await settle();
@@ -915,15 +1032,108 @@ describe("source-anchored private card presentation", () => {
         expect(numericFields()[0]).toBe(field);
         expect(workspace.state.draft!.approval).toBeUndefined();
         expect(button("Send reviewed request")).toBeUndefined();
-        button("Review full request").click();
+        seedApproval();
         await settle();
         expect(confirmation().checked).toBe(false);
-        expect(button("Send reviewed request").disabled).toBe(true);
+        expect(confirmButton().disabled).toBe(true);
         expect(calls.deliver).not.toHaveBeenCalled();
     });
 });
 
 describe("local app card modal and authoritative review", () => {
+    it("sends from one explicit original confirm click when the app declares no disclosure", async () => {
+        const declaration = JSON.parse(catalog);
+        delete declaration.apps[0].actions[0].definition.card.disclosure;
+        workspace.discard();
+        expect(workspace.importCatalog(JSON.stringify(declaration))).toBe(true);
+        expect(workspace.select("synthetic", "capture")).toBe(true);
+        await propose();
+        expect(target.querySelector('.host-approval input[type="checkbox"]')).toBeNull();
+        expect(confirmButton().disabled).toBe(false);
+        expect(workspace.state.draft!.approval).toBeUndefined();
+        expect(calls.deliver).not.toHaveBeenCalled();
+        confirmButton().click();
+        // Delivery starts in the same user gesture, with no intermediate review UI.
+        expect(calls.deliver).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({
+                payload: { value: 42, extra: "Also sent" },
+                destination: "https://example.test/import",
+            }),
+            expect.any(AbortSignal),
+        );
+        await settle();
+        expect(workspace.state.draft!.status).toBe("delivered");
+    });
+
+    it("does not send when reopening or reconnecting the same account", async () => {
+        await acknowledge();
+        await closeCard();
+        workspace.setAccount("synthetic-account", "synthetic-backend");
+        workspace.open();
+        await settle();
+        expect(confirmation().checked).toBe(false);
+        expect(confirmButton().disabled).toBe(true);
+        expect(workspace.state.draft!.approval).toBeUndefined();
+        expect(calls.deliver).not.toHaveBeenCalled();
+        expect(calls.extract).toHaveBeenCalledOnce();
+    });
+
+    it("uses the original cancel action to discard only this local card without sending", async () => {
+        const previous = workspace.state.draft!.id;
+        await propose();
+        const selected = workspace.state.draft!.id;
+        await acknowledge();
+        button("Keep sending").click();
+        await settle();
+        expect(workspace.state.open).toBe(false);
+        expect(workspace.state.cards.map((card) => card.id)).toContain(previous);
+        expect(workspace.state.cards.map((card) => card.id)).not.toContain(selected);
+        expect(calls.deliver).not.toHaveBeenCalled();
+    });
+
+    it.each(["delivered", "uncertain"] as const)(
+        "removes only the selected %s local card while retaining sibling source cards",
+        async (kind) => {
+            const siblingSource = source("501");
+            const selectedSource = source("502");
+            registerAnchor(siblingSource);
+            registerAnchor(selectedSource);
+            await propose(siblingSource);
+            await changeNumber("57");
+            const siblingId = workspace.state.draft!.id;
+            await propose(selectedSource);
+            const selectedId = workspace.state.draft!.id;
+            const retainedIds = workspace.state.cards
+                .map((card) => card.id)
+                .filter((id) => id !== selectedId);
+            calls.deliver.mockResolvedValue({ kind });
+            await approveAndSend();
+            expect(workspace.state.draft!.status).toBe(kind);
+            const attemptedRequest = calls.deliver.mock.calls[0][0];
+            const inferences = calls.extract.mock.calls.length;
+            const details = target.querySelector<HTMLDetailsElement>("details.payload-details")!;
+            details.querySelector("summary")!.click();
+            await settle();
+            expect(details.open).toBe(true);
+            expect(calls.deliver).toHaveBeenCalledOnce();
+            button("Remove from this device").click();
+            await settle();
+            expect(workspace.state.open).toBe(false);
+            expect(workspace.state.cards.map((card) => card.id)).toEqual(retainedIds);
+            expect(workspace.state.cardSources[siblingId]).toEqual(siblingSource);
+            expect(workspace.state.cardSources[selectedId]).toBeUndefined();
+            expect(calls.deliver).toHaveBeenCalledOnce();
+            expect(calls.deliver.mock.calls[0][0]).toEqual(attemptedRequest);
+            expect(calls.nativeDeliver).not.toHaveBeenCalled();
+            await propose(siblingSource);
+            expect(workspace.state.draft!.id).toBe(siblingId);
+            expect(numericFields()[0].value).toBe("57");
+            expect(workspace.state.draft!.approval).toBeUndefined();
+            expect(calls.extract).toHaveBeenCalledTimes(inferences);
+            expect(calls.deliver).toHaveBeenCalledOnce();
+        },
+    );
+
     it("hides every retained card field and source while a new proposal is processing, then reveals only its new result", async () => {
         calls.extract.mockResolvedValue({
             kind: "extracted",
@@ -944,15 +1154,15 @@ describe("local app card modal and authoritative review", () => {
         );
         workspace.open("saved");
         await settle();
-        button("Review full request").click();
+        seedApproval();
         await settle();
         confirmation().click();
         await settle();
-        expect(button("Send reviewed request").disabled).toBe(false);
-        expect(target.querySelector('[aria-label="Selected card source"]')).not.toBeNull();
+        expect(confirmButton().disabled).toBe(false);
+        expect(target.querySelector('[aria-label="Selected card source"]')).toBeNull();
         expect(
             target.querySelector('[aria-label="Saved private cards on this device"]'),
-        ).not.toBeNull();
+        ).toBeNull();
         const retainedIds = workspace.state.cards.map((card) => card.id);
         const previousId = workspace.state.draft!.id;
         const extraction = deferExtraction();
@@ -974,7 +1184,7 @@ describe("local app card modal and authoritative review", () => {
             extraction.phase(phase);
             await settle();
             expectProcessingOnly();
-            expect(visibleText()).toContain(`Local processing: ${phase.replaceAll("_", " ")}`);
+            expect(visibleText()).toContain(phase.replaceAll("_", " "));
             expect(visibleText()).not.toContain("Previous selected result");
             expect(visibleText()).not.toContain("Also sent");
             expect(workspace.state.draft!.id).toBe(previousId);
@@ -998,26 +1208,27 @@ describe("local app card modal and authoritative review", () => {
         expect(cardText()).toContain("New selected image result");
         expect(cardText()).not.toContain("Previous selected result");
         expect(cardText()).not.toContain("Also sent");
-        expect(target.querySelector('[aria-label="Selected card source"]')).not.toBeNull();
-        expect(button("Review full request").disabled).toBe(false);
+        expect(target.querySelector('[aria-label="Selected card source"]')).toBeNull();
+        await acknowledge();
+        expect(confirmButton().disabled).toBe(false);
         expect(button("Send reviewed request")).toBeUndefined();
         expect(workspace.state.draft!.approval).toBeUndefined();
         expect(calls.extract).toHaveBeenCalledTimes(3);
         expect(calls.deliver).not.toHaveBeenCalled();
     });
 
-    it("retains the old card without showing it as a cancelled proposal result, and reopens it only from saved cards", async () => {
+    it("retains the old card without showing it as a cancelled proposal result, and reopens it from the original source message", async () => {
+        const retainedSource = {
+            ...source("201"),
+            chatKind: "group_chat" as const,
+            messageIndex: 4,
+        };
         await workspace.propose(
             client,
             { kind: "text_content", text: "Retained source" } as MessageContent,
             {
                 stillCurrent: () => true,
-                source: {
-                    chatKey: "rrkah-fqaaa-aaaaa-aaaaq-cai",
-                    chatKind: "group_chat",
-                    messageId: "201",
-                    messageIndex: 4,
-                },
+                source: retainedSource,
             },
         );
         workspace.open("saved");
@@ -1033,17 +1244,18 @@ describe("local app card modal and authoritative review", () => {
         extraction.phase("reading_image");
         await settle();
         expectProcessingOnly();
-        button("Cancel / discard local draft").click();
+        button("Cancel").click();
         await settle();
         expect(workspace.state.busy).toBe(false);
         expect(workspace.state.phase).toBeUndefined();
         expect(workspace.state.cards.map((card) => card.id)).toEqual(retainedIds);
         expect(workspace.state.draft).toEqual(previous);
-        expect(visibleText()).toContain("Processing cancelled");
+        expect(workspace.state.message).toContain("Processing cancelled");
+        expect(workspace.state.open).toBe(false);
         expect(preview()).toBeNull();
         expect(numericFields()).toHaveLength(0);
         expect(button("Review full request")).toBeUndefined();
-        expect(button("Cancel / discard local draft")).toBeUndefined();
+        expect(button("Cancel")).toBeUndefined();
         extraction.phase("validating");
         extraction.finish({
             kind: "extracted",
@@ -1056,23 +1268,24 @@ describe("local app card modal and authoritative review", () => {
         expect(workspace.state.draft).toEqual(previous);
         expect(preview()).toBeNull();
         expect(visibleText()).not.toContain("Cancelled extraction must never appear");
-        workspace.open("saved");
+        expect(workspace.state.cardSources[previous.id]).toEqual(retainedSource);
+        await propose(retainedSource);
         await settle();
         expect(numericFields()[0].value).toBe("57");
         expect(cardText()).toContain("Also sent");
         expect(cardText()).not.toContain("Cancelled extraction must never appear");
-        expect(target.querySelector('[aria-label="Selected card source"]')).not.toBeNull();
+        expect(target.querySelector('[aria-label="Selected card source"]')).toBeNull();
         expect(
             target.querySelector('[aria-label="Saved private cards on this device"]'),
-        ).not.toBeNull();
-        button("Review full request").click();
+        ).toBeNull();
+        seedApproval();
         await settle();
         expect(workspace.state.draft!.approval!.request.payload).toEqual({
             value: 57,
             extra: "Also sent",
         });
         expect(confirmation().checked).toBe(false);
-        expect(button("Send reviewed request").disabled).toBe(true);
+        expect(confirmButton().disabled).toBe(true);
         expect(calls.extract).toHaveBeenCalledTimes(3);
         expect(calls.deliver).not.toHaveBeenCalled();
         expect(calls.cancel).toHaveBeenCalledTimes(priorCancellationCount);
@@ -1099,11 +1312,11 @@ describe("local app card modal and authoritative review", () => {
     });
 
     it("clears visible consent when the card modal closes and reopens", async () => {
-        button("Review full request").click();
+        seedApproval();
         await settle();
         confirmation().click();
         await settle();
-        expect(button("Send reviewed request").disabled).toBe(false);
+        expect(confirmButton().disabled).toBe(false);
         const id = workspace.state.draft!.id;
         window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
         await settle();
@@ -1112,105 +1325,70 @@ describe("local app card modal and authoritative review", () => {
         await settle();
         expect(workspace.state.draft!.id).toBe(id);
         expect(confirmation().checked).toBe(false);
-        expect(button("Send reviewed request").disabled).toBe(true);
+        expect(confirmButton().disabled).toBe(true);
         expect(calls.extract).toHaveBeenCalledOnce();
         expect(calls.deliver).not.toHaveBeenCalled();
     });
 
-    it("returns to the exact source without losing edits, delivering, or rerunning inference", async () => {
-        await workspace.propose(
-            client,
-            { kind: "text_content", text: "Synthetic source with no app access" } as MessageContent,
-            {
-                stillCurrent: () => true,
-                source: {
-                    chatKey: "rrkah-fqaaa-aaaaa-aaaaq-cai",
-                    chatKind: "direct_chat",
-                    messageId: "18446744073709551615",
-                    messageIndex: 0,
-                },
-            },
-        );
-        workspace.open("saved");
-        await settle();
+    it("reopens the original message card without losing edits, delivering, or rerunning inference", async () => {
+        const coordinate = { ...source("18446744073709551615"), messageIndex: 0 };
+        registerAnchor(coordinate);
+        await propose(coordinate);
         const draftId = workspace.state.draft!.id;
-        const inferenceCount = calls.extract.mock.calls.length;
+        const inferences = calls.extract.mock.calls.length;
         await changeNumber("57");
-        button("Review full request").click();
-        await settle();
-        confirmation().click();
-        await settle();
-        expect(workspace.state.draft!.approval).toBeDefined();
-        expect(target.querySelector('[aria-label="Selected card source"]')?.textContent).toContain(
-            "rrkah-fqaaa-aaaaa-aaaaq-cai",
-        );
-        button("View source message").click();
-        await settle();
-        expect(calls.navigate).toHaveBeenCalledExactlyOnceWith(
-            "/chats/user/rrkah-fqaaa-aaaaa-aaaaq-cai/0",
-        );
-        expect(workspace.state.open).toBe(false);
-        expect(workspace.state.cards).toHaveLength(2);
+        expect(seedApproval()).toBe(true);
+        const stale = workspace.state.draft!.approval!.approvalId;
+        await acknowledge();
+        await closeCard();
+        await propose(coordinate);
         expect(workspace.state.draft!.id).toBe(draftId);
+        expect(workspace.state.cardSources[draftId]).toEqual(coordinate);
+        expect(workspace.state.cards).toHaveLength(2);
         expect(workspace.state.draft!.approval).toBeUndefined();
-        workspace.open();
-        await settle();
         expect(numericFields()[0].value).toBe("57");
-        expect(calls.extract).toHaveBeenCalledTimes(inferenceCount);
+        expect(confirmation().checked).toBe(false);
+        await workspace.confirm(stale);
+        expect(calls.extract).toHaveBeenCalledTimes(inferences);
         expect(calls.deliver).not.toHaveBeenCalled();
+        expect(calls.navigate).not.toHaveBeenCalled();
     });
 
     it.each(["delivered", "uncertain"] as const)(
-        "requires a fresh recovery review after leaving a %s card for its source",
+        "requires an explicit same-import retry after reopening a %s card from its message",
         async (kind) => {
-            await workspace.propose(
-                client,
-                { kind: "text_content", text: "Synthetic recovery source" } as MessageContent,
-                {
-                    stillCurrent: () => true,
-                    source: {
-                        chatKey: "rrkah-fqaaa-aaaaa-aaaaq-cai",
-                        chatKind: "group_chat",
-                        messageId: "900",
-                        messageIndex: 4,
-                    },
-                },
-            );
-            workspace.open("saved");
-            await settle();
+            const coordinate = { ...source("900"), chatKind: "group_chat" as const };
+            registerAnchor(coordinate);
+            await propose(coordinate);
             calls.deliver.mockResolvedValue({ kind });
             await approveAndSend();
-            expect(workspace.state.draft!.status).toBe(kind);
             const draftId = workspace.state.draft!.id;
+            const oldApproval = workspace.state.draft!.approval!.approvalId;
             const request = workspace.state.draft!.approval!.request;
-            const inferenceCount = calls.extract.mock.calls.length;
-            expect(workspace.selectCard(draftId)).toBe(true);
-            await settle();
-            button("Review recovered request before retrying").click();
-            await settle();
-            const oldApprovalId = workspace.state.draft!.approval!.approvalId;
-            expect(workspace.state.draft!.approval!.request).toEqual(request);
-            button("View source message").click();
-            await settle();
-            expect(calls.navigate).toHaveBeenCalledExactlyOnceWith(
-                "/chats/group/rrkah-fqaaa-aaaaa-aaaaq-cai/4",
-            );
-            expect(workspace.state.draft!.status).toBe(kind);
-            expect(workspace.state.draft!.approval).toBeUndefined();
-            expect(workspace.state.open).toBe(false);
-            workspace.open();
-            await settle();
-            expect(button("Review recovered request before retrying")).toBeDefined();
-            if (kind === "uncertain") await workspace.retryUncertain(oldApprovalId);
-            else await workspace.reopenDelivered(oldApprovalId);
-            expect(calls.deliver).toHaveBeenCalledOnce();
-            button("Review recovered request before retrying").click();
-            await settle();
-            expect(workspace.state.draft!.approval!.approvalId).not.toBe(oldApprovalId);
-            expect(workspace.state.draft!.approval!.request).toEqual(request);
+            const serialized = JSON.stringify(request);
+            const inferences = calls.extract.mock.calls.length;
+            await closeCard();
+            await propose(coordinate);
+            await expandDelivered();
             expect(workspace.state.draft!.id).toBe(draftId);
-            expect(calls.extract).toHaveBeenCalledTimes(inferenceCount);
+            expect(workspace.state.draft!.approval).toBeUndefined();
+            expect(button("Reopen in app").disabled).toBe(true);
+            button("Reopen in app").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+            if (kind === "uncertain") await workspace.retryUncertain(oldApproval);
+            else await workspace.reopenDelivered(oldApproval);
             expect(calls.deliver).toHaveBeenCalledOnce();
+            const checkbox = target.querySelector<HTMLInputElement>(
+                '.host-approval input[type="checkbox"]',
+            )!;
+            checkbox.click();
+            await settle();
+            expect(calls.deliver).toHaveBeenCalledOnce();
+            button("Reopen in app").click();
+            await settle();
+            expect(calls.deliver).toHaveBeenCalledTimes(2);
+            expect(calls.deliver.mock.calls[1][0]).toEqual(request);
+            expect(JSON.stringify(calls.deliver.mock.calls[1][0])).toBe(serialized);
+            expect(calls.extract).toHaveBeenCalledTimes(inferences);
         },
     );
 
@@ -1226,8 +1404,8 @@ describe("local app card modal and authoritative review", () => {
             const reason = target.querySelector('[aria-label="Saved card connection required"]');
             expect(reason?.textContent).toContain("inspect-only");
             expect(reason?.textContent).toContain("Check the receiving app");
-            expect(button("Review recovered request before retrying").disabled).toBe(true);
-            button("Review recovered request before retrying").click();
+            expect(button("Reopen in app")).toBeUndefined();
+            expect(seedApproval()).toBe(false);
             await settle();
             expect(workspace.state.draft).toMatchObject({
                 id: prior.id,
@@ -1242,74 +1420,58 @@ describe("local app card modal and authoritative review", () => {
         },
     );
 
-    it("uses the selected card's source and gives legacy cards an honest thread fallback", async () => {
-        const captured = { kind: "text_content", text: "Synthetic" } as MessageContent;
-        await workspace.propose(client, captured, {
-            stillCurrent: () => true,
-            source: {
-                chatKey: "rrkah-fqaaa-aaaaa-aaaaq-cai",
-                chatKind: "group_chat",
-                messageId: "99",
-                messageIndex: 3,
-            },
-        });
-        const groupCard = workspace.state.draft!.id;
-        await workspace.propose(client, captured, {
-            stillCurrent: () => true,
-            source: {
-                chatKey: "rrkah-fqaaa-aaaaa-aaaaq-cai_8",
-                chatKind: "channel",
-                messageId: "99",
-                threadRootMessageIndex: 4,
-            },
-        });
-        workspace.open("saved");
-        await settle();
-        expect(button("View source message")).toBeUndefined();
-        button("Open source thread").click();
-        await settle();
-        expect(calls.navigate).toHaveBeenLastCalledWith(
-            "/community/rrkah-fqaaa-aaaaa-aaaaq-cai/channel/8/4?open=true",
-        );
-        workspace.open();
-        workspace.selectCard(groupCard);
-        await settle();
+    it("retains distinct source and thread coordinates without a separate saved-card manager", async () => {
+        const group = { ...source("99"), chatKind: "group_chat" as const, messageIndex: 3 };
+        const thread = {
+            chatKey: "rrkah-fqaaa-aaaaa-aaaaq-cai_8",
+            chatKind: "channel" as const,
+            messageId: "99",
+            threadRootMessageIndex: 4,
+        };
+        registerAnchor(group);
+        registerAnchor(thread);
+        await propose(group);
+        const first = workspace.state.draft!.id;
+        await changeNumber("57");
+        await propose(thread);
+        const second = workspace.state.draft!.id;
+        await closeCard();
+        await propose(group);
+        expect(workspace.state.draft!.id).toBe(first);
+        expect(numericFields()[0].value).toBe("57");
+        expect(workspace.state.cardSources[first]).toEqual(group);
+        expect(workspace.state.cardSources[second]).toEqual(thread);
+        expect(
+            target.querySelector('nav[aria-label="Saved private cards on this device"]'),
+        ).toBeNull();
         expect(button("Open source thread")).toBeUndefined();
-        button("View source message").click();
-        await settle();
-        expect(calls.navigate).toHaveBeenLastCalledWith(
-            "/chats/group/rrkah-fqaaa-aaaaa-aaaaq-cai/3",
-        );
-        expect(workspace.state.cards).toHaveLength(3);
+        expect(calls.navigate).not.toHaveBeenCalled();
         expect(calls.extract).toHaveBeenCalledTimes(3);
         expect(calls.deliver).not.toHaveBeenCalled();
     });
 
-    it("blocks source navigation while an unrepresentable edit would be hidden", async () => {
-        await workspace.propose(
-            client,
-            { kind: "text_content", text: "Synthetic" } as MessageContent,
-            {
-                stillCurrent: () => true,
-                source: {
-                    chatKey: "rrkah-fqaaa-aaaaa-aaaaq-cai",
-                    chatKind: "direct_chat",
-                    messageId: "8",
-                    messageIndex: 7,
-                },
-            },
-        );
-        workspace.open("saved");
-        await settle();
+    it("blocks switching to another source while an unrepresentable edit is pending", async () => {
+        const first = source("7"),
+            second = source("8");
+        registerAnchor(first);
+        registerAnchor(second);
+        await propose(first);
+        const firstId = workspace.state.draft!.id;
+        await propose(second);
+        const currentId = workspace.state.draft!.id;
         await changeExtra("x".repeat(70000));
-        const sourceButton = button("View source message");
-        expect(sourceButton.disabled).toBe(true);
-        sourceButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-        await settle();
-        expect(calls.navigate).not.toHaveBeenCalled();
-        expect(workspace.state.open).toBe(true);
+        expect(workspace.selectCard(firstId)).toBe(false);
+        expect(workspace.state.draft!.id).toBe(currentId);
         expect(extraField().value).toHaveLength(70000);
+        await acknowledge();
+        confirmButton().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await settle();
         expect(calls.deliver).not.toHaveBeenCalled();
+        expect(calls.navigate).not.toHaveBeenCalled();
+        await changeExtra("corrected");
+        await propose(first);
+        expect(workspace.state.draft!.id).toBe(firstId);
+        expect(calls.extract).toHaveBeenCalledTimes(3);
     });
 
     it("never turns malformed stored source references or app payload fields into links", async () => {
@@ -1344,9 +1506,7 @@ describe("local app card modal and authoritative review", () => {
         );
         await settle();
         expect(target.querySelector('[aria-label="Selected card source"]')).toBeNull();
-        expect(visibleText()).toContain(
-            "Propose again from the original message to restore its link",
-        );
+        expect(workspace.state.cardSources[workspace.state.draft!.id]?.chatKind).toBeUndefined();
         expect(button("View source message")).toBeUndefined();
         expect(button("Open source chat")).toBeUndefined();
         expect(calls.navigate).not.toHaveBeenCalled();
@@ -1366,49 +1526,45 @@ describe("local app card modal and authoritative review", () => {
         expect(calls.deliver).not.toHaveBeenCalled();
     });
 
-    it("selects retained local cards without re-inference and requires fresh consent", async () => {
+    it("reuses retained source-linked cards without re-inference and requires fresh consent", async () => {
+        const firstSource = source("71"),
+            secondSource = source("72");
+        registerAnchor(firstSource);
+        registerAnchor(secondSource);
+        await propose(firstSource);
         await changeNumber("43");
-        button("Review full request").click();
-        await settle();
-        confirmation().click();
-        await settle();
+        expect(seedApproval()).toBe(true);
         const first = workspace.state.draft!.id;
-        const approval = workspace.state.draft!.approval!.approvalId;
-        await propose();
+        const oldApproval = workspace.state.draft!.approval!.approvalId;
+        await acknowledge();
+        await propose(secondSource);
         const second = workspace.state.draft!.id;
-        expect(second).not.toBe(first);
-        const selector = target.querySelector(
-            'nav[aria-label="Saved private cards on this device"]',
-        )!;
-        expect(selector.textContent).toContain("not posted in chat");
-        expect(selector.querySelectorAll("button")).toHaveLength(2);
         const inferences = calls.extract.mock.calls.length;
-        selector.querySelector<HTMLButtonElement>("button")!.click();
-        await settle();
-        expect(workspace.state.draft?.id).toBe(first);
+        await propose(firstSource);
+        expect(workspace.state.draft!.id).toBe(first);
+        expect(second).not.toBe(first);
         expect(numericFields()[0].value).toBe("43");
-        expect(workspace.state.draft?.approval).toBeUndefined();
-        await workspace.confirm(approval);
-        expect(calls.deliver).not.toHaveBeenCalled();
-        button("Review full request").click();
-        await settle();
+        expect(workspace.state.draft!.approval).toBeUndefined();
         expect(confirmation().checked).toBe(false);
+        expect(confirmButton().disabled).toBe(true);
+        expect(
+            target.querySelector('nav[aria-label="Saved private cards on this device"]'),
+        ).toBeNull();
+        await workspace.confirm(oldApproval);
+        expect(calls.deliver).not.toHaveBeenCalled();
         expect(calls.extract).toHaveBeenCalledTimes(inferences);
-        expect(workspace.state.cards).toHaveLength(2);
+        expect(workspace.state.cards).toHaveLength(3);
     });
 
     it("keeps a pending unrepresentable edit visible and blocks card switching", async () => {
         await propose();
         await changeExtra("x".repeat(70000));
         const current = workspace.state.draft!.id;
-        const selector = target.querySelector(
-            'nav[aria-label="Saved private cards on this device"]',
-        )!;
         expect(
-            [...selector.querySelectorAll<HTMLButtonElement>("button")].every(
-                (node) => node.disabled,
-            ),
-        ).toBe(true);
+            target.querySelector('nav[aria-label="Saved private cards on this device"]'),
+        ).toBeNull();
+        await acknowledge();
+        expect(confirmButton().disabled).toBe(true);
         expect(workspace.selectCard(workspace.state.cards[0].id)).toBe(false);
         expect(workspace.state.draft?.id).toBe(current);
         expect(extraField().value).toHaveLength(70000);
@@ -1440,37 +1596,40 @@ describe("local app card modal and authoritative review", () => {
             target.querySelector<HTMLInputElement>('input[aria-label="Item 1 — date"]')!;
         expect(date().type).toBe("text");
         expect(date().value).toBe("2026-02-30");
-        expect(JSON.parse(editor().value).date).toBe("2026-02-30");
-        expect(button("Review full request").disabled).toBe(true);
+        expect(JSON.parse(workspace.state.editorJson).date).toBe("2026-02-30");
+        await acknowledge();
+        expect(confirmButton().disabled).toBe(true);
         expect(workspace.state.draft!.approval).toBeUndefined();
         date().value = "2026-02-28";
         date().dispatchEvent(new Event("input", { bubbles: true }));
         await settle();
         expect(date().type).toBe("date");
-        expect(button("Review full request").disabled).toBe(false);
-        button("Review full request").click();
+        await acknowledge();
+        expect(confirmButton().disabled).toBe(false);
+        seedApproval();
         await settle();
         const staleApproval = workspace.state.draft!.approval!.approvalId;
         confirmation().click();
         await settle();
-        await changeJson(JSON.stringify({ value: 42, date: "" }));
+        await fixtureJson(JSON.stringify({ value: 42, date: "" }));
         expect(date().type).toBe("text");
         expect(date().value).toBe("");
-        expect(JSON.parse(editor().value)).toEqual({ value: 42, date: "" });
-        expect(button("Review full request").disabled).toBe(true);
+        expect(JSON.parse(workspace.state.editorJson)).toEqual({ value: 42, date: "" });
+        await acknowledge();
+        expect(confirmButton().disabled).toBe(true);
         expect(workspace.state.draft!.approval).toBeUndefined();
         await workspace.confirm(staleApproval);
         expect(calls.deliver).not.toHaveBeenCalled();
         date().value = "2026-03-01";
         date().dispatchEvent(new Event("input", { bubbles: true }));
         await settle();
-        button("Review full request").click();
+        seedApproval();
         await settle();
         expect(confirmation().checked).toBe(false);
-        expect(button("Send reviewed request").disabled).toBe(true);
+        expect(confirmButton().disabled).toBe(true);
         confirmation().click();
         await settle();
-        button("Send reviewed request").click();
+        confirmButton().click();
         await settle();
         expect(calls.deliver).toHaveBeenCalledExactlyOnceWith(
             expect.objectContaining({ payload: { value: 42, date: "2026-03-01" } }),
@@ -1482,7 +1641,7 @@ describe("local app card modal and authoritative review", () => {
         await proposeNamed();
         expect(categoryChoice().value).toBe("option-0");
         expect(categoryChoice().selectedOptions[0].textContent).toBe("Friendly Alpha");
-        expect(JSON.parse(editor().value)).toEqual({
+        expect(JSON.parse(workspace.state.editorJson)).toEqual({
             value: 10,
             extra: "Also sent",
             categoryId: "category-a",
@@ -1497,7 +1656,7 @@ describe("local app card modal and authoritative review", () => {
             ),
         ).toBeNull();
         await changeNumber("55.5");
-        button("Review full request").click();
+        seedApproval();
         await settle();
         const staleApproval = workspace.state.draft!.approval!.approvalId;
         confirmation().click();
@@ -1512,26 +1671,29 @@ describe("local app card modal and authoritative review", () => {
             categoryId: "category-b",
             categoryLabel: "Assigned Beta",
         };
-        expect(JSON.parse(editor().value)).toEqual(expected);
+        expect(JSON.parse(workspace.state.editorJson)).toEqual(expected);
         expect(button("Send reviewed request")).toBeUndefined();
         await workspace.confirm(staleApproval);
         expect(calls.deliver).not.toHaveBeenCalled();
+        const priorChoice = categoryChoice();
         await approveAndSend();
         expect(calls.deliver).toHaveBeenCalledExactlyOnceWith(
             expect.objectContaining({ payload: expected }),
             expect.any(AbortSignal),
         );
-        expect(categoryChoice().disabled).toBe(true);
-        const deliveredJson = editor().value;
-        await selectCategory("option-0");
-        expect(editor().value).toBe(deliveredJson);
+        expect(categoryChoice()).toBeNull();
+        const deliveredJson = workspace.state.editorJson;
+        priorChoice.value = "option-0";
+        priorChoice.dispatchEvent(new Event("change", { bubbles: true }));
+        await settle();
+        expect(workspace.state.editorJson).toBe(deliveredJson);
         expect(calls.extract).toHaveBeenCalledOnce();
     });
 
     it("sends None without choice or companion keys and restores the untouched extracted value", async () => {
         await proposeNamed();
-        expect(JSON.parse(editor().value).value).toBe(10);
-        button("Review full request").click();
+        expect(JSON.parse(workspace.state.editorJson).value).toBe(10);
+        seedApproval();
         await settle();
         const staleApproval = workspace.state.draft!.approval!.approvalId;
         await selectCategory("absent");
@@ -1539,7 +1701,7 @@ describe("local app card modal and authoritative review", () => {
         expect(categoryChoice().selectedOptions[0].textContent).toBe(
             "None — keep extracted values",
         );
-        expect(JSON.parse(editor().value)).toEqual(expected);
+        expect(JSON.parse(workspace.state.editorJson)).toEqual(expected);
         expect(
             target.querySelector('output[aria-label="Item 1 — categoryLabel"]')?.textContent,
         ).toContain("Not supplied");
@@ -1566,14 +1728,14 @@ describe("local app card modal and authoritative review", () => {
         expect(categoryChoice().getAttribute("aria-invalid")).toBe("true");
         expect(categoryChoice().selectedOptions[0].textContent).toBe("Unknown supplied choice");
         expect(visibleText()).toContain("unknown-id");
-        expect(JSON.parse(editor().value)).toEqual(payload);
-        button("Review full request").click();
+        expect(JSON.parse(workspace.state.editorJson)).toEqual(payload);
+        seedApproval();
         await settle();
         expect(workspace.state.draft!.approval).toBeUndefined();
         expect(button("Send reviewed request")).toBeUndefined();
         expect(calls.deliver).not.toHaveBeenCalled();
         await selectCategory("absent");
-        expect(JSON.parse(editor().value)).toEqual({ value: 42, extra: "Also sent" });
+        expect(JSON.parse(workspace.state.editorJson)).toEqual({ value: 42, extra: "Also sent" });
         await approveAndSend();
         expect(calls.deliver).toHaveBeenCalledExactlyOnceWith(
             expect.objectContaining({ payload: { value: 42, extra: "Also sent" } }),
@@ -1582,9 +1744,9 @@ describe("local app card modal and authoritative review", () => {
         expect(calls.extract).toHaveBeenCalledOnce();
     });
 
-    it("keeps advanced JSON authoritative, blocks mismatched companions, and never reapplies defaults on repair", async () => {
+    it("preserves restored explicit values, blocks mismatched companions, and never reapplies defaults on repair", async () => {
         await proposeNamed();
-        button("Review full request").click();
+        seedApproval();
         await settle();
         const staleApproval = workspace.state.draft!.approval!.approvalId;
         const manual = {
@@ -1593,24 +1755,24 @@ describe("local app card modal and authoritative review", () => {
             categoryId: "category-a",
             categoryLabel: "Mismatched companion",
         };
-        await changeJson(JSON.stringify(manual));
-        expect(JSON.parse(editor().value)).toEqual(manual);
-        expect(visibleText()).toContain("Advanced JSON keeps your explicit field values");
+        await fixtureJson(JSON.stringify(manual));
+        expect(JSON.parse(workspace.state.editorJson)).toEqual(manual);
+        expect(cardText()).toContain("Mismatched companion");
         expect(workspace.state.draft!.approval).toBeUndefined();
-        button("Review full request").click();
+        seedApproval();
         await settle();
         expect(workspace.state.draft!.approval).toBeUndefined();
         await workspace.confirm(staleApproval);
         expect(calls.deliver).not.toHaveBeenCalled();
         await selectCategory("option-1");
-        expect(JSON.parse(editor().value)).toEqual({
+        expect(JSON.parse(workspace.state.editorJson)).toEqual({
             ...manual,
             categoryId: "category-b",
             categoryLabel: "Assigned Beta",
         });
         await selectCategory("absent");
         const expected = { value: 99, extra: "Manual payload" };
-        expect(JSON.parse(editor().value)).toEqual(expected);
+        expect(JSON.parse(workspace.state.editorJson)).toEqual(expected);
         await approveAndSend();
         expect(calls.deliver).toHaveBeenCalledExactlyOnceWith(
             expect.objectContaining({ payload: expected }),
@@ -1619,60 +1781,87 @@ describe("local app card modal and authoritative review", () => {
         expect(calls.extract).toHaveBeenCalledOnce();
     });
 
-    it("starts proposals with no management page and advanced JSON collapsed without hiding the complete review", async () => {
-        const advanced = target.querySelector<HTMLDetailsElement>("details.advanced-editor")!;
-        expect(target.querySelector("details.setup-disclosure")).toBeNull();
-        expect(advanced.open).toBe(false);
-        expect(advanced.querySelector("summary")?.textContent).toContain("complete payload");
-        expect(numericFields()[0].value).toBe("42");
-        expect(JSON.parse(editor().value)).toEqual({ value: 42, extra: "Also sent" });
-        button("Review full request").click();
+    it("keeps a rejected confirmation visible after rendering until the inconsistent field is corrected", async () => {
+        await proposeNamed();
+        const payload = {
+            value: 99,
+            extra: "Preserved restored values",
+            categoryId: "category-a",
+            categoryLabel: "Mismatched companion",
+        };
+        await fixtureJson(JSON.stringify(payload));
+        const before = workspace.state.editorJson;
+        await acknowledge();
+        confirmButton().click();
         await settle();
-        const summary = workspace.state.draft!.approval!.summary;
-        expect(summary).toContain("Also sent");
-        expect(summary).toContain("https://example.test/import");
-        const review = [...target.querySelectorAll("pre")].find(
-            (node) => node.textContent === summary,
-        )!;
-        expect(review).toBeDefined();
-        expect(review.closest("details")?.classList.contains("request-details")).toBe(true);
-        expect(review.closest("details")?.open).toBe(false);
-        expect(cardText()).toContain("42");
-        expect(cardText()).toContain("Also sent");
-        expect(preview().closest("details")).toBeNull();
-        expect(target.querySelector(".privacy-disclosure")).toBeNull();
-        expect(advanced.open).toBe(false);
+        await settle();
+        expect(target.querySelector('.card-loading[role="status"]')?.textContent).toContain(
+            "do not meet this app's schema",
+        );
+        expect(target.querySelector('.card-loading[role="status"]')?.textContent).toContain(
+            "nothing was sent",
+        );
+        expect(workspace.state.editorJson).toBe(before);
+        expect(JSON.parse(workspace.state.editorJson)).toEqual(payload);
+        expect(workspace.state.draft!.approval).toBeUndefined();
+        expect(calls.deliver).not.toHaveBeenCalled();
+        await selectCategory("option-1");
+        expect(target.querySelector('.card-loading[role="status"]')).toBeNull();
+        expect(JSON.parse(workspace.state.editorJson)).toEqual({
+            ...payload,
+            categoryId: "category-b",
+            categoryLabel: "Assigned Beta",
+        });
+        expect(confirmation().checked).toBe(false);
         expect(calls.deliver).not.toHaveBeenCalled();
     });
 
-    it("shows declared labels and additional fields without replacing explicit host sharing consent", async () => {
-        expect(target.querySelector("h2")?.textContent).toBe("App-defined title");
+    it("uses only the original card form with no management page, advanced JSON or extra review step", async () => {
+        expect(target.querySelectorAll(".action-card .title")).toHaveLength(1);
+        expect(target.querySelector(".title")?.textContent).toBe("App-defined title");
+        expect(target.querySelector("details.advanced-editor")).toBeNull();
+        expect(target.querySelector('textarea[aria-label="Complete payload (JSON)"]')).toBeNull();
         expect(
-            [...target.querySelectorAll("h2, h3")].filter(
-                (node) => node.textContent === "App-defined title",
-            ),
-        ).toHaveLength(1);
-        expect(target.querySelector(".privacy-disclosure")).toBeNull();
-        expect(target.querySelector(".setup-disclosure")).toBeNull();
+            target.querySelector('nav[aria-label="Saved private cards on this device"]'),
+        ).toBeNull();
+        expect(target.querySelector('input[type="file"]')).toBeNull();
+        expect(target.querySelector('input[aria-label*="recipient"]')).toBeNull();
+        expect(
+            target.querySelector('pre[aria-label="Complete canonical outgoing values"]')
+                ?.textContent,
+        ).toBe(workspace.state.editorJson);
+        expect(target.querySelector<HTMLDetailsElement>("details.payload-details")!.open).toBe(
+            false,
+        );
+        expect(button("Review full request")).toBeUndefined();
+        expect(button("Send reviewed request")).toBeUndefined();
+        expect(numericFields()[0].value).toBe("42");
+        expect(extraField().value).toBe("Also sent");
+        expect(target.querySelector(".card-url")?.textContent).toBe("https://example.test/import");
+        expect(preview().closest("details")).toBeNull();
+        expect(workspace.state.draft!.approval).toBeUndefined();
+        expect(calls.deliver).not.toHaveBeenCalled();
+    });
+
+    it("keeps original app labels and disclosure with a host-owned encrypted-sharing notice", async () => {
+        expect(target.querySelectorAll(".action-card .title")).toHaveLength(1);
         expect(preview().textContent).toContain("App-defined value");
-        expect(cardText()).toContain("Also sent");
-        expect(editor().value).toContain('"extra": "Also sent"');
+        expect(extraField().value).toBe("Also sent");
+        expect(confirmButton().textContent).toBe("Preview only");
+        expect(button("Keep sending")).toBeDefined();
+        expect(confirmButton().title).toContain("encrypted to the receiving app");
+        expect(visibleText()).toContain(
+            "Send these fields encrypted to Synthetic app; review and save there.",
+        );
+        expect(visibleText()).toContain("https://example.test/import");
+        expect(confirmButton().disabled).toBe(true);
+        confirmButton().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await settle();
+        expect(workspace.state.draft!.approval).toBeUndefined();
         expect(calls.deliver).not.toHaveBeenCalled();
-        expect(visibleText()).not.toContain("Preview only");
-        expect(visibleText()).not.toContain("Keep sending");
-        button("Review full request").click();
-        await settle();
-        expect(button("Send reviewed request").disabled).toBe(true);
-        expect(button("Send reviewed request").textContent).toContain("Preview only");
-        expect(button("Send reviewed request").textContent).toContain("Send reviewed request");
-        expect(visibleText()).toContain("Send exactly this request outside OpenChat.");
-        button("Send reviewed request").click();
-        await settle();
+        await acknowledge();
         expect(calls.deliver).not.toHaveBeenCalled();
-        confirmation().click();
-        await settle();
-        expect(button("Send reviewed request").disabled).toBe(false);
-        button("Send reviewed request").click();
+        confirmButton().click();
         await settle();
         expect(calls.deliver).toHaveBeenCalledExactlyOnceWith(
             expect.objectContaining({
@@ -1681,15 +1870,22 @@ describe("local app card modal and authoritative review", () => {
             }),
             expect.any(AbortSignal),
         );
+        expect(target.querySelector(".action-card.collapsed")).not.toBeNull();
+        expect(preview()).toBeNull();
+        await expandDelivered();
+        expect(cardText()).toContain("42");
+        expect(cardText()).toContain("Also sent");
+        expect(confirmButton()).toBeUndefined();
+        expect(calls.deliver).toHaveBeenCalledOnce();
     });
 
     it("updates from edited JSON, revokes prior approval, and hides old values on invalid edits", async () => {
-        button("Review full request").click();
+        seedApproval();
         await settle();
         const firstApproval = workspace.state.draft!.approval!.approvalId;
         confirmation().click();
         await settle();
-        await changeJson('{"value":43,"extra":"Edited payload"}');
+        await fixtureJson('{"value":43,"extra":"Edited payload"}');
         expect(cardText()).toContain("43");
         expect(cardText()).toContain("Edited payload");
         expect(cardText()).not.toContain("Also sent");
@@ -1697,11 +1893,11 @@ describe("local app card modal and authoritative review", () => {
         expect(button("Send reviewed request")).toBeUndefined();
         await workspace.confirm(firstApproval);
         expect(calls.deliver).not.toHaveBeenCalled();
-        await changeJson('{"value":');
+        await fixtureJson('{"value":');
         expect(preview().textContent).toContain("Field editing is unavailable");
         expect(preview().textContent).not.toContain("Edited payload");
         expect(preview().querySelector("dl")).toBeNull();
-        button("Review full request").click();
+        seedApproval();
         await settle();
         expect(workspace.state.draft!.approval).toBeUndefined();
         expect(calls.deliver).not.toHaveBeenCalled();
@@ -1709,24 +1905,24 @@ describe("local app card modal and authoritative review", () => {
     });
 
     it("edits a declared field, revokes consent and sends only the newly reviewed payload", async () => {
-        button("Review full request").click();
+        seedApproval();
         await settle();
         const firstApproval = workspace.state.draft!.approval!.approvalId;
         confirmation().click();
         await settle();
         await changeNumber("43.5");
-        expect(JSON.parse(editor().value)).toEqual({ value: 43.5, extra: "Also sent" });
+        expect(JSON.parse(workspace.state.editorJson)).toEqual({ value: 43.5, extra: "Also sent" });
         expect(workspace.state.draft!.approval).toBeUndefined();
         expect(button("Send reviewed request")).toBeUndefined();
         await workspace.confirm(firstApproval);
         expect(calls.deliver).not.toHaveBeenCalled();
-        button("Review full request").click();
+        seedApproval();
         await settle();
         expect(confirmation().checked).toBe(false);
-        expect(button("Send reviewed request").disabled).toBe(true);
+        expect(confirmButton().disabled).toBe(true);
         confirmation().click();
         await settle();
-        button("Send reviewed request").click();
+        confirmButton().click();
         await settle();
         expect(calls.deliver).toHaveBeenCalledExactlyOnceWith(
             expect.objectContaining({ payload: { value: 43.5, extra: "Also sent" } }),
@@ -1738,7 +1934,7 @@ describe("local app card modal and authoritative review", () => {
     it.each(["", "-", "1e", "12junk"])(
         "keeps an invalid numeric edit (%j) unapproved, then recovers without re-inference",
         async (invalid) => {
-            button("Review full request").click();
+            seedApproval();
             await settle();
             const firstApproval = workspace.state.draft!.approval!.approvalId;
             confirmation().click();
@@ -1746,14 +1942,21 @@ describe("local app card modal and authoritative review", () => {
             await changeNumber(invalid);
             expect(numericFields()[0].value).toBe(invalid);
             expect(workspace.state.draft!.approval).toBeUndefined();
-            button("Review full request").click();
+            await acknowledge();
+            // Numeric syntax is rejected by review validation, not coerced to
+            // the last valid number; exercise the actual explicit-click path.
+            confirmButton().dispatchEvent(new MouseEvent("click", { bubbles: true }));
             await settle();
+            expect(numericFields()[0].value).toBe(invalid);
             expect(workspace.state.draft!.approval).toBeUndefined();
             await workspace.confirm(firstApproval);
             expect(calls.deliver).not.toHaveBeenCalled();
             expect(button("Send reviewed request")).toBeUndefined();
             await changeNumber("44.25");
-            expect(JSON.parse(editor().value)).toEqual({ value: 44.25, extra: "Also sent" });
+            expect(JSON.parse(workspace.state.editorJson)).toEqual({
+                value: 44.25,
+                extra: "Also sent",
+            });
             await approveAndSend();
             expect(calls.deliver).toHaveBeenCalledExactlyOnceWith(
                 expect.objectContaining({ payload: { value: 44.25, extra: "Also sent" } }),
@@ -1798,14 +2001,14 @@ describe("local app card modal and authoritative review", () => {
             calls.extract.mockResolvedValue({ kind: "extracted", candidates: records });
             await propose();
             if (kind === "wrapped-list") {
-                await changeJson(
+                await fixtureJson(
                     JSON.stringify({
                         customRecords: records,
                         envelopeNote: "ENVELOPE MUST REMAIN",
                     }),
                 );
             }
-            button("Review full request").click();
+            seedApproval();
             await settle();
             const firstApproval = workspace.state.draft!.approval!.approvalId;
             expect(numericFields()).toHaveLength(2);
@@ -1815,7 +2018,7 @@ describe("local app card modal and authoritative review", () => {
                 kind === "list"
                     ? editedRecords
                     : { customRecords: editedRecords, envelopeNote: "ENVELOPE MUST REMAIN" };
-            expect(JSON.parse(editor().value)).toEqual(expected);
+            expect(JSON.parse(workspace.state.editorJson)).toEqual(expected);
             expect(cardText()).toContain("FIRST ITEM MUST REMAIN");
             expect(cardText()).toContain("SECOND ITEM EXTRA");
             if (kind === "wrapped-list")
@@ -1832,16 +2035,19 @@ describe("local app card modal and authoritative review", () => {
     );
 
     it.each(["delivered", "uncertain"] as const)(
-        "disables both field and JSON editing after a %s outcome",
+        "renders fields read-only and preserves the exact request after a %s outcome",
         async (kind) => {
             calls.deliver.mockResolvedValue({ kind });
+            const priorField = numericFields()[0];
             await approveAndSend();
             expect(workspace.state.draft!.status).toBe(kind);
-            expect(numericFields()[0].disabled).toBe(true);
-            expect(editor().disabled).toBe(true);
+            expect(preview().querySelector("input,select,textarea")).toBeNull();
+            expect(preview().querySelector("input,select,textarea")).toBeNull();
             expect(button("Review full request")).toBeUndefined();
             const unchanged = workspace.state.editorJson;
-            await changeNumber("99");
+            priorField.value = "99";
+            priorField.dispatchEvent(new Event("input", { bubbles: true }));
+            await settle();
             expect(workspace.state.editorJson).toBe(unchanged);
             expect(calls.deliver).toHaveBeenCalledOnce();
         },
@@ -1855,22 +2061,29 @@ describe("local app card modal and authoritative review", () => {
                     finish = resolve;
                 }),
         );
+        const priorField = numericFields()[0];
+        const priorConfirm = confirmButton();
         await approveAndSend();
         expect(workspace.state.draft!.status).toBe("sending");
+        priorConfirm.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await settle();
+        expect(calls.deliver).toHaveBeenCalledOnce();
         expect(workspace.state.busy).toBe(true);
         expect(workspace.state.phase).toBeUndefined();
         expect(preview()).not.toBeNull();
-        expect(target.querySelector("h2")?.textContent).toBe("App-defined title");
-        expect(numericFields()[0].value).toBe("42");
+        expect(target.querySelector(".title")?.textContent).toBe("App-defined title");
+        expect(cardText()).toContain("42");
         expect(cardText()).toContain("Also sent");
         expect(workspace.state.draft!.approval!.request.payload).toEqual({
             value: 42,
             extra: "Also sent",
         });
-        expect(numericFields()[0].disabled).toBe(true);
-        expect(editor().disabled).toBe(true);
+        expect(preview().querySelector("input,select,textarea")).toBeNull();
+        expect(preview().querySelector("input,select,textarea")).toBeNull();
         const unchanged = workspace.state.editorJson;
-        await changeNumber("99");
+        priorField.value = "99";
+        priorField.dispatchEvent(new Event("input", { bubbles: true }));
+        await settle();
         expect(workspace.state.editorJson).toBe(unchanged);
         finish({ kind: "delivered" });
         await settle();
@@ -1878,68 +2091,75 @@ describe("local app card modal and authoritative review", () => {
         expect(calls.deliver).toHaveBeenCalledOnce();
     });
 
-    it.each(["field", "advanced JSON"] as const)(
-        "keeps an over-limit edit blocked across revision updates and recovers through %s",
-        async (recovery) => {
-            button("Review full request").click();
-            await settle();
-            const firstApproval = workspace.state.draft!.approval!.approvalId;
-            const originalJson = workspace.state.editorJson;
-            const oversized = "x".repeat(65536);
-            await changeExtra(oversized);
-            expect(extraField().value).toBe(oversized);
-            expect(extraField().getAttribute("aria-invalid")).toBe("true");
-            expect(workspace.state.editorJson).toBe(originalJson);
-            expect(workspace.state.draft!.approval).toBeUndefined();
-            expect(preview()).toBeNull();
-            expect(button("Review full request").disabled).toBe(true);
-            const blockedRevision = workspace.state.draft!.revision;
-            workspace.edit(originalJson, "Changed recipient review label");
-            await settle();
-            expect(workspace.state.draft!.revision).toBeGreaterThan(blockedRevision);
-            expect(button("Review full request").disabled).toBe(true);
-            expect(preview()).toBeNull();
-            button("Review full request").click();
-            await settle();
-            await workspace.confirm(firstApproval);
-            expect(workspace.state.draft!.approval).toBeUndefined();
-            expect(calls.deliver).not.toHaveBeenCalled();
-            if (recovery === "field") await changeExtra("Recovered extra");
-            else await changeJson(JSON.stringify({ value: 42, extra: "Recovered extra" }));
-            expect(extraField().value).toBe("Recovered extra");
-            expect(visibleText()).not.toContain(
-                "The pending field edit cannot be reviewed or sent",
-            );
-            expect(cardText()).toContain("Recovered extra");
-            expect(button("Review full request").disabled).toBe(false);
-            await approveAndSend();
-            expect(calls.deliver).toHaveBeenCalledExactlyOnceWith(
-                expect.objectContaining({ payload: { value: 42, extra: "Recovered extra" } }),
-                expect.any(AbortSignal),
-            );
-            expect(calls.extract).toHaveBeenCalledOnce();
-        },
-    );
-
-    it("clears a pending oversized field when the user explicitly restores identical canonical JSON", async () => {
+    it("keeps an over-limit edit blocked across revision updates and recovers through its field", async () => {
+        seedApproval();
+        await settle();
+        const firstApproval = workspace.state.draft!.approval!.approvalId;
         const originalJson = workspace.state.editorJson;
-        await changeExtra("x".repeat(65536));
-        expect(button("Review full request").disabled).toBe(true);
-        await changeJson(originalJson);
-        expect(extraField().value).toBe("Also sent");
-        expect(visibleText()).not.toContain("The pending field edit cannot be reviewed or sent");
-        expect(button("Review full request").disabled).toBe(false);
-        expect(cardText()).toContain("Also sent");
+        const oversized = "x".repeat(65536);
+        await changeExtra(oversized);
+        expect(extraField().value).toBe(oversized);
+        expect(extraField().getAttribute("aria-invalid")).toBe("true");
+        expect(workspace.state.editorJson).toBe(originalJson);
+        expect(workspace.state.draft!.approval).toBeUndefined();
+        expect(preview()).toBeNull();
+        await acknowledge();
+        expect(confirmButton().disabled).toBe(true);
+        const blockedRevision = workspace.state.draft!.revision;
+        workspace.edit(originalJson, "Changed recipient review label");
+        await settle();
+        expect(workspace.state.draft!.revision).toBeGreaterThan(blockedRevision);
+        await acknowledge();
+        expect(confirmButton().disabled).toBe(true);
+        expect(preview()).toBeNull();
+        confirmButton().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await settle();
+        await workspace.confirm(firstApproval);
+        expect(workspace.state.draft!.approval).toBeUndefined();
         expect(calls.deliver).not.toHaveBeenCalled();
+        await changeExtra("Recovered extra");
+        expect(extraField().value).toBe("Recovered extra");
+        expect(visibleText()).not.toContain("The pending field edit cannot be reviewed or sent");
+        expect(cardText()).toContain("Recovered extra");
+        await acknowledge();
+        expect(confirmButton().disabled).toBe(false);
+        await approveAndSend();
+        expect(calls.deliver).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({ payload: { value: 42, extra: "Recovered extra" } }),
+            expect.any(AbortSignal),
+        );
+        expect(calls.extract).toHaveBeenCalledOnce();
+    });
+
+    it("corrects an oversized pending field through the original field control", async () => {
+        const original = workspace.state.editorJson;
+        await changeExtra("x".repeat(65536));
+        await acknowledge();
+        expect(confirmButton().disabled).toBe(true);
+        expect(workspace.state.editorJson).toBe(original);
+        confirmButton().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await settle();
+        expect(calls.deliver).not.toHaveBeenCalled();
+        await changeExtra("Also sent");
+        expect(extraField().value).toBe("Also sent");
+        expect(workspace.state.editorJson).toBe(original);
+        expect(confirmation().checked).toBe(false);
+        await approveAndSend();
+        expect(calls.deliver).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({
+                payload: { value: 42, extra: "Also sent" },
+            }),
+            expect.any(AbortSignal),
+        );
     });
 
     it("preserves an oversized pending edit across Close and reopen without approving old values", async () => {
-        button("Review full request").click();
+        seedApproval();
         await settle();
         const firstApproval = workspace.state.draft!.approval!.approvalId;
         const oversized = "x".repeat(65536);
         await changeExtra(oversized);
-        button("Close").click();
+        await closeCard();
         await settle();
         expect(workspace.state.open).toBe(false);
         expect(target.querySelector<HTMLElement>(".card-surface")!.hidden).toBe(true);
@@ -1951,7 +2171,8 @@ describe("local app card modal and authoritative review", () => {
         await settle();
         expect(target.querySelector<HTMLElement>(".card-surface")!.hidden).toBe(false);
         expect(extraField().value).toBe(oversized);
-        expect(button("Review full request").disabled).toBe(true);
+        await acknowledge();
+        expect(confirmButton().disabled).toBe(true);
         expect(preview()).toBeNull();
         await changeExtra("Recovered after reopening");
         await approveAndSend();
@@ -1965,12 +2186,13 @@ describe("local app card modal and authoritative review", () => {
     it.each(["draft", "account"] as const)(
         "does not retain blocked edits or approvals after replacing the %s",
         async (replacement) => {
-            button("Review full request").click();
+            seedApproval();
             await settle();
             const firstApproval = workspace.state.draft!.approval!.approvalId;
             const firstDraft = workspace.state.draft!.id;
             await changeExtra("x".repeat(65536));
-            expect(button("Review full request").disabled).toBe(true);
+            await acknowledge();
+            expect(confirmButton().disabled).toBe(true);
             if (replacement === "account") {
                 (currentUserIdStore as unknown as Writable<string>).set(
                     "another-synthetic-account",
@@ -1996,7 +2218,8 @@ describe("local app card modal and authoritative review", () => {
             expect(workspace.state.draft!.approval).toBeUndefined();
             expect(extraField().value).toBe("Fresh draft");
             expect(numericFields()[0].disabled).toBe(false);
-            expect(button("Review full request").disabled).toBe(false);
+            await acknowledge();
+            expect(confirmButton().disabled).toBe(false);
             expect(visibleText()).not.toContain(
                 "The pending field edit cannot be reviewed or sent",
             );

@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { LocalAppAction } from "./localAppCatalog";
 import type { LocalDraftSchema } from "./localAppDrafts";
-import { validateLocalAppView as validate } from "./localAppView";
+import {
+    resolveLocalAppViewPalette as palette,
+    validateLocalAppView as validate,
+} from "./localAppView";
+import type { LocalAppViewPalette } from "./localAppView";
 
 const single = { kind: "single" } as const;
 const row: LocalDraftSchema = {
@@ -20,6 +24,117 @@ const row: LocalDraftSchema = {
 };
 const field = (name: string) => ({ kind: "field", field: name });
 const tree = (nodes: unknown[] = [field("quantity")]) => ({ version: 1, nodes });
+
+describe("host-safe canonical field paint", () => {
+    const readableLight = {
+        background: "#eef3f1",
+        surface: "#ffffff",
+        field: "#f3f7f5",
+        text: "#0f1a17",
+        muted: "#5a6b64",
+        border: "#d3ded9",
+        accent: "#0f9c7c",
+    };
+    const readableDark = {
+        background: "#0f1216",
+        surface: "#181c22",
+        field: "#12161b",
+        text: "#eaf0f0",
+        muted: "#8a95a1",
+        border: "#262c34",
+        accent: "#5fe3b3",
+    };
+
+    it.each(["light", "dark"] as const)(
+        "preserves readable original %s paint without mutation",
+        (mode) => {
+            const input = mode === "light" ? readableLight : readableDark;
+            const before = JSON.stringify(input);
+            expect(palette(input, mode)).toEqual(input);
+            expect(Object.isFrozen(palette(input, mode))).toBe(true);
+            expect(JSON.stringify(input)).toBe(before);
+        },
+    );
+
+    it.each(["background", "surface", "field"] as const)(
+        "rejects unreadable text on the %s role",
+        (role) => {
+            expect(palette({ ...readableLight, [role]: readableLight.text }, "light")).toEqual(
+                palette(undefined, "light"),
+            );
+            expect(palette({ ...readableDark, [role]: readableDark.text }, "dark")).toEqual(
+                palette(undefined, "dark"),
+            );
+        },
+    );
+
+    it.each(["background", "surface", "field"] as const)(
+        "rejects unreadable canonical labels on the %s role",
+        (role) => {
+            expect(palette({ ...readableLight, muted: readableLight[role] }, "light")).toEqual(
+                palette(undefined, "light"),
+            );
+            expect(palette({ ...readableDark, muted: readableDark[role] }, "dark")).toEqual(
+                palette(undefined, "dark"),
+            );
+        },
+    );
+
+    it("uses the strict 4.5:1 threshold, not rounded contrast", () => {
+        expect(palette({ text: "#777777" }, "light")).toEqual(palette(undefined, "light"));
+        expect(palette({ text: "#767676" }, "light").text).toBe("#767676");
+    });
+
+    it.each(["light", "dark"] as const)(
+        "resolves partial %s palettes to every opaque host paint role",
+        (mode) => {
+            const defaults = palette(undefined, mode);
+            expect(Object.keys(defaults).sort()).toEqual([
+                "accent",
+                "background",
+                "border",
+                "field",
+                "muted",
+                "surface",
+                "text",
+            ]);
+            expect(Object.values(defaults).every((value) => /^#[a-f0-9]{6}$/.test(value))).toBe(
+                true,
+            );
+            expect(palette({ text: mode === "light" ? "#000000" : "#FFFFFF" }, mode)).toEqual({
+                ...defaults,
+                text: mode === "light" ? "#000000" : "#FFFFFF",
+            });
+            expect(palette({ text: mode === "light" ? "#ffffff" : "#000000" }, mode)).toEqual(
+                defaults,
+            );
+        },
+    );
+
+    it.each([
+        "transparent",
+        "#00000000",
+        "red",
+        "var(--hidden)",
+        "url(https://invalid.example)",
+        undefined,
+    ])("does not emit invalid direct-call paint %#", (text) => {
+        expect(palette({ text } as LocalAppViewPalette, "light")).toEqual(
+            palette(undefined, "light"),
+        );
+    });
+
+    it("does not convert contrast safety into approval or field coverage authority", () => {
+        const result = validate(
+            { ...tree(), theme: { light: { text: "#ffffff", field: "#ffffff" } } },
+            row,
+            single,
+        );
+        expect(result.view.theme?.light?.text).toBe("#ffffff");
+        expect(result.requiresCompleteHostReview).toBe(true);
+        expect(palette(result.view.theme?.light, "light").text).toBe("#111111");
+    });
+});
 
 describe("app-owned inert view contract", () => {
     it("preserves layout hints and canonical field bindings, not app-supplied values", () => {

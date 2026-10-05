@@ -159,7 +159,7 @@ afterEach(async () => {
 
 describe("main AI Apps directory using the existing PR card and detail components", () => {
     it.each([false, true])(
-        "reopens disconnected legacy saved cards with fresh review and no processing (mobile=%s)",
+        "keeps saved cards out of the app-directory toolbar without opening or discarding them (mobile=%s)",
         (mobile) => {
             update({
                 cards: [
@@ -169,52 +169,39 @@ describe("main AI Apps directory using the existing PR card and detail component
                 cardSources: {},
             });
             const target = render(mobile, { connectedOnly: true });
-            button(target, "Saved cards (1)").click();
-            expect(calls.invalidateReview).toHaveBeenCalledOnce();
-            expect(calls.selectCard).toHaveBeenCalledExactlyOnceWith("legacy-no-source");
-            expect(calls.open).toHaveBeenCalledOnce();
-            expect(calls.invalidateReview.mock.invocationCallOrder[0]).toBeLessThan(
-                calls.open.mock.invocationCallOrder[0],
-            );
+            expect(target.textContent).not.toContain("Saved cards");
+            expect(get(state).cards.map((card) => card.id)).toEqual(["legacy-no-source"]);
+            expect(calls.invalidateReview).not.toHaveBeenCalled();
+            expect(calls.selectCard).not.toHaveBeenCalled();
+            expect(calls.open).not.toHaveBeenCalled();
             expect(calls.propose).not.toHaveBeenCalled();
             expect(calls.deliver).not.toHaveBeenCalled();
             expect(calls.discard).not.toHaveBeenCalled();
             expect(calls.connectApp).not.toHaveBeenCalled();
         },
     );
-    it("does not open an empty card host if selection is rejected", () => {
-        update({ cards: [{ id: "retained" }] as unknown as PrivateAppWorkspaceState["cards"] });
-        calls.selectCard.mockReturnValueOnce(false);
-        const target = render();
-        button(target, "Saved cards (1)").click();
-        expect(calls.open).not.toHaveBeenCalled();
-        expect(calls.invalidateReview).not.toHaveBeenCalled();
-    });
-    it("preserves an active card and its pending editor instead of selecting another card", () => {
-        const draft = { id: "active" } as PrivateAppWorkspaceState["draft"];
-        update({
-            draft,
-            cards: [draft] as PrivateAppWorkspaceState["cards"],
-            editorJson: "PENDING EDIT",
-        });
-        const target = render();
-        button(target, "Saved cards (1)").click();
-        expect(calls.selectCard).not.toHaveBeenCalled();
-        expect(get(state).editorJson).toBe("PENDING EDIT");
-        expect(calls.invalidateReview).toHaveBeenCalledOnce();
-        expect(calls.open).toHaveBeenCalledOnce();
-    });
-    it.each(["busy", "draftLoading"] as const)("does not reopen a saved card while %s", (field) => {
-        update({
-            [field]: true,
-            cards: [{ id: "retained" }] as unknown as PrivateAppWorkspaceState["cards"],
-        });
-        const target = render();
-        expect(button(target, "Saved cards (1)").disabled).toBe(true);
-        button(target, "Saved cards (1)").click();
-        expect(calls.open).not.toHaveBeenCalled();
-        expect(calls.selectCard).not.toHaveBeenCalled();
-    });
+    it.each([false, true])(
+        "preserves the active card and pending editor without a saved-card manager (mobile=%s)",
+        (mobile) => {
+            const draft = { id: "active" } as PrivateAppWorkspaceState["draft"];
+            update({
+                draft,
+                cards: [draft] as PrivateAppWorkspaceState["cards"],
+                editorJson: "PENDING EDIT",
+            });
+            const target = render(mobile);
+            for (const flags of [{}, { busy: true }, { busy: false, draftLoading: true }]) {
+                update(flags);
+                expect(target.textContent).not.toContain("Saved cards");
+                expect(get(state).draft).toBe(draft);
+                expect(get(state).editorJson).toBe("PENDING EDIT");
+                expect(calls.open).not.toHaveBeenCalled();
+                expect(calls.selectCard).not.toHaveBeenCalled();
+                expect(calls.invalidateReview).not.toHaveBeenCalled();
+                expect(calls.discard).not.toHaveBeenCalled();
+            }
+        },
+    );
     it.each([false, true])(
         "browses/connects/disconnects using local adapters only (mobile=%s)",
         async (mobile) => {

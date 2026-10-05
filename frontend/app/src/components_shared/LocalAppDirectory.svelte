@@ -78,15 +78,6 @@
         selectedId = id;
         connectionMessage = "";
     }
-    function openSavedCards() {
-        if (busy) return;
-        if (!workspaceView.draft) {
-            const card = workspaceView.cards[0];
-            if (!card || !workspace.selectCard(card.id)) return;
-        }
-        workspace.invalidateReview();
-        workspace.open();
-    }
     function cancelConnection() {
         if (!connecting) return;
         ++operation;
@@ -137,11 +128,6 @@
 <div class="app-directory">
     <div class="directory-actions">
         {#if mobile}
-            {#if workspaceView.cards.length > 0}
-                <CommonButton size={"small_text"} disabled={busy} onClick={openSavedCards}
-                    >Saved cards ({workspaceView.cards.length})</CommonButton
-                >
-            {/if}
             <CommonButton
                 size={"small_text"}
                 disabled={busy}
@@ -154,11 +140,6 @@
                     >Discover apps</CommonButton
                 >{/if}
         {:else}
-            {#if workspaceView.cards.length > 0}
-                <Button small hollow disabled={busy} onClick={openSavedCards}
-                    >Saved cards ({workspaceView.cards.length})</Button
-                >
-            {/if}
             <Button
                 small
                 hollow
