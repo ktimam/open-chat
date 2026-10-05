@@ -45,10 +45,23 @@ to load an untrusted source. Importing a local JSON file does not need a remote 
 | `generation`                             | `maxOutputTokens`, `doSample`, `temperature`, `topP`, `topK`, `repetitionPenalty`.                                                                                               |
 | `artifactBytes`                          | Informational; the loader recomputes totals from the artifact list.                                                                                                              |
 
-Generation ranges: output 1–96 tokens, temperature 0.01–2, top-p 0.01–1,
-top-k integer 1–100, repetition penalty 0.5–2. The effective output cap is the minimum of
-the request, user setting and catalog limit. The catalog cannot override a smaller
-application request or the runtime safety ceiling.
+Generation ranges: output 1–96 tokens for `qwen3-vl-2b-staged-v1` and 1–192 for
+`gemma4-e2b-row-v1`; temperature 0.01–2, top-p 0.01–1, top-k integer 1–100,
+repetition penalty 0.5–2. The global user output ceiling defaults to 192; it is not
+an unconditional generation budget. The effective cap is the minimum of an explicit
+request (when supplied), the user ceiling, the selected catalog limit and the adapter's
+build-owned safety limit. A catalog cannot raise Qwen above 96 or override a smaller request
+or user setting. Unknown adapters fail closed.
+
+The October 5 bundled catalog raises only Gemma's configured cap to 192. Existing valid
+saved user ceilings of 1–96 remain unchanged, including an explicit 96. Existing saved
+catalogs also remain unchanged: a saved Gemma catalog capped at 96 stays at 96 until the
+user explicitly imports or refreshes it. To use the higher Gemma budget, both the user
+ceiling and the selected catalog entry must permit it. Increasing only one does not
+override the other. Model selection is not changed automatically, and the unchanged
+artifact identities reuse verified downloaded weights rather than requiring new weights.
+Older clients need an application update before they can accept Gemma's larger adapter
+limit; a catalog alone cannot expand an old build's safety envelope.
 
 Derived artifacts can retain the existing bounded `source` declaration: immutable repository,
 revision, file, exact byte range, source digest and `bf16-le-to-f32-le` transform.
@@ -97,6 +110,28 @@ model ID may require application configuration for that app's prompt template; t
 does not inject or rewrite application prompts.
 
 ## Verification scope
+
+### October 5 output-budget diagnostic
+
+A paired, cache-only desktop WebGPU diagnostic used the same active Gemma prompt,
+weights, synthetic two-entry image and sampling settings at 96 and 192 output tokens.
+The 96-token run stopped at its cap without EOS; the 192-token run completed both entries
+with EOS after 135 generated tokens. Their first 96 generated token IDs were identical,
+isolating the output cap as the cause of that fixture's truncation. The completed output
+passed the unchanged source oracle and strict parser; partial output was not accepted.
+
+This supports the bounded Gemma budget change, not phone memory safety or complete
+application-flow qualification. Rebuilt web/APK artifacts, normal UI settings/catalog
+refresh, repeated device inference and end-to-end delivery still require qualification.
+Qwen's 96-token limit, image/context guards, prompts, weights and sampling are unchanged;
+the larger Gemma budget is not evidence that Qwen's separate missing-entry issue is fixed.
+
+The implementation's focused suites passed 306 tests; the full frontend regression run
+passed 6,109 tests with no failures or pending tests. Svelte checking reported zero
+errors (573 existing warnings). The retained full report is
+`F:/Temp/OpenChat-IOU/output-budget-fix-20261005/frontend-full-tests.json`, SHA-256
+`092f9aa53be702bc48700008852b2dffd8a3743f118c71aef9da478b090589c6`.
+These are source-level checks, not updated web/APK or end-to-end model acceptance.
 
 ### Current selection — September 15
 

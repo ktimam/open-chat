@@ -3,7 +3,9 @@ import { webcrypto } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { get } from "svelte/store";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import catalogDefaults from "../../public/model-catalog.json";
+import { applyWebGpuModelCatalog } from "./webGpuModelCatalog";
 import * as gpuProtocol from "./transformersWebGpuProtocol";
 import {
     resetTransformersWebGpuMaxOutputTokens,
@@ -735,6 +737,7 @@ describe("pinned all-WebGPU model integration", () => {
         await clearWebModel();
         localStorage.clear();
         resetTransformersWebGpuMaxOutputTokens();
+        applyWebGpuModelCatalog(catalogDefaults, false);
         transformers.enabled = true;
         transformers.downloaded = false;
         transformers.downloadedModelIds.clear();
@@ -760,6 +763,59 @@ describe("pinned all-WebGPU model integration", () => {
         transformers.requests = [];
         resetWllama();
     });
+
+    afterEach(() => {
+        applyWebGpuModelCatalog(catalogDefaults, false);
+        resetTransformersWebGpuMaxOutputTokens();
+    });
+
+    it.each([
+        { modelId: "gemma-4-e2b-it-q4", modelCap: 192, user: 192, request: 256, expected: 192 },
+        {
+            modelId: "gemma-4-e2b-it-q4",
+            modelCap: 192,
+            user: 192,
+            request: undefined,
+            expected: 192,
+        },
+        { modelId: "gemma-4-e2b-it-q4", modelCap: 192, user: 96, request: 256, expected: 96 },
+        { modelId: "qwen3-vl-2b-instruct-q4", modelCap: 96, user: 192, request: 256, expected: 96 },
+        {
+            modelId: "qwen3-vl-2b-instruct-q4",
+            modelCap: 96,
+            user: 192,
+            request: undefined,
+            expected: 96,
+        },
+        { modelId: "gemma-4-e2b-it-q4", modelCap: 64, user: 192, request: 256, expected: 64 },
+        { modelId: "gemma-4-e2b-it-q4", modelCap: 192, user: 192, request: 24, expected: 24 },
+    ])(
+        "dispatches $modelId with request/user/catalog intersection $expected",
+        async ({ modelId, modelCap, user, request, expected }) => {
+            const catalog = structuredClone(catalogDefaults);
+            catalog.models.find((model) => model.id === modelId)!.generation.maxOutputTokens =
+                modelCap;
+            applyWebGpuModelCatalog(catalog, false);
+            updateTransformersWebGpuMaxOutputTokens(user);
+            await useWebModelFromUrl({ ...entry, id: modelId });
+            const image = new Uint8Array([21, 22, 23]);
+            await webInfer({ prompt: "Application-owned image prompt", image, maxTokens: request });
+            expect(transformers.requests).toEqual([
+                { prompt: "Application-owned image prompt", image, modelId, maxTokens: expected },
+            ]);
+            expect(wl.loadCount).toBe(0);
+        },
+    );
+
+    it.each([0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])(
+        "preserves invalid request %s for the WebGPU engine to reject",
+        async (maxTokens) => {
+            await useWebModelFromUrl(entry);
+            await webInfer({ prompt: "Invalid budget", maxTokens });
+            expect(transformers.requests).toHaveLength(1);
+            expect(transformers.requests[0].maxTokens).toBe(maxTokens);
+        },
+    );
 
     it("downloads and verifies the ONNX manifest during model selection without touching Wllama", async () => {
         await expect(useWebModelFromUrl(entry)).resolves.toBeUndefined();

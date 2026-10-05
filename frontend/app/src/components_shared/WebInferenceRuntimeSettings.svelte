@@ -9,6 +9,7 @@
     import { TRANSFORMERS_WEBGPU_MAX_RAW_IMAGE_PATCHES } from "../utils/transformersWebGpuImageLayout";
     import {
         resetTransformersWebGpuMaxOutputTokens,
+        resolveTransformersWebGpuMaxOutputTokens,
         TRANSFORMERS_WEBGPU_MAX_OUTPUT_TOKEN_LIMITS,
         TRANSFORMERS_WEBGPU_MAX_OUTPUT_TOKENS_DEFAULT,
         transformersWebGpuMaxOutputTokens,
@@ -33,6 +34,15 @@
         void $webGpuModelCatalog;
         return transformersWebGpuModelSpec(modelId);
     });
+    let effectiveOutputCeiling = $derived(
+        modelSpec === undefined
+            ? undefined
+            : resolveTransformersWebGpuMaxOutputTokens(
+                  undefined,
+                  $transformersWebGpuMaxOutputTokens,
+                  modelSpec.generation.maxOutputTokens,
+              ),
+    );
     let audioInstalled = $state(false);
     let audioChecking = $state(false);
     let audioBusy = $state(false);
@@ -158,12 +168,12 @@
     function saveMaxOutputTokens(event: Event) {
         const input = event.currentTarget as HTMLInputElement;
         updateTransformersWebGpuMaxOutputTokens(input.valueAsNumber);
-        savedMessage = "Max output token cap saved. The next local model run uses it.";
+        savedMessage = "Global output token ceiling saved. The next local model run uses it.";
     }
 
     function reset() {
         resetTransformersWebGpuMaxOutputTokens();
-        savedMessage = "The 96-token output cap was restored.";
+        savedMessage = `The ${TRANSFORMERS_WEBGPU_MAX_OUTPUT_TOKENS_DEFAULT}-token global output ceiling was restored.`;
     }
 </script>
 
@@ -227,6 +237,16 @@
                 <dt>Lifecycle</dt>
                 <dd><code>one job per worker · release after result</code></dd>
             </div>
+            {#if modelSpec !== undefined}
+                <div>
+                    <dt>Selected model catalog limit</dt>
+                    <dd>{modelSpec.generation.maxOutputTokens} tokens</dd>
+                </div>
+                <div>
+                    <dt>Effective selected-model ceiling</dt>
+                    <dd>{effectiveOutputCeiling} tokens</dd>
+                </div>
+            {/if}
         </dl>
 
         {#if modelSpec?.optionalAudio !== undefined}
@@ -262,7 +282,7 @@
         {/if}
 
         <label>
-            <span>Maximum output tokens</span>
+            <span>Global output token ceiling</span>
             <input
                 type="number"
                 min={TRANSFORMERS_WEBGPU_MAX_OUTPUT_TOKEN_LIMITS.min}
@@ -274,9 +294,10 @@
             />
         </label>
         <p class="hint">
-            Range {TRANSFORMERS_WEBGPU_MAX_OUTPUT_TOKEN_LIMITS.min}–{TRANSFORMERS_WEBGPU_MAX_OUTPUT_TOKEN_LIMITS.max};
-            default {TRANSFORMERS_WEBGPU_MAX_OUTPUT_TOKENS_DEFAULT}. Temperature, top-p, and top-k
-            are inactive because sampling is disabled.
+            Applies to all WebGPU models. Range {TRANSFORMERS_WEBGPU_MAX_OUTPUT_TOKEN_LIMITS.min}–{TRANSFORMERS_WEBGPU_MAX_OUTPUT_TOKEN_LIMITS.max};
+            default {TRANSFORMERS_WEBGPU_MAX_OUTPUT_TOKENS_DEFAULT}. The selected model's catalog
+            limit and any smaller request still apply. Temperature, top-p, and top-k are inactive
+            because sampling is disabled.
         </p>
         <button type="button" disabled={busy} onclick={reset}>Restore default</button>
         {#if savedMessage !== ""}

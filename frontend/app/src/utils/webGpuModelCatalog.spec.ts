@@ -56,12 +56,51 @@ describe("configurable all-WebGPU catalog", () => {
         );
         expect(parsed.models[0].optionalAudio).toBeUndefined();
         expect(parsed.models[1].optionalAudio?.artifactBytes).toBe(171518558);
-        expect(
-            parsed.models.every(
-                (m) => !m.generation.doSample && m.generation.maxOutputTokens === 96,
-            ),
-        ).toBe(true);
+        expect(parsed.models.every((m) => !m.generation.doSample)).toBe(true);
+        expect(parsed.models.map((m) => m.generation.maxOutputTokens)).toEqual([96, 192]);
         expect(Object.isFrozen(parsed.models[0].generation)).toBe(true);
+    });
+    it("supports a configured compatible Gemma at 192 without expanding smaller requests", () => {
+        const c = candidate();
+        c.models = [c.models[1]];
+        Object.assign(c.models[0], {
+            id: "custom-gemma-output",
+            repository: "example/custom-gemma",
+            revision: "3".repeat(40),
+            cacheKey: "openchat-model-custom-gemma-output",
+        });
+        const spec = parseWebGpuModelCatalog(c).models[0];
+        expect(webGpuGenerationOptions(spec).max_new_tokens).toBe(192);
+        expect(webGpuGenerationOptions(spec, 192).max_new_tokens).toBe(192);
+        expect(webGpuGenerationOptions(spec, 1000).max_new_tokens).toBe(192);
+        expect(webGpuGenerationOptions(spec, 135).max_new_tokens).toBe(135);
+        expect(webGpuGenerationOptions(spec, 96).max_new_tokens).toBe(96);
+        expect(webGpuGenerationOptions(spec, 1).max_new_tokens).toBe(1);
+        c.models[0].generation.maxOutputTokens = 72;
+        expect(
+            webGpuGenerationOptions(parseWebGpuModelCatalog(c).models[0], 192).max_new_tokens,
+        ).toBe(72);
+    });
+    it.each([
+        [0, 97],
+        [1, 193],
+    ])("rejects adapter %i output above its own ceiling (%i)", (index, tokens) => {
+        const c = candidate();
+        c.models[index].id = `custom-limit-${index}`;
+        c.models[index].cacheKey = `openchat-model-custom-limit-${index}`;
+        c.models[index].generation.maxOutputTokens = tokens;
+        expect(() => parseWebGpuModelCatalog(c)).toThrow("number outside supported bounds");
+    });
+    it("enforces adapter ceilings again when resolving generation options", () => {
+        for (const spec of parseWebGpuModelCatalog(defaults).models) {
+            const altered = {
+                ...spec,
+                generation: { ...spec.generation, maxOutputTokens: 1000 },
+            };
+            expect(webGpuGenerationOptions(altered, 1000).max_new_tokens).toBe(
+                spec.adapter === "qwen3-vl-2b-staged-v1" ? 96 : 192,
+            );
+        }
     });
     it("adds a compatible model, changes generation config and atomically removes built-ins", () => {
         const c = candidate();
@@ -131,6 +170,41 @@ describe("configurable all-WebGPU catalog", () => {
         const restored = await import("./webGpuModelCatalog");
         expect(restored.currentWebGpuModelCatalog().version).toBe(defaults.version);
         expect(restored.currentWebGpuModelCatalog().models).toHaveLength(2);
+    });
+    it("retains a saved Gemma 96 catalog until explicit refresh without changing cache identities", async () => {
+        const old = candidate();
+        old.version = "saved-gemma-96";
+        old.models[1].generation.maxOutputTokens = 96;
+        applyWebGpuModelCatalog(old);
+        const saved = localStorage.getItem("openchat_webgpu_catalog_v1");
+        const fetcher = vi.fn();
+        const remove = vi.fn();
+        vi.stubGlobal("fetch", fetcher);
+        vi.stubGlobal("caches", { delete: remove });
+        vi.resetModules();
+        const restored = await import("./webGpuModelCatalog");
+        const gemmaId = defaults.models[1].id;
+        expect(restored.currentWebGpuModelCatalog().version).toBe("saved-gemma-96");
+        expect(restored.currentWebGpuModelSpec(gemmaId)?.generation.maxOutputTokens).toBe(96);
+        expect(localStorage.getItem("openchat_webgpu_catalog_v1")).toBe(saved);
+        expect(fetcher).not.toHaveBeenCalled();
+
+        fetcher.mockResolvedValue(new Response(JSON.stringify(defaults)));
+        await restored.refreshWebGpuModelCatalog("https://catalog.example.test/models.json");
+        expect(restored.currentWebGpuModelSpec(gemmaId)?.generation.maxOutputTokens).toBe(192);
+        const snapshot = JSON.parse(localStorage.getItem("openchat_webgpu_catalog_v1")!);
+        const oldSnapshot = JSON.parse(saved!);
+        expect(snapshot.history.map((m: { cacheKey: string }) => m.cacheKey)).toEqual(
+            oldSnapshot.history.map((m: { cacheKey: string }) => m.cacheKey),
+        );
+        for (const model of snapshot.catalog.models) {
+            const previous = old.models.find((m) => m.id === model.id)!;
+            expect(model.cacheKey).toBe(previous.cacheKey);
+            expect(model.revision).toBe(previous.revision);
+            expect(model.artifacts).toEqual(previous.artifacts);
+            expect(model.optionalAudio).toEqual(previous.optionalAudio);
+        }
+        expect(remove).not.toHaveBeenCalled();
     });
     it.each([
         ["adapter", "other-runtime"],

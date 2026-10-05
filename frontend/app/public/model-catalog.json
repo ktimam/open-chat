@@ -1,6 +1,6 @@
 {
     "schemaVersion": 1,
-    "version": "2026-09-default",
+    "version": "2026-10-gemma-output-budget",
     "models": [
         {
             "id": "qwen3-vl-2b-instruct-q4",
@@ -271,7 +271,7 @@
                 ]
             },
             "generation": {
-                "maxOutputTokens": 96,
+                "maxOutputTokens": 192,
                 "doSample": false,
                 "temperature": 1,
                 "topP": 1,

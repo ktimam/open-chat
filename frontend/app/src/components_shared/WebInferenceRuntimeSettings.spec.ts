@@ -2,6 +2,12 @@ import { flushSync, tick } from "svelte";
 import { createClassComponent } from "svelte/legacy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WebInferenceRuntimeSettings from "./WebInferenceRuntimeSettings.svelte";
+import catalogDefaults from "../../public/model-catalog.json";
+import { applyWebGpuModelCatalog } from "../utils/webGpuModelCatalog";
+import {
+    resetTransformersWebGpuMaxOutputTokens,
+    updateTransformersWebGpuMaxOutputTokens,
+} from "../stores/transformersWebGpuSettings";
 import { TRANSFORMERS_WEBGPU_MAX_RAW_IMAGE_PATCHES } from "../utils/transformersWebGpuImageLayout";
 import {
     deleteTransformersWebGpuAudio,
@@ -22,6 +28,17 @@ const download = vi.mocked(preloadTransformersWebGpuAudio);
 const verify = vi.mocked(transformersWebGpuAudioDownloaded);
 const remove = vi.mocked(deleteTransformersWebGpuAudio);
 const cleanup: (() => void)[] = [];
+
+function catalogWithGemmaLimit(limit = 192) {
+    const catalog = structuredClone(catalogDefaults);
+    catalog.models.find((model) => model.id === GEMMA)!.generation.maxOutputTokens = limit;
+    return catalog;
+}
+
+function settingText(target: HTMLElement, label: string) {
+    return Array.from(target.querySelectorAll("dt")).find((item) => item.textContent === label)
+        ?.nextElementSibling?.textContent;
+}
 
 function deferred<T>() {
     let resolve!: (value: T) => void;
@@ -74,6 +91,8 @@ function render(context: "desktop" | "phone" = "phone") {
 }
 
 beforeEach(() => {
+    resetTransformersWebGpuMaxOutputTokens();
+    applyWebGpuModelCatalog(catalogWithGemmaLimit(), false);
     download.mockReset().mockResolvedValue(undefined);
     verify.mockReset().mockResolvedValue(false);
     remove.mockReset().mockResolvedValue(undefined);
@@ -81,6 +100,61 @@ beforeEach(() => {
 
 afterEach(() => {
     cleanup.splice(0).forEach((destroy) => destroy());
+    applyWebGpuModelCatalog(catalogDefaults, false);
+    resetTransformersWebGpuMaxOutputTokens();
+});
+
+describe("global output ceiling and selected model budget", () => {
+    it.each(["desktop", "phone"] as const)(
+        "keeps global192 distinct from selected Gemma192 and Qwen96 in %s settings",
+        async (context) => {
+            const view = render(context);
+            await settle();
+            const input = view.target.querySelector<HTMLInputElement>('input[type="number"]')!;
+            expect(input.value).toBe("192");
+            expect(input.max).toBe("192");
+            expect(view.target.textContent).toContain("Global output token ceiling");
+            expect(settingText(view.target, "Selected model catalog limit")).toBe("192 tokens");
+            expect(settingText(view.target, "Effective selected-model ceiling")).toBe("192 tokens");
+            view.switchTo(QWEN);
+            await settle();
+            expect(input.value).toBe("192");
+            expect(settingText(view.target, "Selected model catalog limit")).toBe("96 tokens");
+            expect(settingText(view.target, "Effective selected-model ceiling")).toBe("96 tokens");
+        },
+    );
+
+    it("keeps an explicit96 ceiling until the user restores the new default", async () => {
+        updateTransformersWebGpuMaxOutputTokens(96);
+        const view = render();
+        await settle();
+        expect(settingText(view.target, "Selected model catalog limit")).toBe("192 tokens");
+        expect(settingText(view.target, "Effective selected-model ceiling")).toBe("96 tokens");
+        view.button("Restore default").click();
+        await settle();
+        expect(view.target.querySelector<HTMLInputElement>('input[type="number"]')?.value).toBe(
+            "192",
+        );
+        expect(settingText(view.target, "Effective selected-model ceiling")).toBe("192 tokens");
+        expect(view.target.textContent).toContain("192-token global output ceiling was restored");
+    });
+
+    it("recomputes after catalog changes and user edits without replacing either ceiling", async () => {
+        const view = render();
+        await settle();
+        applyWebGpuModelCatalog(catalogWithGemmaLimit(72), false);
+        await settle();
+        const input = view.target.querySelector<HTMLInputElement>('input[type="number"]')!;
+        expect(input.value).toBe("192");
+        expect(settingText(view.target, "Selected model catalog limit")).toBe("72 tokens");
+        expect(settingText(view.target, "Effective selected-model ceiling")).toBe("72 tokens");
+        input.value = "40";
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+        await settle();
+        expect(settingText(view.target, "Selected model catalog limit")).toBe("72 tokens");
+        expect(settingText(view.target, "Effective selected-model ceiling")).toBe("40 tokens");
+        expect(view.target.textContent).toContain("Global output token ceiling saved");
+    });
 });
 
 describe("all-WebGPU image budget label", () => {

@@ -248,7 +248,10 @@ describe.each(["Qwen", "Gemma"] as const)("actual %s worker completion gate", (k
             ).resolves.toBe('{"completeLooking":true}');
             expect(run.model.generate).toHaveBeenCalledExactlyOnceWith({
                 ...run.inputs,
-                max_new_tokens: Math.min(maxTokens ?? 96, 96),
+                max_new_tokens: Math.min(
+                    maxTokens ?? (kind === "Gemma" ? 192 : 96),
+                    kind === "Gemma" ? 192 : 96,
+                ),
                 do_sample: false,
                 temperature: 1,
                 top_p: 1,
@@ -268,4 +271,35 @@ describe.each(["Qwen", "Gemma"] as const)("actual %s worker completion gate", (k
         expect(run.model.generate).not.toHaveBeenCalled();
         for (const value of Object.values(run.inputs)) expect(value.dispose).toHaveBeenCalledOnce();
     });
+});
+
+describe("Gemma's catalog output allowance in the actual worker", () => {
+    it("accepts a 135-token response only after its final EOS and disposes all tensors", async () => {
+        const run = harness("Gemma", [...Array<number>(134).fill(8), 3]);
+        await expect(
+            run.invoke({ requestId: "test", prompt: "input", maxTokens: 192 }),
+        ).resolves.toBe('{"completeLooking":true}');
+        expect(run.model.generate).toHaveBeenCalledWith(
+            expect.objectContaining({ max_new_tokens: 192 }),
+        );
+        expect(run.processor.batch_decode).toHaveBeenCalledOnce();
+        for (const value of [...Object.values(run.inputs), run.output])
+            expect(value.dispose).toHaveBeenCalledOnce();
+    });
+
+    it.each([96, 192])(
+        "still rejects unfinished output at a %s-token allowance",
+        async (maxTokens) => {
+            const run = harness("Gemma", Array<number>(maxTokens).fill(8));
+            await expect(
+                run.invoke({ requestId: "test", prompt: "input", maxTokens }),
+            ).rejects.toThrow("output token limit");
+            expect(run.model.generate).toHaveBeenCalledWith(
+                expect.objectContaining({ max_new_tokens: maxTokens }),
+            );
+            expect(run.processor.batch_decode).not.toHaveBeenCalled();
+            for (const value of [...Object.values(run.inputs), run.output])
+                expect(value.dispose).toHaveBeenCalledOnce();
+        },
+    );
 });

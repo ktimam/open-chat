@@ -7,6 +7,10 @@ import {
 } from "../../transformersWebGpuFeatureFlag.mjs";
 import { readTransformersWebGpuDevRuntimeVersion } from "./transformersWebGpuDevRuntimeVersion";
 import {
+    TRANSFORMERS_WEBGPU_MAX_OUTPUT_TOKENS,
+    transformersWebGpuAdapterOutputLimit,
+} from "./transformersWebGpuOutputLimits";
+import {
     transformersWebGpuArtifactSourceHeaders,
     transformTransformersWebGpuArtifactResponse,
 } from "./transformersWebGpuArtifactTransform";
@@ -66,7 +70,6 @@ type SpikeEligibility = {
 const DEFAULT_JOB_TIMEOUT_MS = 15 * 60_000;
 const DEFAULT_WORKER_SHUTDOWN_GRACE_MS = 30_000;
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
-const MAX_OUTPUT_TOKENS = 96;
 const CACHE_DIGEST_HEADER = "x-content-sha256";
 const RUNTIME_VERSION_HEADER = "x-openchat-runtime-version";
 const RUNTIME_ASSET_HEADER = "x-openchat-runtime-asset";
@@ -1500,7 +1503,7 @@ export function createTransformersWebGpuEngine(
             (request.maxTokens !== undefined &&
                 (!Number.isInteger(request.maxTokens) ||
                     request.maxTokens < 1 ||
-                    request.maxTokens > MAX_OUTPUT_TOKENS))
+                    request.maxTokens > TRANSFORMERS_WEBGPU_MAX_OUTPUT_TOKENS))
         ) {
             return {
                 kind: "error",
@@ -1509,6 +1512,15 @@ export function createTransformersWebGpuEngine(
         }
 
         const spec = requiredSpec(explicitModelId ?? request.modelId ?? PHONE_QWEN3_VL_2B_MODEL_ID);
+        if (
+            request.maxTokens !== undefined &&
+            request.maxTokens > transformersWebGpuAdapterOutputLimit(spec.adapter)
+        ) {
+            return {
+                kind: "error",
+                error: "all-WebGPU browser request exceeds safety limits",
+            };
+        }
         if (!spec.enabled)
             return {
                 kind: "unavailable",

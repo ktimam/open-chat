@@ -1367,16 +1367,20 @@ export async function webInfer(
     if (request.modelId !== undefined && request.modelId !== selected) {
         return { kind: "error", error: "the selected browser model changed before inference" };
     }
-    if (
-        transformersWebGpuModelSpec(selected) !== undefined &&
-        !transformersWebGpuSelectionCanHandle(selected)
-    ) {
+    const selectedSpec = transformersWebGpuModelSpec(selected);
+    if (selectedSpec !== undefined && !transformersWebGpuSelectionCanHandle(selected)) {
         return {
             kind: "unavailable",
             reason: "The selected all-WebGPU runtime is not enabled in this browser.",
         };
     }
     if (transformersWebGpuSelectionCanHandle(selected)) {
+        if (selectedSpec === undefined) {
+            return {
+                kind: "unavailable",
+                reason: "The selected all-WebGPU model is not in the configured catalog.",
+            };
+        }
         if (!transformersWebGpuSpikeCanHandle(request, state.id)) {
             return {
                 kind: "unavailable",
@@ -1389,7 +1393,11 @@ export async function webInfer(
         const result = await transformersWebGpuInfer({
             ...request,
             modelId: selected,
-            maxTokens: resolveTransformersWebGpuMaxOutputTokens(request.maxTokens),
+            maxTokens: resolveTransformersWebGpuMaxOutputTokens(
+                request.maxTokens,
+                undefined,
+                selectedSpec.generation.maxOutputTokens,
+            ),
         });
         return attachImageInferenceEvidence(request, selected, result);
     }

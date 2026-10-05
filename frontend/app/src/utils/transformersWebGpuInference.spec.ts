@@ -1842,6 +1842,112 @@ describe("Transformers.js Qwen WebGPU spike", () => {
         expect(worker.terminate).toHaveBeenCalledOnce();
     });
 
+    it.each([
+        { modelId: PHONE_QWEN3_VL_2B_MODEL_ID, maxTokens: 96 },
+        { modelId: PHONE_GEMMA4_E2B_MODEL_ID, maxTokens: 192 },
+    ])(
+        "admits the selected adapter's output ceiling: $modelId/$maxTokens",
+        async ({ modelId, maxTokens }) => {
+            const worker = new FakeWorker();
+            const engine = createTransformersWebGpuEngine(() => worker, {
+                available: () => ({ available: true }),
+                timeoutMs: 10_000,
+            });
+            try {
+                const pending = engine.infer({ ...IMAGE_REQUEST, modelId, maxTokens });
+                await vi.waitFor(() => expect(worker.sent).toHaveLength(1));
+                const sent = worker.sent[0];
+                expect(sent).toMatchObject({ kind: "infer", modelId, maxTokens });
+                worker.respond({ kind: "result", requestId: sent.requestId, text: "complete" });
+                await expect(pending).resolves.toEqual({ kind: "ok", text: "complete" });
+                expect(worker.terminate).toHaveBeenCalledOnce();
+            } finally {
+                await engine.dispose();
+            }
+        },
+    );
+
+    it.each([
+        { modelId: PHONE_QWEN3_VL_2B_MODEL_ID, maxTokens: 97 },
+        { modelId: PHONE_QWEN3_VL_2B_MODEL_ID, maxTokens: 192 },
+        ...[193, 0, -1, 1.5, NaN, Infinity].map((maxTokens) => ({
+            modelId: PHONE_GEMMA4_E2B_MODEL_ID,
+            maxTokens,
+        })),
+    ])(
+        "rejects unsafe output budgets before creating a worker: $modelId/$maxTokens",
+        async ({ modelId, maxTokens }) => {
+            const factory = vi.fn(() => new FakeWorker());
+            const engine = createTransformersWebGpuEngine(factory, {
+                available: () => ({ available: true }),
+            });
+            try {
+                await expect(
+                    engine.infer({ ...IMAGE_REQUEST, modelId, maxTokens }),
+                ).resolves.toEqual({
+                    kind: "error",
+                    error: "all-WebGPU browser request exceeds safety limits",
+                });
+                expect(factory).not.toHaveBeenCalled();
+            } finally {
+                await engine.dispose();
+            }
+        },
+    );
+
+    it("uses the explicit selected model's limit, not a conflicting request model ID", async () => {
+        const factory = vi.fn(() => new FakeWorker());
+        const engine = createTransformersWebGpuEngine(factory, {
+            available: () => ({ available: true }),
+        });
+        try {
+            await expect(
+                engine.infer(
+                    {
+                        ...IMAGE_REQUEST,
+                        modelId: PHONE_GEMMA4_E2B_MODEL_ID,
+                        maxTokens: 192,
+                    },
+                    PHONE_QWEN3_VL_2B_MODEL_ID,
+                ),
+            ).resolves.toEqual({
+                kind: "error",
+                error: "all-WebGPU browser request exceeds safety limits",
+            });
+            expect(factory).not.toHaveBeenCalled();
+        } finally {
+            await engine.dispose();
+        }
+    });
+
+    it("enforces adapter limits for configured model IDs too", async () => {
+        const spec = gpuProtocol.transformersWebGpuModelSpec(PHONE_QWEN3_VL_2B_MODEL_ID)!;
+        const configured = { ...spec, id: "configured-qwen-output-test" };
+        const lookup = vi
+            .spyOn(gpuProtocol, "transformersWebGpuModelSpec")
+            .mockReturnValue(configured);
+        const factory = vi.fn(() => new FakeWorker());
+        const engine = createTransformersWebGpuEngine(factory, {
+            available: () => ({ available: true }),
+        });
+        try {
+            await expect(
+                engine.infer({
+                    ...IMAGE_REQUEST,
+                    modelId: configured.id,
+                    maxTokens: 192,
+                }),
+            ).resolves.toEqual({
+                kind: "error",
+                error: "all-WebGPU browser request exceeds safety limits",
+            });
+            expect(factory).not.toHaveBeenCalled();
+        } finally {
+            lookup.mockRestore();
+            await engine.dispose();
+        }
+    });
+
     it("sends text without caller pixels so the worker can author its neutral vision frame", async () => {
         const worker = new FakeWorker();
         const statuses: unknown[] = [];

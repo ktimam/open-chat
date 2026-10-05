@@ -1,4 +1,5 @@
 import defaults from "../../public/model-catalog.json";
+import { transformersWebGpuAdapterOutputLimit } from "./transformersWebGpuOutputLimits";
 import type {
     TransformersWebGpuArtifact,
     TransformersWebGpuModelSpec,
@@ -233,7 +234,7 @@ export function validateWebGpuModelSpec(value: unknown): TransformersWebGpuModel
     }
     const g = object(m.generation);
     keys(g, ["maxOutputTokens", "doSample", "temperature", "topP", "topK", "repetitionPenalty"]);
-    number(g.maxOutputTokens, 1, 96);
+    number(g.maxOutputTokens, 1, transformersWebGpuAdapterOutputLimit(m.adapter));
     boolean(g.doSample);
     number(g.temperature, 0.01, 2, false);
     number(g.topP, 0.01, 1, false);
@@ -391,7 +392,11 @@ export function webGpuGenerationOptions(spec: TransformersWebGpuModelSpec, reque
     if (requested !== undefined) number(requested, 1, Number.MAX_SAFE_INTEGER);
     const g = spec.generation;
     return {
-        max_new_tokens: Math.min(requested ?? g.maxOutputTokens, g.maxOutputTokens, 96),
+        max_new_tokens: Math.min(
+            requested ?? g.maxOutputTokens,
+            g.maxOutputTokens,
+            transformersWebGpuAdapterOutputLimit(spec.adapter),
+        ),
         do_sample: g.doSample,
         temperature: g.temperature,
         top_p: g.topP,
