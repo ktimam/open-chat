@@ -2,9 +2,83 @@
 
 This is an experimental frontend profile, not an official OpenChat release. It uses
 the checked-in official canister IDs without deploying modified OpenChat canisters.
-Public branding, hosting and native Android authentication are separate release gates.
+Public branding, hosting and public Android-provider qualification remain outside
+the local-only acceptance below.
 
-## Current checkpoint — October 5, 2026
+## Current checkpoint — October 6, 2026
+
+**The PR-only UI is restored on fork main. Desktop original-image checks and the
+final emulator's reconnect/encrypted delivery checks passed. Native all-WebGPU
+image inference is not qualified: the emulator returns no adapter, and the matching
+ARM APK has not been tested on a physical phone. This is not public-release approval.**
+
+### Source and scope
+
+The tested OpenChat source is `d0b00668c342d6b4bc09f93e19c2f023c6c07926`;
+the companion app's tested IOU source is
+`1ce9eef2105ced88aaa8b533018dbe6926223a40`. Both were verified on their
+respective remote `main` branches. Later documentation commits do not change the
+source identity of these binaries. The backend tree remains
+`5dd2d8447467dde7b3eb59a25bf0a06bc2af0e2a`, identical to integrated official
+upstream `0519aa39964a34d165173587b4d63e572c89670d`; no OpenChat canister
+change or deployment was required.
+
+The current flow uses normal Apps connection and the restored app-authored inline
+card at its source message, not the removed technical draft/setup workspace.
+Private cards remain encrypted device-local records; explicit sender review,
+recipient encryption, app-side decryption and a second review/save remain required.
+No prompts, weights, UI, inference runtime or backend were changed during this
+verification run. Uncommitted experiments were excluded from the frozen builds.
+
+### Current local-test completion checklist
+
+| Area | Verified result | Limit |
+| --- | --- | --- |
+| Reconnect | Three focused suites passed 50 tests. Final x86 APK normal Apps → Reconnect → approved app setup → return reached Connected without restarting the PC | Earlier intermittent timeout cause remains unproven; no timeout or security guard was weakened |
+| Desktop image proposals | Model-only Gemma passed the original Arabic and date-range images. Small all-q4 Qwen passed Arabic → date-range → Arabic without restart/model switch. Switching back to cached Gemma passed the date-range image | Fresh v2 normal-UI observations, not emulator inference, a fresh v1 run or general image/multi-document accuracy |
+| Image fields | Arabic: 12,900 EGP, 2026-08-14, settlement. Date-range: 1,912.15 USD, 2026-07-19, correct app-defined Type/default direction and full printed from–to note | The Type is companion-app configuration, not an OpenChat keyword or schema rule |
+| Browser delivery | Gemma Arabic proposal completed encrypted handoff, recipient review, one save and fresh sheet readback of exactly one matching entry | Other image proposals were inspected and canceled unsaved; their extraction passes are not delivery passes |
+| Final APK delivery | A reviewed synthetic 44.45 USD / 2026-10-06 / You owe / IOU card completed encrypted handoff, app decryption, second review, save, helper/APK Saved acknowledgement and fresh sheet readback exactly once | Its source Note and saved Type were not populated. This proves fidelity to the reviewed card, not text extraction accuracy. An earlier 44.44 receipt-only attempt was not saved |
+| Restart persistence | In-place APK update and subsequent app restart retained the existing account/chat, app setup and a prior private-card link without new sign-in | The restart preceded the 44.45 save; post-save restart/replay was not rerun on this artifact |
+| Native image inference | Final APK secure-context/foreground preflight exposes WebGPU but default requestAdapter returns null; no GPU device/model/download was started | Emulator GPU inference is unpassed. No fallback or blocklist override was used. Physical-phone qualification remains deferred |
+| CI and advisories | Historical source-bound functional test evidence below remains valid for its own commits | No fresh hosted-CI or advisory-scan pass is claimed. Existing exact-version local-test deferrals remain disclosed, not clean scans or public-release approval |
+
+### Final local-test APKs
+
+Both APKs contain the same frozen frontend build ID
+`e6f28ecbdd7a5edc5a194b0f7f329552` and frontend SHA-256
+`73a51596588660ee72459fa631763b6b09283d79c64eb1ee4a5cfdc07a8d80f5`.
+Independent packaging checks verified all 1,606 embedded frontend assets,
+the existing package/signing identity, official canister profile, Credential
+Manager route and disabled OTA. Native source and DEX match the reviewed baseline.
+Static verification does not establish phone runtime or GPU support.
+
+| File | SHA-256 | Runtime |
+| --- | --- | --- |
+| `openchat-fork-local-test-x86_64.apk` | `09e9f1aee2bb6e0b4c1cee3217c0bb0e52b6df94dc253fc92e9c2b72987e3682` | Installed in place; reconnect, persistence and delivery checks above |
+| `openchat-fork-local-test-aarch64.apk` | `e19253bf1746ecdc401f20c76098dbb770442c44021ee6240b249006a403588f` | Built and statically verified; not installed/tested on a phone |
+
+Local artifacts are retained under
+`F:/Temp/OpenChat-IOU/pr-only-final-20261006/artifacts/`, not published releases.
+The desktop run used the restored r3 v2 preview; the final APK's seven card
+components were independently compared with its emitted UI. Desktop observations
+must not be relabeled as a run of the final APK or a newly served web bundle.
+
+Evidence records: `acceptance-progress.json` (SHA-256
+`0ce13040039e2462974256e717e6c243b1b5188a76e1d44e991298a644c5a5f8`),
+`independent-acceptance-inventory.json` (SHA-256
+`bae4253681950ea742015c6f3353c3fec83dc7d2b235e0dfb6a42708c74e4f88`),
+`APK-VERIFIED-x86_64.json`, `APK-VERIFIED-aarch64.json`, and
+`emulator-webgpu-preflight-final.jsonl`. Browser image results include live operator
+observations, not an independent second inference replay. Raw images, screenshots,
+account identifiers and one-time handoff material are not published with these docs.
+
+Only native image/phone qualification remains open in this bounded PR-parity run.
+Expanded image-contract experiments are not activated or added to this release's
+scope. Optional voice's documented synthetic-recording limitation, public branding,
+hosting/provider qualification and publication retain their existing deferrals.
+
+## Historical checkpoint — October 5, 2026
 
 **App-owned card presentation is packaged in verified build031 artifacts; final model/IOU
 end-to-end acceptance is not complete.** Earlier dated checkpoints below remain
@@ -333,7 +407,11 @@ Collection/schema checks and scoped licenses passed; findings and conservative
 scope/freshness limits remain disclosed. Deferral is local-test-only, not a clean
 scan, suppression, broader waiver or public-release approval.
 
-### Remaining acceptance work
+### Historical build031 acceptance work
+
+The list below records the earlier build031 state. The October 6 checklist above
+supersedes its current-status claims, including local IOU readiness and final
+reconnect/delivery. Inactive expanded-contract research is not a new PR-parity gate.
 
 - **Restored app presentation:** packaging and normal-browser saved-card keyboard
   checks are complete for build031. Complete fresh IOU Connect/new proposals for app-view
@@ -1333,12 +1411,12 @@ fields and cards were restored while the card returned to draft and required a
 fresh review. Nothing was sent or saved in IOU. The source-details/labels prompt
 experiments remain inactive and do not replace this build's app package.
 
-### Current local-test completion checklist
+### Historical build031 completion checklist
 
-Use this finite checklist rather than treating each historical checkpoint above as a
-new requirement to rebuild or repeat all tests. Runtime evidence remains bound to its
-actual artifact; documentation-only changes do not change the packaged source identity.
-This checklist reflects the [October 5 build031 checkpoint](#current-checkpoint--october-5-2026);
+Use the [October 6 checklist](#current-local-test-completion-checklist) for current
+status. The following retains historical evidence, not new requirements to rebuild
+or repeat every test. Documentation changes do not change packaged source identity.
+This checklist reflects the [October 5 build031 checkpoint](#historical-checkpoint--october-5-2026);
 the dated build026–030 results below remain historical rather than current-build passes.
 The latest local-only evidence also includes 705 passing offline feature-helper
 contracts from 17 suites; it does not change the failed advisory-gate disposition.

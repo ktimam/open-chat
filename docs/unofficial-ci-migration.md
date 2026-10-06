@@ -6,6 +6,20 @@ This migration does not modify backend sources, upstream backend/Candid workflow
 or deployment scripts. The separately approved current-client security route and
 ownership inventories below preserve historical inventories and advisory decisions.
 
+## October 6 runtime-status clarification
+
+The current [local-client checkpoint](unofficial-local-client.md#current-checkpoint--october-6-2026)
+records final APKs built from `d0b00668c342d6b4bc09f93e19c2f023c6c07926`,
+fresh desktop original-image checks with both retained models, and the final x86
+APK's reconnect, account/card restart and encrypted app review/save/readback checks.
+It supersedes the older web029/APK029 and pending-Qwen runtime statements below;
+it does not relabel their source-bound CI results. Current emulator WebGPU returns
+no adapter, and the final ARM APK's physical-phone test remains deferred.
+
+This is documentation of local runtime evidence, not a fresh hosted CI run or
+dependency scan. The existing advisory failures/deferrals remain unchanged; no
+workflow, reviewed baseline, inventory, suppression or release gate is changed here.
+
 ## Superseded hosted contracts
 
 | Historical hosted suite                            | Why it no longer describes this product                                                                             | Current executable coverage                                                                                                                                     |

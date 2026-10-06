@@ -6,6 +6,11 @@ impersonate the official website. Public branding, hosting and native APK identi
 separate decisions. Private app cards are saved locally; delivery requires explicit review
 and client-side recipient encryption. See [the required workflow](private-app-encrypted-delivery.md).
 
+For the tested source, final APK hashes and the distinction between desktop,
+emulator and pending phone checks, use the
+[October 6 local-client checkpoint](unofficial-local-client.md#current-checkpoint--october-6-2026).
+A documentation update does not replace the served bundle or installed APK.
+
 ## Reuse an existing local-test build after a reboot
 
 Do not rebuild or reinstall the client just to restore local services. Reuse healthy
