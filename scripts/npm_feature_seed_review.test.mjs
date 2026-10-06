@@ -306,11 +306,379 @@ const beforeOutputBudgetMerge = new Map([
   ["frontend/openchat-worker/src/worker.ts", "91593aa7b006b7c12847c0afe4cba74ce029dd2466c540a90daf1373bf9791d7"],
 ]);
 const currentSourceSha256 =
+  "c478ca7aefd4551309ee18992f5705660a0f14e834069cabc12f8a2871b34b88";
+// The reviewed UI repair at 1cf9e1a and explicit reproposal change only these
+// existing sources and two local helpers. All 177 blobs from 2384b716 were read
+// independently and reproduce 6ae14948. These are historical preimages only;
+// every current byte is still bound by the live gate and drift/removal tests.
+const uiRepairAdditions = [
+  "frontend/app/src/utils/localAppRelayFrame.ts",
+  "frontend/app/src/utils/localAppReproposalPresentation.ts"
+];
+const beforeUiRepair = new Map([
+  [
+    "frontend/app/local-native-app-handoff.html",
+    "4b7db3930a4f7b6707c3da211e4469aefe5afa8ea5a96495b40cd733f89ced6f"
+  ],
+  [
+    "frontend/app/local-native-app-setup.html",
+    "6ebd5c040ba520633d0e846c7313477937249355ea2a7ef76c0611ea29d362d4"
+  ],
+  [
+    "frontend/app/localAppRelayBuild.mjs",
+    "3174a9e4b2fda365ea9c7d9fd9a9f7bed46e59e1a1ebce3792be1c361a8c4178"
+  ],
+  [
+    "frontend/app/localAppRelayHeaders.mjs",
+    "bd98276752818660ad9a5d95c68f5e3583841d943cca87e331ccb4ad57eb328b"
+  ],
+  [
+    "frontend/app/public/local-app-handoff.html",
+    "746958511e1b8087ddd6922e5ed34646a2395d2c82b16733ba1b08fe5e2f363e"
+  ],
+  [
+    "frontend/app/public/local-app-setup.html",
+    "65a484d81cce3c35f481067b76b4f9f716db8ecf1474f7de534403f1bb27a25e"
+  ],
+  [
+    "frontend/app/rollup.config.mjs",
+    "903f6b5096626dbb130b8f38f21f8fe492ff81241757dd150184df323003ff90"
+  ],
+  [
+    "frontend/app/src/components/home/ActionCardContent.svelte",
+    "c4b66e228cbdbede9c5cfb71db5c297cd417e6469fe3b5fa4953e474fbb8029c"
+  ],
+  [
+    "frontend/app/src/components/home/ChatMessage.svelte",
+    "88f1dda0b9966747bcc93698116fe5eededc98cb4527c9f37d60d3e1eb7154bf"
+  ],
+  [
+    "frontend/app/src/components_mobile/home/ChatMessage.svelte",
+    "54eb464be34aedbf2f688844665122841b2989d6aca8a1424527a16278734cdc"
+  ],
+  [
+    "frontend/app/src/components_shared/LocalAppCards.svelte",
+    "c70d3c3575e75ba4e1fee76bd2a90a925da48bdde0f5e9e103db317d21036f1a"
+  ],
+  [
+    "frontend/app/src/components_shared/LocalAppDirectory.svelte",
+    "e6322ff479aaaa13c20a365d620ab3eca6cf1f9e9ddbb7fb57f134f005cd1586"
+  ],
+  [
+    "frontend/app/src/components_shared/PrivateAppDraftFields.svelte",
+    "ccd84296b3ba15b41b62b75b2602ac78ddb6585deb665df908cfadcf97cf2066"
+  ],
+  [
+    "frontend/app/src/localAppHandoffRelay.ts",
+    "f6b99692b6339982a5509a5e25a38af5e6544291d06cb4f01b4856b05f092a0c"
+  ],
+  [
+    "frontend/app/src/localAppSetupRelay.ts",
+    "3f4b731f7a63946220e1cc2814de242322132e43f7a5e850c9525081439141e8"
+  ],
+  [
+    "frontend/app/src/localNativeAppHandoff.ts",
+    "ed7c334d9ad78f37280a888ce789264ba99161e0ff487b1f6ad508cc1d8ca308"
+  ],
+  [
+    "frontend/app/src/localNativeAppSetup.ts",
+    "c43055fb050435a047c4e8ad9dc7550e6aa0a98259b456fd1b62fec9eff1014e"
+  ],
+  [
+    "frontend/app/src/utils/localAppDraftPersistence.ts",
+    "ccecbcc08c86de43e3668a72d8f15343883e3c8c8a6f51d0778df5513c95a574"
+  ],
+  [
+    "frontend/app/src/utils/localAppSetupConnection.ts",
+    "c5fcd8a6031df9d820842bb0fb4f7779e099a99edf8e259c219e5dc847ef3536"
+  ],
+  [
+    "frontend/app/src/utils/localAppSetupPopup.ts",
+    "4f16e73743599fc3ddba9175454b796a5c33907179672bb2f3607f066f15e648"
+  ],
+  [
+    "frontend/app/src/utils/localAppView.ts",
+    "67825c6d9a2c00a57031d7a22bb363ef0a94dbe17dd843f1d4c54d5c0951ce65"
+  ],
+  [
+    "frontend/app/src/utils/nativeAppDelivery.ts",
+    "42e9c4c74111776aade15511ca2e838852a592bce96f3255a19ba8a0b58dd0d0"
+  ],
+  [
+    "frontend/app/src/utils/privateAppWorkspace.ts",
+    "c15bf3528376d5a48de3f001a68eabb674fe41732419a5261eba8092f5e63334"
+  ],
+  [
+    "frontend/tauri-plugin-oc/guest-js/commands/localAppHandoff.ts",
+    "ab1bf68e9c1cc82e3451fa9867e34b7ac16f6890c79f23379b77ce93f6e6363a"
+  ]
+]);
+const uiRepairCurrentHashes = new Map([
+  [
+    "frontend/app/local-native-app-handoff.html",
+    "556e3e7f039f3fe2a54e1cbb47eda88a2fd7886609294a001d6795cc7072b3f0"
+  ],
+  [
+    "frontend/app/local-native-app-setup.html",
+    "daf9371b7e6c49a763a526a8b6308d0c471962afbf3a884d87324e0ccddcd03c"
+  ],
+  [
+    "frontend/app/localAppRelayBuild.mjs",
+    "c07088e41fa8ca0da9b7c49782643a92608a7c0c21cb0aeb88ca21002a307b9d"
+  ],
+  [
+    "frontend/app/localAppRelayHeaders.mjs",
+    "b73a882c51e4549e9e2d91daf7897e92c4dcac299e0d051a26893ff4d17c29d7"
+  ],
+  [
+    "frontend/app/public/local-app-handoff.html",
+    "f417bc1ee5fae4bcb3aa72c0feb7b2de34e8f8992d282454dabb98dcca5762ed"
+  ],
+  [
+    "frontend/app/public/local-app-setup.html",
+    "5cad5a76f103d35ab0fc7338c34f62a883992c79a6c35a55e6037a3a495a0432"
+  ],
+  [
+    "frontend/app/rollup.config.mjs",
+    "249dc70d20e1c4de3bab4b067279506876604a83edacfbcc5bb30f093a255727"
+  ],
+  [
+    "frontend/app/src/components/home/ActionCardContent.svelte",
+    "12a0ce6a0d524d93131342c4f46afe7f5cb23e91106d50597bfff41a8a7894e5"
+  ],
+  [
+    "frontend/app/src/components/home/ChatMessage.svelte",
+    "8a1ccc6f45a60c19ef194b30b940d3f46a6984a791734bd373995377fa2b755c"
+  ],
+  [
+    "frontend/app/src/components_mobile/home/ChatMessage.svelte",
+    "cd7e6fc12a92129b2a3b75596398bd17d58941f44965b507b264888063696aba"
+  ],
+  [
+    "frontend/app/src/components_shared/LocalAppCards.svelte",
+    "b49bfd850fa53adf2df4785ec9eaa6d6227aca1beaddb868f524759803e8f5ec"
+  ],
+  [
+    "frontend/app/src/components_shared/LocalAppDirectory.svelte",
+    "83ef4f4401c8258f85ccb4a35fdf4dbaf94be098b94a1b0a6064610ebd0bb009"
+  ],
+  [
+    "frontend/app/src/components_shared/PrivateAppDraftFields.svelte",
+    "c7f406a3bd269cbd22db79f505464bfb443ebcd731311f5c57f20e221a7d3c3b"
+  ],
+  [
+    "frontend/app/src/localAppHandoffRelay.ts",
+    "22e9903abcf1d3fd8b25fdf2168eeeef038108e77112cac368e097954d5b0a53"
+  ],
+  [
+    "frontend/app/src/localAppSetupRelay.ts",
+    "fa488bebdb124e1031bc8057118775436e1aac83adad26bd18118a607dda93e2"
+  ],
+  [
+    "frontend/app/src/localNativeAppHandoff.ts",
+    "43a4ab1e7cf6ffc0c7d2f8293b0502169cdad0b4149d7120cf18e80269985128"
+  ],
+  [
+    "frontend/app/src/localNativeAppSetup.ts",
+    "6b928d0230128c5e11cb8f9c975f41a3061a611e8c4a37ca58156931eaabb0e2"
+  ],
+  [
+    "frontend/app/src/utils/localAppDraftPersistence.ts",
+    "9d34fffc2dfa6c55dd5b4a8f0d01cfc7b320df3c77b680f468efd895234d368a"
+  ],
+  [
+    "frontend/app/src/utils/localAppSetupConnection.ts",
+    "ddb57345db1e40a94b453886e214165537b3c81339812bc50511d59c68937e8d"
+  ],
+  [
+    "frontend/app/src/utils/localAppSetupPopup.ts",
+    "bc2bea71faac4c332b4b780a4ef17ffdc5f0ecda3da072b1b51cf5733dffd3bf"
+  ],
+  [
+    "frontend/app/src/utils/localAppView.ts",
+    "ee3f1e483d08af0a079ddf4656c0dec38f036d7e8a9003124eda0591fba1dc06"
+  ],
+  [
+    "frontend/app/src/utils/nativeAppDelivery.ts",
+    "69c34838418d35df10c8d0d4e5e5c282483108d9b166b965a77fa1199ed36d64"
+  ],
+  [
+    "frontend/app/src/utils/privateAppWorkspace.ts",
+    "53c41a966fc06e572fdce8b710e919d9aaf5b9e2d4ba9953d679b55a2d5ed740"
+  ],
+  [
+    "frontend/tauri-plugin-oc/guest-js/commands/localAppHandoff.ts",
+    "4b286a2d3f98cf3870c2afec467fdb71a76ec8e2dd6328696044f463e2f24548"
+  ]
+]);
+const beforeUiRepairSourceSha256 =
   "6ae14948ee5e532a901797b86790df515d397eca046290501f78b098b9f23d97";
+function beforeUiRepairSourceHash(file) {
+  return beforeUiRepair.get(file) ?? sourceHash(file);
+}
+function beforeUiRepairFingerprint(fingerprint) {
+  const files = fingerprint.files.filter((file) => !uiRepairAdditions.includes(file));
+  return {
+    ...fingerprint,
+    files,
+    sha256: createHash("sha256")
+      .update(JSON.stringify(files.map((file) => [file, beforeUiRepairSourceHash(file)])))
+      .digest("hex"),
+  };
+}
+// Only these two older tests reconstruct source text, not just byte identities.
+// Reverse the exact reviewed hunks before applying their original historical
+// assertions. No Git history/network is needed when CI runs with a shallow clone.
+const uiRepairTextReversals = new Map([
+  [
+    "frontend/app/rollup.config.mjs",
+    [
+      [
+        "        localAppRelayPlugin({\n            enabled: localWebBuild,\n            appDirectoryUrl: process.env.OC_APP_DIRECTORY_URL,\n        }),\n        localAppRelayPlugin({\n            enabled: localWebBuild,\n            setup: true,\n            appDirectoryUrl: process.env.OC_APP_DIRECTORY_URL,\n        }),\n",
+        "        localAppRelayPlugin({ enabled: localWebBuild }),\n        localAppRelayPlugin({ enabled: localWebBuild, setup: true }),\n"
+      ]
+    ]
+  ],
+  [
+    "frontend/app/src/components_shared/PrivateAppDraftFields.svelte",
+    [
+      [
+        "    import { untrack, type Snippet } from \"svelte\";\n",
+        "    import { untrack } from \"svelte\";\n"
+      ],
+      [
+        "        resolveLocalAppViewPalette,\n",
+        ""
+      ],
+      [
+        "        showDisclosure = true,\n",
+        ""
+      ],
+      [
+        "        compactDetails = false,\n        detailsActions,\n",
+        ""
+      ],
+      [
+        "        showDisclosure?: boolean;\n",
+        ""
+      ],
+      [
+        "        /** Host-only presentation: consolidate secondary controls without changing field edits. */\n        compactDetails?: boolean;\n        /** Host-owned actions only; never supplied through app view metadata. */\n        detailsActions?: Snippet;\n",
+        ""
+      ],
+      [
+        "        if (!validatedView && !compactDetails) return undefined;\n",
+        "        if (!validatedView) return undefined;\n"
+      ],
+      [
+        "        // Validation bounds paint syntax; host resolution additionally keeps canonical values\n        // and labels readable across every supported surface, even before expanded review.\n        return Object.entries(resolveLocalAppViewPalette(palette, viewTheme))\n",
+        "        if (!palette) return \"\";\n        // Keys and exact hex values came from the strict validator, not arbitrary CSS.\n        return Object.entries(palette)\n"
+      ],
+      [
+        "    function primaryField(field: LocalAppDraftField): boolean {\n        return !compactDetails || !companionOwner(field);\n    }\n\n    function additionalPrimaryField(field: LocalAppDraftField): boolean {\n        return (\n            primaryField(field) && !viewFields.has(field.key) && (field.present || field.required)\n        );\n    }\n\n",
+        ""
+      ],
+      [
+        "        {:else if compact && !compactDetails && companionOwner(field)}\n",
+        "        {:else if compact && companionOwner(field)}\n"
+      ],
+      [
+        "                    {#if field.required && !(compact && validatedView)}<span class=\"required\"\n                            >Required</span\n                        >{/if}</span\n",
+        "                    {#if field.required}<span class=\"required\">Required</span>{/if}</span\n"
+      ],
+      [
+        "        {#if !compactDetails && compact && fieldAction(field, index)}\n",
+        "        {#if compact && fieldAction(field, index)}\n"
+      ],
+      [
+        "        {:else if !compactDetails}\n",
+        "        {:else}\n"
+      ],
+      [
+        "            {#if field && primaryField(field)}\n",
+        "            {#if field}\n"
+      ],
+      [
+        "    {#if showDisclosure && action.definition.card.disclosure}<p class=\"disclosure\">\n",
+        "    {#if action.definition.card.disclosure}<p class=\"disclosure\">\n"
+      ],
+      [
+        "                    >{fields.items.length > 1\n                        ? `Entry ${index + 1} of ${fields.items.length}`\n                        : \"Draft fields\"}</legend\n",
+        "                    >{fields.items.length > 1 ? `Item ${index + 1}` : \"Draft fields\"}</legend\n"
+      ],
+      [
+        "                    {#if item.some(additionalPrimaryField)}\n",
+        "                    {#if item.some((field) => !viewFields.has(field.key))}\n"
+      ],
+      [
+        "                            {#each item.filter(additionalPrimaryField) as field (field.key)}\n",
+        "                            {#each item.filter((field) => !viewFields.has(field.key)) as field (field.key)}\n"
+      ],
+      [
+        "                    {#each item.filter(primaryField) as field (field.key)}\n",
+        "                    {#each item as field (field.key)}\n"
+      ],
+      [
+        "                Correct the highlighted fields before sending. If a field cannot be corrected,\n                cancel this card and propose the message again.\n",
+        "                The current draft does not match the app's schema. Correct the fields or advanced\n                JSON before review.\n"
+      ],
+      [
+        "                Additional values are preserved and available in Details. If they need changing,\n                cancel this card and prepare a new proposal.\n",
+        "                Complex and additional values are preserved. Inspect the complete preview and use\n                advanced JSON to edit them.\n"
+      ],
+      [
+        "            {#if !compactDetails && validatedView && reviewing}<p class=\"host-review-notice\">\n",
+        "            {#if validatedView && reviewing}<p class=\"host-review-notice\">\n"
+      ],
+      [
+        "                additionalOnly={compactDetails || !validatedView || !reviewing}\n",
+        "                additionalOnly={!validatedView || !reviewing}\n"
+      ],
+      [
+        "            {#if !compactDetails && validatedView && reviewing && exactViewPayload !== undefined}\n",
+        "            {#if validatedView && reviewing && exactViewPayload !== undefined}\n"
+      ],
+      [
+        "            This card cannot be edited. Cancel it and propose the message again. No previous values\n            will be sent.\n",
+        "            Field editing is unavailable for this JSON structure. Correct the complete payload in\n            advanced JSON. No previous values are shown.\n"
+      ],
+      [
+        "    {#if compactDetails}\n        <details class=\"payload-details\">\n            <summary>Details</summary>\n            {#if !pending && exactViewPayload !== undefined}\n                <pre aria-label=\"Complete canonical outgoing values\">{exactViewPayload}</pre>\n            {:else}\n                <p role=\"status\">\n                    Exact outgoing values are unavailable until the current edit is corrected.\n                </p>\n            {/if}\n            {#each fields?.items ?? [] as item, index}\n                {#if item.some((field) => companionOwner(field) || fieldAction(field, index))}\n                    <section\n                        class=\"secondary-fields\"\n                        aria-label={`Field details for item ${index + 1}`}\n                    >\n                        {#if (fields?.items.length ?? 0) > 1}<h4>Entry {index + 1}</h4>{/if}\n                        {#each item as field (field.key)}\n                            {#if companionOwner(field)}\n                                {@render renderField(field, index)}\n                            {:else}\n                                {@render fieldActions(field, index)}\n                            {/if}\n                        {/each}\n                    </section>\n                {/if}\n            {/each}\n            {@render detailsActions?.()}\n        </details>\n    {/if}\n",
+        ""
+      ],
+      [
+        "    .compact .app-owned-view .field,\n    .compact .app-owned-view label {\n        gap: 2px;\n",
+        "    .app-owned-view .field,\n    .app-owned-view label {\n        gap: 4px;\n"
+      ],
+      [
+        "    .app-owned-view label > span {\n        font-size: 11px;\n        color: var(--app-view-muted, inherit);\n",
+        "    .app-owned-view label > span {\n        font-size: 11px;\n"
+      ],
+      [
+        "    .host-exact-review pre,\n    .payload-details pre {\n",
+        "    .host-exact-review pre {\n"
+      ],
+      [
+        "    .payload-details {\n        min-width: 0;\n        color: var(--txt, #1b1b1b);\n        background: var(--bg, #ffffff);\n    }\n    .payload-details > summary {\n        cursor: pointer;\n        padding: 4px 0;\n        font-size: 12px;\n    }\n    .payload-details[open] > :not(summary) {\n        margin-top: 8px;\n    }\n    .secondary-fields {\n        display: flex;\n        flex-direction: column;\n        gap: 8px;\n        min-width: 0;\n    }\n",
+        ""
+      ]
+    ]
+  ]
+]);
+function beforeUiRepairSourceText(file, text) {
+  for (const [current, previous] of uiRepairTextReversals.get(file) ?? []) {
+    assert.equal(text.split(current).length, 2, "exact UI repair hunk required");
+    text = text.replace(current, previous);
+  }
+  if (uiRepairTextReversals.has(file))
+    assert.equal(createHash("sha256").update(text).digest("hex"), beforeUiRepair.get(file), file);
+  return text;
+}
 function beforeOutputBudgetSourceHash(file) {
-  return beforeOutputBudgetMerge.get(file) ?? sourceHash(file);
+  return beforeOutputBudgetMerge.get(file) ?? beforeUiRepairSourceHash(file);
 }
 function beforeOutputBudgetFingerprint(fingerprint) {
+  fingerprint = beforeUiRepairFingerprint(fingerprint);
   const files = fingerprint.files.filter((file) => file !== outputBudgetAddition);
   return {
     ...fingerprint,
@@ -408,7 +776,7 @@ function beforeWalletSpenderFingerprint(fingerprint) {
   };
 }
 function beforeWalletSpenderSourceText(file) {
-  let text = readFileSync(resolve(root, file), "utf8").replaceAll("\r\n", "\n");
+  let text = beforeUiRepairSourceText(file, readFileSync(resolve(root, file), "utf8").replaceAll("\r\n", "\n"));
   if (!beforeWalletSpenderMerge.has(file)) return text;
   for (const [current, previous] of [
     ["    paymentSpenderAccount,\n", "    userCanisterSpenderAccount,\n"],
@@ -892,18 +1260,109 @@ test("current inline local-card rendering has exact runtime ownership without te
   }
 });
 
+
+test("normal app flow and explicit reproposal retain exact history without expanding dependency roots", () => {
+  const config = JSON.parse(
+    readFileSync(
+      resolve(root, "scripts/npm_feature_scope.current-client.json"),
+      "utf8",
+    ),
+  );
+  const actual = seedSourceFingerprint(root, config);
+  const previous = beforeUiRepairFingerprint(actual);
+  assert.equal(actual.sha256, currentSourceSha256);
+  assert.equal(actual.files.length, 179);
+  assert.equal(previous.files.length, 177);
+  assert.equal(previous.sha256, beforeUiRepairSourceSha256);
+  assertReviewedSourceFingerprint(actual, config.sourceReview);
+  assertReviewedSourceFingerprint(previous, config.sourceReview);
+  const owned = featureOwnedFiles(root, config.scopeId);
+  assert.equal(owned.length, 131);
+  assert.equal(config.seeds.length, 26);
+  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
+  const names = new Set(
+    config.seeds.map(
+      (seed) => seed.name ?? seed.location.replace(/^node_modules\//u, ""),
+    ),
+  );
+  const entries = actual.files.map((file) => [
+    file,
+    readFileSync(resolve(root, file)),
+  ]);
+  for (const file of [...beforeUiRepair.keys(), ...uiRepairAdditions]) {
+    assert(actual.files.includes(file), file);
+    if (beforeUiRepair.has(file)) {
+      assert.equal(sourceHash(file), uiRepairCurrentHashes.get(file), file);
+      assert.notEqual(sourceHash(file), beforeUiRepair.get(file), file);
+    }
+    if (uiRepairAdditions.includes(file)) {
+      assert(owned.includes(file), file);
+      for (const scope of ["pr1-model-npm", "pr2-app-card-ocr-npm"])
+        assert(!featureOwnedFiles(root, scope).includes(file), file);
+    }
+    if (owned.includes(file)) {
+      const source = readFileSync(resolve(root, file), "utf8");
+      assertReviewedFeatureImports(source, names);
+      assert.throws(
+        () =>
+          assertReviewedFeatureImports(
+            source + '\nimport "unreviewed-card-package";\n',
+            names,
+          ),
+        /no reviewed root/u,
+      );
+    }
+    for (const changed of [
+      entries.filter(([path]) => path !== file),
+      entries.map(([path, bytes]) => [
+        path,
+        path === file
+          ? Buffer.concat([bytes, Buffer.from("\n// unreviewed card change\n")])
+          : bytes,
+      ]),
+    ])
+      assert.throws(
+        () =>
+          assertReviewedSourceFingerprint(
+            sourceReviewFingerprintFromBytes(changed),
+            config.sourceReview,
+          ),
+        /source set changed/u,
+      );
+  }
+  for (const file of [
+    "frontend/app/src/utils/localAppReproposalPresentation.spec.ts",
+    "frontend/app/src/components_shared/AutoProposeChip.spec.ts",
+  ]) {
+    assert(existsSync(resolve(root, file)), file);
+    assert(!owned.includes(file), file);
+    assert(!actual.files.includes(file), file);
+  }
+  const rollup = readFileSync(
+    resolve(root, "frontend/app/rollup.config.mjs"),
+    "utf8",
+  );
+  assert.match(
+    rollup,
+    /localAppRelayPlugin\(\{\s*enabled: localWebBuild,\s*appDirectoryUrl: process\.env\.OC_APP_DIRECTORY_URL,\s*\}\)/u,
+  );
+  assert.match(
+    rollup,
+    /localAppRelayPlugin\(\{\s*enabled: localWebBuild,\s*setup: true,\s*appDirectoryUrl: process\.env\.OC_APP_DIRECTORY_URL,\s*\}\)/u,
+  );
+});
 test("bounded model budgets and 0519 merge retain the exact predecessor without expanding roots", () => {
   const config = JSON.parse(readFileSync(resolve(root, "scripts/npm_feature_scope.current-client.json"), "utf8"));
   const actual = seedSourceFingerprint(root, config);
   const previous = beforeOutputBudgetFingerprint(actual);
   assert.equal(actual.sha256, currentSourceSha256);
-  assert.equal(actual.files.length, 177);
+  assert.equal(actual.files.length, 179);
   assert.equal(previous.sha256, appViewSourceSha256);
   assert.equal(previous.files.length, 176);
   assertReviewedSourceFingerprint(actual, config.sourceReview);
   assertReviewedSourceFingerprint(previous, config.sourceReview);
   const owned = featureOwnedFiles(root, config.scopeId);
-  assert.equal(owned.length, 129);
+  assert.equal(owned.length, 131);
   assert.equal(config.seeds.length, 26);
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   assert(owned.includes(outputBudgetAddition));
@@ -925,7 +1384,7 @@ test("bounded model budgets and 0519 merge retain the exact predecessor without 
   const names = new Set(config.seeds.map((seed) => seed.name ?? seed.location.replace(/^node_modules\//u, "")));
   const entries = actual.files.map((file) => [file, readFileSync(resolve(root, file))]);
   for (const [file, digest] of expected) {
-    assert.equal(sourceHash(file), digest, file);
+    assert.equal(beforeUiRepairSourceHash(file), digest, file);
     if (beforeOutputBudgetMerge.has(file)) assert.notEqual(digest, beforeOutputBudgetMerge.get(file), file);
     if (owned.includes(file)) {
       const source = readFileSync(resolve(root, file), "utf8");
@@ -948,8 +1407,8 @@ test("inline-card source checkpoint preserves the exact committed predecessor an
   );
   const actual = seedSourceFingerprint(root, config);
   const previous = beforeInlineCardFingerprint(actual);
-  assert.equal(actual.files.length, 177);
-  assert.equal(featureOwnedFiles(root, config.scopeId).length, 129);
+  assert.equal(actual.files.length, 179);
+  assert.equal(featureOwnedFiles(root, config.scopeId).length, 131);
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   assert.equal(config.seeds.length, 26);
   assert.equal(previous.files.length, 171);
@@ -1062,13 +1521,13 @@ test("inert app views bind every current source and preserve the exact 175-sourc
   const actual = seedSourceFingerprint(root, config);
   const previous = beforeAppViewFingerprint(actual);
   assert.equal(actual.sha256, currentSourceSha256);
-  assert.equal(actual.files.length, 177);
+  assert.equal(actual.files.length, 179);
   assert.equal(previous.sha256, inlineCardSourceSha256);
   assert.equal(previous.files.length, 175);
   assertReviewedSourceFingerprint(previous, config.sourceReview);
   assertReviewedSourceFingerprint(actual, config.sourceReview);
   const owned = featureOwnedFiles(root, config.scopeId);
-  assert.equal(owned.length, 129);
+  assert.equal(owned.length, 131);
   assert(owned.includes(appViewAddition));
   for (const historical of ["pr1-model-npm", "pr2-app-card-ocr-npm"])
     assert(!featureOwnedFiles(root, historical).includes(appViewAddition));
@@ -1117,7 +1576,7 @@ test("inert app views bind every current source and preserve the exact 175-sourc
   );
   for (const [file, digest] of expected) {
     assert(actual.files.includes(file), file);
-    assert.equal(sourceHash(file), digest, file);
+    assert.equal(beforeUiRepairSourceHash(file), digest, file);
     if (beforeAppViews.has(file))
       assert.notEqual(digest, beforeAppViews.get(file), file);
     if (owned.includes(file)) {
@@ -1168,6 +1627,7 @@ test("inert app views bind every current source and preserve the exact 175-sourc
 });
 
 function beforeOptionalFieldCorrections(source) {
+  source = beforeUiRepairSourceText("frontend/app/src/components_shared/PrivateAppDraftFields.svelte", source);
   const replacements = [
     [
       '    import { localAppDraftChoiceCompanionFields } from "../utils/localAppDraftChoices";\n',
@@ -1443,8 +1903,8 @@ test("main Apps flow, retained local cards and startup completion have an exact 
   );
   assertReviewedSourceFingerprint(previous, config.sourceReview);
   assertReviewedSourceFingerprint(actual, config.sourceReview);
-  assert.equal(featureOwnedFiles(root, config.scopeId).length, 129);
-  assert.equal(actual.files.length, 177);
+  assert.equal(featureOwnedFiles(root, config.scopeId).length, 131);
+  assert.equal(actual.files.length, 179);
   assert.equal(config.seeds.length, 26);
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   assert.equal(
@@ -1493,8 +1953,10 @@ test("main Apps flow, retained local cards and startup completion have an exact 
     ),
     "utf8",
   );
-  assert(directory.includes("Saved cards ({workspaceView.cards.length})"));
-  assert(directory.includes("workspace.open();"));
+  assert(directory.includes("ok = await workspace.connectApp(id);"));
+  assert(directory.includes("onCancelConnection={connecting ? cancelConnection : undefined}"));
+  assert(!directory.includes("Saved cards ({workspaceView.cards.length})"));
+  assert(!directory.includes("workspace.open();"));
   const userIndex = readFileSync(
     resolve(
       root,
@@ -1540,8 +2002,8 @@ test("current encryption, recovery and enum-label owners use existing selectors 
         `frontend/app/src/utils/localAppEncryption${suffix}`,
       ),
     );
-  assert.equal(owned.length, 129);
-  assert.equal(fingerprint.files.length, 177);
+  assert.equal(owned.length, 131);
+  assert.equal(fingerprint.files.length, 179);
   assert.equal(config.seeds.length, 26);
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   assert.equal(fingerprint.sha256, currentSourceSha256);
@@ -1596,7 +2058,7 @@ test("upstream wallet spender merge preserves the reviewed mixed-file boundary a
   assertReviewedSourceFingerprint(actual, config.sourceReview);
   assert.equal(actual.files.length, 171);
   // Ownership discovery is live; the reconstructed historical source count above is unchanged.
-  assert.equal(featureOwnedFiles(root, config.scopeId).length, 129);
+  assert.equal(featureOwnedFiles(root, config.scopeId).length, 131);
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   assert.equal(config.seeds.length, 26);
 });
@@ -1636,7 +2098,7 @@ test("generic context framing preserves exact prior source identity and existing
   assertReviewedSourceFingerprint(actual, config.sourceReview);
   assert.equal(actual.files.length, 171);
   // Ownership discovery is live; the reconstructed historical source count above is unchanged.
-  assert.equal(featureOwnedFiles(root, config.scopeId).length, 129);
+  assert.equal(featureOwnedFiles(root, config.scopeId).length, 131);
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   assert.equal(config.seeds.length, 26);
   assert(
@@ -1657,7 +2119,7 @@ test("saved-card opt-in and recovery feedback preserve exact prior source identi
   );
   assert.equal(actual.files.length, 171);
   // Ownership discovery is live; the reconstructed historical source count above is unchanged.
-  assert.equal(featureOwnedFiles(root, config.scopeId).length, 129);
+  assert.equal(featureOwnedFiles(root, config.scopeId).length, 131);
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   assert.equal(config.seeds.length, 26);
   const expected = new Map([
@@ -1806,8 +2268,8 @@ test("cache hashing responsiveness preserves exact prior source identity and int
   );
   assertReviewedSourceFingerprint(previous, config.sourceReview);
   assertReviewedSourceFingerprint(actual, config.sourceReview);
-  assert.equal(actual.files.length, 177);
-  assert.equal(featureOwnedFiles(root, config.scopeId).length, 129);
+  assert.equal(actual.files.length, 179);
+  assert.equal(featureOwnedFiles(root, config.scopeId).length, 131);
   assert.equal(config.seeds.length, 26);
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   for (const unchanged of [
@@ -1875,7 +2337,7 @@ test("unofficial immutable-asset routing preserves the exact prior source aggreg
   );
   assertReviewedSourceFingerprint(previous, config.sourceReview);
   assertReviewedSourceFingerprint(actual, config.sourceReview);
-  assert.equal(actual.files.length, 177);
+  assert.equal(actual.files.length, 179);
   assert.equal(config.seeds.length, 26);
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   assert(
@@ -1976,8 +2438,8 @@ test("current setup persistence is a dedicated builtin-API consumer with an exac
   const clientPath = "frontend/openchat-client/src/openchat.ts";
   const owned = featureOwnedFiles(root, config.scopeId);
   const fingerprint = seedSourceFingerprint(root, config);
-  assert.equal(owned.length, 129);
-  assert.equal(fingerprint.files.length, 177);
+  assert.equal(owned.length, 131);
+  assert.equal(fingerprint.files.length, 179);
   assert.equal(config.seeds.length, 26);
   assert.equal(
     config.seeds.reduce((count, seed) => count + seed.evidence.length, 0),
@@ -2126,6 +2588,7 @@ for (const file of mixedProposalFiles) {
         "return proposePrivateAppMessage(client, capturedContent, {\n" +
           "                    stillCurrent,\n" +
           "                    onPhase,\n" +
+          "                    regenerate: true,\n" +
           "                    sourceTimestamp: Number(timestamp),\n" +
           "                    source: {\n" +
           "                        chatKey: capturedChatKey,\n" +
@@ -2287,11 +2750,12 @@ test("source navigation uses the real host codec and only the precisely reached 
     /\b(?:fetch|WebSocket|XMLHttpRequest|Worker|indexedDB|localStorage|sessionStorage)\s*\(/u,
   );
   const ui = readFileSync(
-    resolve(root, "frontend/app/src/components_shared/LocalAppCards.svelte"),
+    resolve(root, "frontend/app/src/components_shared/LocalAppSourceCardLink.svelte"),
     "utf8",
   );
-  assert(ui.includes('import { navigate } from "@utils/navigation";'));
-  assert(ui.includes("navigate(route);"));
+  assert(ui.includes('workspace.open("source");'));
+  assert(ui.includes("workspace.selectCard(id);"));
+  assert(ui.includes("localAppCardAnchorKey(namespace, current.cardSources[id]) !== sourceKey"));
   const expected = new Map([
     [
       "svelte",
@@ -2443,7 +2907,7 @@ test("current app discovery and setup include every production owner but no test
     ["frontend/app/src/utils/localAppSetupPopup.ts", ["./localAppHandoff"]],
     ["frontend/app/local-native-app-setup.html", []],
     ["frontend/app/public/local-app-setup.html", []],
-    ["frontend/app/src/localAppSetupRelay.ts", ["./utils/localAppSetupPopup"]],
+    ["frontend/app/src/localAppSetupRelay.ts", ["./utils/localAppSetupPopup", "./utils/localAppRelayFrame"]],
     [
       "frontend/app/localNativeAppSetupBuild.mjs",
       ["node:fs/promises", "node:url", "esbuild"],
@@ -2854,8 +3318,8 @@ test("current upstream merge preserves scoped startup, model and private-app bou
     readFileSync(resolve(root, file), "utf8").replaceAll("\r\n", "\n");
   const hash = (text) => createHash("sha256").update(text).digest("hex");
   const fingerprint = seedSourceFingerprint(root, config);
-  assert.equal(fingerprint.files.length, 177);
-  assert.equal(featureOwnedFiles(root, config.scopeId).length, 129);
+  assert.equal(fingerprint.files.length, 179);
+  assert.equal(featureOwnedFiles(root, config.scopeId).length, 131);
   assert.equal(config.seeds.length, 26);
   assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
   // Preserve the committed merge identity after the separately reviewed Windows

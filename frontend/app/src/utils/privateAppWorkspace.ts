@@ -29,7 +29,7 @@ import {
     createBrowserLocalAppDraftStorage,
     snapshotSavedLocalAppDraftCollection,
     snapshotLocalAppDraftSourceReference,
-    MAX_SAVED_LOCAL_APP_DRAFTS,
+    LocalAppDraftStorageCapacityError,
     type LocalAppDraftSourceReference,
     type SavedLocalAppDraftCollection,
     type LocalAppDraftStorage,
@@ -134,6 +134,8 @@ type Dependencies = {
 };
 export type PrivateAppProposalOptions = {
     stillCurrent: () => boolean;
+    /** An explicit user request for fresh extraction; never replaces a retained card. */
+    regenerate?: boolean;
     sourceTimestamp?: number;
     onPhase?: ProposalPhaseListener;
     /** Host-captured identifiers only; never included in the app's outgoing DTO. */
@@ -1446,7 +1448,7 @@ export class PrivateAppWorkspace {
         // A failed or cancelled new extraction must not present the previously selected card
         // as the result for this message. Keep the requested source until explicit navigation.
         this.#set({ presentationSource: source, presentationDraftId: undefined });
-        if (source) {
+        if (source && !options.regenerate) {
             const existing = [...this.#cards].find(([id, card]) => {
                 const target = this.#drafts.get(id)?.target;
                 return (
@@ -1464,13 +1466,8 @@ export class PrivateAppWorkspace {
                 card.source = previousSource;
             }
         }
-        if (this.#cards.size >= MAX_SAVED_LOCAL_APP_DRAFTS) {
-            this.#set({
-                message:
-                    "The private card limit is reached. Discard a card before creating another; no existing card was replaced.",
-            });
-            return "retryable";
-        }
+        // Starting fresh extraction is not approval of either the old or the new result.
+        this.#leaveCard();
         // A retained card's immutable presentation is for reviewing that card only.
         // Every new proposal is pinned afresh to the currently connected configuration.
         const app = this.#state.catalog?.apps.find((app) => app.id === selectedAppId);
@@ -1589,10 +1586,15 @@ export class PrivateAppWorkspace {
             });
             try {
                 this.#collection();
-            } catch {
+            } catch (error) {
                 this.#cards.delete(draft.id);
                 this.#drafts.cancel(draft.id);
-                throw new Error("Private card collection is full");
+                if (!(error instanceof LocalAppDraftStorageCapacityError)) throw error;
+                this.#set({
+                    message:
+                        "Private card storage is full. Remove an unneeded card from this device and try again. Existing cards were preserved; nothing was sent.",
+                });
+                return "retryable";
             }
             this.#leaveCard();
             this.#choiceSession = choiceSession;

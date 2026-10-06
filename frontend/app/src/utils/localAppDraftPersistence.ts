@@ -29,7 +29,6 @@ export interface SavedLocalAppDraftCollection {
         readonly app?: LocalAppCatalogEntry;
     }[];
 }
-export const MAX_SAVED_LOCAL_APP_DRAFTS = 8;
 export interface LocalAppDraftStorage {
     read(scope: LocalAppSetupScope): Promise<SavedLocalAppDraftCollection | undefined>;
     write(
@@ -60,6 +59,15 @@ const DATABASE = "openchat-private-app-drafts";
 const STORE = "encrypted-cards";
 const ZERO = "0".repeat(64);
 const LIMIT = 256 * 1024;
+// A collection is history, not a small set of open slots. Keep each card bounded,
+// but allow retained cards to grow within a separate encrypted-storage budget.
+export const MAX_SAVED_LOCAL_APP_DRAFT_BYTES = 16 * 1024 * 1024;
+export class LocalAppDraftStorageCapacityError extends Error {
+    constructor() {
+        super("Private card storage on this device has reached its size limit");
+        this.name = "LocalAppDraftStorageCapacityError";
+    }
+}
 const TIMEOUT_MS = 10_000;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
@@ -265,13 +273,13 @@ export function snapshotSavedLocalAppDraftCollection(value: unknown): SavedLocal
     if (
         fields.version !== 2 ||
         !Array.isArray(fields.cards) ||
-        fields.cards.length > MAX_SAVED_LOCAL_APP_DRAFTS ||
         Reflect.ownKeys(fields.cards).length !== fields.cards.length + 1
     )
         invalid();
     const ids = new Set<string>();
     const importIds = new Set<string>();
     const cards: SavedLocalAppDraftCollection["cards"][number][] = [];
+    let cardBytes = 0;
     for (let index = 0; index < fields.cards.length; index++) {
         const descriptor = Object.getOwnPropertyDescriptor(fields.cards, String(index));
         if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) invalid();
@@ -280,15 +288,19 @@ export function snapshotSavedLocalAppDraftCollection(value: unknown): SavedLocal
         if (ids.has(saved.draft.id) || importIds.has(saved.draft.idempotencyKey)) invalid();
         ids.add(saved.draft.id);
         importIds.add(saved.draft.idempotencyKey);
-        cards.push(
-            Object.freeze({
-                saved,
-                ...(Object.hasOwn(entry, "source")
-                    ? { source: snapshotLocalAppDraftSourceReference(entry.source) }
-                    : {}),
-                ...(Object.hasOwn(entry, "app") ? { app: snapshotSavedApp(entry.app, saved) } : {}),
-            }),
-        );
+        const card = Object.freeze({
+            saved,
+            ...(Object.hasOwn(entry, "source")
+                ? { source: snapshotLocalAppDraftSourceReference(entry.source) }
+                : {}),
+            ...(Object.hasOwn(entry, "app") ? { app: snapshotSavedApp(entry.app, saved) } : {}),
+        });
+        const bytes = encoder.encode(JSON.stringify(card)).byteLength;
+        if (bytes > LIMIT) invalid();
+        cardBytes += bytes + (index === 0 ? 0 : 1);
+        if (cardBytes > MAX_SAVED_LOCAL_APP_DRAFT_BYTES)
+            throw new LocalAppDraftStorageCapacityError();
+        cards.push(card);
     }
     if (
         Object.hasOwn(fields, "activeDraftId") &&
@@ -302,7 +314,8 @@ export function snapshotSavedLocalAppDraftCollection(value: unknown): SavedLocal
             ? { activeDraftId: fields.activeDraftId }
             : {}),
     });
-    if (encoder.encode(JSON.stringify(snapshot)).byteLength > LIMIT) invalid();
+    if (encoder.encode(JSON.stringify(snapshot)).byteLength > MAX_SAVED_LOCAL_APP_DRAFT_BYTES)
+        throw new LocalAppDraftStorageCapacityError();
     return snapshot;
 }
 function generation(): string {
@@ -340,7 +353,8 @@ function checkRecord(record: EncryptedLocalDraftRecord | undefined): void {
         record.iv.byteLength !== 12 ||
         !(record.ciphertext instanceof ArrayBuffer) ||
         record.ciphertext.byteLength < 16 ||
-        record.ciphertext.byteLength > LIMIT + 16
+        record.ciphertext.byteLength >
+            (record.version === 1 ? LIMIT : MAX_SAVED_LOCAL_APP_DRAFT_BYTES) + 16
     )
         invalid();
 }

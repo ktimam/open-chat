@@ -111,7 +111,7 @@
         },
         {
           "file": "frontend/app/src/components_shared/LocalAppDirectory.svelte",
-          "contains": "Saved cards ({workspaceView.cards.length})"
+          "contains": "ok = await workspace.connectApp(id);"
         },
         {
           "file": "frontend/app/src/components/home/nav/MainMenu.svelte",
@@ -343,7 +343,7 @@
         },
         {
           "file": "frontend/app/rollup.config.mjs",
-          "contains": "localAppRelayPlugin({ enabled: localWebBuild })"
+          "contains": "appDirectoryUrl: process.env.OC_APP_DIRECTORY_URL,"
         },
         {
           "file": "frontend/app/rollup.extras.mjs",
@@ -790,6 +790,11 @@
         "sha256": "6ae14948ee5e532a901797b86790df515d397eca046290501f78b098b9f23d97",
         "reviewRecord": "npm_feature_scope.current-client.review.md",
         "workingTreeReview": "2026-10-05: approved bounded current source review of 2384b716c2ce2d4fada522b6c926818ff84cfeaa, combining the already reviewed output-budget fix 08f8cf846 with upstream 0519aa399. Independently reading all 176 c2a8ca44 predecessor blobs exactly reproduces f8f5e475. One import-free dedicated transformersWebGpuOutputLimits.ts helper is added through the existing selector; five dedicated budget/settings/catalog consumers and four already anchored mixed upstream files change. Qwen retains its build-owned 96 ceiling, Gemma has a bounded 192 ceiling, legacy saved limits remain respected, and catalog/request limits intersect rather than expand adapter safety. All 129 dedicated owners pass existing direct-import review; no external package root is added. Upstream migration changes are fingerprinted only where existing mixed ownership already reaches them; unrelated core consumers are not newly selected or audited. Exact prior identities and narrow inference-hunk reversal preserve every historical aggregate, while live removal/drift tests cover all ten changed/added inputs. Composition is 177 sources, 129 dedicated owners, unchanged 108 anchors and 26 roots. No selector, manifest, dependency/lock, advisory decision, prompt/weight, cache identity, authentication, encryption, backend, CI waiver, or deployment change is made by this inventory update. This is source-ownership evidence, not model/device/runtime or release acceptance."
+      },
+      {
+        "sha256": "c478ca7aefd4551309ee18992f5705660a0f14e834069cabc12f8a2871b34b88",
+        "reviewRecord": "npm_feature_scope.current-client.review.md",
+        "workingTreeReview": "2026-10-06: bounded current-source binding for reviewed UI repair 1cf9e1a866c68a261acaa8679ab5a6fc9c0fc7cb and approved private-card reproposal/storage fixes. Reuse the prior frozen 41-source repair inventory and its browser/emulator evidence, without treating it as acceptance of today's new runtime bytes. Independently reading all 177 predecessor blobs at 2384b716 reproduces 6ae14948. Two local helpers, localAppRelayFrame and localAppReproposalPresentation, are discovered by the unchanged current-only selector; 24 existing owned or anchored inputs change. Equivalent current Connect and appDirectoryUrl anchors replace the removed Saved-cards-manager text and old one-line relay invocation. All 131 dedicated modules use the existing 26 roots; mixed hosts remain exact anchored only. Retained cards stay encrypted, approval is revoked before fresh extraction, prior delivery identities remain immutable, explicit source-matched regeneration creates a separate unapproved request, and the old eight-card cap is replaced by per-card and aggregate-byte bounds. Earlier technical handoff screens remain removed. Composition is 179 sources and unchanged 108 anchors. Exact historical preimages and two strict text reversals retain every earlier checkpoint; current source drift/removal and unreviewed imports remain rejected. Tests and docs are not runtime owners. No source-selector, dependency/lock, advisory decision, workflow, model/prompt, authentication, OpenChat backend, deployment or release acceptance change is made."
       }
     ]
   }

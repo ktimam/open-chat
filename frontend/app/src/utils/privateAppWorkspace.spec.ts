@@ -292,6 +292,107 @@ describe("private card presentation intent", () => {
         expect(deps.deliver).not.toHaveBeenCalled();
     });
 
+    it.each(["text_content", "image_content"] as const)(
+        "explicitly regenerates %s without replacing the old card or carrying approval",
+        async (kind) => {
+            const { workspace, deps } = fixture();
+            const content = { ...text, kind } as MessageContent;
+            const options = { stillCurrent: () => true, source: source("1"), regenerate: true };
+            await workspace.propose(client, content, options);
+            const first = workspace.state.draft!;
+            workspace.edit('{"value":43}', workspace.state.recipient);
+            expect(workspace.review()).toBe(true);
+            const priorApproval = workspace.state.draft!.approval!.approvalId;
+            deps.extract.mockResolvedValueOnce({ kind: "extracted", candidates: [{ value: 99 }] });
+
+            await expect(workspace.propose(client, content, options)).resolves.toBe("drafted");
+            const next = workspace.state.draft!;
+            expect(next.id).not.toBe(first.id);
+            expect(next.payload).toEqual({ value: 99 });
+            expect(next.approval).toBeUndefined();
+            expect(workspace.state.cards).toHaveLength(2);
+            expect(workspace.state.cards.find((card) => card.id === first.id)).toMatchObject({
+                payload: { value: 43 },
+                status: "draft",
+            });
+            expect(workspace.state.presentationDraftId).toBe(next.id);
+            expect(deps.extract).toHaveBeenCalledTimes(2);
+            await workspace.confirm(priorApproval);
+            expect(deps.deliver).not.toHaveBeenCalled();
+            expect(workspace.selectCard(first.id)).toBe(true);
+            expect(workspace.state.draft?.payload).toEqual({ value: 43 });
+            expect(deps.extract).toHaveBeenCalledTimes(2);
+        },
+    );
+
+    it("keeps prior delivery retries immutable when deliberately proposing the same message again", async () => {
+        const { workspace, deps } = fixture();
+        const options = { stillCurrent: () => true, source: source("1"), regenerate: true };
+        await workspace.propose(client, text, options);
+        const first = workspace.state.draft!.id;
+        expect(workspace.review()).toBe(true);
+        await workspace.confirm(workspace.state.draft!.approval!.approvalId);
+        const originalRequest = deps.deliver.mock.calls[0][0];
+
+        await workspace.propose(client, text, options);
+        expect(workspace.state.cards.find((card) => card.id === first)?.status).toBe("delivered");
+        expect(workspace.state.draft?.approval).toBeUndefined();
+        expect(deps.deliver).toHaveBeenCalledOnce();
+        expect(workspace.review()).toBe(true);
+        expect(workspace.state.draft!.approval!.request.idempotencyKey).not.toBe(
+            originalRequest.idempotencyKey,
+        );
+        expect(workspace.selectCard(first)).toBe(true);
+        expect(workspace.review()).toBe(true);
+        expect(workspace.state.draft!.approval!.request).toEqual(originalRequest);
+        expect(deps.deliver).toHaveBeenCalledOnce();
+    });
+
+    it("preserves the earlier card if same-message regeneration fails or is cancelled", async () => {
+        const { workspace, deps } = fixture();
+        const options = { stillCurrent: () => true, source: source("1"), regenerate: true };
+        await workspace.propose(client, text, options);
+        const first = workspace.state.draft!.id;
+        deps.extract.mockResolvedValueOnce({ kind: "no_extraction", raw: "" });
+        await expect(workspace.propose(client, text, options)).resolves.toBe("retryable");
+        expect(workspace.state.cards.map((card) => card.id)).toEqual([first]);
+        expect(workspace.state.presentationDraftId).toBeUndefined();
+        let finish!: (result: PrivateAppExtractionResult) => void;
+        deps.extract.mockImplementationOnce(() => new Promise((resolve) => (finish = resolve)));
+        const pending = workspace.propose(client, text, options);
+        await expect(workspace.propose(client, text, options)).resolves.toBe("retryable");
+        workspace.discard();
+        finish({ kind: "extracted", candidates: [{ value: 99 }] });
+        await expect(pending).resolves.toBe("retryable");
+        expect(workspace.state.cards.map((card) => card.id)).toEqual([first]);
+        expect(workspace.selectCard(first)).toBe(true);
+        expect(workspace.state.draft?.payload).toEqual({ value: 42 });
+        expect(deps.deliver).not.toHaveBeenCalled();
+    });
+
+    it("allows more than eight retained cards including delivered cards without evicting history", async () => {
+        const { workspace, deps } = fixture();
+        const ids: string[] = [];
+        for (let index = 0; index < 12; index++) {
+            await expect(
+                workspace.propose(client, text, {
+                    stillCurrent: () => true,
+                    source: source(String(index)),
+                    regenerate: true,
+                }),
+            ).resolves.toBe("drafted");
+            ids.push(workspace.state.draft!.id);
+            if (index < 9) {
+                expect(workspace.review()).toBe(true);
+                await workspace.confirm(workspace.state.draft!.approval!.approvalId);
+            }
+        }
+        expect(workspace.state.cards.map((card) => card.id)).toEqual(ids);
+        expect(workspace.state.cards.filter((card) => card.status === "delivered")).toHaveLength(9);
+        expect(deps.extract).toHaveBeenCalledTimes(12);
+        expect(deps.deliver).toHaveBeenCalledTimes(9);
+    });
+
     it("changes the source when selecting another card and revokes its old approval", async () => {
         const { workspace, deps } = fixture();
         await workspace.propose(client, text, { stillCurrent: () => true, source: source("1") });

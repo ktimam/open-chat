@@ -1,6 +1,6 @@
 # Current unofficial-client npm source ownership
 
-Latest disposition: see **October 5 bounded output budgets and 0519 merge**
+Latest disposition: see **October 6 normal app flow and deliberate re-proposal**
 below. Earlier sections and their hashes remain historical evidence; they do not
 describe the now-removed active browser-auth transport.
 
@@ -1107,3 +1107,55 @@ unchanged. Exact source/formatter/config identities and regenerated live edit
 proofs remain mandatory; unknown paths, changed bases or candidate bytes fail
 closed. No upstream source is reformatted and no blanket exemption is added.
 These are scoped CI checkpoint updates, not new audit or release acceptance.
+
+## October 6 normal app flow and deliberate re-proposal
+
+This bounded review binds the UI repair committed as
+`1cf9e1a866c68a261acaa8679ab5a6fc9c0fc7cb` and the approved private-card
+capacity/re-proposal working-tree fix. The previous repair's frozen 41-source
+inventory and browser/emulator checks remain evidence for that earlier runtime,
+not for newly changed card code. No core audit is added.
+
+The unchanged selectors discover two additions:
+`localAppRelayFrame.ts` from the reviewed repair and
+`localAppReproposalPresentation.ts` from this change. Both import only local
+modules or use built-in browser APIs; tests remain outside production ownership.
+The full current source set is **179 files, 131 dedicated owners, 108 exact
+ownership anchors and 26 unchanged dependency roots**, with UTF-8/LF aggregate
+`c478ca7aefd4551309ee18992f5705660a0f14e834069cabc12f8a2871b34b88`.
+
+The two obsolete anchors are replaced without reducing their owned file scope:
+
+- `LocalAppDirectory.svelte`: the normal `workspace.connectApp(id)` operation
+  replaces the removed Saved-cards-manager label. Source-inline links still
+  reopen every retained card; a separate manager is not restored.
+- `rollup.config.mjs`: the configured `appDirectoryUrl` relay argument replaces
+  the former one-line invocation. The regression also checks that both relay
+  invocations retain the local-web gate and that only the setup invocation sets
+  `setup: true`.
+
+The earlier repair displays the normal app connection/review UI inside a
+first-party transport with exact destination/frame/nonce checks. It retains
+encryption before handoff, explicit app saving and immutable same-ID retry.
+The current fix removes only the eight-card count restriction, preserving the
+per-card bounds and a 16 MiB aggregate budget without deleting retained cards.
+Fresh extraction is explicit, uses a new request identity, revokes prior approval
+and preserves old delivery history. The source-matched re-proposal label grants
+no delivery authority. Desktop/mobile success no longer implicitly dismisses the
+suggestion; explicit Dismiss/mute remains available.
+
+All **177** predecessor files were independently read from Git
+`2384b716c2ce2d4fada522b6c926818ff84cfeaa`, reproducing the exact reviewed
+`6ae14948ee5e532a901797b86790df515d397eca046290501f78b098b9f23d97`
+aggregate. Twenty-four exact old identities plus removal of the two additions
+reconstruct that checkpoint before the existing historical chain. The two tests
+that reconstruct source text first reverse only exact reviewed UI hunks and
+verify the complete predecessor hashes. No Git access is needed in CI.
+Every changed/added input is separately tested against live removal and drift;
+current imports, roots and all historical snapshots remain checked.
+
+Only these source-review files change in this update. Source selectors,
+workflows, root declarations, manifests/locks, historical PR inventories,
+advisory decisions, authentication, model weights/prompts and backend
+configuration remain untouched. These offline source checks are not a new
+advisory scan, rebuilt-artifact result, device qualification or release approval.

@@ -9,7 +9,8 @@ import {
     snapshotSavedLocalAppDraft,
     snapshotSavedLocalAppDraftCollection,
     snapshotLocalAppDraftSourceReference,
-    MAX_SAVED_LOCAL_APP_DRAFTS,
+    MAX_SAVED_LOCAL_APP_DRAFT_BYTES,
+    LocalAppDraftStorageCapacityError,
     type EncryptedLocalDraftRecord,
     type LocalDraftRecordBackend,
     type SavedLocalAppDraft,
@@ -62,6 +63,22 @@ const collection = (...saved: SavedLocalAppDraft[]): SavedLocalAppDraftCollectio
     version: 2,
     cards: saved.map((value) => ({ saved: value })),
 });
+function collectionAtByteLimit(slack = 0): SavedLocalAppDraftCollection {
+    const cards = Array.from({ length: MAX_SAVED_LOCAL_APP_DRAFT_BYTES / (64 * 1024) }, () => ({
+        ...fixture(),
+        editorJson: "x".repeat(64 * 1024),
+    }));
+    let excess =
+        new TextEncoder().encode(JSON.stringify(collection(...cards))).byteLength -
+        MAX_SAVED_LOCAL_APP_DRAFT_BYTES +
+        slack;
+    for (let index = cards.length - 1; excess > 0; index--) {
+        const removed = Math.min(excess, cards[index].editorJson.length);
+        cards[index] = { ...cards[index], editorJson: cards[index].editorJson.slice(removed) };
+        excess -= removed;
+    }
+    return collection(...cards);
+}
 const sourceReference = {
     chatKey: "PRIVATE_CHAT_REFERENCE",
     messageId: "18446744073709551615",
@@ -399,47 +416,77 @@ describe("bounded private card collections", () => {
         expect(Object.isFrozen(snapshot.cards[0].source)).toBe(true);
     });
 
-    it("accepts empty or eight-card collections and rejects a ninth without eviction", async () => {
+    it("retains more than eight unsent and attempted cards without eviction or restored approval", async () => {
         const db = backend();
         const storage = createLocalAppDraftStorage(db.store);
-        expect(MAX_SAVED_LOCAL_APP_DRAFTS).toBe(8);
         expect(snapshotSavedLocalAppDraftCollection(collection())).toEqual(collection());
-        const saved = collection(...Array.from({ length: 8 }, fixture));
+        const saved = collection(
+            ...Array.from({ length: 16 }, (_, index) => {
+                const saved = fixture();
+                return { ...saved, draft: { ...saved.draft, attempted: index % 2 === 0 } };
+            }),
+        );
         await storage.write(scope, saved);
-        const original = db.records.get(scopeKey());
-        expect(() =>
-            storage.write(scope, collection(...saved.cards.map((card) => card.saved), fixture())),
-        ).toThrow("Private card could not");
-        expect(db.records.get(scopeKey())).toBe(original);
-        expect(await storage.read(scope)).toEqual(saved);
+        const restored = await createLocalAppDraftStorage(db.store).read(scope);
+        expect(restored).toEqual(saved);
+        const send = vi.fn<LocalDraftDelivery>(async () => ({ kind: "delivered" as const }));
+        const drafts = new LocalAppDraftStore(send);
+        drafts.setAccount(scope.account);
+        for (const [index, card] of restored!.cards.entries()) {
+            const draft = drafts.restore(card.saved.draft);
+            expect(draft.status).toBe(index % 2 === 0 ? "uncertain" : "draft");
+            expect(draft.approval).toBeUndefined();
+            expect(drafts.snapshot(draft.id).idempotencyKey).toBe(card.saved.draft.idempotencyKey);
+        }
+        expect(send).not.toHaveBeenCalled();
+        const appended = collection(...saved.cards.map((card) => card.saved), fixture());
+        await storage.write(scope, appended);
+        expect(await storage.read(scope)).toEqual(appended);
     });
 
-    it("caps the entire collection at 256 KiB, including editor text and source references", async () => {
+    it("roundtrips a collection larger than 256 KiB while retaining the individual editor limit", async () => {
         const db = backend();
         const storage = createLocalAppDraftStorage(db.store);
-        const cards = Array.from({ length: 4 }, () => ({
-            ...fixture(),
-            editorJson: "x".repeat(64 * 1024),
-        }));
-        for (const saved of cards) expect(() => snapshotSavedLocalAppDraft(saved)).not.toThrow();
-        const original = collection(cards[0], cards[1], cards[2]);
+        const saved = collection(
+            ...Array.from({ length: 12 }, () => ({
+                ...fixture(),
+                editorJson: "x".repeat(32 * 1024),
+            })),
+        );
+        await storage.write(scope, saved);
+        expect(db.records.get(scopeKey())!.ciphertext!.byteLength).toBeGreaterThan(256 * 1024);
+        expect(await createLocalAppDraftStorage(db.store).read(scope)).toEqual(saved);
+        expect(() =>
+            snapshotSavedLocalAppDraft({ ...fixture(), editorJson: "x".repeat(64 * 1024 + 1) }),
+        ).toThrow("Private card could not");
+    });
+
+    it("caps aggregate bytes, including metadata, without changing any previously saved cards", async () => {
+        const db = backend();
+        const storage = createLocalAppDraftStorage(db.store);
+        const original = collection(fixture());
         await storage.write(scope, original);
         const row = db.records.get(scopeKey());
-        expect(() => storage.write(scope, collection(...cards))).toThrow("Private card could not");
-        expect(db.records.get(scopeKey())).toBe(row);
         const encoder = new TextEncoder();
-        const nearLimit = collection(...cards);
-        const overhead = encoder.encode(JSON.stringify(nearLimit)).byteLength - 256 * 1024;
-        const last = { ...cards[3], editorJson: cards[3].editorJson.slice(overhead + 10) };
-        const bounded = collection(cards[0], cards[1], cards[2], last);
-        expect(encoder.encode(JSON.stringify(bounded)).byteLength).toBe(256 * 1024 - 10);
+        const bounded = collectionAtByteLimit(10);
+        expect(MAX_SAVED_LOCAL_APP_DRAFT_BYTES).toBe(16 * 1024 * 1024);
+        expect(encoder.encode(JSON.stringify(bounded)).byteLength).toBe(
+            MAX_SAVED_LOCAL_APP_DRAFT_BYTES - 10,
+        );
         expect(() => snapshotSavedLocalAppDraftCollection(bounded)).not.toThrow();
+        expect(() =>
+            storage.write(scope, {
+                ...bounded,
+                cards: [...bounded.cards, { saved: fixture() }],
+            }),
+        ).toThrow(LocalAppDraftStorageCapacityError);
+        expect(db.records.get(scopeKey())).toBe(row);
         expect(() =>
             snapshotSavedLocalAppDraftCollection({
                 ...bounded,
                 activeDraftId: bounded.cards[0].saved.draft.id,
             }),
-        ).toThrow("Private card could not");
+        ).toThrow(LocalAppDraftStorageCapacityError);
         expect(() =>
             snapshotSavedLocalAppDraftCollection({
                 ...bounded,
@@ -447,8 +494,31 @@ describe("bounded private card collections", () => {
                     index === 0 ? { ...card, source: sourceReference } : card,
                 ),
             }),
-        ).toThrow("Private card could not");
+        ).toThrow(LocalAppDraftStorageCapacityError);
         expect(await storage.read(scope)).toEqual(original);
+    });
+
+    it("rejects oversized encrypted records before decryption for both record versions", async () => {
+        const db = backend();
+        const storage = createLocalAppDraftStorage(db.store);
+        await storage.write(scope, fixture());
+        const original = db.records.get(scopeKey())!;
+        const decrypt = vi.spyOn(crypto.subtle, "decrypt");
+        try {
+            for (const version of [1, 2] as const) {
+                db.records.set(scopeKey(), {
+                    ...original,
+                    version,
+                    ciphertext: new ArrayBuffer(
+                        (version === 1 ? 256 * 1024 : MAX_SAVED_LOCAL_APP_DRAFT_BYTES) + 17,
+                    ),
+                });
+                await expect(storage.read(scope)).rejects.toThrow("Private card could not");
+            }
+            expect(decrypt).not.toHaveBeenCalled();
+        } finally {
+            decrypt.mockRestore();
+        }
     });
 
     it("rejects duplicate card and import identities, rather than dropping or replacing entries", () => {
@@ -1068,20 +1138,8 @@ describe("frozen encrypted per-card app metadata", () => {
         expect(getter).not.toHaveBeenCalled();
     });
 
-    it("counts frozen app metadata toward the same total byte cap", () => {
-        const cards = Array.from({ length: 4 }, () => ({
-            ...fixture(),
-            editorJson: "x".repeat(64 * 1024),
-        }));
-        const value = collection(...cards);
-        const overhead = new TextEncoder().encode(JSON.stringify(value)).byteLength - 256 * 1024;
-        const bounded = collection(
-            ...cards.map((saved, index) =>
-                index === 3
-                    ? { ...saved, editorJson: saved.editorJson.slice(overhead + 10) }
-                    : saved,
-            ),
-        );
+    it("counts frozen app metadata toward the aggregate storage byte cap", () => {
+        const bounded = collectionAtByteLimit(10);
         expect(() => snapshotSavedLocalAppDraftCollection(bounded)).not.toThrow();
         expect(() =>
             snapshotSavedLocalAppDraftCollection({
@@ -1090,7 +1148,7 @@ describe("frozen encrypted per-card app metadata", () => {
                     index === 0 ? { ...card, app: appFixture(card.saved) } : card,
                 ),
             }),
-        ).toThrow("Private card could not");
+        ).toThrow(LocalAppDraftStorageCapacityError);
     });
 });
 

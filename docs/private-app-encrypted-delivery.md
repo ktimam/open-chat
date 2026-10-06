@@ -224,9 +224,10 @@ recipient, not proof of who authored the message or truthfulness of the extracte
 
 ## Local storage and restart
 
-The October 2 collection format retains up to eight private cards, with a combined
-256 KiB plaintext limit including their schemas, frozen app configuration and local
-references. Each card retains its editor, recipient, draft/request IDs and attempted
+Private cards have no fixed count limit. The encrypted collection has a 16 MiB
+plaintext safety budget, including schemas, frozen app configuration and local
+references; each card remains bounded to 256 KiB. This supersedes the original
+eight-card/256 KiB collection cap. Each card retains its editor, recipient, draft/request IDs and attempted
 state. The collection and active-card selection are encrypted with AES-GCM and a
 nonextractable device-local IndexedDB key, scoped to OpenChat account and backend.
 Capacity failure never evicts or replaces an existing card. App/action presentation,
@@ -237,12 +238,19 @@ connected configuration, not an old card's frozen configuration.
 Only host-captured chat/message identifiers, an optional chat kind and optional
 message/thread indices associate a card with its source. These references stay
 inside the encrypted local collection;
-they are not source content, chat messages or outgoing app DTO fields. Re-proposing
-the same source for the same app/action resumes its retained card without inference.
-The source message's **View private card** control selects its retained card. An old
+they are not source content, chat messages or outgoing app DTO fields. **Propose again**
+deliberately reruns extraction from the current message with the current connected
+action/model. It creates a fresh unapproved card and request ID without replacing
+earlier cards. Failed or cancelled extraction retains the earlier cards. A successful
+proposal keeps the normal proposal chip available; explicit Dismiss/mute still works.
+The source message's **View private card** control selects an earlier result without
+rerunning inference. When an earlier card was sent, the new card warns that saving
+again may create another entry. Existing delivery retries still use their exact old
+request IDs; re-proposal never sends automatically. An old
 bare-principal reference does not distinguish a direct chat from a group, so the
-client does not guess a navigation URL. Re-proposing that same message fills in the
-missing kind/position without inference or creating another card. Navigation preserves
+client does not guess a navigation URL. The internal resume operation can fill in
+missing kind/position without inference; user Propose actions explicitly request
+fresh extraction instead. Navigation preserves
 the card and its edits, requires a new review, and sends nothing to the receiving app.
 Malformed references cannot become navigation URLs. None of this posts a card to
 chat or persists original message content. Do not persist approval tokens, transport

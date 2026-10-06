@@ -755,8 +755,13 @@ opt-ins; directory updates preserve unaffected apps and approved compatible setu
 Connection controls wait for restoration; a failed read/write is shown rather than
 reported as saved. Invalid or future-version records are not silently accepted.
 
-Up to eight private cards are saved encrypted on this device, separately from setup,
-scoped to their OpenChat account/backend. Closing a view does not delete them.
+Private cards are saved encrypted on this device, separately from setup,
+scoped to their OpenChat account/backend, without an eight-card count limit. The
+collection retains a 16 MiB safety budget and a 256 KiB per-card bound. Closing a view does not delete them.
+**Propose again** on the same message/image performs fresh extraction and preserves
+the previous card; **View private card** opens the previous result without inference.
+Neither operation sends to the app. A new proposal has a new request ID and needs
+explicit review/send; the existing card's delivery retry keeps its original request ID.
 Canceling an unsent proposal or using **Remove from this device** on a read-only
 card removes only that card. Disconnecting its app does not discard it; use its
 source message's **View private card** link to inspect it. The former setup

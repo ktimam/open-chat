@@ -2196,6 +2196,7 @@
             "muted": "AI action suggestions muted in this chat",
             "setting": "Suggest AI actions",
             "suggestion": "Propose {title}?",
+            "proposeAgain": "Propose again — {title}?",
             "working": "Working…",
             "verifyingModel": "Verifying cached model…",
             "loadingModel": "Loading model…",

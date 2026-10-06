@@ -15,6 +15,8 @@
         me: boolean;
         // The matched action's card title.
         title: string;
+        // A deliberate fresh extraction, distinct from reopening a retained private card.
+        again?: boolean;
         // The propose flow is running (the on-device model is loading/inferring) — show a spinner and
         // swallow taps so the chip reads as "working" instead of silently doing nothing.
         busy?: boolean;
@@ -29,6 +31,7 @@
     let {
         me,
         title,
+        again = false,
         busy = false,
         disabled = false,
         busyResourceKey,
@@ -79,7 +82,12 @@
             {#if busy}
                 <Translatable resourceKey={busyResourceKey} />
             {:else}
-                <Translatable resourceKey={i18nKey("aiApps.autoPropose.suggestion", { title })} />
+                <Translatable
+                    resourceKey={i18nKey(
+                        again ? "aiApps.autoPropose.proposeAgain" : "aiApps.autoPropose.suggestion",
+                        { title },
+                    )}
+                />
             {/if}
         </span>
         <button

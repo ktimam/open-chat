@@ -15,6 +15,8 @@
         me: boolean;
         // The matched action's card title.
         title: string;
+        // A deliberate fresh extraction, distinct from reopening a retained private card.
+        again?: boolean;
         offset: boolean;
         // The propose flow is running: show progress and swallow duplicate taps.
         busy?: boolean;
@@ -29,6 +31,7 @@
     let {
         me,
         title,
+        again = false,
         offset,
         busy = false,
         disabled = false,
@@ -103,7 +106,12 @@
             {#if busy}
                 <Translatable resourceKey={busyResourceKey} />
             {:else}
-                <Translatable resourceKey={i18nKey("aiApps.autoPropose.suggestion", { title })} />
+                <Translatable
+                    resourceKey={i18nKey(
+                        again ? "aiApps.autoPropose.proposeAgain" : "aiApps.autoPropose.suggestion",
+                        { title },
+                    )}
+                />
             {/if}
         </ChatFootnote>
         <button

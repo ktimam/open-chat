@@ -143,6 +143,54 @@ async function propose(workspace: PrivateAppWorkspace) {
 }
 
 describe("private workspace encrypted-card lifecycle", () => {
+    it("restores more than eight cards and permits same-message regeneration without losing prior requests", async () => {
+        const first = fixture();
+        await start(first.workspace);
+        const sources = Array.from({ length: 10 }, (_, index) => ({
+            chatKey: "synthetic-chat",
+            messageId: String(index),
+        }));
+        for (const source of sources) {
+            await expect(
+                first.workspace.propose(client, content, {
+                    stillCurrent: () => true,
+                    source,
+                    regenerate: true,
+                }),
+            ).resolves.toBe("drafted");
+            await saved(first.workspace);
+            expect(first.workspace.review()).toBe(true);
+            await first.workspace.confirm(first.workspace.state.draft!.approval!.approvalId);
+            await saved(first.workspace);
+        }
+        const before = (await first.storage.read(scope))!.cards;
+        expect(before).toHaveLength(10);
+        first.workspace.clear();
+        const restored = fixture(first.shared);
+        await start(restored.workspace);
+        expect(restored.workspace.state.cards).toHaveLength(10);
+        expect(restored.workspace.state.cards.every((card) => card.status === "uncertain")).toBe(
+            true,
+        );
+        expect(restored.deliver).not.toHaveBeenCalled();
+        await expect(
+            restored.workspace.propose(client, content, {
+                stillCurrent: () => true,
+                source: sources[0],
+                regenerate: true,
+            }),
+        ).resolves.toBe("drafted");
+        await saved(restored.workspace);
+        const after = (await restored.storage.read(scope))!.cards;
+        expect(after).toHaveLength(11);
+        expect(after.slice(0, 10).map((card) => card.saved.draft.idempotencyKey)).toEqual(
+            before.map((card) => card.saved.draft.idempotencyKey),
+        );
+        expect(after[10].saved.draft.idempotencyKey).not.toBe(before[0].saved.draft.idempotencyKey);
+        expect(restored.workspace.state.draft?.approval).toBeUndefined();
+        expect(restored.crossed).not.toHaveBeenCalled();
+    });
+
     it("directs failed setup restoration to normal Apps reconnect without manual import", async () => {
         const shared = sharedStorage();
         shared.setupStorage.read = async () => {
@@ -614,18 +662,20 @@ describe("private workspace encrypted-card lifecycle", () => {
         expect((await first.storage.read(scope))?.cards).toHaveLength(2);
     });
 
-    it("fails at capacity before inference without replacing any saved card", async () => {
+    it("adds a ninth retained card without replacing the earlier eight", async () => {
         const first = fixture();
         await start(first.workspace);
         for (let index = 0; index < 8; index++) await propose(first.workspace);
         const ids = first.workspace.state.cards.map((card) => card.id);
         expect(await first.workspace.propose(client, content, { stillCurrent: () => true })).toBe(
-            "retryable",
+            "drafted",
         );
-        expect(first.extract).toHaveBeenCalledTimes(8);
-        expect(first.workspace.state.cards.map((card) => card.id)).toEqual(ids);
+        await saved(first.workspace);
+        expect(first.extract).toHaveBeenCalledTimes(9);
+        expect(first.workspace.state.cards.slice(0, 8).map((card) => card.id)).toEqual(ids);
+        expect(first.workspace.state.cards).toHaveLength(9);
         expect((await first.storage.read(scope))?.cards.map((card) => card.saved.draft.id)).toEqual(
-            ids,
+            first.workspace.state.cards.map((card) => card.id),
         );
     });
 

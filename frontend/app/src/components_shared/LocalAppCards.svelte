@@ -91,6 +91,24 @@
             ? $localAppDeliveryStatus
             : undefined,
     );
+    const previousDeliveryForSource = $derived(
+        !!cardSource &&
+            workspaceView.cards.some((card) => {
+                const other = workspaceView.cardSources[card.id];
+                return (
+                    card.id !== workspaceView.draft?.id &&
+                    card.target.appId === workspaceView.draft?.target.appId &&
+                    card.target.actionId === workspaceView.draft?.target.actionId &&
+                    (card.status === "delivered" || card.status === "uncertain") &&
+                    other?.chatKey === cardSource.chatKey &&
+                    other?.messageId === cardSource.messageId &&
+                    other?.threadRootMessageIndex === cardSource.threadRootMessageIndex &&
+                    (other?.chatKind === undefined ||
+                        cardSource.chatKind === undefined ||
+                        other.chatKind === cardSource.chatKind)
+                );
+            }),
+    );
     const consumed = $derived(showDraft && workspaceView.draft?.status === "delivered");
     // Receipt can advance after confirm() resolves. Only this session's exact reviewed request
     // may replace the conservative workspace message; restored cards have no live approval.
@@ -337,6 +355,13 @@
                                 </div>{/if}
                             {#if editable}
                                 <div class="host-approval" role="group" aria-label="Card actions">
+                                    {#if previousDeliveryForSource}
+                                        <span class="handoff-notice" role="status"
+                                            >An earlier card for this message was already sent. This
+                                            is a new proposal; check the app before saving another
+                                            entry.</span
+                                        >
+                                    {/if}
                                     <span class="handoff-notice"
                                         >Send these fields encrypted to {selected?.name ??
                                             "the app"}; review and save there.</span

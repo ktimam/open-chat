@@ -13,7 +13,12 @@
         type ManualExtractionPromptResult,
         type ProposalPhase,
     } from "@utils/aiActionRunner";
-    import { privateAppWorkspace, proposePrivateAppMessage } from "@utils/privateAppWorkspace";
+    import {
+        privateAppWorkspace,
+        privateAppWorkspaceState,
+        proposePrivateAppMessage,
+    } from "@utils/privateAppWorkspace";
+    import { hasLocalAppSourceProposal } from "@utils/localAppReproposalPresentation";
     import { navigateToMainApps } from "@utils/mainAppsNavigation";
     import {
         localAppChatConfiguration,
@@ -540,6 +545,7 @@
                 return proposePrivateAppMessage(client, capturedContent, {
                     stillCurrent,
                     onPhase,
+                    regenerate: true,
                     sourceTimestamp: Number(timestamp),
                     source: {
                         chatKey: capturedChatKey,
@@ -995,17 +1001,11 @@
     async function proposeLocalSuggestedAction(suggestion: LocalAppSuggestion) {
         if (proposing || !localAppChatConfiguration.current(suggestion)) return;
         const key = privateSuggestionKey(suggestion);
-        const messageKey = autoProposeSuggestionKey(
-            $currentUserIdStore,
-            chatId,
-            threadRootMessageIndex,
-            msg.messageId,
-        );
         activeAutoProposeSuggestionKey = key;
         try {
-            if ((await runAiActionHandler(undefined, suggestion)) === "drafted") {
-                dismissLocalAutoProposeSuggestion(messageKey, suggestion);
-            }
+            // Keep the explicit Propose again action available after success. Only the user's
+            // dismiss/mute controls hide this suggestion; viewing a card never reruns extraction.
+            await runAiActionHandler(undefined, suggestion);
         } finally {
             if (activeAutoProposeSuggestionKey === key) activeAutoProposeSuggestionKey = undefined;
         }
@@ -1454,6 +1454,12 @@
                             {me}
                             offset={index === 0 && !hasThread && !hasReactions && !hasTips}
                             title={`${suggestion.appName} — ${suggestion.title}`}
+                            again={hasLocalAppSourceProposal(
+                                $privateAppWorkspaceState,
+                                localCardNamespace,
+                                localCardSource,
+                                suggestion,
+                            )}
                             busy={proposing &&
                                 activeAutoProposeSuggestionKey === privateSuggestionKey(suggestion)}
                             disabled={proposing}

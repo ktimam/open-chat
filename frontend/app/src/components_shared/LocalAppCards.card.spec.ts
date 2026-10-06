@@ -189,11 +189,11 @@ const closeCard = async () => {
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
     await settle();
 };
-const propose = async (coordinate?: LocalAppCardAnchorSource) => {
+const propose = async (coordinate?: LocalAppCardAnchorSource, regenerate = false) => {
     await workspace.propose(
         client,
         { kind: "text_content", text: "synthetic source" } as MessageContent,
-        { stillCurrent: () => true, ...(coordinate ? { source: coordinate } : {}) },
+        { stillCurrent: () => true, regenerate, ...(coordinate ? { source: coordinate } : {}) },
     );
     await settle();
 };
@@ -1552,6 +1552,45 @@ describe("local app card modal and authoritative review", () => {
         expect(calls.deliver).not.toHaveBeenCalled();
         expect(calls.extract).toHaveBeenCalledTimes(inferences);
         expect(workspace.state.cards).toHaveLength(3);
+    });
+
+    it("shows a fresh same-message result without replacing the old card or silently repeating its delivery", async () => {
+        const coordinate = source("73");
+        registerAnchor(coordinate);
+        await propose(coordinate, true);
+        const first = workspace.state.draft!.id;
+        const firstPayload = workspace.state.draft!.payload;
+        await acknowledge();
+        confirmButton().click();
+        await vi.waitFor(() => expect(workspace.state.draft?.status).toBe("delivered"));
+        calls.extract.mockResolvedValueOnce({ kind: "extracted", candidates: [{ value: 99 }] });
+        await propose(coordinate, true);
+        expect(workspace.state.draft!.id).not.toBe(first);
+        expect(numericFields()[0].value).toBe("99");
+        expect(workspace.state.cards.find((card) => card.id === first)?.status).toBe("delivered");
+        expect(workspace.state.draft!.approval).toBeUndefined();
+        expect(confirmation().checked).toBe(false);
+        expect(confirmButton().disabled).toBe(true);
+        expect(visibleText()).toContain("An earlier card for this message was already sent");
+        expect(calls.deliver).toHaveBeenCalledOnce();
+        expect(workspace.selectCard(first)).toBe(true);
+        await settle();
+        await expandDelivered();
+        expect(cardText()).toContain("42");
+        expect(workspace.state.draft?.payload).toEqual(firstPayload);
+        expect(calls.deliver).toHaveBeenCalledOnce();
+    });
+
+    it("renders a ninth retained private card without an eight-card error or deleting older cards", async () => {
+        for (let index = 0; index < 8; index++) {
+            const coordinate = source(String(80 + index));
+            registerAnchor(coordinate);
+            await propose(coordinate, true);
+        }
+        expect(workspace.state.cards).toHaveLength(9);
+        expect(preview()).not.toBeNull();
+        expect(visibleText()).not.toContain("limit is reached");
+        expect(calls.deliver).not.toHaveBeenCalled();
     });
 
     it("keeps a pending unrepresentable edit visible and blocks card switching", async () => {
