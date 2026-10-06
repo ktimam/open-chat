@@ -836,8 +836,15 @@ export default {
             ],
             hook: "buildStart",
         }),
-        localAppRelayPlugin({ enabled: localWebBuild }),
-        localAppRelayPlugin({ enabled: localWebBuild, setup: true }),
+        localAppRelayPlugin({
+            enabled: localWebBuild,
+            appDirectoryUrl: process.env.OC_APP_DIRECTORY_URL,
+        }),
+        localAppRelayPlugin({
+            enabled: localWebBuild,
+            setup: true,
+            appDirectoryUrl: process.env.OC_APP_DIRECTORY_URL,
+        }),
         localNativeAppHandoffBuildPlugin({ enabled: localTestApk }),
         localNativeAppSetupBuildPlugin({ enabled: localTestApk }),
         unofficialWebArtifacts(),

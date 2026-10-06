@@ -5,7 +5,7 @@ import { createReadStream, lstatSync, readFileSync, realpathSync } from "node:fs
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseUnofficialLocalPort } from "../frontend/unofficialLocalProfile.mjs";
-import { LOCAL_APP_RELAY_HEADERS } from "../frontend/app/localAppRelayHeaders.mjs";
+import { localAppRelayHeaders } from "../frontend/app/localAppRelayHeaders.mjs";
 
 const MANIFEST = "unofficial-local-web.json";
 const RELAY_ROUTES = new Set(["/local-app-handoff.html", "/local-app-handoff.js", "/local-app-setup.html", "/local-app-setup.js"]);
@@ -45,7 +45,10 @@ export function validateManifest(manifest) {
         manifest.relay?.html !== "/local-app-handoff.html" || manifest.relay?.script !== "/local-app-handoff.js") {
         throw new Error("Not a supported local-only web build manifest");
     }
-    return Object.freeze({ port, origin: manifest.origin, layout: manifest.layout, version: manifest.version });
+    // An absent origin preserves old previews' frame-src none policy; malformed pins fail closed.
+    localAppRelayHeaders(manifest.relay.appOrigin);
+    return Object.freeze({ port, origin: manifest.origin, layout: manifest.layout, version: manifest.version,
+        appOrigin: manifest.relay.appOrigin });
 }
 
 function fileInside(root, relative) {
@@ -102,7 +105,7 @@ export function localPreviewHandler(build) {
         }
         if (!file) { end(404); return; }
         if (RELAY_ROUTES.has(route)) {
-            for (const [name, value] of Object.entries(LOCAL_APP_RELAY_HEADERS)) response.setHeader(name, value);
+            for (const [name, value] of Object.entries(localAppRelayHeaders(build.appOrigin))) response.setHeader(name, value);
         } else if (raw === route && (
             (route === "/transformers_webgpu_worker.js" && request.url === `${route}?v=${build.version}`) ||
             (PINNED_RUNTIME_ROUTES.has(route) && request.url === route)

@@ -43,7 +43,7 @@ const encryptedRequest = encryptedRequestFixture({
 
 const start = (): LocalAppHandoffStart => ({
     handoffId: "a".repeat(32),
-    url: "http://localhost:41000/handoff",
+    url: "http://localhost:5192/handoff",
     pairingCode: "A".repeat(20),
     claimExpiresAtMs: now + 120_000,
 });
@@ -74,7 +74,7 @@ async function receivedReplacementFixture() {
         ...start(),
         handoffId: "b".repeat(32),
         pairingCode: "B".repeat(20),
-        url: "http://localhost:41001/handoff",
+        url: "http://localhost:5192/handoff",
     };
     deps.begin.mockResolvedValueOnce(start()).mockResolvedValueOnce(replacementStart);
     let finishPreviousPoll!: (result: LocalAppHandoffStatus) => void;
@@ -107,7 +107,7 @@ afterEach(() => {
 });
 
 describe("native private draft delivery", () => {
-    it("does nothing before explicit confirmation, then sends only the exact approved JSON; copy/open remain separate", async () => {
+    it("starts only after explicit confirmation, seals before opening once, and exposes no pairing controls", async () => {
         const { adapter, deps, abort } = fixture();
         expect(deps.begin).not.toHaveBeenCalled();
         const pending = adapter.deliver(request, abort.signal);
@@ -115,35 +115,58 @@ describe("native private draft delivery", () => {
         expect(deps.begin).toHaveBeenCalledExactlyOnceWith({
             approvedRequestJson: JSON.stringify(encryptedRequest),
         });
-        expect(get(adapter.pairing)?.pairingCode).toBe("A".repeat(20));
+        expect(get(adapter.pairing)).toBeUndefined();
         expect(deps.copy).not.toHaveBeenCalled();
-        expect(deps.open).not.toHaveBeenCalled();
-        await adapter.copyCode("wrong-id");
-        await adapter.openBrowser("wrong-id");
-        expect(deps.copy).not.toHaveBeenCalled();
-        expect(deps.open).not.toHaveBeenCalled();
-        await adapter.copyCode(request.idempotencyKey);
-        await adapter.openBrowser(request.idempotencyKey);
-        expect(deps.copy).toHaveBeenCalledExactlyOnceWith("A".repeat(20));
-        expect(deps.open).toHaveBeenCalledExactlyOnceWith("http://localhost:41000/handoff");
-        expect(deps.open.mock.calls[0][0]).not.toContain("A".repeat(20));
+        expect(deps.open).toHaveBeenCalledExactlyOnceWith(
+            "http://localhost:5192/handoff#bootstrap=" + "A".repeat(20),
+        );
+        expect(deps.open.mock.calls[0][0]).not.toContain(encryptedRequest.envelope.ciphertext);
         abort.abort();
         await expect(pending).resolves.toEqual({ kind: "uncertain" });
         expect(get(adapter.pairing)).toBeUndefined();
         expect(deps.cancel).toHaveBeenCalledOnce();
     });
 
-    it("erases the code after claim; receipt settles delivery but saved remains app-reported separately", async () => {
+    it("does not launch until the durable approval promise completes", async () => {
+        const { adapter, deps, abort } = fixture();
+        let approve!: () => void;
+        const beforeDelivery = new Promise<void>((resolve) => {
+            approve = resolve;
+        });
+        const pending = adapter.deliver(request, abort.signal, beforeDelivery);
+        await flush();
+        expect(deps.begin).not.toHaveBeenCalled();
+        expect(deps.open).not.toHaveBeenCalled();
+        approve();
+        await flush();
+        expect(deps.open).toHaveBeenCalledOnce();
+        abort.abort();
+        await expect(pending).resolves.toEqual({ kind: "uncertain" });
+    });
+
+    it("never retries a failed browser launch or exposes a code as fallback", async () => {
+        const { adapter, deps, abort } = fixture();
+        deps.open.mockRejectedValue(new Error("PRIVATE_OPEN_ERROR"));
+        await expect(adapter.deliver(request, abort.signal)).resolves.toEqual({
+            kind: "uncertain",
+        });
+        await vi.advanceTimersByTimeAsync(1_000_000);
+        expect(deps.open).toHaveBeenCalledOnce();
+        expect(deps.copy).not.toHaveBeenCalled();
+        expect(get(adapter.pairing)).toBeUndefined();
+        expect(deps.cancel).toHaveBeenCalledOnce();
+        expect(JSON.stringify(deps.status.mock.calls)).not.toContain("PRIVATE_OPEN_ERROR");
+    });
+
+    it("keeps the launch capability hidden after claim; receipt settles delivery but saved remains app-reported separately", async () => {
         const { adapter, deps, abort } = fixture();
         const pending = adapter.deliver(request, abort.signal);
         await flush();
         deps.poll.mockResolvedValueOnce(status("reviewing"));
         await vi.advanceTimersByTimeAsync(1_000);
         expect(get(adapter.pairing)).toBeUndefined();
-        await adapter.copyCode(request.idempotencyKey);
-        await adapter.openBrowser(request.idempotencyKey);
         expect(deps.copy).not.toHaveBeenCalled();
-        expect(deps.open).not.toHaveBeenCalled();
+        expect(deps.open).toHaveBeenCalledOnce();
         deps.poll.mockResolvedValueOnce(status("received"));
         await vi.advanceTimersByTimeAsync(1_000);
         await expect(pending).resolves.toEqual({ kind: "delivered" });
@@ -171,12 +194,7 @@ describe("native private draft delivery", () => {
                 [{ approvedRequestJson: JSON.stringify(encryptedRequest) }],
             ]);
             expect(deps.cancel).toHaveBeenCalledExactlyOnceWith(start().handoffId);
-            expect(get(adapter.pairing)).toMatchObject({
-                importId: request.idempotencyKey,
-                handoffId: replacementStart.handoffId,
-                pairingCode: replacementStart.pairingCode,
-                url: replacementStart.url,
-            });
+            expect(get(adapter.pairing)).toBeUndefined();
             expect(deps.poll).toHaveBeenLastCalledWith(replacementStart.handoffId);
             expect(deps.status).toHaveBeenLastCalledWith({
                 importId: request.idempotencyKey,
@@ -210,7 +228,7 @@ describe("native private draft delivery", () => {
             await vi.advanceTimersByTimeAsync(1_000_000);
             expect(deps.begin).toHaveBeenCalledTimes(2);
             expect(deps.copy).not.toHaveBeenCalled();
-            expect(deps.open).not.toHaveBeenCalled();
+            expect(deps.open).toHaveBeenCalledTimes(2);
         },
     );
 
@@ -263,7 +281,7 @@ describe("native private draft delivery", () => {
             expect(deps.poll).toHaveBeenCalledTimes(pollCalls);
             expect(deps.begin).toHaveBeenCalledTimes(2);
             expect(deps.copy).not.toHaveBeenCalled();
-            expect(deps.open).not.toHaveBeenCalled();
+            expect(deps.open).toHaveBeenCalledTimes(2);
         },
     );
 
@@ -337,12 +355,14 @@ describe("native private draft delivery", () => {
     });
 
     it.each([
-        "https://localhost:41000/handoff",
-        "http://127.0.0.1:41000/handoff",
+        "https://localhost:5192/handoff",
+        "http://127.0.0.1:5192/handoff",
         "http://localhost:80/handoff",
-        "http://localhost:41000/handoff?code=hidden",
-        "http://localhost:41000/handoff#hidden",
-        "http://user@localhost:41000/handoff",
+        "http://localhost:41000/handoff",
+        "http://localhost:5193/handoff",
+        "http://localhost:5192/handoff?code=hidden",
+        "http://localhost:5192/handoff#hidden",
+        "http://user@localhost:5192/handoff",
         "https://example.test/handoff",
     ])("rejects an unsafe or unexpected browser URL: %s", async (url) => {
         const { adapter, deps, abort } = fixture();

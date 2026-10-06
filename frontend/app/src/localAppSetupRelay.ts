@@ -2,19 +2,26 @@ import {
     APP_SETUP_NONCE,
     APP_SETUP_TIMEOUT_MS,
     exactSetupPacket,
-    openAppSetupPopup,
+    openAppSetupFrame,
     validSetupTarget,
 } from "./utils/localAppSetupPopup";
+import { validateLocalAppFrameDestination } from "./utils/localAppRelayFrame";
 
-/** First-party non-isolated relay. Neither this page nor the app receives chat content. */
+/** The normal app connection UI is the only visible surface; sharing still needs its consent. */
 export function startLocalAppSetupRelay(): () => void {
     window.opener = null;
     const status = document.querySelector<HTMLElement>("#setup-status")!;
-    const button = document.querySelector<HTMLButtonElement>("#connect-app")!;
+    const frame = document.querySelector<HTMLIFrameElement>("#app-frame")!;
     const params = new URLSearchParams(location.hash.slice(1));
     const nonce = params.get("sessionNonce");
-    if (window.top !== window || params.size !== 1 || !nonce || !APP_SETUP_NONCE.test(nonce)) {
-        status.textContent = "Invalid app connection. Return to Apps to connect.";
+    if (
+        window.top !== window ||
+        location.search ||
+        params.size !== 1 ||
+        !nonce ||
+        !APP_SETUP_NONCE.test(nonce)
+    ) {
+        status.textContent = "This connection expired. Return to Apps to reconnect.";
         return () => {};
     }
     history.replaceState(null, "", location.pathname);
@@ -29,19 +36,18 @@ export function startLocalAppSetupRelay(): () => void {
         closed = true;
         clearTimeout(timer);
         controller.abort();
-        button.disabled = true;
-        button.onclick = null;
         window.removeEventListener("pagehide", cancel);
         channel.close();
         target = undefined;
     };
     const cancel = () => {
         if (closed) return;
-        status.textContent = "Connection ended. Return to Apps to reconnect.";
+        status.hidden = false;
+        status.textContent = "Connection did not finish. Return to Apps to reconnect.";
         try {
             send("setup-failed");
         } catch {
-            /* Cleanup must survive a broken channel. */
+            /* Broken transport still closes locally. */
         } finally {
             stop();
         }
@@ -55,6 +61,8 @@ export function startLocalAppSetupRelay(): () => void {
             data.type === "setup-cancel" &&
             exactSetupPacket(data, ["type", "version", "sessionNonce"])
         ) {
+            status.hidden = false;
+            status.textContent = "This connection was closed. Return to Apps to reconnect.";
             stop();
             return;
         }
@@ -66,25 +74,28 @@ export function startLocalAppSetupRelay(): () => void {
         )
             return;
         target = { appId: data.appId as string, setupUrl: data.setupUrl as string };
-        status.textContent = `Connect ${target.appId} at ${new URL(target.setupUrl).origin}. You will choose what app setup to share there.`;
-        button.disabled = false;
-    };
-    button.onclick = () => {
-        if (closed || !target || button.disabled) return;
-        button.disabled = true;
-        status.textContent = "Complete Connect in the app window. No chat messages have been sent.";
-        void openAppSetupPopup(target.appId, target.setupUrl, controller.signal)
-            .then((catalogJson) => {
-                if (closed) return;
-                send("setup-result", { catalogJson });
-                status.textContent = "App setup returned to OpenChat. You can close this tab.";
-                stop();
-            })
-            .catch(() => {
-                if (closed) return;
-                status.textContent = "Connection did not finish. Return to Apps to try again.";
-                cancel();
-            });
+        try {
+            validateLocalAppFrameDestination(target.setupUrl);
+            status.hidden = true;
+            void openAppSetupFrame(target.appId, target.setupUrl, controller.signal, frame)
+                .then((catalogJson) => {
+                    if (closed) return;
+                    try {
+                        send("setup-result", { catalogJson });
+                    } finally {
+                        stop();
+                    }
+                })
+                .catch(() => {
+                    if (!closed) {
+                        status.hidden = false;
+                        cancel();
+                    }
+                });
+        } catch {
+            status.hidden = false;
+            cancel();
+        }
     };
     try {
         send("setup-ready");

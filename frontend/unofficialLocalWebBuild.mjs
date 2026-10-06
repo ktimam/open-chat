@@ -1,6 +1,7 @@
 import { cpSync, lstatSync, readdirSync, realpathSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
+import { localAppRelayOrigin } from "./app/localAppRelayHeaders.mjs";
 import {
     createUnofficialLocalEnvironment,
     parseUnofficialLocalPort,
@@ -100,7 +101,11 @@ export function unofficialLocalWebManifest(environment) {
         clientOnlyApps: true,
         ota: "none",
         native: false,
-        relay: { html: "/local-app-handoff.html", script: "/local-app-handoff.js" },
+        relay: {
+            html: "/local-app-handoff.html",
+            script: "/local-app-handoff.js",
+            appOrigin: localAppRelayOrigin(environment.OC_APP_DIRECTORY_URL),
+        },
     });
 }
 

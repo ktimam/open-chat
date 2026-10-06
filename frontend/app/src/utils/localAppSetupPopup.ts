@@ -52,6 +52,29 @@ export function openAppSetupPopup(
     setupUrl: string,
     signal: AbortSignal,
 ): Promise<string> {
+    return connectAppSetupWindow(appId, setupUrl, signal, () => window.open(setupUrl, "_blank"));
+}
+
+/** Same consent protocol, in the app's normal full-page UI. The host's CSP pins frame origins. */
+export function openAppSetupFrame(
+    appId: string,
+    setupUrl: string,
+    signal: AbortSignal,
+    frame: HTMLIFrameElement,
+): Promise<string> {
+    return connectAppSetupWindow(appId, setupUrl, signal, () => {
+        frame.src = setupUrl;
+        frame.hidden = false;
+        return frame.contentWindow;
+    });
+}
+
+function connectAppSetupWindow(
+    appId: string,
+    setupUrl: string,
+    signal: AbortSignal,
+    open: () => Window | null,
+): Promise<string> {
     return new Promise((resolve, reject) => {
         if (signal.aborted || !validSetupTarget(appId, setupUrl)) {
             reject(new Error("App connection is unavailable or cancelled"));
@@ -116,7 +139,7 @@ export function openAppSetupPopup(
         window.addEventListener("pagehide", cancel, { once: true });
         window.addEventListener("message", receive);
         try {
-            popup = window.open(setupUrl, "_blank");
+            popup = open();
         } catch {
             finish();
             return;

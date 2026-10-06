@@ -104,7 +104,11 @@ test("manifest is fixed local build metadata, without credentials or arbitrary f
         clientOnlyApps: true,
         ota: "none",
         native: false,
-        relay: { html: "/local-app-handoff.html", script: "/local-app-handoff.js" },
+        relay: {
+            html: "/local-app-handoff.html",
+            script: "/local-app-handoff.js",
+            appOrigin: undefined,
+        },
     });
     for (const change of [
         { OC_UNOFFICIAL_CLIENT: "false" },
@@ -155,6 +159,24 @@ test("each build rotates worker script version without changing pinned model art
     );
     for (const value of [undefined, "", "A".repeat(32), "a".repeat(31), "../".repeat(11)])
         assert.throws(() => parseUnofficialLocalWebBuildId(value));
+});
+
+test("manifest pins only the configured public app origin for the normal app frame", (t) => {
+    const env = createUnofficialLocalWebBuildEnvironment(canisters, {
+        ...fixture(t),
+        appDirectoryUrl: "http://localhost:3000/openchat/apps-v1.json",
+    });
+    const manifest = unofficialLocalWebManifest(env);
+    assert.equal(manifest.relay.appOrigin, "http://localhost:3000");
+    assert.equal(JSON.stringify(manifest).includes("apps-v1.json"), false);
+    for (const directory of [
+        "https://app.example/path?secret=1",
+        "https://*.example/apps.json",
+        "http://remote.example/apps.json",
+    ])
+        assert.throws(() =>
+            unofficialLocalWebManifest({ ...env, OC_APP_DIRECTORY_URL: directory }),
+        );
 });
 
 test("public copy preserves generated key and relay, ignores associations, and refuses overwriting generated assets", (t) => {
@@ -210,7 +232,10 @@ test("Rollup local path has explicit safety replacements, isolated output, relay
         /localClientBuild \? \{ "process\.env\.NODE_ENV": JSON\.stringify\("production"\)/,
     );
     assert.match(source, /localClientBuild \? "development" : \(process\.env\.NODE_ENV/);
-    assert.match(source, /localAppRelayPlugin\(\{ enabled: localWebBuild \}\)/);
+    assert.match(
+        source,
+        /localAppRelayPlugin\(\{\s*enabled: localWebBuild,\s*appDirectoryUrl: process\.env\.OC_APP_DIRECTORY_URL,?\s*\}\)/,
+    );
     assert.match(source, localWebWiring.key);
     assert.match(source, localWebWiring.otaPlugin);
     assert.match(source, localWebWiring.rpId);

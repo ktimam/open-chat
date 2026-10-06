@@ -24,7 +24,6 @@ type Dependencies = {
     poll: (id: string) => Promise<LocalAppHandoffStatus>;
     cancel: (id: string) => Promise<unknown>;
     open: (url: string) => Promise<unknown>;
-    copy: (code: string) => Promise<unknown>;
     status: (status: DeliveryStatus | undefined) => void;
     now?: () => number;
 };
@@ -57,8 +56,7 @@ function validStart(value: LocalAppHandoffStart, now: number): boolean {
             url.href === value.url &&
             url.protocol === "http:" &&
             url.hostname === "localhost" &&
-            Number(url.port) >= 1024 &&
-            Number(url.port) <= 65535 &&
+            url.port === "5192" &&
             url.pathname === "/handoff" &&
             !url.username &&
             !url.password &&
@@ -70,15 +68,13 @@ function validStart(value: LocalAppHandoffStart, now: number): boolean {
     }
 }
 
-/** Only the immutable reviewed request reaches this adapter. No persistence, browser fallback,
- * automatic clipboard access, automatic opening, or automatic delivery retry is available. */
+/** Only explicit card confirmation reaches this adapter. Seal before launching the first-party
+ * transport once; never copy the launch capability, persist it, or retry an ambiguous delivery. */
 export function createNativeAppDelivery(deps: Dependencies) {
     const pairing = writable<NativeAppPairing | undefined>(undefined);
     const now = deps.now ?? Date.now;
-    let shown: NativeAppPairing | undefined;
     let active: { cancel: () => void } | undefined;
     const show = (value: NativeAppPairing | undefined) => {
-        shown = value;
         pairing.set(value);
     };
     const cancelAll = () => {
@@ -213,17 +209,11 @@ export function createNativeAppDelivery(deps: Dependencies) {
                         return;
                     }
                     id = result.handoffId;
-                    show(
-                        Object.freeze({
-                            importId: request.idempotencyKey,
-                            handoffId: id,
-                            url: result.url,
-                            pairingCode: result.pairingCode,
-                            expiresAtMs: result.claimExpiresAtMs,
-                        }),
-                    );
-                    // Remove a stale bearer code even if an IPC poll hangs. The native clock owns
-                    // the actual deadline; a UI timeout never authorizes an external offer.
+                    // A fragment is never sent in HTTP or referrers. The bundled transport erases
+                    // it before embedding the app. No capability is displayed or copied.
+                    await deps.open(`${result.url}#bootstrap=${result.pairingCode}`);
+                    if (closed || signal.aborted) return;
+                    // The native clock owns the actual deadline, even while IPC is stalled.
                     claimTimer = setTimeout(() => {
                         if (active === run) show(undefined);
                     }, result.claimExpiresAtMs - now());
@@ -234,43 +224,7 @@ export function createNativeAppDelivery(deps: Dependencies) {
             })();
         });
     };
-    const current = (importId: string) =>
-        shown?.importId === importId && shown.expiresAtMs > now() ? shown : undefined;
-    async function openBrowser(importId: string): Promise<void> {
-        const value = current(importId);
-        if (!value) return;
-        try {
-            await deps.open(value.url);
-        } catch {
-            if (shown === value)
-                show({
-                    ...value,
-                    message:
-                        "The local browser could not be opened. You can try opening it again while this code is valid.",
-                });
-        }
-    }
-    async function copyCode(importId: string): Promise<void> {
-        const value = current(importId);
-        if (!value) return;
-        try {
-            await deps.copy(value.pairingCode);
-            if (shown === value)
-                show({
-                    ...value,
-                    message:
-                        "Code copied. Paste it only into the local browser page shown here. The clipboard may retain it after it expires.",
-                });
-        } catch {
-            if (shown === value)
-                show({
-                    ...value,
-                    message:
-                        "The code could not be copied. You can enter the displayed code manually.",
-                });
-        }
-    }
-    return { deliver, pairing: { subscribe: pairing.subscribe }, cancelAll, openBrowser, copyCode };
+    return { deliver, pairing: { subscribe: pairing.subscribe }, cancelAll };
 }
 
 export const nativeAppDelivery = createNativeAppDelivery({
@@ -283,7 +237,6 @@ export const nativeAppDelivery = createNativeAppDelivery({
     cancel: async (id) =>
         (await import("tauri-plugin-oc-api/commands/localAppHandoff")).cancelLocalAppHandoff(id),
     open: async (url) => (await import("tauri-plugin-oc-api/commands/openUrl")).openUrl({ url }),
-    copy: async (code) => navigator.clipboard.writeText(code),
     status: (status) => localAppDeliveryStatus.set(status),
 });
 export const nativeAppPairing = nativeAppDelivery.pairing;

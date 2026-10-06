@@ -8,7 +8,7 @@ import { once } from "node:events";
 import { parseBuildArgs, localWebBuildPlan } from "./build-unofficial-local-web.mjs";
 import { loadLocalWebBuild, localPreviewHandler, parsePreviewArgs, validateManifest } from "./preview-unofficial-local-web.mjs";
 import { UNOFFICIAL_LOCAL_CANISTERS } from "../frontend/unofficialLocalProfile.mjs";
-import { LOCAL_APP_RELAY_HEADERS } from "../frontend/app/localAppRelayHeaders.mjs";
+import { LOCAL_APP_RELAY_HEADERS, localAppRelayHeaders, localAppRelayOrigin } from "../frontend/app/localAppRelayHeaders.mjs";
 
 const manifest = {
     schemaVersion: 1, profile: "unofficial-local-web", buildMode: "optimized", runtimeNodeEnvironment: "development",
@@ -39,8 +39,9 @@ function fixture(t, populated = true) {
     }
     return { parent, root };
 }
-async function running(t) {
+async function running(t, appOrigin) {
     const { parent, root } = fixture(t);
+    if (appOrigin !== undefined) writeFileSync(path.join(root, "unofficial-local-web.json"), JSON.stringify({ ...manifest, relay: { ...manifest.relay, appOrigin } }));
     const server = createServer(localPreviewHandler(loadLocalWebBuild(root)));
     server.listen(0, "127.0.0.1");
     await once(server, "listening");
@@ -70,7 +71,7 @@ test("CLI arguments cannot change the preview host/port or invoke a shell", (t) 
 });
 
 test("preview accepts only the pinned local manifest and a complete artifact", (t) => {
-    assert.deepEqual(validateManifest(manifest), { port: 5194, origin: "http://localhost:5194", layout: "v2", version: manifest.version });
+    assert.deepEqual(validateManifest(manifest), { port: 5194, origin: "http://localhost:5194", layout: "v2", version: manifest.version, appOrigin: undefined });
     for (const override of [{ port: undefined }, { port: "5194" }, { version: "2.0.0-localtest" }, { version: undefined }, { origin: "https://oc.app" }, { port: 5195 }, { ota: "minor" }, { existingAccountOnly: true }, { existingAccountOnly: undefined }, { clientOnlyApps: false }, { native: true }, { officialBackend: "http://wrong" }, { buildMode: "development" }, { runtimeNodeEnvironment: "production" }, { relay: { html: "/index.html", script: "/local-app-handoff.js" } }]) {
         assert.throws(() => validateManifest({ ...manifest, ...override }));
     }
@@ -115,6 +116,68 @@ test("preview refuses writes, foreign hosts/origins, traversal and hidden files"
     for (const route of ["/../secret", "/%2e%2e/secret", "/%252e%252e/secret", "/.env", "/dir/.git/config", "/C:/secret", "/%5c..%5csecret", "/%00", "/bad%", "//evil.example/a", "http://evil.example/a"]) {
         assert.equal((await send(route)).status, 400, route);
     }
+});
+
+test("only an exact build-pinned app may fill the relay; main isolation and anti-framing stay intact", async (t) => {
+  const appOrigin = "http://localhost:3000";
+  const { send } = await running(t, appOrigin);
+  for (const route of ["/local-app-handoff.html", "/local-app-setup.html"]) {
+    const response = await send(route);
+    for (const [name, value] of Object.entries(localAppRelayHeaders(appOrigin)))
+      assert.equal(response.headers[name.toLowerCase()], value);
+    assert.match(
+      response.headers["content-security-policy"],
+      /frame-src http:\/\/localhost:3000;/,
+    );
+    assert.match(
+      response.headers["content-security-policy"],
+      /frame-ancestors 'none'/,
+    );
+    assert.doesNotMatch(response.headers["content-security-policy"], /\*/);
+  }
+  const main = await send("/");
+  assert.equal(main.headers["cross-origin-opener-policy"], "same-origin");
+  assert.equal(main.headers["cross-origin-embedder-policy"], "credentialless");
+  assert.equal(main.headers["x-frame-options"], "DENY");
+});
+
+test("relay configuration fails closed on malformed, wildcard, credentialed or non-origin destinations", () => {
+  assert.equal(localAppRelayOrigin(undefined), undefined);
+  assert.equal(localAppRelayOrigin(""), undefined);
+  assert.equal(
+    localAppRelayOrigin("https://app.example/openchat/apps.json"),
+    "https://app.example",
+  );
+  assert.match(
+    localAppRelayHeaders(undefined)["Content-Security-Policy"],
+    /frame-src 'none'/,
+  );
+  for (const appOrigin of [
+    null,
+    false,
+    0,
+    "",
+    "*",
+    "https://*.example",
+    "https://app.example;",
+    "https://app.example'",
+    "https://app.example/",
+    "https://app.example/path",
+    "https://app.example?x=1",
+    "https://app.example#x",
+    "https://u:p@app.example",
+    "http://remote.example",
+    "https://app.example\nframe-src *",
+    "HTTPS://APP.EXAMPLE",
+  ]) {
+    assert.throws(() => localAppRelayHeaders(appOrigin));
+    assert.throws(() =>
+      validateManifest({
+        ...manifest,
+        relay: { ...manifest.relay, appOrigin },
+      }),
+    );
+  }
 });
 
 test("preview cannot expose files through a directory junction", async (t) => {

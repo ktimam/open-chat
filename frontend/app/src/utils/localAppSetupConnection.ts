@@ -130,8 +130,7 @@ export async function connectNativeAppSetup(
         if (
             url.protocol !== "http:" ||
             url.hostname !== "localhost" ||
-            !url.port ||
-            Number(url.port) < 1024 ||
+            url.port !== "5193" ||
             url.pathname !== "/setup" ||
             url.search ||
             fragment.size !== 1 ||

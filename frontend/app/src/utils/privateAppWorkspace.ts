@@ -89,6 +89,8 @@ export interface PrivateAppWorkspaceState {
     setupGeneration: number;
     draftLoading: boolean;
     draftStorageStatus: string;
+    /** Only storage failures are surfaced in the normal card and Apps UI. */
+    draftStorageError?: string;
     enabledChats: LocalAppSetupSnapshot["enabledChats"];
     catalog?: LocalAppCatalog;
     appId?: string;
@@ -555,7 +557,7 @@ export class PrivateAppWorkspace {
                 this.#set({
                     setupLoading: false,
                     setupStatus:
-                        "Saved app setup could not be restored. Import it again; nothing was run or sent.",
+                        "Saved app setup could not be restored. Open Apps and reconnect the app; nothing was run or sent.",
                 });
         } finally {
             if (epoch === this.#setupEpoch) await this.#restoreDraft(scope, epoch);
@@ -637,7 +639,9 @@ export class PrivateAppWorkspace {
                 this.#set({
                     draftLoading: false,
                     draftStorageStatus:
-                        "The saved private card could not be restored. Nothing was sent. Use Forget to remove unavailable saved data.",
+                        "The saved private card could not be restored. Nothing was sent. Restart OpenChat to retry; saved data was left unchanged.",
+                    draftStorageError:
+                        "Saved cards could not be restored. Restart OpenChat to retry. Nothing was sent or deleted.",
                 });
             }
         }
@@ -672,7 +676,10 @@ export class PrivateAppWorkspace {
         if (!storage) return;
         const epoch = this.#setupEpoch,
             revision = ++this.#draftSaveRevision;
-        this.#set({ draftStorageStatus: "Saving this private card on this device…" });
+        this.#set({
+            draftStorageStatus: "Saving this private card on this device…",
+            draftStorageError: undefined,
+        });
         try {
             if (!scope)
                 throw new Error("Private card storage requires a signed-in account and backend");
@@ -688,6 +695,8 @@ export class PrivateAppWorkspace {
                 this.#set({
                     draftStorageStatus:
                         "Private card could not be saved. Recent changes are only in memory; sending is blocked until storage works.",
+                    draftStorageError:
+                        "This card could not be saved on this device. Keep OpenChat open and try again; nothing will be sent until it is saved.",
                 });
             throw new Error("Private card storage is unavailable");
         }
@@ -1344,7 +1353,7 @@ export class PrivateAppWorkspace {
                 (app.processor === undefined || !!this.#processor),
             message:
                 app.processor && !this.#processor
-                    ? "Import this app's matching local processor file before proposing a message."
+                    ? "Reconnect this app from Apps before proposing a message."
                     : "Ready. Use Propose on one message to prepare a private draft.",
         });
         this.#saveSetup();
@@ -1480,8 +1489,7 @@ export class PrivateAppWorkspace {
         const artifact = this.#processors.get(app.id);
         if (app.processor && (!artifact || !this.#state.processorReady)) {
             this.#set({
-                message:
-                    "Import the processor file matching this app's catalog, then propose the message again.",
+                message: "Reconnect this app from Apps, then propose the message again.",
             });
             return "retryable";
         }
@@ -1769,7 +1777,7 @@ export class PrivateAppWorkspace {
             this.#set({
                 draft: this.#drafts.edit(draft.id, {}),
                 message:
-                    "The edited JSON, app choices or recipient do not meet this app's schema. Correct them before review; nothing was sent.",
+                    "The edited fields, app choices or recipient do not meet this app's schema. Correct them before review; nothing was sent.",
             });
             return false;
         }
@@ -1837,7 +1845,10 @@ export class PrivateAppWorkspace {
             draft: current,
             message:
                 current?.status === "delivered"
-                    ? "The app received the handoff. Review and save it in the app; delivery is not proof that it was saved."
+                    ? current.approval &&
+                      this.deps.deliverySaved(current.approval.request.idempotencyKey)
+                        ? "The app reports that this request was saved."
+                        : "The app received the handoff. Review and save it in the app; delivery is not proof that it was saved."
                     : "The handoff outcome is unknown. Check the receiving app first. An explicit retry keeps this exact reviewed request and import ID; no automatic retry will occur.",
         });
         this.#saveDraft();
@@ -1898,7 +1909,9 @@ export class PrivateAppWorkspace {
                         this.#set({
                             draftLoading: false,
                             draftStorageStatus:
-                                "Card cleared from memory, but saved data could not be removed. Use Forget before leaving this device.",
+                                "Card cleared from memory, but saved data could not be removed. Restart OpenChat, reopen the saved card and try Remove from this device again.",
+                            draftStorageError:
+                                "The saved card could not be removed. Restart OpenChat, reopen the card and try Remove from this device again.",
                         });
                 },
             );

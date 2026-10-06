@@ -143,6 +143,22 @@ async function propose(workspace: PrivateAppWorkspace) {
 }
 
 describe("private workspace encrypted-card lifecycle", () => {
+    it("directs failed setup restoration to normal Apps reconnect without manual import", async () => {
+        const shared = sharedStorage();
+        shared.setupStorage.read = async () => {
+            throw new Error("private storage failure");
+        };
+        const current = fixture(shared);
+        await start(current.workspace);
+        expect(current.workspace.state.setupStatus).toBe(
+            "Saved app setup could not be restored. Open Apps and reconnect the app; nothing was run or sent.",
+        );
+        expect(current.workspace.state.setupStatus).not.toMatch(/import|upload|private storage/i);
+        expect(current.workspace.state.catalog).toBeUndefined();
+        expect(current.extract).not.toHaveBeenCalled();
+        expect(current.deliver).not.toHaveBeenCalled();
+    });
+
     it("does not persist failed source-presentation intent or restore it with saved cards", async () => {
         const first = fixture();
         await start(first.workspace);
@@ -629,6 +645,8 @@ describe("private workspace encrypted-card lifecycle", () => {
         expect(first.extract).not.toHaveBeenCalled();
         expect(write).not.toHaveBeenCalled();
         expect(first.workspace.state.draftStorageStatus).toContain("could not be restored");
+        expect(first.workspace.state.draftStorageError).toContain("Restart OpenChat");
+        expect(first.workspace.state.draftStorageError).not.toContain("corrupt");
     });
 
     it("restores edited card across restart with no inference, approval, transmission or source message", async () => {
@@ -738,6 +756,8 @@ describe("private workspace encrypted-card lifecycle", () => {
         expect(first.crossed).not.toHaveBeenCalled();
         expect(first.workspace.state.draft?.status).toBe("uncertain");
         expect(first.workspace.state.draftStorageStatus).not.toContain("private quota error");
+        expect(first.workspace.state.draftStorageError).toContain("Keep OpenChat open");
+        expect(first.workspace.state.draftStorageError).not.toContain("private quota error");
     });
 
     it.each(["uncertain", "delivered"] as const)(

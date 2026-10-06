@@ -13,11 +13,23 @@ use tokio::{net::TcpListener, sync::{watch, Mutex as AsyncMutex, Semaphore}};
 pub const HTML_ASSET: &str = "local-native-app-handoff.html";
 pub const JS_ASSET: &str = "local-native-app-handoff.js";
 pub const PROFILE_ASSET: &str = "local-native-app-handoff-profile.json";
+// Local-test-only profile: the app can authorize this exact frame origin, not all localhost ports.
+const LOCAL_PORT: u16 = 5192;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct BundledProfile { version: u8, application_id: String, transport: String }
+pub struct BundledProfile {
+    version: u8, application_id: String, transport: String,
+    #[cfg(test)]
+    #[serde(skip)]
+    test_listen_port: Option<u16>,
+}
 impl BundledProfile {
+    fn listen_port(&self) -> u16 {
+        #[cfg(test)]
+        if let Some(port) = self.test_listen_port { return port; }
+        LOCAL_PORT
+    }
     pub fn parse(bytes: &[u8]) -> Result<Self, String> {
         let profile: Self = parse_strict(bytes, 1024)?;
         if profile.version != 1 || profile.application_id != "dev.openchatfork.localtest" || profile.transport != "private-app-code-v1" {
@@ -28,7 +40,7 @@ impl BundledProfile {
 }
 pub struct BrowserAssets { pub html: Vec<u8>, pub script: Vec<u8> }
 struct Shared {
-    attempt: Mutex<Attempt>, host: String, origin: String, html: Bytes, script: Bytes,
+    attempt: Mutex<Attempt>, host: String, origin: String, app_origin: String, html: Bytes, script: Bytes,
     epoch_ms: u64, started: Instant,
     retention: Arc<RetentionLease>, connections: AtomicUsize,
 }
@@ -50,11 +62,26 @@ impl Drop for ServerGuard {
         self.0.retention.release();
     }
 }
-struct Session { id: String, shared: Arc<Shared>, shutdown: watch::Sender<bool> }
+struct Session { id: String, shared: Arc<Shared>, shutdown: watch::Sender<bool>, server: Option<tokio::task::JoinHandle<()>> }
+impl Session {
+    async fn drain(&mut self) -> Result<(), String> {
+        let Some(mut server) = self.server.take() else { return Ok(()); };
+        match tokio::time::timeout(Duration::from_secs(6), &mut server).await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(_)) => Err("Private handoff listener stopped unexpectedly".into()),
+            Err(_) => {
+                server.abort();
+                let _ = server.await;
+                Err("Private handoff listener could not finish closing".into())
+            }
+        }
+    }
+}
 impl Drop for Session {
     fn drop(&mut self) {
         if let Ok(mut attempt) = self.shared.attempt.lock() { attempt.cancel(); }
         let _ = self.shutdown.send(true);
+        if let Some(server) = self.server.take() { server.abort(); }
         self.shared.retention.release();
     }
 }
@@ -80,8 +107,14 @@ fn pairing_code() -> Result<String, String> {
 
 impl LocalAppHandoffBridge {
     pub fn with_retention(retention: Option<Arc<dyn RetentionBackend>>) -> Self { Self { session: AsyncMutex::new(None), retention } }
-    pub async fn begin(&self, request: BeginRequest, _profile: BundledProfile, assets: BrowserAssets) -> Result<BeginResponse, String> {
+    pub async fn begin(&self, request: BeginRequest, profile: BundledProfile, assets: BrowserAssets) -> Result<BeginResponse, String> {
         validate_approved_request(&request.approved_request_json)?;
+        let approved: serde_json::Value = parse_strict(request.approved_request_json.as_bytes(), MAX_REQUEST_BYTES)?;
+        let app_origin = reqwest::Url::parse(approved["destination"].as_str().ok_or("Invalid destination")?)
+            .map_err(|_| "Invalid destination")?.origin().ascii_serialization();
+        if !app_origin.bytes().all(|b| b.is_ascii_alphanumeric() || b":/._-[]".contains(&b)) {
+            return Err("The app requires an exact frame origin".into());
+        }
         if assets.html.is_empty() || assets.html.len() > 64 * 1024 || assets.script.is_empty() || assets.script.len() > 1024 * 1024 {
             return Err("Bundled private handoff assets are unavailable".into());
         }
@@ -91,9 +124,11 @@ impl LocalAppHandoffBridge {
                 return Err("A private handoff is active; cancel it before starting another".into());
             }
         }
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.map_err(|_| "Could not start private handoff")?;
+        // Wait for the previous terminal response to drain before reusing the exact origin.
+        if let Some(mut previous) = current.take() { previous.drain().await?; }
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, profile.listen_port())).await.map_err(|_| "Could not start private handoff on its dedicated local port")?;
         let port = listener.local_addr().map_err(|_| "Private handoff address is unavailable")?.port();
-        if port < 1024 { return Err("Private handoff requires an ephemeral local port".into()); }
+        if port < 1024 { return Err("Private handoff requires its dedicated local port".into()); }
         let host = format!("localhost:{port}");
         let origin = format!("http://{host}");
         let id = random_hex(16)?;
@@ -107,10 +142,10 @@ impl LocalAppHandoffBridge {
             return Err("Private handoff retention ended before startup".into());
         }
         let response = BeginResponse { handoff_id: id.clone(), url: format!("{origin}/handoff"), pairing_code: code, claim_expires_at_ms: attempt.claim_expires_at_ms };
-        let shared = Arc::new(Shared { attempt: Mutex::new(attempt), host, origin, html: assets.html.into(), script: assets.script.into(), epoch_ms, started, retention, connections: AtomicUsize::new(0) });
+        let shared = Arc::new(Shared { attempt: Mutex::new(attempt), host, origin, app_origin, html: assets.html.into(), script: assets.script.into(), epoch_ms, started, retention, connections: AtomicUsize::new(0) });
         let (shutdown, mut cancelled) = watch::channel(false);
         let transport = shared.clone();
-        tokio::spawn(async move {
+        let server = tokio::spawn(async move {
             let _server = ServerGuard(transport.clone());
             let slots = Arc::new(Semaphore::new(4));
             let mut expiry = tokio::time::interval(Duration::from_millis(250));
@@ -151,7 +186,7 @@ impl LocalAppHandoffBridge {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         });
-        *current = Some(Session { id, shared, shutdown });
+        *current = Some(Session { id, shared, shutdown, server: Some(server) });
         Ok(response)
     }
     pub async fn poll(&self, id: &str) -> Result<Status, String> {
@@ -162,11 +197,11 @@ impl LocalAppHandoffBridge {
         Ok(status)
     }
     pub async fn cancel(&self, id: &str) -> Result<CancelResponse, String> {
-        let current = self.session.lock().await;
-        let session = current.as_ref().filter(|s| s.id == id).ok_or("Unknown private handoff")?;
+        let mut current = self.session.lock().await;
+        let session = current.as_mut().filter(|s| s.id == id).ok_or("Unknown private handoff")?;
         let result = session.shared.attempt.lock().map_err(|_| "Private handoff state is unavailable")?.cancel();
         let _ = session.shutdown.send(true);
-        session.shared.retention.release();
+        session.drain().await?;
         Ok(result)
     }
 }
@@ -184,6 +219,13 @@ fn response(status: StatusCode, content_type: &str, body: impl Into<Bytes>) -> B
         .header("X-Frame-Options", "DENY").body(Full::new(body.into())).expect("fixed headers")
 }
 fn error(status: StatusCode) -> BrowserResponse { response(status, "text/plain; charset=utf-8", "Private handoff request rejected") }
+// Only the explicit approved destination can be framed. This adds no cross-origin fetch access.
+fn app_page(body: Bytes, app_origin: &str) -> BrowserResponse {
+    let mut page = response(StatusCode::OK, "text/html; charset=utf-8", body);
+    let policy = format!("default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'none'; frame-src {app_origin}; worker-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
+    page.headers_mut().insert("Content-Security-Policy", header::HeaderValue::from_str(&policy).expect("validated URL origin"));
+    page
+}
 fn allows_fetch_metadata(method: &Method, path: &str, headers: &hyper::HeaderMap) -> bool {
     const NAMES: [&str; 4] = ["sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest", "sec-fetch-user"];
     if NAMES.iter().any(|h| headers.get_all(*h).iter().count() > 1) { return false; }
@@ -215,7 +257,7 @@ async fn handle(request: Request<Incoming>, shared: Arc<Shared>) -> Result<Brows
     }
     if request.method() == Method::GET {
         return Ok(match path.as_str() {
-            "/handoff" => response(StatusCode::OK, "text/html; charset=utf-8", shared.html.clone()),
+            "/handoff" => app_page(shared.html.clone(), &shared.app_origin),
             "/handoff.js" => response(StatusCode::OK, "text/javascript; charset=utf-8", shared.script.clone()),
             _ => error(StatusCode::NOT_FOUND),
         });
@@ -258,7 +300,10 @@ mod tests {
     use serde_json::{json, Value};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     fn profile() -> BundledProfile {
-        BundledProfile::parse(br#"{"version":1,"applicationId":"dev.openchatfork.localtest","transport":"private-app-code-v1"}"#).unwrap()
+        let mut profile = BundledProfile::parse(br#"{"version":1,"applicationId":"dev.openchatfork.localtest","transport":"private-app-code-v1"}"#).unwrap();
+        assert_eq!(profile.listen_port(), 5192);
+        profile.test_listen_port = Some(0);
+        profile
     }
     fn raw_approved() -> String {
         format!(r#"{{ "appId":"fixture","appRevision":"revision-1","actionId":"add","destination":"https://example.test/import","idempotencyKey":"{}","envelope":{{"version":1,"scheme":"p256-hkdf-sha256-aes-256-gcm-v1","keyId":"{}","recipientContext":"AA","ephemeralPublicKey":"BA{}","salt":"{}","iv":"{}","ciphertext":"{}"}} }}"#,
@@ -270,6 +315,56 @@ mod tests {
             html: b"<!doctype html><script src=\"/handoff.js\"></script>".to_vec(), script: b"void 0;".to_vec(),
         }).await.unwrap();
         (bridge, response)
+    }
+    fn profile_at(port: u16) -> BundledProfile {
+        let mut profile = profile();
+        profile.test_listen_port = Some(port);
+        profile
+    }
+    #[test]
+    fn bundled_profile_cannot_override_the_dedicated_port() {
+        assert!(BundledProfile::parse(br#"{"version":1,"applicationId":"dev.openchatfork.localtest","transport":"private-app-code-v1","testListenPort":42000}"#).is_err());
+    }
+    #[tokio::test]
+    async fn occupied_dedicated_port_fails_without_authority_or_fallback() {
+        let occupied = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let port = occupied.local_addr().unwrap().port();
+        let platform = Arc::new(crate::local_app_retention::test_support::Platform::default());
+        let bridge = LocalAppHandoffBridge::with_retention(Some(platform.clone()));
+        assert!(bridge.begin(BeginRequest { approved_request_json: raw_approved() }, profile_at(port), BrowserAssets { html: vec![1], script: vec![1] }).await.is_err());
+        assert!(bridge.session.lock().await.is_none());
+        assert!(platform.owners.lock().unwrap().is_empty());
+    }
+    #[tokio::test]
+    async fn dedicated_port_is_reusable_immediately_after_cancel_expiry_and_saved_response() {
+        let reservation = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let port = reservation.local_addr().unwrap().port();
+        drop(reservation);
+        let bridge = LocalAppHandoffBridge::default();
+        let mut prior_id = String::new();
+        for outcome in ["cancel", "expiry", "saved", "cancel", "saved"] {
+            let start = bridge.begin(BeginRequest { approved_request_json: raw_approved() }, profile_at(port), BrowserAssets { html: vec![1], script: vec![1] }).await.unwrap();
+            assert_eq!(start.url, format!("http://localhost:{port}/handoff"));
+            assert_ne!(start.handoff_id, prior_id);
+            prior_id = start.handoff_id.clone();
+            assert!(bridge.begin(BeginRequest { approved_request_json: raw_approved() }, profile_at(port), BrowserAssets { html: vec![1], script: vec![1] }).await.is_err());
+            match outcome {
+                "cancel" => { bridge.cancel(&start.handoff_id).await.unwrap(); },
+                "expiry" => { bridge.session.lock().await.as_ref().unwrap().shared.attempt.lock().unwrap().status(u64::MAX); },
+                _ => {
+                    assert_eq!(status(&claim(&start).await), 200);
+                    let mut result = proof(&start); result["importId"] = json!("A".repeat(43));
+                    assert_eq!(status(&post(&start, "/dispatch", result.clone()).await), 200);
+                    result["outcome"] = json!("received");
+                    assert_eq!(status(&post(&start, "/result", result.clone()).await), 200);
+                    result["outcome"] = json!("saved");
+                    assert_eq!(status(&post(&start, "/result", result).await), 200);
+                    assert_eq!(bridge.poll(&start.handoff_id).await.unwrap().phase, Phase::Saved);
+                }
+            }
+        }
+        bridge.cancel(&prior_id).await.unwrap();
+        assert!(TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await.is_ok());
     }
     fn host(start: &BeginResponse) -> &str { start.url.strip_prefix("http://").unwrap().strip_suffix("/handoff").unwrap() }
     async fn wire(start: &BeginResponse, request: String) -> String {
@@ -396,6 +491,8 @@ mod tests {
             assert!(!response.contains(&start.pairing_code) && !response.contains("amount") && !response.contains("recipient"));
             let headers = response.to_lowercase();
             assert!(headers.contains("cache-control: no-store") && headers.contains("connect-src 'self'"));
+            assert!(headers.contains("frame-src https://example.test;"));
+            assert!(!headers.contains("frame-src *") && !headers.contains("frame-src https:;"));
             assert!(headers.contains("cross-origin-opener-policy: unsafe-none") && !headers.contains("access-control-allow-origin"));
         }
         for path in ["/approved", "/claim", "/status", "/dispatch", "/result", "/challenge"] {
@@ -443,6 +540,7 @@ mod tests {
         let host = host(&start);
         let body = json!({"version":1,"code":start.pairing_code,"browserProofHex":"11".repeat(32)}).to_string();
         for (host_header, origin, metadata, content_type) in [
+            (host.to_string(), "Origin: https://example.test\r\n".to_string(), "Sec-Fetch-Site: cross-site\r\nSec-Fetch-Mode: cors\r\nSec-Fetch-Dest: empty\r\n", "application/json"),
             (host.to_string(), "Origin: https://evil.test\r\n".to_string(), "Sec-Fetch-Site: same-origin\r\n", "application/json"),
             (host.to_string(), "".to_string(), "Sec-Fetch-Site: same-origin\r\n", "application/json"),
             ("other.test".into(), format!("Origin: http://{host}\r\n"), "Sec-Fetch-Site: same-origin\r\n", "application/json"),
@@ -487,6 +585,8 @@ mod tests {
         let bridge = LocalAppHandoffBridge::default();
         for raw in [r#"{"appId":"fixture","actionId":"add","destination":"https://example.test/import","recipient":"Private user","idempotencyKey":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","payload":{"secret":"private note"}}"#.to_owned(),
             raw_approved().replace("\"version\":1", "\"version\":2"),
+            raw_approved().replace("example.test", "*.example.test"),
+            raw_approved().replace("example.test", "other;example.test"),
             raw_approved().replacen('{', "{\"payload\":{\"secret\":1},", 1),
             raw_approved().replace("\"recipientContext\":\"AA\"", "\"recipientContext\":\"AB\""),
             " ".repeat(MAX_REQUEST_BYTES + 1)] {

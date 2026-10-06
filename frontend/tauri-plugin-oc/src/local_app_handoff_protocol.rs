@@ -19,7 +19,7 @@ pub struct BeginRequest { pub approved_request_json: String }
 pub struct BeginResponse {
     pub handoff_id: String,
     pub url: String,
-    // Bearer authority; only the native review UI may display/copy this. Never log it.
+    // One-use first-party launch fragment, erased before the app frame loads. Never log/display.
     pub pairing_code: String,
     pub claim_expires_at_ms: u64,
 }

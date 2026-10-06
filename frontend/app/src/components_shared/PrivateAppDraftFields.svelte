@@ -680,13 +680,13 @@
                 The pending field edit cannot be reviewed or sent. Correct it first.
             </p>{/if}
         {#if !fields.valid}<p role="status">
-                The current draft does not match the app's schema. Correct the fields or advanced
-                JSON before review.
+                Correct the highlighted fields before sending. If a field cannot be corrected,
+                cancel this card and propose the message again.
             </p>{/if}
         {#if fields.hasOtherFields || fields.items.every((item) => item.length === 0)}
             <p>
-                Complex and additional values are preserved. Inspect the complete preview and use
-                advanced JSON to edit them.
+                Additional values are preserved and available in Details. If they need changing,
+                cancel this card and prepare a new proposal.
             </p>
         {/if}
         {#if !pending}
@@ -708,8 +708,8 @@
         {/if}
     {:else}
         <p role="status">
-            Field editing is unavailable for this JSON structure. Correct the complete payload in
-            advanced JSON. No previous values are shown.
+            This card cannot be edited. Cancel it and propose the message again. No previous values
+            will be sent.
         </p>
     {/if}
     {#if compactDetails}

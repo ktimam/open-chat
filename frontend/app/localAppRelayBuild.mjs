@@ -2,16 +2,19 @@ import fs from "node:fs/promises";
 import { fileURLToPath, URL } from "node:url";
 import { build } from "vite";
 
-import { LOCAL_APP_RELAY_HEADERS } from "./localAppRelayHeaders.mjs";
+import { localAppRelayOrigin, localAppRelayHeaders } from "./localAppRelayHeaders.mjs";
 export { LOCAL_APP_RELAY_CSP, LOCAL_APP_RELAY_HEADERS } from "./localAppRelayHeaders.mjs";
 
 /** Fixed, non-isolated first-party handoff page only. The model page's headers never change. */
-export function localAppRelayPlugin({ enabled = false, setup = false } = {}) {
+export function localAppRelayPlugin({ enabled = false, setup = false, appDirectoryUrl = "" } = {}) {
     const assetBase = setup ? "local-app-setup" : "local-app-handoff";
+    const appOrigin = localAppRelayOrigin(appDirectoryUrl);
+    const headers = localAppRelayHeaders(appOrigin);
     let script;
     let html;
     async function compile() {
         html = await fs.readFile(new URL(`./public/${assetBase}.html`, import.meta.url), "utf8");
+        html = html.replace('data-app-origin=""', `data-app-origin="${appOrigin ?? ""}"`);
         const result = await build({
             configFile: false,
             envDir: false,
@@ -59,8 +62,7 @@ export function localAppRelayPlugin({ enabled = false, setup = false } = {}) {
                     res.end();
                     return;
                 }
-                for (const [key, value] of Object.entries(LOCAL_APP_RELAY_HEADERS))
-                    res.setHeader(key, value);
+                for (const [key, value] of Object.entries(headers)) res.setHeader(key, value);
                 res.setHeader(
                     "Content-Type",
                     route.endsWith(".js")

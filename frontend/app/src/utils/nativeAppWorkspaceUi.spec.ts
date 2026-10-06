@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mount, tick, unmount } from "svelte";
 import type { OpenChat } from "@client";
 import { privateAppWorkspaceState, privateAppWorkspace } from "./privateAppWorkspace";
-import { nativeAppDelivery, nativeAppPairing } from "./nativeAppDelivery";
+import { nativeAppPairing } from "./nativeAppDelivery";
 import { localAppDeliveryStatus } from "./localAppRelayDelivery";
 import { identityStateStore, currentUserIdStore } from "@client";
 import LocalAppCards from "../components_shared/LocalAppCards.svelte";
@@ -23,10 +23,14 @@ vi.mock("../theme/themes", async () => ({
 }));
 vi.mock("@utils/navigation", () => ({ navigate: vi.fn() }));
 vi.mock("./privateAppWorkspace", async () => {
-    const { writable } = await import("svelte/store");
+    const { writable, get } = await import("svelte/store");
+    const workspaceState = writable({});
     return {
-        privateAppWorkspaceState: writable({}),
+        privateAppWorkspaceState: workspaceState,
         privateAppWorkspace: {
+            get state() {
+                return get(workspaceState);
+            },
             setAccount: vi.fn(),
             setClient: vi.fn(),
             setConnectAppSetup: vi.fn(),
@@ -39,6 +43,7 @@ vi.mock("./privateAppWorkspace", async () => {
             retryUncertain: vi.fn(),
             reopenDelivered: vi.fn(),
             confirm: vi.fn(),
+            review: vi.fn(() => true),
         },
     };
 });
@@ -46,7 +51,7 @@ vi.mock("./nativeAppDelivery", async () => {
     const { writable } = await import("svelte/store");
     return {
         nativeAppPairing: writable(undefined),
-        nativeAppDelivery: { copyCode: vi.fn(), openBrowser: vi.fn() },
+        nativeAppDelivery: { cancelAll: vi.fn() },
     };
 });
 vi.mock("./localAppRelayDelivery", async () => {
@@ -139,6 +144,12 @@ async function render(native = true, privateApps = true) {
         },
     });
     await tick();
+    await expandConsumed();
+}
+async function expandConsumed() {
+    const header = target.querySelector<HTMLElement>(".action-card.collapsed .header[role=button]");
+    header?.click();
+    await tick();
 }
 const button = (text: string) =>
     [...target.querySelectorAll("button")].find((node) => node.textContent === text)!;
@@ -167,158 +178,216 @@ afterEach(async () => {
     target.remove();
 });
 
-describe.each(["saved", "source"] as const)("native pairing and retry UI (%s)", (presentation) => {
-    beforeEach(() => {
-        cardPresentation = presentation;
-        state.set(view());
-    });
-    it("shows the exact transient local URL/code only after pairing and requires separate Copy/Open clicks", async () => {
-        await render();
-        expect(target.textContent).not.toContain(pairing.pairingCode);
-        pair.set(pairing);
-        await tick();
-        expect(target.textContent).toContain(pairing.pairingCode);
-        expect(target.textContent).toContain(pairing.url);
-        expect(nativeAppDelivery.copyCode).not.toHaveBeenCalled();
-        expect(nativeAppDelivery.openBrowser).not.toHaveBeenCalled();
-        button("Copy pairing code").click();
-        button("Open local browser").click();
-        await tick();
-        expect(nativeAppDelivery.copyCode).toHaveBeenCalledExactlyOnceWith(importId);
-        expect(nativeAppDelivery.openBrowser).toHaveBeenCalledExactlyOnceWith(importId);
-        pair.set(undefined);
-        await tick();
-        expect(target.textContent).not.toContain(pairing.pairingCode);
-    });
-
-    it.each([
-        [false, true],
-        [true, false],
-    ])(
-        "never displays native pairing without both UI profile gates (%s/%s)",
-        async (native, privateApps) => {
-            pair.set(pairing);
-            await render(native, privateApps);
+describe.each(["saved", "source"] as const)(
+    "native normal card and retry UI (%s)",
+    (presentation) => {
+        beforeEach(() => {
+            cardPresentation = presentation;
+            state.set(view());
+        });
+        it("never adds manual pairing controls or exposes a legacy transient code", async () => {
+            await render();
             expect(target.textContent).not.toContain(pairing.pairingCode);
+            pair.set(pairing);
+            await tick();
+            expect(target.textContent).not.toContain(pairing.pairingCode);
+            expect(target.textContent).not.toContain(pairing.url);
             expect(button("Copy pairing code")).toBeUndefined();
-        },
-    );
-
-    it("does not display another draft's code and hides private content on logout", async () => {
-        pair.set({ ...pairing, importId: "other" });
-        await render();
-        expect(target.textContent).not.toContain(pairing.pairingCode);
-        pair.set(pairing);
-        await tick();
-        expect(target.textContent).toContain(pairing.pairingCode);
-        identity.set({ kind: "anon" });
-        await tick();
-        expect(target.textContent).not.toContain(pairing.pairingCode);
-        expect(privateAppWorkspace.setAccount).toHaveBeenLastCalledWith(undefined);
-    });
-
-    it("requires a fresh explicit retry acknowledgement and never retries on render/reconnect", async () => {
-        state.set(view("uncertain"));
-        await render();
-        const retry = button("Retry the same reviewed request");
-        expect(retry.disabled).toBe(true);
-        expect(privateAppWorkspace.retryUncertain).not.toHaveBeenCalled();
-        (target.querySelector('input[type="checkbox"]') as HTMLInputElement).click();
-        await tick();
-        expect(retry.disabled).toBe(false);
-        retry.click();
-        await tick();
-        expect(privateAppWorkspace.retryUncertain).toHaveBeenCalledExactlyOnceWith(approvalId);
-        expect(retry.disabled).toBe(true);
-        state.set(view("sending"));
-        await tick();
-        state.set(view("uncertain"));
-        await tick();
-        expect(button("Retry the same reviewed request").disabled).toBe(true);
-        expect(privateAppWorkspace.retryUncertain).toHaveBeenCalledOnce();
-    });
-
-    it.each([false, true])(
-        "reopens received-but-unsaved requests only after a fresh choice (native=%s)",
-        async (native) => {
-            state.set(view("delivered"));
-            localAppDeliveryStatus.set({ importId, status: "received" });
-            await render(native);
-            const reopen = button("Reopen the same reviewed request");
-            expect(reopen).toBeDefined();
-            expect(reopen.disabled).toBe(true);
-            expect(privateAppWorkspace.reopenDelivered).not.toHaveBeenCalled();
-            expect(target.textContent?.replace(/\s+/g, " ")).toContain(
-                "same receiving account and destination",
-            );
-            (target.querySelector('input[type="checkbox"]') as HTMLInputElement).click();
-            await tick();
-            expect(reopen.disabled).toBe(false);
-            reopen.click();
-            await tick();
-            expect(privateAppWorkspace.reopenDelivered).toHaveBeenCalledExactlyOnceWith(approvalId);
-            expect(reopen.disabled).toBe(true);
-            state.set(view("sending"));
-            await tick();
-            state.set(view("delivered"));
-            await tick();
-            expect(button("Reopen the same reviewed request").disabled).toBe(true);
+            expect(button("Open local browser")).toBeUndefined();
+            expect(target.querySelector('[aria-label="Pair local browser handoff"]')).toBeNull();
             expect(privateAppWorkspace.confirm).not.toHaveBeenCalled();
             expect(privateAppWorkspace.retryUncertain).not.toHaveBeenCalled();
-        },
-    );
+            pair.set(undefined);
+            await tick();
+            expect(target.textContent).not.toContain(pairing.pairingCode);
+        });
 
-    it("keeps explicit reopen consent across unchanged receipt polling", async () => {
-        state.set(view("delivered"));
-        localAppDeliveryStatus.set({ importId, status: "received" });
-        await render();
-        (target.querySelector('input[type="checkbox"]') as HTMLInputElement).click();
-        await tick();
-        expect(button("Reopen the same reviewed request").disabled).toBe(false);
-        // Native polling emits a fresh object every second, even when its status is unchanged.
-        localAppDeliveryStatus.set({ importId, status: "received" });
-        await tick();
-        expect(button("Reopen the same reviewed request").disabled).toBe(false);
-        state.set({ ...view("delivered"), message: "Unchanged handoff received" });
-        await tick();
-        expect(button("Reopen the same reviewed request").disabled).toBe(false);
-        expect(privateAppWorkspace.reopenDelivered).not.toHaveBeenCalled();
-    });
+        it.each([
+            [false, true],
+            [true, false],
+        ])(
+            "never displays native pairing without both UI profile gates (%s/%s)",
+            async (native, privateApps) => {
+                pair.set(pairing);
+                await render(native, privateApps);
+                expect(target.textContent).not.toContain(pairing.pairingCode);
+                expect(button("Copy pairing code")).toBeUndefined();
+            },
+        );
 
-    it("withdraws reopen consent when saving is reported or the workspace closes", async () => {
-        state.set(view("delivered"));
-        localAppDeliveryStatus.set({ importId, status: "received" });
-        await render();
-        expect(button("Reopen the same reviewed request")).toBeDefined();
-        (target.querySelector('input[type="checkbox"]') as HTMLInputElement).click();
-        await tick();
-        localAppDeliveryStatus.set({ importId, status: "saved" });
-        await tick();
-        expect(button("Reopen the same reviewed request")).toBeUndefined();
-        expect(privateAppWorkspace.reopenDelivered).not.toHaveBeenCalled();
-        localAppDeliveryStatus.set({ importId, status: "received" });
-        await tick();
-        expect(button("Reopen the same reviewed request").disabled).toBe(true);
-        (target.querySelector('input[type="checkbox"]') as HTMLInputElement).click();
-        await tick();
-        state.set({ ...view("delivered"), open: false });
-        await tick();
-        state.set(view("delivered"));
-        await tick();
-        expect(button("Reopen the same reviewed request").disabled).toBe(true);
-    });
+        it("does not display another draft's code and hides private content on logout", async () => {
+            pair.set({ ...pairing, importId: "other" });
+            await render();
+            expect(target.textContent).not.toContain(pairing.pairingCode);
+            pair.set(pairing);
+            await tick();
+            expect(target.textContent).not.toContain(pairing.pairingCode);
+            expect(
+                target.querySelector('[aria-label="Complete canonical outgoing values"]'),
+            ).not.toBeNull();
+            identity.set({ kind: "anon" });
+            await tick();
+            expect(target.textContent).not.toContain(pairing.pairingCode);
+            expect(
+                target.querySelector('[aria-label="Complete canonical outgoing values"]'),
+            ).toBeNull();
+            expect(privateAppWorkspace.setAccount).toHaveBeenLastCalledWith(undefined);
+        });
 
-    it("distinguishes app receipt from its report of saving and clears on component teardown", async () => {
-        state.set(view("delivered"));
-        localAppDeliveryStatus.set({ importId, status: "received" });
-        await render();
-        expect(target.textContent).toContain("finish its review before saving");
-        expect(target.textContent).not.toContain("reports that this request was saved");
-        localAppDeliveryStatus.set({ importId, status: "saved" });
-        await tick();
-        expect(target.textContent).toContain("reports that this request was saved");
-        await unmount(component!);
-        component = undefined;
-        expect(privateAppWorkspace.clear).toHaveBeenCalledOnce();
-    });
-});
+        it("requires a fresh explicit retry acknowledgement and never retries on render/reconnect", async () => {
+            state.set(view("uncertain"));
+            await render();
+            const retry = button("Reopen in app");
+            expect(retry.disabled).toBe(true);
+            expect(privateAppWorkspace.retryUncertain).not.toHaveBeenCalled();
+            (target.querySelector('input[type="checkbox"]') as HTMLInputElement).click();
+            await tick();
+            expect(retry.disabled).toBe(false);
+            retry.click();
+            await tick();
+            expect(privateAppWorkspace.retryUncertain).toHaveBeenCalledExactlyOnceWith(approvalId);
+            expect(retry.disabled).toBe(true);
+            state.set(view("sending"));
+            await tick();
+            state.set(view("uncertain"));
+            await tick();
+            expect(button("Reopen in app").disabled).toBe(true);
+            expect(privateAppWorkspace.retryUncertain).toHaveBeenCalledOnce();
+        });
+
+        it.each([false, true])(
+            "reopens received-but-unsaved requests only after a fresh choice (native=%s)",
+            async (native) => {
+                state.set(view("delivered"));
+                localAppDeliveryStatus.set({ importId, status: "received" });
+                await render(native);
+                const reopen = button("Reopen in app");
+                expect(reopen).toBeDefined();
+                expect(reopen.disabled).toBe(true);
+                expect(privateAppWorkspace.reopenDelivered).not.toHaveBeenCalled();
+                expect(target.textContent?.replace(/\s+/g, " ")).toContain(
+                    "I checked the receiving app. Reopen this same request and import ID; it may already have been saved.",
+                );
+                (target.querySelector('input[type="checkbox"]') as HTMLInputElement).click();
+                await tick();
+                expect(reopen.disabled).toBe(false);
+                reopen.click();
+                await tick();
+                expect(privateAppWorkspace.reopenDelivered).toHaveBeenCalledExactlyOnceWith(
+                    approvalId,
+                );
+                expect(reopen.disabled).toBe(true);
+                state.set(view("sending"));
+                await tick();
+                state.set(view("delivered"));
+                await tick();
+                await expandConsumed();
+                expect(button("Reopen in app").disabled).toBe(true);
+                expect(privateAppWorkspace.confirm).not.toHaveBeenCalled();
+                expect(privateAppWorkspace.retryUncertain).not.toHaveBeenCalled();
+            },
+        );
+
+        it("keeps explicit reopen consent across unchanged receipt polling", async () => {
+            state.set(view("delivered"));
+            localAppDeliveryStatus.set({ importId, status: "received" });
+            await render();
+            (target.querySelector('input[type="checkbox"]') as HTMLInputElement).click();
+            await tick();
+            expect(button("Reopen in app").disabled).toBe(false);
+            // Native polling emits a fresh object every second, even when its status is unchanged.
+            localAppDeliveryStatus.set({ importId, status: "received" });
+            await tick();
+            expect(button("Reopen in app").disabled).toBe(false);
+            state.set({ ...view("delivered"), message: "Unchanged handoff received" });
+            await tick();
+            expect(button("Reopen in app").disabled).toBe(false);
+            expect(privateAppWorkspace.reopenDelivered).not.toHaveBeenCalled();
+        });
+
+        it("withdraws reopen consent when saving is reported or the workspace closes", async () => {
+            state.set(view("delivered"));
+            localAppDeliveryStatus.set({ importId, status: "received" });
+            await render();
+            expect(button("Reopen in app")).toBeDefined();
+            (target.querySelector('input[type="checkbox"]') as HTMLInputElement).click();
+            await tick();
+            localAppDeliveryStatus.set({ importId, status: "saved" });
+            await tick();
+            expect(button("Reopen in app")).toBeUndefined();
+            expect(privateAppWorkspace.reopenDelivered).not.toHaveBeenCalled();
+            localAppDeliveryStatus.set({ importId, status: "received" });
+            await tick();
+            expect(button("Reopen in app").disabled).toBe(true);
+            (target.querySelector('input[type="checkbox"]') as HTMLInputElement).click();
+            await tick();
+            state.set({ ...view("delivered"), open: false });
+            await tick();
+            state.set(view("delivered"));
+            await tick();
+            await expandConsumed();
+            expect(button("Reopen in app").disabled).toBe(true);
+        });
+
+        it("updates the receipt message when the exact live request is later reported saved", async () => {
+            const receivedMessage =
+                "The app received the handoff. Review and save it in the app; delivery is not proof that it was saved.";
+            state.set({ ...view("delivered"), message: receivedMessage });
+            localAppDeliveryStatus.set({ importId, status: "received" });
+            await render();
+            expect(target.querySelector(".state-sent")?.textContent).toBe("sent");
+            expect(target.querySelector(".state-saved")).toBeNull();
+            expect(target.textContent).toContain(receivedMessage);
+            expect(button("Reopen in app")).toBeDefined();
+            localAppDeliveryStatus.set({ importId, status: "saved" });
+            await tick();
+            expect(target.querySelector(".state-saved")?.textContent).toBe("saved");
+            expect(target.textContent).toContain("The app reports that this request was saved.");
+            expect(target.textContent).not.toContain(receivedMessage);
+            expect(button("Reopen in app")).toBeUndefined();
+            await unmount(component!);
+            component = undefined;
+            expect(privateAppWorkspace.clear).toHaveBeenCalledOnce();
+        });
+        it("does not treat another request's live save receipt as this card's acknowledgement", async () => {
+            const receivedMessage = "Review and save this request in the receiving app.";
+            state.set({ ...view("delivered"), message: receivedMessage });
+            localAppDeliveryStatus.set({ importId: "other-request", status: "saved" });
+            await render();
+            expect(target.querySelector(".state-saved")).toBeNull();
+            expect(target.textContent).toContain(receivedMessage);
+            expect(target.textContent).not.toContain(
+                "The app reports that this request was saved.",
+            );
+        });
+        it("keeps a restored card without live approval conservative despite a stale save receipt", async () => {
+            const restored = view("uncertain");
+            const message = "Previous handoff outcome is unknown. Check the receiving app.";
+            state.set({
+                ...restored,
+                message,
+                draft: { ...restored.draft, approval: undefined, idempotencyKey: importId },
+            });
+            localAppDeliveryStatus.set({ importId, status: "saved" });
+            await render();
+            expect(target.querySelector(".state-saved")).toBeNull();
+            expect(target.textContent).toContain(message);
+            expect(target.textContent).not.toContain(
+                "The app reports that this request was saved.",
+            );
+            expect(privateAppWorkspace.confirm).not.toHaveBeenCalled();
+            expect(privateAppWorkspace.retryUncertain).not.toHaveBeenCalled();
+        });
+        it("does not send when the current fields fail host validation", async () => {
+            state.set(view("draft"));
+            vi.mocked(privateAppWorkspace.review).mockReturnValueOnce(false);
+            await render();
+            button("Send to app").click();
+            await tick();
+            expect(privateAppWorkspace.review).toHaveBeenCalledOnce();
+            expect(privateAppWorkspace.confirm).not.toHaveBeenCalled();
+            expect(privateAppWorkspace.retryUncertain).not.toHaveBeenCalled();
+            expect(privateAppWorkspace.reopenDelivered).not.toHaveBeenCalled();
+        });
+    },
+);

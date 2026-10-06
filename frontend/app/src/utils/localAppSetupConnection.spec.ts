@@ -118,7 +118,7 @@ describe("native app connection host", () => {
         vi.resetAllMocks();
         native.begin.mockResolvedValue({
             setupId: "a".repeat(32),
-            url: `http://localhost:45678/setup#bootstrap=${"c".repeat(64)}`,
+            url: `http://localhost:5193/setup#bootstrap=${"c".repeat(64)}`,
             expiresAtMs: Date.now() + APP_SETUP_TIMEOUT_MS,
         });
         native.cancel.mockResolvedValue(undefined);
@@ -138,15 +138,17 @@ describe("native app connection host", () => {
             setupUrl: descriptor.setupUrl,
         });
         expect(native.open).toHaveBeenCalledWith({
-            url: `http://localhost:45678/setup#bootstrap=${"c".repeat(64)}`,
+            url: `http://localhost:5193/setup#bootstrap=${"c".repeat(64)}`,
         });
         expect(native.cancel).toHaveBeenCalledWith("a".repeat(32));
     });
     it.each([
-        "http://localhost:45678/setup",
-        "http://localhost:45678/setup#bootstrap=short",
-        "http://evil.example:45678/setup#bootstrap=" + "c".repeat(64),
-        "http://localhost:45678/setup?secret=x#bootstrap=" + "c".repeat(64),
+        "http://localhost:45678/setup#bootstrap=" + "c".repeat(64),
+        "http://localhost:5192/setup#bootstrap=" + "c".repeat(64),
+        "http://localhost:5193/setup",
+        "http://localhost:5193/setup#bootstrap=short",
+        "http://evil.example:5193/setup#bootstrap=" + "c".repeat(64),
+        "http://localhost:5193/setup?secret=x#bootstrap=" + "c".repeat(64),
     ])("rejects an unbound native URL", async (url) => {
         native.begin.mockResolvedValue({
             setupId: "a".repeat(32),

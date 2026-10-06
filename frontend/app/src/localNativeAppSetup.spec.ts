@@ -2,10 +2,10 @@
 // @vitest-environment-options {"url":"http://localhost:45678/setup"}
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readSetupChallenge, startLocalNativeAppSetup } from "./localNativeAppSetup";
-import { openAppSetupPopup } from "./utils/localAppSetupPopup";
+import { openAppSetupFrame } from "./utils/localAppSetupPopup";
 vi.mock("./utils/localAppSetupPopup", async (original) => ({
     ...(await original<object>()),
-    openAppSetupPopup: vi.fn(),
+    openAppSetupFrame: vi.fn(),
 }));
 const challenge = () => ({
     version: 1,
@@ -17,6 +17,7 @@ const challenge = () => ({
 });
 let cleanup: (() => void) | undefined;
 beforeEach(() => {
+    vi.clearAllMocks();
     history.replaceState(null, "", `/setup#bootstrap=${"c".repeat(64)}`);
 });
 afterEach(() => {
@@ -42,27 +43,24 @@ describe("native setup fixed page", () => {
     it("rejects oversized challenge before parsing", async () => {
         await expect(readSetupChallenge(new Response("x".repeat(16385)))).rejects.toThrow();
     });
-    it("opens only after click and keeps the native proof out of the app packet", async () => {
+    it("opens the normal app frame automatically and keeps native authority out of app packets", async () => {
         document.body.innerHTML =
-            '<p id="setup-status"></p><button id="connect-app" disabled>Connect</button>';
+            '<p id="setup-status"></p><iframe id="app-setup" hidden></iframe>';
         const value = challenge();
         const fetcher = vi
             .fn()
             .mockResolvedValueOnce(new Response(JSON.stringify(value)))
             .mockResolvedValueOnce(new Response("{}"));
         vi.stubGlobal("fetch", fetcher);
-        vi.mocked(openAppSetupPopup).mockResolvedValue('{"version":1,"apps":[]}');
+        vi.mocked(openAppSetupFrame).mockResolvedValue('{"version":1,"apps":[]}');
         cleanup = startLocalNativeAppSetup();
         expect(location.hash).toBe("");
-        const button = document.querySelector<HTMLButtonElement>("#connect-app")!;
-        await vi.waitFor(() => expect(button.disabled).toBe(false));
-        expect(openAppSetupPopup).not.toHaveBeenCalled();
-        button.click();
         await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
-        expect(openAppSetupPopup).toHaveBeenCalledWith(
+        expect(openAppSetupFrame).toHaveBeenCalledWith(
             "sample",
             "https://app.example/connect",
             expect.any(AbortSignal),
+            document.querySelector("#app-setup"),
         );
         expect(fetcher.mock.calls[0][1]).toMatchObject({
             headers: { "X-OpenChat-Setup-Bootstrap": "c".repeat(64) },
@@ -87,9 +85,9 @@ describe("native setup fixed page", () => {
     });
     it("does not reconnect or post after page teardown", async () => {
         document.body.innerHTML =
-            '<p id="setup-status"></p><button id="connect-app" disabled>Connect</button>';
+            '<p id="setup-status"></p><iframe id="app-setup" hidden></iframe>';
         let resolvePopup!: (value: string) => void;
-        vi.mocked(openAppSetupPopup).mockImplementation(
+        vi.mocked(openAppSetupFrame).mockImplementation(
             () =>
                 new Promise((resolve) => {
                     resolvePopup = resolve;
@@ -98,9 +96,7 @@ describe("native setup fixed page", () => {
         const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(challenge())));
         vi.stubGlobal("fetch", fetcher);
         cleanup = startLocalNativeAppSetup();
-        const button = document.querySelector<HTMLButtonElement>("#connect-app")!;
-        await vi.waitFor(() => expect(button.disabled).toBe(false));
-        button.click();
+        await vi.waitFor(() => expect(openAppSetupFrame).toHaveBeenCalled());
         cleanup();
         resolvePopup("{}");
         await Promise.resolve();

@@ -18,7 +18,8 @@ export type LocalAppHandoffStatus = {
 export type LocalAppHandoffStart = {
     handoffId: string;
     url: string;
-    /** One-use bearer code: display/copy only after approval; never log, persist or put in a URL. */
+    /** One-use bootstrap: only the first-party launch fragment after approval. Never display,
+     * copy, log, persist, or forward it to the app; the bundled page erases it immediately. */
     pairingCode: string;
     claimExpiresAtMs: number;
 };

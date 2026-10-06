@@ -7,7 +7,6 @@
         privateAppWorkspaceState,
     } from "../utils/privateAppWorkspace";
     import { localAppDeliveryStatus } from "../utils/localAppRelayDelivery";
-    import { nativeAppDelivery, nativeAppPairing } from "../utils/nativeAppDelivery";
     import PrivateAppDraftFields from "./PrivateAppDraftFields.svelte";
     import { connectLocalAppSetup } from "../utils/localAppSetupConnection";
     import LocalAppCardSurface from "./LocalAppCardSurface.svelte";
@@ -92,12 +91,14 @@
             ? $localAppDeliveryStatus
             : undefined,
     );
-    const pairing = $derived(
-        $nativeAppPairing?.importId === workspaceView.draft?.approval?.request.idempotencyKey
-            ? $nativeAppPairing
-            : undefined,
+    const consumed = $derived(showDraft && workspaceView.draft?.status === "delivered");
+    // Receipt can advance after confirm() resolves. Only this session's exact reviewed request
+    // may replace the conservative workspace message; restored cards have no live approval.
+    const cardStatusMessage = $derived(
+        consumed && delivery?.status === "saved"
+            ? "The app reports that this request was saved."
+            : workspaceView.message,
     );
-    const consumed = $derived(showDraft && workspaceView.draft?.status === "delivered" && !pairing);
     const confirmDisabled = $derived(
         !accountReady ||
             !showDraft ||
@@ -256,6 +257,12 @@
                         </div>
                     {/snippet}
                     {#snippet children()}
+                        {#if workspaceView.draftStorageError}<div
+                                class="card-load-error"
+                                role="alert"
+                            >
+                                {workspaceView.draftStorageError}
+                            </div>{/if}
                         {#if proposing}
                             <div class="card-loading" role="status">{workspaceView.message}</div>
                             {#if workspaceView.phase}<div class="card-loading">
@@ -393,36 +400,9 @@
                                     </div>
                                 </div>
                             {/if}
-                            {#if pairing && client.isNativeApp()}
-                                <section class="pairing" aria-label="Pair local browser handoff">
-                                    <p>Open the reviewed draft in your browser</p>
-                                    <p>{pairing.url}</p>
-                                    <code class="pairing-code">{pairing.pairingCode}</code>
-                                    <p>
-                                        One-use code. Expires at {new Date(
-                                            pairing.expiresAtMs,
-                                        ).toLocaleTimeString()}.
-                                    </p>
-                                    <div class="actions">
-                                        <button
-                                            type="button"
-                                            onclick={() =>
-                                                void nativeAppDelivery.copyCode(pairing.importId)}
-                                            >Copy pairing code</button
-                                        ><button
-                                            type="button"
-                                            onclick={() =>
-                                                void nativeAppDelivery.openBrowser(
-                                                    pairing.importId,
-                                                )}>Open local browser</button
-                                        >
-                                    </div>
-                                    {#if pairing.message}<p role="status">{pairing.message}</p>{/if}
-                                </section>
-                            {/if}
                             {#if workspaceView.draft.status !== "draft" || connectionBlocked || confirmationFailed}
                                 <div class="card-loading" role="status">
-                                    {workspaceView.message}
+                                    {cardStatusMessage}
                                 </div>
                             {/if}
                         {:else}<div class="card-loading" role="status">
@@ -471,20 +451,6 @@
     }
     .payload-details pre {
         white-space: pre-wrap;
-        overflow-wrap: anywhere;
-    }
-    .pairing {
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-        font-size: 0.8em;
-    }
-    .pairing p {
-        margin: 0;
-        overflow-wrap: anywhere;
-    }
-    .pairing-code {
-        user-select: text;
         overflow-wrap: anywhere;
     }
 </style>

@@ -2,25 +2,28 @@
 
 This is a separate feature from account sign-in. It neither changes
 the OpenChat backend nor sends chat history, image bytes, processor context, or account
-credentials. Its only input is the immutable six-field private draft already reviewed
+credentials. Its only input is the immutable encrypted delivery request already reviewed
 and explicitly confirmed in the native host. It is generic; it contains no app schema.
 
 ## Consent and transport
 
 1. The host calls `beginLocalAppHandoff({ approvedRequestJson })` only after confirmation.
-   The returned URL is a fixed `http://localhost:<ephemeral-port>/handoff`, with no token,
-   code, payload, account identifier, query or fragment. The separate native UI may show
-   and explicitly copy the 100-bit, twenty-character base32 pairing code.
-2. The user opens the fixed browser page, pastes the code, and explicitly claims the
-   draft. `POST /claim` includes that code and a fresh browser-memory 256-bit proof.
-   The claim atomically consumes the code and returns the exact UTF-8 approved JSON once.
+   The returned URL is the fixed `http://localhost:5192/handoff`. The host opens it
+   from that confirmed action with a one-use, 100-bit bootstrap capability in the
+   fragment. No fields, account identifier or credentials enter the URL. There is
+   no separate Copy/Open/paste step.
+2. The bundled page captures and immediately removes the fragment before embedding
+   the app. `POST /claim` includes that capability and a fresh browser-memory 256-bit
+   proof. The claim atomically consumes it and returns the exact encrypted approved
+   JSON once.
    Native state releases its payload/code references. Response loss is uncertain and
    is never automatically retried. The same approved import ID is retained for an
    explicitly requested new attempt, allowing app-side deduplication.
-3. The browser displays every approved field using text, including destination and
-   recipient. A separate user action opens the exact destination, never a model-returned
-   URL. Public connect/connected metadata and the receiver's explicit origin consent
-   establish the exact opener, receiver window, origin and receiver-generated nonce.
+3. The relay directly presents the receiving app's normal UI in a full-viewport frame
+   at the exact approved destination, never a model-returned URL. It cannot decrypt
+   the fields and shows no JSON review or extra Open button. The receiver binds the
+   exact parent window, configured sender origin and fresh receiver-generated nonce.
+   App-side authentication, recipient-bound decryption and review/save remain required.
 4. Immediately after receiver READY and before the single private offer, the relay
    must successfully call `POST /dispatch`. This is the atomic point beyond which
    cancellation cannot promise recall. Cancelled/expired/missing native sessions forbid
@@ -30,10 +33,11 @@ and explicitly confirmed in the native host. It is generic; it contains no app s
    after `received` changes that state. This is an app-reported status, not an independent
    attestation that an app has saved anything. No acknowledgement triggers a resend.
 
-The native code never opens a browser or app on its own. The host owns Copy/Open/Cancel
-UI and must cancel the native session on account change, logout, discard, pagehide and
-session expiration. Browser code must scrub all retained payload/code/proof references
-on teardown and stop when native authorization disappears. Data already delivered to an
+The native service never initiates an unsolicited browser launch. The host opens the
+transport only for the explicit confirmed action and must cancel the native session
+on account change, logout, discard, pagehide and session expiration. Browser code must
+scrub all retained payload/code/proof references on teardown and stop when native
+authorization disappears. Data already delivered to an
 app cannot be recalled. App review and final save remain in the receiving app.
 
 ## Wire contract, version 1
@@ -68,24 +72,28 @@ No payload GET, CORS, cookies, redirect, arbitrary filesystem route, or request 
 exists. POSTs require exact Origin, JSON type and bounded unique-key bodies. Fetch
 Metadata is checked; the only cross-site exception is the fixed static entry document's
 Chrome Custom Tab navigation, not a data route. Responses use no-store, no-referrer,
-same-origin resource policy and a self-only connection CSP. Popup-compatible COOP/COEP
-apply only to this relay, never the model's isolated WebView.
+same-origin resource policy and a self-only connection CSP. The frame policy allows
+only the exact approved app origin; the relay itself remains unframeable. Compatible
+COOP/COEP apply only to this relay, never the model's isolated WebView. The local-test
+listener uses port 5192 without fallback: an occupied port fails closed, and a previous
+inactive listener is drained before replacement. The separate setup bridge uses 5193.
 
 ## Bounds and limitations
 
 The code expires after two minutes or five invalid claims. A successful claim begins a
 ten-minute delivery lifetime. Native deadlines use a monotonic clock. The server allows
 four concurrent connections, three-second headers, five-second requests, at most 32
-headers, 16 KiB header buffers and 2 KiB POST bodies. The approved envelope is at most
-72 KiB and its payload at most 64 KiB, 16 levels and 4096 nodes; collections have at most
-256 items. Duplicate/forbidden object keys, unknown envelope fields, noncanonical
+headers, 16 KiB header buffers and 2 KiB POST bodies. The encrypted approved request is
+at most 112 KiB; plaintext schema/value bounds are enforced in the originating host.
+Duplicate/forbidden object keys, unknown envelope fields, noncanonical
 destinations and invalid UTF-8 fail closed. JSON is preserved verbatim, not reserialized
 through Rust numeric or Unicode normalization.
 
-The bearer pairing code must not enter URLs, logs, persistent storage, automatic retries
-or automatic clipboard writes. An explicitly copied code can be observed by a compromised
-clipboard/browser/OS; this is not protection against a compromised device. Local processes
-can deny service by consuming failed-claim attempts. Clearing references is not a claim
+The one-use bootstrap capability is carried only in the launch fragment, not an HTTP
+query or referrer, and is erased before the receiving app is loaded. It must not enter
+logs, persistent storage, clipboard contents or automatic retries. A compromised browser
+or OS may still observe it; this is not protection against a compromised device. Local
+processes can deny service by consuming failed-claim attempts. Clearing references is not a claim
 of cryptographically secure RAM erasure. Transport authorization does not prove that app
 content is trustworthy or that an app honors its own review screen.
 

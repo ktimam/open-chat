@@ -646,7 +646,7 @@ describe("app-owned view in the normal private-card flow", () => {
                 });
             });
 
-            it("routes only the explicit exact request to native pairing with separate Copy and Open", async () => {
+            it("routes the explicit exact request to native without a manual pairing page", async () => {
                 let finish!: (outcome: { kind: "delivered" }) => void;
                 calls.nativeDeliver.mockImplementation(
                     (request) =>
@@ -673,7 +673,9 @@ describe("app-owned view in the normal private-card flow", () => {
                 );
                 expect(calls.deliver).not.toHaveBeenCalled();
                 expect(workspace.state.draft!.status).toBe("sending");
-                expect(target.textContent).toContain(pairing(reviewed.idempotencyKey).pairingCode);
+                expect(target.textContent).not.toContain(
+                    pairing(reviewed.idempotencyKey).pairingCode,
+                );
                 expect(calls.nativeCopyCode).not.toHaveBeenCalled();
                 expect(calls.nativeOpenBrowser).not.toHaveBeenCalled();
                 showPairing(pairing("another-import"));
@@ -681,15 +683,11 @@ describe("app-owned view in the normal private-card flow", () => {
                 expect(button("Copy pairing code")).toBeUndefined();
                 showPairing(pairing(reviewed.idempotencyKey));
                 await settle();
-                button("Copy pairing code").click();
-                button("Open local browser").click();
-                await settle();
-                expect(calls.nativeCopyCode).toHaveBeenCalledExactlyOnceWith(
-                    reviewed.idempotencyKey,
-                );
-                expect(calls.nativeOpenBrowser).toHaveBeenCalledExactlyOnceWith(
-                    reviewed.idempotencyKey,
-                );
+                expect(button("Copy pairing code")).toBeUndefined();
+                expect(button("Open local browser")).toBeUndefined();
+                expect(target.textContent).not.toContain(pairing(reviewed.idempotencyKey).url);
+                expect(calls.nativeCopyCode).not.toHaveBeenCalled();
+                expect(calls.nativeOpenBrowser).not.toHaveBeenCalled();
                 showPairing(undefined);
                 finish({ kind: "delivered" });
                 await settle();
@@ -1894,7 +1892,8 @@ describe("local app card modal and authoritative review", () => {
         await workspace.confirm(firstApproval);
         expect(calls.deliver).not.toHaveBeenCalled();
         await fixtureJson('{"value":');
-        expect(preview().textContent).toContain("Field editing is unavailable");
+        expect(preview().textContent).toContain("This card cannot be edited");
+        expect(preview().textContent).not.toContain("advanced JSON");
         expect(preview().textContent).not.toContain("Edited payload");
         expect(preview().querySelector("dl")).toBeNull();
         seedApproval();

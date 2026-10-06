@@ -71,7 +71,10 @@ Open **Apps → AI Apps** in the normal Explore interface; responsive v2 exposes
 entry through **App settings → Apps**. Open an app's card and choose **Connect** in
 its details. The connected-apps view shares these cards and offers **Discover apps**.
 No separate management page, manual catalog upload or floating launcher is required.
-**Saved cards (N)** opens only local card review. See the
+Use **View private card** at the source message to reopen its retained card; this
+does not restore consent or send anything. There is no separate saved-card manager.
+After confirmation the relay shows the receiving app's normal UI directly, not a
+JSON/transport page or another Open button. See the
 [connection and card guide](unofficial-local-client.md#connect-apps-and-review-local-cards).
 
 The output must already exist, be empty, and not traverse a symbolic link/junction. No

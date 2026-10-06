@@ -43,13 +43,11 @@ function appMessage(type: string, extra: object = {}) {
     postEvent({ type: `oc:app-import:${type}`, version: 2, sessionNonce: nonce, ...extra });
 }
 async function load() {
-    el<HTMLInputElement>("pairing-code").value = "ABCDEFGHIJKLMNOPQRST";
-    el<HTMLButtonElement>("claim-draft").click();
+    cleanup = startLocalNativeAppHandoff();
     await flush();
 }
 async function openAndReady() {
     await load();
-    el<HTMLButtonElement>("open-app").click();
     connected();
     appMessage("ready");
     await flush();
@@ -58,10 +56,13 @@ beforeEach(() => {
     vi.useFakeTimers();
     phase = "reviewing";
     pendingDispatch = undefined;
-    document.body.innerHTML =
-        '<input id="pairing-code"><button id="claim-draft">Load</button><p id="handoff-status"></p><pre id="handoff-summary" hidden></pre><button id="open-app" disabled>Open</button>';
+    document.body.innerHTML = '<p id="handoff-status"></p><iframe id="app-review" hidden></iframe>';
+    history.replaceState(null, "", "/handoff#bootstrap=ABCDEFGHIJKLMNOPQRST");
     popup = { closed: false, postMessage: vi.fn() };
-    vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
+    vi.spyOn(window, "open").mockReturnValue(null);
+    vi.spyOn(HTMLIFrameElement.prototype, "contentWindow", "get").mockReturnValue(
+        popup as unknown as Window,
+    );
     fetchMock = vi.fn(async (path: string, init: RequestInit) => {
         const body = JSON.parse(init.body as string);
         if (path === "/claim")
@@ -83,7 +84,6 @@ beforeEach(() => {
         throw new Error("Unexpected request");
     });
     vi.stubGlobal("fetch", fetchMock);
-    cleanup = startLocalNativeAppHandoff();
 });
 afterEach(() => {
     cleanup?.();
@@ -94,12 +94,9 @@ afterEach(() => {
 });
 
 describe("native private app browser relay", () => {
-    it("does nothing until click; claims once in POST body, reviews escaped exact fields, and never includes secrets in a URL", async () => {
+    it("claims the approved launch once, scrubs its fragment, and shows only the app frame without popup or technical controls", async () => {
         expect(fetchMock).not.toHaveBeenCalled();
-        expect(window.open).not.toHaveBeenCalled();
         await load();
-        el<HTMLButtonElement>("claim-draft").click();
-        await flush();
         expect(fetchMock).toHaveBeenCalledTimes(1);
         const [path, init] = fetchMock.mock.calls[0];
         expect(path).toBe("/claim");
@@ -114,24 +111,36 @@ describe("native private app browser relay", () => {
             code: "ABCDEFGHIJKLMNOPQRST",
             browserProofHex: expect.stringMatching(/^[a-f0-9]{64}$/),
         });
-        expect(el<HTMLInputElement>("pairing-code").value).toBe("");
-        expect(JSON.parse(el("handoff-summary").textContent!)).toMatchObject({
-            destination: request.destination,
-            recipientKey: request.envelope.keyId,
-        });
-        expect(el("handoff-summary").textContent).not.toContain("private-marker");
-        expect(el("handoff-summary").querySelector("script")).toBeNull();
-        expect(window.open).not.toHaveBeenCalled();
-        el<HTMLButtonElement>("open-app").click();
-        expect(window.open).toHaveBeenCalledExactlyOnceWith(request.destination, "_blank");
         expect(location.href).toBe("http://localhost:45821/handoff");
-        expect(JSON.stringify(popup.postMessage.mock.calls)).not.toContain("private-marker");
+        const frame = el<HTMLIFrameElement>("app-review");
+        expect(frame.src).toBe(request.destination);
+        expect(frame.hidden).toBe(false);
+        expect(frame.referrerPolicy).toBe("no-referrer");
+        expect(frame.getAttribute("sandbox")).not.toContain("allow-top-navigation");
+        expect(document.querySelector("button, input, pre")).toBeNull();
+        expect(document.body.textContent).not.toContain(request.envelope.ciphertext);
+        expect(window.open).not.toHaveBeenCalled();
+        expect(JSON.stringify(popup.postMessage.mock.calls)).not.toContain("ABCDEFGHIJKLMNOPQRST");
+        expect(JSON.stringify(popup.postMessage.mock.calls)).not.toContain(
+            request.envelope.ciphertext,
+        );
+    });
+    it.each([
+        "",
+        "#bootstrap=bad",
+        "#bootstrap=ABCDEFGHIJKLMNOPQRST&extra=1",
+        "#bootstrap=ABCDEFGHIJKLMNOPQRST&bootstrap=ABCDEFGHIJKLMNOPQRST",
+    ])("rejects missing or ambiguous launch authority without claiming: %s", async (hash) => {
+        history.replaceState(null, "", "/handoff" + hash);
+        await load();
+        expect(location.hash).toBe("");
+        expect(fetchMock).not.toHaveBeenCalled();
+        expect(el<HTMLIFrameElement>("app-review").getAttribute("src")).toBeNull();
     });
     it.each(["origin", "source", "connection", "nonce", "extras"])(
         "ignores unbound receiver consent (%s)",
         async (alteration) => {
             await load();
-            el<HTMLButtonElement>("open-app").click();
             connected(
                 alteration === "connection"
                     ? { connectionId: "wrong" }
@@ -151,7 +160,6 @@ describe("native private app browser relay", () => {
     );
     it("requires connected then ready then one successful dispatch; duplicate messages never re-offer", async () => {
         await load();
-        el<HTMLButtonElement>("open-app").click();
         appMessage("ready");
         await flush();
         expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -203,7 +211,7 @@ describe("native private app browser relay", () => {
         expect(
             popup.postMessage.mock.calls.filter(([m]) => m.type.endsWith(":offer")),
         ).toHaveLength(0);
-        expect(el("handoff-summary").textContent).toBe("");
+        expect(document.querySelector("pre")).toBeNull();
         expect(el("handoff-status").textContent).toContain("outcome is unknown");
     });
     it("does not release payload after pagehide while the dispatch response is pending", async () => {
@@ -219,7 +227,6 @@ describe("native private app browser relay", () => {
                 : original(path, init),
         );
         await load();
-        el<HTMLButtonElement>("open-app").click();
         connected();
         appMessage("ready");
         await flush();
@@ -229,7 +236,7 @@ describe("native private app browser relay", () => {
         expect(
             popup.postMessage.mock.calls.filter(([m]) => m.type.endsWith(":offer")),
         ).toHaveLength(0);
-        expect(el("handoff-summary").textContent).toBe("");
+        expect(document.querySelector("pre")).toBeNull();
     });
     it("rechecks absolute expiry after a delayed dispatch even if timeout callbacks have not run", async () => {
         const original = fetchMock.getMockImplementation()!;
@@ -249,7 +256,6 @@ describe("native private app browser relay", () => {
                 : original(path, init),
         );
         await load();
-        el<HTMLButtonElement>("open-app").click();
         connected();
         appMessage("ready");
         await flush();
@@ -261,7 +267,7 @@ describe("native private app browser relay", () => {
             popup.postMessage.mock.calls.filter(([m]) => m.type.endsWith(":offer")),
         ).toHaveLength(0);
         expect(fetchMock.mock.calls.filter(([path]) => path === "/dispatch")).toHaveLength(1);
-        expect(el("handoff-summary").textContent).toBe("");
+        expect(document.querySelector("pre")).toBeNull();
     });
     it("serializes receipt then save, and does not call receipt a saved entry", async () => {
         await openAndReady();
@@ -289,23 +295,25 @@ describe("native private app browser relay", () => {
         expect(el("handoff-status").textContent).toBe(
             "The app reports that this import was saved.",
         );
-        expect(el("handoff-summary").textContent).toBe("");
+        expect(document.querySelector("pre")).toBeNull();
     });
     it("erases pending content on native cancellation and ignores later receiver consent", async () => {
         await load();
-        el<HTMLButtonElement>("open-app").click();
+        el<HTMLIFrameElement>("app-review").dispatchEvent(new Event("load"));
+        expect(el("handoff-status").hidden).toBe(true);
         phase = "cancelled";
         await vi.advanceTimersByTimeAsync(1000);
         connected();
         appMessage("ready");
         await flush();
-        expect(el("handoff-summary").textContent).toBe("");
+        expect(document.querySelector("pre")).toBeNull();
         expect(el("handoff-status").textContent).toContain("closed or expired");
+        expect(el("handoff-status").hidden).toBe(false);
+        expect(el<HTMLIFrameElement>("app-review").src).toBe(request.destination);
         expect(fetchMock.mock.calls.filter(([path]) => path === "/dispatch")).toHaveLength(0);
     });
     it("bounds receiver consent to two minutes, with metadata only and no auto-offer", async () => {
         await load();
-        el<HTMLButtonElement>("open-app").click();
         await vi.advanceTimersByTimeAsync(120_000);
         expect(JSON.stringify(popup.postMessage.mock.calls)).not.toContain("private-marker");
         expect(
@@ -313,74 +321,49 @@ describe("native private app browser relay", () => {
                 .filter(([path]) => path === "/result")
                 .map(([, init]) => JSON.parse(init.body as string).outcome),
         ).toEqual(["uncertain"]);
-        expect(el("handoff-summary").textContent).toBe("");
+        expect(document.querySelector("pre")).toBeNull();
     });
-    it("leaves blocked popups retryable only by an explicit click", async () => {
-        vi.mocked(window.open).mockReturnValueOnce(null);
+    it("does not depend on popup permission or open another browser window", async () => {
         await load();
-        el<HTMLButtonElement>("open-app").click();
         await vi.advanceTimersByTimeAsync(1500);
-        expect(window.open).toHaveBeenCalledTimes(1);
-        expect(el<HTMLButtonElement>("open-app").disabled).toBe(false);
-        el<HTMLButtonElement>("open-app").click();
-        expect(window.open).toHaveBeenCalledTimes(2);
+        expect(window.open).not.toHaveBeenCalled();
+        expect(el<HTMLIFrameElement>("app-review").src).toBe(request.destination);
+        expect(fetchMock.mock.calls.filter(([path]) => path === "/claim")).toHaveLength(1);
     });
     it("closes after an app popup is closed and erases the review", async () => {
         await load();
-        el<HTMLButtonElement>("open-app").click();
         popup.closed = true;
         await vi.advanceTimersByTimeAsync(500);
-        expect(el("handoff-summary").textContent).toBe("");
-        expect(el<HTMLButtonElement>("open-app").disabled).toBe(true);
+        expect(document.querySelector("pre")).toBeNull();
+        expect(document.querySelector("button")).toBeNull();
     });
     it.each(["throwing", "already closed"] as const)(
-        "keeps an initially %s popup terminal without starting new timers or sending again",
+        "keeps an initially %s frame terminal without starting new timers or sending again",
         async (reason) => {
-            await load();
-            if (reason === "throwing") {
+            if (reason === "throwing")
                 popup.postMessage.mockImplementationOnce(() => {
-                    throw new Error("Synthetic popup transport failure");
+                    throw new Error("Synthetic transport failure");
                 });
-            } else popup.closed = true;
-            el<HTMLButtonElement>("open-app").click();
+            else popup.closed = true;
+            await load();
             expect(el("handoff-status").textContent).toContain("outcome is unknown");
-            expect(el("handoff-summary").textContent).toBe("");
-            expect(el<HTMLButtonElement>("open-app").disabled).toBe(true);
-            expect(fetchMock.mock.calls.map(([path]) => path)).toEqual(["/claim"]);
             expect(vi.getTimerCount()).toBe(0);
-            const failureStatus = el("handoff-status").textContent;
-            const sends = reason === "throwing" ? 1 : 0;
-            expect(popup.postMessage).toHaveBeenCalledTimes(sends);
+            const sends = popup.postMessage.mock.calls.length;
             popup.closed = false;
-            if (reason === "throwing") {
-                // Match the actual attempted connection, not an unrelated ID
-                // that the live handler would reject even without cleanup.
-                const connectionId = popup.postMessage.mock.calls[0][0].connectionId;
-                postEvent({
-                    type: "oc:app-import:connected",
-                    version: 1,
-                    connectionId,
-                    sessionNonce: nonce,
-                });
-            }
             appMessage("ready");
-            el<HTMLButtonElement>("open-app").dispatchEvent(new Event("click"));
-            await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
-            expect(window.open).toHaveBeenCalledOnce();
+            await vi.advanceTimersByTimeAsync(600_000);
+            expect(window.open).not.toHaveBeenCalled();
             expect(popup.postMessage).toHaveBeenCalledTimes(sends);
             expect(fetchMock.mock.calls.map(([path]) => path)).toEqual(["/claim"]);
-            expect(el("handoff-status").textContent).toBe(failureStatus);
-            expect(vi.getTimerCount()).toBe(0);
         },
     );
     it("does not automatically retry a claim whose response was lost", async () => {
         fetchMock.mockRejectedValue(new Error("lost claim"));
         await load();
-        el<HTMLButtonElement>("claim-draft").click();
         await vi.advanceTimersByTimeAsync(10_000);
         expect(fetchMock).toHaveBeenCalledTimes(1);
         expect(window.open).not.toHaveBeenCalled();
-        expect(el("handoff-status").textContent).toContain("Do not reload or retry");
+        expect(el("handoff-status").textContent).toContain("Nothing is retried automatically");
     });
     it.each([
         { ...request, destination: "https://user:pass@app.example/import" },

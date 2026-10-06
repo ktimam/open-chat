@@ -1,7 +1,7 @@
 import {
     APP_SETUP_TIMEOUT_MS,
     exactSetupPacket,
-    openAppSetupPopup,
+    openAppSetupFrame,
     validSetupTarget,
 } from "./utils/localAppSetupPopup";
 
@@ -66,7 +66,7 @@ export async function readSetupChallenge(response: Response): Promise<SetupChall
 export function startLocalNativeAppSetup(): () => void {
     window.opener = null;
     const status = document.querySelector<HTMLElement>("#setup-status")!;
-    const button = document.querySelector<HTMLButtonElement>("#connect-app")!;
+    const frame = document.querySelector<HTMLIFrameElement>("#app-setup")!;
     const params = new URLSearchParams(location.hash.slice(1));
     const bootstrap = params.get("bootstrap");
     if (
@@ -97,14 +97,14 @@ export function startLocalNativeAppSetup(): () => void {
         clearTimeout(timer);
         controller.abort();
         challenge = undefined;
-        button.disabled = true;
-        button.onclick = null;
+        frame.onload = null;
         window.removeEventListener("pagehide", stop);
     };
     const fail = () => {
         if (stopped) return;
         status.textContent =
             "Connection did not finish. Return to OpenChat to check its status before reconnecting.";
+        status.hidden = false;
         stop();
     };
     timer = setTimeout(fail, APP_SETUP_TIMEOUT_MS);
@@ -124,16 +124,24 @@ export function startLocalNativeAppSetup(): () => void {
             challenge = value;
             clearTimeout(timer);
             timer = setTimeout(fail, Math.max(1, value.expiresAtMs - Date.now()));
-            status.textContent = `Connect ${value.appId} at ${new URL(value.setupUrl).origin}. Choose the account and setup to share in the app.`;
-            button.disabled = false;
+            if (new URL(value.setupUrl).origin === location.origin)
+                throw new Error("App setup requires a separate origin");
+            frame.referrerPolicy = "no-referrer";
+            frame.setAttribute(
+                "sandbox",
+                "allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox",
+            );
+            frame.onload = () => {
+                if (!stopped) status.hidden = true;
+            };
+            connect();
         })
         .catch(fail);
-    button.onclick = () => {
-        if (stopped || !challenge || button.disabled) return;
+    function connect() {
+        if (stopped || !challenge) return;
         const current = challenge;
-        button.disabled = true;
-        status.textContent = "Complete Connect in the app window. No chat messages have been sent.";
-        void openAppSetupPopup(current.appId, current.setupUrl, controller.signal)
+        status.textContent = "Opening the app…";
+        void openAppSetupFrame(current.appId, current.setupUrl, controller.signal, frame)
             .then(async (catalogJson) => {
                 if (stopped) return;
                 const response = await fetch("/result", {
@@ -159,7 +167,7 @@ export function startLocalNativeAppSetup(): () => void {
                 stop();
             })
             .catch(fail);
-    };
+    }
     return stop;
 }
 if (typeof document !== "undefined" && document.body?.dataset.localNativeAppSetup === "true")

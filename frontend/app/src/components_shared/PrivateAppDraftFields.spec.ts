@@ -965,7 +965,8 @@ describe.each([false, true])("mounted generic private draft fields (compact=%s)"
             expect(control(view.target, "Item 1 — App count").getAttribute("aria-invalid")).toBe(
                 "true",
             );
-            expect(view.target.textContent).toContain("does not match the app's schema");
+            expect(view.target.textContent).toContain("Correct the highlighted fields");
+            expect(view.target.textContent).not.toContain("advanced JSON");
         }
         await input(view.target, "Item 1 — App count", "12");
         expect(view.payload().count).toBe(12);

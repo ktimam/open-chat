@@ -25,7 +25,10 @@ Source/test updates are not evidence that an existing server or APK is updated.
    originating client. Missing/invalid keys require reconnection; no plaintext fallback.
 8. The app receives ciphertext. Its authenticated UI recovers the recipient's private
    key and checks the bound account/sheet before decrypting locally into an unsaved draft.
-9. Review again in the app, including app-owned calculations and the exact receiving sheet.
+   The browser/native relay presents that normal app UI directly in its bound frame;
+   there is no intermediate JSON page, manual pairing or second destination picker.
+9. Review again in the app's existing entry form or batch review, including app-owned
+   calculations and the exact receiving sheet. IOU uses Pending from chat → Review & add.
 10. On explicit Save, the app separately encrypts final entry contents with the sheet key
     and submits ciphertext through its existing backend API.
 11. Report receipt and saving separately, using request IDs/status only. Receipt is not
@@ -39,11 +42,11 @@ New proposals use a compact private card beside their source message in both lay
 The original app-declared field order, labels and controls remain app-owned; encrypted
 local storage does not require a separate generic draft-editor page. A source message's
 **View private card** control reopens its saved card without running inference again.
-**Saved cards (N)** remains a separate card-only navigation/review view, including for
-older saved cards without a complete source link. Setup, catalog uploads and account-wide
-Forget controls are not part of either card view.
+There is no separate **Saved cards (N)** manager. Setup, catalog uploads and account-wide
+Forget controls are not part of the card. Older stored records are not deleted by this
+UI repair; do not infer that a missing source link creates a new management route.
 
-One host editor moves between the active source-message anchor and the saved-card view;
+One host editor retains the active card and moves to its source-message anchor;
 virtualized messages do not create their own editors or clear the workspace. Anchors are
 bound to account, backend, chat kind, chat key, message ID and thread. If a source leaves
 the rendered chat, its editor is retained hidden until that source returns. Pending or
@@ -52,8 +55,8 @@ does not count as approval, and reopening a card never sends it. A pending inval
 edit must be corrected before switching cards or approving a request.
 
 Compact cards keep invalid-value warnings and app disclosure visible. Optional field
-actions and app-controlled companion values are available in per-field details; the
-complete payload and exact reviewed request remain inspectable. No field is omitted from
+actions and app-controlled companion values are grouped under one optional **Details**
+disclosure; the complete payload and exact reviewed request remain inspectable. No field is omitted from
 the approval or encrypted delivery because its presentation is collapsed.
 The directory can refresh while cards are retained, but automatic recipe changes
 wait so they cannot replace a card's frozen configuration. Explicit connection is
@@ -236,12 +239,10 @@ message/thread indices associate a card with its source. These references stay
 inside the encrypted local collection;
 they are not source content, chat messages or outgoing app DTO fields. Re-proposing
 the same source for the same app/action resumes its retained card without inference.
-The saved-card selector shows host-owned source labels and offers a normal OpenChat
-source-message navigation action. Cards with a known chat kind but no message
-position honestly offer the source chat or thread instead. An old bare-principal
-reference does not distinguish a direct chat from a group, so it offers no guessed
-link. Re-proposing that same message fills in the missing kind/position without
-inference or creating another card. Navigation preserves
+The source message's **View private card** control selects its retained card. An old
+bare-principal reference does not distinguish a direct chat from a group, so the
+client does not guess a navigation URL. Re-proposing that same message fills in the
+missing kind/position without inference or creating another card. Navigation preserves
 the card and its edits, requires a new review, and sends nothing to the receiving app.
 Malformed references cannot become navigation URLs. None of this posts a card to
 chat or persists original message content. Do not persist approval tokens, transport

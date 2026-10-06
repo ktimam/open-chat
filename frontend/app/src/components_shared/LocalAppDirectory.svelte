@@ -126,6 +126,7 @@
 </script>
 
 <div class="app-directory">
+    {#if workspaceView.draftStorageError}<p role="alert">{workspaceView.draftStorageError}</p>{/if}
     <div class="directory-actions">
         {#if mobile}
             <CommonButton

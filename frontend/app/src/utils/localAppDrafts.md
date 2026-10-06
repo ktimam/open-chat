@@ -21,8 +21,10 @@ acceptance below are superseded and do not prove the new encryption/storage boun
    schema keywords fail closed. No external app processor may receive data here.
 3. Render/edit the returned draft locally. `edit` revokes its previous review.
 4. `review(id)` returns a deeply frozen request and full canonical JSON `summary`.
-   Render the summary as host-owned text, including destination and recipient. A
-   separate explicit user confirmation passes that review's `approvalId` to `confirm`.
+   Make exact values, destination and recipient inspectable in host-owned text.
+   The inline card's explicit confirmation validates the current edited values,
+   creates this review and passes its `approvalId` to `confirm`; this is not a
+   separate full-JSON page or additional user-facing transport step.
 5. The adapter must encrypt exactly the reviewed payload in OpenChat before any
    BroadcastChannel, IPC, loopback or postMessage boundary. Never remap fields or relax
    the approved-origin binding. Version-2 encrypted delivery binds the app/action/revision,
@@ -129,9 +131,10 @@ characters; field references must be unique and in the current row schema.
 
 `LocalAppCards` supplies the current host theme, edit/read-only state and review
 phase to `PrivateAppDraftFields`. While editing, the app layout shows canonical
-controls and unrepresented fields remain outside app paint. After Review, the
-complete outgoing values are displayed separately in host-owned unthemed UI
-before the existing explicit confirmation. View coverage or attractive pixels
+controls, with unrepresented non-companion fields still visible. The complete outgoing
+values and secondary field actions remain inspectable in one host-owned unthemed
+Details disclosure before explicit confirmation, not a separate review/editor page.
+View coverage or attractive pixels
 are never proof of complete review: app text/colors can be misleading. Invalid
 views, invalid dates and unrepresentable pending edits block approval. Edits revoke
 the previous review; rendering, changing theme or restoring a card never sends.
@@ -148,21 +151,23 @@ is not support for arbitrary app-authored executable interfaces.
 The cross-origin-isolated model client opens a fixed same-origin nonisolated relay
 only after explicit confirmation. A fresh 256-bit nonce binds their BroadcastChannel;
 the relay immediately clears its own opener and receives only an already encrypted
-request. The user then explicitly opens the app; ciphertext plus bounded routing/key
-metadata pass an exact-origin/window/session handshake. Neither source messages,
+request. The relay directly mounts the approved app's normal UI in its bound frame;
+ciphertext plus bounded routing/key metadata pass an exact-origin/window/session
+handshake. There is no further Open button or JSON transport page. Neither source messages,
 processor context, nor account credentials are added by the relay.
-The browser handshake binds the destination origin and exact popup, not its final URL
+The browser handshake binds the destination origin and exact frame window, not its final URL
 pathname. A cross-origin redirect cannot receive an offer; a same-origin redirect stays
 inside the explicitly trusted app origin. The host cannot inspect its cross-origin
-popup's final pathname. The encrypted envelope authenticates the approved destination
+frame's final pathname. The encrypted envelope authenticates the approved destination
 string and opaque recipient context; the recipient UI must validate both before decryption.
 
 An app acknowledgement means received for review, not saved. A later committed
 acknowledgement means **the app reports saved**, not an independent host attestation
 or proof of an actual backend write. A malicious approved app can lie about its own
-state. It also retains an opener to the relay for the handshake and can navigate or
-close that relay; it cannot use that link to access the isolated main client because
-the relay has severed its parent opener. The relay holds no unapproved chat data.
+state. The receiver binds messages to its expected relay parent and configured origin;
+the relay itself has severed its opener to the isolated main client. Framing is allowed
+only for the configured app destination, not arbitrary sites. The app does not acquire
+main-client chat access through this handshake. The relay holds no unapproved chat data.
 
 This boundary does not defend against arbitrary malicious same-origin client code,
 browser compromise, or the receiving app leaking a payload the user chose to deliver.

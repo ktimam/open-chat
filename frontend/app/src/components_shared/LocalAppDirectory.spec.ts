@@ -159,6 +159,25 @@ afterEach(async () => {
 
 describe("main AI Apps directory using the existing PR card and detail components", () => {
     it.each([false, true])(
+        "surfaces saved-card failures without a technical manager (mobile=%s)",
+        (mobile) => {
+            update({
+                draftStorageError:
+                    "Saved cards could not be restored. Restart OpenChat to retry. Nothing was sent or deleted.",
+            });
+            const target = render(mobile);
+            expect(target.querySelector('[role="alert"]')?.textContent).toContain(
+                "Restart OpenChat",
+            );
+            expect(target.textContent).not.toMatch(/Use Forget|import.*file|advanced JSON/i);
+            expect(target.querySelector('input[type="file"],textarea,pre')).toBeNull();
+            expect(calls.deliver).not.toHaveBeenCalled();
+            update({ draftStorageError: undefined });
+            flushSync();
+            expect(target.querySelector('[role="alert"]')).toBeNull();
+        },
+    );
+    it.each([false, true])(
         "keeps saved cards out of the app-directory toolbar without opening or discarding them (mobile=%s)",
         (mobile) => {
             update({

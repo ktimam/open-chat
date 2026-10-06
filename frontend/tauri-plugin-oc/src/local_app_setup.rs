@@ -25,14 +25,24 @@ use tokio::{
 pub const HTML_ASSET: &str = "local-native-app-setup.html";
 pub const JS_ASSET: &str = "local-native-app-setup.js";
 pub const PROFILE_ASSET: &str = "local-native-app-setup-profile.json";
+// Local-test-only profile: permit one exact app frame ancestor, not arbitrary loopback ports.
+const LOCAL_PORT: u16 = 5193;
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BundledProfile {
     version: u8,
     application_id: String,
     transport: String,
+    #[cfg(test)]
+    #[serde(skip)]
+    test_listen_port: Option<u16>,
 }
 impl BundledProfile {
+    fn listen_port(&self) -> u16 {
+        #[cfg(test)]
+        if let Some(port) = self.test_listen_port { return port; }
+        LOCAL_PORT
+    }
     pub fn parse(bytes: &[u8]) -> Result<Self, String> {
         let profile: Self = parse_strict(bytes, 1024)?;
         if profile.version != 1
@@ -52,6 +62,7 @@ struct Shared {
     attempt: Mutex<Attempt>,
     host: String,
     origin: String,
+    app_origin: String,
     html: Bytes,
     script: Bytes,
     epoch_ms: u64,
@@ -84,6 +95,21 @@ struct Session {
     id: String,
     shared: Arc<Shared>,
     shutdown: watch::Sender<bool>,
+    server: Option<tokio::task::JoinHandle<()>>,
+}
+impl Session {
+    async fn drain(&mut self) -> Result<(), String> {
+        let Some(mut server) = self.server.take() else { return Ok(()); };
+        match tokio::time::timeout(Duration::from_secs(6), &mut server).await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(_)) => Err("App setup listener stopped unexpectedly".into()),
+            Err(_) => {
+                server.abort();
+                let _ = server.await;
+                Err("App setup listener could not finish closing".into())
+            }
+        }
+    }
 }
 impl Drop for Session {
     fn drop(&mut self) {
@@ -91,6 +117,7 @@ impl Drop for Session {
             attempt.cancel();
         }
         let _ = self.shutdown.send(true);
+        if let Some(server) = self.server.take() { server.abort(); }
         self.shared.retention.release();
     }
 }
@@ -109,10 +136,15 @@ impl LocalAppSetupBridge {
     pub async fn begin(
         &self,
         request: BeginRequest,
-        _profile: BundledProfile,
+        profile: BundledProfile,
         assets: BrowserAssets,
     ) -> Result<BeginResponse, String> {
         validate_begin(&request)?;
+        let app_origin = reqwest::Url::parse(&request.setup_url)
+            .map_err(|_| "Invalid setup destination")?.origin().ascii_serialization();
+        if !app_origin.bytes().all(|b| b.is_ascii_alphanumeric() || b":/._-[]".contains(&b)) {
+            return Err("The app requires an exact frame origin".into());
+        }
         if assets.html.is_empty()
             || assets.html.len() > 64 * 1024
             || assets.script.is_empty()
@@ -134,15 +166,17 @@ impl LocalAppSetupBridge {
                 );
             }
         }
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        // Do not reuse the exact origin until the previous terminal response has drained.
+        if let Some(mut previous) = current.take() { previous.drain().await?; }
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, profile.listen_port()))
             .await
-            .map_err(|_| "Could not start local app setup")?;
+            .map_err(|_| "Could not start app setup on its dedicated local port")?;
         let port = listener
             .local_addr()
             .map_err(|_| "App setup address is unavailable")?
             .port();
         if port < 1024 {
-            return Err("App setup requires an ephemeral local port".into());
+            return Err("App setup requires its dedicated local port".into());
         }
         let host = format!("localhost:{port}");
         let origin = format!("http://{host}");
@@ -170,6 +204,7 @@ impl LocalAppSetupBridge {
             attempt: Mutex::new(attempt),
             host,
             origin,
+            app_origin,
             html: assets.html.into(),
             script: assets.script.into(),
             epoch_ms,
@@ -179,7 +214,7 @@ impl LocalAppSetupBridge {
         });
         let (shutdown, mut cancelled) = watch::channel(false);
         let transport = shared.clone();
-        tokio::spawn(async move {
+        let server = tokio::spawn(async move {
             let _server = ServerGuard(transport.clone());
             let slots = Arc::new(Semaphore::new(4));
             let mut expiry = tokio::time::interval(Duration::from_millis(250));
@@ -220,6 +255,7 @@ impl LocalAppSetupBridge {
             id,
             shared,
             shutdown,
+            server: Some(server),
         });
         Ok(response)
     }
@@ -242,9 +278,9 @@ impl LocalAppSetupBridge {
         Ok(result)
     }
     pub async fn cancel(&self, id: &str) -> Result<(), String> {
-        let current = self.session.lock().await;
+        let mut current = self.session.lock().await;
         let session = current
-            .as_ref()
+            .as_mut()
             .filter(|s| s.id == id)
             .ok_or("Unknown app setup connection")?;
         session
@@ -254,7 +290,7 @@ impl LocalAppSetupBridge {
             .map_err(|_| "App setup state is unavailable")?
             .cancel();
         let _ = session.shutdown.send(true);
-        session.shared.retention.release();
+        session.drain().await?;
         Ok(())
     }
 }
@@ -276,6 +312,12 @@ fn error(status: StatusCode) -> BrowserResponse {
         "text/plain; charset=utf-8",
         "Local app setup request rejected",
     )
+}
+fn app_page(body: Bytes, app_origin: &str) -> BrowserResponse {
+    let mut page = response(StatusCode::OK, "text/html; charset=utf-8", body);
+    let policy = format!("default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'none'; frame-src {app_origin}; worker-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
+    page.headers_mut().insert("Content-Security-Policy", header::HeaderValue::from_str(&policy).expect("validated URL origin"));
+    page
 }
 fn allows_fetch_metadata(method: &Method, path: &str, headers: &hyper::HeaderMap) -> bool {
     const NAMES: [&str; 4] = [
@@ -345,11 +387,7 @@ async fn handle(
     }
     if request.method() == Method::GET {
         return Ok(match path.as_str() {
-            "/setup" => response(
-                StatusCode::OK,
-                "text/html; charset=utf-8",
-                shared.html.clone(),
-            ),
+            "/setup" => app_page(shared.html.clone(), &shared.app_origin),
             "/setup.js" => response(
                 StatusCode::OK,
                 "text/javascript; charset=utf-8",
@@ -424,7 +462,10 @@ mod tests {
     use serde_json::{Value, json};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     fn profile() -> BundledProfile {
-        BundledProfile::parse(br#"{"version":1,"applicationId":"dev.openchatfork.localtest","transport":"private-app-setup-v1"}"#).unwrap()
+        let mut profile = BundledProfile::parse(br#"{"version":1,"applicationId":"dev.openchatfork.localtest","transport":"private-app-setup-v1"}"#).unwrap();
+        assert_eq!(profile.listen_port(), 5193);
+        profile.test_listen_port = Some(0);
+        profile
     }
     fn begin() -> BeginRequest {
         BeginRequest {
@@ -442,6 +483,61 @@ mod tests {
         let bridge = LocalAppSetupBridge::default();
         let start = bridge.begin(begin(), profile(), assets()).await.unwrap();
         (bridge, start)
+    }
+    fn profile_at(port: u16) -> BundledProfile {
+        let mut profile = profile();
+        profile.test_listen_port = Some(port);
+        profile
+    }
+    #[test]
+    fn bundled_profile_cannot_override_the_dedicated_port() {
+        assert!(BundledProfile::parse(br#"{"version":1,"applicationId":"dev.openchatfork.localtest","transport":"private-app-setup-v1","testListenPort":42000}"#).is_err());
+    }
+    #[tokio::test]
+    async fn occupied_dedicated_port_fails_without_bootstrap_or_fallback() {
+        let occupied = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let port = occupied.local_addr().unwrap().port();
+        let platform = Arc::new(crate::local_app_retention::test_support::Platform::default());
+        let bridge = LocalAppSetupBridge::with_retention(Some(platform.clone()));
+        assert!(bridge.begin(begin(), profile_at(port), assets()).await.is_err());
+        assert!(bridge.session.lock().await.is_none());
+        assert!(platform.owners.lock().unwrap().is_empty());
+    }
+    #[tokio::test]
+    async fn dedicated_port_is_reusable_immediately_after_cancel_expiry_and_received_response() {
+        let reservation = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let port = reservation.local_addr().unwrap().port();
+        drop(reservation);
+        let bridge = LocalAppSetupBridge::default();
+        let mut prior_id = String::new();
+        for outcome in ["cancel", "expiry", "received", "cancel", "received"] {
+            let start = bridge.begin(begin(), profile_at(port), assets()).await.unwrap();
+            assert_eq!(host(&start), format!("localhost:{port}"));
+            assert_ne!(start.setup_id, prior_id);
+            prior_id = start.setup_id.clone();
+            assert!(bridge.begin(begin(), profile_at(port), assets()).await.is_err());
+            match outcome {
+                "cancel" => { bridge.cancel(&start.setup_id).await.unwrap(); },
+                "expiry" => { bridge.session.lock().await.as_ref().unwrap().shared.attempt.lock().unwrap().phase(u64::MAX); },
+                _ => {
+                    let challenge = challenge(&start).await;
+                    assert_eq!(status(&post(&start, result(&challenge)).await), 200);
+                    assert_eq!(bridge.poll(&start.setup_id).await.unwrap().phase, Phase::Received);
+                }
+            }
+        }
+        bridge.cancel(&prior_id).await.unwrap();
+        assert!(TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await.is_ok());
+    }
+    #[tokio::test]
+    async fn frame_policy_rejects_wildcards_and_csp_delimiters_before_creating_session() {
+        let bridge = LocalAppSetupBridge::default();
+        for host in ["*.example", "other;example"] {
+            let mut request = begin();
+            request.setup_url = format!("https://{host}/connect");
+            assert!(bridge.begin(request, profile(), assets()).await.is_err());
+            assert!(bridge.session.lock().await.is_none());
+        }
     }
     fn host(start: &BeginResponse) -> &str {
         start
@@ -546,7 +642,7 @@ mod tests {
         assert_eq!(status(&response), 200);
         assert!(
             !response.contains("browserProofHex")
-                && !response.contains("app.example")
+                && !response.split_once("\r\n\r\n").unwrap().1.contains("app.example")
                 && !response.contains(bootstrap(&start))
         );
         let headers = response.to_lowercase();
@@ -554,7 +650,9 @@ mod tests {
             headers.contains("cache-control: no-store")
                 && headers.contains("frame-ancestors 'none'")
                 && headers.contains("connect-src 'self'")
+                && headers.contains("frame-src https://app.example;")
         );
+        assert!(!headers.contains("frame-src *") && !headers.contains("frame-src https:;"));
         assert!(!headers.contains("access-control-allow-origin"));
         for path in ["/result", "/catalog", "/challenge"] {
             assert_ne!(

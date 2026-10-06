@@ -732,6 +732,37 @@ describe("private app workspace boundaries", () => {
         expect(workspace.state.draft!.status).toBe("delivered");
     });
 
+    it.each([
+        [false, false],
+        [false, true],
+        [true, false],
+        [true, true],
+    ])(
+        "reports only the live app save acknowledgement (native=%s, saved=%s)",
+        async (native, saved) => {
+            const { workspace, deps } = fixture();
+            const runtimeClient = {
+                clientOnlyApps: () => true,
+                isNativeApp: () => native,
+            } as OpenChat;
+            await workspace.propose(runtimeClient, text, { stillCurrent: () => true });
+            expect(workspace.review()).toBe(true);
+            const approval = workspace.state.draft!.approval!;
+            deps.deliverySaved.mockReturnValue(saved);
+            await workspace.confirm(approval.approvalId);
+            expect(workspace.state.draft?.status).toBe("delivered");
+            expect(deps.deliverySaved).toHaveBeenCalledExactlyOnceWith(
+                approval.request.idempotencyKey,
+            );
+            expect(workspace.state.message).toBe(
+                saved
+                    ? "The app reports that this request was saved."
+                    : "The app received the handoff. Review and save it in the app; delivery is not proof that it was saved.",
+            );
+            expect(native ? deps.nativeDeliver : deps.deliver).toHaveBeenCalledOnce();
+        },
+    );
+
     it.each([false, true])(
         "reopens a received handoff without re-extraction or changing the request (native=%s)",
         async (native) => {
@@ -745,6 +776,7 @@ describe("private app workspace boundaries", () => {
             const approval = workspace.state.draft!.approval!;
             const transport = native ? deps.nativeDeliver : deps.deliver;
             await workspace.confirm(approval.approvalId);
+            deps.deliverySaved.mockClear();
             workspace.close();
             workspace.open();
             workspace.setAccount("test-account");
@@ -760,9 +792,10 @@ describe("private app workspace boundaries", () => {
             expect(transport).toHaveBeenCalledTimes(2);
             expect(transport.mock.calls[1][0]).toBe(approval.request);
             expect(workspace.state.draft!.approval).toBe(approval);
-            expect(deps.deliverySaved).toHaveBeenCalledExactlyOnceWith(
-                approval.request.idempotencyKey,
-            );
+            expect(deps.deliverySaved.mock.calls).toEqual([
+                [approval.request.idempotencyKey], // Fresh reopen guard.
+                [approval.request.idempotencyKey], // Result status after that explicit reopen.
+            ]);
             expect(deps.extract).toHaveBeenCalledOnce();
             expect(native ? deps.deliver : deps.nativeDeliver).not.toHaveBeenCalled();
         },
@@ -774,6 +807,7 @@ describe("private app workspace boundaries", () => {
         workspace.review();
         const approval = workspace.state.draft!.approval!;
         await workspace.confirm(approval.approvalId);
+        deps.deliverySaved.mockClear();
         deps.deliverySaved.mockReturnValue(true);
         await workspace.reopenDelivered(approval.approvalId);
         expect(deps.deliverySaved).toHaveBeenCalledExactlyOnceWith(approval.request.idempotencyKey);

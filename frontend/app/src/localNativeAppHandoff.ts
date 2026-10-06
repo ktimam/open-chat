@@ -8,7 +8,6 @@ import {
     validateEncryptedLocalAppDeliveryRequest,
     type EncryptedLocalAppDeliveryRequest,
 } from "./utils/localAppEncryption";
-import { formatLocalHandoffReview } from "./localAppHandoffRelay";
 
 const NONCE = /^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/;
 const PHASES = [
@@ -85,14 +84,15 @@ async function boundedJson(response: Response, limit: number): Promise<unknown> 
     }
 }
 
-/** Fixed first-party loopback UI. No storage, cookies, app fetches, hidden frames, URL secrets,
- * automatic claim/retry, or source-chat access. Only the reviewed app payload crosses postMessage. */
+/** Internal first-party transport after the APK's explicit card approval. The one-use launch
+ * fragment is erased before mounting the app's normal review UI. No source-chat access or retry. */
 export function startLocalNativeAppHandoff(): () => void {
-    const code = document.querySelector<HTMLInputElement>("#pairing-code")!;
-    const claim = document.querySelector<HTMLButtonElement>("#claim-draft")!;
     const status = document.querySelector<HTMLElement>("#handoff-status")!;
-    const summary = document.querySelector<HTMLElement>("#handoff-summary")!;
-    const open = document.querySelector<HTMLButtonElement>("#open-app")!;
+    const frame = document.querySelector<HTMLIFrameElement>("#app-review")!;
+    const params = new URLSearchParams(location.hash.slice(1));
+    let bootstrap = params.get("bootstrap") ?? "";
+    // Scrub even malformed launch material. Neither the app URL nor the HTTP request carries it.
+    if (location.hash) history.replaceState(null, "", location.pathname + location.search);
     const validOrigin = /^http:\/\/localhost:([1-9][0-9]{3,4})$/.exec(location.origin);
     if (
         !validOrigin ||
@@ -100,18 +100,16 @@ export function startLocalNativeAppHandoff(): () => void {
         Number(validOrigin[1]) < 1024 ||
         location.pathname !== "/handoff" ||
         location.search ||
-        location.hash ||
+        params.size !== 1 ||
+        !/^[A-Z2-7]{20}$/.test(bootstrap) ||
         window.top !== window
     ) {
         status.textContent = "This is not a valid local handoff page. Return to the APK.";
-        claim.disabled = true;
-        code.disabled = true;
-        open.disabled = true;
+        bootstrap = "";
         return () => {};
     }
     window.opener = null;
     let closed = false;
-    let claimAttempted = false;
     let request: EncryptedLocalAppDeliveryRequest | undefined;
     let browserProofHex = "";
     let handoffId = "";
@@ -133,7 +131,10 @@ export function startLocalNativeAppHandoff(): () => void {
     function stop(message?: string) {
         if (closed) return;
         closed = true;
-        if (message !== undefined) status.textContent = message;
+        if (message !== undefined) {
+            status.textContent = message;
+            status.hidden = false;
+        }
         controller.abort();
         session?.close();
         session = undefined;
@@ -146,15 +147,8 @@ export function startLocalNativeAppHandoff(): () => void {
         handoffId = "";
         connectionId = "";
         sessionNonce = "";
-        code.value = "";
-        summary.textContent = "";
-        summary.hidden = true;
-        code.disabled = true;
-        claim.disabled = true;
-        open.disabled = true;
-        code.oninput = null;
-        claim.onclick = null;
-        open.onclick = null;
+        bootstrap = "";
+        frame.onload = null;
         window.removeEventListener("message", onMessage);
         window.removeEventListener("pagehide", onPageHide);
     }
@@ -303,18 +297,10 @@ export function startLocalNativeAppHandoff(): () => void {
     }
     window.addEventListener("message", onMessage);
     window.addEventListener("pagehide", onPageHide);
-    claim.onclick = async () => {
-        if (closed || claimAttempted) return;
-        const enteredCode = code.value.trim().toUpperCase();
-        if (!/^[A-Z2-7]{20}$/.test(enteredCode)) {
-            status.textContent = "Enter the 20-character code currently shown in the APK.";
-            return;
-        }
-        claimAttempted = true;
-        claim.disabled = true;
-        code.disabled = true;
-        code.value = "";
-        status.textContent = "Loading the explicitly approved draft from the APK…";
+    void (async () => {
+        const enteredCode = bootstrap;
+        bootstrap = "";
+        status.textContent = "Opening the app…";
         try {
             browserProofHex = Array.from(crypto.getRandomValues(new Uint8Array(32)), (n) =>
                 n.toString(16).padStart(2, "0"),
@@ -340,11 +326,6 @@ export function startLocalNativeAppHandoff(): () => void {
             expiresAtMs = value.expiresAtMs;
             monotonicDeadline =
                 performance.now() + Math.min(10 * 60 * 1000, expiresAtMs - Date.now());
-            summary.textContent = formatLocalHandoffReview(request);
-            summary.hidden = false;
-            status.textContent =
-                "The approved fields were encrypted inside OpenChat. This page cannot read them. Open the linked app to decrypt and review them; nothing has been saved yet.";
-            open.disabled = false;
             expiryTimer = setTimeout(
                 () =>
                     stop(
@@ -355,26 +336,32 @@ export function startLocalNativeAppHandoff(): () => void {
             pollTimer = setInterval(() => {
                 void poll();
             }, 1000);
+            openApp();
         } catch {
             if (!closed)
                 stop(
-                    "The code could not be claimed, or its outcome is unknown. Return to the APK. Do not reload or retry this code automatically.",
+                    "The app could not be opened, or the outcome is unknown. Return to OpenChat to check the card. Nothing is retried automatically.",
                 );
         }
-    };
-    open.onclick = () => {
+    })();
+    function openApp() {
         if (closed || !request || popup) return;
         try {
-            popup = window.open(request.destination, "_blank"); // No fragment, bearer code or origin parameter.
-            if (!popup) {
-                status.textContent =
-                    "The app popup was blocked. Allow popups, then press Open app again.";
-                return;
-            }
-            open.disabled = true;
+            if (new URL(request.destination).origin === location.origin)
+                throw new Error("The app must have a separate origin");
+            frame.referrerPolicy = "no-referrer";
+            frame.setAttribute(
+                "sandbox",
+                "allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox",
+            );
+            frame.onload = () => {
+                if (!closed) status.hidden = true;
+            };
+            frame.src = request.destination; // No bearer, proof, draft or origin URL parameter.
+            frame.hidden = false;
+            popup = frame.contentWindow;
+            if (!popup) throw new Error("App review is unavailable");
             connectionId = localAppSessionNonce();
-            status.textContent =
-                "In the app, allow this local connection once. No payload is sent before that consent and the APK's final approval check.";
             publicHello();
             if (closed) return;
             helloTimer = setInterval(publicHello, 500);
@@ -389,7 +376,7 @@ export function startLocalNativeAppHandoff(): () => void {
         } catch {
             uncertain();
         }
-    };
+    }
     return () => stop();
 }
 

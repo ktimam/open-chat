@@ -1,4 +1,42 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect app — local client</title>
-<style>body{font:16px system-ui,sans-serif;max-width:640px;margin:32px auto;padding:0 20px;line-height:1.6;overflow-wrap:anywhere}button{font:inherit;padding:12px 18px}h1{font-size:24px}</style></head>
-<body data-local-app-setup="true"><main><h1>Connect an app</h1><p id="setup-status" role="status">Waiting for the selected app…</p><button id="connect-app" disabled>Continue to app</button><p>The app will ask which account and setup to share. This connection does not send chat messages, drafts, or credentials.</p></main><script src="/local-app-setup.js" defer></script></body></html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width,initial-scale=1" />
+        <title>Connect app</title>
+        <style>
+            html,
+            body {
+                margin: 0;
+                width: 100%;
+                height: 100%;
+                font:
+                    16px system-ui,
+                    sans-serif;
+            }
+            #setup-status {
+                padding: 24px;
+            }
+            iframe {
+                display: block;
+                border: 0;
+                width: 100%;
+                height: 100dvh;
+            }
+            iframe[hidden] {
+                display: none;
+            }
+        </style>
+    </head>
+    <body data-local-app-setup="true" data-app-origin="">
+        <p id="setup-status" role="status">Opening app…</p>
+        <iframe
+            id="app-frame"
+            title="Connect app"
+            hidden
+            sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
+            referrerpolicy="no-referrer"
+        ></iframe>
+        <script src="/local-app-setup.js" defer></script>
+    </body>
+</html>

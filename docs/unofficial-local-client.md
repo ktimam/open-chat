@@ -7,12 +7,108 @@ the local-only acceptance below.
 
 ## Current checkpoint — October 6, 2026
 
+The later normal-flow repair removes the remaining transport JSON/pairing pages and
+extra Open/Load steps. Apps → Connect/Reconnect shows the app's normal connection
+page; confirming an inline card opens its normal review/save flow directly. Sender
+approval, recipient encryption and the receiving app's separate review/save remain.
+
+The active browser candidate is an explicitly uncommitted UI overlay on
+`e8ff0811660e705c377e1fef0addde133536f85b`, not a newly published release. Its r3
+build is `2.0.0-localtest.63d10d313e0ac88441122a01a18cdd98`, served at localhost:5190
+from `F:/Temp/OpenChat-IOU/pr-flow-repair-20261006/web-r3/v2`. Source receipt SHA-256:
+`c3a20e4544efd427fbde3b6d12947962295c33ee3ef796effb6e104ace2ee631`;
+independent `VERIFIED.json` SHA-256:
+`c9625f04a83038c585e33b68451792bb65bd2bae548c9cc83aa22c49bc9528d4`.
+This supersedes r2 for serving, not its retained acceptance evidence. The r3 build
+includes the narrow Saved-status fix, now confirmed in the browser and the matching
+refreshed x86 APK. The companion IOU r4 source record is SHA-256
+`bc0779909901f43369a64a8ff385058eff081aae8c8cda748f4e722cba523ff2`, retained at
+`F:/Temp/OpenChat-IOU/pr-flow-repair-20261006/iou-r4/source.json`. Its app/node
+TypeScript checks, 228 unit tests and 90 integration tests passed. The HTTP framing
+policy remains restricted to exact localhost origins 5190, 5192 and 5193.
+
+| Repair acceptance | Observed result | Boundary |
+| --- | --- | --- |
+| Browser connection | Normal Apps reconnect retained sign-in and showed friendly account/sheet names, Types and Connect directly | No manual IDs, file uploads, JSON page or extra transport button |
+| Browser review/save | A synthetic 45.67 card opened normal IOU Sheet → Pending from chat → Review & add. Its original entry form applied the Type's 10% fee; explicit Add entry produced an in-session Saved acknowledgement. Fresh sheet navigation found exactly one row, gross 45.67/net 41.10 | This end-to-end interaction ran r1. The r2 browser change is recovery wording; native-only deltas do not establish browser or APK runtime acceptance |
+| r2 reload | The stored card remained available and selecting it did not resend | Restore requires fresh acknowledgement to reopen; a trusted Saved status or sending approval is not restored |
+| r3 browser artifact | Build and independent source/relay checks passed; all 27 AI assets match retained r2. Same-origin server replacement and exact HTTP/security-header checks passed | This artifact check is not another browser inference, delivery or Saved-status runtime pass |
+| r3 browser runtime with IOU r4 | Reload retained the account and source-linked card without sending or opening a tab; acknowledgement remained unchecked and Reopen disabled. Explicit same-ID reopening and saving returned the earlier-save-already-accepted result, inline Saved and the corrected saved-status sentence | Fresh history showed the browser and native test-note rows once each. Restoring the card itself did not restore trusted Saved status or approval |
+| App navigation | Details opened a new top-level IOU account tab; Open active sheet then navigated normally | No frame-policy refusal; the exact CSP was retained, not weakened |
+| Initial repaired native save | The fixed-origin x86 APK passed normal connection and review/save on persistent emulator-5554, followed by backend reload readback | A later fresh browser page independently confirmed the native test-note row; this does not turn the earlier saving-page reload into an independent-session check |
+| Final status-corrected APK | In-place installation retained the account and card. Explicit same-ID reopening, original entry-form review and save returned earlier-save-already-accepted, one native test-note row and corrected native Saved status | Same persistent emulator and retained card, not a fresh image-inference test. Both architecture artifacts passed verification; the ARM APK has not been tested on a physical phone |
+
+The repaired emulator flow used normal Apps → IOU reconnect, with friendly sheet
+names and Types; cancel/reopen on the same fixed ports passed. Propose → inline
+card → Add to IOU opened the normal sheet's Pending from chat → Review & add and
+unchanged entry form. Explicit Add entry for synthetic 45.67 USD, 2026-10-06,
+You owe, note `TEST ONLY - APK UI repair`, and the 10%-fee Type produced net 41.10.
+IOU showed Saved in IOU and the native card showed Add to IOU Saved. The normal
+submit handler awaited its backend reload; a subsequent sheet snapshot included the
+new row with that unique test note, gross 45.67 and net 41.10. This is backend reload
+readback, not an independent fresh-session readback. The form screenshot is retained as
+`F:/Temp/OpenChat-IOU/pr-flow-repair-20261006/emulator-normal-iou-form.png`.
+No native GPU inference or physical-phone pass is claimed.
+
+That run also exposed stale delivered-status text beneath the Saved header and an
+existing Open active sheet navigation blocked when followed inside the restricted
+app frame. Both are resolved and runtime-checked in browser r3/IOU r4; the corrected
+Saved status also passed in the final x86 APK. A fresh browser history page separately
+confirmed the native row and, after explicit replay, both test-note rows remained unique.
+Details now opens the normal app account in a new top-level tab, where Open active sheet
+works; this does not weaken the receiving frame's exact CSP.
+
+The final x86 replay retained the original 45.67 USD, 2026-10-06, You owe,
+`TEST ONLY - APK UI repair` note and Type's 10% fee/net 41.10. Only after the explicit
+checked acknowledgement did Reopen proceed through the existing sign-in and normal
+Pending from chat → Review & add entry form. Add entry returned
+"Saved in IOU — the earlier save was already accepted." Back in OpenChat, the card
+showed Saved and "The app reports that this request was saved." The final screenshots
+are retained locally as `final-apk-normal-iou-review.png` and `final-apk-saved-card.png`
+under `F:/Temp/OpenChat-IOU/pr-flow-repair-20261006/`; the latter has SHA-256
+`368b2374908818eb0eea0726782bd99b21e2d8ef8a705a0a1160378bb481ac73`.
+
+The final status-corrected APKs are retained in
+`F:/Temp/OpenChat-IOU/pr-flow-repair-20261006/apk-saved-status/artifacts/`:
+`openchat-fork-local-test-x86_64.apk` SHA-256
+`1dab809a8af3aea89546c8b1f58499d29cf24842dc249bb48b1da5fdd56dd769`, and
+`openchat-fork-local-test-aarch64.apk` SHA-256
+`84aa572be993bcf0f7f22265eda4ecbfdd78747414c45baf84b2d0ede351f0e0`.
+Their shared frontend build ID is `ab7e55a2161f1747404a2699cd01a3ea`; the 41-overlay
+source record SHA-256 is `b90916cbf31b0695af427b4ae27d59baee105d8518c01b07c804deb3e2988f8c`.
+All 38 common web-r3 overlay hashes match. `APK-COMPACT.json`, linking both independent
+artifact reports, has SHA-256 `27d8ce6f75c13f08421c2e6d41313d60e774f5153d20aed070dbebd157a5e64a`.
+The final status regression passed 204 focused tests; this overlaps earlier coverage,
+not an additional disjoint total. No native source, authentication or model change
+was needed for this last status correction.
+
+The earlier fixed-origin APKs, before the final status correction, are preserved in
+`F:/Temp/OpenChat-IOU/pr-flow-repair-20261006/apk-fixed-origins/artifacts/`:
+`openchat-fork-local-test-x86_64.apk` SHA-256
+`e422ae0a601a984383805c53ab35331e7fd90273580dd731e043c8475c5d12fd`, and
+`openchat-fork-local-test-aarch64.apk` SHA-256
+`5bd814b568f3946770ae3cd10ee16255b4edac1ea30c60b6c22edef446eb554f`.
+Their shared frontend build ID is `f2a32f83dfddd29e5242ab54c3b652a2`.
+The 40-overlay source record SHA-256 is
+`144598e98b4f066175ea63ae7fd03b29de6a5df16208ec2eef4bc7578980efa9`;
+`APK-COMPACT.json` links the independent per-architecture reports and has SHA-256
+`d23a0786139d60e8a7fb84b949875f8cbc7d564d8b409fd5c48f6bfa2a4d299e`.
+These are local repair artifacts, not published releases. Runtime acceptance is
+limited to the observed browser and x86 emulator flows described above.
+
+Main-page isolation and exact relay/app framing policies were checked after the r3
+server switch. There is no backend, prompt, weight or model-setting change in this UI
+repair. Existing advisory, optional-voice, physical-phone and public-release limits
+remain; this checkpoint does not upgrade them to passes.
+
+### Earlier October 6 checkpoint — before the transport UI repair
+
 **The PR-only UI is restored on fork main. Desktop original-image checks and the
 final emulator's reconnect/encrypted delivery checks passed. Native all-WebGPU
 image inference is not qualified: the emulator returns no adapter, and the matching
 ARM APK has not been tested on a physical phone. This is not public-release approval.**
 
-### Source and scope
+#### Earlier source and scope
 
 The tested OpenChat source is `d0b00668c342d6b4bc09f93e19c2f023c6c07926`;
 the companion app's tested IOU source is
@@ -23,14 +119,14 @@ source identity of these binaries. The backend tree remains
 upstream `0519aa39964a34d165173587b4d63e572c89670d`; no OpenChat canister
 change or deployment was required.
 
-The current flow uses normal Apps connection and the restored app-authored inline
+That checkpoint used normal Apps connection and the restored app-authored inline
 card at its source message, not the removed technical draft/setup workspace.
 Private cards remain encrypted device-local records; explicit sender review,
 recipient encryption, app-side decryption and a second review/save remain required.
 No prompts, weights, UI, inference runtime or backend were changed during this
 verification run. Uncommitted experiments were excluded from the frozen builds.
 
-### Current local-test completion checklist
+#### Earlier local-test completion checklist
 
 | Area | Verified result | Limit |
 | --- | --- | --- |
@@ -43,7 +139,7 @@ verification run. Uncommitted experiments were excluded from the frozen builds.
 | Native image inference | Final APK secure-context/foreground preflight exposes WebGPU but default requestAdapter returns null; no GPU device/model/download was started | Emulator GPU inference is unpassed. No fallback or blocklist override was used. Physical-phone qualification remains deferred |
 | CI and advisories | Historical source-bound functional test evidence below remains valid for its own commits | No fresh hosted-CI or advisory-scan pass is claimed. Existing exact-version local-test deferrals remain disclosed, not clean scans or public-release approval |
 
-### Final local-test APKs
+#### Earlier local-test APKs
 
 Both APKs contain the same frozen frontend build ID
 `e6f28ecbdd7a5edc5a194b0f7f329552` and frontend SHA-256
@@ -73,7 +169,8 @@ Evidence records: `acceptance-progress.json` (SHA-256
 observations, not an independent second inference replay. Raw images, screenshots,
 account identifiers and one-time handoff material are not published with these docs.
 
-Only native image/phone qualification remains open in this bounded PR-parity run.
+At that earlier checkpoint, only native image/phone qualification remained open in
+the bounded PR-parity run. It does not qualify the repaired APK flow above.
 Expanded image-contract experiments are not activated or added to this release's
 scope. Optional voice's documented synthetic-recording limitation, public branding,
 hosting/provider qualification and publication retain their existing deferrals.
@@ -521,16 +618,18 @@ does not run inference or send chat data.
    **Propose** on one text or image message. Both UIs share this pipeline; app
    proposals do not currently accept voice messages.
    App prompts, labels, rules, extraction and normalization remain app-owned.
-4. Edit the local card using its app-labelled fields. This panel contains card review,
-   not app setup; **Advanced: complete payload (JSON)** remains available
-   for structured fields and repairs. Nothing is posted to the chat or sent to the
+4. Edit the inline card using its app-labelled fields. The optional **Details**
+   disclosure contains exact outgoing values and secondary field controls, not a
+   separate JSON editor or setup page. Nothing is posted to the chat or sent to the
    app for card verification. Every edit invalidates the previous approval.
 5. Confirm the full request, including its destination and recipient review label.
    OpenChat encrypts the fields before handing them to a separate browser relay.
-   The relay displays only routing/key metadata and asks before opening the receiving
-   app; it cannot read the fields. In the local-test APK, first pair that relay below.
+   The relay directly presents the receiving app's normal UI in its bound frame;
+   it cannot read the fields. There is no intermediate transport review, manual
+   pairing step or extra Open button in either browser or local-test APK.
 6. Sign in to the app, decrypt for the linked destination, review the full fields and
-   actual account/destination again, then explicitly save there.
+   actual account/destination again, then explicitly save there. IOU uses its normal
+   sheet's **Pending from chat → Review & add** and existing entry/batch review.
    **Received** is not **saved**; the latter means the app reports that it saved.
 
 Per-chat app opt-in enables suggestions from app-owned declarative rules for fresh
@@ -555,8 +654,9 @@ updates can be applied, publisher removal disables that app's proposals and chat
 opt-ins while retaining its setup for recovery. Manual file-import controls are not
 part of the normal Apps interface.
 
-**Saved cards (N)** in Apps opens the card-only panel, including cards whose app is
-disconnected. It restores neither sending consent nor a handoff. **Disconnect** in
+Use **View private card** at a retained card's source message to reopen it. There is
+no separate saved-card manager, and reopening restores neither sending consent nor
+a handoff. **Disconnect** in
 app details removes that app's connection and chat opt-ins but retains its cards.
 Those cards stay inspect-only until a matching connection is restored and reviewed;
 a changed connection cannot silently retarget their fields or destination.
@@ -564,7 +664,7 @@ a changed connection cannot silently retarget their fields or destination.
 The local-test APK uses a separate ten-minute setup bridge. A one-use random launch
 fragment is immediately removed from the browser URL and authenticates the initial
 local request; it never goes to the app publisher. The app's response is accepted
-only from the expected popup/origin and nonce, then revalidated against the public
+only from the expected app frame/origin and nonce, then revalidated against the public
 package before installation. Neither HTTP GET nor the app receives an OpenChat
 session, chat history or draft. Closing/reloading an unfinished bridge requires a
 fresh Connect; it does not automatically retry.
@@ -577,34 +677,33 @@ does not enable desktop native/iOS or change the official client's platform poli
 
 ### Local-test APK browser handoff
 
-After **Send reviewed request**, the APK displays an exact localhost browser URL
-and a one-use pairing code. Choose **Copy pairing code** and **Open local browser**,
-enter the code only on that displayed page, then select **Load reviewed draft**.
-The URL itself contains neither the code nor the draft. Copying is optional and
-explicit; your device clipboard may retain the code after it expires.
+Confirming the inline card opens the normal receiving app directly through the
+local transport. No pairing-code entry, clipboard step or second Open/Load button
+is required. Internally, a one-use launch fragment is removed before the app frame
+loads; it contains a transport capability, never fields, account IDs or credentials.
 
-The code expires after two minutes and can claim the encrypted approved draft only once.
+The capability expires after two minutes and can claim the encrypted approved draft only once.
 After a successful claim, the browser has up to ten minutes to complete delivery.
-Check the destination and recipient-key metadata before opening the receiving app.
+Review the destination and recipient on the inline card before confirming.
 The relay cannot display or decrypt the fields; they were encrypted inside OpenChat.
-The receiving app asks you to allow the one-time connection before it receives the
-encrypted payload. After signing in and decrypting locally, review every field and
+The receiver accepts only its configured exact sender origin and bound parent/nonce.
+After signing in and decrypting locally, review every field and
 its actual account and destination, then save there.
 **Received** does not mean that anything has been saved.
 
 Discarding the draft or changing account cancels the pending native handoff. Data
 already handed to the receiving app cannot be recalled. If the outcome is uncertain,
 check the app before choosing the explicitly confirmed retry with the same import
-ID. There is no automatic retry or automatic browser/clipboard action.
-**Close** only hides the card panel; use **Cancel / discard local draft** to cancel
-pending work.
+ID. There is no automatic retry, unsolicited browser launch or clipboard action.
+Closing a view is not approval or deletion. Use the card's Cancel action to discard
+an unsent proposal; retained read-only cards offer **Remove from this device** in Details.
 
 If the receiving page closes or reloads after **Received** but before saving,
-return to the still-open client and choose **Reopen the same reviewed request**.
+return to the still-open client and choose **Reopen in app**.
 First check the receiving app for an existing save, then explicitly acknowledge
 the warning. Reopening preserves the entire approved request and import ID; it
 does not rerun extraction or inference. The previous handoff is cancelled and a
-new browser relay or native pairing is created. Review the same receiving account
+new browser relay or native transport session is created. Review the same receiving account
 and destination again: an app may deduplicate only within that destination, not
 across different accounts or sheets. Reopening is unavailable once the current
 handoff reports **Saved**, and never occurs automatically.
@@ -614,18 +713,18 @@ for single items and lists. These edit the same canonical payload used for revie
 there is no second submission object. Optional absent values are different from an
 empty string, zero, false or null. Removing an optional field omits it. Incomplete
 numbers do not become zero, and invalid or oversized edits cannot approve or send
-the previously valid request. Non-scalar values remain available through the full
-JSON editor and complete preview. These controls do not run inference again or
-interpret an app's private processor context. App-specific dependent choices, such
+the previously valid request. Non-scalar values remain visible in the exact outgoing
+values in Details; there is no JSON-editing page in the normal flow. These controls
+do not run inference again or interpret an app's private processor context. App-specific dependent choices, such
 as selecting a saved template and applying its defaults, remain in the receiving
 app unless the app supplies a supported declarative contract for them.
 
 Private drafts also show an app-declared preview: title, disclosure and labelled
-fields, repeated for each item. It is derived from the current valid JSON editor,
+fields, repeated for each item. It is derived from the current canonical field values,
 not a second submission payload. Additional fields remain visible; hidden text
-controls are escaped. Invalid edits remove the preview until corrected. The full
-JSON editor and exact-request review remain authoritative. Imported app button
-labels never replace OpenChat's explicit external-send or discard controls.
+controls are escaped. Invalid edits block confirmation until corrected. The exact
+outgoing values remain inspectable in Details. App-declared button labels do not
+change the host's explicit approval, encryption, validation or cancellation boundaries.
 This renderer is shared by both UIs and contains no app-specific formatting rules.
 
 ### Process with AI and `/ai` are chat actions
@@ -657,9 +756,10 @@ Connection controls wait for restoration; a failed read/write is shown rather th
 reported as saved. Invalid or future-version records are not silently accepted.
 
 Up to eight private cards are saved encrypted on this device, separately from setup,
-scoped to their OpenChat account/backend. Closing the panel does not delete them.
-**Discard local draft** removes only the selected card. Disconnecting its app does
-not discard it; use **Saved cards (N)** to inspect retained cards. The former setup
+scoped to their OpenChat account/backend. Closing a view does not delete them.
+Canceling an unsent proposal or using **Remove from this device** on a read-only
+card removes only that card. Disconnecting its app does not discard it; use its
+source message's **View private card** link to inspect it. The former setup
 import and account-wide Forget buttons are not present in the normal Apps flow.
 Source images/chat history and approval/transport tokens are not persisted.
 Restoration requires fresh review and never sends automatically. Attempted deliveries
@@ -672,18 +772,18 @@ for the complete workflow and device-local key threat boundary.
 
 An imported app can declare named choices and their scalar companion fields/defaults.
 The private editor shows the app's labels alongside the exact outgoing values. Choosing
-an option updates its declared companion fields atomically; those fields are read-only
-outside Advanced JSON. Clearing a choice removes its companions and restores the
-original defaulted values, unless the user has explicitly edited those values.
+an option updates its declared companion fields atomically; their exact values are
+inspectable in Details rather than separate main-form controls. Clearing a choice
+removes its companions and restores the original defaulted values, unless the user
+has explicitly edited those values.
 
 Choice history remains in the current draft session through closing/reopening the
 panel and changing the recipient. It is not saved with app setup/card or sent to the app.
 After reload or logout/return, restored card values are treated as manually supplied:
 choices still update their companion fields, but do not reapply defaults or reconstruct
 the previous baseline on clearing. Edit those values explicitly after restoration.
-Advanced JSON is authoritative: editing it clears that history, and later choices do
-not reapply automatic defaults. Unknown choices or inconsistent companion values block
-review. Every edit invalidates the previous approval; changing a choice does not run a
+The normal flow has no Advanced JSON editor. Unknown choices or inconsistent companion
+values block review. Every edit invalidates the previous approval; changing a choice does not run a
 model or processor again or contact the receiving app.
 
 Apps own the declarations and meanings. OpenChat implements only the bounded generic
@@ -706,7 +806,7 @@ silently reassigned a publisher; this does not restore the removed file-import U
   secure-context profile and does not require cross-origin isolation: its local
   inference runtime uses single-threaded WASM support alongside WebGPU. Imported
   app processors still run in the separately isolated, network-blocked sandbox.
-- The handoff binds exact origin, popup and fresh nonce; encrypted AAD binds destination,
+- The handoff binds exact origin, receiver frame/parent and fresh nonce; encrypted AAD binds destination,
   app/action/revision, request ID and the connected recipient context. IOU checks its
   current authenticated recipient before decryption. This is not sender attestation or
   protection from malicious app frontend code after authorized decryption.
