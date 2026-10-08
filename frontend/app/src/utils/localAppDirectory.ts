@@ -1,3 +1,5 @@
+import { Principal } from "@icp-sdk/core/principal";
+import { isLocalAppInboxGrant, localAppInboxEndpoint } from "./localAppInbox";
 import {
     parseLocalAppCatalog,
     type LocalAppCatalog,
@@ -10,6 +12,7 @@ export type LocalAppDirectoryArtifact = Readonly<{
     sha256: string;
     byteLength: number;
 }>;
+export type LocalAppPublisher = Readonly<{ principal: string; origin: string }>;
 export type LocalAppDirectoryDescriptor = Readonly<{
     id: string;
     name: string;
@@ -18,10 +21,26 @@ export type LocalAppDirectoryDescriptor = Readonly<{
     catalog: LocalAppDirectoryArtifact;
     processor: LocalAppDirectoryArtifact;
     setupUrl: string;
+    /** Present only for an explicitly connected v2 registry listing. */
+    publisher?: LocalAppPublisher;
 }>;
-export type LocalAppDirectory = Readonly<{
+type LegacyDirectory = Readonly<{
     version: 1;
     apps: readonly LocalAppDirectoryDescriptor[];
+}>;
+type RegistryDirectory = Readonly<{
+    version: 2;
+    apps: readonly LocalAppDirectoryDescriptor[];
+    /** A complete v2 snapshot; never a partially loaded page. */
+    generation: string;
+}>;
+export type LocalAppDirectory = LegacyDirectory | RegistryDirectory;
+type RegistryPage = Readonly<{
+    version: 2;
+    generation: string;
+    page: number;
+    apps: readonly LocalAppDirectoryDescriptor[];
+    next: string | null;
 }>;
 export type LocalAppInstallation = Readonly<{
     appId: string;
@@ -36,6 +55,9 @@ export type LocalAppPublicPackage = Readonly<{
 }>;
 const MAX_FILE = 1024 * 1024;
 const MAX_DIRECTORY = 128 * 1024;
+const MAX_DIRECTORY_PAGES = 16;
+const MAX_DIRECTORY_TOTAL = MAX_DIRECTORY * MAX_DIRECTORY_PAGES;
+const LOOPBACK = ["localhost", "127.0.0.1", "[::1]"];
 // eslint-disable-next-line no-control-regex -- Displayed publisher metadata must not hide control characters.
 const HIDDEN = /[\p{Cf}\u0000-\u001f\u007f-\u009f]/u;
 function invalid(): never {
@@ -79,10 +101,7 @@ export function localAppDirectorySource(value: string): string {
         url.hash ||
         url.search ||
         (url.protocol !== "https:" &&
-            !(
-                url.protocol === "http:" &&
-                ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
-            ))
+            !(url.protocol === "http:" && LOOPBACK.includes(url.hostname)))
     )
         invalid();
     return url.href;
@@ -109,15 +128,39 @@ function artifact(value: unknown, source: string): LocalAppDirectoryArtifact {
         byteLength: value.byteLength as number,
     });
 }
-export function parseLocalAppDirectory(json: string, sourceUrl: string): LocalAppDirectory {
-    const source = localAppDirectorySource(sourceUrl);
-    if (new TextEncoder().encode(json).byteLength > MAX_DIRECTORY) invalid();
-    const value: unknown = JSON.parse(json);
-    exact(value, ["version", "apps"]);
-    if (value.version !== 1 || !Array.isArray(value.apps) || value.apps.length > 16) invalid();
+function publisher(value: unknown, source: string): LocalAppPublisher {
+    exact(value, ["principal", "origin"]);
+    text(value.principal, 63);
+    const identity = Principal.fromText(value.principal);
+    if (
+        identity.isAnonymous() ||
+        identity.toText() === "aaaaa-aa" ||
+        identity.toText() !== value.principal
+    )
+        invalid();
+    text(value.origin, 2048);
+    const url = new URL(localAppDirectorySource(value.origin));
+    if (
+        value.origin !== url.origin ||
+        (LOOPBACK.includes(url.hostname) && !LOOPBACK.includes(new URL(source).hostname))
+    )
+        invalid();
+    return Object.freeze({ principal: value.principal, origin: value.origin });
+}
+function descriptors(value: unknown, source: string, version: 1 | 2) {
+    if (!Array.isArray(value) || value.length > 16) invalid();
     const ids = new Set<string>();
-    const apps = value.apps.map((entry: unknown) => {
-        exact(entry, ["id", "name", "description", "revision", "catalog", "processor", "setupUrl"]);
+    const apps = value.map((entry: unknown) => {
+        exact(entry, [
+            "id",
+            "name",
+            "description",
+            "revision",
+            "catalog",
+            "processor",
+            "setupUrl",
+            ...(version === 2 ? ["publisher"] : []),
+        ]);
         text(entry.id, 128);
         text(entry.revision, 128);
         text(entry.name, 200);
@@ -129,17 +172,60 @@ export function parseLocalAppDirectory(json: string, sourceUrl: string): LocalAp
         )
             invalid();
         ids.add(entry.id);
+        const owner = version === 2 ? publisher(entry.publisher, source) : undefined;
+        const resourceSource = owner ? `${owner.origin}/` : source;
         return Object.freeze({
             id: entry.id,
             name: entry.name,
             description: entry.description,
             revision: entry.revision,
-            catalog: artifact(entry.catalog, source),
-            processor: artifact(entry.processor, source),
-            setupUrl: resource(entry.setupUrl, source),
+            catalog: artifact(entry.catalog, resourceSource),
+            processor: artifact(entry.processor, resourceSource),
+            setupUrl: resource(entry.setupUrl, resourceSource),
+            ...(owner ? { publisher: owner } : {}),
         });
     });
-    return Object.freeze({ version: 1, apps: Object.freeze(apps) });
+    return Object.freeze(apps);
+}
+function parseDirectoryPage(
+    json: string,
+    source: string,
+    page: number,
+): LegacyDirectory | RegistryPage {
+    if (new TextEncoder().encode(json).byteLength > MAX_DIRECTORY) invalid();
+    const value: unknown = JSON.parse(json);
+    if (!value || typeof value !== "object" || Array.isArray(value)) invalid();
+    if ((value as { version?: unknown }).version === 1 && page === 0) {
+        exact(value, ["version", "apps"]);
+        return Object.freeze({ version: 1, apps: descriptors(value.apps, source, 1) });
+    }
+    exact(value, ["version", "generation", "page", "apps", "next"]);
+    if (
+        value.version !== 2 ||
+        typeof value.generation !== "string" ||
+        !/^(0|[1-9][0-9]{0,19})$/.test(value.generation) ||
+        BigInt(value.generation) > 18_446_744_073_709_551_615n ||
+        value.page !== page ||
+        page >= MAX_DIRECTORY_PAGES
+    )
+        invalid();
+    const expectedNext = `${new URL(".", source).pathname}pages/${value.generation}/${page + 1}.json`;
+    if (value.next !== null && (page === MAX_DIRECTORY_PAGES - 1 || value.next !== expectedNext))
+        invalid();
+    return Object.freeze({
+        version: 2,
+        generation: value.generation,
+        page,
+        apps: descriptors(value.apps, source, 2),
+        next: value.next as string | null,
+    });
+}
+/** Parse a complete one-page directory. Paginated registries must use loadLocalAppDirectory. */
+export function parseLocalAppDirectory(json: string, sourceUrl: string): LocalAppDirectory {
+    const parsed = parseDirectoryPage(json, localAppDirectorySource(sourceUrl), 0);
+    if (!("next" in parsed)) return parsed;
+    if (parsed.next !== null) invalid();
+    return Object.freeze({ version: 2, generation: parsed.generation, apps: parsed.apps });
 }
 async function sha256(bytes: Uint8Array): Promise<string> {
     const digest = await crypto.subtle.digest("SHA-256", bytes as Uint8Array<ArrayBuffer>);
@@ -207,7 +293,31 @@ export async function loadLocalAppDirectory(
 ): Promise<LocalAppDirectory> {
     const source = localAppDirectorySource(sourceUrl);
     const bytes = await readPublic(source, MAX_DIRECTORY, signal, fetcher);
-    return parseLocalAppDirectory(new TextDecoder("utf-8", { fatal: true }).decode(bytes), source);
+    const decode = (value: Uint8Array) => new TextDecoder("utf-8", { fatal: true }).decode(value);
+    const first = parseDirectoryPage(decode(bytes), source, 0);
+    if (first.version === 1) return first;
+    let page: RegistryPage = first;
+    const generation = page.generation;
+    const apps = [...page.apps];
+    const ids = new Set(apps.map((app) => app.id));
+    let totalBytes = bytes.byteLength;
+    while (page.next !== null) {
+        const nextUrl = new URL(page.next, source).href;
+        const nextBytes = await readPublic(nextUrl, MAX_DIRECTORY, signal, fetcher);
+        totalBytes += nextBytes.byteLength;
+        if (totalBytes > MAX_DIRECTORY_TOTAL) invalid();
+        const next = parseDirectoryPage(decode(nextBytes), source, page.page + 1);
+        if (!("next" in next) || next.generation !== generation) invalid();
+        for (const app of next.apps) {
+            if (ids.has(app.id)) invalid();
+            ids.add(app.id);
+            apps.push(app);
+        }
+        page = next;
+    }
+    signal.throwIfAborted();
+    // Only this complete, verified snapshot may reconcile removed installations.
+    return Object.freeze({ version: 2, generation, apps: Object.freeze(apps) });
 }
 async function loadArtifact(
     descriptor: LocalAppDirectoryArtifact,
@@ -233,7 +343,10 @@ export function publicLocalAppCatalog(
         app.description !== descriptor.description ||
         app.processor?.sha256 !== descriptor.processor.sha256 ||
         app.processor.byteLength !== descriptor.processor.byteLength ||
+        (descriptor.publisher !== undefined &&
+            new URL(app.destination).origin !== descriptor.publisher.origin) ||
         app.deliveryEncryption !== undefined ||
+        (app.deliveryInbox !== undefined && isLocalAppInboxGrant(app.deliveryInbox)) ||
         app.actions.some((action) => action.processorContext !== undefined)
     )
         invalid();
@@ -271,6 +384,10 @@ export function bindConnectedLocalApp(
         app.name !== advertised.name ||
         app.description !== advertised.description ||
         app.destination !== advertised.destination ||
+        !sameJson(
+            app.deliveryInbox ? localAppInboxEndpoint(app.deliveryInbox) : undefined,
+            advertised.deliveryInbox ? localAppInboxEndpoint(advertised.deliveryInbox) : undefined,
+        ) ||
         !sameJson(app.processor, advertised.processor) ||
         app.actions.length !== advertised.actions.length
     )
@@ -310,6 +427,8 @@ export function sameLocalAppPublisher(
 ): boolean {
     return (
         previous.sourceUrl === sourceUrl &&
+        previous.descriptor.publisher?.principal === next.publisher?.principal &&
+        previous.descriptor.publisher?.origin === next.publisher?.origin &&
         previous.descriptor.setupUrl === next.setupUrl &&
         previous.descriptor.catalog.url === next.catalog.url &&
         previous.descriptor.processor.url === next.processor.url
@@ -328,10 +447,11 @@ export async function validateLocalAppInstallation(
     )
         invalid();
     const sourceUrl = localAppDirectorySource(value.sourceUrl);
-    const descriptor = parseLocalAppDirectory(
-        JSON.stringify({ version: 1, apps: [value.descriptor] }),
-        sourceUrl,
-    ).apps[0];
+    const hasPublisher =
+        value.descriptor !== null &&
+        typeof value.descriptor === "object" &&
+        Object.hasOwn(value.descriptor, "publisher");
+    const descriptor = descriptors([value.descriptor], sourceUrl, hasPublisher ? 2 : 1)[0];
     const bytes = new TextEncoder().encode(value.publicCatalogJson);
     if (
         bytes.byteLength !== descriptor.catalog.byteLength ||

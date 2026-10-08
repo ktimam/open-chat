@@ -6,7 +6,10 @@ import path, { dirname } from "path";
 import { fileURLToPath } from "url";
 import { createUnofficialLocalEnvironment } from "../unofficialLocalProfile.mjs";
 import { createUnofficialLocalWebBuildEnvironment } from "../unofficialLocalWebBuild.mjs";
-import { createUnofficialLocalApkEnvironment } from "../unofficialLocalApkProfile.mjs";
+import {
+    createUnofficialLocalApkEnvironment,
+    localApkParentRpId,
+} from "../unofficialLocalApkProfile.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 export const __dirname = dirname(__filename);
@@ -103,6 +106,7 @@ export function initEnv({ websiteVersion } = {}) {
                   inherited: process.env,
                   buildId: process.env.OC_UNOFFICIAL_APK_BUILD_ID,
                   appDirectoryUrl: options.appDirectoryUrl,
+                  rpId: localApkParentRpId(process.env),
               })
             : process.env.OC_UNOFFICIAL_WEB_BUILD === "true"
               ? createUnofficialLocalWebBuildEnvironment(canisters, {

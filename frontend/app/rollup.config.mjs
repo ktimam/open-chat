@@ -29,7 +29,7 @@ import { queryOfficialUserIndexPublicKey } from "./officialPublicKeyQuery.mjs";
 import { localAppRelayPlugin } from "./localAppRelayBuild.mjs";
 import { localNativeAppHandoffBuildPlugin } from "./localNativeAppHandoffBuild.mjs";
 import { localNativeAppSetupBuildPlugin } from "./localNativeAppSetupBuild.mjs";
-import { localApkBundleMarker } from "../unofficialLocalApkProfile.mjs";
+import { localApkBundleMarker, localApkParentRpId } from "../unofficialLocalApkProfile.mjs";
 import {
     copyUnofficialWebPublicFiles,
     unofficialLocalWebManifest,
@@ -97,6 +97,7 @@ function clean() {
                             localApkBundleMarker(
                                 process.env.OC_IDENTITY_CANISTER,
                                 Principal.fromText(process.env.OC_IDENTITY_CANISTER).toHex(),
+                                androidRpId,
                             ),
                         ),
                     );
@@ -203,7 +204,9 @@ if (!otaUpdateStrategies.has(otaUpdateStrategy)) {
 
 const androidRpId = localWebBuild
     ? ""
-    : (process.env.OC_ANDROID_RP_ID ?? "oc.app").trim().toLowerCase();
+    : localTestApk
+      ? localApkParentRpId(process.env)
+      : (process.env.OC_ANDROID_RP_ID ?? "oc.app").trim().toLowerCase();
 if (
     !localWebBuild &&
     (!/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(androidRpId) ||

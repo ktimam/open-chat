@@ -6,6 +6,8 @@ import { UNOFFICIAL_LOCAL_CANISTERS } from "../frontend/unofficialLocalProfile.m
 import {
     createUnofficialLocalApkEnvironment,
     localApkBundleMarker,
+    localApkParentRpId,
+    parseLocalApkRpId,
 } from "../frontend/unofficialLocalApkProfile.mjs";
 import { localApkBuildPlan, parseLocalApkArgs } from "./build-unofficial-local-apk.mjs";
 import { localNativeAppHandoffBuildPlugin } from "../frontend/app/localNativeAppHandoffBuild.mjs";
@@ -14,6 +16,7 @@ const canisters = Object.fromEntries(
     Object.values(UNOFFICIAL_LOCAL_CANISTERS).map((name) => [name, { ic: "aaaaa-aa" }]),
 );
 const read = (name) => readFileSync(new URL(`../${name}`, import.meta.url), "utf8");
+const rpId = "fork-test.tail000000.ts.net";
 const officialKeyWiring =
     /localClientBuild\s*\?\s*\{\s*queryPublicKey:\s*queryOfficialUserIndexPublicKey\s*,/;
 const nativeProfileWiring =
@@ -21,6 +24,7 @@ const nativeProfileWiring =
 
 test("local APK pins official backend, distinct identity and no production updates/signing", () => {
     const env = createUnofficialLocalApkEnvironment(canisters, {
+        rpId,
         inherited: {
             OC_BASE_ORIGIN: "https://oc.app",
             OC_ANDROID_APPLICATION_ID: "com.oclabs.openchat",
@@ -42,8 +46,9 @@ test("local APK pins official backend, distinct identity and no production updat
     assert.equal(env.OC_ANDROID_OTA_UPDATES, "none");
     assert.equal(env.OC_ANDROID_KEYSTORE_PASSWORD, "");
     assert.equal(env.NODE_OPTIONS, "");
-    assert.equal(env.OC_ANDROID_RP_ID, "oc.app");
-    assert.equal(env.OC_WEBAUTHN_ORIGIN, "oc.app");
+    assert.equal(env.OC_ANDROID_RP_ID, rpId);
+    assert.equal(env.OC_WEBAUTHN_ORIGIN, rpId);
+    assert.equal(env.OC_UNOFFICIAL_APK_RP_ID, rpId);
     assert.equal(env.OC_ACCOUNT_LINKING_CODES_ENABLED, "true");
     assert.equal(env.OC_II_DERIVATION_ORIGIN, "");
     assert.equal(env.OC_ANDROID_NATIVE_AUTH, "android-credential-manager-v1");
@@ -51,7 +56,7 @@ test("local APK pins official backend, distinct identity and no production updat
 });
 
 test("optimized APK keeps development deployment policy and model/OCR feature", () => {
-    const env = createUnofficialLocalApkEnvironment(canisters);
+    const env = createUnofficialLocalApkEnvironment(canisters, { rpId });
     assert.equal(env.NODE_ENV, "production");
     assert.equal(env.OC_NODE_ENV, "development");
     assert.equal(env.OC_BUILD_ENV, "development");
@@ -61,8 +66,8 @@ test("optimized APK keeps development deployment policy and model/OCR feature", 
 });
 
 test("rebuild cache key changes without changing pinned weight delivery", () => {
-    const first = createUnofficialLocalApkEnvironment(canisters);
-    const second = createUnofficialLocalApkEnvironment(canisters);
+    const first = createUnofficialLocalApkEnvironment(canisters, { rpId });
+    const second = createUnofficialLocalApkEnvironment(canisters, { rpId });
     assert.notEqual(first.OC_WEBSITE_VERSION, second.OC_WEBSITE_VERSION);
     assert.equal(
         first.OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY,
@@ -70,25 +75,83 @@ test("rebuild cache key changes without changing pinned weight delivery", () => 
     );
     assert.equal(
         createUnofficialLocalApkEnvironment(canisters, {
+            rpId,
             buildId: first.OC_UNOFFICIAL_APK_BUILD_ID,
         }).OC_WEBSITE_VERSION,
         first.OC_WEBSITE_VERSION,
     );
     for (const buildId of ["", "../../anything", "f".repeat(31), "G".repeat(32)])
-        assert.throws(() => createUnofficialLocalApkEnvironment(canisters, { buildId }));
+        assert.throws(() => createUnofficialLocalApkEnvironment(canisters, { buildId, rpId }));
 });
 
 test("bundle marker selects original native authentication without claiming provider qualification", () => {
-    const marker = localApkBundleMarker("aaaaa-aa", "ABCD");
+    const marker = localApkBundleMarker("aaaaa-aa", "ABCD", rpId);
     assert.equal(marker.applicationId, "dev.openchatfork.localtest");
     assert.equal(marker.label, "OpenChat Fork · Local Test");
     assert.equal(marker.ota, "none");
     assert.equal(marker.nativeAuthentication, "android-credential-manager-v1");
-    assert.equal(marker.androidRpId, "oc.app");
+    assert.equal(marker.androidRpId, rpId);
     assert.equal(Object.hasOwn(marker, "digitalAssetLinksVerified"), false);
     assert.equal(Object.hasOwn(marker, "providerQualified"), false);
-    assert.throws(() => localApkBundleMarker("https://oc.app", "ABCD"));
-    assert.throws(() => localApkBundleMarker("aaaaa-aa", "nothex"));
+    assert.throws(() => localApkBundleMarker("https://oc.app", "ABCD", rpId));
+    assert.throws(() => localApkBundleMarker("aaaaa-aa", "nothex", rpId));
+    assert.throws(() => localApkBundleMarker("aaaaa-aa", "ABCD"));
+    assert.throws(() => localApkBundleMarker("aaaaa-aa", "ABCD", "oc.app"));
+});
+
+test("explicit RP accepts separate Tailscale and certified ICP hosts, not URLs or official defaults", () => {
+    for (const value of [rpId, "aaaaa-aa.icp0.io", "aaaaa-aa.icp.net", "aaaaa-aa.ic0.app", "login.example.com"]) {
+        assert.equal(parseLocalApkRpId(value), value);
+        assert.equal(parseLocalApkArgs(["--rp-id", value]).rpId, value);
+    }
+    assert.equal(parseLocalApkRpId(rpId.toUpperCase()), rpId);
+    for (const value of [
+        undefined, null, 123, "", "oc.app", "login.oc.app", "OC.APP",
+        "https://login.example.com", "login.example.com:443", "user@login.example.com",
+        "login.example.com/path", "login.example.com?x=1", "login.example.com#x",
+        "localhost", "app.localhost", "app.local", "127.0.0.1", "127.1", "2130706433",
+        "0x7f.0x1", "[::1]", "::1", "192.168.1.2", "10.0.2.2",
+        ".example.com", "app..example.com", "app.example.com.", "-app.example.com",
+        "app-.example.com", "a_b.example.com", "app.example.com\n", " app.example.com",
+        "app.example.com ", "éxample.com", `${"a".repeat(64)}.example.com`,
+        `${"a".repeat(63)}.${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(62)}.com`,
+        ...["icp0.io", "icp.net", "ic0.app"].flatMap((gateway) => [gateway, `raw.${gateway}`, `aaaaa-aa.raw.${gateway}`]),
+    ]) assert.throws(() => parseLocalApkRpId(value), undefined, String(value));
+});
+
+test("missing explicit RP fails despite ambient generic RP or stale APK environment", () => {
+    const inherited = {
+        OC_ANDROID_RP_ID: rpId,
+        OC_WEBAUTHN_ORIGIN: rpId,
+        OC_UNOFFICIAL_APK_RP_ID: rpId,
+        oc_android_rp_id: "oc.app",
+        oc_unofficial_apk_rp_id: "oc.app",
+    };
+    assert.throws(() => createUnofficialLocalApkEnvironment(canisters, { inherited }));
+    assert.throws(() => localApkBuildPlan(".", canisters, parseLocalApkArgs([]), inherited));
+    assert.throws(() => localApkBuildPlan(".", canisters, { frontendOnly: true }, inherited));
+    const parent = createUnofficialLocalApkEnvironment(canisters, { inherited, rpId });
+    assert.equal(parent.OC_ANDROID_RP_ID, rpId);
+    assert.equal(parent.oc_android_rp_id, undefined);
+    assert.equal(parent.oc_unofficial_apk_rp_id, undefined);
+    assert.throws(() => localApkBuildPlan(".", canisters, {}, parent));
+});
+
+test("frontend continuation validates the complete parent RP binding and rejects retargeting", () => {
+    const parent = createUnofficialLocalApkEnvironment(canisters, { rpId });
+    assert.equal(localApkParentRpId(parent), rpId);
+    for (const key of ["OC_UNOFFICIAL_APK_RP_ID", "OC_ANDROID_RP_ID", "OC_WEBAUTHN_ORIGIN",
+        "OC_UNOFFICIAL_APK_BUILD_ID", "OC_UNOFFICIAL_CLIENT", "OC_ANDROID_APPLICATION_ID", "OC_ANDROID_NATIVE_AUTH"]) {
+        for (const value of [undefined, "", "other.example.com"]) {
+            const changed = { ...parent, [key]: value };
+            assert.throws(() => localApkBuildPlan(".", canisters, { frontendOnly: true }, changed), undefined, key);
+        }
+    }
+    assert.throws(() => localApkBuildPlan(".", canisters, { frontendOnly: true, rpId: "other.example.com" }, parent));
+    const child = localApkBuildPlan(".", canisters, { frontendOnly: true }, parent);
+    assert.equal(child.options.env.OC_ANDROID_RP_ID, rpId);
+    assert.equal(child.options.env.OC_WEBAUTHN_ORIGIN, rpId);
+    assert.equal(localApkParentRpId(child.options.env), rpId);
 });
 
 test("CLI only accepts bounded build targets and no device/data operations", () => {
@@ -100,13 +163,15 @@ test("CLI only accepts bounded build targets and no device/data operations", () 
         ["--target"],
         ["--target", "aarch64", "--target", "x86_64"],
         ["--config", "arbitrary"],
+        ["--rp-id"],
+        ["--rp-id", rpId, "--rp-id", rpId],
     ])
         assert.throws(() => parseLocalApkArgs(args));
 });
 
 test("build plan contains GPU and private-handoff features without browser auth; never invokes shell/install", () => {
     const repo = fileURLToPath(new URL("..", import.meta.url));
-    const plan = localApkBuildPlan(repo, canisters, parseLocalApkArgs([]));
+    const plan = localApkBuildPlan(repo, canisters, parseLocalApkArgs(["--rp-id", rpId]));
     assert.equal(plan.options.shell, false);
     assert.equal(plan.options.windowsHide, true);
     assert.ok(plan.args.includes("transformers-webgpu-android,local-test-app-handoff"));
@@ -117,7 +182,7 @@ test("build plan contains GPU and private-handoff features without browser auth;
 });
 
 test("frontend child retains parent's unique build ID", () => {
-    const parent = createUnofficialLocalApkEnvironment(canisters);
+    const parent = createUnofficialLocalApkEnvironment(canisters, { rpId });
     const child = localApkBuildPlan(".", canisters, parseLocalApkArgs(["--frontend-only"]), parent);
     assert.equal(child.options.env.OC_WEBSITE_VERSION, parent.OC_WEBSITE_VERSION);
 });
@@ -263,8 +328,14 @@ test("Gradle identity is separate; JNI namespace remains stable", () => {
     assert.match(gradle, /src\/localTest\/AndroidManifest.xml/);
     assert.match(gradle, /openchat-fork-local-test.apk/);
     assert.match(gradle, /marker\["nativeAuthentication"\] == "android-credential-manager-v1"/);
-    assert.match(gradle, /marker\["androidRpId"\] == "oc.app"/);
-    assert.match(gradle, /require\(!unofficialLocalTest \|\| openChatRpId == "oc.app"\)/);
+    assert.match(gradle, /marker\["androidRpId"\] as\? String/);
+    assert.match(gradle, /System.getenv\("OC_UNOFFICIAL_APK_RP_ID"\)/);
+    assert.match(gradle, /System.getenv\("OC_ANDROID_RP_ID"\) == rpId/);
+    assert.match(gradle, /System.getenv\("OC_WEBAUTHN_ORIGIN"\) == rpId/);
+    assert.match(gradle, /bundledOpenChatRpIdFile.isFile && bundledOpenChatRpIdFile.readText\(\) == rpId/);
+    assert.match(gradle, /localApkMarkerRpId == rpId/);
+    assert.match(gradle, /explicitLocalApkRpId \?: environmentOpenChatRpId \?: bundledOpenChatRpId \?: "oc.app"/);
+    assert.doesNotMatch(gradle, /require\(!unofficialLocalTest \|\| openChatRpId == "oc.app"\)/);
     assert.doesNotMatch(gradle, /openChatRpId = if \(unofficialLocalTest\) ""/);
     assert.doesNotMatch(gradle, /if \(unofficialLocalTest\) "\[\]" else/);
 });
@@ -337,7 +408,9 @@ test("only the local-test APK permits exact loopback cleartext without changing 
 
 test("Rollup keeps local web/private-app modes but emits no browser authentication assets", () => {
     const rollup = read("frontend/app/rollup.config.mjs");
-    assert.match(rollup, /localAppRelayPlugin\(\{ enabled: localWebBuild \}\)/);
+    assert.match(rollup, /localAppRelayPlugin\(\{\s*enabled: localWebBuild,\s*appDirectoryUrl: process\.env\.OC_APP_DIRECTORY_URL,\s*\}\)/);
+    assert.match(rollup, /localApkBundleMarker\(\s*process\.env\.OC_IDENTITY_CANISTER,\s*Principal\.fromText\(process\.env\.OC_IDENTITY_CANISTER\)\.toHex\(\),\s*androidRpId,/);
+    assert.match(rollup, /localTestApk\s*\? localApkParentRpId\(process\.env\)/);
     assert.doesNotMatch(rollup, /localBrowserAuthBuildPlugin|local-browser-auth\.(?:html|js)/);
     assert.match(rollup, /import.meta.env.OC_UNOFFICIAL_LOCAL_APK/);
     assert.match(rollup, officialKeyWiring);
@@ -366,6 +439,17 @@ test("formatted APK wiring checks still reject different flags, sources and dest
         assert.match(compact.replaceAll(" ", "\n    "), pattern);
         assert.doesNotMatch(changed, pattern);
     }
+});
+
+test("RP source wiring rejects a constant marker or a substituted native resource", () => {
+    const markerWiring = /localApkBundleMarker\(\s*process\.env\.OC_IDENTITY_CANISTER,\s*Principal\.fromText\(process\.env\.OC_IDENTITY_CANISTER\)\.toHex\(\),\s*androidRpId,/;
+    const rollup = read("frontend/app/rollup.config.mjs");
+    assert.match(rollup, markerWiring);
+    assert.doesNotMatch(rollup.replace(/(\.toHex\(\),\s*)androidRpId,/, '$1"oc.app",'), markerWiring);
+    const resourceWiring = /resValue\("string", "openchat_rp_id", openChatRpId\)/;
+    const gradle = read("frontend/src-tauri/gen/android/app/build.gradle.kts");
+    assert.match(gradle, resourceWiring);
+    assert.doesNotMatch(gradle.replace('"openchat_rp_id", openChatRpId', '"openchat_rp_id", "oc.app"'), resourceWiring);
 });
 
 test("native auth uses original Credential Manager operations without privileged origins; Firebase stays disabled", () => {

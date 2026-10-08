@@ -14,7 +14,7 @@ plugins {
 val unofficialLocalTest = System.getenv("OC_UNOFFICIAL_LOCAL_APK") == "true"
 val localTestApplicationId = "dev.openchatfork.localtest"
 if (!unofficialLocalTest) apply(plugin = "com.google.gms.google-services")
-if (unofficialLocalTest) {
+val localApkMarkerRpId: String? = if (unofficialLocalTest) {
     require(System.getenv("OC_UNOFFICIAL_CLIENT") == "true" &&
         System.getenv("OC_ANDROID_APPLICATION_ID") == localTestApplicationId) {
         "Local APK requires its explicit isolated package profile"
@@ -23,9 +23,9 @@ if (unofficialLocalTest) {
     require(markerFile.isFile) { "Local APK frontend profile marker is missing" }
     val marker = JsonSlurper().parse(markerFile) as Map<*, *>
     require(marker["applicationId"] == localTestApplicationId && marker["ota"] == "none" &&
-        marker["nativeAuthentication"] == "android-credential-manager-v1" &&
-        marker["androidRpId"] == "oc.app") { "Local APK frontend profile mismatch" }
-}
+        marker["nativeAuthentication"] == "android-credential-manager-v1") { "Local APK frontend profile mismatch" }
+    marker["androidRpId"] as? String ?: error("Local APK frontend RP marker is missing")
+} else null
 
 val tauriProperties = Properties().apply {
     val propFile = file("tauri.properties")
@@ -124,19 +124,34 @@ val releaseVersionCode: Int? = releaseVersionName?.let { name ->
 val bundledOpenChatRpIdFile = projectDir.resolve("../../../../app/build/android-rp-id").normalize()
 val bundledOpenChatRpId = bundledOpenChatRpIdFile.takeIf { it.isFile }?.readText()?.trim()?.lowercase()
 val environmentOpenChatRpId = System.getenv("OC_ANDROID_RP_ID")?.trim()?.lowercase()
+val explicitLocalApkRpId = if (unofficialLocalTest) {
+    val rpId = System.getenv("OC_UNOFFICIAL_APK_RP_ID")
+        ?: error("Local APK requires explicit --rp-id <HTTPS hostname>")
+    val labels = rpId.split('.')
+    require(rpId.length <= 253 && rpId == rpId.lowercase() && labels.size >= 2 &&
+        labels.all { Regex("^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$").matches(it) } &&
+        Regex("^[a-z].*").matches(labels.last()) &&
+        rpId != "oc.app" && !rpId.endsWith(".oc.app") &&
+        !rpId.endsWith(".localhost") && !rpId.endsWith(".local") &&
+        listOf("icp0.io", "icp.net", "ic0.app").none { rpId == it || rpId == "raw.$it" || rpId.endsWith(".raw.$it") }) {
+        "Local APK RP must be an explicit non-loopback HTTPS hostname, not oc.app or an uncertified raw host"
+    }
+    require(System.getenv("OC_ANDROID_RP_ID") == rpId &&
+        System.getenv("OC_WEBAUTHN_ORIGIN") == rpId &&
+        bundledOpenChatRpIdFile.isFile && bundledOpenChatRpIdFile.readText() == rpId &&
+        localApkMarkerRpId == rpId) {
+        "Local APK RP differs between the explicit profile, frontend marker and Android resource"
+    }
+    rpId
+} else null
 require(environmentOpenChatRpId == null || bundledOpenChatRpId == null || environmentOpenChatRpId == bundledOpenChatRpId) {
     "OC_ANDROID_RP_ID differs between the outer Android build and the bundled frontend"
 }
-val openChatRpId = (environmentOpenChatRpId ?: bundledOpenChatRpId ?: "oc.app").also {
+val openChatRpId = (explicitLocalApkRpId ?: environmentOpenChatRpId ?: bundledOpenChatRpId ?: "oc.app").also {
     require(Regex("^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$").matches(it) &&
         it.contains('.') && !it.contains("..")) {
         "OC_ANDROID_RP_ID must be one valid HTTPS hostname"
     }
-}
-// The fork keeps upstream's RP identifier, not its signing identity or a claim
-// of oc.app DAL approval. Provider-specific app trust is qualified separately.
-require(!unofficialLocalTest || openChatRpId == "oc.app") {
-    "Local APK must retain the original OpenChat native RP"
 }
 
 android {

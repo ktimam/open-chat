@@ -4,6 +4,13 @@ Required contract, approved 2026-10-01. This replaces the September 26 plaintext
 local-handoff design; encrypted ledger storage alone does not satisfy this contract.
 Source/test updates are not evidence that an existing server or APK is updated.
 
+The optional `deliveryInbox` transport added on 2026-10-08 lets an app retain
+encrypted pending requests while either client is closed. It changes delivery,
+not the inline card, local extraction, recipient encryption or second app-owned
+review. The window-based transport remains available for older connections.
+See [the inbox contract](#optional-app-owned-durable-inbox) and the distinct
+[verification boundaries](#durable-inbox-verification-boundaries).
+
 ## User workflow
 
 1. Open Apps → AI Apps, open the app's card and choose Connect in its details.
@@ -20,15 +27,18 @@ Source/test updates are not evidence that an existing server or APK is updated.
    from chat messages; it is not posted, synchronized, or backend-attested.
 6. Review the exact fields and destination, then explicitly approve delivery. OpenChat
    durably records the stable request ID and attempted state before any dispatch.
-7. OpenChat encrypts the fields to the linked recipient key BEFORE BroadcastChannel,
-   native IPC, loopback HTTP or app postMessage. Only the encrypted envelope leaves the
+7. OpenChat encrypts the fields to the linked recipient key BEFORE an inbox deposit,
+   BroadcastChannel, native IPC, loopback HTTP or app postMessage. Only the encrypted envelope leaves the
    originating client. Missing/invalid keys require reconnection; no plaintext fallback.
-8. The app receives ciphertext. Its authenticated UI recovers the recipient's private
-   key and checks the bound account/sheet before decrypting locally into an unsaved draft.
-   The browser/native relay presents that normal app UI directly in its bound frame;
-   there is no intermediate JSON page, manual pairing or second destination picker.
+8. With an inbox grant, the app backend first stores ciphertext and returns a pending
+   receipt; no app window needs to be open. **Open app** then navigates to the existing
+   app destination. Without an inbox grant, the browser/native relay presents that
+   normal app UI directly in its bound frame. The authenticated app recovers the
+   recipient's private key and checks the bound account/sheet before decrypting into
+   an unsaved draft. Neither path needs an intermediate JSON page, manual pairing or
+   second destination picker.
 9. Review again in the app's existing entry form or batch review, including app-owned
-   calculations and the exact receiving sheet. IOU uses Pending from chat → Review & add.
+   calculations and the exact receiving destination.
 10. On explicit Save, the app separately encrypts final entry contents with the sheet key
     and submits ciphertext through its existing backend API.
 11. Report receipt and saving separately, using request IDs/status only. Receipt is not
@@ -213,7 +223,9 @@ AES-256-GCM and a 12-byte IV with a 128-bit authentication tag. HKDF info is UTF
 The encrypted plaintext is the exact reviewed payload JSON. The independent transport
 nonce is not in the encryption AAD, so explicit retries use the same request ID with
 a fresh handshake. Re-encrypting identical fields must not create a second entry;
-changing fields under the same ID must fail. Reject legacy plaintext offers, mixed
+changing fields under the same ID must fail. The inbox extension below has a stricter
+wire retry rule: reuse the exact previously persisted ciphertext bytes, not a new
+encryption. Reject legacy plaintext offers, mixed
 plaintext/encrypted objects, malformed keys, noncanonical binary values and unknown
 protocol versions. Maximum plaintext is 64 KiB; total bounded relay request is 112 KiB.
 
@@ -222,11 +234,151 @@ are visible metadata. Base64url does not hide recipientContext. Do not put entry
 or source text in that context. Encryption provides confidentiality/integrity to the
 recipient, not proof of who authored the message or truthfulness of the extracted fields.
 
+## Optional app-owned durable inbox
+
+An app may advertise `deliveryInbox` alongside its normal destination. The public
+catalog contains only this endpoint; private Connect setup adds a recipient-scoped
+write grant. This is a generic capability contract, not an app-specific field schema
+or an OpenChat canister API. The authoritative validators and sender are
+[`localAppInbox.ts`](../frontend/app/src/utils/localAppInbox.ts) and
+[`localAppInboxDelivery.ts`](../frontend/app/src/utils/localAppInboxDelivery.ts).
+
+| Property | Public catalog | Explicit private Connect setup |
+| --- | --- | --- |
+| `version` | `1` | Same published value |
+| `kind` | `"ic-canister"` | Same published value |
+| `host` | Canonical HTTPS origin; HTTP loopback permitted for local testing | Exact published origin |
+| `canisterId` | Canonical, nonanonymous, nonmanagement principal | Exact published canister |
+| `inboxId` | Absent | 64 lowercase hexadecimal characters |
+| `writeCapability` | Absent | Canonical base64url encoding of 32 random bytes |
+| `expiresAtMs` | Absent | Positive safe-integer grant expiry in Unix milliseconds |
+
+All three private properties must be present together. Unknown properties are
+rejected. Public discovery must reject private grants, delivery keys and private
+processor context; private setup must match the published endpoint and retain a
+valid `deliveryEncryption` recipient. Connect consent binds this grant to the app's
+own authenticated recipient, action, revision, destination, key and opaque context.
+The host does not derive that binding from model output. A capability authorizes
+deposit only: it is neither a read credential nor evidence of OpenChat identity or
+chat membership. Treat it as a bearer secret, not public catalog data.
+
+### Delivery and exact retry
+
+1. The existing host review and explicit confirmation freeze the fields,
+   destination, recipient and stable request ID. The card saves attempted state.
+2. OpenChat encrypts locally and durably stores the exact serialized encrypted
+   request and its SHA-256 digest inside the encrypted local card **before** any
+   deposit. Storage failure prevents dispatch. The serialized object has exactly
+   `appId`, `appRevision`, `actionId`, `destination`, `idempotencyKey` and `envelope`;
+   it contains no plaintext proposal or source message.
+3. An anonymous IC agent calls the selected app canister's
+   `deposit_encrypted_inbox({ inbox_id, write_capability, request_id, encrypted_payload })`.
+   The last field is the stored encrypted JSON bytes; `request_id` is the existing
+   `idempotencyKey`. No OpenChat identity, cookies or authorization headers are
+   borrowed. Fetches are limited to the selected host/canister protocol paths;
+   redirects and automatic request retries are disabled. Production verifies the
+   IC root key. Only the explicit unofficial development profile may fetch a local
+   replica root key for a loopback or supported private-development hostname.
+4. The app must validate the grant, bound metadata and request identity, and persist
+   ciphertext before issuing a receipt. The receipt binds the inbox/request IDs,
+   ciphertext SHA-256, receive/expiry times, `Pending`/`Saved`/`Dismissed` status and
+   replay flag. The host validates and persists it. `Pending` means received for
+   later app review, not saved in the app's ledger or equivalent data model.
+5. Timeout, cancellation or an unknown response retains the encrypted request and
+   an uncertain state. Explicit retry reuses **identical stored bytes and ID**;
+   it never re-encrypts, opens a fallback transport or runs inference automatically.
+   The app's idempotency scope must prevent an old request from becoming a second
+   write merely because a grant was renewed. A replay may refer to the original
+   inbox ID; it must still match the same request and ciphertext digest.
+
+Routing metadata, request IDs, ciphertext size and timing remain visible. The
+write capability travels only to the selected app endpoint. Hashes here bind
+ciphertext, not low-entropy plaintext fields. Encryption does not make an untrusted
+app frontend safe after the user authorizes that frontend to decrypt.
+
+### App review, expiry and navigation
+
+The app owns authenticated listing, key recovery, local decryption, review, saving
+and acknowledgement. Reopening its ordinary UI on another device can recover a
+pending request only when the same app identity has access to the same recipient
+key and destination. This does not synchronize the OpenChat private card itself.
+An unreadable or invalid request must remain distinguishable from an empty inbox;
+receiving or navigating to it is never implicit Save or Dismiss.
+
+The app-side implementation used for the current local test retains pending
+ciphertext and acknowledgement tombstones for 30 days from first receipt and
+limits grants to 90 days. These are **app-side retention and capacity settings**,
+not OpenChat business rules or constants in its generic protocol. The host checks
+the supplied grant/receipt expiry; it does not assign a retention period, archive
+an app's records or extend expired delivery authority. A grant expiry can block a
+new deposit without invalidating still-live requests already held by the app.
+
+After a valid receipt, the existing card's **Open app** control opens only the
+pinned destination with `#oc-inbox=<receiptInboxId>&oc-request=<requestId>`.
+These opaque selectors carry no fields, ciphertext, write capability or sign-in
+credential and do not authorize a save. The app captures and removes the fragment,
+then uses its authenticated metadata to navigate to its existing destination UI.
+Opening does not redeposit or require a new intermediary review page. A failed or
+unrelated selector cannot authorize reading another user's inbox.
+
+Connections/cards without `deliveryInbox` keep their original encrypted relay
+path. Publishing an endpoint alone does not grant authority or upgrade an old
+card. Explicit reconnect supplies a new private grant for new proposals; existing
+cards retain their frozen recipient and delivery configuration. An uncertain old
+relay handoff must not be silently converted into a new inbox request.
+
+### Durable-inbox verification boundaries
+
+Source validators, mocked transport tests, mounted route tests and encrypted
+round trips establish different properties from a deployed app backend or an
+installed APK. The mounted normal-route regression checks that an inbox launch
+reaches the existing app destination without remounting a second authentication
+or key-provider lifecycle; pure URL parsing alone did not catch that routing bug.
+The app backend must separately be upgraded and its deployed interface checked.
+
+Web/APK builds must bind the reviewed source, unchanged authentication/model
+configuration and emitted/embedded assets. Updating a public catalog or serving
+the app's new frontend does not update an installed OpenChat APK. Packaging checks
+are not device sign-in, model inference, cross-device pending recovery or saved
+entry acceptance. Those need fresh checks of the exact served/installed artifacts,
+including close/reopen before Save and same-ID retry after an unknown result.
+Historical dated results below remain evidence only for their original builds.
+
+#### Emulator startup checkpoint (2026-10-08)
+
+The verified x86_64 APK was installed over the existing local-test package without
+clearing its data. Its signer was unchanged, and the normal `/chats` page displayed
+the existing account avatar without a new sign-in. The packaged runtime reported
+`2.0.0-localtest.332edbd15feaba1360674ee62b28e7f3`, matching the verified build;
+native Credential Manager authentication remained selected and OTA was disabled.
+The APK SHA-256 is
+`4ed415ca361e16e039ccd0037466a6cb30574f7a473670d84132efd6844e247c`.
+This is installation, startup and version evidence only. App discovery remained
+unverified when the bounded check stopped because WebView debugging was slow.
+No new sign-in, app connection, inference, delivery or Save was attempted; no
+physical phone was connected. Earlier native delivery results do not qualify this
+new inbox build's complete APK flow.
+
 ## Local storage and restart
+
+Connected setup is now encrypted separately from cards in its account/backend-
+scoped IndexedDB store. Version-2 records seal the entire validated setup,
+including private app context and inbox capabilities, using AES-256-GCM with a
+fresh nonextractable key and IV per committed snapshot. Authenticated data binds
+the account, backend and invalidation generation. Valid legacy plaintext setup
+remains readable and is encrypted on the next successful write; a read alone does
+not erase that older plaintext record. Forget replaces the setup/key with a
+generation tombstone, and stale reads/writes cannot resurrect the old capability.
+There is no localStorage plaintext fallback or remote synchronization. This is
+not chat E2EE: same-origin client code or a compromised device can still invoke
+the stored key. Receiver private keys and application storage keys are never part
+of this setup. See [`localAppSetupStore.ts`](../frontend/app/src/utils/localAppSetupStore.ts).
 
 Private cards have no fixed count limit. The encrypted collection has a 16 MiB
 plaintext safety budget, including schemas, frozen app configuration and local
-references; each card remains bounded to 256 KiB. This supersedes the original
+references. Normal cards remain bounded to 256 KiB; only a card containing a sealed
+inbox request may use the 384 KiB bound for its exact encrypted delivery bytes.
+The collection budget remains 16 MiB. This supersedes the original
 eight-card/256 KiB collection cap. Each card retains its editor, recipient, draft/request IDs and attempted
 state. The collection and active-card selection are encrypted with AES-GCM and a
 nonextractable device-local IndexedDB key, scoped to OpenChat account and backend.
@@ -293,6 +445,11 @@ decryption, the receiving app frontend can read the fields and must itself be tr
   no release before confirmation or successful write-ahead, nor after abort/logout.
 - No ledger write on receipt/decrypt/review; only second approval triggers encrypted save.
 - Same-ID equal-field re-encryption dedupes; changed-field replay fails; receipt is not saved.
+- Inbox write-ahead retains exact ciphertext through reload and explicit retry; no
+  dispatch after a storage failure and no automatic fallback/re-encryption. Public
+  catalogs cannot carry grants; changed destinations or grant bindings cannot
+  retarget a saved request. Encrypted setup migration/tampering/account separation
+  and Forget-generation races retain their independent coverage.
 - Card reload/account/backend separation, local ciphertext tampering, interrupted send,
   explicit discard, internal Forget, disconnect/reconnect, stale-write races and
   visible quota/storage failures.

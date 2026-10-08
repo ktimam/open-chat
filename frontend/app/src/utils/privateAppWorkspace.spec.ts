@@ -7,6 +7,11 @@ import type { LocalDraftDelivery, LocalDraftSchema } from "./localAppDrafts";
 import { PrivateAppWorkspace } from "./privateAppWorkspace";
 import { parseLocalAppCatalog } from "./localAppCatalog";
 import type { LocalAppDraftStorage } from "./localAppDraftPersistence";
+import { localAppBase64Url } from "./localAppEncryption";
+import { localAppInboxSha256, type LocalAppInboxGrant } from "./localAppInbox";
+import type { LocalAppInboxDeposit } from "./localAppInboxDelivery";
+import { directoryFixture, directorySource } from "./localAppDirectory.testFixtures";
+import type { LocalAppDirectory } from "./localAppDirectory";
 import type {
     LocalAppSetupScope,
     LocalAppSetupSnapshot,
@@ -111,6 +116,187 @@ function fixture(
 }
 const propose = (workspace: PrivateAppWorkspace) =>
     workspace.propose(client, text, { stillCurrent: () => true });
+
+describe("confirmed app inbox delivery uses the existing card flow", () => {
+    async function inboxFixture(native = false) {
+        const writes: unknown[] = [];
+        const storage: LocalAppDraftStorage = {
+            read: vi.fn(async () => undefined),
+            write: vi.fn(async (_scope, value) => {
+                writes.push(structuredClone(value));
+            }),
+            remove: vi.fn(async () => {}),
+        };
+        const result = fixture(false, undefined, storage);
+        result.workspace.setAccount("test-account", "https://backend.example");
+        await vi.waitFor(() => expect(result.workspace.state.draftLoading).toBe(false));
+        const key = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, [
+            "deriveBits",
+        ]);
+        const spki = new Uint8Array(await crypto.subtle.exportKey("spki", key.publicKey));
+        const grant: LocalAppInboxGrant = {
+            version: 1,
+            kind: "ic-canister",
+            host: "https://gateway.example",
+            canisterId: "rrkah-fqaaa-aaaaa-aaaaq-cai",
+            inboxId: "a".repeat(64),
+            writeCapability: localAppBase64Url(new Uint8Array(32).fill(4)),
+            expiresAtMs: Date.now() + 86_400_000,
+        };
+        const connected = {
+            ...app("one"),
+            deliveryInbox: grant,
+            deliveryEncryption: {
+                version: 1,
+                scheme: "p256-hkdf-sha256-aes-256-gcm-v1",
+                keyId: await localAppInboxSha256(spki),
+                publicKeySpki: localAppBase64Url(spki),
+                recipientContext: "AQ",
+            },
+        };
+        expect(
+            result.workspace.importCatalog(JSON.stringify({ version: 1, apps: [connected] })),
+        ).toBe(true);
+        result.workspace.select("one", "add");
+        const activeClient = { clientOnlyApps: () => true, isNativeApp: () => native } as OpenChat;
+        result.workspace.setClient(activeClient);
+        const deposit = vi.fn<LocalAppInboxDeposit>(async (_grant, requestId, bytes) => {
+            const saved = writes.at(-1) as {
+                cards: { saved: { draft: { inboxDelivery: { requestJson: string } } } }[];
+            };
+            expect(saved.cards[0].saved.draft.inboxDelivery.requestJson).toBe(
+                new TextDecoder().decode(bytes),
+            );
+            return {
+                inboxId: grant.inboxId,
+                requestId,
+                bodySha256: await localAppInboxSha256(bytes),
+                receivedAtMs: Date.now(),
+                expiresAtMs: Date.now() + 86_400_000,
+                replayed: false,
+                status: "Pending",
+            };
+        });
+        Object.assign(result.deps, { inboxDeposit: deposit });
+        expect(
+            await result.workspace.propose(activeClient, text, { stillCurrent: () => true }),
+        ).toBe("drafted");
+        expect(result.workspace.review()).toBe(true);
+        return { ...result, storage, writes, deposit, grant };
+    }
+    it.each([false, true])(
+        "browser/native=%s deposits without opening any relay or native handoff",
+        async (native) => {
+            const { workspace, deps, deposit, grant } = await inboxFixture(native);
+            const approval = workspace.state.draft!.approval!;
+            expect(approval.summary).not.toContain(grant.writeCapability);
+            await workspace.confirm(approval.approvalId);
+            expect(deposit).toHaveBeenCalledTimes(1);
+            expect(deps.deliver).not.toHaveBeenCalled();
+            expect(deps.nativeDeliver).not.toHaveBeenCalled();
+            expect(workspace.state.draft).toMatchObject({
+                status: "delivered",
+                inboxDelivery: { receipt: { status: "Pending" } },
+            });
+            expect(workspace.state.message).toContain("stored in the app inbox");
+        },
+    );
+    it("a failed encrypted-card write prevents any deposit or relay fallback", async () => {
+        const { workspace, deps, deposit, storage } = await inboxFixture();
+        vi.mocked(storage.write).mockRejectedValue(new Error("storage full"));
+        await workspace.confirm(workspace.state.draft!.approval!.approvalId);
+        expect(deposit).not.toHaveBeenCalled();
+        expect(deps.deliver).not.toHaveBeenCalled();
+        expect(workspace.state.draft?.status).toBe("uncertain");
+    });
+});
+
+describe("app inbox update boundaries", () => {
+    const endpoint = {
+        version: 1 as const,
+        kind: "ic-canister" as const,
+        host: "https://gateway.example",
+        canisterId: "rrkah-fqaaa-aaaaa-aaaaq-cai",
+    };
+    async function publication(revision: string, inbox: typeof endpoint | undefined) {
+        const value = await directoryFixture("one", revision);
+        const raw = JSON.parse(value.catalogJson);
+        if (inbox) raw.apps[0].deliveryInbox = inbox;
+        const catalogJson = JSON.stringify(raw);
+        const descriptor = {
+            ...value.descriptor,
+            catalog: {
+                ...value.descriptor.catalog,
+                sha256: await localAppInboxSha256(new TextEncoder().encode(catalogJson)),
+                byteLength: new TextEncoder().encode(catalogJson).byteLength,
+            },
+        };
+        return {
+            descriptor,
+            catalogJson,
+            pkg: { ...value.pkg, catalogJson, catalog: parseLocalAppCatalog(catalogJson) },
+        };
+    }
+    it.each(["same", "changed", "added", "private grant"] as const)(
+        "refresh handles %s inbox without silently replacing approved private authority",
+        async (change) => {
+            let published = await publication("1", change === "added" ? undefined : endpoint);
+            let directory: LocalAppDirectory = { version: 1, apps: [published.descriptor] };
+            const raw = JSON.parse(published.catalogJson);
+            const grant = {
+                ...endpoint,
+                inboxId: "a".repeat(64),
+                writeCapability: localAppBase64Url(new Uint8Array(32).fill(4)),
+                expiresAtMs: Date.now() + 86_400_000,
+            };
+            if (change === "private grant") raw.apps[0].deliveryInbox = grant;
+            const loadPublicPackage = vi.fn(async () => published.pkg);
+            const workspace = new PrivateAppWorkspace({
+                extract: vi.fn<typeof extractPrivateAppAction>(),
+                runProcessor: vi.fn<typeof runIsolatedAppProcessor>(),
+                verifyProcessor: vi.fn(async () => true),
+                deliver: vi.fn<LocalDraftDelivery>(),
+                deliverySaved: () => false,
+                loadDirectory: vi.fn(async () => directory),
+                loadPublicPackage,
+                connectAppSetup: vi.fn(async () => JSON.stringify(raw)),
+                cancelDelivery: vi.fn(),
+            });
+            workspace.setAccount("test-account", "https://backend.test|index");
+            workspace.configureDirectory(directorySource);
+            await workspace.refreshDirectory();
+            expect(await workspace.connectApp("one")).toBe(true);
+            workspace.replaceEnabledChats("test-account", workspace.state.catalog!, [
+                { chatKey: "chat", appIds: ["one"] },
+            ]);
+            const original = workspace.state.catalog;
+            published = await publication(
+                "2",
+                change === "changed"
+                    ? { ...endpoint, host: "https://different.example" }
+                    : endpoint,
+            );
+            directory = { version: 1, apps: [published.descriptor] };
+            loadPublicPackage.mockClear();
+            expect(await workspace.refreshDirectory()).toBe(true);
+            expect(workspace.state.enabledChats).toEqual([{ chatKey: "chat", appIds: ["one"] }]);
+            if (change === "same") {
+                expect(workspace.state.catalog?.apps[0]).toMatchObject({
+                    revision: "2",
+                    deliveryInbox: endpoint,
+                });
+            } else {
+                expect(workspace.state.catalog).toBe(original);
+                expect(workspace.state.appUpdates.one).toContain("Connect");
+                if (change === "private grant") {
+                    expect(loadPublicPackage).not.toHaveBeenCalled();
+                    expect(workspace.state.catalog?.apps[0].deliveryInbox).toEqual(grant);
+                }
+            }
+            workspace.clear();
+        },
+    );
+});
 
 describe("private card presentation intent", () => {
     const source = (messageId: string) => ({ chatKey: "synthetic-chat", messageId });

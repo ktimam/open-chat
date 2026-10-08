@@ -27,6 +27,7 @@ const calls = vi.hoisted(() => ({
     nativeCopyCode: vi.fn(),
     nativeOpenBrowser: vi.fn(),
     navigate: vi.fn(),
+    openExternal: vi.fn(async () => {}),
     scrollIntoView: vi.fn<(options?: ScrollIntoViewOptions) => void>(),
 }));
 vi.mock("@client", async () => {
@@ -41,6 +42,7 @@ vi.mock("../theme/themes", async () => ({
     currentTheme: (await import("svelte/store")).writable({ mode: "light" }),
 }));
 vi.mock("@utils/navigation", () => ({ navigate: calls.navigate }));
+vi.mock("../utils/urls", () => ({ openExternalUrl: calls.openExternal }));
 vi.mock("../utils/aiActionRunner", () => ({ extractPrivateAppAction: calls.extract }));
 vi.mock("../utils/localAppSetupConnection", () => ({ connectLocalAppSetup: vi.fn() }));
 vi.mock("../utils/isolatedAppProcessor", () => ({
@@ -554,6 +556,53 @@ describe("app-owned view in the normal private-card flow", () => {
         expect(calls.deliver).not.toHaveBeenCalled();
         expect(calls.nativeDeliver).not.toHaveBeenCalled();
     });
+
+    it.each(["Pending", "Saved", "Dismissed"] as const)(
+        "opens a restored durable %s receipt without retrying delivery or restoring consent",
+        async (status) => {
+            await approveAndSend();
+            const draft = workspace.state.draft!;
+            const inboxId = "b".repeat(64);
+            const requestId = "A".repeat(43);
+            // View-only restored-receipt fixture; the real envelope parser, exact-byte retry,
+            // and encrypted storage are covered by localAppInbox.spec.ts.
+            privateAppWorkspaceState.set({
+                ...workspace.state,
+                draft: {
+                    ...draft,
+                    approval: undefined,
+                    inboxDelivery: {
+                        version: 1,
+                        requestJson: "inert view fixture; never transmitted",
+                        bodySha256: "c".repeat(64),
+                        receipt: {
+                            inboxId,
+                            requestId,
+                            bodySha256: "c".repeat(64),
+                            status,
+                            receivedAtMs: Date.now(),
+                            expiresAtMs: Date.now() + 86_400_000,
+                            replayed: true,
+                        },
+                    },
+                },
+            });
+            await settle();
+            const sent = calls.deliver.mock.calls.length;
+            expect(button("Retry delivery")).toBeUndefined();
+            expect(button("Reopen in app")).toBeUndefined();
+            expect(target.querySelector('.host-approval input[type="checkbox"]')).toBeNull();
+            expect(calls.openExternal).not.toHaveBeenCalled();
+            button("Open app").click();
+            await settle();
+            expect(calls.openExternal).toHaveBeenCalledExactlyOnceWith(
+                client,
+                `${draft.target.destination}#oc-inbox=${inboxId}&oc-request=${requestId}`,
+            );
+            expect(calls.deliver).toHaveBeenCalledTimes(sent);
+            expect(calls.nativeDeliver).not.toHaveBeenCalled();
+        },
+    );
 
     it("renders delivered card values read-only with no new extraction or send", async () => {
         await proposeView();

@@ -31,6 +31,7 @@ const canisters = Object.fromEntries(
   ]),
 );
 const directory = "https://publisher.example/apps-v1.json";
+const rpId = "fork-test.tail000000.ts.net";
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 const initEnvUrl = new URL("../frontend/app/rollup.extras.mjs", import.meta.url)
   .href;
@@ -45,7 +46,8 @@ function actualInitEnv(environment) {
             "OC_APP_DIRECTORY_URL", "OC_UNOFFICIAL_CLIENT", "OC_UNOFFICIAL_WEB_BUILD",
             "OC_UNOFFICIAL_LOCAL_APK", "OC_MOBILE_LAYOUT", "OC_APP_TYPE", "OC_OTA_UPDATES",
             "OC_IC_URL", "OC_USER_INDEX_CANISTER", "OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY",
-            "OC_BASE_ORIGIN", "OC_WEBSITE_VERSION"
+            "OC_BASE_ORIGIN", "OC_WEBSITE_VERSION", "OC_UNOFFICIAL_APK_RP_ID",
+            "OC_ANDROID_RP_ID", "OC_WEBAUTHN_ORIGIN"
         ].map(key => [key, process.env[key] ?? null]));
         try {
             initEnv({ websiteVersion: "0.0.0-directory-test" });
@@ -102,7 +104,7 @@ for (const mode of [
         ? localApkBuildPlan(
             repositoryRoot,
             officialCanisters,
-            { appDirectoryUrl: directory },
+            { appDirectoryUrl: directory, rpId },
             {},
           )
         : mode.startsWith("optimized")
@@ -134,6 +136,16 @@ for (const mode of [
       "repeated normalization must be stable",
     );
     assert.equal(result.second.OC_APP_DIRECTORY_URL, directory);
+    if (mode === "apk") {
+      assert.equal(result.second.OC_UNOFFICIAL_APK_RP_ID, rpId);
+      assert.equal(result.second.OC_ANDROID_RP_ID, rpId);
+      assert.equal(result.second.OC_WEBAUTHN_ORIGIN, rpId);
+      for (const key of ["OC_UNOFFICIAL_APK_RP_ID", "OC_ANDROID_RP_ID", "OC_WEBAUTHN_ORIGIN"]) {
+        const changed = actualInitEnv({ ...plan.options.env, [key]: "other.example.com" });
+        assert.equal(changed.status, 1, key);
+        assert.match(changed.stderr, /matching explicit parent RP profile/);
+      }
+    }
     assert.equal(result.second.OC_UNOFFICIAL_CLIENT, "true");
     assert.equal(result.second.OC_MOBILE_LAYOUT, layout);
     assert.equal(result.second.OC_APP_TYPE, mode === "apk" ? "android" : "web");
@@ -186,6 +198,7 @@ test("operator config, not inherited environment, selects generic app directory"
   assert.equal(
     createUnofficialLocalApkEnvironment(canisters, {
       appDirectoryUrl: directory,
+      rpId,
     }).OC_APP_DIRECTORY_URL,
     directory,
   );
@@ -214,6 +227,7 @@ test("all local build entrypoints accept explicit app directory; child retains i
   );
   const parent = createUnofficialLocalApkEnvironment(canisters, {
     appDirectoryUrl: directory,
+    rpId,
   });
   const child = localApkBuildPlan(
     ".",

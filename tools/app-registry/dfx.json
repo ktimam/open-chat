@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "canisters": {
+    "app_registry": {
+      "type": "custom",
+      "candid": "app_registry.did",
+      "wasm": "app_registry.wasm",
+      "build": []
+    }
+  }
+}

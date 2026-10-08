@@ -4,6 +4,12 @@ import {
     validateLocalAppDeliveryEncryption,
     type LocalAppDeliveryEncryption,
 } from "./localAppEncryption";
+import {
+    validateLocalAppInboxTarget,
+    validateLocalAppInboxDelivery,
+    type LocalAppInboxTarget,
+    type LocalAppInboxDelivery,
+} from "./localAppInbox";
 export type LocalDraftJson =
     | null
     | boolean
@@ -50,6 +56,7 @@ export interface LocalDraftTarget {
     readonly recipient: string;
     readonly appRevision?: string;
     readonly deliveryEncryption?: LocalAppDeliveryEncryption;
+    readonly deliveryInbox?: LocalAppInboxTarget;
 }
 
 export interface LocalDraftInput {
@@ -81,6 +88,7 @@ export interface LocalDraftView {
     readonly target: LocalDraftTarget;
     readonly payload: LocalDraftJson;
     readonly approval?: LocalDraftApproval;
+    readonly inboxDelivery?: LocalAppInboxDelivery;
 }
 
 // An adapter must preserve the exact destination/recipient/payload/idempotency key, not follow a
@@ -114,6 +122,7 @@ export interface LocalDraftSnapshot {
     readonly target: LocalDraftTarget;
     readonly schema: LocalDraftSchema;
     readonly payload: LocalDraftJson;
+    readonly inboxDelivery?: LocalAppInboxDelivery;
 }
 
 const MAX_BYTES = 64 * 1024;
@@ -373,6 +382,7 @@ function snapshotTarget(input: LocalDraftTarget): LocalDraftTarget {
                     "recipient",
                     "appRevision",
                     "deliveryEncryption",
+                    "deliveryInbox",
                 ].includes(key),
         )
     )
@@ -390,6 +400,7 @@ function snapshotTarget(input: LocalDraftTarget): LocalDraftTarget {
         invalid();
     if (value.deliveryEncryption !== undefined)
         validateLocalAppDeliveryEncryption(value.deliveryEncryption);
+    if (value.deliveryInbox !== undefined) validateLocalAppInboxTarget(value.deliveryInbox);
     let url: URL;
     try {
         url = new URL(value.destination as string);
@@ -424,7 +435,15 @@ export function snapshotLocalDraftRecovery(value: unknown): LocalDraftSnapshot {
         "payload",
     ];
     if (
-        Reflect.ownKeys(value).length !== keys.length ||
+        Reflect.ownKeys(value).some((key) => {
+            const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
+            return (
+                typeof key !== "string" ||
+                ![...keys, "inboxDelivery"].includes(key) ||
+                !("value" in descriptor) ||
+                !descriptor.enumerable
+            );
+        }) ||
         keys.some((key) => {
             const descriptor = Object.getOwnPropertyDescriptor(value, key);
             return !descriptor || !("value" in descriptor) || !descriptor.enumerable;
@@ -444,15 +463,25 @@ export function snapshotLocalDraftRecovery(value: unknown): LocalDraftSnapshot {
     )
         invalid();
     const schema = snapshotLocalDraftSchema(value.schema);
+    const target = snapshotTarget(value.target as LocalDraftTarget);
+    const inboxDelivery =
+        value.inboxDelivery === undefined
+            ? undefined
+            : validateLocalAppInboxDelivery(value.inboxDelivery, {
+                  ...target,
+                  idempotencyKey: value.idempotencyKey,
+              });
+    if (inboxDelivery && !value.attempted) invalid();
     return Object.freeze({
         version: 1,
         id: value.id,
         idempotencyKey: value.idempotencyKey,
         revision: value.revision,
         attempted: value.attempted,
-        target: snapshotTarget(value.target as LocalDraftTarget),
+        target,
         schema,
         payload: snapshotLocalDraftPayload(value.payload, schema),
+        ...(inboxDelivery ? { inboxDelivery } : {}),
     });
 }
 
@@ -529,6 +558,7 @@ export class LocalAppDraftStore {
             target: record.view.target,
             schema: record.schema,
             payload: record.view.payload,
+            ...(record.view.inboxDelivery ? { inboxDelivery: record.view.inboxDelivery } : {}),
         });
     }
 
@@ -539,9 +569,17 @@ export class LocalAppDraftStore {
         const view: LocalDraftView = Object.freeze({
             id: snapshot.id,
             revision: snapshot.revision,
-            status: snapshot.attempted ? "uncertain" : "draft",
+            status:
+                snapshot.inboxDelivery?.receipt &&
+                (snapshot.inboxDelivery.receipt.status !== "Pending" ||
+                    snapshot.inboxDelivery.receipt.expiresAtMs > Date.now())
+                    ? "delivered"
+                    : snapshot.attempted
+                      ? "uncertain"
+                      : "draft",
             target: snapshot.target,
             payload: snapshot.payload,
+            ...(snapshot.inboxDelivery ? { inboxDelivery: snapshot.inboxDelivery } : {}),
         });
         this.#drafts.set(view.id, {
             view,
@@ -553,6 +591,23 @@ export class LocalAppDraftStore {
     }
 
     /** A recovered attempted request is immutable. Fresh review restores no old consent. */
+    setInboxDelivery(id: string, value: LocalAppInboxDelivery): void {
+        const record = this.#required(id);
+        if (!record.attempted) invalid();
+        const snapshot = validateLocalAppInboxDelivery(value, {
+            ...record.view.target,
+            idempotencyKey: record.idempotencyKey,
+        });
+        const previous = record.view.inboxDelivery;
+        if (
+            previous &&
+            (previous.requestJson !== snapshot.requestJson ||
+                previous.bodySha256 !== snapshot.bodySha256)
+        )
+            invalid();
+        record.view = Object.freeze({ ...record.view, inboxDelivery: snapshot });
+    }
+
     reviewRecovered(id: string): LocalDraftApproval {
         const record = this.#required(id);
         const status = record.view.status;
@@ -576,6 +631,7 @@ export class LocalAppDraftStore {
             target: view.target,
             payload: view.payload,
             status: record.attempted ? view.status : "draft",
+            ...(view.inboxDelivery ? { inboxDelivery: view.inboxDelivery } : {}),
         });
         return record.view;
     }

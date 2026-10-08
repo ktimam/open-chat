@@ -6,6 +6,7 @@ import {
 } from "./localAppDrafts";
 import type { LocalAppSetupScope } from "./localAppSetupStore";
 import { parseLocalAppCatalog, type LocalAppCatalogEntry } from "./localAppCatalog";
+import { isLocalAppInboxGrant, localAppInboxCapabilityDigest } from "./localAppInbox";
 
 export interface SavedLocalAppDraft {
     readonly version: 1;
@@ -59,6 +60,8 @@ const DATABASE = "openchat-private-app-drafts";
 const STORE = "encrypted-cards";
 const ZERO = "0".repeat(64);
 const LIMIT = 256 * 1024;
+// Exact encrypted retry bytes add at most 112 KiB to an otherwise valid 256 KiB card.
+const INBOX_LIMIT = 384 * 1024;
 // A collection is history, not a small set of open slots. Keep each card bounded,
 // but allow retained cards to grow within a separate encrypted-storage budget.
 export const MAX_SAVED_LOCAL_APP_DRAFT_BYTES = 16 * 1024 * 1024;
@@ -124,7 +127,11 @@ export function snapshotSavedLocalAppDraft(value: unknown): SavedLocalAppDraft {
         editorJson: fields.editorJson,
         recipient: fields.recipient,
     });
-    if (encoder.encode(JSON.stringify(snapshot)).byteLength > LIMIT) invalid();
+    if (
+        encoder.encode(JSON.stringify(snapshot)).byteLength >
+        (draft.inboxDelivery ? INBOX_LIMIT : LIMIT)
+    )
+        invalid();
     return snapshot;
 }
 function plainFields(
@@ -250,6 +257,15 @@ function snapshotSavedApp(value: unknown, saved: SavedLocalAppDraft): LocalAppCa
         app.id !== target.appId ||
         app.revision !== target.appRevision ||
         app.destination !== target.destination ||
+        (app.deliveryInbox === undefined) !== (target.deliveryInbox === undefined) ||
+        (app.deliveryInbox !== undefined &&
+            (!isLocalAppInboxGrant(app.deliveryInbox) ||
+                app.deliveryInbox.host !== target.deliveryInbox?.host ||
+                app.deliveryInbox.canisterId !== target.deliveryInbox?.canisterId ||
+                app.deliveryInbox.inboxId !== target.deliveryInbox?.inboxId ||
+                app.deliveryInbox.expiresAtMs !== target.deliveryInbox?.expiresAtMs ||
+                localAppInboxCapabilityDigest(app.deliveryInbox) !==
+                    target.deliveryInbox?.capabilitySha256)) ||
         JSON.stringify(snapshotLocalDraftJson(app.deliveryEncryption ?? null)) !==
             JSON.stringify(snapshotLocalDraftJson(target.deliveryEncryption ?? null)) ||
         !action ||
@@ -296,7 +312,7 @@ export function snapshotSavedLocalAppDraftCollection(value: unknown): SavedLocal
             ...(Object.hasOwn(entry, "app") ? { app: snapshotSavedApp(entry.app, saved) } : {}),
         });
         const bytes = encoder.encode(JSON.stringify(card)).byteLength;
-        if (bytes > LIMIT) invalid();
+        if (bytes > (saved.draft.inboxDelivery ? INBOX_LIMIT : LIMIT)) invalid();
         cardBytes += bytes + (index === 0 ? 0 : 1);
         if (cardBytes > MAX_SAVED_LOCAL_APP_DRAFT_BYTES)
             throw new LocalAppDraftStorageCapacityError();

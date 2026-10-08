@@ -7,16 +7,23 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import { createServer, request } from "node:http";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { after, test } from "node:test";
 import {
   assetLinks,
+  ASSET_PATH,
+  checkedCanisterId,
+  createAssociationServer,
   fetchLoopback,
   localReplica,
+  main,
+  mainnetPlan,
   prepareProject,
   probeProject,
   projectFiles,
   readProject,
+  serveProject,
 } from "./association.mjs";
 
 const fingerprint = "11".repeat(32);
@@ -228,6 +235,24 @@ test("readProject fails closed if the association asset disappears", async () =>
 });
 
 const canisterId = "rrkah-fqaaa-aaaaa-aaaaq-cai";
+test("canister IDs require canonical base32, checksum and opaque principal class", () => {
+  for (const id of [
+    canisterId,
+    "ryjl3-tyaaa-aaaaa-aaaba-cai",
+    "em77e-bvlzu-aq",
+  ])
+    assert.equal(checkedCanisterId(id), id);
+  for (const id of [
+    "aaaaa-aa",
+    "2vxsx-fae",
+    "srkah-fqaaa-aaaaa-aaaaq-cai",
+    "rrkah-fqaaa-aaaaa-aaaaq-caj",
+    "rrkahfqaaa-aaaaa-aaaaq-cai",
+    "RRKAH-FQAAA-AAAAA-AAA AQ-CAI",
+    "00000-00000-cai",
+  ])
+    assert.throws(() => checkedCanisterId(id));
+});
 function fakeFetch(directory, mutate = (_path, response) => response) {
   const requests = [];
   return {
@@ -467,3 +492,411 @@ for (const redirectedPath of [
     );
   });
 }
+
+const mainnetConfig = {
+  mode: "mainnet-plan",
+  packageName: "dev.example.client",
+  fingerprints: [fingerprint, otherFingerprint],
+};
+async function mainnetProject() {
+  const directory = join(fixtureRoot, `mainnet-plan-${++fixtureIndex}`);
+  const result = await prepareProject(directory, mainnetConfig);
+  assert.equal(result.deploymentPerformed, false);
+  assert.equal(result.localOnly, false);
+  assert.equal(result.googlePasswordManagerVerified, false);
+  return directory;
+}
+
+test("explicit local mode retains existing schema-1 bytes and local project compatibility", async () => {
+  assert.deepEqual(
+    projectFiles({ ...config, mode: "local" }),
+    projectFiles(config),
+  );
+  const restored = await readProject(await project());
+  assert.equal(restored.schema, 1);
+  assert.equal(restored.localOnly, true);
+});
+
+test("mainnet preparation contains only static assets, explicit public metadata and no deployment hook", async () => {
+  const directory = await mainnetProject();
+  const files = projectFiles(mainnetConfig);
+  assert.deepEqual(Object.keys(files).sort(), [
+    "assets/.ic-assets.json5",
+    "assets/.well-known/assetlinks.json",
+    "dfx.json",
+    "mainnet-plan-config.json",
+  ]);
+  const dfx = JSON.parse(files["dfx.json"]);
+  assert.deepEqual(dfx, {
+    version: 1,
+    canisters: {
+      android_passkey_association: { type: "assets", source: ["assets"] },
+    },
+  });
+  assert.deepEqual(
+    files["assets/.ic-assets.json5"],
+    projectFiles(config)["assets/.ic-assets.json5"],
+  );
+  assert.deepEqual(
+    JSON.parse(files["assets/.well-known/assetlinks.json"]),
+    assetLinks(mainnetConfig.packageName, mainnetConfig.fingerprints),
+  );
+  assert.equal((await readProject(directory)).preparationOnly, true);
+  await assert.rejects(() => prepareProject(directory, mainnetConfig));
+  let calls = 0;
+  const noNetwork = () => {
+    calls++;
+    throw new Error("must not contact any network");
+  };
+  await assert.rejects(
+    () => probeProject(directory, canisterId, noNetwork),
+    /local-only/,
+  );
+  await assert.rejects(
+    () => createAssociationServer(directory, canisterId, noNetwork),
+    /local-only/,
+  );
+  assert.equal(calls, 0);
+});
+
+test("mainnet plan requires separate preparation, explicit certified gateway and stable RP review", async () => {
+  const directory = await mainnetProject();
+  for (const gateway of ["icp.net", "icp0.io"]) {
+    const result = await mainnetPlan(directory, canisterId, gateway);
+    assert.equal(result.rpId, `${canisterId}.${gateway}`);
+    assert.equal(
+      result.assetUrl,
+      `https://${canisterId}.${gateway}${ASSET_PATH}`,
+    );
+    assert.equal(result.deploymentPerformed, false);
+    assert.equal(result.networkVerified, false);
+    assert.equal(result.googlePasswordManagerVerified, false);
+    assert.match(result.warning, /re-linking/);
+    assert.match(result.warning, /not migrated/);
+  }
+  const localDirectory = await project();
+  await assert.rejects(() =>
+    mainnetPlan(localDirectory, canisterId, "icp.net"),
+  );
+  for (const gateway of [
+    undefined,
+    "raw.icp.net",
+    "raw.icp0.io",
+    "icp.net.evil.invalid",
+    "https://icp.net",
+    "localhost",
+    "example.invalid",
+  ])
+    await assert.rejects(() => mainnetPlan(directory, canisterId, gateway));
+  for (const id of [
+    undefined,
+    "",
+    "../escape",
+    `${canisterId}.raw`,
+    "x".repeat(64) + "-cai",
+  ])
+    await assert.rejects(() => mainnetPlan(directory, id, "icp.net"));
+});
+
+test("preparation rejects unknown modes, injected mainnet replicas and tampered plan files", async () => {
+  for (const mode of ["ic", "mainnet", "playground", "", null])
+    assert.throws(() => projectFiles({ ...config, mode }));
+  assert.throws(() =>
+    projectFiles({ ...mainnetConfig, replica: "https://icp-api.io" }),
+  );
+  for (const name of Object.keys(projectFiles(mainnetConfig))) {
+    const directory = await mainnetProject();
+    writeFileSync(
+      join(directory, name),
+      readFileSync(join(directory, name), "utf8") + "\n",
+    );
+    await assert.rejects(() => readProject(directory));
+  }
+  for (const args of [
+    ["deploy"],
+    ["prepare", "--mode", "ic"],
+    ["prepare", "--mode", "mainnet"],
+    ["mainnet-plan"],
+  ])
+    await assert.rejects(() => main(args));
+});
+
+for (const port of [
+  undefined,
+  "",
+  "0",
+  "65536",
+  "-1",
+  "8080.0",
+  "8080/path",
+  "0.0.0.0:8080",
+  "1e3",
+  8080,
+])
+  test(`serve rejects invalid explicit listening port ${String(port)} before reading project`, async () => {
+    await assert.rejects(
+      () => serveProject("missing-project", canisterId, port),
+      /explicit local listening port/,
+    );
+  });
+
+async function withProxy(directory, transport, operation) {
+  const server = await createAssociationServer(
+    directory,
+    canisterId,
+    transport.fetch,
+  );
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  try {
+    assert.equal(server.address().address, "127.0.0.1");
+    await operation(server.address().port);
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
+}
+
+function proxyRequest(port, pathname = ASSET_PATH, method = "GET") {
+  return new Promise((resolve, reject) => {
+    const req = request(
+      {
+        hostname: "127.0.0.1",
+        port,
+        path: pathname,
+        method,
+        headers: {
+          Host: "device.example.ts.net",
+          Cookie: "not-forwarded=yes",
+          Authorization: "not-forwarded",
+          "Tailscale-User-Login": "not-forwarded",
+        },
+      },
+      async (response) => {
+        try {
+          const chunks = [];
+          for await (const chunk of response) chunks.push(chunk);
+          resolve({
+            status: response.statusCode,
+            headers: response.headers,
+            body: Buffer.concat(chunks).toString("utf8"),
+          });
+        } catch (error) {
+          reject(error);
+        }
+      },
+    );
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+test("DAL-only proxy returns exact GET/HEAD metadata and strips unrelated headers", async () => {
+  const directory = await project();
+  const transport = fakeFetch(directory, (_path, response) => {
+    response.headers.set("set-cookie", "must-not-leak=yes");
+    response.headers.set("access-control-allow-origin", "*");
+    response.headers.set("tailscale-user-login", "must-not-leak");
+    response.headers.set("cache-control", "public, max-age=60");
+    response.headers.set("ic-certificateexpression", "synthetic-expression");
+    return response;
+  });
+  await withProxy(directory, transport, async (port) => {
+    const get = await proxyRequest(port);
+    const head = await proxyRequest(port, ASSET_PATH, "HEAD");
+    for (const response of [get, head]) {
+      assert.equal(response.status, 200);
+      assert.equal(response.headers["content-type"], "application/json");
+      assert.equal(
+        response.headers["content-length"],
+        String(Buffer.byteLength(body(directory))),
+      );
+      assert.equal(response.headers["cache-control"], "public, max-age=60");
+      assert.ok(response.headers["ic-certificate"]);
+      assert.equal(
+        response.headers["ic-certificateexpression"],
+        "synthetic-expression",
+      );
+      for (const header of [
+        "set-cookie",
+        "location",
+        "access-control-allow-origin",
+        "tailscale-user-login",
+      ])
+        assert.equal(response.headers[header], undefined);
+    }
+    assert.equal(get.body, body(directory));
+    assert.equal(head.body, "");
+  });
+  assert.equal(transport.requests.length, 2);
+  for (const { url, options } of transport.requests) {
+    assert.equal(url.href, `http://${canisterId}.localhost:8080${ASSET_PATH}`);
+    assert.equal(options.redirect, "manual");
+    assert.deepEqual(Object.keys(options).sort(), ["redirect", "signal"]);
+  }
+});
+
+test("DAL proxy never forwards nonexact paths, queries, request targets or methods", async () => {
+  const directory = await project();
+  const transport = fakeFetch(directory);
+  await withProxy(directory, transport, async (port) => {
+    for (const pathname of [
+      "/",
+      "/api/v2/status",
+      "/dfx.json",
+      "/local-test-config.json",
+      "/mainnet-plan-config.json",
+      `${ASSET_PATH}?x=1`,
+      `${ASSET_PATH}/`,
+      "/.well-known/%61ssetlinks.json",
+      `http://example.invalid${ASSET_PATH}`,
+    ]) {
+      const result = await proxyRequest(port, pathname);
+      assert.equal(result.status, 404, pathname);
+      assert.equal(result.body, "");
+    }
+    for (const method of ["POST", "PUT", "DELETE", "OPTIONS"]) {
+      const result = await proxyRequest(port, ASSET_PATH, method);
+      assert.equal(result.status, 405, method);
+      assert.equal(result.headers.allow, "GET, HEAD");
+      assert.equal(result.body, "");
+    }
+  });
+  assert.equal(transport.requests.length, 0);
+});
+
+for (const failure of [
+  "mismatch",
+  "redirect",
+  "missing-certificate",
+  "wrong-mime",
+  "oversized",
+  "transport-error",
+])
+  test(`DAL proxy fails closed without response content or fallback: ${failure}`, async () => {
+    const directory = await project();
+    const transport = fakeFetch(directory, (_path, response) => {
+      if (failure === "transport-error")
+        throw new Error("upstream private diagnostic must not leak");
+      if (failure === "redirect")
+        return new Response(null, {
+          status: 302,
+          headers: { location: "https://example.invalid/" },
+        });
+      if (failure === "missing-certificate")
+        response.headers.delete("ic-certificate");
+      if (failure === "wrong-mime")
+        response.headers.set("content-type", "text/html");
+      if (failure === "mismatch" || failure === "oversized")
+        return new Response(failure === "mismatch" ? "[]" : "x".repeat(65537), {
+          status: 200,
+          headers: response.headers,
+        });
+      return response;
+    });
+    await withProxy(directory, transport, async (port) => {
+      const result = await proxyRequest(port);
+      assert.equal(result.status, 502);
+      assert.equal(result.body, "");
+      assert.equal(result.headers.location, undefined);
+      assert.equal(result.headers["ic-certificate"], undefined);
+      assert.equal(result.headers["cache-control"], "no-store");
+    });
+    assert.equal(transport.requests.length, 1);
+  });
+
+test("DAL proxy revalidates every response instead of caching a formerly valid statement", async () => {
+  const directory = await project();
+  let calls = 0;
+  const transport = fakeFetch(directory, (_path, response) =>
+    ++calls === 1
+      ? response
+      : new Response("[]", { headers: response.headers }),
+  );
+  await withProxy(directory, transport, async (port) => {
+    assert.equal((await proxyRequest(port)).status, 200);
+    assert.equal((await proxyRequest(port)).status, 502);
+  });
+});
+
+test("real loopback transport sends the fixed canister Host and no caller identity", async () => {
+  const observed = [];
+  const upstream = createServer((req, res) => {
+    observed.push({ method: req.method, path: req.url, headers: req.headers });
+    res
+      .writeHead(200, {
+        "content-type": "application/json",
+        "ic-certificate": "synthetic-certificate",
+      })
+      .end("[]");
+  });
+  await new Promise((resolve, reject) => {
+    upstream.once("error", reject);
+    upstream.listen(0, "127.0.0.1", resolve);
+  });
+  try {
+    const port = upstream.address().port;
+    const response = await fetchLoopback(
+      `http://${canisterId}.localhost:${port}${ASSET_PATH}`,
+      { signal: AbortSignal.timeout(5000), redirect: "manual" },
+    );
+    assert.equal(await response.text(), "[]");
+    assert.equal(observed.length, 1);
+    assert.equal(observed[0].method, "GET");
+    assert.equal(observed[0].path, ASSET_PATH);
+    assert.equal(observed[0].headers.host, `${canisterId}.localhost:${port}`);
+    assert.equal(observed[0].headers.accept, "application/json");
+    for (const header of ["authorization", "cookie", "tailscale-user-login"])
+      assert.equal(observed[0].headers[header], undefined);
+  } finally {
+    upstream.closeAllConnections();
+    await new Promise((resolve, reject) =>
+      upstream.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
+});
+
+test("CLI explicit modes prepare offline projects and print a non-deploying mainnet plan", async () => {
+  const output = [];
+  const previousLog = console.log;
+  console.log = (value) => output.push(JSON.parse(value));
+  const localDirectory = join(fixtureRoot, `cli-local-${++fixtureIndex}`);
+  const mainnetDirectory = join(fixtureRoot, `cli-mainnet-${++fixtureIndex}`);
+  try {
+    await main([
+      "prepare",
+      "--mode",
+      "local",
+      localDirectory,
+      config.replica,
+      config.packageName,
+      fingerprint,
+    ]);
+    await main([
+      "prepare",
+      "--mode",
+      "mainnet-plan",
+      mainnetDirectory,
+      mainnetConfig.packageName,
+      fingerprint,
+      otherFingerprint,
+    ]);
+    await main(["mainnet-plan", mainnetDirectory, canisterId, "icp.net"]);
+  } finally {
+    console.log = previousLog;
+  }
+  assert.equal(output.length, 3);
+  assert.equal(output[0].localOnly, true);
+  assert.equal(output[1].deploymentMode, "mainnet-plan");
+  assert.equal(output[2].rpId, `${canisterId}.icp.net`);
+  for (const result of output) {
+    assert.equal(result.deploymentPerformed, false);
+    assert.equal(result.googlePasswordManagerVerified, false);
+  }
+  assert.equal((await readProject(localDirectory)).localOnly, true);
+  assert.equal((await readProject(mainnetDirectory)).preparationOnly, true);
+});

@@ -15,11 +15,14 @@
     import { localAppCardAnchorKey, localAppCardAnchors } from "../utils/localAppCardAnchors";
     import { currentTheme } from "../theme/themes";
     import { formatLocalDraftJson } from "../utils/localAppDrafts";
+    import { openExternalUrl } from "../utils/urls";
+    import { localAppInboxReviewUrl } from "../utils/localAppInbox";
 
     let { client }: { client: OpenChat } = $props();
     let acknowledged = $state(false);
     let retryConfirmed = $state(false);
     let confirmationFailed = $state(false);
+    let openAppFailed = $state(false);
     let blockedFieldDraft = $state<{ id: string | undefined; blocked: boolean }>();
     const workspaceView = $derived($privateAppWorkspaceState);
     const errorScope = $derived(
@@ -110,12 +113,23 @@
             }),
     );
     const consumed = $derived(showDraft && workspaceView.draft?.status === "delivered");
+    const inboxReceipt = $derived(workspaceView.draft?.inboxDelivery?.receipt);
     // Receipt can advance after confirm() resolves. Only this session's exact reviewed request
     // may replace the conservative workspace message; restored cards have no live approval.
     const cardStatusMessage = $derived(
-        consumed && delivery?.status === "saved"
-            ? "The app reports that this request was saved."
-            : workspaceView.message,
+        openAppFailed
+            ? "The app could not be opened. Your encrypted request remains in its inbox."
+            : inboxReceipt
+              ? inboxReceipt.status === "Saved"
+                  ? "The app reports that this request was saved."
+                  : inboxReceipt.status === "Dismissed"
+                    ? "This request was dismissed in the app. It was not queued again."
+                    : inboxReceipt.expiresAtMs <= Date.now()
+                      ? "Inbox retention has expired. Check the app before sending another request."
+                      : "Stored in the app inbox, pending your review. Open the app to review and save."
+              : consumed && delivery?.status === "saved"
+                ? "The app reports that this request was saved."
+                : workspaceView.message,
     );
     const confirmDisabled = $derived(
         !accountReady ||
@@ -164,6 +178,7 @@
     $effect(() => {
         errorScope;
         confirmationFailed = false;
+        openAppFailed = false;
     });
     $effect(() => {
         const kind = $identityStateStore.kind;
@@ -244,6 +259,26 @@
             void workspace.retryUncertain(reviewed.approval.approvalId);
         else if (reviewed.status === "delivered")
             void workspace.reopenDelivered(reviewed.approval.approvalId);
+    }
+    function openReceivedApp(event: MouseEvent) {
+        event.stopPropagation();
+        const draft = workspaceView.draft;
+        if (
+            !accountReady ||
+            !workspaceView.open ||
+            workspaceView.busy ||
+            connectionBlocked ||
+            !draft?.inboxDelivery?.receipt
+        )
+            return;
+        // Navigation only: opaque receipt IDs stay in the fragment; no fields or authority.
+        openAppFailed = false;
+        void openExternalUrl(
+            client,
+            localAppInboxReviewUrl(draft.target.destination, draft.inboxDelivery.receipt),
+        ).catch(() => {
+            openAppFailed = true;
+        });
     }
     onDestroy(() => workspace.clear());
 </script>
@@ -400,6 +435,18 @@
                                         >
                                     </div>
                                 </div>
+                            {:else if !connectionBlocked && inboxReceipt}
+                                <div class="host-approval">
+                                    <div class="actions">
+                                        <button
+                                            class="confirm"
+                                            type="button"
+                                            disabled={workspaceView.busy ||
+                                                workspaceView.draftLoading}
+                                            onclick={openReceivedApp}>Open app</button
+                                        >
+                                    </div>
+                                </div>
                             {:else if !connectionBlocked && (workspaceView.draft.status === "uncertain" || workspaceView.draft.status === "delivered") && delivery?.status !== "saved"}
                                 <div class="host-approval">
                                     <label class="disclosure"
@@ -408,8 +455,9 @@
                                             bind:checked={retryConfirmed}
                                             disabled={workspaceView.busy}
                                         /><span
-                                            >I checked the receiving app. Reopen this same request
-                                            and import ID; it may already have been saved.</span
+                                            >{workspaceView.draft.target.deliveryInbox
+                                                ? "I checked the receiving app. Retry this same encrypted request and import ID; it may already have been received."
+                                                : "I checked the receiving app. Reopen this same request and import ID; it may already have been saved."}</span
                                         ></label
                                     >
                                     <div class="actions">
@@ -420,7 +468,10 @@
                                                 workspaceView.busy ||
                                                 workspaceView.draftLoading ||
                                                 fieldEditBlocked}
-                                            onclick={retryCard}>Reopen in app</button
+                                            onclick={retryCard}
+                                            >{workspaceView.draft.target.deliveryInbox
+                                                ? "Retry delivery"
+                                                : "Reopen in app"}</button
                                         >
                                     </div>
                                 </div>

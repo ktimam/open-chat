@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import { Principal } from "@icp-sdk/core/principal";
 import type { OpenChat, MessageContent } from "@client";
 import { PrivateAppWorkspace } from "./privateAppWorkspace";
 import { directoryFixture, directorySource } from "./localAppDirectory.testFixtures";
@@ -14,6 +15,7 @@ import type {
     LocalAppDirectoryDescriptor,
     LocalAppPublicPackage,
 } from "./localAppDirectory";
+import { loadLocalAppDirectory } from "./localAppDirectory";
 import type { extractPrivateAppAction } from "./aiActionRunner";
 import { verifyImportedLocalProcessor, type runIsolatedAppProcessor } from "./isolatedAppProcessor";
 import type { LocalDraftDelivery } from "./localAppDrafts";
@@ -21,6 +23,10 @@ import type { LocalDraftDelivery } from "./localAppDrafts";
 vi.mock("@client", () => ({ currentUserIdStore: { value: "synthetic-account" } }));
 vi.mock("@shared", () => ({ ANON_USER_ID: "anonymous" }));
 vi.mock("./aiActionRunner", () => ({ extractPrivateAppAction: vi.fn() }));
+vi.mock("./nativeAppDelivery", () => ({
+    nativeAppDelivery: { deliver: vi.fn(), cancelAll: vi.fn() },
+    nativeDeliveryAllowed: vi.fn(() => false),
+}));
 vi.mock("./localAppRelayDelivery", async () => {
     const { writable } = await import("svelte/store");
     return {
@@ -89,6 +95,133 @@ const propose = (workspace: PrivateAppWorkspace) =>
     );
 
 describe("automatic app setup atomicity and privacy", () => {
+    it.each(["network", "abort", "generation", "duplicate"])(
+        "keeps installations, opt-ins and the last full list when registry pagination fails: %s",
+        async (failure) => {
+            const { workspace, deps, two } = await fixture();
+            await workspace.connectApp("one");
+            workspace.replaceEnabledChats("synthetic-account", workspace.state.catalog!, [
+                { chatKey: "chat", appIds: ["one"] },
+            ]);
+            const directory = workspace.state.directory;
+            const catalog = workspace.state.catalog;
+            const owner = {
+                principal: Principal.fromUint8Array(new Uint8Array([1, 2, 3, 2])).toText(),
+                origin: "https://publisher.test",
+            };
+            const abort = new AbortController();
+            const fetcher = vi.fn<typeof fetch>(async (): Promise<Response> => {
+                const page = fetcher.mock.calls.length - 1;
+                if (page === 1 && failure === "network") throw new Error("offline");
+                if (page === 1 && failure === "abort") abort.abort();
+                return new Response(
+                    JSON.stringify({
+                        version: 2,
+                        generation: page === 1 && failure === "generation" ? "43" : "42",
+                        page,
+                        apps:
+                            page === 0 || failure === "duplicate"
+                                ? [{ ...two.descriptor, publisher: owner }]
+                                : [],
+                        next: page === 0 ? "/openchat/pages/42/1.json" : null,
+                    }),
+                );
+            });
+            deps.loadDirectory.mockImplementationOnce(() =>
+                loadLocalAppDirectory(directorySource, abort.signal, fetcher),
+            );
+            expect(await workspace.refreshDirectory()).toBe(false);
+            expect(fetcher).toHaveBeenCalledTimes(2);
+            expect(workspace.state.directory).toBe(directory);
+            expect(workspace.state.catalog).toBe(catalog);
+            expect(workspace.state.disabledAppIds).toEqual([]);
+            expect(workspace.state.enabledChats).toEqual([{ chatKey: "chat", appIds: ["one"] }]);
+            workspace.select("one", "add");
+            expect(workspace.state.processorReady).toBe(true);
+        },
+    );
+
+    it("never auto-migrates a legacy connection; later compatible registry updates retain opt-ins", async () => {
+        const { workspace, deps, packages, connected, setDirectory, one } = await fixture();
+        await workspace.connectApp("one");
+        const owner = {
+            principal: Principal.fromUint8Array(new Uint8Array([1, 2, 3, 2])).toText(),
+            origin: "https://publisher.test",
+        };
+        setDirectory({
+            version: 2,
+            generation: "1",
+            apps: [{ ...one.descriptor, publisher: owner }],
+        });
+        deps.loadPublicPackage.mockClear();
+        await workspace.refreshDirectory();
+        expect(deps.loadPublicPackage).not.toHaveBeenCalled();
+        expect(workspace.state.appUpdates.one).toContain("approve");
+        expect(await workspace.connectApp("one")).toBe(true);
+        workspace.replaceEnabledChats("synthetic-account", workspace.state.catalog!, [
+            { chatKey: "chat", appIds: ["one"] },
+        ]);
+        const update = await directoryFixture("one", "2");
+        packages.set("one", update.pkg);
+        connected.set("one", update.connectedJson);
+        setDirectory({
+            version: 2,
+            generation: "2",
+            apps: [{ ...update.descriptor, publisher: owner }],
+        });
+        expect(await workspace.refreshDirectory()).toBe(true);
+        expect(workspace.state.catalog?.apps[0].revision).toBe("2");
+        expect(workspace.state.enabledChats).toEqual([{ chatKey: "chat", appIds: ["one"] }]);
+        setDirectory({
+            version: 2,
+            generation: "3",
+            apps: [
+                {
+                    ...update.descriptor,
+                    publisher: {
+                        ...owner,
+                        principal: Principal.fromUint8Array(new Uint8Array([4, 5, 6, 2])).toText(),
+                    },
+                },
+            ],
+        });
+        deps.loadPublicPackage.mockClear();
+        expect(await workspace.refreshDirectory()).toBe(true);
+        expect(deps.loadPublicPackage).not.toHaveBeenCalled();
+        expect(workspace.state.appUpdates.one).toContain("approve");
+        expect(workspace.state.catalog?.apps[0].revision).toBe("2");
+        expect(workspace.state.enabledChats).toEqual([{ chatKey: "chat", appIds: ["one"] }]);
+        expect(await workspace.connectApp("one")).toBe(true);
+        expect(workspace.state.enabledChats).toEqual([]);
+    });
+
+    it("does not disable a connected app while it is still on a later registry page", async () => {
+        const { workspace, deps, one, two } = await fixture();
+        await workspace.connectApp("one");
+        const owner = {
+            principal: Principal.fromUint8Array(new Uint8Array([1, 2, 3, 2])).toText(),
+            origin: "https://publisher.test",
+        };
+        const fetcher = vi.fn<typeof fetch>(async (): Promise<Response> => {
+            const page = fetcher.mock.calls.length - 1;
+            return new Response(
+                JSON.stringify({
+                    version: 2,
+                    generation: "42",
+                    page,
+                    apps: [{ ...(page === 0 ? two.descriptor : one.descriptor), publisher: owner }],
+                    next: page === 0 ? "/openchat/pages/42/1.json" : null,
+                }),
+            );
+        });
+        deps.loadDirectory.mockImplementationOnce(() =>
+            loadLocalAppDirectory(directorySource, new AbortController().signal, fetcher),
+        );
+        expect(await workspace.refreshDirectory()).toBe(true);
+        expect(workspace.state.directory?.apps.map((app) => app.id)).toEqual(["two", "one"]);
+        expect(workspace.state.disabledAppIds).toEqual([]);
+    });
+
     it("disconnects only one app while retaining its card and revoking permission to send", async () => {
         const { workspace, deps } = await fixture();
         await workspace.connectApp("one");

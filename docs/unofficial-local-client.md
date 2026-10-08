@@ -589,15 +589,34 @@ sign-in may therefore be required after that test build; this does not delete th
 provider's passkey or the existing account. Device persistence and provider acceptance
 must be tested separately from the source-level restoration tests.
 
-The current local-test profile retains the original `oc.app` RP identifier, but uses
-the distinct `dev.openchatfork.localtest` package and local signing certificate.
-Restoring the original code does not itself establish that Google Password Manager
-accepts this package/certificate for that RP. Google's documented association
-requirements and a real provider test remain separate qualification checks; they
-are not evidence that missing association caused a previously successful PR APK's
-regression. The local-only association asset canister under
-`tools/android-passkey-association` tests hosting/response behavior, not public
-HTTPS reachability or Google provider authorization.
+The local-test APK uses the distinct `dev.openchatfork.localtest` package and local
+signing certificate. Its build now requires an explicit `--rp-id HOSTNAME` rather
+than inheriting `oc.app` or a personal hostname. Supply the approved Tailscale HTTPS
+hostname for local testing, without a scheme, port or path. The original onboarding,
+account-linking and native Credential Manager flow is unchanged; no special login
+page or browser authentication bridge is introduced.
+
+The [association helper](../tools/android-passkey-association/README.md) serves only
+public package/certificate metadata from the existing local asset canister through
+a DAL-only loopback adapter and separately configured HTTPS proxy. It exposes no
+replica API, chat or account data and requires no OpenChat canister change. Private
+Tailscale Serve access does not prove Google can retrieve the file; public exposure,
+Google association lookup and actual provider acceptance are separate checks. The
+helper does not enable Funnel or claim that a certification header is a verified
+signature. Comparison with the retained PR APK found that it used the operator's
+Tailscale RP, while the later local-test profile forced `oc.app`; the debug signing
+certificate was unchanged. The official `oc.app` association does not authorize
+this separate local-test package/signature combination. This establishes an RP
+configuration regression, not which exact provider check raised the earlier error.
+
+For a later IC deployment, the helper's explicit `mainnet-plan` mode only prepares
+a separate static asset project; it neither deploys nor spends cycles. After
+separate deployment approval, retain the actual mainnet canister and a stable
+certified `CANISTER_ID.icp.net` or `CANISTER_ID.icp0.io` hostname, never a raw host.
+Changing RP from Tailscale to that hostname requires re-linking a new passkey to the
+same existing account through the original flow. It does not migrate credentials;
+retain the old passkey until new creation, fresh sign-in and restoration are verified.
+Historical APK receipts below retain their original RP and qualification status.
 
 ## Connect apps and review local cards
 
@@ -644,6 +663,23 @@ not publisher honesty. Clients supporting this directory can discover compatible
 app additions/updates at that URL without rebuilding the APK.
 Changing the publisher origin or client-supported protocol still requires review.
 
+The standalone [app registry](../tools/app-registry/README.md) restores publisher
+registration without requiring the PR's modified OpenChat UserIndex. Its v2
+directory carries the authenticated publisher principal and approved origin for
+each app. Publishers submit pending revisions; a separate registry operator must
+approve the exact revision before it is listed. This operator review is not
+OpenChat governance or automatic proof that an app is safe. Existing v1 publisher
+directories keep their original same-origin checks.
+
+V2 clients load every bounded, generation-consistent registry page before applying
+removals or updates. A partial or invalid refresh leaves installed apps untouched.
+Registry source and publisher identity/origin are retained with installed setup;
+changing them requires explicit Connect, not silent migration. The original
+Apps/Connect UI, per-chat opt-in, private card renderer and encrypted delivery stay
+unchanged. The first registry-capable APK must be installed; later compatible app
+listings need no APK rebuild. The registry serves only public metadata and does not
+receive chats, proposals, private setup or keys.
+
 Opening Apps refreshes the public directory with no cookies or referrer. A busy
 processing operation defers the refresh. With saved cards retained, the list can
 refresh, but automatic recipe changes wait; each card keeps its frozen configuration.
@@ -676,6 +712,16 @@ or verified-download checks. Native WebGPU packaging remains Android-only; this
 does not enable desktop native/iOS or change the official client's platform policy.
 
 ### Local-test APK browser handoff
+
+An app with a connected `deliveryInbox` uses the newer asynchronous path instead:
+confirmation deposits ciphertext directly to its app-owned inbox after durable
+local write-ahead. It does not require an app window. The existing card's **Open app**
+control then opens the pinned app destination with opaque receipt IDs only; the
+app restores pending requests into its normal review UI. Receipt is still not Save.
+Retention belongs to the app, not OpenChat. See the
+[generic inbox contract](private-app-encrypted-delivery.md#optional-app-owned-durable-inbox).
+The browser-handoff instructions below apply to connections/cards without that
+optional contract; they are not required extra steps for inbox delivery.
 
 Confirming the inline card opens the normal receiving app directly through the
 local transport. No pairing-code entry, clipboard step or second Open/Load button
@@ -744,9 +790,12 @@ optional audio support is enabled. This does not add voice input to app proposal
 Connected app catalogs, the selected app/action, verified processors and
 enabled chats are remembered on the same device for the same signed-in account
 and configured backend. This includes private app-owned setup/context, such as
-user-defined labels. A separate IndexedDB store is used; nothing is synchronized
-to OpenChat or an app. This is not chat encryption or a promise of encryption at
-rest. Browser profiles/origins and the APK installation have separate storage.
+user-defined labels and a connected app's inbox write capability. New setup writes
+are encrypted in a separate IndexedDB store with a nonextractable device-local key;
+nothing is synchronized to OpenChat or an app. Valid older plaintext setup remains
+readable and is encrypted on the next successful write. This is not chat encryption
+and does not protect against malicious same-origin client code that can use the key.
+Browser profiles/origins and the APK installation have separate storage.
 
 Restore revalidates catalog declarations and processor hashes without executing
 app code, running a model or contacting an app. Chat opt-ins bind to the exact
@@ -834,8 +883,8 @@ Use a clean source snapshot and retain its complete root `Cargo.toml` and
 already installed, the repository's build entry point is:
 
 ```sh
-node scripts/build-unofficial-local-apk.mjs --target x86_64
-node scripts/build-unofficial-local-apk.mjs --target aarch64
+node scripts/build-unofficial-local-apk.mjs --target x86_64 --rp-id HOSTNAME
+node scripts/build-unofficial-local-apk.mjs --target aarch64 --rp-id HOSTNAME
 ```
 
 Each command builds frontend assets for the separate `dev.openchatfork.localtest`

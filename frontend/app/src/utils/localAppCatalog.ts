@@ -1,5 +1,10 @@
 import type { AiActionDefinition } from "@shared";
 import {
+    validateLocalAppInbox,
+    type LocalAppInboxEndpoint,
+    type LocalAppInboxGrant,
+} from "./localAppInbox";
+import {
     validateLocalAppDeliveryEncryption,
     type LocalAppDeliveryEncryption,
 } from "./localAppEncryption";
@@ -45,6 +50,7 @@ export interface LocalAppCatalogEntry {
     // Declared review context, not proof of the account/sheet that will ultimately save the action.
     readonly recipientLabel?: string;
     readonly deliveryEncryption?: LocalAppDeliveryEncryption;
+    readonly deliveryInbox?: LocalAppInboxEndpoint | LocalAppInboxGrant;
     readonly processor?: LocalProcessorArtifactDescriptor;
     readonly actions: readonly LocalAppAction[];
 }
@@ -217,7 +223,7 @@ export function parseLocalAppCatalog(json: string): LocalAppCatalog {
         exact(
             app,
             ["id", "revision", "name", "description", "destination", "actions"],
-            ["processor", "recipientLabel", "deliveryEncryption"],
+            ["processor", "recipientLabel", "deliveryEncryption", "deliveryInbox"],
         );
         text(app.id, 128);
         text(app.revision, 128);
@@ -228,6 +234,8 @@ export function parseLocalAppCatalog(json: string): LocalAppCatalog {
         if (app.recipientLabel !== undefined) text(app.recipientLabel, 512);
         if (app.deliveryEncryption !== undefined)
             app.deliveryEncryption = validateLocalAppDeliveryEncryption(app.deliveryEncryption);
+        if (app.deliveryInbox !== undefined)
+            app.deliveryInbox = validateLocalAppInbox(app.deliveryInbox);
         text(app.destination, 2048);
         let destination: URL;
         try {

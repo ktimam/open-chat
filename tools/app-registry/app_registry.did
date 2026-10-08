@@ -1,0 +1,43 @@
+type HttpRequest = record {
+  url : text;
+  method : text;
+  body : blob;
+  headers : vec record { text; text };
+  certificate_version : opt nat16;
+};
+type HttpResponse = record {
+  body : blob;
+  headers : vec record { text; text };
+  upgrade : opt bool;
+  status_code : nat16;
+};
+type Init = record { operator : principal; allow_loopback : bool };
+type Result = variant { Ok : ReviewPage; Err : text };
+type Result_1 = variant { Ok : Review; Err : text };
+type Result_2 = variant { Ok : nat64; Err : text };
+type Review = record {
+  id : text;
+  owner : principal;
+  proposal_revision : nat64;
+  descriptor_json : text;
+  published_revision : opt nat64;
+  commitment : text;
+};
+type ReviewPage = record { apps : vec Review; next : opt text };
+type Status = record {
+  operator : principal;
+  generation : nat64;
+  schema_version : nat32;
+  published_count : nat32;
+  allow_loopback : bool;
+  registry : principal;
+};
+service : (Init) -> {
+  get_my_apps : (opt text) -> (Result) query;
+  get_pending : (principal, text) -> (Result_1) query;
+  http_request : (HttpRequest) -> (HttpResponse) query;
+  publish_app : (principal, text, text) -> (Result_1);
+  register_app : (text) -> (Result_1);
+  registry_status : () -> (Status) query;
+  unpublish_app : (text, nat64) -> (Result_2);
+}

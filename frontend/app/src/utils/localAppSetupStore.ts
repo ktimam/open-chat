@@ -34,12 +34,23 @@ const HASH = /^[a-f0-9]{64}$/;
 const INITIAL_GENERATION = "0".repeat(64);
 // Shared across adapter instances in this page. An older queued write cannot overtake removal.
 const queues = new Map<string, Promise<void>>();
-type StoredSetup = Readonly<{
+type LegacyStoredSetup = Readonly<{
     version: 1;
     scope: LocalAppSetupScope;
     generation: string;
     snapshotJson?: string;
 }>;
+type EncryptedStoredSetup = Readonly<{
+    version: 2;
+    scope: LocalAppSetupScope;
+    generation: string;
+    sealed?: Readonly<{
+        key: CryptoKey;
+        iv: Uint8Array<ArrayBuffer>;
+        ciphertext: Uint8Array<ArrayBuffer>;
+    }>;
+}>;
+type StoredSetup = LegacyStoredSetup | EncryptedStoredSetup;
 
 function invalid(): never {
     throw new Error("Invalid stored private app setup");
@@ -394,25 +405,144 @@ function queued<T>(key: string, operation: () => Promise<T>): Promise<T> {
 
 function storedSetup(scope: LocalAppSetupScope, value: unknown): StoredSetup | undefined {
     if (value === undefined) return undefined;
-    exact(value, ["version", "scope", "generation"], ["snapshotJson"]);
+    exact(value, ["version", "scope", "generation"], ["snapshotJson", "sealed"]);
     const owner = scopeSnapshot(value.scope);
     if (
-        value.version !== VERSION ||
+        (value.version !== 1 && value.version !== 2) ||
         owner.account !== scope.account ||
         owner.backend !== scope.backend ||
         typeof value.generation !== "string" ||
-        !HASH.test(value.generation) ||
-        (Object.hasOwn(value, "snapshotJson") &&
-            (typeof value.snapshotJson !== "string" ||
-                new TextEncoder().encode(value.snapshotJson).byteLength > MAX_RECORD_BYTES))
+        !HASH.test(value.generation)
+    )
+        invalid();
+    if (value.version === 1) {
+        if (
+            Object.hasOwn(value, "sealed") ||
+            (Object.hasOwn(value, "snapshotJson") &&
+                (typeof value.snapshotJson !== "string" ||
+                    new TextEncoder().encode(value.snapshotJson).byteLength > MAX_RECORD_BYTES))
+        )
+            invalid();
+        return Object.freeze({
+            version: 1,
+            scope: owner,
+            generation: value.generation,
+            ...(typeof value.snapshotJson === "string" ? { snapshotJson: value.snapshotJson } : {}),
+        });
+    }
+    if (Object.hasOwn(value, "snapshotJson")) invalid();
+    if (!Object.hasOwn(value, "sealed")) {
+        return Object.freeze({ version: 2, scope: owner, generation: value.generation });
+    }
+    exact(value.sealed, ["key", "iv", "ciphertext"]);
+    const key = value.sealed.key as CryptoKey;
+    if (
+        !key ||
+        key.type !== "secret" ||
+        key.extractable ||
+        key.algorithm?.name !== "AES-GCM" ||
+        (key.algorithm as AesKeyAlgorithm).length !== 256 ||
+        key.usages?.length !== 2 ||
+        !key.usages.includes("encrypt") ||
+        !key.usages.includes("decrypt") ||
+        !setupBytes(value.sealed.iv) ||
+        value.sealed.iv.byteLength !== 12 ||
+        !setupBytes(value.sealed.ciphertext) ||
+        value.sealed.ciphertext.byteLength < 17 ||
+        value.sealed.ciphertext.byteLength > MAX_RECORD_BYTES + 16
     )
         invalid();
     return Object.freeze({
-        version: VERSION,
+        version: 2,
         scope: owner,
         generation: value.generation,
-        ...(typeof value.snapshotJson === "string" ? { snapshotJson: value.snapshotJson } : {}),
+        sealed: Object.freeze({
+            key,
+            iv: new Uint8Array(value.sealed.iv),
+            ciphertext: new Uint8Array(value.sealed.ciphertext),
+        }),
     });
+}
+
+function setupBytes(value: unknown): value is Uint8Array {
+    // Structured-cloned IndexedDB values can originate in another JS realm.
+    return (
+        ArrayBuffer.isView(value) && Object.prototype.toString.call(value) === "[object Uint8Array]"
+    );
+}
+
+function setupAdditionalData(
+    scope: LocalAppSetupScope,
+    generation: string,
+): Uint8Array<ArrayBuffer> {
+    return new TextEncoder().encode(
+        JSON.stringify([
+            "openchat/private-app/setup-storage/v2",
+            scope.backend,
+            scope.account,
+            generation,
+        ]),
+    );
+}
+
+async function sealSetup(
+    scope: LocalAppSetupScope,
+    generation: string,
+    serialized: string,
+): Promise<EncryptedStoredSetup> {
+    const plaintext = new TextEncoder().encode(serialized);
+    try {
+        // A fresh nonextractable key/IV per committed snapshot avoids nonce reuse and also
+        // lets Forget erase all key material atomically with its generation tombstone.
+        const key = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, [
+            "encrypt",
+            "decrypt",
+        ]);
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        const ciphertext = new Uint8Array(
+            await crypto.subtle.encrypt(
+                {
+                    name: "AES-GCM",
+                    iv,
+                    additionalData: setupAdditionalData(scope, generation),
+                    tagLength: 128,
+                },
+                key,
+                plaintext,
+            ),
+        );
+        return { version: 2, scope, generation, sealed: { key, iv, ciphertext } };
+    } catch {
+        throw storageError();
+    } finally {
+        plaintext.fill(0);
+    }
+}
+
+async function openSetup(saved: StoredSetup): Promise<string | undefined> {
+    if (saved.version === 1) return saved.snapshotJson;
+    if (!saved.sealed) return undefined;
+    let plaintext: Uint8Array | undefined;
+    try {
+        plaintext = new Uint8Array(
+            await crypto.subtle.decrypt(
+                {
+                    name: "AES-GCM",
+                    iv: saved.sealed.iv,
+                    additionalData: setupAdditionalData(saved.scope, saved.generation),
+                    tagLength: 128,
+                },
+                saved.sealed.key,
+                saved.sealed.ciphertext,
+            ),
+        );
+        if (plaintext.byteLength > MAX_RECORD_BYTES) invalid();
+        return new TextDecoder("utf-8", { fatal: true }).decode(plaintext);
+    } catch {
+        throw storageError();
+    } finally {
+        plaintext?.fill(0);
+    }
 }
 
 function newGeneration(): string {
@@ -571,9 +701,17 @@ export function createBrowserLocalAppSetupStorage(
                 );
                 const saved = storedSetup(owner, raw);
                 observed.set(key, saved?.generation ?? null);
-                return saved?.snapshotJson === undefined
-                    ? undefined
-                    : decodeLocalAppSetup(owner, saved.snapshotJson);
+                const serialized = saved ? await openSetup(saved) : undefined;
+                if (serialized === undefined) return undefined;
+                const snapshot = await decodeLocalAppSetup(owner, serialized);
+                // Another tab can Forget while WebCrypto or catalog verification is pending.
+                // Never restore the decrypted pre-Forget capability into a live connection.
+                const latest = await transaction(factory(), "readonly", (store, request) =>
+                    request(store.get(key)),
+                );
+                if (storedSetup(owner, latest)?.generation !== saved?.generation)
+                    throw storageError();
+                return snapshot;
             });
         },
         async write(scope, value) {
@@ -596,12 +734,7 @@ export function createBrowserLocalAppSetupStorage(
                 // An absent record and the first live record share the initial generation.
                 // Ordinary queued saves do not revoke each other; only Forget rotates it.
                 const generation = expected ?? INITIAL_GENERATION;
-                const saved: StoredSetup = {
-                    version: VERSION,
-                    scope: owner,
-                    generation,
-                    snapshotJson: serialized,
-                };
+                const saved = await sealSetup(owner, generation, serialized);
                 // The comparison and put are in ONE readwrite transaction. A concurrent Forget
                 // rotates the generation, so pre-Forget code/hash work cannot resurrect setup.
                 await transaction(factory(), "readwrite", (store, request) => {
@@ -624,7 +757,7 @@ export function createBrowserLocalAppSetupStorage(
                 const generation = newGeneration();
                 // Keep only account/backend identity and a random invalidation token. Physically
                 // deleting the key would let an old tab mistake absence for its original state.
-                const tombstone: StoredSetup = { version: VERSION, scope: owner, generation };
+                const tombstone: StoredSetup = { version: 2, scope: owner, generation };
                 await transaction(factory(), "readwrite", (store, request) =>
                     request(store.put(tombstone, key)),
                 );

@@ -4,10 +4,53 @@ import { createUnofficialLocalEnvironment } from "./unofficialLocalProfile.mjs";
 export const UNOFFICIAL_LOCAL_APK_ID = "dev.openchatfork.localtest";
 export const UNOFFICIAL_LOCAL_APK_LABEL = "OpenChat Fork · Local Test";
 
+/** Explicit operator input, not a URL or a claim of provider/domain authorization. */
+export function parseLocalApkRpId(value) {
+    if (typeof value !== "string" || value.length > 253 || value.trim() !== value)
+        throw new Error("Local APK requires explicit --rp-id <HTTPS hostname>");
+    const hostname = value.toLowerCase();
+    const labels = hostname.split(".");
+    if (
+        labels.length < 2 ||
+        labels.some((label) => !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)) ||
+        !/^[a-z]/.test(labels.at(-1)) ||
+        hostname === "oc.app" ||
+        hostname.endsWith(".oc.app") ||
+        hostname.endsWith(".localhost") ||
+        hostname.endsWith(".local") ||
+        ["icp0.io", "icp.net", "ic0.app"].includes(hostname) ||
+        /(?:^|\.)raw\.(?:icp0\.io|icp\.net|ic0\.app)$/.test(hostname)
+    ) {
+        throw new Error(
+            "Local APK RP must be an explicit non-loopback HTTPS hostname, not oc.app or an uncertified raw host",
+        );
+    }
+    return hostname;
+}
+
+/** Only the matching, explicit parent APK profile may continue through Tauri/Rollup. */
+export function localApkParentRpId(environment) {
+    const rpId = parseLocalApkRpId(environment.OC_UNOFFICIAL_APK_RP_ID);
+    if (
+        environment.OC_UNOFFICIAL_LOCAL_APK !== "true" ||
+        environment.OC_UNOFFICIAL_CLIENT !== "true" ||
+        environment.OC_ANDROID_APPLICATION_ID !== UNOFFICIAL_LOCAL_APK_ID ||
+        environment.OC_ANDROID_NATIVE_AUTH !== "android-credential-manager-v1" ||
+        !/^[a-f0-9]{32}$/.test(environment.OC_UNOFFICIAL_APK_BUILD_ID ?? "") ||
+        environment.OC_UNOFFICIAL_APK_RP_ID !== rpId ||
+        environment.OC_ANDROID_RP_ID !== rpId ||
+        environment.OC_WEBAUTHN_ORIGIN !== rpId
+    ) {
+        throw new Error("Local APK child requires a matching explicit parent RP profile");
+    }
+    return rpId;
+}
+
 export function createUnofficialLocalApkEnvironment(
     canisters,
-    { inherited = {}, buildId, appDirectoryUrl } = {},
+    { inherited = {}, buildId, appDirectoryUrl, rpId: suppliedRpId } = {},
 ) {
+    const rpId = parseLocalApkRpId(suppliedRpId);
     const id = buildId ?? randomBytes(16).toString("hex");
     if (typeof id !== "string" || !/^[a-f0-9]{32}$/.test(id))
         throw new Error("Invalid local APK build identifier");
@@ -22,16 +65,16 @@ export function createUnofficialLocalApkEnvironment(
         OC_BUILD_ENV: "development",
         OC_UNOFFICIAL_LOCAL_APK: "true",
         OC_UNOFFICIAL_APK_BUILD_ID: id,
+        OC_UNOFFICIAL_APK_RP_ID: rpId,
         OC_APP_TYPE: "android",
         OC_MOBILE_LAYOUT: "v2",
         OC_APP_STORE: "false",
         OC_BASE_ORIGIN: "http://tauri.localhost",
         OC_II_DERIVATION_ORIGIN: "",
-        // Restore OpenChat's original native RP identifier, not a claim that this
-        // fork's package/signature is authorized by oc.app Digital Asset Links.
-        // The selected provider must support the app's own package/signature trust.
-        OC_WEBAUTHN_ORIGIN: "oc.app",
-        OC_ANDROID_RP_ID: "oc.app",
+        // The operator must separately publish this package/signer's association
+        // at the selected host and qualify it with the actual credential provider.
+        OC_WEBAUTHN_ORIGIN: rpId,
+        OC_ANDROID_RP_ID: rpId,
         OC_ACCOUNT_LINKING_CODES_ENABLED: "true",
         OC_ANDROID_NATIVE_AUTH: "android-credential-manager-v1",
         OC_ANDROID_APPLICATION_ID: UNOFFICIAL_LOCAL_APK_ID,
@@ -50,7 +93,7 @@ export function createUnofficialLocalApkEnvironment(
     });
 }
 
-export function localApkBundleMarker(identityCanister, identityTargetHex) {
+export function localApkBundleMarker(identityCanister, identityTargetHex, rpId) {
     if (
         typeof identityCanister !== "string" ||
         !/^[a-z0-9]+(?:-[a-z0-9]+)+$/.test(identityCanister) ||
@@ -65,7 +108,7 @@ export function localApkBundleMarker(identityCanister, identityTargetHex) {
         label: UNOFFICIAL_LOCAL_APK_LABEL,
         ota: "none",
         nativeAuthentication: "android-credential-manager-v1",
-        androidRpId: "oc.app",
+        androidRpId: parseLocalApkRpId(rpId),
         identityCanister,
         identityTargetHex,
     });

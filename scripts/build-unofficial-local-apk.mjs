@@ -6,6 +6,8 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
     createUnofficialLocalApkEnvironment,
+    localApkParentRpId,
+    parseLocalApkRpId,
     UNOFFICIAL_LOCAL_APK_ID,
 } from "../frontend/unofficialLocalApkProfile.mjs";
 import { parseAppDirectoryUrl } from "../frontend/unofficialLocalProfile.mjs";
@@ -19,7 +21,9 @@ export function parseLocalApkArgs(args) {
         seen.add(flag);
         if (flag === "--help" || flag === "-h") options.help = true;
         else if (flag === "--frontend-only") options.frontendOnly = true;
-        else if (flag === "--app-directory") {
+        else if (flag === "--rp-id") {
+            options.rpId = parseLocalApkRpId(args[++i]);
+        } else if (flag === "--app-directory") {
             const value = args[++i];
             if (!value) throw new Error("--app-directory requires a URL");
             options.appDirectoryUrl = parseAppDirectoryUrl(value);
@@ -30,15 +34,23 @@ export function parseLocalApkArgs(args) {
             options.target = target;
         } else
             throw new Error(
-                "Use --target aarch64|x86_64, --frontend-only, or --app-directory <public URL>",
+                "Use --rp-id <HTTPS hostname>, --target aarch64|x86_64, --frontend-only, or --app-directory <public URL>",
             );
     }
     return options;
 }
 
 export function localApkBuildPlan(repository, canisters, options, inherited = {}) {
+    const parentRpId =
+        options.frontendOnly && inherited.OC_UNOFFICIAL_LOCAL_APK === "true"
+            ? localApkParentRpId(inherited)
+            : undefined;
+    const rpId = options.rpId === undefined ? parentRpId : parseLocalApkRpId(options.rpId);
+    if (parentRpId !== undefined && rpId !== parentRpId)
+        throw new Error("Local APK frontend RP differs from its explicit parent profile");
     const env = createUnofficialLocalApkEnvironment(canisters, {
         inherited,
+        rpId,
         // The Tauri child retains only this explicit parent setting, like its build ID.
         appDirectoryUrl:
             options.appDirectoryUrl ??
@@ -83,7 +95,7 @@ export function main(args = process.argv.slice(2)) {
     const options = parseLocalApkArgs(args);
     if (options.help) {
         console.log(
-            "Usage: node scripts/build-unofficial-local-apk.mjs [--target aarch64|x86_64] [--app-directory <public URL>]",
+            "Usage: node scripts/build-unofficial-local-apk.mjs --rp-id <HTTPS hostname> [--target aarch64|x86_64] [--app-directory <public URL>]",
         );
         console.log(
             "Builds a separate local APK; does not install or access a device/account. Rust dependencies must already be cached.",
@@ -99,7 +111,7 @@ export function main(args = process.argv.slice(2)) {
         `Local test APK: ${UNOFFICIAL_LOCAL_APK_ID}; original native Credential Manager sign-in; OTA disabled; old APK/data untouched.`,
     );
     console.log(
-        "Native RP is oc.app. This separate package/signature has no asserted Google Password Manager/Digital Asset Links authorization; provider-specific app trust must be qualified separately.",
+        `Native RP is ${plan.options.env.OC_ANDROID_RP_ID}. This separate package/signature has no asserted Google Password Manager/Digital Asset Links authorization; provider-specific app trust must be qualified separately.`,
     );
     const result = spawnSync(plan.command, [...plan.args], plan.options);
     if (result.error) throw new Error("Local APK build process could not start");
@@ -113,7 +125,9 @@ export function main(args = process.argv.slice(2)) {
         if (
             marker.applicationId !== UNOFFICIAL_LOCAL_APK_ID ||
             marker.nativeAuthentication !== "android-credential-manager-v1" ||
-            marker.androidRpId !== "oc.app" ||
+            marker.androidRpId !== plan.options.env.OC_ANDROID_RP_ID ||
+            readFileSync(path.join(output, "android-rp-id"), "utf8") !==
+                plan.options.env.OC_ANDROID_RP_ID ||
             ota.strategy !== "none" ||
             existsSync(path.join(output, "local-browser-auth.html")) ||
             existsSync(path.join(output, "local-browser-auth.js")) ||

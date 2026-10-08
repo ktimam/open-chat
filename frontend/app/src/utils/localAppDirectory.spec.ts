@@ -11,6 +11,51 @@ import {
 } from "./localAppDirectory";
 import { directoryFixture, directorySource } from "./localAppDirectory.testFixtures";
 import { parseLocalAppCatalog } from "./localAppCatalog";
+import { localAppBase64Url } from "./localAppEncryption";
+
+describe("public app inbox destination binding", () => {
+    const endpoint = {
+        version: 1,
+        kind: "ic-canister",
+        host: "https://gateway.example",
+        canisterId: "rrkah-fqaaa-aaaaa-aaaaq-cai",
+    };
+    const grant = {
+        ...endpoint,
+        inboxId: "a".repeat(64),
+        writeCapability: localAppBase64Url(new Uint8Array(32).fill(9)),
+        expiresAtMs: Date.now() + 86_400_000,
+    };
+    it("public discovery accepts only endpoint metadata, never a bearer capability", async () => {
+        const fixture = await directoryFixture();
+        const value = JSON.parse(fixture.catalogJson);
+        value.apps[0].deliveryInbox = endpoint;
+        expect(
+            publicLocalAppCatalog(JSON.stringify(value), fixture.descriptor).apps[0].deliveryInbox,
+        ).toEqual(endpoint);
+        value.apps[0].deliveryInbox = grant;
+        expect(() => publicLocalAppCatalog(JSON.stringify(value), fixture.descriptor)).toThrow();
+    });
+    it("Connect pins advertised host and canister and rejects silently adding an inbox", async () => {
+        const fixture = await directoryFixture();
+        const value = JSON.parse(fixture.catalogJson);
+        value.apps[0].deliveryInbox = endpoint;
+        const advertised = parseLocalAppCatalog(JSON.stringify(value));
+        value.apps[0].deliveryInbox = grant;
+        expect(bindConnectedLocalApp(JSON.stringify(value), advertised).deliveryInbox).toEqual(
+            grant,
+        );
+        expect(() => bindConnectedLocalApp(JSON.stringify(value), fixture.pkg.catalog)).toThrow();
+        for (const changed of [
+            { ...grant, host: "https://other.example" },
+            { ...grant, canisterId: "ryjl3-tyaaa-aaaaa-aaaba-cai" },
+            undefined,
+        ]) {
+            value.apps[0].deliveryInbox = changed;
+            expect(() => bindConnectedLocalApp(JSON.stringify(value), advertised)).toThrow();
+        }
+    });
+});
 
 type DirectoryJson = {
     version: number;

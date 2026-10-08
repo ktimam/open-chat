@@ -490,6 +490,82 @@ describe("isolated IndexedDB setup adapter", () => {
         expect(db.open).toHaveBeenCalledWith("openchat-private-app-setup", 1);
         expect(db.closes.every((close) => close.mock.calls.length === 1)).toBe(true);
     });
+    it("stores only ciphertext and a nonextractable key, including private connection setup", async () => {
+        const db = fakeIndexedDb();
+        const value = await fixture(true);
+        const storage = createBrowserLocalAppSetupStorage({ indexedDB: () => db.factory });
+        await storage.write(scope, value);
+        const record = db.records.get(key()) as {
+            version: number;
+            sealed: { key: CryptoKey; iv: Uint8Array; ciphertext: Uint8Array };
+        };
+        expect(record.version).toBe(2);
+        expect(record).not.toHaveProperty("snapshotJson");
+        expect(JSON.stringify(record)).not.toContain("PRIVATE_IMPORTED_SETUP_ONLY");
+        expect(JSON.stringify(record)).not.toContain("synthetic imported artifact");
+        expect(record.sealed.key.extractable).toBe(false);
+        await expect(crypto.subtle.exportKey("raw", record.sealed.key)).rejects.toThrow();
+        // IndexedDB structured-clones CryptoKey and typed arrays, not JSON representations.
+        db.records.set(key(), structuredClone(record));
+        expect(
+            await createBrowserLocalAppSetupStorage({ indexedDB: () => db.factory }).read(scope),
+        ).toEqual(value);
+    });
+    it("reads legacy setup but upgrades only on a successful new write", async () => {
+        const db = fakeIndexedDb();
+        const value = await fixture();
+        const legacy = {
+            version: 1,
+            scope,
+            generation: "0".repeat(64),
+            snapshotJson: await encodeLocalAppSetup(scope, value),
+        };
+        db.records.set(key(), legacy);
+        const storage = createBrowserLocalAppSetupStorage({ indexedDB: () => db.factory });
+        expect(await storage.read(scope)).toEqual(value);
+        expect(db.records.get(key())).toBe(legacy);
+        await storage.write(scope, value);
+        expect(db.records.get(key())).toMatchObject({ version: 2 });
+        expect(db.records.get(key())).not.toHaveProperty("snapshotJson");
+        expect(await storage.read(scope)).toEqual(value);
+    });
+    it.each(["ciphertext", "iv", "generation", "scope"])(
+        "rejects encrypted setup with tampered %s without deleting it",
+        async (field) => {
+            const db = fakeIndexedDb();
+            const storage = createBrowserLocalAppSetupStorage({ indexedDB: () => db.factory });
+            await storage.write(scope, await fixture());
+            const record = structuredClone(db.records.get(key())) as {
+                generation: string;
+                scope: LocalAppSetupScope;
+                sealed: { iv: Uint8Array; ciphertext: Uint8Array };
+            };
+            let requestedScope = scope;
+            if (field === "ciphertext" || field === "iv") record.sealed[field][0] ^= 1;
+            if (field === "generation") record.generation = "f".repeat(64);
+            if (field === "scope") {
+                requestedScope = { ...scope, account: "another-account" };
+                record.scope = requestedScope;
+            }
+            db.records.set(key(requestedScope), record);
+            await expect(storage.read(requestedScope)).rejects.toThrow();
+            expect(db.records.get(key(requestedScope))).toBe(record);
+        },
+    );
+    it("forgets ciphertext and key material and uses a fresh key after reconnecting", async () => {
+        const db = fakeIndexedDb();
+        const storage = createBrowserLocalAppSetupStorage({ indexedDB: () => db.factory });
+        const value = await fixture();
+        await storage.write(scope, value);
+        const before = db.records.get(key()) as { sealed: { key: CryptoKey } };
+        await storage.remove(scope);
+        expectTombstone(db);
+        expect(db.records.get(key())).not.toHaveProperty("sealed");
+        await storage.write(scope, value);
+        const after = db.records.get(key()) as { sealed: { key: CryptoKey } };
+        expect(after.sealed.key).not.toBe(before.sealed.key);
+        expect(await storage.read(scope)).toEqual(value);
+    });
     it("does not report persistence success before transaction completion", async () => {
         const db = fakeIndexedDb();
         const storage = createBrowserLocalAppSetupStorage({ indexedDB: () => db.factory });
@@ -703,6 +779,37 @@ describe("isolated IndexedDB setup adapter", () => {
         expect(await firstTab.read(scope)).toBeUndefined();
         await firstTab.write(scope, value);
         expect(await otherTab.read(scope)).toEqual(value);
+    });
+    it("does not restore a capability when another tab Forgets during decryption", async () => {
+        const db = fakeIndexedDb();
+        const readingTab = createBrowserLocalAppSetupStorage({ indexedDB: () => db.factory });
+        vi.resetModules();
+        const otherModule = await import("./localAppSetupStore");
+        const otherTab = otherModule.createBrowserLocalAppSetupStorage({
+            indexedDB: () => db.factory,
+        });
+        await readingTab.write(scope, await fixture());
+        let release!: () => void;
+        let entered!: () => void;
+        const paused = new Promise<void>((resolve) => {
+            entered = resolve;
+        });
+        const decrypt = crypto.subtle.decrypt.bind(crypto.subtle);
+        vi.spyOn(crypto.subtle, "decrypt").mockImplementationOnce(async (algorithm, key, bytes) => {
+            entered();
+            await new Promise<void>((resolve) => {
+                release = resolve;
+            });
+            return decrypt(algorithm, key, bytes);
+        });
+        const reading = readingTab.read(scope);
+        const rejected = expect(reading).rejects.toThrow("on this device");
+        await paused;
+        await otherTab.remove(scope);
+        release();
+        await rejected;
+        expectTombstone(db);
+        expect(await readingTab.read(scope)).toBeUndefined();
     });
     it("retains the new generation through reimport so an old tab cannot overwrite it", async () => {
         const db = fakeIndexedDb();

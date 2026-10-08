@@ -73,8 +73,11 @@ its details. The connected-apps view shares these cards and offers **Discover ap
 No separate management page, manual catalog upload or floating launcher is required.
 Use **View private card** at the source message to reopen its retained card; this
 does not restore consent or send anything. There is no separate saved-card manager.
-After confirmation the relay shows the receiving app's normal UI directly, not a
-JSON/transport page or another Open button. See the
+Apps with a connected `deliveryInbox` receive ciphertext durably without an open
+app window; the existing card's **Open app** control then opens the normal app UI
+using only opaque receipt IDs. Other connected apps retain the encrypted relay,
+which shows their normal UI directly rather than a JSON/transport page.
+Neither receipt nor opening the app saves its entries. See the
 [connection and card guide](unofficial-local-client.md#connect-apps-and-review-local-cards).
 
 The output must already exist, be empty, and not traverse a symbolic link/junction. No

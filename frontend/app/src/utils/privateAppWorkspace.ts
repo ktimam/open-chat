@@ -50,6 +50,8 @@ import {
     localAppDeliveryStatus,
 } from "./localAppRelayDelivery";
 import { nativeAppDelivery, nativeDeliveryAllowed } from "./nativeAppDelivery";
+import { isLocalAppInboxGrant, localAppInboxTarget, localAppInboxEndpoint } from "./localAppInbox";
+import { deliverLocalAppToInbox, type LocalAppInboxDeposit } from "./localAppInboxDelivery";
 import {
     createBrowserLocalAppSetupStorage,
     validateLocalAppSetupSnapshot,
@@ -124,6 +126,7 @@ type Dependencies = {
     verifyProcessor: typeof verifyImportedLocalProcessor;
     deliver: LocalDraftDelivery;
     nativeDeliver?: LocalDraftDelivery;
+    inboxDeposit?: LocalAppInboxDeposit;
     cancelDelivery: () => void;
     deliverySaved: (importId: string) => boolean;
     setupStorage?: LocalAppSetupStorage;
@@ -323,6 +326,34 @@ export class PrivateAppWorkspace {
     ) {
         this.#connectAppSetup = deps.connectAppSetup;
         this.#drafts = new LocalAppDraftStore((request, signal) => {
+            if (request.deliveryInbox) {
+                const draft = this.#state.draft;
+                const grant = draft && this.#cards.get(draft.id)?.app?.deliveryInbox;
+                // An inbox is an explicitly connected app destination, never a relay fallback.
+                // Without durable write-ahead storage no upload is permitted.
+                if (
+                    !draft ||
+                    !grant ||
+                    !isLocalAppInboxGrant(grant) ||
+                    !this.deps.draftStorage ||
+                    (this.#nativeDelivery && !nativeDeliveryAllowed(this.#deliveryClient))
+                )
+                    return Promise.resolve({ kind: "uncertain" });
+                const epoch = this.#epoch;
+                return deliverLocalAppToInbox(request, signal, {
+                    grant,
+                    saved: this.#drafts.get(draft.id)?.inboxDelivery,
+                    deposit: deps.inboxDeposit,
+                    persist: async (value) => {
+                        signal.throwIfAborted();
+                        if (epoch !== this.#epoch) throw new Error("App delivery cancelled");
+                        this.#drafts.setInboxDelivery(draft.id, value);
+                        await this.#persistDraft();
+                        signal.throwIfAborted();
+                        if (epoch !== this.#epoch) throw new Error("App delivery cancelled");
+                    },
+                });
+            }
             // Write-ahead: a restart must know this exact request MAY have been sent, with its
             // original import ID. A failed save is not permission to send an unrecorded request.
             const beforeDelivery = this.deps.draftStorage ? this.#persistDraft() : undefined;
@@ -590,11 +621,17 @@ export class PrivateAppWorkspace {
                 const configuredAction = configuredApp?.actions.find(
                     (action) => action.definition.name === saved.draft.target.actionId,
                 );
+                const configuredInbox =
+                    configuredApp?.deliveryInbox &&
+                    isLocalAppInboxGrant(configuredApp.deliveryInbox)
+                        ? localAppInboxTarget(configuredApp.deliveryInbox)
+                        : undefined;
                 const targetMatches =
                     !!configuredApp &&
                     !!action &&
                     configuredApp.destination === saved.draft.target.destination &&
                     configuredApp.revision === saved.draft.target.appRevision &&
+                    sameCardConfiguration(configuredInbox, saved.draft.target.deliveryInbox) &&
                     JSON.stringify(
                         snapshotLocalDraftJson(configuredApp.deliveryEncryption ?? null),
                     ) ===
@@ -985,6 +1022,17 @@ export class PrivateAppWorkspace {
                 }
                 if (pkg.catalog.apps[0].destination !== app.destination) {
                     updates[app.id] = "Connect to approve the changed destination.";
+                    continue;
+                }
+                if (
+                    !sameCardConfiguration(
+                        pkg.catalog.apps[0].deliveryInbox
+                            ? localAppInboxEndpoint(pkg.catalog.apps[0].deliveryInbox!)
+                            : undefined,
+                        app.deliveryInbox ? localAppInboxEndpoint(app.deliveryInbox) : undefined,
+                    )
+                ) {
+                    updates[app.id] = "Connect to approve the changed app inbox.";
                     continue;
                 }
                 this.#installApp(
@@ -1559,6 +1607,10 @@ export class PrivateAppWorkspace {
                 action,
                 JSON.stringify(projectLocalAppPayload(action, result.candidates), null, 2),
             );
+            const inboxTarget = app.deliveryInbox
+                ? await localAppInboxTarget(app.deliveryInbox)
+                : undefined;
+            if (!stillCurrent()) return "retryable";
             const draft = this.#drafts.create({
                 target: {
                     appId: app.id,
@@ -1569,6 +1621,7 @@ export class PrivateAppWorkspace {
                     ...(app.deliveryEncryption
                         ? { deliveryEncryption: app.deliveryEncryption }
                         : {}),
+                    ...(inboxTarget ? { deliveryInbox: inboxTarget } : {}),
                 },
                 schema: action.draftSchema,
                 payload: JSON.parse(choiceSession.editorJson),
@@ -1731,6 +1784,19 @@ export class PrivateAppWorkspace {
 
     review(): boolean {
         const draft = this.#state.draft;
+        if (draft?.target.deliveryInbox) {
+            const configured = this.#state.catalog?.apps.find(
+                (app) => app.id === draft.target.appId,
+            )?.deliveryInbox;
+            if (
+                !configured ||
+                !isLocalAppInboxGrant(configured) ||
+                !sameCardConfiguration(localAppInboxTarget(configured), draft.target.deliveryInbox)
+            ) {
+                this.#set({ message: CARD_CONNECTION_REVIEW_BLOCKED });
+                return false;
+            }
+        }
         if (draft && !this.#restoredTargetMatches) {
             this.#set({ message: CARD_CONNECTION_REVIEW_BLOCKED });
             return false;
@@ -1804,6 +1870,19 @@ export class PrivateAppWorkspace {
         expectedStatus: "reviewed" | "uncertain" | "delivered",
     ): Promise<void> {
         const draft = this.#state.draft;
+        if (draft?.target.deliveryInbox) {
+            const configured = this.#state.catalog?.apps.find(
+                (app) => app.id === draft.target.appId,
+            )?.deliveryInbox;
+            if (
+                !configured ||
+                !isLocalAppInboxGrant(configured) ||
+                !sameCardConfiguration(localAppInboxTarget(configured), draft.target.deliveryInbox)
+            ) {
+                this.#set({ message: CARD_CONNECTION_REVIEW_BLOCKED });
+                return;
+            }
+        }
         if (draft && !this.#restoredTargetMatches) {
             this.#set({ message: CARD_CONNECTION_REVIEW_BLOCKED });
             return;
@@ -1847,10 +1926,16 @@ export class PrivateAppWorkspace {
             draft: current,
             message:
                 current?.status === "delivered"
-                    ? current.approval &&
-                      this.deps.deliverySaved(current.approval.request.idempotencyKey)
-                        ? "The app reports that this request was saved."
-                        : "The app received the handoff. Review and save it in the app; delivery is not proof that it was saved."
+                    ? current.inboxDelivery?.receipt
+                        ? current.inboxDelivery.receipt.status === "Saved"
+                            ? "The app reports that this request was saved."
+                            : current.inboxDelivery.receipt.status === "Dismissed"
+                              ? "This request was dismissed in the app. It was not queued again."
+                              : "The encrypted request is stored in the app inbox, pending your review. Open the app to review and save it."
+                        : current.approval &&
+                            this.deps.deliverySaved(current.approval.request.idempotencyKey)
+                          ? "The app reports that this request was saved."
+                          : "The app received the handoff. Review and save it in the app; delivery is not proof that it was saved."
                     : "The handoff outcome is unknown. Check the receiving app first. An explicit retry keeps this exact reviewed request and import ID; no automatic retry will occur.",
         });
         this.#saveDraft();
