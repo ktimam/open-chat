@@ -305,6 +305,51 @@ describe("main AI Apps directory using the existing PR card and detail component
         expect(button(target, "aiApps.reconnect").disabled).toBe(true);
         expect(button(target, "aiApps.disconnect").disabled).toBe(false);
     });
+    it.each([false, true])(
+        "recovers Reconnect after a failed directory refresh without removing retained cards (mobile=%s)",
+        async (mobile) => {
+            const card = { id: "saved-uncertain-card", status: "uncertain" };
+            update({
+                directory: undefined,
+                catalog: fixture.pkg.catalog,
+                cards: [card] as unknown as PrivateAppWorkspaceState["cards"],
+                directoryStatus: "The app directory could not be verified.",
+            });
+            const target = render(mobile);
+            await settle();
+            select(target);
+            expect(button(target, "Refresh apps").disabled).toBe(false);
+            expect(button(target, "aiApps.reconnect").disabled).toBe(true);
+            expect(target.textContent?.replace(/\s+/g, " ")).toContain(
+                "Check your connection and use Refresh apps to retry",
+            );
+            calls.refreshDirectory.mockImplementationOnce(async () => {
+                update({ directoryLoading: true });
+                await Promise.resolve();
+                update({
+                    directory: fixture.directory,
+                    directoryLoading: false,
+                    directoryStatus: "",
+                });
+                return true;
+            });
+            button(target, "Refresh apps").click();
+            flushSync();
+            expect(button(target, "Refresh apps").disabled).toBe(true);
+            expect(button(target, "aiApps.reconnect").disabled).toBe(true);
+            await settle();
+            expect(button(target, "Refresh apps").disabled).toBe(false);
+            expect(button(target, "aiApps.reconnect").disabled).toBe(false);
+            expect(get(state).cards).toEqual([card]);
+            expect(calls.connectApp).not.toHaveBeenCalled();
+            expect(calls.discard).not.toHaveBeenCalled();
+            expect(calls.deliver).not.toHaveBeenCalled();
+            button(target, "aiApps.reconnect").click();
+            await settle();
+            expect(calls.connectApp).toHaveBeenCalledExactlyOnceWith("sample");
+            expect(get(state).cards).toEqual([card]);
+        },
+    );
     it("filters locally and lets My Apps discover the main app directory", () => {
         const target = render(false, { connectedOnly: true });
         expect(target.textContent).toContain("No connected apps yet");

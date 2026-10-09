@@ -1,4 +1,9 @@
 import { localAppSessionNonce } from "./localAppHandoff";
+import {
+    parseLocalAppSetupContext,
+    parseLocalAppScopedSetupResult,
+    type LocalAppSetupContext,
+} from "./localAppScopedSetup";
 
 export const APP_SETUP_TIMEOUT_MS = 10 * 60 * 1000;
 export const APP_SETUP_MAX_BYTES = 1024 * 1024;
@@ -51,8 +56,15 @@ export function openAppSetupPopup(
     appId: string,
     setupUrl: string,
     signal: AbortSignal,
+    setupContext?: LocalAppSetupContext,
 ): Promise<string> {
-    return connectAppSetupWindow(appId, setupUrl, signal, () => window.open(setupUrl, "_blank"));
+    return connectAppSetupWindow(
+        appId,
+        setupUrl,
+        signal,
+        () => window.open(setupUrl, "_blank"),
+        setupContext,
+    );
 }
 
 /** Same consent protocol, in the app's normal full-page UI. The host's CSP pins frame origins. */
@@ -61,12 +73,19 @@ export function openAppSetupFrame(
     setupUrl: string,
     signal: AbortSignal,
     frame: HTMLIFrameElement,
+    setupContext?: LocalAppSetupContext,
 ): Promise<string> {
-    return connectAppSetupWindow(appId, setupUrl, signal, () => {
-        frame.src = setupUrl;
-        frame.hidden = false;
-        return frame.contentWindow;
-    });
+    return connectAppSetupWindow(
+        appId,
+        setupUrl,
+        signal,
+        () => {
+            frame.src = setupUrl;
+            frame.hidden = false;
+            return frame.contentWindow;
+        },
+        setupContext,
+    );
 }
 
 function connectAppSetupWindow(
@@ -74,8 +93,11 @@ function connectAppSetupWindow(
     setupUrl: string,
     signal: AbortSignal,
     open: () => Window | null,
+    setupContext?: LocalAppSetupContext,
 ): Promise<string> {
     return new Promise((resolve, reject) => {
+        const context =
+            setupContext === undefined ? undefined : parseLocalAppSetupContext(setupContext, appId);
         if (signal.aborted || !validSetupTarget(appId, setupUrl)) {
             reject(new Error("App connection is unavailable or cancelled"));
             return;
@@ -112,13 +134,18 @@ function connectAppSetupWindow(
                     "catalogJson",
                 ]) ||
                 value.type !== "oc:app-setup:result" ||
-                value.version !== 1 ||
+                value.version !== (context ? 2 : 1) ||
                 value.connectionId !== connectionId ||
                 value.appId !== appId ||
                 !boundedSetupCatalog(value.catalogJson)
             )
                 return;
-            finish(value.catalogJson);
+            try {
+                if (context) parseLocalAppScopedSetupResult(value.catalogJson, appId, context);
+                finish(value.catalogJson);
+            } catch {
+                finish();
+            }
         };
         const hello = () => {
             if (done) return;
@@ -128,7 +155,13 @@ function connectAppSetupWindow(
                     return;
                 }
                 popup.postMessage(
-                    { type: "oc:app-setup:connect", version: 1, connectionId, appId },
+                    {
+                        type: "oc:app-setup:connect",
+                        version: context ? 2 : 1,
+                        connectionId,
+                        appId,
+                        ...(context ? { setupContext: context } : {}),
+                    },
                     origin,
                 );
             } catch {

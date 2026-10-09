@@ -2,7 +2,8 @@
     import { currentUserIdStore, type ChatIdentifier } from "@client";
     import { chatIdentifierToString } from "@shared";
     import { navigateToMainApps } from "../utils/mainAppsNavigation";
-    import { privateAppWorkspaceState } from "../utils/privateAppWorkspace";
+    import { privateAppWorkspace, privateAppWorkspaceState } from "../utils/privateAppWorkspace";
+    import { resolveLocalAppForChat } from "../utils/localAppChatRoutes";
     import { localAppChatConfiguration, localAppChatRevision } from "../utils/localAppChatState";
     let { chatId }: { chatId: ChatIdentifier } = $props();
     const chatKey = $derived(chatIdentifierToString(chatId));
@@ -44,6 +45,23 @@
             /><span>Suggest {app.name} actions in this chat</span></label
         >
         <p class="small">{app.description}</p>
+        {#if app.setupScopes}
+            <button
+                type="button"
+                disabled={$privateAppWorkspaceState.setupLoading ||
+                    $privateAppWorkspaceState.busy ||
+                    !enabled(app.id)}
+                onclick={() => privateAppWorkspace.configureChat(app.id, chatKey)}
+                >Open setup</button
+            >
+            {#if !enabled(app.id)}
+                <p class="small">Enable this app in the chat, then open setup.</p>
+            {:else if !resolveLocalAppForChat($privateAppWorkspaceState.catalog, $privateAppWorkspaceState.connections, $privateAppWorkspaceState.chatSetups, app.id, chatKey)}
+                <p class="small">
+                    Set up this chat’s destination in the app before proposing an action.
+                </p>
+            {/if}
+        {/if}
     {/each}
     <p class="small">
         Off by default. Enabled chats are remembered for this account on this device, not shared

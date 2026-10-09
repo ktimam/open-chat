@@ -187,6 +187,33 @@ describe("normal app connection frame", () => {
         expect(f.frame.hasAttribute("src")).toBe(false);
         expect(f.receiver.postMessage).not.toHaveBeenCalled();
     });
+    it("forwards a scoped request without URL metadata and returns its exact bound reply", async () => {
+        const f = fixture();
+        const accountId = "A".repeat(43),
+            handle = "B".repeat(42) + "A";
+        const setupContext = { version: 2, scope: "chat", accountId, handle };
+        f.host("setup-target", {
+            appId: "sample",
+            setupUrl: "https://app.example/connect",
+            setupContext,
+        });
+        expect(f.frame.src).toBe("https://app.example/connect");
+        expect(f.receiver.postMessage.mock.calls[0][0]).toMatchObject({ version: 2, setupContext });
+        const catalogJson = JSON.stringify({ version: 1, apps: [{ id: "sample" }] });
+        const result = JSON.stringify({
+            version: 2,
+            scope: "chat",
+            appId: "sample",
+            accountId,
+            catalogJson,
+            routes: [{ handle, catalogJson }],
+        });
+        f.reply({ version: 2, catalogJson: result });
+        await Promise.resolve();
+        expect(f.results()).toEqual([
+            { type: "setup-result", version: 1, sessionNonce: nonce, catalogJson: result },
+        ]);
+    });
     it.each(["cancel", "pagehide", "decode", "timeout", "stop"])(
         "has no automatic share or retry after %s",
         async (reason) => {

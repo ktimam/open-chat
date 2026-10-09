@@ -47,6 +47,8 @@ export interface LocalAppCatalogEntry {
     readonly name: string;
     readonly description: string;
     readonly destination: string;
+    /** Generic opt-in to separate account connection and opaque per-chat setup. */
+    readonly setupScopes?: readonly ["account", "chat"];
     // Declared review context, not proof of the account/sheet that will ultimately save the action.
     readonly recipientLabel?: string;
     readonly deliveryEncryption?: LocalAppDeliveryEncryption;
@@ -223,8 +225,16 @@ export function parseLocalAppCatalog(json: string): LocalAppCatalog {
         exact(
             app,
             ["id", "revision", "name", "description", "destination", "actions"],
-            ["processor", "recipientLabel", "deliveryEncryption", "deliveryInbox"],
+            ["processor", "recipientLabel", "deliveryEncryption", "deliveryInbox", "setupScopes"],
         );
+        if (
+            app.setupScopes !== undefined &&
+            (!Array.isArray(app.setupScopes) ||
+                app.setupScopes.length !== 2 ||
+                app.setupScopes[0] !== "account" ||
+                app.setupScopes[1] !== "chat")
+        )
+            invalid();
         text(app.id, 128);
         text(app.revision, 128);
         if (!ID.test(app.id) || !ID.test(app.revision) || appIds.has(app.id)) invalid();

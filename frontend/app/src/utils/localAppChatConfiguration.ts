@@ -1,6 +1,11 @@
 import type { LocalAppCatalog, LocalAppCatalogEntry } from "./localAppCatalog";
 import { buildBoundedAutoProposeVocabulary } from "./autoProposeVocabulary";
 import { matchesKeyword } from "./keywordMatch";
+import {
+    resolveLocalAppForChat,
+    type LocalAppAccountConnection,
+    type LocalAppChatSetup,
+} from "./localAppChatRoutes";
 
 export type LocalAppSuggestion = Readonly<{
     appId: string;
@@ -17,6 +22,8 @@ export type LocalAppSuggestion = Readonly<{
 export class LocalAppChatConfiguration {
     #account?: string;
     #catalog?: LocalAppCatalog;
+    #connections?: readonly LocalAppAccountConnection[];
+    #chatSetups?: readonly LocalAppChatSetup[];
     #revision = 0;
     #enabled = new Map<string, Set<string>>();
     constructor(
@@ -29,11 +36,21 @@ export class LocalAppChatConfiguration {
         ++this.#revision;
         this.changed(cause);
     }
-    setContext(account: string | undefined, catalog: LocalAppCatalog | undefined): void {
-        if (account === this.#account && catalog === this.#catalog) return;
+    setContext(
+        account: string | undefined,
+        catalog: LocalAppCatalog | undefined,
+        connections?: readonly LocalAppAccountConnection[],
+        chatSetups?: readonly LocalAppChatSetup[],
+    ): void {
+        const catalogChanged = account !== this.#account || catalog !== this.#catalog;
+        if (!catalogChanged && connections === this.#connections && chatSetups === this.#chatSetups)
+            return;
         this.#account = account;
         this.#catalog = catalog;
-        this.#enabled.clear();
+        this.#connections = connections;
+        this.#chatSetups = chatSetups;
+        // Reconnecting an app refreshes its private configuration, not the user's chat opt-ins.
+        if (catalogChanged) this.#enabled.clear();
         this.#notify("context");
     }
     setEnabled(account: string, chatKey: string, appId: string, enabled: boolean): boolean {
@@ -101,13 +118,25 @@ export class LocalAppChatConfiguration {
         return account === this.#account && this.#enabled.get(chatKey)?.has(appId) === true;
     }
     enabledApps(account: string, chatKey: string): readonly LocalAppCatalogEntry[] {
-        return this.#catalog?.apps.filter((app) => this.enabled(account, chatKey, app.id)) ?? [];
+        return (
+            this.#catalog?.apps.flatMap((app) => {
+                if (!this.enabled(account, chatKey, app.id)) return [];
+                const configured = resolveLocalAppForChat(
+                    this.#catalog,
+                    this.#connections,
+                    this.#chatSetups,
+                    app.id,
+                    chatKey,
+                );
+                return configured ? [configured] : [];
+            }) ?? []
+        );
     }
     current(suggestion: LocalAppSuggestion): boolean {
         return (
             suggestion.configurationRevision === this.#revision &&
             this.enabled(suggestion.viewerId, suggestion.chatKey, suggestion.appId) &&
-            this.#catalog?.apps.some(
+            this.enabledApps(suggestion.viewerId, suggestion.chatKey).some(
                 (app) =>
                     app.id === suggestion.appId &&
                     app.revision === suggestion.appRevision &&

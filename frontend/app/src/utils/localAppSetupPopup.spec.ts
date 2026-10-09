@@ -9,15 +9,21 @@ import {
     openAppSetupPopup,
     validSetupTarget,
 } from "./localAppSetupPopup";
+import { parseLocalAppSetupContext, type LocalAppSetupContext } from "./localAppScopedSetup";
 
 describe.each(["popup", "frame"])("app setup %s consent boundary", (mode) => {
     let popup: { closed: boolean; postMessage: ReturnType<typeof vi.fn> };
     let controller: AbortController;
     let frame: HTMLIFrameElement;
-    const connect = (appId: string, url: string, signal: AbortSignal) =>
+    const connect = (
+        appId: string,
+        url: string,
+        signal: AbortSignal,
+        context?: LocalAppSetupContext,
+    ) =>
         mode === "popup"
-            ? openAppSetupPopup(appId, url, signal)
-            : openAppSetupFrame(appId, url, signal, frame);
+            ? openAppSetupPopup(appId, url, signal, context)
+            : openAppSetupFrame(appId, url, signal, frame, context);
     beforeEach(() => {
         vi.useFakeTimers();
         popup = { closed: false, postMessage: vi.fn() };
@@ -64,6 +70,49 @@ describe.each(["popup", "frame"])("app setup %s consent boundary", (mode) => {
         expect(popup.postMessage.mock.calls[0][1]).toBe("https://app.example");
         reply();
         await expect(promise).resolves.toBe('{"version":1}');
+        expect(vi.getTimerCount()).toBe(0);
+    });
+    it("binds v2 metadata only through source/origin-checked messages, never the URL", async () => {
+        const context = parseLocalAppSetupContext({
+            version: 2,
+            scope: "chat",
+            accountId: "A".repeat(43),
+            handle: "B".repeat(42) + "A",
+        });
+        const catalogJson = JSON.stringify({ version: 1, apps: [{ id: "sample" }] });
+        const result = JSON.stringify({
+            version: 2,
+            scope: "chat",
+            appId: "sample",
+            accountId: context.accountId,
+            catalogJson,
+            routes: [{ handle: "B".repeat(42) + "A", catalogJson }],
+        });
+        const promise = connect(
+            "sample",
+            "https://app.example/connect",
+            controller.signal,
+            context,
+        );
+        expect(popup.postMessage.mock.calls[0][0]).toEqual({
+            type: "oc:app-setup:connect",
+            version: 2,
+            connectionId: expect.any(String),
+            appId: "sample",
+            setupContext: context,
+        });
+        expect(popup.postMessage.mock.calls[0][1]).toBe("https://app.example");
+        if (mode === "popup")
+            expect(window.open).toHaveBeenCalledWith("https://app.example/connect", "_blank");
+        else expect(frame.src).toBe("https://app.example/connect");
+        const settled = vi.fn();
+        void promise.then(settled);
+        reply({ version: 1, catalogJson: result });
+        reply({ version: 2, catalogJson: result }, "https://evil.example");
+        await Promise.resolve();
+        expect(settled).not.toHaveBeenCalled();
+        reply({ version: 2, catalogJson: result });
+        await expect(promise).resolves.toBe(result);
         expect(vi.getTimerCount()).toBe(0);
     });
     it.each([

@@ -44,6 +44,13 @@ import {
 } from "./localAppDraftChoices";
 import type { LocalAppDraftScalar } from "./localAppDraftFields";
 import { APP_SETUP_TIMEOUT_MS } from "./localAppSetupPopup";
+import { parseLocalAppScopedSetupResult, type LocalAppSetupContext } from "./localAppScopedSetup";
+import {
+    resolveLocalAppForChat,
+    validateLocalAppChatRoutes,
+    type LocalAppAccountConnection,
+    type LocalAppChatSetup,
+} from "./localAppChatRoutes";
 import {
     deliverLocalAppViaRelay,
     cancelLocalAppHandoffs,
@@ -75,6 +82,7 @@ import {
 export type ConnectLocalAppSetup = (
     descriptor: LocalAppDirectoryDescriptor,
     signal: AbortSignal,
+    context?: LocalAppSetupContext | Promise<LocalAppSetupContext | undefined>,
 ) => Promise<string>;
 
 export interface PrivateAppWorkspaceState {
@@ -94,6 +102,8 @@ export interface PrivateAppWorkspaceState {
     /** Only storage failures are surfaced in the normal card and Apps UI. */
     draftStorageError?: string;
     enabledChats: LocalAppSetupSnapshot["enabledChats"];
+    connections: readonly LocalAppAccountConnection[];
+    chatSetups: readonly LocalAppChatSetup[];
     catalog?: LocalAppCatalog;
     appId?: string;
     actionId?: string;
@@ -278,6 +288,8 @@ const initial = (): PrivateAppWorkspaceState => ({
     cards: Object.freeze([]),
     cardSources: Object.freeze({}),
     enabledChats: Object.freeze([]),
+    connections: Object.freeze([]),
+    chatSetups: Object.freeze([]),
     editorJson: "",
     recipient: "",
     draftManualValues: false,
@@ -574,6 +586,8 @@ export class PrivateAppWorkspace {
                 appId: setup?.appId,
                 actionId: setup?.actionId,
                 enabledChats: setup?.enabledChats ?? Object.freeze([]),
+                connections: setup?.connections ?? Object.freeze([]),
+                chatSetups: setup?.chatSetups ?? Object.freeze([]),
                 disabledAppIds: setup?.disabledAppIds ?? Object.freeze([]),
                 processorReady:
                     !!setup?.actionId &&
@@ -611,9 +625,7 @@ export class PrivateAppWorkspace {
             }
             const collection = snapshotSavedLocalAppDraftCollection(raw);
             for (const { saved, source, app: savedApp } of collection.cards) {
-                const configuredApp = this.#state.catalog?.apps.find(
-                    (app) => app.id === saved.draft.target.appId,
-                );
+                const configuredApp = this.#appForChat(saved.draft.target.appId, source?.chatKey);
                 const app = savedApp ?? configuredApp;
                 const action = app?.actions.find(
                     (action) => action.definition.name === saved.draft.target.actionId,
@@ -745,11 +757,11 @@ export class PrivateAppWorkspace {
         void this.#persistDraft().catch(() => {});
     }
 
-    #saveSetup(): void {
+    #saveSetup(): Promise<void> {
         const storage = this.deps.setupStorage;
         const scope = this.#setupScope();
         const catalog = this.#state.catalog;
-        if (!storage || !scope || !catalog) return;
+        if (!storage || !scope || !catalog) return Promise.resolve();
         // Inspecting a retained card from a disconnected app is not a new setup selection.
         const selected = catalog.apps.find((app) => app.id === this.#state.appId);
         // Capture only setup at the explicit user mutation. Never serialize workspace state.
@@ -768,11 +780,14 @@ export class PrivateAppWorkspace {
             installations: Object.freeze([...this.#installations.values()]),
             disabledAppIds: this.#state.disabledAppIds,
             enabledChats: this.#state.enabledChats,
+            connections: this.#state.connections,
+            chatSetups: this.#state.chatSetups,
         };
         const epoch = this.#setupEpoch;
         const revision = ++this.#saveRevision;
         this.#set({ setupStatus: "Saving app setup on this device…" });
-        void this.#queueSetup(scope, () => storage.write(scope, snapshot)).then(
+        const pending = this.#queueSetup(scope, () => storage.write(scope, snapshot));
+        void pending.then(
             () => {
                 if (epoch === this.#setupEpoch && revision === this.#saveRevision)
                     this.#set({
@@ -788,6 +803,7 @@ export class PrivateAppWorkspace {
                     });
             },
         );
+        return pending;
     }
 
     enabledChatsSnapshot(): LocalAppSetupSnapshot["enabledChats"] {
@@ -947,7 +963,7 @@ export class PrivateAppWorkspace {
                 return false;
             const updates: Record<string, string> = {};
             this.#set({ directory });
-            if (this.#state.busy || this.#cards.size > 0) {
+            if (this.#state.busy) {
                 this.#refreshDeferred = true;
                 this.#set({
                     directoryStatus:
@@ -955,6 +971,11 @@ export class PrivateAppWorkspace {
                 });
                 return false;
             }
+            // Discovery remains available with saved cards. Only explicit Connect may
+            // change their installed setup; refreshing must not revoke an approval or
+            // reinterpret an attempted request against a new recipe or private grant.
+            const retainSetup = this.#cards.size > 0;
+            if (retainSetup) this.#refreshDeferred = true;
             const disabled = new Set(this.#state.disabledAppIds);
             for (const installed of this.#installations.values()) {
                 if (
@@ -963,7 +984,7 @@ export class PrivateAppWorkspace {
                 )
                     disabled.add(installed.appId);
             }
-            if (disabled.size !== this.#state.disabledAppIds.length) {
+            if (!retainSetup && disabled.size !== this.#state.disabledAppIds.length) {
                 const disabledAppIds = Object.freeze([...disabled]);
                 const enabledChats = Object.freeze(
                     this.#state.enabledChats
@@ -990,8 +1011,9 @@ export class PrivateAppWorkspace {
                 }
                 const descriptor = directory.apps.find((app) => app.id === installed.appId);
                 if (!descriptor) {
-                    updates[installed.appId] =
-                        "No longer listed by this publisher. Disabled in chats and for proposals; setup is retained for recovery.";
+                    updates[installed.appId] = retainSetup
+                        ? "No longer listed by this publisher. Saved cards and their setup are retained; check the app before sending."
+                        : "No longer listed by this publisher. Disabled in chats and for proposals; setup is retained for recovery.";
                     continue;
                 }
                 if (JSON.stringify(descriptor) === JSON.stringify(installed.descriptor)) continue;
@@ -1002,7 +1024,10 @@ export class PrivateAppWorkspace {
                 const app = this.#state.catalog?.apps.find((app) => app.id === installed.appId);
                 if (!app) continue;
                 // Never reinterpret opaque private setup against a newly published recipe.
-                if (localAppHasPrivateSetup(app, installed.publicCatalogJson)) {
+                if (
+                    localAppHasPrivateSetup(app, installed.publicCatalogJson) ||
+                    this.#state.connections.some((entry) => entry.appId === app.id)
+                ) {
                     updates[app.id] = "Connect again to refresh private app setup for this update.";
                     continue;
                 }
@@ -1016,7 +1041,7 @@ export class PrivateAppWorkspace {
                     abort.signal.aborted
                 )
                     return false;
-                if (this.#state.busy || this.#cards.size > 0) {
+                if (this.#state.busy) {
                     this.#refreshDeferred = true;
                     break;
                 }
@@ -1035,6 +1060,12 @@ export class PrivateAppWorkspace {
                     updates[app.id] = "Connect to approve the changed app inbox.";
                     continue;
                 }
+                if (retainSetup || this.#cards.size > 0) {
+                    this.#refreshDeferred = true;
+                    updates[app.id] =
+                        "Connect again to apply this app update. Saved cards keep their original configuration.";
+                    continue;
+                }
                 this.#installApp(
                     pkg.catalog.apps[0],
                     pkg.processor,
@@ -1049,8 +1080,9 @@ export class PrivateAppWorkspace {
             }
             this.#set({
                 appUpdates: Object.freeze(updates),
-                directoryStatus:
-                    "App list updated. New apps are not enabled in any chat. Connect approves this publisher's compatible future recipe updates.",
+                directoryStatus: retainSetup
+                    ? "Available apps updated. Saved cards keep their existing configuration; connect explicitly to change an app."
+                    : "App list updated. New apps are not enabled in any chat. Connect approves this publisher's compatible future recipe updates.",
             });
             return true;
         } catch {
@@ -1069,10 +1101,123 @@ export class PrivateAppWorkspace {
         }
     }
 
+    #appForChat(appId: string, chatKey?: string): LocalAppCatalogEntry | undefined {
+        return resolveLocalAppForChat(
+            this.#state.catalog,
+            this.#state.connections,
+            this.#state.chatSetups,
+            appId,
+            chatKey,
+        );
+    }
+
+    async configureChat(appId: string, chatKey: string): Promise<void> {
+        await this.#connectApp(appId, chatKey);
+    }
+
     async connectApp(appId: string): Promise<boolean> {
+        return this.#connectApp(appId);
+    }
+
+    async #setupContext(
+        app: LocalAppCatalogEntry,
+        descriptor: LocalAppDirectoryDescriptor,
+        source: string,
+        chatKey?: string,
+    ): Promise<LocalAppSetupContext | undefined> {
+        const connection = this.#state.connections.find((row) => row.appId === app.id);
+        if (!app.setupScopes) {
+            if (chatKey || connection) throw new Error("Scoped app setup is unavailable");
+            return undefined;
+        }
+        const installed = this.#installations.get(app.id);
+        const previous = this.#state.catalog?.apps.find((entry) => entry.id === app.id);
+        const samePublisher =
+            installed &&
+            previous?.destination === app.destination &&
+            sameLocalAppPublisher(installed, descriptor, source);
+        if (connection && !samePublisher) throw new Error("Reconnect publisher changed");
+        if (chatKey !== undefined) {
+            // Chat coordinates never cross the setup boundary. Persist a random handle before
+            // opening setup so a lost callback can retry the same app-owned mapping.
+            if (
+                !connection ||
+                !samePublisher ||
+                !this.deps.setupStorage ||
+                !this.#setupScope() ||
+                !chatKey ||
+                chatKey.length > 512 ||
+                !this.#state.enabledChats.some(
+                    (row) => row.chatKey === chatKey && row.appIds.includes(app.id),
+                )
+            )
+                throw new Error("Connect and enable the app before chat setup");
+            let row = this.#state.chatSetups.find(
+                (row) => row.appId === app.id && row.chatKey === chatKey,
+            );
+            if (!row) {
+                const handle = btoa(
+                    String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))),
+                )
+                    .replaceAll("+", "-")
+                    .replaceAll("/", "_")
+                    .replaceAll("=", "");
+                row = Object.freeze({
+                    appId: app.id,
+                    accountId: connection.accountId,
+                    chatKey,
+                    handle,
+                });
+                const chatSetups = Object.freeze([...this.#state.chatSetups, row]);
+                validateLocalAppChatRoutes(
+                    this.#state.catalog!,
+                    [...this.#installations.values()],
+                    this.#state.connections,
+                    chatSetups,
+                );
+                this.#set({ chatSetups });
+            }
+            // A previous failed write may have left this handle in memory. Retrying must
+            // confirm durability again before any app-owned mapping can be created.
+            if (!row.catalogJson) await this.#saveSetup();
+            return Object.freeze({
+                version: 2,
+                scope: "chat",
+                accountId: connection.accountId,
+                handle: row.handle,
+                ...(row.catalogJson ? { catalogJson: row.catalogJson } : {}),
+            });
+        }
+        const legacy =
+            samePublisher &&
+            previous &&
+            (connection
+                ? connection.legacyChatKeys?.length
+                : localAppHasPrivateSetup(previous, installed.publicCatalogJson));
+        return Object.freeze({
+            version: 2,
+            scope: "account",
+            ...(connection ? { accountId: connection.accountId } : {}),
+            ...(legacy
+                ? { legacyCatalogJson: JSON.stringify({ version: 1, apps: [previous] }) }
+                : {}),
+            routes: Object.freeze(
+                this.#state.chatSetups
+                    .filter((row) => row.appId === app.id && row.catalogJson)
+                    .map((row) =>
+                        Object.freeze({ handle: row.handle, catalogJson: row.catalogJson! }),
+                    ),
+            ),
+        });
+    }
+
+    async #connectApp(appId: string, chatKey?: string): Promise<boolean> {
         if (!this.#setupAllowed(true) || this.#state.directoryLoading || !this.#connectAppSetup)
             return false;
-        const descriptor = this.#state.directory?.apps.find((app) => app.id === appId);
+        const descriptor =
+            chatKey === undefined
+                ? this.#state.directory?.apps.find((app) => app.id === appId)
+                : this.#installations.get(appId)?.descriptor;
         const source = this.#directorySource;
         if (!descriptor || !source) return false;
         const epoch = this.#epoch;
@@ -1103,30 +1248,82 @@ export class PrivateAppWorkspace {
             });
             // The explicit Connect gesture opens the exact directory setup URL before awaiting
             // downloads. Neither result is adopted until both are verified as one package.
-            const connection = this.#connectAppSetup(descriptor, abort.signal);
+            const packagePromise = (this.deps.loadPublicPackage ?? loadLocalAppPublicPackage)(
+                descriptor,
+                abort.signal,
+            );
+            const contextPromise = packagePromise.then(async (pkg) => {
+                if (epoch !== this.#epoch || abort.signal.aborted)
+                    throw new Error("App setup cancelled");
+                return this.#setupContext(pkg.catalog.apps[0], descriptor, source, chatKey);
+            });
+            void contextPromise.catch(() => {});
+            // Opening remains synchronous with the user gesture; the hello waits for the
+            // verified public recipe and never sends private setup to an unverified publisher.
+            const connection = this.#connectAppSetup(descriptor, abort.signal, contextPromise);
             const [pkg, json] = await Promise.race([
-                Promise.all([
-                    (this.deps.loadPublicPackage ?? loadLocalAppPublicPackage)(
-                        descriptor,
-                        abort.signal,
-                    ),
-                    connection,
-                ]),
+                Promise.all([packagePromise, connection]),
                 deadline,
                 cancelled,
             ]);
-            const app = bindConnectedLocalApp(json, pkg.catalog);
+            const context = await contextPromise;
+            const scoped = context
+                ? parseLocalAppScopedSetupResult(json, appId, context)
+                : undefined;
+            const received = bindConnectedLocalApp(scoped?.catalogJson ?? json, pkg.catalog);
             if (epoch !== this.#epoch || source !== this.#directorySource || abort.signal.aborted)
                 return false;
+            const oldConnection = this.#state.connections.find((row) => row.appId === appId);
+            const legacyChatKeys =
+                context?.scope === "chat"
+                    ? oldConnection?.legacyChatKeys?.filter((key) => key !== chatKey)
+                    : (oldConnection?.legacyChatKeys ??
+                      (context?.scope === "account" && context.legacyCatalogJson
+                          ? this.#state.enabledChats
+                                .filter((row) => row.appIds.includes(appId))
+                                .map((row) => row.chatKey)
+                          : undefined));
+            const app =
+                context?.scope === "chat"
+                    ? this.#state.catalog!.apps.find((row) => row.id === appId)!
+                    : received;
+            const routes = scoped
+                ? {
+                      connections: Object.freeze([
+                          ...this.#state.connections.filter((row) => row.appId !== appId),
+                          Object.freeze({
+                              appId,
+                              accountId: scoped.accountId,
+                              ...(legacyChatKeys?.length
+                                  ? { legacyChatKeys: Object.freeze(legacyChatKeys) }
+                                  : {}),
+                          }),
+                      ]),
+                      chatSetups: Object.freeze(
+                          this.#state.chatSetups.map((row) => {
+                              if (row.appId !== appId) return row;
+                              const refreshed = scoped.routes.find(
+                                  (route) => route.handle === row.handle,
+                              );
+                              return refreshed
+                                  ? Object.freeze({ ...row, catalogJson: refreshed.catalogJson })
+                                  : row;
+                          }),
+                      ),
+                  }
+                : undefined;
             this.#installApp(
                 app,
                 pkg.processor,
                 { appId, sourceUrl: source, descriptor, publicCatalogJson: pkg.catalogJson },
                 true,
+                routes,
             );
             this.#set({
                 message:
-                    "App connected. Enable it in a chat before proposing a message. No chat content was sent.",
+                    chatKey !== undefined
+                        ? "Chat setup updated. Other chats and saved cards are unchanged."
+                        : "App connected. Existing chat assignments are retained. Enable it and use Open setup for a new chat. No chat content was sent.",
             });
             return true;
         } catch {
@@ -1192,6 +1389,10 @@ export class PrivateAppWorkspace {
         this.#set({
             catalog,
             enabledChats,
+            connections: Object.freeze(
+                this.#state.connections.filter((row) => row.appId !== appId),
+            ),
+            chatSetups: Object.freeze(this.#state.chatSetups.filter((row) => row.appId !== appId)),
             appId: selectedId,
             actionId: retainSelection ? this.#state.actionId : undefined,
             processorReady: selectedId !== appId && this.#state.processorReady,
@@ -1210,7 +1411,8 @@ export class PrivateAppWorkspace {
         for (const [id, card] of this.#cards) {
             const draft = this.#drafts.get(id);
             if (draft?.target.appId !== appId) continue;
-            card.targetMatches = !!app && sameCardConfiguration(card.app, app);
+            const configured = app ? this.#appForChat(appId, card.source?.chatKey) : undefined;
+            card.targetMatches = !!configured && sameCardConfiguration(card.app, configured);
             if (!card.targetMatches && draft.approval) this.#drafts.revokeApproval(id);
             if (id === this.#state.draft?.id) {
                 this.#restoredTargetMatches = card.targetMatches;
@@ -1224,6 +1426,10 @@ export class PrivateAppWorkspace {
         processor: ImportedLocalProcessor,
         installation: LocalAppInstallation,
         select: boolean,
+        scoped?: Readonly<{
+            connections: readonly LocalAppAccountConnection[];
+            chatSetups: readonly LocalAppChatSetup[];
+        }>,
     ): void {
         const previous = this.#state.catalog?.apps.find((entry) => entry.id === app.id);
         const oldInstallation = this.#installations.get(app.id);
@@ -1236,6 +1442,16 @@ export class PrivateAppWorkspace {
             app,
         ];
         const catalog = parseLocalAppCatalog(JSON.stringify({ version: 1, apps }));
+        const routes = validateLocalAppChatRoutes(
+            catalog,
+            [...this.#installations.values()]
+                .filter((row) => row.appId !== app.id)
+                .concat(installation),
+            scoped?.connections ??
+                this.#state.connections.filter((row) => row.appId !== app.id || preservePermission),
+            scoped?.chatSetups ??
+                this.#state.chatSetups.filter((row) => row.appId !== app.id || preservePermission),
+        );
         ++this.#epoch;
         const enabledChats = Object.freeze(
             this.#state.enabledChats
@@ -1251,6 +1467,7 @@ export class PrivateAppWorkspace {
         );
         this.#processors.set(app.id, processor);
         this.#installations.set(app.id, Object.freeze(installation));
+        this.#state = { ...this.#state, catalog, ...routes };
         this.#updateCardConnection(app.id, app);
         const activeDraft = this.#state.draft;
         const appId = activeDraft?.target.appId ?? (select ? app.id : this.#state.appId);
@@ -1331,6 +1548,8 @@ export class PrivateAppWorkspace {
                 catalog,
                 setupGeneration: this.#setupGeneration,
                 enabledChats: Object.freeze([]),
+                connections: Object.freeze([]),
+                chatSetups: Object.freeze([]),
                 disabledAppIds: Object.freeze([]),
                 appId: undefined,
                 actionId: undefined,
@@ -1518,10 +1737,13 @@ export class PrivateAppWorkspace {
         this.#leaveCard();
         // A retained card's immutable presentation is for reviewing that card only.
         // Every new proposal is pinned afresh to the currently connected configuration.
-        const app = this.#state.catalog?.apps.find((app) => app.id === selectedAppId);
+        const app = this.#appForChat(selectedAppId, source?.chatKey);
         const action = app?.actions.find((action) => action.definition.name === selectedActionId);
         if (!app || !action) {
-            this.#set({ message: "Reconnect the app before creating another private card." });
+            this.#set({
+                message:
+                    "Open this chat's app settings and use Open setup before proposing. Existing chat assignments are unchanged.",
+            });
             return "retryable";
         }
         if (this.#state.disabledAppIds.includes(app.id)) {
@@ -1785,8 +2007,9 @@ export class PrivateAppWorkspace {
     review(): boolean {
         const draft = this.#state.draft;
         if (draft?.target.deliveryInbox) {
-            const configured = this.#state.catalog?.apps.find(
-                (app) => app.id === draft.target.appId,
+            const configured = this.#appForChat(
+                draft.target.appId,
+                this.#cards.get(draft.id)?.source?.chatKey,
             )?.deliveryInbox;
             if (
                 !configured ||
@@ -1871,8 +2094,9 @@ export class PrivateAppWorkspace {
     ): Promise<void> {
         const draft = this.#state.draft;
         if (draft?.target.deliveryInbox) {
-            const configured = this.#state.catalog?.apps.find(
-                (app) => app.id === draft.target.appId,
+            const configured = this.#appForChat(
+                draft.target.appId,
+                this.#cards.get(draft.id)?.source?.chatKey,
             )?.deliveryInbox;
             if (
                 !configured ||

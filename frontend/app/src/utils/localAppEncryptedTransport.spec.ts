@@ -104,7 +104,7 @@ describe("actual crypto before browser and native transports (no sealing mocks)"
             begin: vi.fn(async (_request: { approvedRequestJson: string }) => ({
                 handoffId: "a".repeat(32),
                 pairingCode: "A".repeat(20),
-                url: "http://localhost:41000/handoff",
+                url: "http://localhost:5192/handoff",
                 claimExpiresAtMs: Date.now() + 120000,
             })),
             poll: vi.fn(async () => ({

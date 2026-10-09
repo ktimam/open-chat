@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { writable } from "svelte/store";
+import { get, writable } from "svelte/store";
+import { scopedAppFixture } from "./localAppChatRoutes.testFixtures";
 import type { PrivateAppWorkspaceState } from "./privateAppWorkspace";
 import type { LocalAppCatalog } from "./localAppCatalog";
 
@@ -30,6 +31,8 @@ const publish = (patch: Partial<PrivateAppWorkspaceState> = {}) =>
         account: "viewer",
         catalog,
         enabledChats,
+        connections: [],
+        chatSetups: [],
         setupLoading: false,
         open: false,
         cardPresentation: "saved",
@@ -60,6 +63,37 @@ beforeEach(() => {
 });
 
 describe("setup-only chat preference integration", () => {
+    it("retains enabled flags when only the route setup or account catalog changes", async () => {
+        const f = await scopedAppFixture();
+        const rows = [{ chatKey: "chat", appIds: ["sample"] }];
+        const context = {
+            catalog: f.catalog,
+            connections: f.connections,
+            chatSetups: [f.route("chat", 1, "alpha")],
+            enabledChats: rows,
+        };
+        publish(context);
+        const old = localAppChatConfiguration.suggestions("viewer", "chat", {
+            kind: "text_content",
+            text: "alpha",
+        });
+        localAutoProposeSuggestions.set(new Map([["message", old]]));
+        publish({ ...context, chatSetups: [f.route("chat", 1, "beta")] });
+        expect(localAppChatConfiguration.enabled("viewer", "chat", "sample")).toBe(true);
+        expect(get(localAutoProposeSuggestions).size).toBe(0);
+        expect(localAppChatConfiguration.current(old[0])).toBe(false);
+        // Reconnect may replace the account catalog while preserving the same opt-in array.
+        publish({ ...context, catalog: { ...f.catalog } });
+        expect(localAppChatConfiguration.enabled("viewer", "chat", "sample")).toBe(true);
+        expect(calls.replace).not.toHaveBeenCalled();
+    });
+    it("restores after loading even when the validated opt-in array is unchanged", () => {
+        publish({ setupLoading: true });
+        expect(localAppChatConfiguration.enabled("viewer", "chat", "app")).toBe(false);
+        publish();
+        expect(localAppChatConfiguration.enabled("viewer", "chat", "app")).toBe(true);
+        expect(calls.replace).not.toHaveBeenCalled();
+    });
     it("restores preferences without writing them and does not save on draft/status updates", () => {
         publish();
         expect(localAppChatConfiguration.enabled("viewer", "chat", "app")).toBe(true);

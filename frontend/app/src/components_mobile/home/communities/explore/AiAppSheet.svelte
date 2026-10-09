@@ -129,8 +129,8 @@
                 >
             {:else}
                 <BodySmall colour={"textSecondary"}
-                    >This connected app is not in the current directory. Disconnect remains
-                    available.</BodySmall
+                    >A verified connection address is not available. Check your connection and
+                    use Refresh apps to retry. Disconnect remains available.</BodySmall
                 >
             {/if}
             {#if app.status}<p role="status">{app.status}</p>{/if}

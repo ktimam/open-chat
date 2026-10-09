@@ -5,14 +5,40 @@ the checked-in official canister IDs without deploying modified OpenChat caniste
 Public branding, hosting and public Android-provider qualification remain outside
 the local-only acceptance below.
 
-## Current checkpoint — October 6, 2026
+## Current scoped-setup checkpoint — October 9, 2026
+
+The verified local frontends are active and public registry generation 10 is
+published. The updated x86 local-test APK was installed in place; a cold emulator
+restart retained the existing account, private cards and app opt-in. Normal chat
+**Open setup** selected and saved an existing synthetic destination. App-level
+**Reconnect** completed with no destination picker. After force-stopping and
+reopening only the local-test APK, the account, chat opt-in and configured route
+were restored; **Open setup** preselected the same destination and displayed both
+private choices without manual reselection. Account/chat reconnect and restart
+acceptance passed.
+
+The receiving app's focused Candid-schema/loader checks passed 15 tests; both
+frozen receiving-app runtimes passed all 132 integration tests. The live setup
+checks created no entries, did not rerun model accuracy or install a physical-phone
+APK, and changed no official OpenChat canister. They are not new delivery or
+financial-save acceptance. The October 6 and earlier records below remain
+historical evidence for their own artifacts.
+
+Known limitation: cancelling inside the app's embedded setup page and returning
+can leave a native chat-setup attempt waiting. Main Apps has no Cancel action for
+that chat-initiated attempt. A page reload did not release the native operation;
+force-stopping and reopening only the local-test APK cleared it without removing
+the saved account, cards, settings or pending route handle. Cancellation itself
+is not qualified by the successful reconnect/restart checks above.
+
+## Historical checkpoint — October 6, 2026
 
 The later normal-flow repair removes the remaining transport JSON/pairing pages and
 extra Open/Load steps. Apps → Connect/Reconnect shows the app's normal connection
 page; confirming an inline card opens its normal review/save flow directly. Sender
 approval, recipient encryption and the receiving app's separate review/save remain.
 
-The active browser candidate is an explicitly uncommitted UI overlay on
+At that checkpoint, the active browser candidate was an explicitly uncommitted UI overlay on
 `e8ff0811660e705c377e1fef0addde133536f85b`, not a newly published release. Its r3
 build is `2.0.0-localtest.63d10d313e0ac88441122a01a18cdd98`, served at localhost:5190
 from `F:/Temp/OpenChat-IOU/pr-flow-repair-20261006/web-r3/v2`. Source receipt SHA-256:
@@ -629,10 +655,13 @@ does not run inference or send chat data.
 1. Open **Apps → AI Apps**. Apps from the operator-configured public directory appear
    automatically; no catalog or processor files need to be uploaded.
 2. Open an app's card, choose **Connect** in its details, and continue to the app's page.
-   Approve the exact requester origin and choose the app account and destination there.
+   Approve the exact requester origin and connect the app account there.
    Only app setup returns
    to OpenChat; discovery and connection send no messages, drafts or credentials.
    Enable the connected app in the intended chat. New apps are never auto-enabled.
+   For apps advertising separate account/chat setup, use **Open setup** in that chat's
+   app settings to choose its destination. **Reconnect** refreshes the app account
+   once; it does not ask the user to reassign every chat.
 3. Select an available local model, or a supported local-reader mode, and use
    **Propose** on one text or image message. Both UIs share this pipeline; app
    proposals do not currently accept voice messages.
@@ -642,10 +671,11 @@ does not run inference or send chat data.
    separate JSON editor or setup page. Nothing is posted to the chat or sent to the
    app for card verification. Every edit invalidates the previous approval.
 5. Confirm the full request, including its destination and recipient review label.
-   OpenChat encrypts the fields before handing them to a separate browser relay.
-   The relay directly presents the receiving app's normal UI in its bound frame;
-   it cannot read the fields. There is no intermediate transport review, manual
-   pairing step or extra Open button in either browser or local-test APK.
+   OpenChat encrypts the fields before sending them. A connected durable-inbox app
+   receives ciphertext directly without opening a browser; **Open app** is a
+   separate optional step to review its pending entries. Apps using the legacy
+   browser transport instead open their normal UI in a bound relay frame that
+   cannot read the fields. Neither transport adds a separate transport-review page.
 6. Sign in to the app, decrypt for the linked destination, review the full fields and
    actual account/destination again, then explicitly save there. IOU uses its normal
    sheet's **Pending from chat → Review & add** and existing entry/batch review.
@@ -696,6 +726,36 @@ a handoff. **Disconnect** in
 app details removes that app's connection and chat opt-ins but retains its cards.
 Those cards stay inspect-only until a matching connection is restored and reviewed;
 a changed connection cannot silently retarget their fields or destination.
+
+### Account reconnect and independent chat setup
+
+An app can declare `setupScopes: ["account", "chat"]` in its verified public
+catalog. The setup-v2 handshake separates an opaque app-account binding from
+per-chat private configuration; apps without the declaration retain setup-v1.
+OpenChat does not interpret app-specific sheets, Types, prompts or fields.
+
+- **Connect/Reconnect** verifies the same app account and refreshes all previously
+  configured routes as one validated response. Missing, extra or duplicate route
+  handles, a different account, or a changed publisher are not silently adopted.
+- **Open setup** explicitly configures only the current chat. A random 32-byte
+  handle is saved in encrypted device storage before it reaches the app. Raw chat
+  identifiers, names, messages and card fields are not included in setup. A lost
+  callback retries the saved handle. Handles are device-local, not a claim of
+  identity or shared-chat proof issued by the official OpenChat backend.
+- Account connections and chat configurations survive restart in the existing
+  account/backend-scoped encrypted setup store. Saved or attempted cards are never
+  rewritten or resent by setup. A card whose exact configuration no longer matches
+  remains inspect-only; a fresh proposal uses its own chat's current configuration.
+- Migrating the former single-destination setup preserves that existing destination
+  only for chats already enabled at migration. It cannot reconstruct distinct older
+  PR mappings that were never stored by this client. Newly enabled chats require
+  explicit setup and cannot inherit the legacy destination.
+
+IOU's account reconnect reads its existing `chat_sheet_links` without changing
+them. Only explicit chat setup uses its existing `set_chat_sheet_link` method.
+Valid matching inbox grants are reused; reconnect is not a new grant for every
+chat. Pending encrypted entries remain in the IOU inbox and still require the
+normal IOU review/save. No official OpenChat canister change is required.
 
 The local-test APK uses a separate ten-minute setup bridge. A one-use random launch
 fragment is immediately removed from the browser URL and authenticates the initial

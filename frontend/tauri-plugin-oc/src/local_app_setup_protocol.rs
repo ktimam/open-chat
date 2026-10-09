@@ -14,6 +14,13 @@ pub const MAX_POST_BYTES: usize = MAX_CATALOG_BYTES * 6 + 1024;
 pub struct BeginRequest {
     pub app_id: String,
     pub setup_url: String,
+    #[serde(default, deserialize_with = "present_context")]
+    pub setup_context: Option<Value>,
+}
+fn present_context<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Value>, D::Error> {
+    Value::deserialize(deserializer).map(Some)
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -31,6 +38,8 @@ pub struct Challenge {
     pub setup_url: String,
     pub expires_at_ms: u64,
     pub browser_proof_hex: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub setup_context: Option<Value>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -87,6 +96,9 @@ pub fn validate_begin(request: &BeginRequest) -> Result<(), &'static str> {
     {
         return Err("Invalid app setup URL");
     }
+    if let Some(context) = &request.setup_context {
+        validate_context(context, &request.app_id)?;
+    }
     Ok(())
 }
 pub fn validate_catalog(raw: &str, app_id: &str) -> Result<(), &'static str> {
@@ -109,6 +121,137 @@ pub fn validate_catalog(raw: &str, app_id: &str) -> Result<(), &'static str> {
     }
     // The existing frontend parser still validates the complete schema, public package binding,
     // processor hash and exact source origin before installing this opaque app-owned setup.
+    Ok(())
+}
+
+const MAX_SETUP_ROUTES: usize = 32;
+fn opaque_id(value: Option<&Value>) -> bool {
+    value.and_then(Value::as_str).is_some_and(|s| {
+        s.len() == 43
+            && s.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+            && b"AEIMQUYcgkosw048".contains(&s.as_bytes()[42])
+    })
+}
+fn exact_keys(value: &Value, required: &[&str], optional: &[&str]) -> bool {
+    value.as_object().is_some_and(|row| {
+        required.iter().all(|key| row.contains_key(*key))
+            && row
+                .keys()
+                .all(|key| required.contains(&key.as_str()) || optional.contains(&key.as_str()))
+    })
+}
+fn validate_routes<'a>(value: &'a Value, app_id: &str) -> Result<Vec<&'a str>, &'static str> {
+    let routes = value.as_array().ok_or("Invalid scoped app setup")?;
+    if routes.len() > MAX_SETUP_ROUTES {
+        return Err("Invalid scoped app setup");
+    }
+    let mut handles = Vec::new();
+    for route in routes {
+        if !exact_keys(route, &["handle", "catalogJson"], &[]) || !opaque_id(route.get("handle")) {
+            return Err("Invalid scoped app setup");
+        }
+        let handle = route["handle"].as_str().ok_or("Invalid scoped app setup")?;
+        if handles.contains(&handle) {
+            return Err("Invalid scoped app setup");
+        }
+        handles.push(handle);
+        validate_catalog(
+            route["catalogJson"]
+                .as_str()
+                .ok_or("Invalid scoped app setup")?,
+            app_id,
+        )?;
+    }
+    Ok(handles)
+}
+fn validate_context(value: &Value, app_id: &str) -> Result<(), &'static str> {
+    if serde_json::to_vec(value)
+        .map_err(|_| "Invalid scoped app setup")?
+        .len()
+        > MAX_CATALOG_BYTES
+        || value.get("version") != Some(&Value::from(2))
+    {
+        return Err("Invalid scoped app setup");
+    }
+    match value.get("scope").and_then(Value::as_str) {
+        Some("account") => {
+            if !exact_keys(
+                value,
+                &["version", "scope", "routes"],
+                &["accountId", "legacyCatalogJson"],
+            ) || (value.get("accountId").is_some() && !opaque_id(value.get("accountId")))
+            {
+                return Err("Invalid scoped app setup");
+            }
+            validate_routes(&value["routes"], app_id)?;
+            if let Some(legacy) = value.get("legacyCatalogJson") {
+                validate_catalog(legacy.as_str().ok_or("Invalid scoped app setup")?, app_id)?;
+            }
+        }
+        Some("chat") => {
+            if !exact_keys(
+                value,
+                &["version", "scope", "accountId", "handle"],
+                &["catalogJson"],
+            ) || !opaque_id(value.get("accountId"))
+                || !opaque_id(value.get("handle"))
+            {
+                return Err("Invalid scoped app setup");
+            }
+            if let Some(catalog) = value.get("catalogJson") {
+                validate_catalog(catalog.as_str().ok_or("Invalid scoped app setup")?, app_id)?;
+            }
+        }
+        _ => return Err("Invalid scoped app setup"),
+    }
+    Ok(())
+}
+fn validate_result(raw: &str, app_id: &str, context: Option<&Value>) -> Result<(), &'static str> {
+    let Some(context) = context else {
+        return validate_catalog(raw, app_id);
+    };
+    validate_context(context, app_id)?;
+    let value: Value = parse_strict(raw.as_bytes(), MAX_CATALOG_BYTES)?;
+    if !exact_keys(
+        &value,
+        &[
+            "version",
+            "scope",
+            "appId",
+            "accountId",
+            "catalogJson",
+            "routes",
+        ],
+        &[],
+    ) || value.get("version") != Some(&Value::from(2))
+        || value.get("scope") != context.get("scope")
+        || value.get("appId").and_then(Value::as_str) != Some(app_id)
+        || !opaque_id(value.get("accountId"))
+        || (context.get("accountId").is_some()
+            && context.get("accountId") != value.get("accountId"))
+    {
+        return Err("Invalid scoped app setup");
+    }
+    validate_catalog(
+        value["catalogJson"]
+            .as_str()
+            .ok_or("Invalid scoped app setup")?,
+        app_id,
+    )?;
+    let handles = validate_routes(&value["routes"], app_id)?;
+    let expected = if context["scope"].as_str() == Some("chat") {
+        vec![
+            context["handle"]
+                .as_str()
+                .ok_or("Invalid scoped app setup")?,
+        ]
+    } else {
+        validate_routes(&context["routes"], app_id)?
+    };
+    if handles.len() != expected.len() || handles.iter().any(|handle| !expected.contains(handle)) {
+        return Err("Invalid scoped app setup");
+    }
     Ok(())
 }
 
@@ -194,6 +337,7 @@ impl Attempt {
             setup_url: self.request.setup_url.clone(),
             expires_at_ms: self.expires_at_ms,
             browser_proof_hex: self.proof.clone().ok_or("App setup proof is unavailable")?,
+            setup_context: self.request.setup_context.clone(),
         })
     }
     pub fn accept(&mut self, body: &[u8], now: u64) -> Result<(), &'static str> {
@@ -221,7 +365,11 @@ impl Attempt {
         {
             return Err("App setup response does not match");
         }
-        validate_catalog(&result.catalog_json, &self.request.app_id)?;
+        validate_result(
+            &result.catalog_json,
+            &self.request.app_id,
+            self.request.setup_context.as_ref(),
+        )?;
         self.catalog_json = Some(result.catalog_json);
         self.proof = None;
         self.phase = Phase::Received;
@@ -254,6 +402,7 @@ mod tests {
             BeginRequest {
                 app_id: "fixture".into(),
                 setup_url: "https://app.example/connect".into(),
+                setup_context: None,
             },
             "22".repeat(16),
             &"33".repeat(32),
@@ -408,7 +557,8 @@ mod tests {
             assert!(
                 validate_begin(&BeginRequest {
                     app_id: "fixture".into(),
-                    setup_url: url.into()
+                    setup_url: url.into(),
+                    setup_context: None,
                 })
                 .is_err()
             );
@@ -422,6 +572,7 @@ mod tests {
             validate_begin(&BeginRequest {
                 app_id: "publisher:app-v1".into(),
                 setup_url: url.into(),
+                setup_context: None,
             })
             .unwrap();
         }
@@ -429,10 +580,97 @@ mod tests {
             assert!(
                 validate_begin(&BeginRequest {
                     app_id: id.into(),
-                    setup_url: "https://app.example/connect".into()
+                    setup_url: "https://app.example/connect".into(),
+                    setup_context: None,
                 })
                 .is_err()
             );
         }
+    }
+
+    fn scoped_context(scope: &str) -> Value {
+        if scope == "chat" {
+            json!({"version":2,"scope":"chat","accountId":"A".repeat(43),"handle":"B".repeat(42)+"A","catalogJson":RAW})
+        } else {
+            json!({"version":2,"scope":"account","accountId":"A".repeat(43),"legacyCatalogJson":RAW,
+                "routes":[{"handle":"B".repeat(42)+"A","catalogJson":RAW}]})
+        }
+    }
+    fn scoped_result(scope: &str) -> Value {
+        json!({"version":2,"scope":scope,"appId":"fixture","accountId":"A".repeat(43),"catalogJson":RAW,
+            "routes":[{"handle":"B".repeat(42)+"A","catalogJson":RAW}]})
+    }
+    #[test]
+    fn scoped_setup_retains_exact_bindings_and_one_use_native_proof() {
+        for scope in ["account", "chat"] {
+            let context = scoped_context(scope);
+            let mut a = fixture();
+            a.request.setup_context = Some(context.clone());
+            let challenge = a.challenge(&"33".repeat(32), 2000).unwrap();
+            assert_eq!(challenge.setup_context, Some(context));
+            let raw = scoped_result(scope).to_string();
+            a.accept(result(&raw).to_string().as_bytes(), 3000).unwrap();
+            assert_eq!(a.poll(3001).catalog_json.as_deref(), Some(raw.as_str()));
+            assert!(a.poll(3002).catalog_json.is_none());
+        }
+    }
+    #[test]
+    fn scoped_reply_rejects_account_scope_app_and_handle_mismatch_or_partial_results() {
+        for (field, replacement) in [
+            ("scope", json!("chat")),
+            ("accountId", json!("C".repeat(42) + "A")),
+            ("appId", json!("other")),
+            ("routes", json!([])),
+            (
+                "routes",
+                json!([{"handle":"C".repeat(42)+"A","catalogJson":RAW}]),
+            ),
+            (
+                "routes",
+                json!([{"handle":"B".repeat(42)+"A","catalogJson":RAW},{"handle":"B".repeat(42)+"A","catalogJson":RAW}]),
+            ),
+            (
+                "catalogJson",
+                json!(r#"{"version":1,"apps":[{"id":"other"}]}"#),
+            ),
+            ("extra", json!(true)),
+        ] {
+            let mut value = scoped_result("account");
+            value[field] = replacement;
+            assert!(
+                validate_result(
+                    &value.to_string(),
+                    "fixture",
+                    Some(&scoped_context("account"))
+                )
+                .is_err()
+            );
+        }
+        assert!(validate_result(RAW, "fixture", Some(&scoped_context("account"))).is_err());
+        assert!(validate_result(&scoped_result("account").to_string(), "fixture", None).is_err());
+    }
+    #[test]
+    fn scoped_context_and_response_bounds_fail_closed() {
+        for scope in ["account", "chat"] {
+            let mut context = scoped_context(scope);
+            context["accountId"] = json!("B".repeat(43));
+            assert!(validate_context(&context, "fixture").is_err());
+            let mut context = scoped_context(scope);
+            context["rawChatKey"] = json!("private");
+            assert!(validate_context(&context, "fixture").is_err());
+        }
+        let mut context = scoped_context("account");
+        context["routes"] = Value::Array(
+            (0..33)
+                .map(|i| json!({"handle":format!("{i:042}A"),"catalogJson":RAW}))
+                .collect(),
+        );
+        assert!(validate_context(&context, "fixture").is_err());
+        let mut context = scoped_context("account");
+        context["legacyCatalogJson"] = json!("x".repeat(MAX_CATALOG_BYTES));
+        assert!(validate_context(&context, "fixture").is_err());
+        let mut begin = fixture().request;
+        begin.setup_context = Some(Value::Null);
+        assert!(validate_begin(&begin).is_err());
     }
 }

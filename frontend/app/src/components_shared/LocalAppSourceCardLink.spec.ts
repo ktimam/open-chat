@@ -71,6 +71,8 @@ beforeEach(() => {
         setupGeneration: 0,
         draftStorageStatus: "",
         enabledChats: [],
+        connections: [],
+        chatSetups: [],
         processorReady: false,
         message: "",
         editorJson: "{}",

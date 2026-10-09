@@ -4,6 +4,11 @@ import {
     openAppSetupFrame,
     validSetupTarget,
 } from "./utils/localAppSetupPopup";
+import {
+    LOCAL_APP_SCOPED_SETUP_MAX_BYTES,
+    parseLocalAppSetupContext,
+    type LocalAppSetupContext,
+} from "./utils/localAppScopedSetup";
 
 type SetupChallenge = {
     version: 1;
@@ -12,6 +17,7 @@ type SetupChallenge = {
     setupUrl: string;
     expiresAtMs: number;
     browserProofHex: string;
+    setupContext?: LocalAppSetupContext;
 };
 export async function readSetupChallenge(response: Response): Promise<SetupChallenge> {
     if (!response.ok || response.redirected || !response.body)
@@ -24,7 +30,8 @@ export async function readSetupChallenge(response: Response): Promise<SetupChall
             const { value, done } = await reader.read();
             if (done) break;
             length += value.byteLength;
-            if (length > 16 * 1024) throw new Error("Oversized setup response");
+            if (length > LOCAL_APP_SCOPED_SETUP_MAX_BYTES + 16 * 1024)
+                throw new Error("Oversized setup response");
             chunks.push(value);
         }
     } finally {
@@ -46,6 +53,9 @@ export async function readSetupChallenge(response: Response): Promise<SetupChall
             "setupUrl",
             "expiresAtMs",
             "browserProofHex",
+            ...(value && typeof value === "object" && Object.hasOwn(value, "setupContext")
+                ? ["setupContext"]
+                : []),
         ]) ||
         value.version !== 1 ||
         typeof value.setupId !== "string" ||
@@ -59,7 +69,11 @@ export async function readSetupChallenge(response: Response): Promise<SetupChall
         value.expiresAtMs > Date.now() + APP_SETUP_TIMEOUT_MS + 5000
     )
         throw new Error("Invalid setup challenge");
-    return value as SetupChallenge;
+    const setupContext = Object.hasOwn(value, "setupContext")
+        ? parseLocalAppSetupContext(value.setupContext, value.appId as string)
+        : undefined;
+    if (!setupContext && length > 16 * 1024) throw new Error("Oversized setup response");
+    return { ...value, ...(setupContext ? { setupContext } : {}) } as SetupChallenge;
 }
 
 /** Bundled first-party page. The native one-use proof stays in memory, never in the app popup. */
@@ -141,7 +155,13 @@ export function startLocalNativeAppSetup(): () => void {
         if (stopped || !challenge) return;
         const current = challenge;
         status.textContent = "Opening the app…";
-        void openAppSetupFrame(current.appId, current.setupUrl, controller.signal, frame)
+        void openAppSetupFrame(
+            current.appId,
+            current.setupUrl,
+            controller.signal,
+            frame,
+            ...(current.setupContext ? [current.setupContext] : []),
+        )
             .then(async (catalogJson) => {
                 if (stopped) return;
                 const response = await fetch("/result", {

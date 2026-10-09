@@ -47,6 +47,18 @@ const processor = Buffer.from(
   'throw new Error("This public processor must never execute during preparation");',
 );
 
+test("accepts only the generic account/chat setup scope declaration", async () => {
+  const sample = await fixture({ catalogChange: catalog => {
+    catalog.apps[0].setupScopes = ["account", "chat"];
+  } });
+  const result = await prepareRegistration(sample.options);
+  assert.equal(result.processorExecuted, false);
+  for (const scopes of [null, [], ["chat"], ["chat", "account"], ["account", "chat", "message"], { account: true }]) {
+    const invalid = await fixture({ catalogChange: catalog => { catalog.apps[0].setupScopes = scopes; } });
+    await assert.rejects(prepareRegistration(invalid.options));
+  }
+});
+
 async function fixture({
   catalogChange,
   descriptorChange,

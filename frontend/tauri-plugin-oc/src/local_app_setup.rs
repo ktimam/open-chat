@@ -471,6 +471,7 @@ mod tests {
         BeginRequest {
             app_id: "fixture".into(),
             setup_url: "https://app.example/connect".into(),
+            setup_context: None,
         }
     }
     fn assets() -> BrowserAssets {

@@ -1,6 +1,11 @@
 import { parseLocalAppCatalog, type LocalAppCatalog } from "./localAppCatalog";
 import { verifyImportedLocalProcessor, type ImportedLocalProcessor } from "./isolatedAppProcessor";
 import { validateLocalAppInstallation, type LocalAppInstallation } from "./localAppDirectory";
+import {
+    validateLocalAppChatRoutes,
+    type LocalAppAccountConnection,
+    type LocalAppChatSetup,
+} from "./localAppChatRoutes";
 
 export type LocalAppSetupScope = Readonly<{ account: string; backend: string }>;
 export type LocalAppEnabledChats = readonly Readonly<{
@@ -15,6 +20,8 @@ export type LocalAppSetupSnapshot = Readonly<{
     processors?: readonly Readonly<{ appId: string; artifact: ImportedLocalProcessor }>[];
     installations?: readonly LocalAppInstallation[];
     disabledAppIds?: readonly string[];
+    connections?: readonly LocalAppAccountConnection[];
+    chatSetups?: readonly LocalAppChatSetup[];
     enabledChats: LocalAppEnabledChats;
 }>;
 export interface LocalAppSetupStorage {
@@ -169,7 +176,16 @@ function captureSnapshot(value: unknown): LocalAppSetupSnapshot {
     exact(
         value,
         ["catalog", "enabledChats"],
-        ["appId", "actionId", "processor", "processors", "installations", "disabledAppIds"],
+        [
+            "appId",
+            "actionId",
+            "processor",
+            "processors",
+            "installations",
+            "disabledAppIds",
+            "connections",
+            "chatSetups",
+        ],
     );
     const catalog = parseLocalAppCatalog(JSON.stringify(cloneJson(value.catalog)));
     const appId = value.appId;
@@ -265,6 +281,12 @@ function captureSnapshot(value: unknown): LocalAppSetupSnapshot {
     const enabledChats = validateLocalAppEnabledChats(value.enabledChats, catalog);
     if (enabledChats.some((row) => row.appIds.some((id) => disabledAppIds?.includes(id))))
         invalid();
+    const routes = validateLocalAppChatRoutes(
+        catalog,
+        installations ?? [],
+        value.connections,
+        value.chatSetups,
+    );
     return Object.freeze({
         catalog,
         ...(appId === undefined ? {} : { appId }),
@@ -273,6 +295,8 @@ function captureSnapshot(value: unknown): LocalAppSetupSnapshot {
         ...(processors === undefined ? {} : { processors }),
         ...(installations === undefined ? {} : { installations }),
         ...(disabledAppIds === undefined ? {} : { disabledAppIds }),
+        ...(value.connections === undefined ? {} : { connections: routes.connections }),
+        ...(value.chatSetups === undefined ? {} : { chatSetups: routes.chatSetups }),
         enabledChats,
     });
 }
@@ -331,6 +355,8 @@ export async function encodeLocalAppSetup(
         ...(snapshot.disabledAppIds === undefined
             ? {}
             : { disabledAppIds: snapshot.disabledAppIds }),
+        ...(snapshot.connections === undefined ? {} : { connections: snapshot.connections }),
+        ...(snapshot.chatSetups === undefined ? {} : { chatSetups: snapshot.chatSetups }),
         enabledChats: { catalogSha256, entries: snapshot.enabledChats },
     });
     if (new TextEncoder().encode(serialized).byteLength > MAX_RECORD_BYTES) invalid();
@@ -358,7 +384,16 @@ export async function decodeLocalAppSetup(
     exact(
         data,
         ["version", "scope", "catalogJson", "catalogSha256", "enabledChats"],
-        ["appId", "actionId", "processor", "processors", "installations", "disabledAppIds"],
+        [
+            "appId",
+            "actionId",
+            "processor",
+            "processors",
+            "installations",
+            "disabledAppIds",
+            "connections",
+            "chatSetups",
+        ],
     );
     const storedOwner = scopeSnapshot(data.scope);
     if (
@@ -386,6 +421,8 @@ export async function decodeLocalAppSetup(
         processors: data.processors,
         installations: data.installations,
         disabledAppIds: data.disabledAppIds,
+        connections: data.connections,
+        chatSetups: data.chatSetups,
         enabledChats: data.enabledChats.entries,
     });
 }

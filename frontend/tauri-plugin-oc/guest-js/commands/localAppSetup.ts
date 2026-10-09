@@ -17,6 +17,22 @@ export type LocalAppSetupStatus = {
 export function beginLocalAppSetup(payload: {
     appId: string;
     setupUrl: string;
+    /** Opaque app-owned route metadata. No chat coordinates or content. */
+    setupContext?:
+        | {
+              readonly version: 2;
+              readonly scope: "account";
+              readonly accountId?: string;
+              readonly legacyCatalogJson?: string;
+              readonly routes: readonly { readonly handle: string; readonly catalogJson: string }[];
+          }
+        | {
+              readonly version: 2;
+              readonly scope: "chat";
+              readonly accountId: string;
+              readonly handle: string;
+              readonly catalogJson?: string;
+          };
 }): Promise<LocalAppSetupStart> {
     return invoke("plugin:oc|begin_local_app_setup", { payload });
 }

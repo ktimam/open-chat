@@ -323,7 +323,8 @@ unrelated selector cannot authorize reading another user's inbox.
 
 Connections/cards without `deliveryInbox` keep their original encrypted relay
 path. Publishing an endpoint alone does not grant authority or upgrade an old
-card. Explicit reconnect supplies a new private grant for new proposals; existing
+card. Explicit reconnect supplies a valid private grant for new proposals, reusing
+a matching unexpired grant when supported; existing
 cards retain their frozen recipient and delivery configuration. An uncertain old
 relay handoff must not be silently converted into a new inbox request.
 
@@ -343,6 +344,25 @@ are not device sign-in, model inference, cross-device pending recovery or saved
 entry acceptance. Those need fresh checks of the exact served/installed artifacts,
 including close/reopen before Save and same-ID retry after an unknown result.
 Historical dated results below remain evidence only for their original builds.
+
+#### Scoped setup and reconnect acceptance (2026-10-09)
+
+With registry generation 10 and the corrected receiving-app frontend active, the
+normal x86 emulator flow saved one chat's existing synthetic destination, then
+completed app-account reconnect without selecting that destination again. A
+force-stop/reopen of only the local-test APK retained the account, opt-in and
+configured route; reopening chat setup preselected the same destination and its
+two private choices. Receiving-app schema/loader checks passed 15 tests and each
+frozen receiving-app runtime passed 132 integration tests. No entry was created,
+model accuracy rerun, physical-phone APK installed or official OpenChat canister
+changed. This is setup persistence acceptance, not another encrypted-delivery or
+ledger-save test.
+
+Cancelling inside the embedded receiving-app page can still leave native chat
+setup waiting; Main Apps does not expose Cancel for that chat-initiated attempt.
+Page reload alone did not release it. Restarting only the local-test APK cleared
+the operation and preserved saved data and its pending handle. This remains a
+cancellation limitation, not a passing protocol result.
 
 #### Emulator startup checkpoint (2026-10-08)
 

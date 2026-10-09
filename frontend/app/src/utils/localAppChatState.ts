@@ -28,9 +28,22 @@ export const localAppChatConfiguration = new LocalAppChatConfiguration((cause) =
     }
 });
 let previousEnabledChats: unknown;
+let previousAccount: unknown;
+let previousCatalog: unknown;
+let previousSetupLoading: unknown;
 const unsubscribe = privateAppWorkspaceState.subscribe((state) => {
-    localAppChatConfiguration.setContext(state.account, state.catalog);
-    if (state.enabledChats === previousEnabledChats) return;
+    localAppChatConfiguration.setContext(
+        state.account,
+        state.catalog,
+        state.connections,
+        state.chatSetups,
+    );
+    const contextChanged = state.account !== previousAccount || state.catalog !== previousCatalog;
+    previousAccount = state.account;
+    previousCatalog = state.catalog;
+    const finishedLoading = previousSetupLoading === true && !state.setupLoading;
+    previousSetupLoading = state.setupLoading;
+    if (!contextChanged && !finishedLoading && state.enabledChats === previousEnabledChats) return;
     previousEnabledChats = state.enabledChats;
     if (state.account && state.catalog && !state.setupLoading)
         localAppChatConfiguration.restoreEnabled(state.account, state.catalog, state.enabledChats);

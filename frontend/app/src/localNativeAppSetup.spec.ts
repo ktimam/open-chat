@@ -27,6 +27,34 @@ afterEach(() => {
     vi.unstubAllGlobals();
 });
 describe("native setup fixed page", () => {
+    it("accepts a bounded scoped challenge larger than the legacy metadata-only cap", async () => {
+        const catalogJson = JSON.stringify({
+            version: 1,
+            apps: [{ id: "sample", note: "a".repeat(17000) }],
+        });
+        const setupContext = {
+            version: 2,
+            scope: "account",
+            accountId: "A".repeat(43),
+            routes: [],
+            legacyCatalogJson: catalogJson,
+        };
+        expect(
+            await readSetupChallenge(
+                new Response(JSON.stringify({ ...challenge(), setupContext })),
+            ),
+        ).toMatchObject({ setupContext });
+        await expect(
+            readSetupChallenge(
+                new Response(
+                    JSON.stringify({
+                        ...challenge(),
+                        setupContext: { ...setupContext, handle: "A".repeat(43) },
+                    }),
+                ),
+            ),
+        ).rejects.toThrow();
+    });
     it.each([
         { extra: "no" },
         { version: 2 },
@@ -101,5 +129,32 @@ describe("native setup fixed page", () => {
         resolvePopup("{}");
         await Promise.resolve();
         expect(fetcher).toHaveBeenCalledTimes(1);
+    });
+    it("keeps scoped metadata in the app message, not native URLs or result authority", async () => {
+        document.body.innerHTML =
+            '<p id="setup-status"></p><iframe id="app-setup" hidden></iframe>';
+        const setupContext = {
+            version: 2,
+            scope: "chat",
+            accountId: "A".repeat(43),
+            handle: "B".repeat(42) + "A",
+        };
+        const fetcher = vi
+            .fn()
+            .mockResolvedValueOnce(new Response(JSON.stringify({ ...challenge(), setupContext })))
+            .mockResolvedValueOnce(new Response("{}"));
+        vi.stubGlobal("fetch", fetcher);
+        vi.mocked(openAppSetupFrame).mockResolvedValue("scoped-result");
+        cleanup = startLocalNativeAppSetup();
+        await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+        expect(openAppSetupFrame).toHaveBeenCalledWith(
+            "sample",
+            "https://app.example/connect",
+            expect.any(AbortSignal),
+            document.querySelector("#app-setup"),
+            setupContext,
+        );
+        expect(fetcher.mock.calls.map((call) => call[0])).toEqual(["/challenge", "/result"]);
+        expect(JSON.parse(fetcher.mock.calls[1][1].body).catalogJson).toBe("scoped-result");
     });
 });

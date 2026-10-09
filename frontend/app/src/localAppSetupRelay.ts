@@ -6,6 +6,7 @@ import {
     validSetupTarget,
 } from "./utils/localAppSetupPopup";
 import { validateLocalAppFrameDestination } from "./utils/localAppRelayFrame";
+import { parseLocalAppSetupContext, type LocalAppSetupContext } from "./utils/localAppScopedSetup";
 
 /** The normal app connection UI is the only visible surface; sharing still needs its consent. */
 export function startLocalAppSetupRelay(): () => void {
@@ -28,7 +29,9 @@ export function startLocalAppSetupRelay(): () => void {
     const controller = new AbortController();
     const channel = new BroadcastChannel(`openchat-local-setup-v1:${nonce}`);
     let closed = false;
-    let target: { appId: string; setupUrl: string } | undefined;
+    let target:
+        | { appId: string; setupUrl: string; setupContext?: LocalAppSetupContext }
+        | undefined;
     const send = (type: string, extra = {}) =>
         channel.postMessage({ type, version: 1, sessionNonce: nonce, ...extra });
     const stop = () => {
@@ -69,15 +72,30 @@ export function startLocalAppSetupRelay(): () => void {
         if (
             target ||
             data.type !== "setup-target" ||
-            !exactSetupPacket(data, ["type", "version", "sessionNonce", "appId", "setupUrl"]) ||
+            !exactSetupPacket(data, [
+                "type",
+                "version",
+                "sessionNonce",
+                "appId",
+                "setupUrl",
+                ...(Object.hasOwn(data, "setupContext") ? ["setupContext"] : []),
+            ]) ||
             !validSetupTarget(data.appId, data.setupUrl)
         )
             return;
         target = { appId: data.appId as string, setupUrl: data.setupUrl as string };
         try {
+            if (Object.hasOwn(data, "setupContext"))
+                target.setupContext = parseLocalAppSetupContext(data.setupContext, target.appId);
             validateLocalAppFrameDestination(target.setupUrl);
             status.hidden = true;
-            void openAppSetupFrame(target.appId, target.setupUrl, controller.signal, frame)
+            void openAppSetupFrame(
+                target.appId,
+                target.setupUrl,
+                controller.signal,
+                frame,
+                ...(target.setupContext ? [target.setupContext] : []),
+            )
                 .then((catalogJson) => {
                     if (closed) return;
                     try {

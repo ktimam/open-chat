@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseLocalAppCatalog } from "./localAppCatalog";
+import { scopedAppFixture, routeHandle } from "./localAppChatRoutes.testFixtures";
+import { resolveLocalAppForChat } from "./localAppChatRoutes";
 import {
     createBrowserLocalAppSetupStorage,
     decodeLocalAppSetup,
@@ -223,6 +225,70 @@ function expectTombstone(db: ReturnType<typeof fakeIndexedDb>) {
 }
 
 describe("strict device-local setup codec", () => {
+    it("round-trips app account connections and independent bounded per-chat setup", async () => {
+        const f = await scopedAppFixture();
+        const value: LocalAppSetupSnapshot = {
+            catalog: f.catalog,
+            installations: [f.installation],
+            connections: f.connections,
+            chatSetups: [f.route("chat-a", 1), f.route("chat-b", 2)],
+            enabledChats: [
+                { chatKey: "chat-a", appIds: ["sample"] },
+                { chatKey: "chat-b", appIds: ["sample"] },
+            ],
+        };
+        const encoded = await encodeLocalAppSetup(scope, value);
+        const restored = await decodeLocalAppSetup(scope, encoded);
+        expect(restored).toEqual(value);
+        expect(Object.isFrozen(restored.connections)).toBe(true);
+        expect(Object.isFrozen(restored.chatSetups?.[0])).toBe(true);
+        expect(
+            resolveLocalAppForChat(
+                restored.catalog,
+                restored.connections,
+                restored.chatSetups,
+                "sample",
+                "chat-a",
+            )?.recipientLabel,
+        ).toBe("Destination 1");
+        expect(
+            resolveLocalAppForChat(
+                restored.catalog,
+                restored.connections,
+                restored.chatSetups,
+                "sample",
+                "chat-b",
+            )?.recipientLabel,
+        ).toBe("Destination 2");
+        const wrong = JSON.parse(encoded);
+        wrong.chatSetups[0].accountId = routeHandle(5);
+        await expect(decodeLocalAppSetup(scope, JSON.stringify(wrong))).rejects.toThrow();
+        const badPublisher = JSON.parse(encoded);
+        badPublisher.installations[0].descriptor.catalog.sha256 = "f".repeat(64);
+        await expect(decodeLocalAppSetup(scope, JSON.stringify(badPublisher))).rejects.toThrow();
+    });
+    it("copies per-chat setup before async publisher validation and restores pending handles", async () => {
+        const f = await scopedAppFixture();
+        const pendingRoute = { ...f.route("pending", 2), catalogJson: undefined };
+        const input = {
+            catalog: f.catalog,
+            installations: [f.installation],
+            connections: [...f.connections],
+            chatSetups: [f.route("first", 1), pendingRoute],
+            enabledChats: [],
+        };
+        const encoded = encodeLocalAppSetup(scope, input);
+        input.chatSetups[0] = f.route("changed", 3);
+        input.connections[0] = { ...f.connections[0], accountId: routeHandle(5) };
+        const restored = await decodeLocalAppSetup(scope, await encoded);
+        expect(restored.chatSetups?.[0].chatKey).toBe("first");
+        expect(restored.chatSetups?.[1]).toEqual({
+            appId: "sample",
+            chatKey: "pending",
+            handle: routeHandle(2),
+            accountId: f.connections[0].accountId,
+        });
+    });
     it("remembers and revalidates app views and binds chat opt-ins to their exact catalog", async () => {
         const snapshot = await fixture();
         const app = snapshot.catalog.apps[0];
@@ -456,6 +522,25 @@ describe("strict device-local setup codec", () => {
 });
 
 describe("isolated IndexedDB setup adapter", () => {
+    it("retains private chat destinations through encrypted storage and a fresh adapter", async () => {
+        const f = await scopedAppFixture();
+        const db = fakeIndexedDb();
+        const storage = createBrowserLocalAppSetupStorage({ indexedDB: () => db.factory });
+        const value: LocalAppSetupSnapshot = {
+            catalog: f.catalog,
+            installations: [f.installation],
+            connections: f.connections,
+            chatSetups: [f.route("chat-a", 1), f.route("chat-b", 2)],
+            enabledChats: [],
+        };
+        await storage.write(scope, value);
+        const raw = JSON.stringify(db.records.get(key()));
+        expect(raw).not.toContain("Destination 1");
+        expect(raw).not.toContain("chat-a");
+        const fresh = createBrowserLocalAppSetupStorage({ indexedDB: () => db.factory });
+        expect(await fresh.read(scope)).toEqual(value);
+        expect(await fresh.read({ ...scope, account: "other" })).toBeUndefined();
+    });
     it("is lazy and reports missing/denied storage without network or localStorage fallback", async () => {
         const fetch = vi.fn();
         const localStorage = { getItem: vi.fn(), setItem: vi.fn() };

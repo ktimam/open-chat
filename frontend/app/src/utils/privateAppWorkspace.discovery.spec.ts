@@ -16,6 +16,7 @@ import type {
     LocalAppPublicPackage,
 } from "./localAppDirectory";
 import { loadLocalAppDirectory } from "./localAppDirectory";
+import { parseLocalAppCatalog } from "./localAppCatalog";
 import type { extractPrivateAppAction } from "./aiActionRunner";
 import { verifyImportedLocalProcessor, type runIsolatedAppProcessor } from "./isolatedAppProcessor";
 import type { LocalDraftDelivery } from "./localAppDrafts";
@@ -306,11 +307,120 @@ describe("automatic app setup atomicity and privacy", () => {
         await propose(workspace);
         const cardId = workspace.state.draft!.id;
         const loads = deps.loadDirectory.mock.calls.length;
-        await workspace.refreshDirectory();
+        expect(await workspace.refreshDirectory()).toBe(true);
         expect(deps.loadDirectory).toHaveBeenCalledTimes(loads + 1);
         expect(workspace.state.directory?.apps.map((app) => app.id)).toEqual(["one", "two"]);
         expect(workspace.state.draft?.id).toBe(cardId);
         expect(deps.deliver).not.toHaveBeenCalled();
+    });
+
+    it.each(["private setup", "publisher", "destination", "inbox", "recipe"] as const)(
+        "reports a changed %s with a reviewed card without changing its approval or setup",
+        async (change) => {
+            const { workspace, deps, packages, setDirectory } = await fixture(
+                change === "private setup",
+            );
+            await workspace.connectApp("one");
+            workspace.replaceEnabledChats("synthetic-account", workspace.state.catalog!, [
+                { chatKey: "chat", appIds: ["one"] },
+            ]);
+            await propose(workspace);
+            expect(workspace.review()).toBe(true);
+            const draft = workspace.state.draft!;
+            const catalog = workspace.state.catalog;
+            const fields = workspace.state.editorJson;
+            const update = await directoryFixture("one", "2");
+            let descriptor = update.descriptor;
+            let pkg = update.pkg;
+            if (change === "publisher") {
+                descriptor = { ...descriptor, setupUrl: "https://publisher.test/new-connection" };
+            } else if (change === "destination" || change === "inbox") {
+                const document = JSON.parse(update.catalogJson);
+                if (change === "destination") {
+                    document.apps[0].destination = "https://publisher.test/new-import";
+                } else {
+                    document.apps[0].deliveryInbox = {
+                        version: 1,
+                        kind: "ic-canister",
+                        host: "https://publisher.test",
+                        canisterId: Principal.fromUint8Array(new Uint8Array([1, 2, 3, 2])).toText(),
+                    };
+                }
+                const catalogJson = JSON.stringify(document);
+                const bytes = new TextEncoder().encode(catalogJson);
+                const sha256 = Array.from(
+                    new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)),
+                    (byte) => byte.toString(16).padStart(2, "0"),
+                ).join("");
+                descriptor = {
+                    ...descriptor,
+                    catalog: { ...descriptor.catalog, byteLength: bytes.byteLength, sha256 },
+                };
+                pkg = { ...pkg, catalogJson, catalog: parseLocalAppCatalog(catalogJson) };
+            }
+            packages.set("one", pkg);
+            setDirectory({ version: 1, apps: [descriptor] });
+            deps.loadPublicPackage.mockClear();
+            deps.connectAppSetup.mockClear();
+            expect(await workspace.refreshDirectory()).toBe(true);
+            expect(workspace.state.appUpdates.one).toContain("Connect");
+            if (change === "destination" || change === "inbox")
+                expect(workspace.state.appUpdates.one).toContain(change);
+            expect(workspace.state.catalog).toBe(catalog);
+            expect(workspace.state.draft).toEqual(draft);
+            expect(workspace.state.draft?.approval).toBe(draft.approval);
+            expect(workspace.state.activeCardApp).toBe(catalog!.apps[0]);
+            expect(workspace.state.editorJson).toBe(fields);
+            expect(workspace.state.enabledChats).toEqual([{ chatKey: "chat", appIds: ["one"] }]);
+            expect(deps.connectAppSetup).not.toHaveBeenCalled();
+            expect(deps.deliver).not.toHaveBeenCalled();
+            if (change === "private setup" || change === "publisher")
+                expect(deps.loadPublicPackage).not.toHaveBeenCalled();
+        },
+    );
+
+    it("inspects every installed app with saved cards instead of stopping at the first deferred update", async () => {
+        const { workspace, packages, setDirectory } = await fixture();
+        await workspace.connectApp("one");
+        await workspace.connectApp("two");
+        workspace.selectForProposal("one", "add");
+        await propose(workspace);
+        const catalog = workspace.state.catalog;
+        const one = await directoryFixture("one", "2");
+        const two = await directoryFixture("two", "2");
+        packages.set("one", one.pkg);
+        packages.set("two", two.pkg);
+        setDirectory({
+            version: 1,
+            apps: [
+                one.descriptor,
+                { ...two.descriptor, setupUrl: "https://publisher.test/changed" },
+            ],
+        });
+        expect(await workspace.refreshDirectory()).toBe(true);
+        expect(workspace.state.appUpdates.one).toContain("Connect again");
+        expect(workspace.state.appUpdates.two).toContain("changed publisher");
+        expect(workspace.state.catalog).toBe(catalog);
+        expect(workspace.state.cards).toHaveLength(1);
+    });
+
+    it("reports an unlisted app without changing retained card approvals or chat opt-ins", async () => {
+        const { workspace, setDirectory, two } = await fixture();
+        await workspace.connectApp("one");
+        workspace.replaceEnabledChats("synthetic-account", workspace.state.catalog!, [
+            { chatKey: "chat", appIds: ["one"] },
+        ]);
+        await propose(workspace);
+        expect(workspace.review()).toBe(true);
+        const draft = workspace.state.draft!;
+        setDirectory(two.directory);
+        expect(await workspace.refreshDirectory()).toBe(true);
+        expect(workspace.state.appUpdates.one).toContain("No longer listed");
+        expect(workspace.state.appUpdates.one).not.toContain("Disabled");
+        expect(workspace.state.disabledAppIds).toEqual([]);
+        expect(workspace.state.enabledChats).toEqual([{ chatKey: "chat", appIds: ["one"] }]);
+        expect(workspace.state.draft).toEqual(draft);
+        expect(workspace.state.draft?.approval).toBe(draft.approval);
     });
 
     it("retains a card's original fields and blocks sending after reconnecting changed setup", async () => {
@@ -362,11 +472,17 @@ describe("automatic app setup atomicity and privacy", () => {
             await workspace.confirm(approval.approvalId);
             const originalDraft = workspace.state.draft!;
             const originalFields = workspace.state.editorJson;
+            const originalCatalog = workspace.state.catalog;
             const update = await directoryFixture("one", "2");
             packages.set("one", update.pkg);
             connected.set("one", withRecipient(update.connectedJson));
             setDirectory(update.directory);
-            await workspace.refreshDirectory();
+            expect(await workspace.refreshDirectory()).toBe(true);
+            expect(workspace.state.appUpdates.one).toContain("Connect again");
+            expect(workspace.state.draft).toEqual(originalDraft);
+            expect(workspace.state.draft?.approval).toBe(originalDraft.approval);
+            expect(workspace.state.catalog).toBe(originalCatalog);
+            expect(deps.deliver).toHaveBeenCalledOnce();
             expect(await workspace.connectApp("one")).toBe(true);
             expect(workspace.state.cardReviewBlockedReason).toContain("inspect-only");
             expect(workspace.review()).toBe(false);
@@ -562,9 +678,51 @@ describe("automatic app setup atomicity and privacy", () => {
         const refresh = workspace.refreshDirectory();
         await propose(workspace);
         resolve({ version: 1, apps: [] });
-        expect(await refresh).toBe(false);
+        expect(await refresh).toBe(true);
         expect(workspace.state.disabledAppIds).toEqual([]);
         expect(workspace.state.draft).toBeDefined();
+        expect(workspace.state.appUpdates.one).toContain("No longer listed");
+    });
+    it("does not change a pending send when a directory response arrives during delivery", async () => {
+        const { workspace, deps, one, connected } = await fixture();
+        const setup = JSON.parse(one.connectedJson);
+        setup.apps[0].deliveryEncryption = {
+            version: 1,
+            scheme: "p256-hkdf-sha256-aes-256-gcm-v1",
+            keyId: "a".repeat(64),
+            publicKeySpki: btoa("\0".repeat(91)).replace(/=+$/, ""),
+            recipientContext: "AQ",
+        };
+        connected.set("one", JSON.stringify(setup));
+        await workspace.connectApp("one");
+        await propose(workspace);
+        expect(workspace.review()).toBe(true);
+        const approval = workspace.state.draft!.approval!;
+        const catalog = workspace.state.catalog;
+        let finishDirectory!: (value: LocalAppDirectory) => void;
+        deps.loadDirectory.mockImplementationOnce(
+            () => new Promise((resolve) => (finishDirectory = resolve)),
+        );
+        let finishDelivery!: () => void;
+        deps.deliver.mockImplementationOnce(
+            () => new Promise((resolve) => (finishDelivery = () => resolve({ kind: "uncertain" }))),
+        );
+        const refresh = workspace.refreshDirectory();
+        const send = workspace.confirm(approval.approvalId);
+        const sending = workspace.state.draft!;
+        expect(sending.status).toBe("sending");
+        finishDirectory({ version: 1, apps: [] });
+        expect(await refresh).toBe(false);
+        expect(workspace.state.catalog).toBe(catalog);
+        expect(workspace.state.draft).toEqual(sending);
+        expect(workspace.state.draft?.approval).toBe(approval);
+        expect(workspace.state.disabledAppIds).toEqual([]);
+        expect(deps.deliver).toHaveBeenCalledOnce();
+        finishDelivery();
+        await send;
+        expect(workspace.state.busy).toBe(false);
+        expect(workspace.state.draft?.status).toBe("uncertain");
+        expect(workspace.state.draft?.approval?.request).toBe(approval.request);
     });
     it("rejects persisted cross-app artifacts, altered provenance and disabled app opt-ins", async () => {
         const one = await directoryFixture("one");
@@ -730,8 +888,9 @@ describe("automatic app setup atomicity and privacy", () => {
         packages.set("one", update.pkg);
         setDirectory(update.directory);
         deps.loadDirectory.mockClear();
-        expect(await workspace.refreshDirectory()).toBe(false);
+        expect(await workspace.refreshDirectory()).toBe(true);
         expect(deps.loadDirectory).toHaveBeenCalledTimes(1);
+        expect(workspace.state.appUpdates.one).toContain("Connect again");
         expect(workspace.state.draft?.approval).toBe(approval);
         expect(workspace.state.catalog?.apps[0].revision).toBe("1");
         workspace.discard();

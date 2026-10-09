@@ -1551,6 +1551,8 @@ describe("private app setup-only persistence", () => {
                 "actionId",
                 "appId",
                 "catalog",
+                "chatSetups",
+                "connections",
                 "disabledAppIds",
                 "enabledChats",
                 "installations",

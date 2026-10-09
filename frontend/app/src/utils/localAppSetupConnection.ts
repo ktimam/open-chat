@@ -2,25 +2,38 @@ import { isTauri } from "@tauri-apps/api/core";
 import type { LocalAppDirectoryDescriptor } from "./localAppDirectory";
 import { localAppSessionNonce } from "./localAppHandoff";
 import {
+    parseLocalAppSetupContext,
+    parseLocalAppScopedSetupResult,
+    type LocalAppSetupContext,
+} from "./localAppScopedSetup";
+import {
     APP_SETUP_TIMEOUT_MS,
     boundedSetupCatalog,
     exactSetupPacket,
     validSetupTarget,
 } from "./localAppSetupPopup";
+export type LocalAppSetupContextInput =
+    | LocalAppSetupContext
+    | Promise<LocalAppSetupContext | undefined>;
 
 /** Called directly by the Connect click: browser popup creation must precede any await. */
 export function connectLocalAppSetup(
     descriptor: LocalAppDirectoryDescriptor,
     signal: AbortSignal,
+    setupContext?: LocalAppSetupContextInput,
 ): Promise<string> {
-    if (isTauri()) return connectNativeAppSetup(descriptor, signal);
-    return connectBrowserAppSetup(descriptor, signal);
+    if (isTauri()) return connectNativeAppSetup(descriptor, signal, setupContext);
+    return connectBrowserAppSetup(descriptor, signal, setupContext);
 }
 export function connectBrowserAppSetup(
     descriptor: Pick<LocalAppDirectoryDescriptor, "id" | "setupUrl">,
     signal: AbortSignal,
+    setupContext?: LocalAppSetupContextInput,
 ): Promise<string> {
     return new Promise((resolve, reject) => {
+        let context: LocalAppSetupContext | undefined;
+        let contextReady = false;
+        let relayReady = false;
         if (
             signal.aborted ||
             typeof BroadcastChannel === "undefined" ||
@@ -55,6 +68,44 @@ export function connectBrowserAppSetup(
                 );
         };
         const cancel = () => finish();
+        const sendTarget = () => {
+            if (closed || sent || !contextReady || !relayReady) return;
+            sent = true;
+            try {
+                channel.postMessage({
+                    type: "setup-target",
+                    version: 1,
+                    sessionNonce: nonce,
+                    appId: descriptor.id,
+                    setupUrl: descriptor.setupUrl,
+                    ...(context ? { setupContext: context } : {}),
+                });
+            } catch {
+                finish();
+            }
+        };
+        if (setupContext === undefined) contextReady = true;
+        else if (!(setupContext instanceof Promise)) {
+            try {
+                context = parseLocalAppSetupContext(setupContext, descriptor.id);
+            } catch {
+                finish();
+                return;
+            }
+            contextReady = true;
+        } else {
+            void setupContext
+                .then((value) => {
+                    if (closed) return;
+                    context =
+                        value === undefined
+                            ? undefined
+                            : parseLocalAppSetupContext(value, descriptor.id);
+                    contextReady = true;
+                    sendTarget();
+                })
+                .catch(() => finish());
+        }
         signal.addEventListener("abort", cancel, { once: true });
         window.addEventListener("pagehide", cancel, { once: true });
         channel.onmessageerror = cancel;
@@ -65,26 +116,22 @@ export function connectBrowserAppSetup(
                 !sent &&
                 exactSetupPacket(data, ["type", "version", "sessionNonce"])
             ) {
-                sent = true;
-                try {
-                    channel.postMessage({
-                        type: "setup-target",
-                        version: 1,
-                        sessionNonce: nonce,
-                        appId: descriptor.id,
-                        setupUrl: descriptor.setupUrl,
-                    });
-                } catch {
-                    finish();
-                }
+                relayReady = true;
+                sendTarget();
             } else if (
                 data.type === "setup-result" &&
                 sent &&
                 exactSetupPacket(data, ["type", "version", "sessionNonce", "catalogJson"]) &&
                 boundedSetupCatalog(data.catalogJson)
-            )
-                finish(data.catalogJson);
-            else if (
+            ) {
+                try {
+                    if (context)
+                        parseLocalAppScopedSetupResult(data.catalogJson, descriptor.id, context);
+                    finish(data.catalogJson);
+                } catch {
+                    finish();
+                }
+            } else if (
                 data.type === "setup-failed" &&
                 exactSetupPacket(data, ["type", "version", "sessionNonce"])
             )
@@ -108,7 +155,35 @@ export function connectBrowserAppSetup(
 export async function connectNativeAppSetup(
     descriptor: LocalAppDirectoryDescriptor,
     signal: AbortSignal,
+    setupContext?: LocalAppSetupContextInput,
 ): Promise<string> {
+    signal.throwIfAborted();
+    const deadline = performance.now() + APP_SETUP_TIMEOUT_MS;
+    const context = await new Promise<LocalAppSetupContext | undefined>((resolve, reject) => {
+        let settled = false;
+        const finish = (value?: LocalAppSetupContext, failed = false) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            signal.removeEventListener("abort", cancel);
+            if (failed) reject(new Error("App connection cancelled or invalid"));
+            else resolve(value);
+        };
+        const cancel = () => finish(undefined, true);
+        const timer = setTimeout(cancel, APP_SETUP_TIMEOUT_MS);
+        signal.addEventListener("abort", cancel, { once: true });
+        void Promise.resolve(setupContext)
+            .then((value) => {
+                if (settled) return;
+                signal.throwIfAborted();
+                finish(
+                    value === undefined
+                        ? undefined
+                        : parseLocalAppSetupContext(value, descriptor.id),
+                );
+            })
+            .catch(cancel);
+    });
     signal.throwIfAborted();
     if (!validSetupTarget(descriptor.id, descriptor.setupUrl))
         throw new Error("Invalid app connection");
@@ -117,8 +192,8 @@ export async function connectNativeAppSetup(
     const started = await transport.beginLocalAppSetup({
         appId: descriptor.id,
         setupUrl: descriptor.setupUrl,
+        ...(context ? { setupContext: context } : {}),
     });
-    const deadline = performance.now() + APP_SETUP_TIMEOUT_MS;
     const cancel = () => {
         void transport.cancelLocalAppSetup(started.setupId).catch(() => undefined);
     };
@@ -143,8 +218,11 @@ export async function connectNativeAppSetup(
         while (!signal.aborted && performance.now() < deadline) {
             const state = await transport.pollLocalAppSetup(started.setupId);
             signal.throwIfAborted();
-            if (state.phase === "received" && boundedSetupCatalog(state.catalogJson))
+            if (state.phase === "received" && boundedSetupCatalog(state.catalogJson)) {
+                if (context)
+                    parseLocalAppScopedSetupResult(state.catalogJson, descriptor.id, context);
                 return state.catalogJson;
+            }
             if (state.phase !== "waiting")
                 throw new Error("App connection expired or was cancelled");
             await new Promise<void>((resolve) => {

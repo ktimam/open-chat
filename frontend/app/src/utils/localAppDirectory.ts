@@ -384,6 +384,7 @@ export function bindConnectedLocalApp(
         app.name !== advertised.name ||
         app.description !== advertised.description ||
         app.destination !== advertised.destination ||
+        !sameJson(app.setupScopes, advertised.setupScopes) ||
         !sameJson(
             app.deliveryInbox ? localAppInboxEndpoint(app.deliveryInbox) : undefined,
             advertised.deliveryInbox ? localAppInboxEndpoint(advertised.deliveryInbox) : undefined,

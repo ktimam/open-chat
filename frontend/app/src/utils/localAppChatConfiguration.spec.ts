@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { LocalAppChatConfiguration } from "./localAppChatConfiguration";
 import type { LocalAppCatalog } from "./localAppCatalog";
+import { scopedAppFixture } from "./localAppChatRoutes.testFixtures";
 
 const catalog = (): LocalAppCatalog => ({
     version: 1,
@@ -44,6 +45,37 @@ const catalog = (): LocalAppCatalog => ({
 });
 
 describe("local per-chat app opt-in", () => {
+    it("uses each chat's private vocabulary and invalidates suggestions without resetting opt-ins", async () => {
+        const f = await scopedAppFixture();
+        const state = new LocalAppChatConfiguration();
+        const routes = [f.route("a", 1, "alpha"), f.route("b", 2, "beta")];
+        state.setContext("viewer", f.catalog, f.connections, routes);
+        state.setEnabled("viewer", "a", "sample", true);
+        state.setEnabled("viewer", "b", "sample", true);
+        state.setEnabled("viewer", "unconfigured", "sample", true);
+        const old = state.suggestions("viewer", "a", { kind: "text_content", text: "alpha" });
+        expect(old).toHaveLength(1);
+        expect(state.suggestions("viewer", "a", { kind: "text_content", text: "beta" })).toEqual(
+            [],
+        );
+        expect(
+            state.suggestions("viewer", "b", { kind: "text_content", text: "beta" }),
+        ).toHaveLength(1);
+        expect(state.enabledApps("viewer", "unconfigured")).toEqual([]);
+        state.setContext("viewer", f.catalog, f.connections, [
+            f.route("a", 1, "updated"),
+            routes[1],
+        ]);
+        expect(state.enabled("viewer", "a", "sample")).toBe(true);
+        expect(state.enabled("viewer", "b", "sample")).toBe(true);
+        expect(state.current(old[0])).toBe(false);
+        expect(
+            state.suggestions("viewer", "a", { kind: "text_content", text: "updated" }),
+        ).toHaveLength(1);
+        expect(
+            state.suggestions("viewer", "b", { kind: "text_content", text: "beta" }),
+        ).toHaveLength(1);
+    });
     it("restores copied bounded choices only against the exact account and catalog", () => {
         const changed = vi.fn();
         const state = new LocalAppChatConfiguration(changed);

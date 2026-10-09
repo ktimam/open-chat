@@ -258,8 +258,10 @@ function validateCatalog(bytes, descriptor, allowLoopback) {
       "processor",
       "actions",
     ],
-    ["deliveryInbox"],
+    ["deliveryInbox", "setupScopes"],
   );
+  if (app.setupScopes !== undefined)
+    assert.deepEqual(app.setupScopes, ["account", "chat"], "Invalid public setup scopes");
   if (app.deliveryInbox !== undefined)
     publicInbox(app.deliveryInbox, allowLoopback);
   for (const key of ["id", "revision", "name", "description"])

@@ -131,8 +131,8 @@
                         </p>
                     {:else}
                         <p class="desc">
-                            This connected app is not in the current directory. Disconnect remains
-                            available.
+                            A verified connection address is not available. Check your connection
+                            and use Refresh apps to retry. Disconnect remains available.
                         </p>
                     {/if}
                     {#if app.status}<p class="desc" role="status">{app.status}</p>{/if}
