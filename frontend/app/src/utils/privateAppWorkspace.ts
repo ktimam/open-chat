@@ -109,6 +109,8 @@ export interface PrivateAppWorkspaceState {
     actionId?: string;
     processorReady: boolean;
     busy: boolean;
+    /** Transient setup attempt only; never persisted or used to cancel another app's work. */
+    pendingConnectionAppId?: string;
     /** Transient editor guard, published so source-card navigation cannot hide an invalid edit. */
     readonly fieldEditBlocked: boolean;
     phase?: ProposalPhase;
@@ -514,6 +516,8 @@ export class PrivateAppWorkspace {
         this.#setupNeedsRestore = this.deps.setupStorage !== undefined;
         this.#abort?.abort();
         this.#abort = undefined;
+        this.#connectionAbort = undefined;
+        this.#cancelledConnection = undefined;
         this.#processor = undefined;
         this.#processors.clear();
         this.#installations.clear();
@@ -1228,6 +1232,7 @@ export class PrivateAppWorkspace {
         let removeCancellationListener = () => {};
         this.#set({
             busy: true,
+            pendingConnectionAppId: appId,
             message:
                 "Checking the app recipe and opening its account connection. No chat content is sent.",
         });
@@ -1343,15 +1348,21 @@ export class PrivateAppWorkspace {
             if (this.#cancelledConnection === abort) this.#cancelledConnection = undefined;
             if (this.#abort === abort) {
                 this.#abort = undefined;
-                this.#set({ busy: false });
+                this.#set({ busy: false, pendingConnectionAppId: undefined });
             }
         }
     }
 
     /** Cancel only a connection attempt; never discard a card or interrupt model processing. */
-    cancelConnection(): boolean {
+    cancelConnection(appId?: string): boolean {
         const abort = this.#connectionAbort;
-        if (!abort || this.#abort !== abort || abort.signal.aborted) return false;
+        if (
+            !abort ||
+            this.#abort !== abort ||
+            abort.signal.aborted ||
+            (appId !== undefined && this.#state.pendingConnectionAppId !== appId)
+        )
+            return false;
         this.#cancelledConnection = abort;
         abort.abort();
         return true;

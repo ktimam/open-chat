@@ -46,8 +46,20 @@
             workspaceView.draftLoading ||
             workspaceView.directoryLoading,
     );
-    let connecting = $state(false);
+    let ownedConnectionId = $state<string>();
+    const matchingPendingConnection = $derived(
+        selectedId !== undefined && workspaceView.pendingConnectionAppId === selectedId,
+    );
+    const connecting = $derived(
+        selectedId !== undefined && (ownedConnectionId === selectedId || matchingPendingConnection),
+    );
     let connectionMessage = $state("");
+    const detailConnectionMessage = $derived(
+        connectionMessage ||
+            (matchingPendingConnection
+                ? "Connection setup is in progress. Complete it in the app or cancel this connection."
+                : ""),
+    );
     let operation = 0;
     let refreshScope: string | undefined;
     let accountScope: string | undefined;
@@ -60,7 +72,7 @@
             refreshScope = undefined;
             ++operation;
             selectedId = undefined;
-            connecting = false;
+            ownedConnectionId = undefined;
             connectionMessage = "";
         }
         if (!workspaceView.account || !workspaceView.directorySource || workspaceView.setupLoading)
@@ -79,21 +91,26 @@
         connectionMessage = "";
     }
     function cancelConnection() {
-        if (!connecting) return;
+        if (!selectedId || !connecting || !workspace.cancelConnection(selectedId)) return;
         ++operation;
-        workspace.cancelConnection();
-        connecting = false;
+        ownedConnectionId = undefined;
         connectionMessage = "Connection cancelled. Previously connected setup is unchanged.";
     }
+    function cancelOwnedConnection() {
+        // Navigation must not silently cancel setup started from another surface, such as chat.
+        if (ownedConnectionId) workspace.cancelConnection(ownedConnectionId);
+        ownedConnectionId = undefined;
+        ++operation;
+    }
     function dismiss() {
-        cancelConnection();
+        cancelOwnedConnection();
         selectedId = undefined;
     }
     async function connect() {
         if (!selected || busy || connecting || !selected.setupOrigin) return;
         const epoch = ++operation;
         const id = selected.id;
-        connecting = true;
+        ownedConnectionId = id;
         connectionMessage =
             "Opening the app's connection screen. Confirm your selected setup there.";
         let ok = false;
@@ -103,7 +120,7 @@
             /* Show fixed host text only. */
         }
         if (epoch !== operation) return;
-        connecting = false;
+        ownedConnectionId = undefined;
         connectionMessage = ok
             ? "Connected. Enable this app in a chat's Apps settings to propose a message."
             : "Connection could not be completed. Previously connected setup is unchanged. Try Connect again.";
@@ -120,8 +137,7 @@
         return ok;
     }
     onDestroy(() => {
-        cancelConnection();
-        ++operation;
+        cancelOwnedConnection();
     });
 </script>
 
@@ -181,7 +197,7 @@
             app={selected}
             connected={selected.connected}
             {busy}
-            {connectionMessage}
+            connectionMessage={detailConnectionMessage}
             onDismiss={dismiss}
             onConnect={connect}
             onDisconnect={disconnect}
@@ -193,7 +209,7 @@
             app={selected}
             connected={selected.connected}
             {busy}
-            {connectionMessage}
+            connectionMessage={detailConnectionMessage}
             onDismiss={dismiss}
             onConnect={connect}
             onDisconnect={disconnect}

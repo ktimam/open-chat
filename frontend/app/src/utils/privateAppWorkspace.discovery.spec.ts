@@ -596,9 +596,12 @@ describe("automatic app setup atomicity and privacy", () => {
             () => new Promise((resolve) => (finish = resolve)),
         );
         const pending = workspace.connectApp("two");
+        expect(workspace.state.pendingConnectionAppId).toBe("two");
+        expect(workspace.cancelConnection("one")).toBe(false);
         expect(workspace.cancelConnection()).toBe(true);
         expect(await pending).toBe(false);
         expect(workspace.state.busy).toBe(false);
+        expect(workspace.state.pendingConnectionAppId).toBeUndefined();
         expect(workspace.state.message).toContain("Connection cancelled");
         finish(two.connectedJson);
         await Promise.resolve();
@@ -606,6 +609,26 @@ describe("automatic app setup atomicity and privacy", () => {
         expect(workspace.state.cards.map((card) => card.id)).toEqual([cardId]);
         expect(deps.deliver).not.toHaveBeenCalled();
         expect(workspace.cancelConnection()).toBe(false);
+    });
+
+    it("does not treat model processing as a cancellable connection", async () => {
+        const { workspace, deps } = await fixture();
+        await workspace.connectApp("one");
+        let finish!: () => void;
+        deps.extract.mockImplementationOnce(
+            () =>
+                new Promise(
+                    (resolve) => (finish = () => resolve({ kind: "no_extraction", raw: "" })),
+                ),
+        );
+        const pending = propose(workspace);
+        expect(workspace.state.busy).toBe(true);
+        expect(workspace.state.pendingConnectionAppId).toBeUndefined();
+        expect(workspace.cancelConnection("one")).toBe(false);
+        expect(workspace.state.busy).toBe(true);
+        finish();
+        await pending;
+        expect(workspace.state.busy).toBe(false);
     });
 
     it("bounds the combined connection when private setup returns but its public download stalls", async () => {
@@ -819,12 +842,14 @@ describe("automatic app setup atomicity and privacy", () => {
                 () => new Promise((done) => (resolve = done)),
             );
             const pending = workspace.connectApp("one");
+            expect(workspace.state.pendingConnectionAppId).toBe("one");
             if (change === "forget") await workspace.forgetSetup();
             else
                 workspace.setAccount(
                     change === "account" ? "other-account" : "synthetic-account",
                     change === "backend" ? "other-backend" : "https://backend.test|index",
                 );
+            expect(workspace.state.pendingConnectionAppId).toBeUndefined();
             resolve(one.connectedJson);
             expect(await pending).toBe(false);
             expect(workspace.state.catalog).toBeUndefined();

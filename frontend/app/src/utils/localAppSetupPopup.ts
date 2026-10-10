@@ -125,6 +125,18 @@ function connectAppSetupWindow(
         const receive = (event: MessageEvent) => {
             if (done || event.source !== popup || event.origin !== origin) return;
             const value = event.data;
+            // Only the selected app and the current connection can cancel this attempt.
+            // Closing an iframe does not close its parent window, so Cancel must be explicit.
+            if (
+                exactSetupPacket(value, ["type", "version", "connectionId", "appId"]) &&
+                value.type === "oc:app-setup:cancel" &&
+                value.version === (context ? 2 : 1) &&
+                value.connectionId === connectionId &&
+                value.appId === appId
+            ) {
+                finish();
+                return;
+            }
             if (
                 !exactSetupPacket(value, [
                     "type",

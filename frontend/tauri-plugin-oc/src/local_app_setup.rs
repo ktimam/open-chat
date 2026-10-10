@@ -333,8 +333,8 @@ fn allows_fetch_metadata(method: &Method, path: &str, headers: &hyper::HeaderMap
         return false;
     }
     let value = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
-    if path == "/challenge" || path == "/result" {
-        // Unlike static navigation, proof/result endpoints require real same-origin fetch metadata.
+    if matches!(path, "/challenge" | "/result" | "/cancel") {
+        // Unlike static navigation, all authority endpoints require same-origin fetch metadata.
         return value("sec-fetch-site") == Some("same-origin")
             && matches!(value("sec-fetch-mode"), Some("same-origin" | "cors"))
             && value("sec-fetch-dest") == Some("empty")
@@ -418,9 +418,10 @@ async fn handle(
             _ => error(StatusCode::NOT_FOUND),
         });
     }
-    if request.method() != Method::POST || path != "/result" {
+    if request.method() != Method::POST || !matches!(path.as_str(), "/result" | "/cancel") {
         return Ok(error(StatusCode::METHOD_NOT_ALLOWED));
     }
+    let max_body_bytes = if path == "/cancel" { MAX_CANCEL_BYTES } else { MAX_POST_BYTES };
     if headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) != Some(&shared.origin)
         || headers.get_all(header::CONTENT_TYPE).iter().count() != 1
         || !matches!(
@@ -434,12 +435,12 @@ async fn handle(
             v.to_str()
                 .ok()
                 .and_then(|s| s.parse::<usize>().ok())
-                .is_none_or(|n| n > MAX_POST_BYTES)
+                .is_none_or(|n| n > max_body_bytes)
         })
     {
         return Ok(error(StatusCode::BAD_REQUEST));
     }
-    let Ok(body) = Limited::new(request.into_body(), MAX_POST_BYTES)
+    let Ok(body) = Limited::new(request.into_body(), max_body_bytes)
         .collect()
         .await
     else {
@@ -449,6 +450,14 @@ async fn handle(
     let Ok(mut attempt) = shared.attempt.lock() else {
         return Ok(error(StatusCode::SERVICE_UNAVAILABLE));
     };
+    if path == "/cancel" {
+        return Ok(match attempt.cancel_from_browser(&body.to_bytes(), shared.now()) {
+            // Do not signal shutdown here: let the server drain this response before
+            // releasing its listener and foreground retention, as for a consumed result.
+            Ok(()) => response(StatusCode::OK, "application/json", r#"{"cancelled":true}"#),
+            Err(_) => error(StatusCode::FORBIDDEN),
+        });
+    }
     Ok(match attempt.accept(&body.to_bytes(), shared.now()) {
         Ok(()) if shared.retention.active() => response(StatusCode::OK, "application/json", r#"{"accepted":true}"#),
         Ok(()) => { attempt.cancel(); error(StatusCode::GONE) },
@@ -587,8 +596,11 @@ mod tests {
         body(&response)
     }
     async fn post(start: &BeginResponse, value: Value) -> String {
+        post_to(start, "/result", value).await
+    }
+    async fn post_to(start: &BeginResponse, path: &str, value: Value) -> String {
         let body = value.to_string();
-        wire(start, format!("POST /result HTTP/1.1\r\nHost: {}\r\nOrigin: http://{}\r\n{FETCH}Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", host(start), host(start), body.len())).await
+        wire(start, format!("POST {path} HTTP/1.1\r\nHost: {}\r\nOrigin: http://{}\r\n{FETCH}Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", host(start), host(start), body.len())).await
     }
     fn status(value: &str) -> u16 {
         value.split_whitespace().nth(1).unwrap().parse().unwrap()
@@ -598,6 +610,86 @@ mod tests {
     }
     fn result(challenge: &Value) -> Value {
         json!({"version":1,"setupId":challenge["setupId"],"browserProofHex":challenge["browserProofHex"],"catalogJson":"{ \"version\":1, \"apps\":[{\"id\":\"fixture\"}] }"})
+    }
+    fn cancellation(challenge: &Value) -> Value {
+        json!({"version":1,"setupId":challenge["setupId"],"browserProofHex":challenge["browserProofHex"]})
+    }
+    #[tokio::test]
+    async fn browser_cancel_releases_retention_and_reuses_port_with_fresh_authority() {
+        let platform = Arc::new(crate::local_app_retention::test_support::Platform::default());
+        let bridge = LocalAppSetupBridge::with_retention(Some(platform.clone()));
+        let start = bridge.begin(begin(), profile(), assets()).await.unwrap();
+        let port = host(&start).rsplit(':').next().unwrap().parse::<u16>().unwrap();
+        let previous = challenge(&start).await;
+        let response = post_to(&start, "/cancel", cancellation(&previous)).await;
+        assert_eq!(status(&response), 200);
+        assert_eq!(body(&response), json!({"cancelled":true}));
+        // Closing the browser alone must release foreground retention, without any UI poll.
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !platform.owners.lock().unwrap().is_empty() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }).await.unwrap();
+        assert_eq!(bridge.poll(&start.setup_id).await.unwrap().phase, Phase::Cancelled);
+        assert!(tokio::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port)).await.is_err());
+        let next = bridge.begin(begin(), profile_at(port), assets()).await.unwrap();
+        let fresh = challenge(&next).await;
+        assert_ne!(next.setup_id, start.setup_id);
+        assert_ne!(fresh["browserProofHex"], previous["browserProofHex"]);
+        assert_eq!(status(&post_to(&next, "/cancel", cancellation(&previous)).await), 403);
+        assert_eq!(bridge.poll(&next.setup_id).await.unwrap().phase, Phase::Waiting);
+        assert_eq!(status(&post_to(&next, "/cancel", cancellation(&fresh)).await), 200);
+        // begin drains the response and releases the dedicated listener before rebinding.
+        let retry = bridge.begin(begin(), profile_at(port), assets()).await.unwrap();
+        bridge.cancel(&retry.setup_id).await.unwrap();
+    }
+    #[tokio::test]
+    async fn browser_cancel_rejects_wrong_proof_origin_metadata_type_and_size() {
+        let (bridge, start) = fixture().await;
+        let proof = challenge(&start).await;
+        for (field, value) in [
+            ("browserProofHex", json!("ff".repeat(32))),
+            ("setupId", json!("ff".repeat(16))),
+            ("version", json!(2)),
+            ("extra", json!(true)),
+        ] {
+            let mut wrong = cancellation(&proof);
+            wrong[field] = value;
+            assert_eq!(status(&post_to(&start, "/cancel", wrong).await), 403);
+        }
+        let body = cancellation(&proof).to_string();
+        for (origin, metadata, content_type, length) in [
+            ("", FETCH, "application/json", body.len()),
+            ("https://other.test", FETCH, "application/json", body.len()),
+            ("SELF", "", "application/json", body.len()),
+            ("SELF", "Sec-Fetch-Site: cross-site\r\nSec-Fetch-Mode: cors\r\nSec-Fetch-Dest: empty\r\n", "application/json", body.len()),
+            ("SELF", FETCH, "text/plain", body.len()),
+            ("SELF", FETCH, "application/json", MAX_CANCEL_BYTES + 1),
+        ] {
+            let origin = if origin == "SELF" { format!("http://{}", host(&start)) } else { origin.into() };
+            let response = wire(&start, format!("POST /cancel HTTP/1.1\r\nHost: {}\r\nOrigin: {origin}\r\n{metadata}Content-Type: {content_type}\r\nContent-Length: {length}\r\n\r\n{body}", host(&start))).await;
+            assert!([400, 403].contains(&status(&response)));
+        }
+        assert_eq!(bridge.poll(&start.setup_id).await.unwrap().phase, Phase::Waiting);
+        assert_eq!(status(&post_to(&start, "/cancel", cancellation(&proof)).await), 200);
+    }
+    #[tokio::test]
+    async fn late_browser_cancel_cannot_erase_an_accepted_result() {
+        let (bridge, start) = fixture().await;
+        let proof = challenge(&start).await;
+        let body = cancellation(&proof).to_string();
+        let port = host(&start).rsplit(':').next().unwrap().parse::<u16>().unwrap();
+        let mut cancel = tokio::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port)).await.unwrap();
+        cancel.write_all(format!("POST /cancel HTTP/1.1\r\nHost: {}\r\nOrigin: http://{}\r\n{FETCH}Content-Type: application/json\r\nContent-Length: {}\r\n\r\n", host(&start), host(&start), body.len()).as_bytes()).await.unwrap();
+        let payload = result(&proof);
+        assert_eq!(status(&post(&start, payload.clone()).await), 200);
+        cancel.write_all(body.as_bytes()).await.unwrap();
+        let mut response = Vec::new();
+        tokio::time::timeout(Duration::from_secs(2), cancel.read_to_end(&mut response)).await.unwrap().unwrap();
+        assert!([403, 410].contains(&status(&String::from_utf8(response).unwrap())));
+        let polled = bridge.poll(&start.setup_id).await.unwrap();
+        assert_eq!(polled.phase, Phase::Received);
+        assert_eq!(polled.catalog_json.as_deref(), payload["catalogJson"].as_str());
     }
     #[tokio::test]
     async fn retained_setup_start_refusal_and_native_lease_loss_fail_closed() {

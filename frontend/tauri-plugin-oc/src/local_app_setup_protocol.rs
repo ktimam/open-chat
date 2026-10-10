@@ -8,6 +8,7 @@ pub const SETUP_LIFETIME_MS: u64 = 600_000;
 pub const MAX_CATALOG_BYTES: usize = 1024 * 1024;
 // JSON string escaping may encode one decoded catalog byte using six envelope bytes.
 pub const MAX_POST_BYTES: usize = MAX_CATALOG_BYTES * 6 + 1024;
+pub const MAX_CANCEL_BYTES: usize = 1024;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -64,6 +65,13 @@ pub struct ResultRequest {
     pub setup_id: String,
     pub browser_proof_hex: String,
     pub catalog_json: String,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CancelRequest {
+    pub version: u8,
+    pub setup_id: String,
+    pub browser_proof_hex: String,
 }
 
 fn hex(value: &str, bytes: usize) -> bool {
@@ -340,31 +348,44 @@ impl Attempt {
             setup_context: self.request.setup_context.clone(),
         })
     }
-    pub fn accept(&mut self, body: &[u8], now: u64) -> Result<(), &'static str> {
-        self.expire(now);
+    fn authenticate_browser(&self, version: u8, setup_id: &str, proof: &str) -> Result<(), &'static str> {
         if self.phase != Phase::Waiting || self.bootstrap_hash.is_some() {
             return Err("App setup is no longer waiting");
         }
-        let result: ResultRequest = parse_strict(body, MAX_POST_BYTES)?;
         let expected = Sha256::digest(
             self.proof
                 .as_ref()
                 .ok_or("App setup proof is unavailable")?
                 .as_bytes(),
         );
-        let actual = Sha256::digest(result.browser_proof_hex.as_bytes());
+        let actual = Sha256::digest(proof.as_bytes());
         let equal = expected
             .iter()
             .zip(actual)
             .fold(0u8, |difference, (a, b)| difference | (a ^ b))
             == 0;
-        if result.version != 1
-            || result.setup_id != self.setup_id
-            || !hex(&result.browser_proof_hex, 32)
+        if version != 1
+            || setup_id != self.setup_id
+            || !hex(proof, 32)
             || !equal
         {
             return Err("App setup response does not match");
         }
+        Ok(())
+    }
+    pub fn cancel_from_browser(&mut self, body: &[u8], now: u64) -> Result<(), &'static str> {
+        self.expire(now);
+        let request: CancelRequest = parse_strict(body, MAX_CANCEL_BYTES)?;
+        self.authenticate_browser(request.version, &request.setup_id, &request.browser_proof_hex)?;
+        // Only an authenticated waiting attempt can be cancelled. A result accepted first
+        // has consumed the proof and must survive late browser teardown or a racing request.
+        self.cancel();
+        Ok(())
+    }
+    pub fn accept(&mut self, body: &[u8], now: u64) -> Result<(), &'static str> {
+        self.expire(now);
+        let result: ResultRequest = parse_strict(body, MAX_POST_BYTES)?;
+        self.authenticate_browser(result.version, &result.setup_id, &result.browser_proof_hex)?;
         validate_result(
             &result.catalog_json,
             &self.request.app_id,
@@ -454,6 +475,47 @@ mod tests {
         }
         let duplicate = result(RAW).to_string().replacen('{', "{\"version\":1,", 1);
         assert!(ready().accept(duplicate.as_bytes(), 2000).is_err());
+    }
+    fn cancellation() -> Value {
+        json!({"version":1,"setupId":"22".repeat(16),"browserProofHex":"11".repeat(32)})
+    }
+    #[test]
+    fn browser_cancel_is_bound_one_use_and_cannot_erase_an_accepted_result() {
+        let body = cancellation().to_string();
+        assert!(fixture().cancel_from_browser(body.as_bytes(), 2000).is_err());
+        let mut waiting = ready();
+        waiting.cancel_from_browser(body.as_bytes(), 2000).unwrap();
+        assert_eq!(waiting.phase(2001), Phase::Cancelled);
+        assert!(waiting.proof.is_none() && waiting.bootstrap_hash.is_none());
+        assert!(waiting.cancel_from_browser(body.as_bytes(), 2001).is_err());
+        assert!(waiting.accept(result(RAW).to_string().as_bytes(), 2001).is_err());
+        let mut received = ready();
+        received.accept(result(RAW).to_string().as_bytes(), 2000).unwrap();
+        assert!(received.cancel_from_browser(body.as_bytes(), 2001).is_err());
+        assert_eq!(received.poll(2002).catalog_json.as_deref(), Some(RAW));
+        assert_eq!(received.phase(2002), Phase::Received);
+    }
+    #[test]
+    fn browser_cancel_rejects_wrong_duplicate_oversized_or_expired_authority() {
+        for (field, value) in [
+            ("version", json!(2)),
+            ("setupId", json!("33".repeat(16))),
+            ("browserProofHex", json!("44".repeat(32))),
+            ("catalogJson", json!(RAW)),
+        ] {
+            let mut attempt = ready();
+            let mut body = cancellation();
+            body[field] = value;
+            assert!(attempt.cancel_from_browser(body.to_string().as_bytes(), 2000).is_err());
+            assert_eq!(attempt.phase(2001), Phase::Waiting);
+        }
+        let body = cancellation().to_string();
+        let duplicate = body.replacen('{', "{\"version\":1,", 1);
+        assert!(ready().cancel_from_browser(duplicate.as_bytes(), 2000).is_err());
+        assert!(ready().cancel_from_browser(&vec![b' '; MAX_CANCEL_BYTES + 1], 2000).is_err());
+        let mut expired = ready();
+        assert!(expired.cancel_from_browser(body.as_bytes(), 601000).is_err());
+        assert_eq!(expired.phase(601000), Phase::Expired);
     }
     #[test]
     fn only_exact_single_app_catalog_root_is_accepted() {

@@ -24,12 +24,52 @@ APK, and changed no official OpenChat canister. They are not new delivery or
 financial-save acceptance. The October 6 and earlier records below remain
 historical evidence for their own artifacts.
 
-Known limitation: cancelling inside the app's embedded setup page and returning
+At that checkpoint, cancelling inside the app's embedded setup page and returning
 can leave a native chat-setup attempt waiting. Main Apps has no Cancel action for
 that chat-initiated attempt. A page reload did not release the native operation;
 force-stopping and reopening only the local-test APK cleared it without removing
 the saved account, cards, settings or pending route handle. Cancellation itself
 is not qualified by the successful reconnect/restart checks above.
+
+### Setup cancellation correction — October 10, 2026
+
+An app's explicit Cancel now sends an exact-origin, window- and attempt-bound
+`oc:app-setup:cancel` message for setup v1 or v2. The host rejects extra fields,
+wrong senders and stale attempts. The native helper then cancels its waiting
+listener with its private proof; the proof is never passed to the app frame.
+A result already accepted by native cannot be erased by a late browser cancel.
+
+The existing Apps detail also exposes **Cancel connection** for a setup started
+from chat settings. Cancelling clears only that pending app attempt and permits
+retry without restarting the APK. Saved account connections, chat destinations,
+private cards and model activity are not deleted or retargeted. Merely closing
+Apps does not cancel an attempt that originated in chat settings.
+
+Closing the browser before its initial challenge response is delivered can still
+leave the native attempt pending: teardown JavaScript is not guaranteed to run.
+Return to **Apps → the same app → Cancel connection**, then retry; a restart is
+not required. This is distinct from the tested explicit Cancel protocol.
+
+The frozen APK passed 1,299 feature tests (one opt-in live-registry test skipped),
+and the native listener/protocol suite passed 28 tests. Both desktop layouts built
+and verified with 646 tests; v2 is served locally. Receiving-app localhost and
+Tailscale frontends are updated without changing their catalog or processor.
+
+The verified x86 APK was installed in place on the persistent Android emulator.
+The existing account restored without sign-in. Three normal chat-setup attempts
+loaded the same saved destination and private choices: explicit app Cancel, then
+retry and host **Apps → Cancel connection**, then retry and explicit app Cancel
+again. The APK PID remained unchanged throughout. Setup and private-card controls
+were re-enabled after cancellation; chat opt-in and cards remained present. No
+setup Save, delivery or entry-save action was pressed. This is cancellation
+acceptance, not a new model, delivery, physical-phone or sign-in qualification.
+After setup ended, directory refresh completed normally. App-level **Reconnect**
+then loaded its account-only consent screen without a destination picker; explicit
+Cancel returned to the same APK process with Reconnect enabled and the saved
+connection unchanged. Both x86 and arm64 artifacts passed independent signature,
+ABI and embedded-file verification. The arm64 APK is ready for a physical phone;
+it has not been installed or tested on one in this check. CI remediation remains
+deferred by the user.
 
 ## Historical checkpoint — October 6, 2026
 

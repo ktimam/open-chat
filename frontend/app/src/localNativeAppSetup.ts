@@ -104,11 +104,32 @@ export function startLocalNativeAppSetup(): () => void {
     const controller = new AbortController();
     let challenge: SetupChallenge | undefined;
     let stopped = false;
+    let completed = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const cancelNative = (current: SetupChallenge) => {
+        // This proof never leaves the first-party origin. Keep teardown cancellation alive
+        // independently of the frame's abort signal; native accepts it only while waiting.
+        void fetch("/cancel", {
+            method: "POST",
+            mode: "same-origin",
+            credentials: "omit",
+            redirect: "error",
+            cache: "no-store",
+            referrerPolicy: "no-referrer",
+            headers: { "Content-Type": "application/json" },
+            keepalive: true,
+            body: JSON.stringify({
+                version: 1,
+                setupId: current.setupId,
+                browserProofHex: current.browserProofHex,
+            }),
+        }).catch(() => {});
+    };
     const stop = () => {
         if (stopped) return;
         stopped = true;
         clearTimeout(timer);
+        if (challenge && !completed) cancelNative(challenge);
         controller.abort();
         challenge = undefined;
         frame.onload = null;
@@ -130,11 +151,16 @@ export function startLocalNativeAppSetup(): () => void {
         redirect: "error",
         cache: "no-store",
         referrerPolicy: "no-referrer",
-        signal: controller.signal,
+        // A stop racing the challenge must still redeem its response and cancel using its
+        // proof. Aborting this fetch would strand the native attempt until its deadline.
+        keepalive: true,
     })
         .then(readSetupChallenge)
         .then((value) => {
-            if (stopped) return;
+            if (stopped) {
+                cancelNative(value);
+                return;
+            }
             challenge = value;
             clearTimeout(timer);
             timer = setTimeout(fail, Math.max(1, value.expiresAtMs - Date.now()));
@@ -183,6 +209,7 @@ export function startLocalNativeAppSetup(): () => void {
                 if (stopped) return;
                 if (!response.ok || response.redirected)
                     throw new Error("Setup result not accepted");
+                completed = true;
                 status.textContent = "Setup returned to OpenChat. Return to the APK to finish.";
                 stop();
             })

@@ -165,6 +165,59 @@ describe.each(["popup", "frame"])("app setup %s consent boundary", (mode) => {
         await rejection;
         expect(vi.getTimerCount()).toBe(0);
     });
+    it.each([1, 2])(
+        "accepts only the bound v%s Cancel and permits a fresh attempt",
+        async (version) => {
+            const context =
+                version === 2
+                    ? parseLocalAppSetupContext({ version: 2, scope: "account", routes: [] })
+                    : undefined;
+            const promise = connect(
+                "sample",
+                "https://app.example/connect",
+                controller.signal,
+                context,
+            );
+            const failed = vi.fn();
+            const rejection = promise.catch(failed);
+            const hello = popup.postMessage.mock.calls[0][0];
+            const packet = {
+                type: "oc:app-setup:cancel",
+                version,
+                connectionId: hello.connectionId,
+                appId: "sample",
+            };
+            const send = (data: object, origin = "https://app.example", source: object = popup) =>
+                window.dispatchEvent(
+                    new MessageEvent("message", { data, origin, source: source as Window }),
+                );
+            send(packet, "https://wrong.example");
+            send(packet, "https://app.example", {});
+            send({ ...packet, connectionId: "stale" });
+            send({ ...packet, appId: "other" });
+            send({ ...packet, version: version === 1 ? 2 : 1 });
+            send({ ...packet, catalogJson: "hidden" });
+            await Promise.resolve();
+            expect(failed).not.toHaveBeenCalled();
+            send(packet);
+            reply();
+            await rejection;
+            expect(failed).toHaveBeenCalledOnce();
+            expect(vi.getTimerCount()).toBe(0);
+
+            popup.postMessage.mockClear();
+            const retry = connect("sample", "https://app.example/connect", controller.signal);
+            const adopted = vi.fn();
+            void retry.then(adopted);
+            expect(popup.postMessage.mock.calls[0][0].connectionId).not.toBe(hello.connectionId);
+            send(packet);
+            await Promise.resolve();
+            expect(adopted).not.toHaveBeenCalled();
+            reply();
+            await expect(retry).resolves.toBe('{"version":1}');
+            expect(vi.getTimerCount()).toBe(0);
+        },
+    );
     it("counts UTF-8 bytes and rejects unsafe targets", () => {
         expect(boundedSetupCatalog("é".repeat(APP_SETUP_MAX_BYTES / 2 + 1))).toBe(false);
         for (const url of [

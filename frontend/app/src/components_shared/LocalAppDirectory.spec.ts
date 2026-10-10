@@ -262,13 +262,88 @@ describe("main AI Apps directory using the existing PR card and detail component
             await settle();
             button(target, "Cancel connection").click();
             await settle();
-            expect(calls.cancelConnection).toHaveBeenCalledOnce();
+            expect(calls.cancelConnection).toHaveBeenCalledExactlyOnceWith("sample");
             finish(true);
             await settle();
             expect(target.textContent).toContain("Connection cancelled");
             expect(target.textContent).not.toContain("Connected. Enable");
         },
     );
+    it.each([false, true])(
+        "cancels setup started from chat using the existing app detail, then allows explicit retry (mobile=%s)",
+        async (mobile) => {
+            update({ busy: true, pendingConnectionAppId: "sample", catalog: fixture.pkg.catalog });
+            calls.cancelConnection.mockImplementationOnce(() => {
+                update({ busy: false, pendingConnectionAppId: undefined });
+                return true;
+            });
+            const target = render(mobile);
+            select(target);
+            expect(target.textContent).toContain("Connection setup is in progress");
+            expect(button(target, "aiApps.reconnect").disabled).toBe(true);
+            expect(button(target, "Cancel connection").disabled).toBe(false);
+            button(target, "Cancel connection").click();
+            await settle();
+            expect(calls.cancelConnection).toHaveBeenCalledExactlyOnceWith("sample");
+            expect(target.textContent).toContain("Connection cancelled");
+            expect(button(target, "aiApps.reconnect").disabled).toBe(false);
+            expect(calls.connectApp).not.toHaveBeenCalled();
+            expect(calls.discard).not.toHaveBeenCalled();
+            button(target, "aiApps.reconnect").click();
+            await settle();
+            expect(calls.connectApp).toHaveBeenCalledExactlyOnceWith("sample");
+        },
+    );
+    it.each([false, true])(
+        "does not cancel chat-started setup when the Apps directory unmounts (mobile=%s)",
+        async (mobile) => {
+            update({ busy: true, pendingConnectionAppId: "sample" });
+            const target = render(mobile);
+            select(target);
+            button(target, "Cancel connection");
+            await unmount(mounted.pop()!);
+            expect(calls.cancelConnection).not.toHaveBeenCalled();
+            expect(get(state).pendingConnectionAppId).toBe("sample");
+        },
+    );
+    it.each([false, true])(
+        "cancels only locally started setup when the directory unmounts (mobile=%s)",
+        async (mobile) => {
+            let finish!: (value: boolean) => void;
+            calls.connectApp.mockImplementationOnce(
+                () => new Promise((resolve) => (finish = resolve)),
+            );
+            const target = render(mobile);
+            select(target);
+            button(target, "aiApps.connect").click();
+            await settle();
+            await unmount(mounted.pop()!);
+            expect(calls.cancelConnection).toHaveBeenCalledExactlyOnceWith("sample");
+            finish(false);
+            await settle();
+        },
+    );
+    it.each(["different-app", undefined])(
+        "does not expose setup cancellation for another app or model work (%s)",
+        (pendingConnectionAppId) => {
+            update({ busy: true, pendingConnectionAppId });
+            const target = render();
+            select(target);
+            expect(target.textContent).not.toContain("Cancel connection");
+            expect(calls.cancelConnection).not.toHaveBeenCalled();
+        },
+    );
+    it("clears chat-started cancellation controls after account switch", async () => {
+        update({ busy: true, pendingConnectionAppId: "sample" });
+        const target = render();
+        select(target);
+        button(target, "Cancel connection");
+        update({ account: "different-account", busy: false, pendingConnectionAppId: undefined });
+        await settle();
+        select(target);
+        expect(target.textContent).not.toContain("Cancel connection");
+        expect(calls.cancelConnection).not.toHaveBeenCalled();
+    });
     it.each(["busy", "setupLoading", "draftLoading", "directoryLoading"] as const)(
         "disables Connect while %s without attempting a backend call",
         (field) => {

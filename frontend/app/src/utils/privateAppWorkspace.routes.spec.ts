@@ -236,6 +236,56 @@ async function propose(workspace: PrivateAppWorkspace, chatKey: string, messageI
 }
 
 describe("account reconnection preserves independent chat routes", () => {
+    it("cancels chat setup without restart and retains mappings/cards while retry ignores a late result", async () => {
+        const f = await fixture(true);
+        await f.workspace.configureChat("sample", "private-chat-A");
+        await f.workspace.configureChat("sample", "private-chat-B");
+        await propose(f.workspace, "private-chat-A");
+        const before = f.workspace.state;
+        const complete = f.deps.connectAppSetup.getMockImplementation()!;
+        let finish!: () => void;
+        f.recipient("Destination B");
+        f.deps.connectAppSetup.mockImplementationOnce(async (...args) => {
+            const result = await complete(...args);
+            return new Promise((resolve) => (finish = () => resolve(result)));
+        });
+        const pending = f.workspace.configureChat("sample", "private-chat-A");
+        expect(f.workspace.state.pendingConnectionAppId).toBe("sample");
+        await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+        const signal = f.deps.connectAppSetup.mock.calls.at(-1)![1];
+        expect(f.workspace.cancelConnection("different-app")).toBe(false);
+        expect(signal.aborted).toBe(false);
+        expect(f.workspace.cancelConnection("sample")).toBe(true);
+        await pending;
+        expect(signal.aborted).toBe(true);
+        expect(f.workspace.state.busy).toBe(false);
+        expect(f.workspace.state.pendingConnectionAppId).toBeUndefined();
+        expect(f.workspace.state.chatSetups).toEqual(before.chatSetups);
+        expect(f.workspace.state.connections).toEqual(before.connections);
+        expect(f.workspace.state.enabledChats).toEqual(before.enabledChats);
+        expect(f.workspace.state.cards).toEqual(before.cards);
+        expect(f.workspace.state.draft).toEqual(before.draft);
+        f.recipient("Destination C");
+        await f.workspace.configureChat("sample", "private-chat-A");
+        const retried = f.workspace.state;
+        expect(retried.chatSetups[0].handle).toBe(before.chatSetups[0].handle);
+        expect(retried.chatSetups[0].catalogJson).toContain("Destination C");
+        expect(retried.chatSetups[1]).toEqual(before.chatSetups[1]);
+        expect(retried.draft?.target).toEqual(before.draft?.target);
+        finish();
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(f.workspace.state.chatSetups).toEqual(retried.chatSetups);
+        expect(f.workspace.state.pendingConnectionAppId).toBeUndefined();
+        expect(f.workspace.cancelConnection("sample")).toBe(false);
+        expect(f.deps.deliver).not.toHaveBeenCalled();
+        expect(f.inboxDeposit).not.toHaveBeenCalled();
+        await vi.waitFor(() => expect(f.workspace.state.setupStatus).toContain("App setup saved"));
+        const restored = await f.make();
+        expect(restored.state.chatSetups).toEqual(retried.chatSetups);
+        expect(restored.state.pendingConnectionAppId).toBeUndefined();
+    });
+
     it("reviews and encrypts each chat's card to its own inbox, never the public account endpoint", async () => {
         const f = await fixture(true);
         await f.workspace.configureChat("sample", "private-chat-A");

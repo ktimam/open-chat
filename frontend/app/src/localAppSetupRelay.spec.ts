@@ -214,6 +214,33 @@ describe("normal app connection frame", () => {
             { type: "setup-result", version: 1, sessionNonce: nonce, catalogJson: result },
         ]);
     });
+    it("returns an app's explicit Cancel to the host without waiting for timeout", async () => {
+        const f = fixture();
+        f.target();
+        const hello = f.receiver.postMessage.mock.calls[0][0];
+        window.dispatchEvent(
+            new MessageEvent("message", {
+                origin: "https://app.example",
+                source: f.receiver as unknown as Window,
+                data: {
+                    type: "oc:app-setup:cancel",
+                    version: 1,
+                    appId: "sample",
+                    connectionId: hello.connectionId,
+                },
+            }),
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        expect(f.channel.postMessage).toHaveBeenCalledWith({
+            type: "setup-failed",
+            version: 1,
+            sessionNonce: nonce,
+        });
+        f.reply();
+        expect(f.results()).toEqual([]);
+        expect(f.channel.close).toHaveBeenCalledOnce();
+        expect(vi.getTimerCount()).toBe(0);
+    });
     it.each(["cancel", "pagehide", "decode", "timeout", "stop"])(
         "has no automatic share or retry after %s",
         async (reason) => {
