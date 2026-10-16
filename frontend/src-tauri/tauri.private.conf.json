@@ -1,0 +1,31 @@
+{
+    "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+    "productName": "OpenChat Private",
+    "version": "0.1.0",
+    "build": {
+        "beforeBuildCommand": "node ../scripts/build-unofficial-production-apk.mjs --frontend-only",
+        "frontendDist": "../app/build"
+    },
+    "app": {
+        "security": {
+            "capabilities": [
+                "default",
+                {
+                    "identifier": "local-app-handoff",
+                    "description": "Approved encrypted private draft transport; not an authentication bridge",
+                    "local": true,
+                    "windows": ["main"],
+                    "permissions": ["oc:allow-local-app-handoff"]
+                },
+                {
+                    "identifier": "local-app-setup",
+                    "description": "Explicit app connection; no chat data",
+                    "local": true,
+                    "windows": ["main"],
+                    "permissions": ["oc:allow-local-app-setup"]
+                }
+            ]
+        }
+    },
+    "plugins": { "deep-link": { "mobile": [] } }
+}

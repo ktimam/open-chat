@@ -30,6 +30,7 @@ import { localAppRelayPlugin } from "./localAppRelayBuild.mjs";
 import { localNativeAppHandoffBuildPlugin } from "./localNativeAppHandoffBuild.mjs";
 import { localNativeAppSetupBuildPlugin } from "./localNativeAppSetupBuild.mjs";
 import { localApkBundleMarker, localApkParentRpId } from "../unofficialLocalApkProfile.mjs";
+import { productionApkBundleMarker, productionApkParentRpId, PRIVATE_APK_ID } from "../unofficialProductionApkProfile.mjs";
 import {
     copyUnofficialWebPublicFiles,
     unofficialLocalWebManifest,
@@ -76,7 +77,7 @@ function clean() {
     return {
         name: "clean-build",
         buildStart() {
-            if (!localTestApk) return;
+            if (!unofficialNativeApk) return;
             // Only this fixed generated frontend output is replaced. No APK or device cache is touched.
             rimrafSync(path.join(__dirname, "build"));
             fs.mkdirSync(path.join(__dirname, "build"));
@@ -101,6 +102,13 @@ function clean() {
                             ),
                         ),
                     );
+                }
+                if (productionApk) {
+                    fs.writeFileSync(outputPath("android-rp-id"), androidRpId);
+                    fs.writeFileSync(outputPath("private-apk-profile.json"), JSON.stringify(
+                        productionApkBundleMarker(process.env.OC_IDENTITY_CANISTER,
+                            Principal.fromText(process.env.OC_IDENTITY_CANISTER).toHex()),
+                    ));
                 }
                 return;
             }
@@ -149,7 +157,9 @@ function clean() {
 const { version, production, development, env } = initEnv();
 const localWebBuild = process.env.OC_UNOFFICIAL_WEB_BUILD === "true";
 const localTestApk = process.env.OC_UNOFFICIAL_LOCAL_APK === "true";
-const localClientBuild = localWebBuild || localTestApk;
+const productionApk = process.env.OC_UNOFFICIAL_PRODUCTION_APK === "true";
+const unofficialNativeApk = localTestApk || productionApk;
+const localClientBuild = localWebBuild || localTestApk || productionApk;
 const outputDirectory = localWebBuild ? process.env.OC_UNOFFICIAL_WEB_OUTPUT : "build";
 const outputPath = (...segments) => path.join(outputDirectory, ...segments);
 
@@ -206,7 +216,9 @@ const androidRpId = localWebBuild
     ? ""
     : localTestApk
       ? localApkParentRpId(process.env)
-      : (process.env.OC_ANDROID_RP_ID ?? "oc.app").trim().toLowerCase();
+      : productionApk
+        ? productionApkParentRpId(process.env)
+        : (process.env.OC_ANDROID_RP_ID ?? "oc.app").trim().toLowerCase();
 if (
     !localWebBuild &&
     (!/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(androidRpId) ||
@@ -561,7 +573,7 @@ export default {
                 process.env.OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY,
             ),
             "import.meta.env.OC_NODE_ENV": JSON.stringify(
-                localClientBuild ? "development" : (process.env.NODE_ENV ?? "production"),
+                localClientBuild && !productionApk ? "development" : (process.env.NODE_ENV ?? "production"),
             ),
             "import.meta.env.OC_WEBSITE_VERSION": JSON.stringify(process.env.OC_WEBSITE_VERSION),
             "import.meta.env.OC_ROLLBAR_ACCESS_TOKEN": JSON.stringify(
@@ -850,6 +862,8 @@ export default {
         }),
         localNativeAppHandoffBuildPlugin({ enabled: localTestApk }),
         localNativeAppSetupBuildPlugin({ enabled: localTestApk }),
+        localNativeAppHandoffBuildPlugin({ enabled: productionApk, applicationId: PRIVATE_APK_ID }),
+        localNativeAppSetupBuildPlugin({ enabled: productionApk, applicationId: PRIVATE_APK_ID }),
         unofficialWebArtifacts(),
         ...(!localClientBuild
             ? [

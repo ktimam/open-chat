@@ -20,7 +20,7 @@ const rpId = "fork-test.tail000000.ts.net";
 const officialKeyWiring =
     /localClientBuild\s*\?\s*\{\s*queryPublicKey:\s*queryOfficialUserIndexPublicKey\s*,/;
 const nativeProfileWiring =
-    /applicationId:\s*"dev\.openchatfork\.localtest"\s*,\s*transport:\s*"private-app-code-v1"\s*,/;
+    /applicationId\s*,\s*transport:\s*"private-app-code-v1"\s*,/;
 
 test("local APK pins official backend, distinct identity and no production updates/signing", () => {
     const env = createUnofficialLocalApkEnvironment(canisters, {
@@ -253,8 +253,9 @@ function assertLocalAppServiceBoundary({
   );
   assert.equal(
     (gradle.match(/src\/localAppTransport\/AndroidManifest.xml/g) ?? []).length,
-    2,
+    4,
   );
+  assert.match(gradle, /if \(System.getenv\("OC_UNOFFICIAL_PRODUCTION_APK"\) == "true"\) \{\s*sourceSets.getByName\("debug"\).manifest.srcFile\("src\/localAppTransport\/AndroidManifest.xml"\)\s*sourceSets.getByName\("release"\).manifest.srcFile\("src\/localAppTransport\/AndroidManifest.xml"\)\s*\}/);
 }
 
 function localAppServiceBoundaryFixture() {
@@ -324,7 +325,8 @@ test("Gradle identity is separate; JNI namespace remains stable", () => {
     const gradle = read("frontend/src-tauri/gen/android/app/build.gradle.kts");
     assert.match(gradle, /applicationId = if \(unofficialLocalTest\) localTestApplicationId/);
     assert.match(gradle, /namespace = "com.oclabs.openchat"/);
-    assert.match(gradle, /!unofficialLocalTest && propFile.exists\(\)/);
+    assert.match(gradle, /val unofficialNative = unofficialLocalTest \|\| unofficialProduction/);
+    assert.match(gradle, /!unofficialNative && propFile.exists\(\)/);
     assert.match(gradle, /src\/localTest\/AndroidManifest.xml/);
     assert.match(gradle, /openchat-fork-local-test.apk/);
     assert.match(gradle, /marker\["nativeAuthentication"\] == "android-credential-manager-v1"/);
@@ -357,7 +359,7 @@ test("only private-app bridges remain in the local overlay; browser authenticati
     );
 });
 
-test("only the local-test APK permits exact loopback cleartext without changing trust anchors", () => {
+test("only the explicit fork APKs permit exact loopback cleartext without changing trust anchors", () => {
     const gradle = read("frontend/src-tauri/gen/android/app/build.gradle.kts");
     const localManifest = read(
         "frontend/src-tauri/gen/android/app/src/localTest/AndroidManifest.xml",
@@ -385,7 +387,8 @@ test("only the local-test APK permits exact loopback cleartext without changing 
         gradle,
         /if \(unofficialLocalTest\) \{\s*sourceSets\.getByName\("main"\)\.manifest\.srcFile\("src\/localTest\/AndroidManifest.xml"\)\s*sourceSets\.getByName\("main"\)\.res\.srcDir\("src\/localTest\/res"\)\s*\}/,
     );
-    assert.equal((gradle.match(/res\.srcDir\("src\/localTest\/res"\)/g) ?? []).length, 1);
+    assert.equal((gradle.match(/res\.srcDir\("src\/localTest\/res"\)/g) ?? []).length, 2);
+    assert.match(gradle, /if \(unofficialProduction\) \{\s*sourceSets\.getByName\("main"\)\.manifest\.srcFile\("src\/localTest\/AndroidManifest.xml"\)\s*sourceSets\.getByName\("main"\)\.res\.srcDir\("src\/localTest\/res"\)\s*\}/);
     assert.match(
         gradle,
         /defaultConfig \{\s*manifestPlaceholders\["usesCleartextTraffic"\] = "false"/,
@@ -431,7 +434,7 @@ test("formatted APK wiring checks still reject different flags, sources and dest
         ],
         [
             nativeProfileWiring,
-            'applicationId: "dev.openchatfork.localtest", transport: "private-app-code-v1",',
+            'applicationId, transport: "private-app-code-v1",',
             'applicationId: "com.oclabs.openchat", transport: "private-app-code-v1",',
         ],
     ]) {

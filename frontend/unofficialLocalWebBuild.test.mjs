@@ -212,7 +212,7 @@ const localWebWiring = {
     mode: /localClientBuild\s*\?\s*\{\s*"import\.meta\.env\.DEV": "false",\s*"import\.meta\.env\.PROD": "true"\s*\}/,
     key: /queryPublicKey: queryOfficialUserIndexPublicKey,\s*outputPath: outputPath\("public-key"\)/,
     otaPlugin: /\.\.\.\(!localClientBuild\s*\?\s*\[\s*androidBundlePlugin/,
-    rpId: /const androidRpId = localWebBuild\s*\?\s*""\s*:\s*localTestApk\s*\?\s*localApkParentRpId\(process\.env\)\s*:\s*\(process\.env\.OC_ANDROID_RP_ID \?\? "oc\.app"\)\.trim\(\)\.toLowerCase\(\);/,
+    rpId: /const androidRpId = localWebBuild\s*\?\s*""\s*:\s*localTestApk\s*\?\s*localApkParentRpId\(process\.env\)\s*:\s*productionApk\s*\?\s*productionApkParentRpId\(process\.env\)\s*:\s*\(process\.env\.OC_ANDROID_RP_ID \?\? "oc\.app"\)\.trim\(\)\.toLowerCase\(\);/,
     otaPolicy:
         /fs\.writeFileSync\(\s*outputPath\("ota-policy\.json"\),\s*JSON\.stringify\(\{ strategy: "none" \}\),?\s*\)/,
     profileGuard:
@@ -224,14 +224,14 @@ test("Rollup local path has explicit safety replacements, isolated output, relay
     const extra = readFileSync(new URL("./app/rollup.extras.mjs", import.meta.url), "utf8");
     assert.match(source, /const localWebBuild = process\.env\.OC_UNOFFICIAL_WEB_BUILD === "true";/);
     assert.match(source, /const localTestApk = process\.env\.OC_UNOFFICIAL_LOCAL_APK === "true";/);
-    assert.match(source, /const localClientBuild = localWebBuild \|\| localTestApk;/);
+    assert.match(source, /const localClientBuild = localWebBuild \|\| localTestApk \|\| productionApk;/);
     assert.match(source, /"import\.meta\.env\.OC_UNOFFICIAL_CLIENT": JSON\.stringify/);
     assert.match(source, localWebWiring.mode);
     assert.match(
         source,
         /localClientBuild \? \{ "process\.env\.NODE_ENV": JSON\.stringify\("production"\)/,
     );
-    assert.match(source, /localClientBuild \? "development" : \(process\.env\.NODE_ENV/);
+    assert.match(source, /localClientBuild && !productionApk \? "development" : \(process\.env\.NODE_ENV/);
     assert.match(
         source,
         /localAppRelayPlugin\(\{\s*enabled: localWebBuild,\s*appDirectoryUrl: process\.env\.OC_APP_DIRECTORY_URL,?\s*\}\)/,
@@ -245,7 +245,7 @@ test("Rollup local path has explicit safety replacements, isolated output, relay
     );
     assert.match(
         source,
-        /buildStart\(\) \{\s*if \(!localTestApk\) return;[\s\S]*?rimrafSync\(path\.join\(__dirname, "build"\)\)/,
+        /buildStart\(\) \{\s*if \(!unofficialNativeApk\) return;[\s\S]*?rimrafSync\(path\.join\(__dirname, "build"\)\)/,
     );
     assert.match(source, localWebWiring.otaPolicy);
     assert.match(
@@ -285,9 +285,9 @@ test("wrapped local web wiring assertions retain their safety values and conditi
         ],
         [
             localWebWiring.rpId,
-            'const androidRpId = localWebBuild ? "" : localTestApk ? localApkParentRpId(process.env) : (process.env.OC_ANDROID_RP_ID ?? "oc.app").trim().toLowerCase();',
-            'const androidRpId = localWebBuild\n ? ""\n : localTestApk\n ? localApkParentRpId(process.env)\n : (process.env.OC_ANDROID_RP_ID ?? "oc.app").trim().toLowerCase();',
-            'const androidRpId = localClientBuild ? "" : localTestApk ? localApkParentRpId(process.env) : (process.env.OC_ANDROID_RP_ID ?? "oc.app").trim().toLowerCase();',
+            'const androidRpId = localWebBuild ? "" : localTestApk ? localApkParentRpId(process.env) : productionApk ? productionApkParentRpId(process.env) : (process.env.OC_ANDROID_RP_ID ?? "oc.app").trim().toLowerCase();',
+            'const androidRpId = localWebBuild\n ? ""\n : localTestApk\n ? localApkParentRpId(process.env)\n : productionApk\n ? productionApkParentRpId(process.env)\n : (process.env.OC_ANDROID_RP_ID ?? "oc.app").trim().toLowerCase();',
+            'const androidRpId = localClientBuild ? "" : localTestApk ? localApkParentRpId(process.env) : productionApk ? productionApkParentRpId(process.env) : (process.env.OC_ANDROID_RP_ID ?? "oc.app").trim().toLowerCase();',
         ],
         [
             localWebWiring.otaPolicy,

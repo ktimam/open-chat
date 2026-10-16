@@ -32,7 +32,7 @@ impl BundledProfile {
     }
     pub fn parse(bytes: &[u8]) -> Result<Self, String> {
         let profile: Self = parse_strict(bytes, 1024)?;
-        if profile.version != 1 || profile.application_id != "dev.openchatfork.localtest" || profile.transport != "private-app-code-v1" {
+        if profile.version != 1 || !matches!(profile.application_id.as_str(), "dev.openchatfork.localtest" | "io.github.ktimam.openchatprivate") || profile.transport != "private-app-code-v1" {
             return Err("Local private app transport is unavailable".into());
         }
         Ok(profile)
@@ -297,6 +297,15 @@ async fn handle(request: Request<Incoming>, shared: Arc<Shared>) -> Result<Brows
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn production_package_uses_the_same_bounded_handoff_without_official_package_access() {
+        let accepted = br#"{"version":1,"applicationId":"io.github.ktimam.openchatprivate","transport":"private-app-code-v1"}"#;
+        assert_eq!(BundledProfile::parse(accepted).unwrap().listen_port(), 5192);
+        for package in ["com.oclabs.openchat", "io.github.ktimam.openchatprivate.extra", ""] {
+            let invalid = format!(r#"{{"version":1,"applicationId":"{package}","transport":"private-app-code-v1"}}"#);
+            assert!(BundledProfile::parse(invalid.as_bytes()).is_err());
+        }
+    }
     use serde_json::{json, Value};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     fn profile() -> BundledProfile {

@@ -46,7 +46,7 @@ impl BundledProfile {
     pub fn parse(bytes: &[u8]) -> Result<Self, String> {
         let profile: Self = parse_strict(bytes, 1024)?;
         if profile.version != 1
-            || profile.application_id != "dev.openchatfork.localtest"
+            || !matches!(profile.application_id.as_str(), "dev.openchatfork.localtest" | "io.github.ktimam.openchatprivate")
             || profile.transport != "private-app-setup-v1"
         {
             return Err("Local app setup transport is unavailable".into());
@@ -468,6 +468,15 @@ async fn handle(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn production_package_uses_the_same_bounded_setup_without_official_package_access() {
+        let accepted = br#"{"version":1,"applicationId":"io.github.ktimam.openchatprivate","transport":"private-app-setup-v1"}"#;
+        assert_eq!(BundledProfile::parse(accepted).unwrap().listen_port(), 5193);
+        for package in ["com.oclabs.openchat", "io.github.ktimam.openchatprivate.extra", ""] {
+            let invalid = format!(r#"{{"version":1,"applicationId":"{package}","transport":"private-app-setup-v1"}}"#);
+            assert!(BundledProfile::parse(invalid.as_bytes()).is_err());
+        }
+    }
     use serde_json::{Value, json};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     fn profile() -> BundledProfile {

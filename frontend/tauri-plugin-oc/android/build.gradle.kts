@@ -15,6 +15,10 @@ android {
         sourceSets.getByName("debug").manifest.srcFile("src/localAppTransport/AndroidManifest.xml")
         sourceSets.getByName("release").manifest.srcFile("src/localAppTransport/AndroidManifest.xml")
     }
+    if (System.getenv("OC_UNOFFICIAL_PRODUCTION_APK") == "true") {
+        sourceSets.getByName("debug").manifest.srcFile("src/localAppTransport/AndroidManifest.xml")
+        sourceSets.getByName("release").manifest.srcFile("src/localAppTransport/AndroidManifest.xml")
+    }
 
     buildFeatures {
         buildConfig = true

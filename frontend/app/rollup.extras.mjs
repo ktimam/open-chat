@@ -10,6 +10,7 @@ import {
     createUnofficialLocalApkEnvironment,
     localApkParentRpId,
 } from "../unofficialLocalApkProfile.mjs";
+import { createUnofficialProductionApkEnvironment, productionApkParentRpId } from "../unofficialProductionApkProfile.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 export const __dirname = dirname(__filename);
@@ -72,6 +73,8 @@ export function generateCspForScripts(
 // Set up environment
 export function initEnv({ websiteVersion } = {}) {
     const localApk = process.env.OC_UNOFFICIAL_LOCAL_APK === "true";
+    const productionApk = process.env.OC_UNOFFICIAL_PRODUCTION_APK === "true";
+    if (productionApk) productionApkParentRpId(process.env);
     if (
         localApk &&
         (process.env.OC_UNOFFICIAL_CLIENT !== "true" ||
@@ -101,7 +104,11 @@ export function initEnv({ websiteVersion } = {}) {
             appDirectoryUrl: process.env.OC_APP_DIRECTORY_URL,
             inherited: process.env,
         };
-        const profile = localApk
+        const profile = productionApk
+            ? createUnofficialProductionApkEnvironment(canisters, {
+                  inherited: process.env, buildId: process.env.OC_UNOFFICIAL_APK_BUILD_ID,
+              })
+            : localApk
             ? createUnofficialLocalApkEnvironment(canisters, {
                   inherited: process.env,
                   buildId: process.env.OC_UNOFFICIAL_APK_BUILD_ID,
@@ -124,7 +131,7 @@ export function initEnv({ websiteVersion } = {}) {
         if (
             websiteVersion !== undefined &&
             process.env.OC_UNOFFICIAL_WEB_BUILD !== "true" &&
-            !localApk
+            !localApk && !productionApk
         ) {
             process.env.OC_WEBSITE_VERSION = websiteVersion;
         }
@@ -218,16 +225,16 @@ export function initEnv({ websiteVersion } = {}) {
     if (!development && !version) {
         throw Error("OC_WEBSITE_VERSION environment variable not set");
     }
-    if (production && !process.env.OC_ROLLBAR_ACCESS_TOKEN) {
+    if (production && !productionApk && !process.env.OC_ROLLBAR_ACCESS_TOKEN) {
         throw Error("OC_ROLLBAR_ACCESS_TOKEN environment variable not set");
     }
-    if (production && !process.env.OC_USERGEEK_APIKEY) {
+    if (production && !productionApk && !process.env.OC_USERGEEK_APIKEY) {
         throw Error("OC_USERGEEK_APIKEY environment variable not set");
     }
-    if (production && !process.env.OC_METERED_APIKEY) {
+    if (production && !productionApk && !process.env.OC_METERED_APIKEY) {
         throw Error("OC_METERED_APIKEY environment variable not set");
     }
-    if (production && !process.env.OC_VAPID_PUBLIC_KEY) {
+    if (production && !productionApk && !process.env.OC_VAPID_PUBLIC_KEY) {
         throw Error("OC_VAPID_PUBLIC_KEY environment variable not set");
     }
 

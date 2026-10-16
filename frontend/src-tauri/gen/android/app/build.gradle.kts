@@ -12,8 +12,34 @@ plugins {
 }
 
 val unofficialLocalTest = System.getenv("OC_UNOFFICIAL_LOCAL_APK") == "true"
+val unofficialProduction = System.getenv("OC_UNOFFICIAL_PRODUCTION_APK") == "true"
+val unofficialNative = unofficialLocalTest || unofficialProduction
 val localTestApplicationId = "dev.openchatfork.localtest"
-if (!unofficialLocalTest) apply(plugin = "com.google.gms.google-services")
+val privateApplicationId = "io.github.ktimam.openchatprivate"
+val privateRpId = "o2xzk-ayaaa-aaaag-azelq-cai.icp0.io"
+require(!(unofficialLocalTest && unofficialProduction)) { "Conflicting unofficial APK profiles" }
+if (!unofficialNative) apply(plugin = "com.google.gms.google-services")
+if (unofficialProduction) {
+    require(System.getenv("OC_UNOFFICIAL_CLIENT") == "true" &&
+        System.getenv("OC_ANDROID_APPLICATION_ID") == privateApplicationId &&
+        System.getenv("OC_ANDROID_VERSION_NAME") == "0.1.0" &&
+        System.getenv("OC_ANDROID_REQUIRE_RELEASE_SIGNING") == "true" &&
+        System.getenv("OC_UNOFFICIAL_APK_RP_ID") == privateRpId &&
+        System.getenv("OC_ANDROID_RP_ID") == privateRpId &&
+        System.getenv("OC_WEBAUTHN_ORIGIN") == privateRpId &&
+        System.getenv("OC_APP_DIRECTORY_URL") == "https://o5w76-naaaa-aaaag-azela-cai.icp0.io/apps-v2.json") {
+        "OpenChat Private requires its explicit signed production package profile"
+    }
+    val markerFile = projectDir.resolve("../../../../app/build/private-apk-profile.json").normalize()
+    require(markerFile.isFile) { "OpenChat Private frontend profile marker is missing" }
+    val marker = JsonSlurper().parse(markerFile) as Map<*, *>
+    require(marker["applicationId"] == privateApplicationId && marker["ota"] == "none" &&
+        marker["nativeAuthentication"] == "android-credential-manager-v1" &&
+        marker["releaseVersion"] == "0.1.0" && marker["androidRpId"] == privateRpId &&
+        marker["appDirectoryUrl"] == System.getenv("OC_APP_DIRECTORY_URL")) {
+        "OpenChat Private frontend profile mismatch"
+    }
+}
 val localApkMarkerRpId: String? = if (unofficialLocalTest) {
     require(System.getenv("OC_UNOFFICIAL_CLIENT") == "true" &&
         System.getenv("OC_ANDROID_APPLICATION_ID") == localTestApplicationId) {
@@ -56,7 +82,7 @@ val tauriProperties = Properties().apply {
 val keystoreDir = rootProject.projectDir
 val keystoreProperties = Properties().apply {
     val propFile = File(keystoreDir, "keystore.properties")
-    if (!unofficialLocalTest && propFile.exists()) propFile.inputStream().use { load(it) }
+    if (!unofficialNative && propFile.exists()) propFile.inputStream().use { load(it) }
 }
 fun signingProperty(name: String, env: String): String? =
     if (unofficialLocalTest) null else System.getenv(env)?.takeIf { it.isNotBlank() }
@@ -123,6 +149,9 @@ val releaseVersionCode: Int? = releaseVersionName?.let { name ->
 
 val bundledOpenChatRpIdFile = projectDir.resolve("../../../../app/build/android-rp-id").normalize()
 val bundledOpenChatRpId = bundledOpenChatRpIdFile.takeIf { it.isFile }?.readText()?.trim()?.lowercase()
+if (unofficialProduction) require(bundledOpenChatRpIdFile.isFile && bundledOpenChatRpIdFile.readText() == privateRpId) {
+    "OpenChat Private bundled RP does not match the production association"
+}
 val environmentOpenChatRpId = System.getenv("OC_ANDROID_RP_ID")?.trim()?.lowercase()
 val explicitLocalApkRpId = if (unofficialLocalTest) {
     val rpId = System.getenv("OC_UNOFFICIAL_APK_RP_ID")
@@ -163,7 +192,7 @@ android {
     namespace = "com.oclabs.openchat"
     defaultConfig {
         manifestPlaceholders["usesCleartextTraffic"] = "false"
-        applicationId = if (unofficialLocalTest) localTestApplicationId else "com.oclabs.openchat"
+        applicationId = if (unofficialLocalTest) localTestApplicationId else if (unofficialProduction) privateApplicationId else "com.oclabs.openchat"
         minSdk = 24
         targetSdk = 36
         versionCode = releaseVersionCode
@@ -172,8 +201,11 @@ android {
             ?: tauriProperties.getProperty("tauri.android.versionName", "1.0")
         resValue("string", "openchat_rp_id", openChatRpId)
         resValue("bool", "openchat_local_test", unofficialLocalTest.toString())
-        buildConfigField("boolean", "UNOFFICIAL_LOCAL_TEST", unofficialLocalTest.toString())
+        resValue("bool", "openchat_private", unofficialProduction.toString())
+        // This historical switch disables upstream Firebase for both separate fork packages.
+        buildConfigField("boolean", "UNOFFICIAL_LOCAL_TEST", unofficialNative.toString())
         if (unofficialLocalTest) resValue("string", "local_test_app_name", "OpenChat Fork · Local Test")
+        if (unofficialProduction) resValue("string", "local_test_app_name", "OpenChat Private")
         resValue(
             "string",
             "asset_statements",
@@ -182,6 +214,10 @@ android {
     }
     
     if (unofficialLocalTest) {
+        sourceSets.getByName("main").manifest.srcFile("src/localTest/AndroidManifest.xml")
+        sourceSets.getByName("main").res.srcDir("src/localTest/res")
+    }
+    if (unofficialProduction) {
         sourceSets.getByName("main").manifest.srcFile("src/localTest/AndroidManifest.xml")
         sourceSets.getByName("main").res.srcDir("src/localTest/res")
     }
@@ -294,7 +330,7 @@ android.applicationVariants.all {
             // val versionName = versionName
             // val versionCode = versionCode
 
-            outputImpl.outputFileName = if (unofficialLocalTest) "openchat-fork-local-test.apk" else "openchat-release.apk"
+            outputImpl.outputFileName = if (unofficialLocalTest) "openchat-fork-local-test.apk" else if (unofficialProduction) "openchat-private-0.1.0.apk" else "openchat-release.apk"
         }
     }
 }

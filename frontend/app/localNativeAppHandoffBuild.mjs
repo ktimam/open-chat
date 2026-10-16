@@ -3,7 +3,9 @@ import { fileURLToPath, URL } from "node:url";
 import { build } from "esbuild";
 
 /** Fixed first-party private-draft relay only. Disabled for all official/browser builds. */
-export function localNativeAppHandoffBuildPlugin({ enabled = false } = {}) {
+export function localNativeAppHandoffBuildPlugin({ enabled = false, applicationId = "dev.openchatfork.localtest" } = {}) {
+    if (!["dev.openchatfork.localtest", "io.github.ktimam.openchatprivate"].includes(applicationId))
+        throw new Error("Unsupported private app transport package");
     return {
         name: "local-native-app-handoff-assets",
         async generateBundle() {
@@ -50,7 +52,7 @@ export function localNativeAppHandoffBuildPlugin({ enabled = false } = {}) {
                 fileName: "local-native-app-handoff-profile.json",
                 source: JSON.stringify({
                     version: 1,
-                    applicationId: "dev.openchatfork.localtest",
+                    applicationId,
                     transport: "private-app-code-v1",
                 }),
             });

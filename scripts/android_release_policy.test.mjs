@@ -775,7 +775,7 @@ function assertDistinctLocalTestApplicationId(gradle) {
   );
   assert.match(
     gradle,
-    /applicationId = if \(unofficialLocalTest\) localTestApplicationId else "com\.oclabs\.openchat"/u,
+    /applicationId = if \(unofficialLocalTest\) localTestApplicationId else if \(unofficialProduction\) privateApplicationId else "com\.oclabs\.openchat"/u,
   );
 }
 
@@ -799,7 +799,7 @@ test("Gradle and policy share production identity, version formula and local RP-
       'val localTestApplicationId = "com.oclabs.openchat"',
     ),
     gradle.replace(
-      'applicationId = if (unofficialLocalTest) localTestApplicationId else "com.oclabs.openchat"',
+      'applicationId = if (unofficialLocalTest) localTestApplicationId else if (unofficialProduction) privateApplicationId else "com.oclabs.openchat"',
       'applicationId = "com.oclabs.openchat"',
     ),
     gradle.replace(
